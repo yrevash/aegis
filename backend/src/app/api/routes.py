@@ -34,6 +34,7 @@ from app.api.schemas import (
     AdminBudgetsResponse,
     AdminTenantsResponse,
     AdminUsageResponse,
+    AdminUserRow,
     AdminUsersResponse,
     AegisModuleRow,
     ApprovalDecisionRequest,
@@ -79,12 +80,18 @@ from app.api.schemas import (
     OpsReleaseResponse,
     OpsRollbackRequest,
     OpsRollbackResponse,
+    PatchCheckRequest,
+    PatchCheckResponse,
     QueryRequest,
     RecallDebugItem,
     RecallDebugResponse,
+    RiskMapResponse,
     Role,
     RunStatus,
+    SavingsResponse,
+    StackResponse,
     StreamEvent,
+    UserRoleUpdateRequest,
 )
 from app.capabilities import (
     AEGIS_MODULES,
@@ -103,12 +110,14 @@ from app.core.models import is_small_model, routing_table
 from app.core.security import (
     PLATFORM_ADMIN,
     TENANT_ADMIN,
+    coarse_role_from_fine,
     create_access_token,
     decode_access_token,
     principal_role,
     verify_password,
 )
 from app.data import (
+    LastPlatformAdminError,
     effective_limits,
     get_approval,
     list_budgets,
@@ -117,9 +126,16 @@ from app.data import (
     list_tenants,
     list_users,
     record_audit,
+    update_user_role,
     upsert_budget,
     usage_rollup,
     user_tenant_id,
+)
+from app.platform import (
+    build_risk_map,
+    build_savings,
+    build_stack,
+    patch_check,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,37 +151,46 @@ router = APIRouter()
 class AuthContext:
     """The authenticated principal resolved from a JWT bearer token.
 
-    ``role`` is the coarse, frozen data-layer role (``admin`` / ``user``) that the
-    existing persona and admin guards read; ``fine_role`` is the §3.3 three-tier
-    RBAC value (``platform_admin`` / ``tenant_admin`` / ``user``) derived from the
-    coarse role plus tenancy. ``tenant_id`` / ``user_id`` pin the request for
-    governance and tenant-isolation scoping.
+    ``role`` is the true four-valued data-layer role (``admin`` / ``ai_team`` /
+    ``devops`` / ``client``) that the persona and per-role guards read — carried
+    honestly on the JWT's ``coarse_role`` claim, never re-derived lossily. ``fine_role``
+    is the §3.3 admin sub-tier (``platform_admin`` / ``tenant_admin``) for an admin, or
+    the role's own string for every other role. ``tenant_id`` / ``user_id`` pin the
+    request for governance and tenant-isolation scoping.
     """
 
     username: str
     role: Role
     persona: str
-    fine_role: str = "user"
+    fine_role: str = "client"
     tenant_id: int | None = None
     user_id: int | None = None
 
 
 # username → (password, coarse role). Demo credentials are a **dev-only** convenience
-# for the offline money-shot demo: they are consulted only when ``app_env == "dev"``
-# AND the username is not a real ``users`` row, and never on a wrong password for an
-# existing account. They are platform-scoped (no tenant), so their runs are ungoverned.
-# In any non-dev environment the demo table is disabled entirely (C2).
+# for the offline money-shot demo — one login per real role (password ``demo``): they
+# are consulted only when ``app_env == "dev"`` AND the username is not a real ``users``
+# row, and never on a wrong password for an existing account. They are platform-scoped
+# (no tenant), so their runs are ungoverned. In any non-dev environment the demo table
+# is disabled entirely (C2).
 _DEMO_USERS: dict[str, tuple[str, Role]] = {
-    "admin": ("admin", Role.ADMIN),
-    "user": ("user", Role.USER),
+    "admin": ("demo", Role.ADMIN),
+    "ai": ("demo", Role.AI_TEAM),
+    "aiteam": ("demo", Role.AI_TEAM),
+    "devops": ("demo", Role.DEVOPS),
+    "client": ("demo", Role.CLIENT),
 }
 
 _bearer = HTTPBearer(auto_error=False)
 
 
 def _persona_for(role: Role) -> str:
-    """Return the default persona for a coarse role (admin → ops lead, else client)."""
-    return "operations_lead" if role is Role.ADMIN else "client"
+    """Return the default persona for a coarse role.
+
+    A ``client`` gets the self-scoped ``client`` persona; every operational role
+    (``admin`` / ``ai_team`` / ``devops``) gets the full ``operations_lead`` persona.
+    """
+    return "client" if role is Role.CLIENT else "operations_lead"
 
 
 async def _authenticate(username: str, password: str) -> AuthContext | None:
@@ -224,11 +249,17 @@ async def _authenticate(username: str, password: str) -> AuthContext | None:
 
 
 def _mint_token(ctx: AuthContext) -> str:
-    """Mint a signed JWT access token carrying ``ctx``'s claims (§3.3)."""
+    """Mint a signed JWT access token carrying ``ctx``'s claims (§3.3).
+
+    Both the fine role (for the admin sub-tier guards) and the true coarse role (for
+    the per-role guards) are carried, so :func:`require_auth` reads the four-valued
+    role directly instead of re-deriving it.
+    """
     return create_access_token(
         user_id=ctx.user_id,
         username=ctx.username,
         role=ctx.fine_role,
+        coarse_role=ctx.role.value,
         tenant_id=ctx.tenant_id,
     )
 
@@ -249,7 +280,26 @@ def require_auth(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid bearer token.",
         ) from exc
-    coarse = Role.ADMIN if claims.role in (PLATFORM_ADMIN, TENANT_ADMIN) else Role.USER
+    # The coarse role is carried honestly on the token (``coarse_role`` claim); read it
+    # directly rather than collapsing the fine role to a lossy admin/user pair.
+    try:
+        coarse = Role(claims.coarse_role)
+    except ValueError as exc:  # unknown/tampered coarse role → auth failure
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid bearer token.",
+        ) from exc
+    # Defense-in-depth (§3.3): the fine ``role`` and the coarse ``coarse_role`` claim
+    # must be mutually consistent. Every real mint path derives ``coarse_role`` from the
+    # fine role via ``coarse_role_from_fine`` (see ``_mint_token`` / ``create_access_token``),
+    # so an inconsistent pair — e.g. fine ``client`` presented with coarse ``admin`` — can
+    # only come from a tampered token or a future mint-path bug. Reject it as invalid
+    # rather than trusting the elevated coarse claim.
+    if coarse_role_from_fine(claims.role) != coarse.value:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid bearer token.",
+        )
     return AuthContext(
         username=claims.username,
         role=coarse,
@@ -266,6 +316,56 @@ def require_admin(auth: AuthContext = Depends(require_auth)) -> AuthContext:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This action requires the admin role.",
+        )
+    return auth
+
+
+def require_roles(*roles: Role) -> Callable[[AuthContext], AuthContext]:
+    """Build a dependency that admits any principal whose coarse role is in ``roles``.
+
+    Use for endpoints open to several roles at once (e.g. ``ai_team`` *or* ``admin``).
+    The single-role guards below are thin specialisations of this.
+    """
+    allowed = frozenset(roles)
+
+    def _dep(auth: AuthContext = Depends(require_auth)) -> AuthContext:
+        if auth.role not in allowed:
+            names = ", ".join(sorted(r.value for r in allowed))
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"This action requires one of the roles: {names}.",
+            )
+        return auth
+
+    return _dep
+
+
+def require_devops(auth: AuthContext = Depends(require_auth)) -> AuthContext:
+    """Require the devops (platform/operations) role."""
+    if auth.role is not Role.DEVOPS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action requires the devops role.",
+        )
+    return auth
+
+
+def require_ai_team(auth: AuthContext = Depends(require_auth)) -> AuthContext:
+    """Require the ai_team (AI/ML engineering) role."""
+    if auth.role is not Role.AI_TEAM:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action requires the ai_team role.",
+        )
+    return auth
+
+
+def require_client(auth: AuthContext = Depends(require_auth)) -> AuthContext:
+    """Require the client (business/end-user) role."""
+    if auth.role is not Role.CLIENT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action requires the client role.",
         )
     return auth
 
@@ -288,6 +388,20 @@ def require_tenant_admin(auth: AuthContext = Depends(require_auth)) -> AuthConte
             detail="This action requires a tenant-admin role.",
         )
     return auth
+
+
+# Multi-role dependency singletons (built once at import so they are immutable
+# defaults, not per-signature calls — the B008-safe idiom for ``require_roles``).
+require_admin_or_devops = require_roles(Role.ADMIN, Role.DEVOPS)
+"""Admit the operator (``admin``) or the platform/ops (``devops``) role."""
+require_admin_or_client = require_roles(Role.ADMIN, Role.CLIENT)
+"""Admit the operator (``admin``) or the business/end-user (``client``) role."""
+require_admin_or_ai_team = require_roles(Role.ADMIN, Role.AI_TEAM)
+"""Admit the operator (``admin``) or the AI/ML engineering (``ai_team``) role.
+
+The AI team owns the self-improvement loop, so it may drive the Improvement-loop ops
+endpoints (diagnose / release / rollback / pending-releases). The human approval gate
+(deciding a staged release) stays admin-only."""
 
 
 def _scope_tenant(auth: AuthContext, requested: int | None) -> int | None:
@@ -337,8 +451,8 @@ def _resolve_persona(requested: str | None, auth: AuthContext) -> str:
         The effective persona id.
 
     Raises:
-        HTTPException: 400 if the persona is unknown; 403 if a non-admin requests
-            an admin-scoped persona.
+        HTTPException: 400 if the persona is unknown; 403 if a ``client`` requests
+            an operator-scoped persona (the operational roles may use it).
     """
     persona_id = requested or auth.persona or DEFAULT_PERSONA_ID
     try:
@@ -348,7 +462,9 @@ def _resolve_persona(requested: str | None, auth: AuthContext) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown persona {persona_id!r}.",
         ) from exc
-    if auth.role is Role.USER and persona.role is Role.ADMIN:
+    # Only the self-scoped ``client`` role is barred from an operator-scoped persona;
+    # the operational roles (admin / ai_team / devops) may drive the full persona.
+    if auth.role is Role.CLIENT and persona.role is Role.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Persona {persona_id!r} is not permitted for your role.",
@@ -584,6 +700,16 @@ async def platform_capabilities(
     )
 
 
+@router.get("/health", tags=["platform"])
+async def health() -> dict[str, str]:
+    """Public liveness probe — the frontend boot probe and load balancers hit this.
+
+    Unauthenticated by design (no user, no tenant, no DB touch) so it answers even
+    when auth or the database is unavailable.
+    """
+    return {"status": "ok", "product": PRODUCT_NAME, "version": PRODUCT_VERSION}
+
+
 @router.get("/about", response_model=AboutResponse, tags=["platform"])
 async def about() -> AboutResponse:
     """Return a trivial, public product-identity card (name, version, module count)."""
@@ -593,6 +719,76 @@ async def about() -> AboutResponse:
         tagline=PRODUCT_TAGLINE,
         modules=len(AEGIS_MODULES),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform operations — live stack, patch freshness, agent risk-map, savings
+# (Wave-2 portal surfaces; see docs/SECURITY_OWASP_AGENTIC.md for the risk map)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/stack", response_model=StackResponse, tags=["platform"])
+async def stack(
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> StackResponse:
+    """Return the live software bill-of-materials (admin/devops — the DevOps portal).
+
+    Backend versions are resolved from the **actually installed** distributions via
+    ``importlib.metadata`` (null when an optional-group dependency isn't installed —
+    honest, not guessed); the small frontend set is parsed from ``frontend/package.json``
+    at request time. Each row maps to the branded Aegis module it powers.
+    """
+    return build_stack()
+
+
+@router.post("/stack/patch-check", response_model=PatchCheckResponse, tags=["platform"])
+async def stack_patch_check(
+    req: PatchCheckRequest | None = None,
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> PatchCheckResponse:
+    """Compare installed vs latest against the live PyPI registry (admin/devops).
+
+    Installed versions come from ``importlib.metadata``; latest comes from a live PyPI
+    JSON query (short timeout, best-effort). Each package is resolved independently: a
+    package is only ever ``current`` after a real registry answer, while one package's
+    network failure marks only that row ``unknown`` (never discarding resolved
+    neighbours). ``online`` is ``True`` when at least one package got a real answer; only
+    when *no* package is reachable does the check degrade to ``online=False`` (or the
+    cached last-successful set), never a fabricated clean bill of health.
+    """
+    packages = req.packages if req is not None else None
+    return patch_check(packages)
+
+
+@router.get("/risk-map", response_model=RiskMapResponse, tags=["platform"])
+async def risk_map(
+    auth: AuthContext = Depends(require_admin_or_client),
+) -> RiskMapResponse:
+    """Return the agent-risk heat-map (admin/client — the assurance surface).
+
+    OWASP-Top-10-for-Agentic-aligned, grounded verbatim in
+    ``docs/SECURITY_OWASP_AGENTIC.md``: each risk carries an honest 1..5
+    likelihood/impact, its real Aegis mitigation, and a ``control_ref`` pointing at a
+    real file. Injection is never marked fully resolved — defense-in-depth, not
+    prevention.
+    """
+    return build_risk_map()
+
+
+@router.get("/savings", response_model=SavingsResponse, tags=["platform"])
+async def savings(
+    auth: AuthContext = Depends(require_auth),
+) -> SavingsResponse:
+    """Return the baseline-vs-actual savings roll-up (any authenticated principal).
+
+    ``require_auth`` because the **Savings** figure appears on the Overview surface in
+    every role's portal. Derived from the real gateway usage ledger
+    (:func:`app.core.llm.usage_tally`): ``saved_usd = baseline − actual`` is the measured
+    small-model-routing win; cache savings bypass the ledger and are reported honestly
+    at $0 in this figure (measured as cache-hit rate elsewhere), so the headline is
+    conservative rather than falsely precise.
+    """
+    return build_savings()
 
 
 @router.post("/query", tags=["agent"])
@@ -665,13 +861,19 @@ async def ml_explain(
 
 @router.get("/metrics", response_model=MetricsResponse, tags=["metrics"])
 async def metrics(
-    auth: AuthContext = Depends(require_platform_admin),
+    auth: AuthContext = Depends(require_auth),
     metrics_store: MetricsStore = Depends(get_metrics_store),
 ) -> MetricsResponse:
-    """Return live efficiency figures (platform-admin only — system-wide, M2).
+    """Return live efficiency figures — the value-spine of the Overview surface.
 
-    The figures are process-wide across every tenant, so they are restricted to the
-    global platform operator; a tenant-admin must not read another tenant's spend.
+    RBAC relaxed from ``require_platform_admin`` to ``require_auth`` (Wave-2 portal
+    reachability): the **Overview** surface is present in *every* role's portal
+    (``admin``/``ai_team``/``devops``/``client`` — see ``frontend/src/routes/Portal.tsx``)
+    and polls this endpoint via ``useMetrics``. Under the old platform-admin gate every
+    non-admin portal 403'd on its landing page. These are **aggregate efficiency
+    figures** (cache-hit rate, small-model share, cost-per-1k, measured savings) — not
+    per-tenant spend, tenant listings or budget mutation, which stay admin-gated. Any
+    authenticated principal may read the platform's own efficiency posture.
     """
     return metrics_store.snapshot()
 
@@ -683,13 +885,15 @@ _AUDIT_LIMIT_MAX = 200
 @router.get("/audit", response_model=AuditLogResponse, tags=["audit"])
 async def audit(
     limit: int = 50,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(require_admin_or_devops),
 ) -> AuditLogResponse:
-    """Return the most recent audit-log rows, newest first (admin only, read-only).
+    """Return the most recent audit-log rows, newest first (admin/devops, read-only).
 
-    Tenant-scoped (H2): a platform-admin sees the whole trail; a tenant-admin sees
-    only rows attributed to their own tenant. ``limit`` is clamped to ``[1, 200]``
-    so a caller cannot request an unbounded scan of the trail.
+    DevOps legitimately needs the audit trail (the DevOps portal's Audit tab), so this
+    read is open to admin *or* devops. Tenant-scoped (H2): a platform-admin sees the
+    whole trail; a tenant-admin (and a tenant-scoped devops) sees only rows attributed
+    to their own tenant. ``limit`` is clamped to ``[1, 200]`` so a caller cannot request
+    an unbounded scan of the trail.
     """
     capped = max(1, min(limit, _AUDIT_LIMIT_MAX))
     scoped = _scope_tenant(auth, None)
@@ -828,6 +1032,53 @@ async def admin_users(
     """List users, scoped to the caller's tenant (platform-admin may target any)."""
     scoped = _scope_tenant(auth, tenant_id)
     return AdminUsersResponse(rows=await list_users(scoped))
+
+
+@router.post(
+    "/admin/users/{user_id}/role", response_model=AdminUserRow, tags=["admin"]
+)
+async def admin_set_user_role(
+    user_id: int,
+    req: UserRoleUpdateRequest,
+    auth: AuthContext = Depends(require_tenant_admin),
+) -> AdminUserRow:
+    """Reassign a user's coarse RBAC role (admin action; §3.3).
+
+    A platform-admin may reassign any user; a tenant-admin is pinned to its own
+    tenant (a cross-tenant target is forbidden). A last-platform-admin lockout is
+    refused so the platform can never be left with no global operator.
+    """
+    scope = _scope_tenant(auth, None)  # None for platform-admin; own tenant otherwise.
+    # A tenant-admin may only touch a user inside its own tenant. Resolve-and-check the
+    # target's tenant first (mirrors the user-scoped budget guard) so a cross-tenant
+    # attempt is a clean 403, never a silent write.
+    if scope is not None:
+        target_tenant = await user_tenant_id(user_id)
+        if target_tenant is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Unknown user."
+            )
+        if target_tenant != scope:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="A tenant-admin may only reassign users in its own tenant.",
+            )
+    try:
+        row = await update_user_role(user_id, req.role, tenant_scope=scope)
+    except LastPlatformAdminError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown user."
+        )
+    await _safe_audit(
+        "admin.user.role_set",
+        auth.username,
+        payload={"user_id": user_id, "role": req.role.value, "tenant_id": scope},
+    )
+    return row
 
 
 @router.get("/admin/budgets", response_model=AdminBudgetsResponse, tags=["admin"])
@@ -1635,9 +1886,9 @@ async def ops_evals(
 @router.post("/ops/diagnose", response_model=OpsDiagnoseResponse, tags=["ops"])
 async def ops_diagnose(
     req: OpsDiagnoseRequest,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsDiagnoseResponse:
-    """Cluster recent failing evals for ``prompt_key`` and draft an improved prompt (admin).
+    """Cluster recent failing evals for ``prompt_key`` and draft an improved prompt (admin/ai_team).
 
     Runs :func:`app.ops.diagnose.diagnose` with the live ``app.core.llm.complete``
     optimizer; the rewrite is written **only as a DRAFT** (never promoted). Returns the
@@ -1673,9 +1924,9 @@ async def ops_diagnose(
 @router.post("/ops/release", response_model=OpsReleaseResponse, tags=["ops"])
 async def ops_release(
     req: OpsReleaseRequest,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsReleaseResponse:
-    """Run the eval gate + tiered decision on a draft (admin).
+    """Run the eval gate + tiered decision on a draft (admin/ai_team).
 
     Injects the REAL regression scorer (:func:`app.ops.gate.make_eval_fn`, which generates
     an answer under the candidate prompt and judges it) and the REAL durable
@@ -1743,9 +1994,9 @@ async def ops_release(
 @router.post("/ops/rollback", response_model=OpsRollbackResponse, tags=["ops"])
 async def ops_rollback(
     req: OpsRollbackRequest,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsRollbackResponse:
-    """Revert ``prompt_key`` to its previous version — a one-call rollback (admin).
+    """Revert ``prompt_key`` to its previous version — a one-call rollback (admin/ai_team).
 
     Reactivates the most-recent archived version and archives the current active. 503
     when the stores are off.
@@ -1778,9 +2029,9 @@ async def ops_rollback(
 )
 async def ops_releases_pending(
     limit: int = 50,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsPendingReleasesResponse:
-    """Return the staged prompt-release approvals awaiting a human decision (admin).
+    """Return the staged prompt-release approvals awaiting a human decision (admin/ai_team).
 
     Tenant-scoped (a platform-admin sees every tenant's staged releases; a tenant-admin
     only its own). Degrades to empty when the stores are off.

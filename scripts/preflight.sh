@@ -34,8 +34,22 @@ port localhost 5432; row $? "Postgres (5432)" "full mode only"
 port localhost 7687; row $? "Neo4j (7687)"    "full mode only"
 port localhost 6379; row $? "Redis (6379)"    "full mode only"
 
+# Regression gate (DeepEval-pattern) — offline CI gate over the seed corpus + the
+# agentic router case. No network, no keys, no stores; a nonzero exit FAILS preflight.
+gate=1
+if [ -x "$ROOT/backend/.venv/bin/python" ]; then
+  ( cd "$ROOT/backend" && PYTHONPATH=src .venv/bin/python -m app.eval.regression ) >/dev/null 2>&1 && gate=0
+  row "$gate" "Regression gate" "DeepEval-pattern eval (offline)"
+else
+  row 1 "Regression gate" "backend/.venv missing — run scripts/bootstrap.sh"
+fi
+
 echo -e "\nGuide:"
 echo "  gateway UP -> lite works (real agent, no databases):  ./scripts/start.sh lite"
 echo "  all UP     -> full mode:                               ./scripts/start.sh full"
 echo "  nothing    -> demo-safe (mock, always works):          ./scripts/start.sh safe"
 echo
+
+# Service probes above are informational (which run mode is available); the
+# regression gate is a real pass/fail bar, so its result is preflight's exit code.
+exit "$gate"

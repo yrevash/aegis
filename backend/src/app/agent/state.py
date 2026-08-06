@@ -76,6 +76,7 @@ class AgentState(TypedDict, total=False):
     route_reason: str
     context: str
     cache_hit: bool
+    answer_cached: bool
     graph_nodes: list[dict[str, Any]]
     graph_edges: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]

@@ -82,7 +82,8 @@ export function LoginPage(): ReactElement {
           </div>
           <h1 className="font-display text-2xl font-semibold">Sign in</h1>
           <p className="mt-1 mb-6 text-sm text-muted-foreground">
-            Access is role-scoped: admins and users land in separate portals.
+            Access is role-scoped: Admin, AI team, DevOps and Client each land in
+            their own portal.
           </p>
 
           <form onSubmit={submit} className="space-y-4">
@@ -116,12 +117,18 @@ export function LoginPage(): ReactElement {
           {mode === 'mock' && (
             <div className="mt-6 rounded-lg border border-border/70 bg-surface/40 p-3">
               <p className="eyebrow mb-2">Demo access</p>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" className="flex-1" onClick={() => quickIn('analyst')}>
-                  Enter as user
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" size="sm" onClick={() => quickIn('admin')}>
+                  Enter as Admin
                 </Button>
-                <Button variant="outline" size="sm" className="flex-1" onClick={() => quickIn('admin')}>
-                  Enter as admin
+                <Button variant="outline" size="sm" onClick={() => quickIn('ai')}>
+                  Enter as AI team
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => quickIn('devops')}>
+                  Enter as DevOps
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => quickIn('client')}>
+                  Enter as Client
                 </Button>
               </div>
             </div>

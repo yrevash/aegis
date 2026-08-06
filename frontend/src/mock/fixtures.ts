@@ -8,6 +8,7 @@
  */
 
 import type {
+  AdminUser,
   ApprovalRow,
   ApprovalsResponse,
   AuditLogResponse,
@@ -19,11 +20,15 @@ import type {
   MLExplainRequest,
   MLExplainResponse,
   MetricsResponse,
+  PatchCheckResponse,
+  RiskMapResponse,
+  SavingsResponse,
+  StackResponse,
   TenantsResponse,
   UsageResponse,
   UsersResponse,
 } from '@/types/api'
-import type { GraphEdge, GraphNode } from '@/types/stream'
+import type { GraphEdge, GraphNode, Role } from '@/types/stream'
 
 /** The base context graph (domain-neutral operations scenario). */
 export const BASE_NODES: GraphNode[] = [
@@ -334,6 +339,195 @@ export function mockMlExplain(_req: MLExplainRequest): MLExplainResponse {
       { feature: 'amount_usd', value: 4200, contribution: -0.09 },
       { feature: 'chargeback_risk', value: 0.22, contribution: -0.06 },
     ],
+  }
+}
+
+// ── DevOps: tech stack + patch check ─────────────────────────────────────────
+
+/**
+ * Mock `GET /stack`. The real Aegis stack (runtime → backend → frontend → infra)
+ * with plausible pinned versions. Marked clearly as a sample inventory: against
+ * a live backend the versions come from the actual lockfiles / runtime.
+ */
+export function mockStack(): StackResponse {
+  return {
+    generated_at: new Date().toISOString(),
+    components: [
+      { name: 'Python', category: 'runtime', package: 'python', version: '3.12.4', aegis_module: null },
+      { name: 'Node.js', category: 'runtime', package: 'node', version: '20.14.0', aegis_module: null },
+      { name: 'FastAPI', category: 'backend', package: 'fastapi', version: '0.115.0', aegis_module: 'Aegis API' },
+      { name: 'Uvicorn', category: 'backend', package: 'uvicorn', version: '0.30.6', aegis_module: 'Aegis API' },
+      { name: 'LangGraph', category: 'backend', package: 'langgraph', version: '0.2.28', aegis_module: 'Aegis Router' },
+      { name: 'Pydantic', category: 'backend', package: 'pydantic', version: '2.9.2', aegis_module: 'Aegis API' },
+      { name: 'SQLAlchemy', category: 'backend', package: 'sqlalchemy', version: '2.0.35', aegis_module: 'Aegis Memory' },
+      { name: 'OpenAI SDK', category: 'backend', package: 'openai', version: '1.51.0', aegis_module: 'Aegis Router' },
+      { name: 'NeMo Guardrails', category: 'backend', package: 'nemoguardrails', version: '0.10.1', aegis_module: 'Aegis Guardrails' },
+      { name: 'scikit-learn', category: 'backend', package: 'scikit-learn', version: '1.5.2', aegis_module: 'Aegis ML' },
+      { name: 'MAPIE (conformal)', category: 'backend', package: 'mapie', version: '0.9.1', aegis_module: 'Aegis ML' },
+      { name: 'SHAP', category: 'backend', package: 'shap', version: '0.46.0', aegis_module: 'Aegis ML' },
+      { name: 'OpenTelemetry SDK', category: 'backend', package: 'opentelemetry-sdk', version: '1.27.0', aegis_module: 'Aegis Trace' },
+      { name: 'React', category: 'frontend', package: 'react', version: '19.1.0', aegis_module: 'Console' },
+      { name: 'Vite', category: 'frontend', package: 'vite', version: '6.0.1', aegis_module: 'Console' },
+      { name: 'TypeScript', category: 'frontend', package: 'typescript', version: '5.6.3', aegis_module: 'Console' },
+      { name: 'Recharts', category: 'frontend', package: 'recharts', version: '2.13.0', aegis_module: 'Console' },
+      { name: 'Tailwind CSS', category: 'frontend', package: 'tailwindcss', version: '4.0.0', aegis_module: 'Console' },
+      { name: 'PostgreSQL', category: 'infra', package: 'postgres', version: '16.4', aegis_module: 'Aegis Memory' },
+      { name: 'pgvector', category: 'infra', package: 'pgvector', version: '0.7.4', aegis_module: 'Aegis Memory' },
+      { name: 'Redis', category: 'infra', package: 'redis', version: '7.4.0', aegis_module: 'Aegis Cache' },
+      { name: 'Docker', category: 'infra', package: 'docker', version: '27.1.1', aegis_module: null },
+    ],
+  }
+}
+
+/**
+ * Mock `POST /stack/patch-check`. Compares installed vs latest for a subset of
+ * the stack. `online: false` here is honest — the mock cannot reach a registry,
+ * so the "latest" figures are illustrative samples, not a live lookup.
+ */
+export function mockPatchCheck(packages?: string[]): PatchCheckResponse {
+  const all: PatchCheckResponse['results'] = [
+    { name: 'fastapi', installed: '0.115.0', latest: '0.115.0', status: 'current' },
+    { name: 'langgraph', installed: '0.2.28', latest: '0.2.44', status: 'outdated', note: 'minor bump — orchestration fixes' },
+    { name: 'pydantic', installed: '2.9.2', latest: '2.9.2', status: 'current' },
+    { name: 'openai', installed: '1.51.0', latest: '1.54.3', status: 'outdated', note: 'new model ids + streaming fixes' },
+    { name: 'nemoguardrails', installed: '0.10.1', latest: '0.10.1', status: 'current' },
+    { name: 'react', installed: '19.1.0', latest: '19.1.0', status: 'current' },
+    { name: 'vite', installed: '6.0.1', latest: '6.0.7', status: 'outdated', note: 'patch — security + HMR' },
+    { name: 'pgvector', installed: '0.7.4', latest: null, status: 'unknown', note: 'registry unreachable in offline demo' },
+  ]
+  const results = packages && packages.length > 0 ? all.filter((r) => packages.includes(r.name)) : all
+  return {
+    checked_at: new Date().toISOString(),
+    online: false,
+    note: 'Sample check — offline demo cannot reach the package registry; against a live backend these compare real installed pins to the registry.',
+    results,
+  }
+}
+
+// ── Client: risk map + savings ───────────────────────────────────────────────
+
+/**
+ * Mock `GET /risk-map`. Six OWASP-Agentic-style agent risks placed on a 1..5
+ * likelihood × impact grid, each mapped to the concrete Aegis control that
+ * mitigates it and a residual band after that control.
+ */
+export function mockRiskMap(): RiskMapResponse {
+  return {
+    generated_at: new Date().toISOString(),
+    note: 'Sample assurance map — OWASP-Agentic-aligned. Bands are illustrative; a live backend derives residuals from real guardrail + audit telemetry.',
+    scale: { likelihood: [1, 2, 3, 4, 5], impact: [1, 2, 3, 4, 5] },
+    risks: [
+      {
+        id: 'AA-01',
+        title: 'Excessive agency',
+        category: 'Autonomy',
+        likelihood: 3,
+        impact: 5,
+        mitigation: 'Human-in-the-loop gate on high-risk tools; conformal deferral routes uncertain actions to an approver.',
+        control_ref: 'Aegis Tools · approval gate',
+        residual: 'low',
+      },
+      {
+        id: 'AA-02',
+        title: 'Tool misuse / unsafe invocation',
+        category: 'Tools',
+        likelihood: 3,
+        impact: 4,
+        mitigation: 'Allowlisted tools with typed args; non-allowlisted calls are denied and audited.',
+        control_ref: 'Aegis Tools · allowlist',
+        residual: 'low',
+      },
+      {
+        id: 'AA-03',
+        title: 'Prompt injection',
+        category: 'Input integrity',
+        likelihood: 4,
+        impact: 4,
+        mitigation: 'Input rail scans and neutralises injection patterns before the planner sees untrusted context.',
+        control_ref: 'Aegis Guardrails · input rail',
+        residual: 'medium',
+      },
+      {
+        id: 'AA-04',
+        title: 'Sensitive-information disclosure',
+        category: 'Output integrity',
+        likelihood: 3,
+        impact: 5,
+        mitigation: 'Output rail redacts PII (kind-only logging); RBAC scopes retrieval so answers never exceed the caller.',
+        control_ref: 'Aegis Guardrails · output rail + RBAC',
+        residual: 'low',
+      },
+      {
+        id: 'AA-05',
+        title: 'Unbounded consumption / cost runaway',
+        category: 'Governance',
+        likelihood: 3,
+        impact: 3,
+        mitigation: 'Per-tenant and per-user budgets at the model chokepoint degrade gracefully to "budget exceeded".',
+        control_ref: 'Aegis Governance · budgets',
+        residual: 'low',
+      },
+      {
+        id: 'AA-06',
+        title: 'Hallucination / ungrounded answer',
+        category: 'Reliability',
+        likelihood: 4,
+        impact: 3,
+        mitigation: 'Retrieval-grounded generation with provenance; conformal abstention when confidence is degenerate.',
+        control_ref: 'Aegis ML · conformal + provenance',
+        residual: 'medium',
+      },
+    ],
+  }
+}
+
+/**
+ * Mock `GET /savings`. Baseline (everything on the frontier model) vs actual,
+ * with an honest breakdown of what drove the delta. Marked sample: a live
+ * backend tallies these from real routing + cache telemetry.
+ */
+export function mockSavings(): SavingsResponse {
+  const baseline = 12_480
+  const actual = 3_910
+  const saved = baseline - actual
+  return {
+    generated_at: new Date().toISOString(),
+    baseline_cost_usd: baseline,
+    actual_cost_usd: actual,
+    saved_usd: saved,
+    saved_pct: saved / baseline,
+    note: 'Sample 30-day roll-up — figures illustrate the routing + caching win; a live backend computes them from real usage.',
+    breakdown: [
+      { source: 'Small-model routing', saved_usd: 6_120, explanation: 'Low-risk turns handled by an 8B/mini model instead of the frontier model.' },
+      { source: 'Semantic cache hits', saved_usd: 1_740, explanation: 'Near-duplicate queries served from cache, skipping generation entirely.' },
+      { source: 'Prompt / context trimming', saved_usd: 710, explanation: 'Retrieval scoping and prompt compaction cut prompt tokens per run.' },
+    ],
+  }
+}
+
+// ── Admin: role assignment ───────────────────────────────────────────────────
+
+/** Portal-role → the internal RBAC role label the admin store uses. */
+const ROLE_LABELS: Record<Role, string> = {
+  admin: 'platform_admin',
+  ai_team: 'member',
+  devops: 'member',
+  client: 'member',
+}
+
+/**
+ * Mock `POST /admin/users/{id}/role`. Echoes the reassigned user so the Roles &
+ * Access surface can reflect the change optimistically without a backend.
+ */
+export function mockAssignRole(userId: number, role: Role): AdminUser {
+  const existing = USER_SEED.find((u) => u.id === userId)
+  return {
+    id: userId,
+    username: existing?.username ?? `user.${userId}`,
+    email: existing?.email ?? null,
+    role: ROLE_LABELS[role],
+    tenant_id: existing?.tenant_id ?? null,
+    is_active: existing?.is_active ?? true,
   }
 }
 

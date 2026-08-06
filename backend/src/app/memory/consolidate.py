@@ -51,6 +51,7 @@ from app.adapter.memory_spec import (
 )
 from app.core.models import ModelRole
 from app.memory.config import MemoryConfig
+from app.memory.scoring import ForgetPolicy
 from app.memory.stores import (
     ConsolidationStatus,
     MemoryConsolidationJob,
@@ -752,6 +753,78 @@ async def consolidate(
     return result
 
 
+async def prune_forgotten(
+    session: AsyncSession,
+    *,
+    config: MemoryConfig,
+    limit: int = 500,
+    trace_id: str | None = None,
+) -> int:
+    """Soft-archive stale, low-value, aged-out facts out of hot recall (the forget sweep).
+
+    The Generative-Agents-style forgetting pass (``ForgetPolicy``): for each currently-live
+    fact whose confidence-weighted recency has decayed below ``config.forget_floor`` while
+    it has never been recalled and is older than ``config.forget_min_age_days``, close it in
+    transaction-time (``expired_at = now``) so it drops out of hot recall
+    (``invalid_at IS NULL AND expired_at IS NULL``). This is a soft-archival, **never a
+    hard delete** — the row is retained for audit and the belief timeline exactly like a
+    supersession — and each archival is logged to ``memory_write_log`` as a ``PRUNE`` op.
+
+    The SQL prefilter (live + never-recalled) bounds the scan cheaply; the exponential
+    decay/floor test is applied in Python because it is not portable SQL across the SQLite
+    test DB and Postgres. Does **not** commit — the caller owns the transaction boundary.
+
+    Returns:
+        The number of facts archived.
+    """
+    policy = ForgetPolicy(
+        forget_floor=config.forget_floor,
+        forget_min_age_days=config.forget_min_age_days,
+        half_life_days=config.half_life_days_fact,
+    )
+    stmt = (
+        select(MemoryFact)
+        .where(
+            MemoryFact.expired_at.is_(None),
+            MemoryFact.access_count == 0,
+        )
+        .order_by(MemoryFact.valid_at)
+        .limit(limit)
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+
+    now = _now()
+    archived = 0
+    for fact in rows:
+        valid_at = fact.valid_at
+        if valid_at.tzinfo is None:
+            valid_at = valid_at.replace(tzinfo=UTC)
+        age_days = max(0.0, (now - valid_at).total_seconds() / 86400.0)
+        if not policy.is_archivable(
+            confidence=fact.confidence,
+            age_days=age_days,
+            access_count=fact.access_count or 0,
+            invalidated=fact.invalid_at is not None,
+        ):
+            continue
+        before = _fact_snapshot(fact)
+        fact.expired_at = now
+        await session.flush()
+        _write_log(
+            session,
+            subject_id=fact.subject_id,
+            tenant_id=fact.tenant_id,
+            op=WriteOp.PRUNE,
+            fact_id=fact.id,
+            before=before,
+            after=_fact_snapshot(fact),
+            reason="prune: decayed below forget_floor, never recalled, aged past floor",
+            trace_id=trace_id,
+        )
+        archived += 1
+    return archived
+
+
 async def sweep_pending(
     session: AsyncSession,
     *,
@@ -820,6 +893,17 @@ async def sweep_pending(
         await session.commit()
         processed += 1
 
+    # Forgetting pass: every drain cycle also soft-archives stale, low-value, aged-out
+    # facts out of hot recall (ForgetPolicy). Isolated from the queue work and committed on
+    # its own — a prune failure must never wedge consolidation, and it does not affect the
+    # returned processed-jobs count.
+    try:
+        pruned = await prune_forgotten(session, config=config)
+        if pruned:
+            await session.commit()
+    except Exception:  # noqa: BLE001 - prune is best-effort; never break the sweep
+        await session.rollback()
+
     return processed
 
 
@@ -827,5 +911,6 @@ __all__ = [
     "ConsolidationResult",
     "consolidate",
     "enqueue_consolidation",
+    "prune_forgotten",
     "sweep_pending",
 ]

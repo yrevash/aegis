@@ -96,6 +96,21 @@ class Settings(BaseSettings):
     # ── Observability ────────────────────────────────────────────────────────
     phoenix_enabled: bool = Field(default=True)
 
+    # ── Retrieval intelligence (docs/EVAL_STRATEGY.md) ───────────────────────
+    # A cheap-model step rewrites the turn into a standalone, context-resolved
+    # search query before retrieval (app/retrieval/query_rewrite.py).
+    query_rewrite_enabled: bool = Field(default=True)
+    # A bounded Self-RAG/FLARE-style loop: retrieve → judge sufficiency →
+    # reformulate → re-retrieve, up to N rounds (app/agent/retrieval_loop.py).
+    agentic_retrieval_enabled: bool = Field(default=True)
+    agentic_retrieval_max_rounds: int = Field(default=2)
+    # Answer-level semantic cache: a semantically-equivalent question reuses the
+    # cached final answer, skipping the generation call (app/retrieval/answer_cache.py).
+    # Scoped per tenant+persona+role so answers never cross principals.
+    answer_cache_enabled: bool = Field(default=True)
+    answer_cache_threshold: float = Field(default=0.97)
+    answer_cache_ttl_seconds: int = Field(default=1800)
+
     # ── Run mode (see docs/RUNBOOK.md) ───────────────────────────────────────
     # "on" (default) uses the real stores — LightRAG over Neo4j + pgvector with a
     # Redis semantic cache. "off" runs a self-contained in-memory backend + cache

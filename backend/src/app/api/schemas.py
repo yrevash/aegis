@@ -23,10 +23,26 @@ from pydantic import BaseModel, Field
 
 
 class Role(StrEnum):
-    """Authenticated role; drives RBAC and which portal/surface is served."""
+    """Authenticated role; drives RBAC and which portal/surface is served.
+
+    Four real personas back the platform's RBAC (§3.3):
+
+    - ``ADMIN`` — the operator/governance role. Split at the fine tier into
+      ``platform_admin`` (no tenant, global) and ``tenant_admin`` (scoped) — see
+      :func:`app.core.security.principal_role`.
+    - ``AI_TEAM`` — the AI/ML engineering role (owns the LLM-Ops surfaces).
+    - ``DEVOPS`` — the platform/operations role.
+    - ``CLIENT`` — the business/end-user role (the former coarse ``user``), always
+      self-scoped to its own data.
+
+    ``CLIENT`` is the direct successor of the retired ``user`` value: any principal
+    that used to be a plain ``user`` is now a ``client``.
+    """
 
     ADMIN = "admin"
-    USER = "user"
+    AI_TEAM = "ai_team"
+    DEVOPS = "devops"
+    CLIENT = "client"
 
 
 class RunStatus(StrEnum):
@@ -737,6 +753,12 @@ class AdminUsersResponse(BaseModel):
     rows: list[AdminUserRow]
 
 
+class UserRoleUpdateRequest(BaseModel):
+    """Body for `POST /admin/users/{user_id}/role` — reassign a user's RBAC role."""
+
+    role: Role = Field(description="The new coarse role to assign the user.")
+
+
 class BudgetRow(BaseModel):
     """One hierarchical spend/rate cap row (`GET /admin/budgets`; §3.3)."""
 
@@ -1085,3 +1107,124 @@ class OpsReleaseDecisionResponse(BaseModel):
     outcome: str = Field(description="promoted | archived | unknown.")
     prompt_key: str | None = None
     active_version: int | None = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform surfaces — tech stack, patch check, agent risk-map, savings (§Wave-2)
+#
+# These mirror ``frontend/src/types/api.ts`` **exactly** — the field names and
+# unions here are the contract the React portal renders against. Keep them in
+# lock-step. The logic that populates them lives in :mod:`app.platform`; these are
+# pure data shells.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class StackComponent(BaseModel):
+    """One installed component in the software bill-of-materials (`GET /stack`)."""
+
+    name: str = Field(description="Human label, e.g. 'FastAPI'.")
+    category: Literal["runtime", "backend", "frontend", "infra"] = Field(
+        description="Coarse layer: runtime | backend | frontend | infra."
+    )
+    package: str = Field(description="Distribution/package name resolved for the version.")
+    version: str | None = Field(
+        default=None,
+        description="Real installed version, or null when the package is not installed "
+        "(honest for optional-group dependencies).",
+    )
+    aegis_module: str | None = Field(
+        default=None,
+        description="Branded Aegis module this component powers, or null for shared infra.",
+    )
+
+
+class StackResponse(BaseModel):
+    """Body for `GET /stack` — the full, live software bill of materials."""
+
+    generated_at: str = Field(description="ISO 8601 UTC time the stack was inventoried.")
+    components: list[StackComponent] = Field(default_factory=list)
+
+
+class PatchCheckRequest(BaseModel):
+    """Body for `POST /stack/patch-check` — optionally narrow to a subset of packages."""
+
+    packages: list[str] | None = Field(
+        default=None,
+        description="Package names to check; omit/null to check the whole tracked stack.",
+    )
+
+
+class PatchResult(BaseModel):
+    """One package's freshness verdict from the patch check."""
+
+    name: str
+    installed: str | None = Field(default=None, description="Installed version, or null.")
+    latest: str | None = Field(
+        default=None, description="Latest version on the registry, or null when unknown."
+    )
+    status: Literal["current", "outdated", "unknown"] = Field(
+        description="'current'/'outdated' only after a real registry answer; else 'unknown'."
+    )
+    note: str | None = Field(default=None, description="Optional human note for this row.")
+
+
+class PatchCheckResponse(BaseModel):
+    """Body for `POST /stack/patch-check` — installed vs latest per package."""
+
+    checked_at: str = Field(description="ISO 8601 UTC time the check ran (or was cached).")
+    online: bool = Field(
+        description="Whether the registry was reachable; false ⇒ results are best-effort."
+    )
+    note: str = Field(description="Honest summary of how to read the results.")
+    results: list[PatchResult] = Field(default_factory=list)
+
+
+class RiskEntry(BaseModel):
+    """One entry on the agent-risk heat-map (OWASP-Agentic-aligned)."""
+
+    id: str
+    title: str
+    category: str
+    likelihood: int = Field(ge=1, le=5, description="1..5 likelihood band.")
+    impact: int = Field(ge=1, le=5, description="1..5 impact band.")
+    mitigation: str = Field(description="The real Aegis control that mitigates the risk.")
+    control_ref: str = Field(description="Real file/module implementing the control.")
+    residual: Literal["low", "medium", "high"] = Field(
+        description="Residual risk after the mitigation."
+    )
+
+
+class RiskScale(BaseModel):
+    """The 1..5 axes the heat-map is plotted on."""
+
+    likelihood: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
+    impact: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
+
+
+class RiskMapResponse(BaseModel):
+    """Body for `GET /risk-map` — the agent-risk heat-map + its scale."""
+
+    generated_at: str = Field(description="ISO 8601 UTC time the map was generated.")
+    note: str = Field(description="How to read the map (this deployment's own posture).")
+    scale: RiskScale = Field(default_factory=RiskScale)
+    risks: list[RiskEntry] = Field(default_factory=list)
+
+
+class SavingsBreakdownRow(BaseModel):
+    """One contributor to the total savings."""
+
+    source: str
+    saved_usd: float
+    explanation: str = Field(description="Plain-language how-it-saves (flags any estimate).")
+
+
+class SavingsResponse(BaseModel):
+    """Body for `GET /savings` — baseline vs actual spend and what drove it."""
+
+    generated_at: str = Field(description="ISO 8601 UTC time the figures were computed.")
+    baseline_cost_usd: float
+    actual_cost_usd: float
+    saved_usd: float = Field(description="baseline − actual.")
+    saved_pct: float = Field(description="Fraction saved vs baseline, 0..1.")
+    note: str = Field(description="Honest framing of the figure (flags any estimate).")
+    breakdown: list[SavingsBreakdownRow] = Field(default_factory=list)

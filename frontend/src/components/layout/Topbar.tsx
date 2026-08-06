@@ -17,7 +17,16 @@ interface TopbarProps {
 
 /** Human name for the portal the session is scoped to. */
 function portalName(role: Session['role']): string {
-  return role === 'admin' ? 'Admin portal' : 'User portal'
+  switch (role) {
+    case 'admin':
+      return 'Admin portal'
+    case 'ai_team':
+      return 'AI team portal'
+    case 'devops':
+      return 'DevOps portal'
+    case 'client':
+      return 'Client portal'
+  }
 }
 
 /**

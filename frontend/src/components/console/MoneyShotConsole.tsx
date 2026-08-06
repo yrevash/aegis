@@ -58,7 +58,7 @@ function GraphFallback(): ReactElement {
 export function MoneyShotConsole(): ReactElement {
   const { session } = useAuth()
   const token = session?.token ?? null
-  const role = session?.role ?? 'user'
+  const role = session?.role ?? 'ai_team'
 
   const { state, running, start, resolveApproval, reset } = useRunStream()
   const metrics = useMetrics(token)

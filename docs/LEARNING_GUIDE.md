@@ -75,3 +75,10 @@ underneath. Full detail in [`learn/20-backend.md`](learn/20-backend.md).
   audits (`docs/HONESTY_AUDIT.md`, `docs/AUDIT_ROUND2.md`) exist because "claimed but not
   real" is the one thing this project does not ship — where a feature is optional or
   not-wired, the docs say so plainly.
+
+### Deeper reference docs
+
+| Doc | What it covers |
+|---|---|
+| [`docs/EVAL_STRATEGY.md`](EVAL_STRATEGY.md) | The three-layer evaluation strategy (trace-level, deterministic retrieval gate, LLM-as-judge). |
+| [`docs/SECURITY_OWASP_AGENTIC.md`](SECURITY_OWASP_AGENTIC.md) | OWASP Top-10-for-Agentic-Apps mapping — each risk to the control that addresses it. |

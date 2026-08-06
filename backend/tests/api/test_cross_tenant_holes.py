@@ -47,8 +47,8 @@ async def _seed_two_tenants() -> None:
             [
                 Tenant(id=1, name="Tenant A"),
                 Tenant(id=2, name="Tenant B"),
-                User(id=11, username="a-user", role=Role.USER, tenant_id=1),
-                User(id=22, username="b-user", role=Role.USER, tenant_id=2),
+                User(id=11, username="a-user", role=Role.CLIENT, tenant_id=1),
+                User(id=22, username="b-user", role=Role.CLIENT, tenant_id=2),
             ]
         )
         await session.commit()
@@ -196,12 +196,25 @@ async def test_budget_listing_is_tenant_scoped(client, db):
     assert {r["scope_id"] for r in p.json()["rows"]} == {1, 2}
 
 
-# ── M2: /metrics restricted to platform-admin ────────────────────────────────
+# ── /metrics reachability (Wave-2: relaxed for the Overview surface) ──────────
 
 
-async def test_metrics_platform_admin_only(client, db):
-    forbidden = await client.get("/metrics", headers=_headers(TENANT_ADMIN, tenant_id=1))
-    assert forbidden.status_code == 403
+async def test_metrics_requires_auth_but_open_to_every_role(client, db):
+    """/metrics is the value-spine of the Overview surface, present in *every* role's
+    portal (see ``frontend/src/routes/Portal.tsx``), so its guard was relaxed from
+    ``require_platform_admin`` to ``require_auth`` (Wave-2). It exposes only *aggregate*
+    efficiency figures (cache-hit rate, small-model share, measured savings), not
+    per-tenant spend/tenant listings/budget mutation — those stay admin-gated (see the
+    budget/usage tenant-scoping tests above). Authentication is still required.
+    """
+    # Every authenticated role — including a tenant-admin and a plain client — may read
+    # the aggregate efficiency posture.
+    tenant_admin = await client.get("/metrics", headers=_headers(TENANT_ADMIN, tenant_id=1))
+    assert tenant_admin.status_code == 200
 
-    ok = await client.get("/metrics", headers=_headers(PLATFORM_ADMIN))
-    assert ok.status_code == 200
+    platform_admin = await client.get("/metrics", headers=_headers(PLATFORM_ADMIN))
+    assert platform_admin.status_code == 200
+
+    # But an unauthenticated caller is still rejected.
+    anon = await client.get("/metrics")
+    assert anon.status_code == 401

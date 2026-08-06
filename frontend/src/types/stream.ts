@@ -10,8 +10,13 @@
  * @see backend/src/app/api/schemas.py
  */
 
-/** Authenticated role; drives RBAC and which portal/surface is served. */
-export type Role = 'admin' | 'user'
+/**
+ * Authenticated role; drives RBAC and which portal/surface is served. The four
+ * portals are: `admin` (platform owner — sees everything), `ai_team` (builds and
+ * tunes the agent), `devops` (runs the stack — versions, patches, ops), and
+ * `client` (the tenant end-user — value, risk, read-only access).
+ */
+export type Role = 'admin' | 'ai_team' | 'devops' | 'client'
 
 /** Terminal status of a query run. */
 export type RunStatus = 'completed' | 'blocked' | 'awaiting_approval' | 'error'

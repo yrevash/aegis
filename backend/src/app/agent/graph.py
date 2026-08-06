@@ -58,8 +58,10 @@ from app.api.schemas import (
     RiskLevel,
     RunStatus,
 )
+from app.core.governance import get_governance_context
 from app.core.models import ModelRole
 from app.observability import SpanKind, semconv, set_span_attributes, span
+from app.retrieval.query_rewrite import CallUsage, rewrite_query
 
 from . import events
 from .deps import (
@@ -67,6 +69,7 @@ from .deps import (
     risk_at_least,
     risk_rank,
 )
+from .retrieval_loop import agentic_retrieve
 from .router import route_query
 from .state import AgentState
 
@@ -76,6 +79,18 @@ logger = logging.getLogger(__name__)
 def _persona(state: AgentState) -> str:
     """Return the persona id for ``state`` (falling back to the default)."""
     return state.get("persona") or DEFAULT_PERSONA_ID
+
+
+def _cache_scope(state: AgentState) -> str:
+    """Build the answer-cache partition key from tenant + persona + routed role.
+
+    Folding tenant, persona and specialist role into one opaque scope guarantees a
+    cached answer can never be served across tenants/personas/roles (a correctness +
+    isolation requirement, not an optimisation).
+    """
+    g = get_governance_context()
+    tenant = g.tenant_id if g else None
+    return f"{tenant}:{state.get('persona', '')}:{state.get('agent_role', '')}"
 
 
 # Splits plan text into sentences for chunked ``reasoning`` events (no true
@@ -231,12 +246,26 @@ def build_agent(deps: AgentDeps) -> CompiledStateGraph:
                 semconv.ROUTER_USED_LLM: decision.used_llm,
             }
         )
-        writer(
-            events.routing(
-                role=decision.role, reason=decision.reason, used_llm=decision.used_llm
+        # Make the hand-off an explicit, labelled A2A span so the trace shows the
+        # supervisor → specialist edge (from/to/reason/protocol) as its own node.
+        with span(
+            SpanKind.AGENT,
+            f"handoff → {decision.role}",
+            attributes={
+                semconv.A2A_FROM: "supervisor",
+                semconv.A2A_TO: decision.role,
+                semconv.A2A_REASON: decision.reason,
+                semconv.A2A_PROTOCOL: "a2a",
+            },
+        ):
+            writer(
+                events.routing(
+                    role=decision.role,
+                    reason=decision.reason,
+                    used_llm=decision.used_llm,
+                )
             )
-        )
-        await _record_route_audit(state, decision)
+            await _record_route_audit(state, decision)
         return {"agent_role": decision.role, "route_reason": decision.reason}
 
     async def answer_memory(state: AgentState) -> dict[str, Any]:
@@ -316,20 +345,89 @@ def build_agent(deps: AgentDeps) -> CompiledStateGraph:
         }
 
     async def retrieve(state: AgentState) -> dict[str, Any]:
-        """Agentic retrieval: fetch context and stream the graph delta."""
+        """Agentic retrieval: fetch context and stream the graph delta.
+
+        Depending on config this is either a single-shot retrieval (today's behaviour),
+        a single retrieval preceded by a context-aware query rewrite, or the bounded
+        Self-RAG/FLARE loop (retrieve → judge → reformulate → re-retrieve, merging
+        evidence). Whichever ran, the DOWNSTREAM stream/provenance emissions and the
+        returned ``context``/``graph``/``query_vec`` are on the final merged result, so
+        the qa pipeline is unchanged from here on.
+        """
         writer = get_stream_writer()
         writer(events.retrieval("started"))
-        result = await deps.retrieve(state["query"], persona=state.get("persona"))
+        history = state.get("messages") or None
+        if config.agentic_retrieval_enabled:
+            # Bounded agentic loop; the rewriter (if enabled) resolves the entry query
+            # against conversation history before round 1.
+            if config.query_rewrite_enabled:
+
+                async def rewrite_fn(q: str, *, history=history):  # noqa: ANN001, ANN202
+                    return await rewrite_query(q, history=history, complete=deps.complete)
+
+            else:
+                rewrite_fn = None
+            agentic = await agentic_retrieve(
+                state["query"],
+                retrieve_fn=deps.retrieve,
+                complete=deps.complete,
+                rewrite_fn=rewrite_fn,
+                max_rounds=config.agentic_retrieval_max_rounds,
+                persona=state.get("persona"),
+            )
+            result = agentic.result
+            rounds = [
+                {
+                    "query": r.query,
+                    "num_candidates": r.num_candidates,
+                    "sufficient": r.sufficient,
+                }
+                for r in agentic.rounds
+            ]
+            rewritten_query = agentic.rounds[0].query if agentic.rounds else state["query"]
+            # Internal rewrite+judge spend from the loop (accrued into telemetry below).
+            retrieval_usage = agentic.usage
+        elif config.query_rewrite_enabled:
+            rw = await rewrite_query(state["query"], complete=deps.complete)
+            rewritten_query = rw.rewritten if rw.changed else state["query"]
+            result = await deps.retrieve(rewritten_query, persona=state.get("persona"))
+            rounds = []
+            retrieval_usage = rw.usage
+        else:
+            rewritten_query = state["query"]
+            result = await deps.retrieve(state["query"], persona=state.get("persona"))
+            rounds = []
+            retrieval_usage = CallUsage()  # no internal model call on the plain path
         # Stamp the RETRIEVER node span (opened by ``_timed``) with the query and the
         # honest recall funnel (N candidates → K sources) so Phoenix shows them.
         set_span_attributes(
             {
-                semconv.RETRIEVAL_QUERY: state["query"],
+                semconv.RETRIEVAL_QUERY: rewritten_query,
                 semconv.RETRIEVAL_RESULT_COUNT: len(result.sources),
                 semconv.RETRIEVAL_CANDIDATE_COUNT: int(result.num_candidates),
                 semconv.RETRIEVAL_CACHE_HIT: bool(result.cache_hit),
+                semconv.RETRIEVAL_ROUNDS: len(rounds) or 1,
+                semconv.RETRIEVAL_REWRITTEN: rewritten_query.strip()
+                != state["query"].strip(),
             }
         )
+        # Glass-box: make the retrieval-intelligence behaviour visible in the live trace
+        # (real consumption of what used to be write-only state). Surface a context-aware
+        # rewrite, and any agentic re-retrieval with its follow-up queries.
+        if rewritten_query.strip() != state["query"].strip():
+            writer(
+                events.reasoning(
+                    f"Rewrote the query for retrieval: {rewritten_query!r}"
+                )
+            )
+        if len(rounds) > 1:
+            followups = ", ".join(repr(r["query"]) for r in rounds[1:])
+            writer(
+                events.reasoning(
+                    f"Agentic retrieval ran {len(rounds)} rounds "
+                    f"(first round judged insufficient); follow-up queries: {followups}"
+                )
+            )
         nodes = [n.model_dump() for n in result.graph_delta.nodes]
         edges = [e.model_dump() for e in result.graph_delta.edges]
         scored = [
@@ -361,6 +459,10 @@ def build_agent(deps: AgentDeps) -> CompiledStateGraph:
             # Surface the query embedding for the "free" episodic write reuse — only a
             # real gateway vector (dim EMBED_DIM); None on cache-exact / lite / 256-dim.
             "query_vec": result.query_vec,
+            # Accrue the loop's internal rewrite+judge spend into the run's per-run
+            # telemetry so cost_usd/tokens reflect reality (the span attrs + reasoning
+            # events above carry the rewrite/rounds provenance — no write-only state).
+            **_accrue(state, retrieval_usage),
         }
 
     async def recall_memory(state: AgentState) -> dict[str, Any]:
@@ -452,9 +554,46 @@ def build_agent(deps: AgentDeps) -> CompiledStateGraph:
             return {}
 
     async def plan(state: AgentState) -> dict[str, Any]:
-        """Reason over the context + ML prediction and propose action tool calls."""
+        """Reason over the context + ML prediction and propose action tool calls.
+
+        Before doing any of that, a qa turn first consults the answer-level semantic
+        cache: on a hit the expensive generation call is skipped entirely and the cached
+        answer short-circuits planning (the output rail still runs). The cache is scoped
+        per tenant + persona + role so an answer can never cross those boundaries. The
+        lookup is skipped on a self-repair re-plan (a retry means the first answer was
+        insufficient) and whenever no real query embedding is available.
+        """
         writer = get_stream_writer()
         persona = _persona(state)
+        if (
+            config.answer_cache_enabled
+            and deps.answer_cache is not None
+            and state.get("agent_role") == "qa"
+            and not state.get("reflect_retry")
+            and state.get("query_vec")
+        ):
+            try:
+                hit = await deps.answer_cache.get(
+                    state["query_vec"], scope=_cache_scope(state)
+                )
+            except Exception:  # noqa: BLE001 - cache read is best-effort; never fail a run
+                logger.warning("Answer cache read failed; planning normally",
+                               exc_info=True)
+                hit = None
+            if hit is not None:
+                set_span_attributes(
+                    {
+                        semconv.ANSWER_CACHE_HIT: True,
+                        semconv.ANSWER_CACHE_SIMILARITY: float(hit.similarity),
+                    }
+                )
+                return {
+                    "messages": [],
+                    "tool_calls": [],
+                    "answer": hit.answer,
+                    "answer_cached": True,
+                    "plan_iterations": state.get("plan_iterations", 0) + 1,
+                }
         user_content = (
             f"Context:\n{state.get('context', '')}\n\n"
             f"Question: {state['query']}"
@@ -686,7 +825,15 @@ def build_agent(deps: AgentDeps) -> CompiledStateGraph:
         }
 
     async def guard_output(state: AgentState) -> dict[str, Any]:
-        """Output rail: scan the complete answer before it is streamed."""
+        """Output rail: scan the complete answer before it is streamed.
+
+        On the way out it also POPULATES the answer-level semantic cache: a clean,
+        freshly-generated qa answer (not itself served from cache, no tool actions, not
+        gated, and with a real query embedding) is stored under the tenant+persona+role
+        scope so a future equivalent question can skip the generation call. A BLOCKed
+        answer is never cached, and the write is best-effort (a cache failure never
+        breaks the run).
+        """
         writer = get_stream_writer()
         result = await deps.check_output(state.get("answer", ""))
         _stamp_guardrail(GuardStage.OUTPUT, result)
@@ -696,10 +843,39 @@ def build_agent(deps: AgentDeps) -> CompiledStateGraph:
             )
         )
         if result.verdict is GuardVerdict.BLOCK:
-            return {"answer": "[response withheld by the output guardrail]"}
-        if result.verdict is GuardVerdict.REDACT:
-            return {"answer": result.text}
-        return {}
+            final_answer = None  # withheld answers are never cached
+            update: dict[str, Any] = {
+                "answer": "[response withheld by the output guardrail]"
+            }
+        elif result.verdict is GuardVerdict.REDACT:
+            final_answer = result.text
+            update = {"answer": result.text}
+        else:
+            final_answer = state.get("answer", "")
+            update = {}
+
+        if (
+            final_answer
+            and config.answer_cache_enabled
+            and deps.answer_cache is not None
+            and state.get("agent_role") == "qa"
+            and not state.get("answer_cached")
+            and not state.get("tool_results")
+            and not state.get("gated")
+            and state.get("query_vec")
+        ):
+            try:
+                await deps.answer_cache.set(
+                    query=state["query"],
+                    embedding=state["query_vec"],
+                    answer=final_answer,
+                    scope=_cache_scope(state),
+                    sources=None,
+                )
+            except Exception:  # noqa: BLE001 - cache write must never break a run
+                logger.warning("Answer cache write failed; answer not cached",
+                               exc_info=True)
+        return update
 
     async def stream_answer(state: AgentState) -> dict[str, Any]:
         """Stream the guarded answer as ``token`` events, chunked by words."""

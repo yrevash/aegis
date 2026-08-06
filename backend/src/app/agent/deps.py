@@ -26,6 +26,7 @@ from app.api.schemas import MLExplainResponse, RiskLevel
 if TYPE_CHECKING:
     from app.memory.config import MemoryConfig
     from app.memory.working import AssembledMemory
+    from app.retrieval.answer_cache import AnswerCache
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,17 @@ class AgentConfig:
     stream_chunk_words: int = 4
     max_plan_iterations: int = 2
     approval_park_timeout: float | None = None
+    #: Retrieval intelligence (docs/EVAL_STRATEGY.md). ``query_rewrite_enabled`` runs a
+    #: cheap-model, context-aware rewrite before retrieval; ``agentic_retrieval_enabled``
+    #: runs the bounded Self-RAG/FLARE loop (retrieve → judge sufficiency → reformulate →
+    #: re-retrieve, capped by ``agentic_retrieval_max_rounds``); ``answer_cache_enabled``
+    #: reuses a semantically-equivalent prior answer (scoped per tenant+persona+role),
+    #: skipping the generation call. All ON in production; test fakes pin them off for
+    #: deterministic single-shot behaviour.
+    query_rewrite_enabled: bool = True
+    agentic_retrieval_enabled: bool = True
+    agentic_retrieval_max_rounds: int = 2
+    answer_cache_enabled: bool = True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,6 +375,10 @@ class AgentDeps:
     #: Long-term memory capability. ``None`` (the test-fake default) makes the
     #: ``recall_memory``/``persist_memory`` nodes silent no-ops — today's exact stream.
     memory: MemoryDeps | None = None
+    #: Answer-level semantic cache (skip the generation call on a semantically-
+    #: equivalent prior answer). ``None`` (the test-fake default, or when stores/answer
+    #: cache are disabled) makes the qa cache lookup/store a silent no-op.
+    answer_cache: AnswerCache | None = None
 
     @classmethod
     def default(cls, config: AgentConfig | None = None) -> AgentDeps:
@@ -375,10 +391,22 @@ class AgentDeps:
             An :class:`AgentDeps` wired to the live gateway, retrieval, guardrails,
             ML spine and adapter tools.
         """
+        from app.config import get_settings
         from app.core.llm import complete
         from app.guardrails import check_input, check_output
         from app.ml import predict_explain
         from app.retrieval import retrieve
+
+        settings = get_settings()
+        # When no explicit config is passed, build one from settings so environment
+        # overrides of the retrieval-intelligence flags actually take effect.
+        if config is None:
+            config = AgentConfig(
+                query_rewrite_enabled=settings.query_rewrite_enabled,
+                agentic_retrieval_enabled=settings.agentic_retrieval_enabled,
+                agentic_retrieval_max_rounds=settings.agentic_retrieval_max_rounds,
+                answer_cache_enabled=settings.answer_cache_enabled,
+            )
 
         return cls(
             complete=complete,
@@ -392,8 +420,9 @@ class AgentDeps:
             render_system_prompt=_default_render_system_prompt,
             features_for=_default_features_for,
             describe_prediction=_default_describe_prediction,
-            config=config or AgentConfig(),
+            config=config,
             memory=MemoryDeps.default(),
+            answer_cache=_default_answer_cache(settings),
         )
 
 
@@ -402,6 +431,29 @@ class AgentDeps:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _shared_store: Any = None
+
+
+def _default_answer_cache(settings: Any) -> AnswerCache | None:  # noqa: ANN401 - Settings
+    """Build the production answer cache, or ``None`` when disabled/unavailable.
+
+    Only wired when both the store layer and the answer cache are enabled; a failure
+    to construct the Redis-backed cache (bad URL, missing driver) degrades to ``None``
+    (always-miss) rather than breaking agent construction. Lazy-imports the cache so the
+    default memory/lite path never pulls in ``redis``.
+    """
+    if not (settings.stores_enabled and settings.answer_cache_enabled):
+        return None
+    try:
+        from app.retrieval.answer_cache import AnswerCache
+
+        return AnswerCache.from_url(
+            settings.redis_url,
+            ttl_seconds=settings.answer_cache_ttl_seconds,
+            similarity_threshold=settings.answer_cache_threshold,
+        )
+    except Exception:  # noqa: BLE001 - answer cache is best-effort; degrade to always-miss
+        logger.warning("Answer cache unavailable; continuing without it", exc_info=True)
+        return None
 
 
 def _get_shared_store() -> Any:  # noqa: ANN401 - adapter store type

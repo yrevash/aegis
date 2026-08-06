@@ -28,7 +28,7 @@ export const PERSONAS: Persona[] = [
   {
     id: 'ops-analyst',
     name: 'Operations Analyst',
-    role: 'user',
+    role: 'ai_team',
     blurb: 'Front-line operator resolving inbound cases against policy and SLA.',
     sampleQueries: [
       'Resolve case #4821 — customer reports a duplicate charge on a premium account',
@@ -39,7 +39,7 @@ export const PERSONAS: Persona[] = [
   {
     id: 'risk-reviewer',
     name: 'Risk Reviewer',
-    role: 'user',
+    role: 'ai_team',
     blurb: 'Approves high-value actions the agent proposes; owns the human gate.',
     sampleQueries: [
       'Should we auto-approve the refund of $4,200 on account A-771?',

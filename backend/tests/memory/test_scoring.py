@@ -57,6 +57,26 @@ def test_rank_top_caps_and_edge_cases():
     assert len(rank_top(cands, MemoryConfig(), half_life_days=30.0, n=10)) == 3
 
 
+def test_frequency_term_breaks_ties_with_default_weight():
+    # Two candidates identical on relevance/recency/importance but differing only in how
+    # often they've been recalled. With the (nonzero) default w_freq, the more-recalled
+    # one must rank first — proving the read-path frequency signal actually influences
+    # ranking rather than being a zero-weighted, inert term.
+    cands = [
+        RecallCandidate(key="rare", text="r", relevance=0.5, age_days=10, importance=5,
+                        access_count=0),
+        RecallCandidate(key="often", text="o", relevance=0.5, age_days=10, importance=5,
+                        access_count=9),
+    ]
+    top = rank_top(cands, MemoryConfig(), half_life_days=30.0, n=2)
+    assert top[0].key == "often"
+
+    # And the weight is genuinely nonzero by default (guards against regressing to 0.0).
+    assert MemoryConfig().w_freq > 0.0
+    scores = score_candidates(cands, MemoryConfig(), half_life_days=30.0)
+    assert scores[1] > scores[0]  # 'often' outscores 'rare' purely on frequency
+
+
 def test_forget_policy_archives_invalidated_and_stale():
     pol = ForgetPolicy(forget_floor=0.05, forget_min_age_days=90.0, half_life_days=30.0)
     assert pol.is_archivable(confidence=0.9, age_days=1, access_count=0, invalidated=True)

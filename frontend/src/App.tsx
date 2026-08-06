@@ -16,7 +16,7 @@ function RootRedirect(): ReactElement {
   return <Navigate to={session ? homePathFor(session.role) : '/login'} replace />
 }
 
-/** Route table: a login surface plus two role-gated portals. */
+/** Route table: a login surface plus one role-gated portal per role. */
 function AppRoutes(): ReactElement {
   return (
     <Routes>
@@ -30,10 +30,26 @@ function AppRoutes(): ReactElement {
         }
       />
       <Route
-        path="/app"
+        path="/ai-team"
         element={
-          <RequireRole role="user">
-            <Portal role="user" />
+          <RequireRole role="ai_team">
+            <Portal role="ai_team" />
+          </RequireRole>
+        }
+      />
+      <Route
+        path="/devops"
+        element={
+          <RequireRole role="devops">
+            <Portal role="devops" />
+          </RequireRole>
+        }
+      />
+      <Route
+        path="/client"
+        element={
+          <RequireRole role="client">
+            <Portal role="client" />
           </RequireRole>
         }
       />

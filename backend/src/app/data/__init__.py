@@ -25,12 +25,14 @@ from .approvals import (
 )
 from .audit import list_recent_audit, record_audit
 from .governance import (
+    LastPlatformAdminError,
     effective_limits,
     enforce_governance,
     list_budgets,
     list_tenants,
     list_users,
     record_usage,
+    update_user_role,
     upsert_budget,
     usage_rollup,
     user_tenant_id,
@@ -75,6 +77,7 @@ __all__ = [
     "BudgetWindow",
     "Chunk",
     "EvalResult",
+    "LastPlatformAdminError",
     "SweepAction",
     "Tenant",
     "TenantStatus",
@@ -104,6 +107,7 @@ __all__ = [
     "set_tenant_scope",
     "sweep_expired",
     "to_asyncpg_dsn",
+    "update_user_role",
     "upsert_budget",
     "usage_rollup",
     "user_tenant_id",

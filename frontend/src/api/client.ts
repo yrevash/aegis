@@ -9,17 +9,23 @@
 
 import {
   mockApprovals,
+  mockAssignRole,
   mockAudit,
   mockBudgets,
   mockCreateBudget,
   mockGraph,
   mockMetrics,
   mockMlExplain,
+  mockPatchCheck,
+  mockRiskMap,
+  mockSavings,
+  mockStack,
   mockTenants,
   mockUsage,
   mockUsers,
 } from '@/mock/fixtures'
 import type {
+  AdminUser,
   ApprovalDecisionResponse,
   ApprovalRequest,
   ApprovalResponse,
@@ -35,11 +41,16 @@ import type {
   MLExplainRequest,
   MLExplainResponse,
   MetricsResponse,
+  PatchCheckResponse,
+  RiskMapResponse,
+  SavingsResponse,
+  StackResponse,
   TenantsResponse,
   UsageResponse,
   UsersResponse,
 } from '@/types/api'
 import type { ApprovalDecision } from '@/types/api'
+import type { Role } from '@/types/stream'
 import type {
   MemoryFactsResponse,
   MemoryMessagesResponse,
@@ -95,15 +106,25 @@ async function request<T>(
   return (await res.json()) as T
 }
 
+/** Map a username to one of the four portal roles (mock-mode derivation). */
+function roleFromUsername(username: string): Role {
+  const u = username.toLowerCase()
+  if (/admin/.test(u)) return 'admin'
+  if (/ai[\s_-]?team|aiteam|^ai$|\bai\b/.test(u)) return 'ai_team'
+  if (/devops|sre|ops/.test(u)) return 'devops'
+  return 'client'
+}
+
 /**
  * Authenticate and receive a JWT + role + tenant. Mock mode derives the role
- * from the username (anything containing "admin" is an admin) so both portals
- * are reachable without a backend.
+ * from the username (`admin`→admin, `ai`/`aiteam`→ai_team, `devops`→devops,
+ * anything else→client) so all four portals are reachable without a backend.
  */
 export async function login(body: LoginRequest): Promise<LoginResponse> {
   if (isMock()) {
-    const role = /admin/i.test(body.username) ? 'admin' : 'user'
-    return { role, token: `mock.${role}.${Date.now()}`, tenant_id: role === 'admin' ? 1 : 2 }
+    const role = roleFromUsername(body.username)
+    const tenantByRole: Record<Role, number> = { admin: 1, ai_team: 1, devops: 1, client: 2 }
+    return { role, token: `mock.${role}.${Date.now()}`, tenant_id: tenantByRole[role] }
   }
   return request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify(body) }, null)
 }
@@ -434,6 +455,61 @@ export async function postOpsReleaseDecision(
   return request<OpsReleaseDecisionResponse>(
     `/ops/releases/${encodeURIComponent(approvalId)}/decide`,
     { method: 'POST', body: JSON.stringify({ approved }) },
+    token,
+  )
+}
+
+// ── DevOps: tech stack + patch check ─────────────────────────────────────────
+
+/** Fetch the running software bill of materials (DevOps stack inventory). */
+export async function getStack(token: string | null = null): Promise<StackResponse> {
+  if (isMock()) return mockStack()
+  return request<StackResponse>('/stack', { method: 'GET' }, token)
+}
+
+/**
+ * Run a freshness check comparing installed vs latest for the stack (or a subset
+ * when `packages` is given). POST so the (optional) package list travels in the
+ * body rather than a long query string.
+ */
+export async function checkPatches(
+  packages?: string[],
+  token: string | null = null,
+): Promise<PatchCheckResponse> {
+  if (isMock()) return mockPatchCheck(packages)
+  return request<PatchCheckResponse>(
+    '/stack/patch-check',
+    { method: 'POST', body: JSON.stringify({ packages: packages ?? null }) },
+    token,
+  )
+}
+
+// ── Client: risk map + savings ───────────────────────────────────────────────
+
+/** Fetch the agent-risk assurance heat-map (client-facing). */
+export async function getRiskMap(token: string | null = null): Promise<RiskMapResponse> {
+  if (isMock()) return mockRiskMap()
+  return request<RiskMapResponse>('/risk-map', { method: 'GET' }, token)
+}
+
+/** Fetch the baseline-vs-actual savings roll-up (client-facing value view). */
+export async function getSavings(token: string | null = null): Promise<SavingsResponse> {
+  if (isMock()) return mockSavings()
+  return request<SavingsResponse>('/savings', { method: 'GET' }, token)
+}
+
+// ── Admin: role assignment ───────────────────────────────────────────────────
+
+/** Reassign a user's portal role (admin-only). */
+export async function assignUserRole(
+  userId: number,
+  role: Role,
+  token: string | null,
+): Promise<AdminUser> {
+  if (isMock()) return mockAssignRole(userId, role)
+  return request<AdminUser>(
+    `/admin/users/${encodeURIComponent(userId)}/role`,
+    { method: 'POST', body: JSON.stringify({ role }) },
     token,
   )
 }

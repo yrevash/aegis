@@ -78,7 +78,7 @@ class MemoryConfig:
     w_rel: float = 1.0
     w_rec: float = 0.5
     w_imp: float = 0.5
-    w_freq: float = 0.0
+    w_freq: float = 0.1
     half_life_days_fact: float = 30.0
     half_life_days_epi: float = 3.0
     ctx_token_cap: int = 8000

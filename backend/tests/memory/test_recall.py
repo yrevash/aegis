@@ -170,6 +170,51 @@ async def test_skills_selected_for_refund_query(db):
     assert all(text.strip() for _, text in bundle.skills)  # bodies actually read
 
 
+async def test_recall_bumps_access_count_durably(db):
+    """The recall READ path bumps + commits access_count for what it recalled this turn.
+
+    Proves the frequency signal is real end to end: the increment survives into a fresh
+    session (i.e. recall committed it), so later turns' composite can weigh it.
+    """
+    cfg = MemoryConfig(raw_window_turns=1)
+    async with db() as s:
+        s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0]))
+        # turn 0 is OLD (outside the 1-turn window) yet a strong vector match → recalled.
+        s.add(_msg("user:1", "sess-1", 0, "old relevant refund note", [1.0, 0.0, 0.0, 0.0]))
+        s.add(_msg("user:1", "sess-1", 1, "recent chit chat", [0.0, 1.0, 0.0, 0.0]))
+        await s.commit()
+
+    async with db() as s:
+        bundle = await recall(
+            s,
+            subject_id="user:1",
+            session_id="sess-1",
+            persona="ops",
+            query="refund by email",
+            query_vec=[1.0, 0.0, 0.0, 0.0],
+            config=cfg,
+        )
+        recalled_fact_id = bundle.facts[0].payload.id
+        recalled_msg_ids = {c.payload.id for c in bundle.episodic}
+    assert recalled_msg_ids  # the old relevant turn was recalled episodically
+
+    # Re-open a clean session: the bump must have been committed, not rolled back.
+    async with db() as s:
+        fact = (
+            await s.execute(select(MemoryFact).where(MemoryFact.id == recalled_fact_id))
+        ).scalar_one()
+        assert fact.access_count == 1
+        assert fact.last_access_at is not None
+
+        for mid in recalled_msg_ids:
+            msg = (
+                await s.execute(select(MemoryMessage).where(MemoryMessage.id == mid))
+            ).scalar_one()
+            assert msg.access_count == 1
+            assert msg.last_access_at is not None
+
+
 async def test_facts_recency_only_when_no_query_vec(db):
     cfg = MemoryConfig()
     async with db() as s:

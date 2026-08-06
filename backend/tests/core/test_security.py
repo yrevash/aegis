@@ -10,6 +10,7 @@ from app.core.security import (
     MEMBER,
     PLATFORM_ADMIN,
     TENANT_ADMIN,
+    coarse_role_from_fine,
     create_access_token,
     decode_access_token,
     hash_password,
@@ -18,14 +19,31 @@ from app.core.security import (
 )
 
 
-def test_principal_role_three_tier():
-    # admin with no tenant is the global platform operator.
+def test_principal_role_admin_subtier_split_by_tenant():
+    # Only ADMIN is split into a fine sub-tier by tenancy.
     assert principal_role(Role.ADMIN, None) == PLATFORM_ADMIN
-    # admin scoped to a tenant is a tenant-admin.
     assert principal_role(Role.ADMIN, 5) == TENANT_ADMIN
-    # a plain user is always a member.
-    assert principal_role(Role.USER, 5) == MEMBER
-    assert principal_role(Role.USER, None) == MEMBER
+
+
+def test_principal_role_non_admin_is_its_own_string():
+    # Every non-admin role's fine tier is just its own coarse string (tenant-agnostic).
+    assert principal_role(Role.AI_TEAM, None) == "ai_team"
+    assert principal_role(Role.AI_TEAM, 5) == "ai_team"
+    assert principal_role(Role.DEVOPS, 5) == "devops"
+    assert principal_role(Role.CLIENT, 5) == "client"
+    assert principal_role(Role.CLIENT, None) == "client"
+
+
+def test_coarse_role_from_fine_is_the_inverse():
+    # Admin sub-tiers collapse back to "admin".
+    assert coarse_role_from_fine(PLATFORM_ADMIN) == "admin"
+    assert coarse_role_from_fine(TENANT_ADMIN) == "admin"
+    # Operational roles are already coarse.
+    assert coarse_role_from_fine("ai_team") == "ai_team"
+    assert coarse_role_from_fine("devops") == "devops"
+    # The client tier and the legacy "user" member alias both map to "client".
+    assert coarse_role_from_fine("client") == "client"
+    assert coarse_role_from_fine(MEMBER) == "client"
 
 
 def test_password_hash_and_verify():
@@ -47,6 +65,19 @@ def test_jwt_roundtrip_carries_claims():
     assert claims.username == "ada"
     assert claims.role == TENANT_ADMIN
     assert claims.tenant_id == 3
+    # The coarse role is carried honestly (derived here from the fine role).
+    assert claims.coarse_role == "admin"
+
+
+def test_jwt_carries_explicit_coarse_role_for_the_four_roles():
+    # The dedicated coarse-role claim carries the true four-valued role directly, so the
+    # API never has to re-derive it. ai_team/devops would be indistinguishable from a
+    # lossy admin/user derivation — the explicit claim keeps them honest.
+    for coarse in ("admin", "ai_team", "devops", "client"):
+        token = create_access_token(
+            user_id=1, username="u", role="anything", coarse_role=coarse, tenant_id=1
+        )
+        assert decode_access_token(token).coarse_role == coarse
 
 
 def test_jwt_omits_sub_for_demo_principal():
@@ -57,6 +88,7 @@ def test_jwt_omits_sub_for_demo_principal():
     claims = decode_access_token(token)
     assert claims.user_id is None
     assert claims.role == PLATFORM_ADMIN
+    assert claims.coarse_role == "admin"
     assert claims.tenant_id is None
 
 

@@ -31,8 +31,8 @@ async def _seed_two_tenants() -> None:
             [
                 Tenant(id=1, name="Tenant A"),
                 Tenant(id=2, name="Tenant B"),
-                User(id=11, username="a-user", role=Role.USER, tenant_id=1),
-                User(id=22, username="b-user", role=Role.USER, tenant_id=2),
+                User(id=11, username="a-user", role=Role.CLIENT, tenant_id=1),
+                User(id=22, username="b-user", role=Role.CLIENT, tenant_id=2),
                 UsageLedger(tenant_id=1, user_id=11, model="m", cost_usd=1.0),
                 UsageLedger(tenant_id=2, user_id=22, model="m", cost_usd=9.0),
             ]

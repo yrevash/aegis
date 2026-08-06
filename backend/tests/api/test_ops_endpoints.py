@@ -5,7 +5,8 @@ external dependency — ``app.core.llm.complete`` — is monkeypatched to a fake
 serves all three callers of the loop (the diagnose optimizer, the release generation, and
 the judge) with parseable JSON, so the whole surface runs with no network.
 
-Covers: read auth (auth required; mutations admin-only), the prompt registry reads,
+Covers: read auth (auth required; Improvement-loop mutations open to admin/ai_team, the
+release-decision gate still admin-only), the prompt registry reads,
 diagnose → draft, release low-risk → promoted / high-risk → staged (pending Approval) /
 fail-eval → rejected, rollback reverts, and the staged-release decide endpoint.
 """
@@ -20,11 +21,18 @@ import pytest_asyncio
 from app.adapter import DEFAULT_PERSONA_ID
 from app.core.llm import LLMResult, Usage
 from app.core.models import ModelRole
+from app.core.security import create_access_token
 from app.data.models import Approval, ApprovalStatus, EvalResult, PromptStatus, PromptVersion
 from app.data.session import get_sessionmaker
 from app.ops import registry
 
 pytestmark = pytest.mark.asyncio
+
+
+def _role_headers(role: str) -> dict[str, str]:
+    """Auth header for a principal minted from a *coarse* role (fine == coarse here)."""
+    token = create_access_token(user_id=1, username="u", role=role, tenant_id=1)
+    return {"Authorization": f"Bearer {token}"}
 
 PK = DEFAULT_PERSONA_ID
 BASE = "\n".join(f"instruction line {i}" for i in range(1, 9))
@@ -109,15 +117,54 @@ async def test_ops_prompts_requires_auth(client, db):
     assert resp.status_code == 401
 
 
-async def test_ops_mutations_require_admin(client, user_headers, seeded):
+async def test_ops_mutations_forbidden_for_client_and_devops(client, seeded):
+    # FIX 2 reachability: the Improvement-loop ops mutations are now open to admin OR
+    # ai_team (the AI team owns the self-improvement loop). Every OTHER role — client and
+    # devops here — must still 403; the relax did not open these up to all roles.
     draft_id = await _make_draft(LOW_DRAFT)
-    for method, path, body in (
-        ("post", "/ops/diagnose", {"prompt_key": PK}),
-        ("post", "/ops/release", {"draft_version_id": draft_id}),
-        ("post", "/ops/rollback", {"prompt_key": PK}),
-    ):
-        resp = await getattr(client, method)(path, json=body, headers=user_headers)
-        assert resp.status_code == 403, (path, resp.status_code)
+    for headers in (_role_headers("client"), _role_headers("devops")):
+        for method, path, body in (
+            ("post", "/ops/diagnose", {"prompt_key": PK}),
+            ("post", "/ops/release", {"draft_version_id": draft_id}),
+            ("post", "/ops/rollback", {"prompt_key": PK}),
+        ):
+            resp = await getattr(client, method)(path, json=body, headers=headers)
+            assert resp.status_code == 403, (path, resp.status_code)
+
+
+async def test_ops_endpoints_reachable_by_ai_team(client, seeded, monkeypatch):
+    # FIX 2: ai_team must be able to fully drive the Improvement surface end-to-end —
+    # pending-releases (read), diagnose, release, rollback — with no 403 dead tab.
+    monkeypatch.setattr("app.core.llm.complete", _gateway({LOW_DRAFT: 0.9, BASE: 0.5}))
+    await _seed_failing_evals()
+    ai = _role_headers("ai_team")
+
+    pending = await client.get("/ops/releases/pending", headers=ai)
+    assert pending.status_code == 200
+
+    diag = await client.post("/ops/diagnose", json={"prompt_key": PK}, headers=ai)
+    assert diag.status_code == 200
+
+    draft_id = await _make_draft(LOW_DRAFT)
+    rel = await client.post(
+        "/ops/release", json={"draft_version_id": draft_id}, headers=ai
+    )
+    assert rel.status_code == 200
+    assert rel.json()["outcome"] == "promoted"
+
+    rollback = await client.post("/ops/rollback", json={"prompt_key": PK}, headers=ai)
+    assert rollback.status_code == 200
+
+
+async def test_ops_release_decide_stays_admin_only(client, seeded):
+    # The human approval gate (deciding a staged release) is NOT part of the FIX 2 relax:
+    # approval authority stays with admin, so ai_team must still 403 on the decide route.
+    resp = await client.post(
+        "/ops/releases/does-not-exist/decide",
+        json={"approved": True},
+        headers=_role_headers("ai_team"),
+    )
+    assert resp.status_code == 403
 
 
 # ── registry reads ───────────────────────────────────────────────────────────

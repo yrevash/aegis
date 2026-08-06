@@ -17,7 +17,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_login_success_and_failure(client, db):
-    ok = await client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    ok = await client.post("/auth/login", json={"username": "admin", "password": "demo"})
     assert ok.status_code == 200
     body = ok.json()
     assert body["role"] == "admin"
@@ -99,7 +99,7 @@ async def test_metrics_quality_score_zero_when_input_blocked(
     assert resp.json()["quality_score"] == 0.0
 
 
-async def test_audit_returns_rows_admin_only(client, db, admin_headers):
+async def test_audit_returns_rows_admin(client, db, admin_headers):
     # The admin_headers fixture already logged in, writing an ``auth.login`` row.
     resp = await client.get("/audit", headers=admin_headers)
     assert resp.status_code == 200
@@ -120,7 +120,17 @@ async def test_audit_returns_rows_admin_only(client, db, admin_headers):
     }
 
 
-async def test_audit_requires_admin(client, db, user_headers):
+async def test_audit_reachable_by_devops(client, db):
+    # FIX 1 reachability: devops legitimately needs the audit trail (the DevOps portal's
+    # Audit tab), so /audit is now open to admin OR devops — no more 403 dead tab.
+    login = await client.post("/auth/login", json={"username": "devops", "password": "demo"})
+    devops_h = {"Authorization": f"Bearer {login.json()['token']}"}
+    assert (await client.get("/audit", headers=devops_h)).status_code == 200
+
+
+async def test_audit_forbidden_for_non_admin_non_devops(client, db, user_headers):
+    # A client (neither admin nor devops) is still forbidden the audit trail — the FIX 1
+    # relax only added devops, it did not open the endpoint up to every role.
     assert (await client.get("/audit", headers=user_headers)).status_code == 403
 
 
@@ -130,7 +140,7 @@ async def test_audit_requires_auth(client, db):
 
 async def test_audit_limit_is_clamped(client, db, admin_headers):
     # A couple more auditable events so there is something to limit.
-    await client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    await client.post("/auth/login", json={"username": "admin", "password": "demo"})
     resp = await client.get("/audit?limit=1", headers=admin_headers)
     assert resp.status_code == 200
     assert len(resp.json()["rows"]) == 1

@@ -9,6 +9,8 @@ in-memory aiosqlite database so audit writes actually round-trip.
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -94,6 +96,38 @@ def build_fake_deps(
         )
 
     async def complete(role, messages, *, tools=None, temperature=0.0, response_format=None):  # noqa: ANN001
+        # Faithful doubles for the two retrieval-intelligence prompts, so the REAL
+        # rewrite + sufficiency code paths execute in every graph test but resolve to a
+        # stable, deterministic single-round / unchanged-query outcome (prod == test).
+        system = messages[0]["content"] if messages else ""
+        if "standalone search query" in system or "rewrite a user's latest turn" in system:
+            # Rewrite prompt → echo the user's latest turn unchanged (changed=False no-op).
+            # The prompt wraps the query in a template, so recover the raw "LATEST TURN".
+            user = messages[-1]["content"] if messages else ""
+            match = re.search(r"LATEST TURN: (.*?)\n\n", user, re.DOTALL)
+            user_query = match.group(1) if match else user
+            return LLMResult(
+                content=json.dumps(
+                    {"rewritten": user_query, "reason": "no rewrite needed"}
+                ),
+                tool_calls=[],
+                usage=Usage(prompt_tokens=3, completion_tokens=2, cost_usd=0.0001),
+                model="fake-cheap",
+            )
+        if "retrieval sufficiency judge" in system:
+            # Sufficiency prompt → sufficient on the first look (loop runs one round).
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "sufficient": True,
+                        "reason": "context sufficient",
+                        "followup_query": None,
+                    }
+                ),
+                tool_calls=[],
+                usage=Usage(prompt_tokens=3, completion_tokens=2, cost_usd=0.0001),
+                model="fake-cheap",
+            )
         if tools and propose_tool:
             return LLMResult(
                 content=(
@@ -233,18 +267,18 @@ async def client():
 
 @pytest_asyncio.fixture
 async def admin_headers(client, db):
-    """Log in as the admin user and return an auth header."""
+    """Log in as the demo admin (password ``demo``) and return an auth header."""
     resp = await client.post(
-        "/auth/login", json={"username": "admin", "password": "admin"}
+        "/auth/login", json={"username": "admin", "password": "demo"}
     )
     return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
 @pytest_asyncio.fixture
 async def user_headers(client, db):
-    """Log in as the standard user and return an auth header."""
+    """Log in as the demo client (the end-user role) and return an auth header."""
     resp = await client.post(
-        "/auth/login", json={"username": "user", "password": "user"}
+        "/auth/login", json={"username": "client", "password": "demo"}
     )
     return {"Authorization": f"Bearer {resp.json()['token']}"}
 

@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter import memory_spec
@@ -268,6 +268,57 @@ def _recall_skills(query: str, persona: str | None, config: MemoryConfig) -> lis
     return skills
 
 
+async def _bump_recall_access(
+    session: AsyncSession,
+    *,
+    facts: list[RecallCandidate],
+    episodic: list[RecallCandidate],
+) -> None:
+    """Record that these facts/messages were recalled this turn (read-path frequency).
+
+    Bumps ``access_count`` (+1) and ``last_access_at`` on every fact and episodic turn
+    actually recalled into this turn's bundle, then **commits** — the recall session is
+    otherwise read-only and its caller (:meth:`app.agent.deps.MemoryDeps.assemble`) never
+    commits, so a bare flush would be rolled back on session close and the frequency
+    signal would stay inert. This is the sole write recall performs; on the hot path no
+    other pending state shares the session, so the commit persists only these bumps.
+
+    The bump feeds the frequency term of the recall composite (``config.w_freq``) on
+    FUTURE turns; it never reorders the current turn, which is already ranked. Mirrors the
+    write-path bump in :func:`app.memory.consolidate._bump_access`.
+    """
+    fact_ids = [
+        f.payload.id
+        for f in facts
+        if getattr(f.payload, "id", None) is not None
+    ]
+    message_ids = [
+        e.payload.id
+        for e in episodic
+        if getattr(e.payload, "id", None) is not None
+    ]
+    if not fact_ids and not message_ids:
+        return
+    now = datetime.now(UTC)
+    if fact_ids:
+        await session.execute(
+            update(MemoryFact)
+            .where(MemoryFact.id.in_(fact_ids))
+            .values(access_count=MemoryFact.access_count + 1, last_access_at=now)
+        )
+    if message_ids:
+        await session.execute(
+            update(MemoryMessage)
+            .where(MemoryMessage.id.in_(message_ids))
+            .values(access_count=MemoryMessage.access_count + 1, last_access_at=now)
+        )
+    await session.commit()
+    # Keep the returned candidates consistent with the persisted counts.
+    for cand in (*facts, *episodic):
+        if getattr(cand.payload, "id", None) is not None:
+            cand.access_count += 1
+
+
 async def recall(
     session: AsyncSession,
     *,
@@ -330,6 +381,10 @@ async def recall(
         stmt = stmt.where(MemorySession.tenant_id == tenant_id)
     sess = (await session.execute(stmt)).scalars().first()
     running_summary = (sess.summary if sess is not None else None) or ""
+
+    # Read-path frequency: durably record what was recalled so the composite's freq term
+    # (config.w_freq) reflects genuinely often-recalled memories on later turns.
+    await _bump_recall_access(session, facts=facts, episodic=episodic)
 
     return RecallBundle(
         profile_text=profile_text,

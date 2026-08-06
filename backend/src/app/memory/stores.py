@@ -47,6 +47,7 @@ class WriteOp(StrEnum):
     UPDATE = "update"
     INVALIDATE = "invalidate"
     NOOP = "noop"
+    PRUNE = "prune"  # soft-archived out of hot recall by the forgetting sweep (never deleted)
 
 
 class ConsolidationStatus(StrEnum):
@@ -180,7 +181,7 @@ class MemoryProfile(Base):
 
 
 class MemoryWriteLog(Base):
-    """Append-only audit of every fact write (ADD/UPDATE/INVALIDATE/NOOP).
+    """Append-only audit of every fact write (ADD/UPDATE/INVALIDATE/NOOP/PRUNE).
 
     The "why does the agent believe X" trail: each row links the operation to the
     before/after fact state, the model that decided it, and the trace it came from —

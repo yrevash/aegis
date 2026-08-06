@@ -27,7 +27,7 @@ async def _seed_user(username: str, password: str, *, tenant_id: int | None = 1)
         session.add(
             User(
                 username=username,
-                role=Role.USER,
+                role=Role.CLIENT,
                 tenant_id=tenant_id,
                 password_hash=hash_password(password),
                 is_active=True,
@@ -37,27 +37,28 @@ async def _seed_user(username: str, password: str, *, tenant_id: int | None = 1)
 
 
 async def test_wrong_password_for_real_user_is_rejected(client, db):
-    # Seed a real ``user`` account whose real password differs from the demo one.
-    # Logging in with the *demo* password ("user") is a wrong password for this real
-    # account: pre-fix it fell through to the demo table and authenticated anyway.
-    await _seed_user("user", "s3cret-real")
+    # Seed a real ``client`` account whose real password differs from the demo one.
+    # ``client`` is a demo username; logging in with the *demo* password ("demo") is a
+    # wrong password for this real account, so it must fail — never falling through to
+    # the demo table (pre-fix it authenticated anyway).
+    await _seed_user("client", "s3cret-real")
     resp = await client.post(
-        "/auth/login", json={"username": "user", "password": "user"}
+        "/auth/login", json={"username": "client", "password": "demo"}
     )
     assert resp.status_code == 401  # never falls through to the demo table
 
     ok = await client.post(
-        "/auth/login", json={"username": "user", "password": "s3cret-real"}
+        "/auth/login", json={"username": "client", "password": "s3cret-real"}
     )
     assert ok.status_code == 200
 
 
 async def test_demo_never_overrides_a_real_account(client, db):
-    # A real ``admin`` row exists with its own password; the demo ``admin``/``admin``
-    # must NOT authenticate (and must not grant platform_admin).
+    # A real ``admin`` row exists with its own password; the demo ``admin``/``demo``
+    # credential must NOT authenticate (and must not grant platform_admin).
     await _seed_user("admin", "the-real-password", tenant_id=None)
     demo = await client.post(
-        "/auth/login", json={"username": "admin", "password": "admin"}
+        "/auth/login", json={"username": "admin", "password": "demo"}
     )
     assert demo.status_code == 401
 
@@ -68,10 +69,10 @@ async def test_demo_never_overrides_a_real_account(client, db):
 
 
 async def test_demo_disabled_outside_dev(client, db, monkeypatch):
-    # In any non-dev environment the demo backdoor is fully closed, even with no
-    # real users row present.
+    # In any non-dev environment the demo backdoor is fully closed: even the real demo
+    # credential (admin/demo) is refused, with no real users row present.
     monkeypatch.setattr(get_settings(), "app_env", "prod")
     resp = await client.post(
-        "/auth/login", json={"username": "admin", "password": "admin"}
+        "/auth/login", json={"username": "admin", "password": "demo"}
     )
     assert resp.status_code == 401

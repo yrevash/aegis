@@ -40,8 +40,10 @@ from .corpus import SEED_CASES, SEED_CORPUS, EvalCase
 from .harness import DEFAULT_THRESHOLDS, EvalReport, EvalThresholds, evaluate
 from .judge import JudgeSummary, JudgeVerdict, judge_answer, judge_enabled
 from .metrics import CaseScore, aggregate, score_case
+from .regression import DEFAULT_METRICS, RegressionReport, run_regression_gate
 
 __all__ = [
+    "DEFAULT_METRICS",
     "DEFAULT_THRESHOLDS",
     "SEED_CASES",
     "SEED_CORPUS",
@@ -51,9 +53,11 @@ __all__ = [
     "EvalThresholds",
     "JudgeSummary",
     "JudgeVerdict",
+    "RegressionReport",
     "aggregate",
     "evaluate",
     "judge_answer",
     "judge_enabled",
+    "run_regression_gate",
     "score_case",
 ]

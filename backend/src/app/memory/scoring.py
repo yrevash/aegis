@@ -34,7 +34,10 @@ class RecallCandidate:
         relevance: Precomputed similarity to the query, in [0, 1].
         age_days: Age used for recency decay (non-negative).
         importance: Poignancy on the Generative-Agents 1..10 scale.
-        access_count: Times recalled (frequency signal; 0 by default).
+        access_count: How many times this item has been surfaced — bumped on the recall
+            READ path (:func:`app.memory.recall.recall`) each turn it is recalled, and on
+            the write path when a duplicate re-asserts it (consolidation dedup). Drives
+            the frequency term of the composite (``config.w_freq``); 0 until first access.
         payload: Opaque source object (e.g. the ORM row) for rendering.
     """
 

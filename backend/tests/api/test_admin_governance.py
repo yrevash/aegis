@@ -34,8 +34,8 @@ async def _seed_two_tenants() -> None:
             [
                 Tenant(id=1, name="Tenant A"),
                 Tenant(id=2, name="Tenant B"),
-                User(id=11, username="a-user", role=Role.USER, tenant_id=1),
-                User(id=22, username="b-user", role=Role.USER, tenant_id=2),
+                User(id=11, username="a-user", role=Role.CLIENT, tenant_id=1),
+                User(id=22, username="b-user", role=Role.CLIENT, tenant_id=2),
                 UsageLedger(
                     tenant_id=1,
                     user_id=11,
@@ -179,7 +179,7 @@ async def test_demo_admin_login_still_works_and_maps_to_platform_admin(client, d
     # Back-compat: the built-in demo admin still logs in (no users row needed) and
     # its JWT authorises the platform-admin surface.
     login = await client.post(
-        "/auth/login", json={"username": "admin", "password": "admin"}
+        "/auth/login", json={"username": "admin", "password": "demo"}
     )
     assert login.status_code == 200
     token = login.json()["token"]

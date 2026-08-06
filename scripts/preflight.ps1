@@ -37,7 +37,27 @@ Row (Port 'localhost' 5432) 'Postgres (5432)'  'full mode only'
 Row (Port 'localhost' 7687) 'Neo4j (7687)'     'full mode only'
 Row (Port 'localhost' 6379) 'Redis (6379)'     'full mode only'
 
+# Regression gate (DeepEval-pattern) — offline CI gate over the seed corpus + the
+# agentic router case. No network, no keys, no stores; a nonzero exit FAILS preflight.
+$gateOk = $false
+$py = "$root\backend\.venv\Scripts\python.exe"
+if (Test-Path $py) {
+  Push-Location "$root\backend"
+  $env:PYTHONPATH = 'src'
+  & $py -m app.eval.regression *> $null
+  $gateOk = ($LASTEXITCODE -eq 0)
+  Pop-Location
+  Row $gateOk 'Regression gate' 'DeepEval-pattern eval (offline)'
+} else {
+  Row $false 'Regression gate' 'backend\.venv missing - run scripts\bootstrap.ps1'
+}
+
 Write-Host "`nGuide:" -f Cyan
 Write-Host "  gateway UP  -> lite mode works (real agent, no databases): .\scripts\start.ps1 -Mode lite"
 Write-Host "  all UP      -> full mode:                                    .\scripts\start.ps1 -Mode full"
 Write-Host "  nothing UP  -> demo-safe (mock, always works):               .\scripts\start.ps1 -Mode safe`n"
+
+# Service probes above are informational (which run mode is available); the
+# regression gate is a real pass/fail bar, so its result is preflight's exit code.
+if (-not $gateOk) { exit 1 }
+exit 0

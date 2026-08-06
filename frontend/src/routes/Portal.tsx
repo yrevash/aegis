@@ -1,4 +1,4 @@
-import { Brain, GitCompareArrows, Inbox, LayoutDashboard, Loader2, ScrollText, SlidersHorizontal, Sparkles, Workflow } from 'lucide-react'
+import { Brain, GitCompareArrows, Inbox, KeyRound, Layers, LayoutDashboard, Loader2, PiggyBank, ScrollText, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Workflow } from 'lucide-react'
 import { Suspense, lazy, useEffect, useState, type ReactElement } from 'react'
 
 import { useAuth } from '@/auth/AuthContext'
@@ -32,6 +32,22 @@ const MemoryView = lazy(() =>
 const OpsView = lazy(() =>
   import('@/components/ops/OpsView').then((m) => ({ default: m.OpsView })),
 )
+// Wave-2 surface stubs — new per-role surfaces the surface agents will flesh out.
+const StackVersions = lazy(() =>
+  import('@/components/devops/StackVersions').then((m) => ({ default: m.StackVersions })),
+)
+const PatchCheck = lazy(() =>
+  import('@/components/devops/PatchCheck').then((m) => ({ default: m.PatchCheck })),
+)
+const RiskMap = lazy(() =>
+  import('@/components/client/RiskMap').then((m) => ({ default: m.RiskMap })),
+)
+const SavingsView = lazy(() =>
+  import('@/components/client/SavingsView').then((m) => ({ default: m.SavingsView })),
+)
+const RolesAccess = lazy(() =>
+  import('@/components/admin/RolesAccess').then((m) => ({ default: m.RolesAccess })),
+)
 
 /** A neutral placeholder shown while a route-split section streams in. */
 function SectionFallback(): ReactElement {
@@ -49,109 +65,211 @@ interface Section {
   render: (role: Role, token: string | null) => ReactElement
 }
 
-/** Section definitions per portal. Admin gets the audit surface too. */
+/**
+ * The full section catalogue, keyed by id. Nav labels + honest tech subtitles
+ * follow the §3.2 Aegis module map: the primary label is short and executive;
+ * the real tech is one hover away. Every item carries a plain-language "why"
+ * (the `tooltip`) — a hard requirement across all surfaces. `sectionsFor` picks
+ * and orders a subset of these per role (RBAC).
+ */
+const SECTIONS: Record<string, Section> = {
+  console: {
+    item: {
+      id: 'console',
+      label: 'Console',
+      icon: Sparkles,
+      hint: 'LangGraph',
+      tooltip: 'Aegis Router — multi-agent orchestration · LangGraph',
+    },
+    title: 'Console',
+    render: () => <MoneyShotConsole />,
+  },
+  dashboard: {
+    item: {
+      id: 'dashboard',
+      label: 'Overview',
+      icon: LayoutDashboard,
+      hint: 'value at a glance',
+      tooltip: 'Operations & value at a glance',
+    },
+    title: 'Overview',
+    render: (r, token) => <Dashboard role={r} token={token} />,
+  },
+  savings: {
+    item: {
+      id: 'savings',
+      label: 'Savings',
+      icon: PiggyBank,
+      hint: 'baseline vs actual',
+      tooltip: 'What the workload would cost on the frontier model vs what it actually cost',
+    },
+    title: 'Savings',
+    render: (_r, token) => <SavingsView token={token} />,
+  },
+  memory: {
+    item: {
+      id: 'memory',
+      label: 'Memory',
+      icon: Brain,
+      hint: 'pgvector',
+      tooltip: 'Aegis Memory — long-term memory · Postgres + pgvector',
+    },
+    title: 'Memory',
+    render: (_r, token) => <MemoryView token={token} />,
+  },
+  simulation: {
+    item: {
+      id: 'simulation',
+      label: 'Access demo',
+      icon: GitCompareArrows,
+      hint: 'RBAC scope',
+      tooltip: 'Aegis Governance — same query, two roles · RBAC + retrieval scope',
+    },
+    title: 'Access demo',
+    render: () => <SimulationView />,
+  },
+  stack: {
+    item: {
+      id: 'stack',
+      label: 'Tech Stack & Versions',
+      icon: Layers,
+      hint: 'SBOM',
+      tooltip: 'Every runtime, library and service in production — so DevOps knows exactly what is running',
+      group: 'Operations',
+    },
+    title: 'Tech Stack & Versions',
+    render: (_r, token) => <StackVersions token={token} />,
+  },
+  patch: {
+    item: {
+      id: 'patch',
+      label: 'Patch Check',
+      icon: ShieldCheck,
+      hint: 'installed vs latest',
+      tooltip: 'Flags outdated dependencies before a known-CVE lapse — installed compared to latest',
+      group: 'Operations',
+    },
+    title: 'Patch Check',
+    render: (_r, token) => <PatchCheck token={token} />,
+  },
+  ops: {
+    item: {
+      id: 'ops',
+      label: 'Improvement',
+      icon: Workflow,
+      hint: 'trace → eval → release',
+      tooltip: 'Aegis Loop — self-improving prompts · trace → eval → release',
+      group: 'Governance',
+    },
+    title: 'Improvement',
+    render: (_r, token) => <OpsView token={token} />,
+  },
+  approvals: {
+    item: {
+      id: 'approvals',
+      label: 'Approvals',
+      icon: Inbox,
+      hint: 'human gate',
+      tooltip: 'Aegis Tools/MCP — human gate on risky actions',
+      group: 'Governance',
+    },
+    title: 'Approvals',
+    render: (_r, token) => <ApprovalsInbox token={token} />,
+  },
+  admin: {
+    item: {
+      id: 'admin',
+      label: 'Governance',
+      icon: SlidersHorizontal,
+      hint: 'tenants · budgets',
+      tooltip: 'Aegis Governance — tenants · budgets · usage · RBAC',
+      group: 'Governance',
+    },
+    title: 'Governance',
+    render: (_r, token) => <AdminSettings token={token} />,
+  },
+  audit: {
+    item: {
+      id: 'audit',
+      label: 'Audit',
+      icon: ScrollText,
+      hint: 'Postgres audit',
+      tooltip: 'Aegis Governance — append-only audit trail · Postgres (RLS), with trace links to Aegis Trace',
+      group: 'Governance',
+    },
+    title: 'Audit',
+    render: (_r, token) => <AuditLog token={token} />,
+  },
+  roles: {
+    item: {
+      id: 'roles',
+      label: 'Roles & Access',
+      icon: KeyRound,
+      hint: 'RBAC grants',
+      tooltip: 'Who can reach which portal — the front line of least-privilege access',
+      group: 'Governance',
+    },
+    title: 'Roles & Access',
+    render: (_r, token) => <RolesAccess token={token} />,
+  },
+  risk: {
+    item: {
+      id: 'risk',
+      label: 'Risk Map',
+      icon: ShieldAlert,
+      hint: 'OWASP-Agentic',
+      tooltip: 'How an autonomous agent can go wrong — and the control holding each risk down',
+      group: 'Governance',
+    },
+    title: 'Risk Map',
+    render: (_r, token) => <RiskMap token={token} />,
+  },
+}
+
+/**
+ * Which sections each role's portal exposes, in nav order (RBAC). Admin sees
+ * everything — the full platform-owner view — while the other three roles get a
+ * focused subset:
+ *   - ai_team  : builds/tunes the agent (Console, Overview, Memory, loop, access demo)
+ *   - devops   : runs the stack (Overview, stack, patches, audit)
+ *   - client   : the tenant end-user (value, risk, read-only access demo)
+ */
+const ROLE_SECTIONS: Record<Role, string[]> = {
+  admin: [
+    'console',
+    'dashboard',
+    'memory',
+    'simulation',
+    'stack',
+    'ops',
+    'approvals',
+    'admin',
+    'audit',
+    'roles',
+    'risk',
+  ],
+  ai_team: ['console', 'dashboard', 'memory', 'ops', 'simulation'],
+  devops: ['dashboard', 'stack', 'patch', 'audit'],
+  client: ['dashboard', 'savings', 'risk', 'simulation'],
+}
+
+/** Section definitions for a role's portal, in nav order. */
 function sectionsFor(role: Role): Section[] {
-  // Nav labels + honest tech subtitles follow the §3.2 Aegis module map:
-  // primary label is short and executive; the real tech is one hover away.
-  const base: Section[] = [
-    {
-      item: {
-        id: 'console',
-        label: 'Console',
-        icon: Sparkles,
-        hint: 'LangGraph',
-        tooltip: 'Aegis Router — multi-agent orchestration · LangGraph',
-      },
-      title: 'Console',
-      render: () => <MoneyShotConsole />,
-    },
-    {
-      item: {
-        id: 'dashboard',
-        label: 'Overview',
-        icon: LayoutDashboard,
-        hint: 'value at a glance',
-        tooltip: 'Operations & value at a glance',
-      },
-      title: 'Overview',
-      render: (r, token) => <Dashboard role={r} token={token} />,
-    },
-    {
-      item: {
-        id: 'memory',
-        label: 'Memory',
-        icon: Brain,
-        hint: 'pgvector',
-        tooltip: 'Aegis Memory — long-term memory · Postgres + pgvector',
-      },
-      title: 'Memory',
-      render: (_r, token) => <MemoryView token={token} />,
-    },
-    {
-      item: {
-        id: 'simulation',
-        label: 'Access demo',
-        icon: GitCompareArrows,
-        hint: 'RBAC scope',
-        tooltip: 'Aegis Governance — same query, two roles · RBAC + retrieval scope',
-      },
-      title: 'Access demo',
-      render: () => <SimulationView />,
-    },
-  ]
-  if (role === 'admin') {
-    base.push(
-      {
-        item: {
-          id: 'ops',
-          label: 'Improvement',
-          icon: Workflow,
-          hint: 'trace → eval → release',
-          tooltip: 'Aegis Loop — self-improving prompts · trace → eval → release',
-          group: 'Governance',
-        },
-        title: 'Improvement',
-        render: (_r, token) => <OpsView token={token} />,
-      },
-      {
-        item: {
-          id: 'approvals',
-          label: 'Approvals',
-          icon: Inbox,
-          hint: 'human gate',
-          tooltip: 'Aegis Tools/MCP — human gate on risky actions',
-          group: 'Governance',
-        },
-        title: 'Approvals',
-        render: (_r, token) => <ApprovalsInbox token={token} />,
-      },
-      {
-        item: {
-          id: 'admin',
-          label: 'Governance',
-          icon: SlidersHorizontal,
-          hint: 'tenants · budgets',
-          tooltip: 'Aegis Governance — tenants · budgets · usage · RBAC',
-          group: 'Governance',
-        },
-        title: 'Governance',
-        render: (_r, token) => <AdminSettings token={token} />,
-      },
-      {
-        item: {
-          id: 'audit',
-          label: 'Audit',
-          icon: ScrollText,
-          hint: 'Postgres audit',
-          tooltip: 'Aegis Governance — append-only audit trail · Postgres (RLS), with trace links to Aegis Trace',
-          group: 'Governance',
-        },
-        title: 'Audit',
-        render: (_r, token) => <AuditLog token={token} />,
-      },
-    )
+  return ROLE_SECTIONS[role].map((id) => SECTIONS[id])
+}
+
+/** Human name for the portal a role owns (foot of the nav rail). */
+function portalLabelFor(role: Role): string {
+  switch (role) {
+    case 'admin':
+      return 'Admin portal'
+    case 'ai_team':
+      return 'AI team portal'
+    case 'devops':
+      return 'DevOps portal'
+    case 'client':
+      return 'Client portal'
   }
-  return base
 }
 
 /**
@@ -197,7 +315,7 @@ export function Portal({ role }: { role: Role }): ReactElement {
       active={active}
       onSelect={setActive}
       title={current.title}
-      portalLabel={role === 'admin' ? 'Admin portal' : 'User portal'}
+      portalLabel={portalLabelFor(role)}
       presenting={presenting}
       onExitPresent={() => setPresenting(false)}
     >

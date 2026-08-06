@@ -220,6 +220,109 @@ export interface BudgetsResponse {
 /** Body for `POST /admin/budgets`. */
 export type CreateBudgetRequest = Budget
 
+// ── DevOps: tech stack + patch check (supply-chain transparency) ────────────
+
+/** One dependency in the running Aegis stack. */
+export interface StackComponent {
+  name: string
+  category: 'runtime' | 'backend' | 'frontend' | 'infra'
+  /** The installable package / image name. */
+  package: string
+  /** Resolved version, or null when it could not be determined. */
+  version: string | null
+  /** Which Aegis module this component powers, or null for shared infra. */
+  aegis_module: string | null
+}
+
+/** Response from `GET /stack` — the full software bill of materials. */
+export interface StackResponse {
+  /** ISO 8601 timestamp the stack was inventoried. */
+  generated_at: string
+  components: StackComponent[]
+}
+
+/** One package's freshness verdict from the patch check. */
+export interface PatchResult {
+  name: string
+  installed: string | null
+  latest: string | null
+  status: 'current' | 'outdated' | 'unknown'
+  note?: string
+}
+
+/**
+ * Body for `POST /stack/patch-check` — optionally narrow the check to a subset
+ * of packages; omit to check the whole stack.
+ */
+export interface PatchCheckRequest {
+  packages?: string[]
+}
+
+/** Response from `POST /stack/patch-check` — installed vs latest per package. */
+export interface PatchCheckResponse {
+  /** ISO 8601 timestamp the check ran. */
+  checked_at: string
+  /** Whether the registry could be reached (false ⇒ results are best-effort). */
+  online: boolean
+  note: string
+  results: PatchResult[]
+}
+
+// ── Client: risk map + savings (value + assurance) ──────────────────────────
+
+/** One entry on the risk heat-map (OWASP-Agentic-aligned). */
+export interface RiskEntry {
+  id: string
+  title: string
+  category: string
+  /** 1..5 likelihood band. */
+  likelihood: number
+  /** 1..5 impact band. */
+  impact: number
+  mitigation: string
+  /** The control / requirement this maps to. */
+  control_ref: string
+  /** Residual risk after mitigation. */
+  residual: 'low' | 'medium' | 'high'
+}
+
+/** Response from `GET /risk-map` — the agent-risk heat-map + its scale. */
+export interface RiskMapResponse {
+  /** ISO 8601 timestamp the map was generated. */
+  generated_at: string
+  note: string
+  scale: {
+    likelihood: number[]
+    impact: number[]
+  }
+  risks: RiskEntry[]
+}
+
+/** One contributor to the total savings. */
+export interface SavingsBreakdownRow {
+  source: string
+  saved_usd: number
+  explanation: string
+}
+
+/** Response from `GET /savings` — baseline vs actual spend and what drove it. */
+export interface SavingsResponse {
+  /** ISO 8601 timestamp the figures were computed. */
+  generated_at: string
+  baseline_cost_usd: number
+  actual_cost_usd: number
+  saved_usd: number
+  /** Fraction saved vs baseline, 0..1. */
+  saved_pct: number
+  note: string
+  breakdown: SavingsBreakdownRow[]
+}
+
+/** Body for `POST /admin/users/{id}/role` — reassign a user's portal role. */
+export interface UserRoleUpdateRequest {
+  role: Role
+}
+
 /** Per-model usage roll-up row. */
 export interface UsageModelRow {
   model: string

@@ -136,8 +136,18 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    # The four-valued RBAC role (admin / ai_team / devops / client). Defaults to the
+    # least-privileged CLIENT (the successor of the retired coarse "user"). The
+    # ``user_role`` Postgres enum is (re)created with all four labels on a fresh
+    # ``create_all`` (the lite/SQLite/test path). A LIVE Postgres that already has the
+    # old two-label enum needs a one-off migration to widen it, e.g.:
+    #     ALTER TYPE user_role ADD VALUE 'ai_team';
+    #     ALTER TYPE user_role ADD VALUE 'devops';
+    #     ALTER TYPE user_role ADD VALUE 'client';
+    # (the old 'user' label is left in place for any historical rows; new rows use
+    # 'client'). SQLite/tests recreate the schema, so no migration is needed there.
     role: Mapped[Role] = mapped_column(
-        SAEnum(Role, name="user_role"), default=Role.USER
+        SAEnum(Role, name="user_role"), default=Role.CLIENT
     )
     tenant_id: Mapped[int | None] = mapped_column(
         ForeignKey("tenants.id"), default=None, index=True

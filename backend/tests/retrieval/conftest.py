@@ -31,10 +31,18 @@ class FakeRedis:
 
 
 class RecordingComplete:
-    """Async `complete` fake that records calls and returns a canned `.content`."""
+    """Async `complete` fake that records calls and returns a canned `.content`.
 
-    def __init__(self, content: str):
+    Each response also carries a `.usage` (mirroring `LLMResult`) so callers that accrue
+    per-call token/cost — e.g. query rewrite — can be exercised. Consumers that read only
+    `.content` are unaffected.
+    """
+
+    def __init__(self, content: str, *, usage: SimpleNamespace | None = None):
         self.content = content
+        self.usage = usage or SimpleNamespace(
+            prompt_tokens=6, completion_tokens=4, cost_usd=0.0002
+        )
         self.calls: list[dict] = []
 
     async def __call__(self, role, messages, *, temperature=0.0, response_format=None):
@@ -46,7 +54,7 @@ class RecordingComplete:
                 "response_format": response_format,
             }
         )
-        return SimpleNamespace(content=self.content)
+        return SimpleNamespace(content=self.content, usage=self.usage)
 
 
 class SequenceEmbed:

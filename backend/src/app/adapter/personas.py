@@ -86,7 +86,7 @@ OPERATIONS_LEAD = Persona(
 
 CLIENT = Persona(
     id="client",
-    role=Role.USER,
+    role=Role.CLIENT,
     display_name="Customer",
     description="End customer tracking and annotating their own service requests.",
     data_scope=DataScope(kind=ScopeKind.OWN, subject_field="customer_id"),

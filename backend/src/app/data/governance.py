@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas import (
     AdminUserRow,
     BudgetRow,
+    Role,
     TenantRow,
     UsageByModel,
     UsageSeriesPoint,
@@ -325,6 +326,74 @@ async def user_tenant_id(user_id: int) -> int | None:
     async with get_sessionmaker()() as session:
         user = await session.get(User, user_id)
         return user.tenant_id if user is not None else None
+
+
+class LastPlatformAdminError(RuntimeError):
+    """Raised when a role change would remove the platform's last platform-admin.
+
+    A platform-admin is a :class:`~app.api.schemas.Role.ADMIN` user with **no** tenant
+    (global operator). Demoting the only such user out of ``admin`` would lock the
+    platform out of every platform-admin surface, so it is refused defensively.
+    """
+
+
+async def update_user_role(
+    user_id: int,
+    role: Role,
+    *,
+    tenant_scope: int | None = None,
+) -> AdminUserRow | None:
+    """Reassign a user's coarse RBAC role, returning the updated row (§3.3).
+
+    Mirrors the short-lived-session pattern of :func:`user_tenant_id`: opens its own
+    session, applies the tenant scope for the belt-and-suspenders RLS layer, and
+    commits a single update.
+
+    Args:
+        user_id: The target user's id.
+        role: The new coarse :class:`~app.api.schemas.Role` to assign.
+        tenant_scope: When set (a tenant-admin caller), the update is pinned to that
+            tenant — a user outside it is treated as not found (``None``). ``None``
+            (a platform-admin caller) may target any user.
+
+    Returns:
+        The updated :class:`~app.api.schemas.AdminUserRow`, or ``None`` if no such
+        user exists within the given scope.
+
+    Raises:
+        LastPlatformAdminError: If the change would demote the last platform-admin.
+    """
+    async with get_sessionmaker()() as session:
+        await set_tenant_scope(session, tenant_scope)
+        user = await session.get(User, user_id)
+        if user is None or (tenant_scope is not None and user.tenant_id != tenant_scope):
+            return None
+        # Defensive lockout guard: never demote the last global platform-admin.
+        is_platform_admin = user.role is Role.ADMIN and user.tenant_id is None
+        if is_platform_admin and role is not Role.ADMIN:
+            remaining = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(User)
+                    .where(User.role == Role.ADMIN, User.tenant_id.is_(None))
+                )
+            ).scalar_one()
+            if remaining <= 1:
+                raise LastPlatformAdminError(
+                    "Cannot demote the last platform-admin; the platform would be "
+                    "left with no global operator."
+                )
+        user.role = role
+        await session.commit()
+        await session.refresh(user)
+        return AdminUserRow(
+            id=user.id,
+            username=user.username,
+            role=user.role,
+            tenant_id=user.tenant_id,
+            email=user.email,
+            is_active=user.is_active,
+        )
 
 
 def _budget_row(b: Budget) -> BudgetRow:

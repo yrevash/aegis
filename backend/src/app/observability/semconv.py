@@ -59,6 +59,22 @@ ROUTER_ROLE = "app.router.role"
 ROUTER_REASON = "app.router.reason"
 ROUTER_USED_LLM = "app.router.used_llm"
 
+# A2A-style labelled agent handoff (the supervisor dispatching a turn to a
+# specialist). Emitted as a dedicated span so the trace tree reads as an
+# explicit agent-to-agent handoff, not just a routing attribute on a node.
+A2A_FROM = "app.a2a.from"  # the dispatching agent (e.g. "supervisor")
+A2A_TO = "app.a2a.to"  # the specialist role the turn is handed to
+A2A_REASON = "app.a2a.reason"  # why this specialist was chosen
+A2A_PROTOCOL = "app.a2a.protocol"  # labelling convention ("a2a")
+
+# Agentic retrieval (bounded reformulate-and-re-retrieve loop).
+RETRIEVAL_ROUNDS = "app.retrieval.rounds"
+RETRIEVAL_REWRITTEN = "app.retrieval.rewritten"
+
+# Answer-level semantic cache (final-answer reuse across equivalent questions).
+ANSWER_CACHE_HIT = "app.answer_cache.hit"
+ANSWER_CACHE_SIMILARITY = "app.answer_cache.similarity"
+
 GUARDRAIL_STAGE = "app.guardrail.stage"
 GUARDRAIL_VERDICT = "app.guardrail.verdict"
 GUARDRAIL_LAYER = "app.guardrail.layer"
