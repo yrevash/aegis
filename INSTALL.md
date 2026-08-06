@@ -186,7 +186,7 @@ exactly once.
 **Backend — tests + lint** (from `backend/`, venv active):
 
 ```bash
-python -m pytest tests -q      # expect: 266 passed, 1 skipped (the opt-in LLM-judge)
+python -m pytest tests -q      # expect: 469 passed, 1 skipped (the opt-in LLM-judge)
 ruff check src tests           # expect: All checks passed!
 ruff format --check src        # formatting
 ```
