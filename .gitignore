@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Data / models / artifacts (regenerated locally)
+*.db
+*.sqlite
+data/*.parquet
+data/*.csv
+*.joblib
+*.pkl
+
+# Local infra state
+phoenix.db
+neo4j/
+redis-data/
+
+# Garak red-team reports + transient generator configs (regenerated on the day)
+backend/scripts/garak_reports/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Linked worktrees (carry venv/node_modules) — never scan or track
+.claude/
