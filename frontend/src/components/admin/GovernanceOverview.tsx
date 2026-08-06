@@ -152,9 +152,9 @@ function BudgetCell({
         </InfoTip>
       </div>
       {utilisation != null && capTotal != null ? (
-        <div className="flex items-center gap-3">
-          <Gauge value={utilisation} color="risk" size={64} />
-          <span className="font-mono text-[0.68rem] text-muted-foreground">
+        <div className="flex items-center gap-4">
+          <Gauge value={utilisation} color="risk" size={72} className="shrink-0" />
+          <span className="min-w-0 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
             {spend != null ? formatUsd(spend) : '—'}
             <span className="text-muted-foreground/60"> / {formatUsd(capTotal)}</span>
           </span>

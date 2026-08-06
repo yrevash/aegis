@@ -35,13 +35,16 @@ interface BentoTileProps {
 }
 
 // Full class strings so Tailwind's scanner keeps them (no dynamic interpolation).
+// Spans collapse in two steps so mid-desktop widths never cramp or overflow:
+// small tiles (3/4/5) go 2-up at `sm`, larger tiles (6/7/8) at `md`, then reach
+// their full `lg` span at the design width.
 const SPAN_CLASS: Record<BentoSpan, string> = {
-  3: 'col-span-12 lg:col-span-3',
-  4: 'col-span-12 lg:col-span-4',
-  5: 'col-span-12 lg:col-span-5',
-  6: 'col-span-12 lg:col-span-6',
-  7: 'col-span-12 lg:col-span-7',
-  8: 'col-span-12 lg:col-span-8',
+  3: 'col-span-12 sm:col-span-6 lg:col-span-3',
+  4: 'col-span-12 sm:col-span-6 lg:col-span-4',
+  5: 'col-span-12 sm:col-span-6 lg:col-span-5',
+  6: 'col-span-12 md:col-span-6 lg:col-span-6',
+  7: 'col-span-12 md:col-span-6 lg:col-span-7',
+  8: 'col-span-12 md:col-span-6 lg:col-span-8',
   12: 'col-span-12',
 }
 
@@ -75,7 +78,9 @@ export function BentoTile({
     </Card>
   )
 
-  const spanClass = cn(SPAN_CLASS[span], rows === 2 && 'lg:row-span-2')
+  // `min-w-0` lets the grid child shrink below its content's intrinsic width
+  // instead of overflowing the row (the horizontal-scroll bug at sub-1440 widths).
+  const spanClass = cn(SPAN_CLASS[span], 'min-w-0', rows === 2 && 'lg:row-span-2')
 
   if (reveal) {
     return (

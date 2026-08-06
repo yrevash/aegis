@@ -105,8 +105,24 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
   const savedTrend = costSavedTrend(series.history)
   const savedDelta = sessionSavedDelta(series.history)
 
+  // The "Value" spine — the four outcomes leadership signs off on. Admin (the
+  // oversight role) leads with it at the very top; the other roles see it after
+  // the hero + charts.
+  const valueSection = (
+    <section className="flex flex-col gap-3">
+      <SectionHead
+        label="Value"
+        info="The four things leadership signs off on — savings, security, performance at least cost, and auditability. Live figures carry a green dot; illustrative ones are badged sample."
+      />
+      <BentoGrid>
+        <ValueSpine metrics={metrics} />
+      </BentoGrid>
+    </section>
+  )
+
   return (
     <div className="flex flex-col gap-8">
+      {isAdmin && valueSection}
       {/* ── Hero band — money leads, operational stats fill beside it. ── */}
       <BentoGrid>
         {saved != null ? (
@@ -187,16 +203,9 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
         <DashboardCharts metrics={metrics} />
       </BentoGrid>
 
-      {/* ── Value spine — the four outcomes a buyer signs off on. ── */}
-      <section className="flex flex-col gap-3">
-        <SectionHead
-          label="Value"
-          info="The four things leadership signs off on — savings, security, performance at least cost, and auditability. Live figures carry a green dot; illustrative ones are badged sample."
-        />
-        <BentoGrid>
-          <ValueSpine metrics={metrics} />
-        </BentoGrid>
-      </section>
+      {/* ── Value spine — the four outcomes a buyer signs off on (admin sees it
+          at the very top instead). ── */}
+      {!isAdmin && valueSection}
 
       {/* ── Detail, one layer down. ── */}
       <div className="flex flex-col gap-4">

@@ -227,27 +227,17 @@ const SECTIONS: Record<string, Section> = {
 }
 
 /**
- * Which sections each role's portal exposes, in nav order (RBAC). Admin sees
- * everything — the full platform-owner view — while the other three roles get a
- * focused subset:
+ * Which sections each role's portal exposes, in nav order (RBAC). Each role
+ * gets a focused subset scoped to what it owns:
+ *   - admin    : oversight/governance/delegation only (Overview, Approvals,
+ *                Governance, Audit, Roles & Access) — it does not do the
+ *                AI-team / DevOps / Client hands-on work
  *   - ai_team  : builds/tunes the agent (Console, Overview, Memory, loop, access demo)
  *   - devops   : runs the stack (Overview, stack, patches, audit)
  *   - client   : the tenant end-user (value, risk, read-only access demo)
  */
 const ROLE_SECTIONS: Record<Role, string[]> = {
-  admin: [
-    'console',
-    'dashboard',
-    'memory',
-    'simulation',
-    'stack',
-    'ops',
-    'approvals',
-    'admin',
-    'audit',
-    'roles',
-    'risk',
-  ],
+  admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
   ai_team: ['console', 'dashboard', 'memory', 'ops', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],

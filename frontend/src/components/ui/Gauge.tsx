@@ -39,6 +39,10 @@ export function Gauge({
 }: GaugeProps): ReactElement {
   const hex = chartHex(color)
   const { clamped, readout } = gaugeDisplay(value, centerLabel)
+  // Scale the centre read-out to the gauge so it never collides with the ring:
+  // small gauges (e.g. the 64px budget tile) shrink the number; large ones cap
+  // at the original 24px so Confidence/Quality gauges look unchanged.
+  const readoutPx = Math.round(Math.min(size * 0.3, 24))
 
   return (
     <div className={cn('flex flex-col items-center gap-1', className)}>
@@ -63,7 +67,10 @@ export function Gauge({
           </RadialBarChart>
         </ResponsiveContainer>
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <span className="tabular font-display text-2xl font-semibold text-foreground">
+          <span
+            className="tabular font-display font-semibold text-foreground"
+            style={{ fontSize: readoutPx, lineHeight: 1 }}
+          >
             {readout}
           </span>
         </div>

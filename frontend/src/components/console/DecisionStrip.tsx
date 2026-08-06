@@ -1,7 +1,8 @@
 import type { ReactElement, ReactNode } from 'react'
 
 import { ActionVerdict } from '@/components/ml/DualVerdict'
-import { BentoGrid, BentoTile, CountUp } from '@/components/shared'
+import { CountUp, RevealOnScroll } from '@/components/shared'
+import { Card } from '@/components/ui/card'
 import { InfoTip } from '@/components/ui/InfoTip'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
@@ -23,16 +24,18 @@ function Cell({
   phaseKey: string
 }): ReactElement {
   return (
-    <BentoTile span={3} reveal index={index} className="p-3.5">
-      <div className="flex items-center gap-1.5">
-        <span className="eyebrow">{label}</span>
-        {info != null && <InfoTip label={`About ${label}`}>{info}</InfoTip>}
-      </div>
-      {/* Re-key on the run phase so the figure cross-fades thinking → decided. */}
-      <div key={phaseKey} className="animate-reveal mt-1.5">
-        <span className={cn('t-metric block leading-none', tone)}>{children}</span>
-      </div>
-    </BentoTile>
+    <RevealOnScroll className="min-w-0" delayMs={index * 40}>
+      <Card className="h-full min-w-0 p-3.5">
+        <div className="flex items-center gap-1.5">
+          <span className="eyebrow truncate">{label}</span>
+          {info != null && <InfoTip label={`About ${label}`}>{info}</InfoTip>}
+        </div>
+        {/* Re-key on the run phase so the figure cross-fades thinking → decided. */}
+        <div key={phaseKey} className="animate-reveal mt-1.5 min-w-0">
+          <span className={cn('t-metric block truncate leading-none', tone)}>{children}</span>
+        </div>
+      </Card>
+    </RevealOnScroll>
   )
 }
 
@@ -62,7 +65,10 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
 
   return (
     <div className="space-y-3">
-      <BentoGrid className="gap-3 lg:gap-3">
+      {/* Metric tiles wrap 2-up and only reach 4-up at the widest breakpoint, so
+          the display figures (e.g. the run cost) never clip inside the narrower
+          centre column at mid-desktop widths. */}
+      <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
         <Cell
           label="Confidence"
           index={0}
@@ -128,7 +134,7 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
             dash
           )}
         </Cell>
-      </BentoGrid>
+      </div>
 
       {hasVerdict && (
         <div className="rounded-lg border border-border/70 bg-surface-2/40 px-3.5 py-2.5">

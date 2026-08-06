@@ -1,54 +1,48 @@
 /**
- * Theme layer — light default with an opt-in dark control-room mode.
+ * Theme layer — the console is light-only.
  *
- * The token system in `index.css` keys off a `.dark` class on the document
- * root. This module is the single owner of that class: it reads the persisted
- * preference, applies it before first paint (see `applyInitialTheme`, called
- * from `main.tsx` to avoid a flash), and exposes a small `useTheme` hook for the
- * top-bar toggle. No external state library — the choice is trivial and local.
+ * The product ships a single light identity, so dark is unreachable: this
+ * module never reads a stored preference, never applies a `.dark` class or
+ * `data-theme="dark"`, and never persists or toggles to dark. It exists only to
+ * (a) guarantee the document root is in the light state before first paint and
+ * (b) hand the fixed `'light'` value to the few consumers (e.g. the toast host)
+ * that still ask for a theme. The `toggle` is a retained no-op so callers keep
+ * compiling; there is nothing to switch to.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect } from 'react'
 
-/** The two identities the console can wear. */
-export type Theme = 'light' | 'dark'
+/** The only identity the console wears. */
+export type Theme = 'light'
 
-const STORAGE_KEY = 'aegis-theme'
-
-/** Read the saved preference, defaulting to the light dashboard identity. */
-function readStoredTheme(): Theme {
-  if (typeof localStorage === 'undefined') return 'light'
-  return localStorage.getItem(STORAGE_KEY) === 'dark' ? 'dark' : 'light'
-}
-
-/** Reflect a theme onto the document root so the CSS variable layer switches. */
-function reflect(theme: Theme): void {
-  document.documentElement.classList.toggle('dark', theme === 'dark')
+/**
+ * Force the document root out of any dark state. Call once from the entry
+ * module, before React renders, so the light palette is present on first paint.
+ */
+export function reflectLight(): void {
+  document.documentElement.classList.remove('dark')
+  if (document.documentElement.dataset.theme === 'dark') {
+    document.documentElement.dataset.theme = 'light'
+  }
 }
 
 /**
- * Apply the stored theme immediately. Call once from the entry module, before
+ * Apply the light theme immediately. Call once from the entry module, before
  * React renders, so the correct palette is present on the very first paint.
  */
 export function applyInitialTheme(): void {
-  reflect(readStoredTheme())
+  reflectLight()
 }
 
 /**
- * Subscribe to and control the active theme. Returns the current value and a
- * toggle that persists the new choice and updates the document root.
+ * Return the active theme. Always `'light'`; the `toggle` is a no-op because the
+ * app has no dark identity to switch to.
  */
 export function useTheme(): { theme: Theme; toggle: () => void } {
-  const [theme, setTheme] = useState<Theme>(readStoredTheme)
-
+  // Defend against any stray dark state introduced after first paint.
   useEffect(() => {
-    reflect(theme)
-    if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, theme)
-  }, [theme])
-
-  const toggle = useCallback(() => {
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+    reflectLight()
   }, [])
 
-  return { theme, toggle }
+  return { theme: 'light', toggle: () => {} }
 }

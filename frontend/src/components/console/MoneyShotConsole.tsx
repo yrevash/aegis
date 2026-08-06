@@ -108,18 +108,29 @@ export function MoneyShotConsole(): ReactElement {
       <TrustBar state={state} beat={beat} idle={idle} />
       <StreamBanners state={state} />
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+      {/*
+        Fluid multi-column console. The layout collapses in two honest steps so
+        nothing is ever squeezed to an unreadable width or clipped:
+          • < lg (≤1023): a single stacked column — every panel full width.
+          • lg–2xl (1024–1535): a two-column stage (activity + centre) with the
+            right rail dropped BENEATH, flowing its panels 2-up so they read at
+            comfortable width instead of a cramped ~280px sliver.
+          • ≥ 2xl (1536+): the full three-column view (activity · centre · rail).
+        Every column and panel carries `min-w-0` so grid children shrink to fit
+        instead of overflowing the `overflow-x-hidden` page.
+      */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         {/* Left rail — the live activity log (full height). */}
-        <div className="xl:col-span-3">
-          <RevealOnScroll className="block h-[440px] xl:h-[760px]">
+        <div className="min-w-0 lg:col-span-4 2xl:col-span-3">
+          <RevealOnScroll className="block h-[440px] lg:h-[620px] 2xl:h-[760px]">
             <AgentTracePanel state={state} />
           </RevealOnScroll>
         </div>
 
         {/* Centre stage — orchestration hero, the Decision strip, reasoning,
             answer, and the collapsible guardrail glass box. */}
-        <div className="flex flex-col gap-4 xl:col-span-6">
-          <RevealOnScroll className="block h-[380px] xl:h-[460px]" delayMs={40}>
+        <div className="flex min-w-0 flex-col gap-4 lg:col-span-8 2xl:col-span-6">
+          <RevealOnScroll className="block h-[380px] lg:h-[460px]" delayMs={40}>
             <Suspense fallback={<GraphFallback />}>
               <KnowledgeGraph base={graph} state={state} beat={beat} idle={idle} />
             </Suspense>
@@ -140,22 +151,23 @@ export function MoneyShotConsole(): ReactElement {
           </RevealOnScroll>
         </div>
 
-        {/* Right rail — confidence, sources, why, and fleet efficiency. */}
-        <div className="flex flex-col gap-4 xl:col-span-3">
-          <RevealOnScroll delayMs={40}>
+        {/* Right rail — confidence, sources, why, and fleet efficiency. Beneath
+            the stage it flows 2-up (md); as the true rail at 2xl it stacks. */}
+        <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 lg:col-span-12 2xl:col-span-3 2xl:grid-cols-1">
+          <RevealOnScroll className="min-w-0" delayMs={40}>
             <ConfidenceCard ml={state.ml} />
           </RevealOnScroll>
-          <RevealOnScroll delayMs={80}>
+          <RevealOnScroll className="min-w-0" delayMs={80}>
             <RerankScoreboard
               scores={state.retrievalScores}
               candidates={state.candidates}
               provenance={state.provenance}
             />
           </RevealOnScroll>
-          <RevealOnScroll delayMs={120}>
+          <RevealOnScroll className="min-w-0" delayMs={120}>
             <ShapPanel ml={state.ml} />
           </RevealOnScroll>
-          <RevealOnScroll delayMs={160}>
+          <RevealOnScroll className="min-w-0" delayMs={160}>
             <EfficiencyPanel metrics={metrics} state={state} />
           </RevealOnScroll>
         </div>

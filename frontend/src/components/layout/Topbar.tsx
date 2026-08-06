@@ -1,13 +1,10 @@
-import { Bell, Moon, Search, Sun } from 'lucide-react'
+import { Search } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import type { Session } from '@/auth/AuthContext'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useBackendMode } from '@/state/backendMode'
-
-import { useTheme } from './theme'
 
 interface TopbarProps {
   session: Session
@@ -30,13 +27,11 @@ function portalName(role: Session['role']): string {
 }
 
 /**
- * The portal header: breadcrumb, global search, theme toggle, notifications,
- * and the signed-in user. Sign-out lives in the sidebar footer.
+ * The portal header: breadcrumb, global search, and the signed-in user.
+ * Sign-out lives in the sidebar footer.
  */
 export function Topbar({ session, title }: TopbarProps): ReactElement {
-  const { theme, toggle } = useTheme()
   const { mode } = useBackendMode()
-  const isDark = theme === 'dark'
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-card/70 px-4 backdrop-blur lg:px-6">
@@ -67,32 +62,6 @@ export function Topbar({ session, title }: TopbarProps): ReactElement {
             className="h-9 w-44 pl-8 lg:w-56"
           />
         </div>
-
-        {/* Theme toggle */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggle}
-          aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-          title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-        >
-          {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-        </Button>
-
-        {/* Notifications */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative"
-          aria-label="Notifications"
-          title="Notifications"
-        >
-          <Bell className="size-4" />
-          <span
-            aria-hidden
-            className="absolute top-2 right-2 size-1.5 rounded-full bg-graph ring-2 ring-card"
-          />
-        </Button>
 
         {/* Signed-in user */}
         <div className="ml-1 flex items-center gap-2.5">

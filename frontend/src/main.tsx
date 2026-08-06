@@ -22,7 +22,7 @@ import { applyInitialTheme } from '@/components/layout/theme'
 const rootEl = document.getElementById('root')
 if (rootEl === null) throw new Error('Root element #root not found')
 
-// Light dashboard by default; restores dark only if the user last chose it.
+// Light-only app: guarantee the root is never in a dark state before paint.
 applyInitialTheme()
 
 createRoot(rootEl).render(
