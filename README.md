@@ -16,11 +16,12 @@ ML confidence — decides when a run defers to a human).
 ```
                          ┌───────────────────────────────────────────────────────────┐
   Browser (Vite+React)   │   SSE stream of structured agent-step events               │
-  ──────────────────────▶│  JWT auth (tenant claims) ─▶ Governance (budget/RLS)       │
-   Admin  /admin         │  POST /query ─▶ Guardrail ─▶ Hybrid retrieval (RRF) ─▶      │
-   Inbox  /approvals     │  ml_predict (signal) ─▶ Plan ─▶ tool-risk gate ┬▶ act       │
-   User   /app           │  (LangGraph + PostgresSaver)              └▶ Human Gate     │
-                         │  ML informs the plan; the tool risk tier drives the gate    │
+  ──────────────────────▶│  JWT auth (tenant + coarse_role claim) ─▶ Governance       │
+   4 role-scoped portals │  POST /query ─▶ Guardrail ─▶ rewrite ─▶ hybrid+agentic RAG  │
+   admin  /admin         │  (RRF) ─▶ ml_predict (signal) ─▶ Plan ─▶ tool-risk gate     │
+   ai_team /ai-team      │  ┬▶ act   (LangGraph + PostgresSaver)     └▶ Human Gate     │
+   devops /devops        │  answer-cache short-circuits the generation call            │
+   client /client        │  ML informs the plan; the tool risk tier drives the gate    │
                          │  ─▶ Tool/Action (exactly-once) ─▶ Output rail ─▶ answer     │
                          └───────────────┬───────────────────────────────────────────-┘
                                          │
@@ -49,10 +50,10 @@ secure enough to buy — and it takes real actions, explainably.*
 | Layer (Aegis module)         | Tech                                                        |
 |------------------------------|-------------------------------------------------------------|
 | API                          | FastAPI (async, SSE), OpenAPI auto-docs                      |
-| **Aegis Governance** (Postgres RLS + JWT) | **JWT** (`pyjwt`) + **Argon2id** (`argon2-cffi`) · multi-tenant RBAC · per-tenant budget/RPM/TPM + usage ledger · Postgres RLS enabled at startup (`create_all` + `bootstrap_rls()`, not a migration) on `users`/`usage_ledger`/`approvals`; `audit_log`/`chunks` are application-scoped |
+| **Aegis Governance** (Postgres RLS + JWT) | **JWT** (`pyjwt`) + **Argon2id** (`argon2-cffi`) · **four-role RBAC** (`admin`/`ai_team`/`devops`/`client`, a signed `coarse_role` claim + fine `platform_admin`/`tenant_admin`/`user` tier; per-role guards + admin role-assignment with last-platform-admin lockout) · per-tenant budget/RPM/TPM + usage ledger · Postgres RLS enabled at startup (`create_all` + `bootstrap_rls()`, not a migration) on `users`/`usage_ledger`/`approvals`; `audit_log`/`chunks` are application-scoped |
 | **Aegis Gateway** (LiteLLM)  | **LiteLLM** → custom OpenAI-compatible provider (`genailab.tcs.in`), budget-enforced chokepoint |
 | **Aegis Router** (LangGraph) | LangGraph (plan-and-execute + tool loop) · **durable `PostgresSaver`** checkpoints · durable approvals **inbox** (SLA sweeper + idempotent resumer) |
-| **Aegis Retrieval** (Neo4j/LightRAG + pgvector) · **Aegis Cache** (Redis) | Hybrid: vector + graph + BM25 → **Reciprocal Rank Fusion** → LLM rerank · LightRAG · Neo4j · Postgres/pgvector · near-exact Redis cache |
+| **Aegis Retrieval** (Neo4j/LightRAG + pgvector) · **Aegis Cache** (Redis) | Context-aware **query rewrite** → bounded **agentic/Self-RAG retrieval loop** → hybrid: vector + graph + BM25 → **Reciprocal Rank Fusion** → LLM rerank · LightRAG · Neo4j · Postgres/pgvector · near-exact retrieval Redis cache **+ per-tenant/persona/role answer-level semantic cache** |
 | **Aegis Signal** (XGBoost + MAPIE + SHAP) | XGBoost + MAPIE (conformal) + SHAP · **solution signal only** — informs the plan; never gates/defers/abstains (the human gate fires on tool risk tier). Graded bands (autonomous/defer/abstain) exist as an inert contract used only by the frontend mock |
 | **Aegis Guardrails** (programmatic + NeMo Colang) | Guardrails AI / NeMo + API injection classifier · **Garak** red-team runner (`backend/scripts/garak_scan.py`, executed on the day) |
 | **Aegis Evals** (RAGAS-style proxies + LLM judge) | Offline deterministic gate (`app/eval/`) · optional reasoning-model LLM-as-judge |
@@ -96,8 +97,9 @@ backend/src/app/
   retrieval/      # LightRAG + stores + semantic cache
   ml/             # XGBoost + MAPIE + SHAP
   guardrails/     # input/output rails
-  data/           # DB models, audit log, migrations
-  observability/  # OTel spans + Phoenix
+  data/           # DB models, audit log, governance (RBAC role assignment)
+  observability/  # OTel spans + Phoenix (incl. A2A handoff span attributes)
+  platform/       # role-portal surfaces: stack · patches · risk-map · savings
   adapter/        # the five domain-specific pieces (swapped on the day)
 frontend/         # Vite + React app
 docs/             # mission context + ADRs + threat model

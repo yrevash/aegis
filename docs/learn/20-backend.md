@@ -25,8 +25,10 @@ flowchart TB
     OBS["observability/*"]
     DATA["data/*"]
     MCP["mcp/server.py"]
+    PLAT["platform/*<br/>(stack · patches · risk_map · savings)"]
 
     API --> ORC --> G
+    API --> PLAT
     G --> GRD & RET & MEM & ML & ADP
     G --> GW
     GRD & RET & MEM & ML & OPS & EVAL --> GW
@@ -38,6 +40,7 @@ flowchart TB
     MCP --> ADP
     MCP --> DATA
     GW --> DATA
+    PLAT --> GW
 ```
 
 Two things every module shares:
@@ -53,18 +56,24 @@ Two things every module shares:
 
 Every endpoint lives in `routes.py`; `schemas.py` holds the request/response models and the
 `StreamEvent` discriminated union that the SSE stream and the frontend share. RBAC is
-enforced with dependency guards (`require_auth` / `require_admin` /
-`require_platform_admin` / `require_tenant_admin`), and every state-changing action writes
-an audit row.
+enforced with dependency guards over the **four coarse roles** (`Role` in `schemas.py`:
+`admin` / `ai_team` / `devops` / `client`): `require_auth`, per-role `require_admin` /
+`require_devops` / `require_ai_team` / `require_client`, the multi-role combinator
+`require_roles(*roles)` (e.g. `require_admin_or_devops` for `/audit` + `/stack`,
+`require_admin_or_ai_team` for the ops loop, `require_admin_or_client` for `/risk-map`), and
+the fine-tier `require_platform_admin` / `require_tenant_admin`. Every state-changing action
+writes an audit row.
 
 | Group | Endpoints |
 |---|---|
-| Auth | `POST /auth/login` (issues a claims-bearing JWT) |
+| Auth | `POST /auth/login` (issues a JWT carrying the signed `coarse_role` claim) |
+| Platform (public/portal) | `GET /health` (**public**), `GET /about`, `GET /platform/capabilities` |
+| Platform surfaces | `GET /stack` · `POST /stack/patch-check` (admin/devops), `GET /risk-map` (admin/client), `GET /savings` (any auth) |
 | Agent | `POST /query` (SSE stream), `POST /approval`, `GET /approvals`, `POST /approvals/{id}/decision` |
-| Glass box | `GET /graph`, `POST /ml/explain`, `GET /metrics` (platform-admin), `GET /audit` (admin) |
-| Admin governance | `GET /admin/tenants`, `GET /admin/users`, `GET|POST /admin/budgets`, `GET /admin/usage` |
+| Glass box | `GET /graph`, `POST /ml/explain`, `GET /metrics` (any auth — Overview is in every portal), `GET /audit` (admin/devops) |
+| Admin governance | `GET /admin/tenants`, `GET /admin/users`, `POST /admin/users/{id}/role`, `GET|POST /admin/budgets`, `GET /admin/usage` |
 | Memory | `GET /memory/{facts,profile,sessions,sessions/{id}/messages,writes,recall_debug}`, `POST /memory/forget`, `DELETE /memory/facts/{id}` |
-| Ops (LLM-Ops loop) | `GET /ops/{prompts,prompts/active,evals,releases/pending}`, `POST /ops/{diagnose,release,rollback,releases/{id}/decide}` |
+| Ops (LLM-Ops loop) | `GET /ops/{prompts,prompts/active,evals,releases/pending}`, `POST /ops/{diagnose,release,rollback,releases/{id}/decide}` (admin/ai_team; the human release decision stays admin-only) |
 
 Reads degrade to empty and mutations return a clean `503` when the stores are off (`STORES=off`);
 memory erasure returns `503` rather than faking success. Process-wide `GraphStore` and
@@ -112,14 +121,35 @@ The Harness. Detailed flow is in `40-request-flow.md`; the files:
 - **`core/governance.py`** — per-request `GovernanceContext` (tenant/user + effective caps)
   via `contextvars`, set at the request edge and read at the chokepoint.
 - **`core/security.py`** — JWT (`create/decode_access_token`, HS256) + Argon2id password
-  hashing; `principal_role` derives the fine-grained tier (`platform_admin` /
-  `tenant_admin` / `user`).
+  hashing. The token carries both the fine tier and a signed **`coarse_role`** claim (one of
+  the four `Role` values). `principal_role(role, tenant_id)` derives the fine-grained tier
+  (`platform_admin` = admin with no tenant / `tenant_admin` = admin scoped to a tenant /
+  `user`); `coarse_role_from_fine` is its honest inverse.
 
 ## Aegis Retrieval — `retrieval/*`
 
 Hybrid RAG. `pipeline.py::Retriever.retrieve()`: **exact cache → semantic cache → hybrid
 wide recall (vector + graph + BM25) → RRF fusion → LLM rerank → spotlight → assemble →
 cache write-back**.
+
+**Retrieval intelligence** (all ON in production, honest deterministic fallbacks; the
+extra model-call costs are accrued into the run's per-run telemetry — see
+`docs/EVAL_STRATEGY.md`):
+
+- **`query_rewrite.py`** — a context-aware **query rewrite** *before* retrieval: one cheap
+  gateway call resolves pronouns/ellipsis/back-references against the conversation history
+  into a standalone, retrieval-optimized query. Pure logic; any failure collapses to an
+  honest no-op (`changed=False`).
+- **`agent/retrieval_loop.py`** (`agentic_retrieve`) — a bounded **agentic / Self-RAG
+  retrieval loop**: retrieve, judge whether the context is sufficient (cheap-model JSON
+  call), and if not re-retrieve with a focused follow-up, then **merge** the evidence —
+  capped by `max_rounds`. Wired into `graph.py::retrieve`; degrades to a deterministic
+  "non-empty context ⇒ sufficient" rule with no judge.
+- **`answer_cache.py`** (`AnswerCache`) — an **answer-level semantic cache** scoped
+  per-`tenant+persona+role`: caches the *final generated answer* so a semantically
+  equivalent question skips the expensive generation call. Scope partitioning is a
+  correctness/security requirement (a hit under one scope can never be returned for
+  another). Checked in `graph.py` before generation; honest misses never raise.
 
 - **`fusion.py`** — pure **Reciprocal Rank Fusion** (`reciprocal_rank_fusion`, k=60),
   origin-tagged; reused by memory too.
@@ -171,13 +201,20 @@ flowchart LR
   w_freq*freq`, min-max normalized), `recency_decay`, `rank_top`.
 - **`recall.py`** — the READ selection: facts (pgvector/Python top-k over *valid* facts),
   episodic (RRF of a recency window + a vector top-k), skills (markdown via
-  `memory_spec.select_skills`).
+  `memory_spec.select_skills`). Recall is **not read-only for scoring**: it bumps each
+  surfaced fact/turn's `access_count` (+1) and `last_access_at`, which feeds a **live**
+  frequency term in the composite (`scoring.py`, `config.w_freq = 0.1 > 0`) — frequency is
+  real, not inert.
 - **`working.py`** — assembles the budgeted, **lost-in-the-middle**-ordered block
   (`profile, facts, skills, summary, episodic, raw`), greedy fill + eviction, episodic
   wrapped in spotlighting. Returns `AssembledMemory` (≤ budget).
 - **`consolidate.py`** — mem0 two-phase write: **extract** durable facts (one cheap call),
   **reconcile** each (dedup short-circuit, else ADD/UPDATE/INVALIDATE/NOOP), all audited;
-  `enqueue_consolidation`/`sweep_pending` for the durable queue.
+  `enqueue_consolidation`/`sweep_pending` for the durable queue. **Forgetting is wired**:
+  `sweep_pending` runs `prune_forgotten` — a Generative-Agents-style **soft-archive** pass
+  that closes stale, never-recalled, aged-out facts in transaction-time
+  (`expired_at = now`, so they drop out of hot recall) governed by `config.forget_floor` /
+  `forget_min_age_days`. It is a bitemporal soft-archival, **never a hard delete**.
 - **`config.py`** (`MemoryConfig` knobs), **`vector_ops.py`** (cosine top-k),
   **`tokens.py`** (tiktoken or a `len//4` fallback).
 
@@ -252,6 +289,12 @@ returns an `EvalReport(passed=…)` (the CI gate; `python -m app.eval.harness`).
 — optional LLM-as-judge (`judge_answer`, gated by `TAIF_EVAL_LLM_JUDGE`). **`metrics.py`**
 — deterministic RAGAS-*style* lexical proxies (context-precision/recall, groundedness).
 **`corpus.py`** — the frozen self-contained KB (`SEED_CORPUS`, `SEED_CASES`).
+**`regression.py`** — the **DeepEval-pattern** CI regression gate: declarative per-metric
+thresholds (`Metric` / `MetricResult` / `RegressionReport`) over the real hybrid retriever
+*plus* an **agentic / tool-use** case that asserts `app.agent.router.route_query` still
+selects the right specialist. Native (no `deepeval` package: no external judge, no network),
+run as `python -m app.eval.regression` — wired as the pass/fail bar in `scripts/preflight.*`.
+See `docs/EVAL_STRATEGY.md`.
 
 ## Aegis Trace — `observability/*`
 
@@ -260,8 +303,11 @@ OpenTelemetry → Phoenix. **`otel.py`** — `init_observability(app)` wires the
 **`spans.py`** — `span(kind, name, attributes)` context manager (stamps
 `openinference.span.kind` so Phoenix renders the run as a tree; no-op when untraced).
 **`genai.py`** — `genai_span` for `gen_ai.*` LLM/embedding spans + `set_usage`.
-**`semconv.py`** — the attribute keys, `DEFAULT_PROVIDER="tcs.genailab"`, and `SpanKind`
-(`AGENT, CHAIN, TOOL, RETRIEVER, RERANKER, GUARDRAIL, LLM, EMBEDDING`).
+**`semconv.py`** — the attribute keys, `DEFAULT_PROVIDER="tcs.genailab"`, `SpanKind`
+(`AGENT, CHAIN, TOOL, RETRIEVER, RERANKER, GUARDRAIL, LLM, EMBEDDING`), and the **A2A**
+labelled-handoff attributes (`A2A_FROM` / `A2A_TO` / `A2A_REASON` / `A2A_PROTOCOL`) stamped
+on the `route` node when the supervisor dispatches a turn to a specialist
+(`agent/graph.py`).
 
 ## Aegis Governance — `data/*`
 
@@ -271,7 +317,10 @@ Persistence + tenancy. **`models.py`** — the ORM on `Base`: `Tenant`, `User`, 
 **`get_agent_checkpointer()`** (the single process-wide LangGraph checkpointer enabling
 cross-worker resume by `thread_id`), **`set_tenant_scope`** (emits the Postgres RLS GUC),
 `bootstrap`/`bootstrap_rls`. **`governance.py`** — `enforce_governance` (the chokepoint
-budget check), `record_usage`, admin rollups. **`audit.py`** — `record_audit`.
+budget check), `record_usage`, admin rollups, and **`update_user_role`** (the admin RBAC
+role-assignment behind `POST /admin/users/{id}/role`, guarded by `LastPlatformAdminError`
+so the platform can never demote its last global platform-admin into a lockout).
+**`audit.py`** — `record_audit`.
 **`approvals.py`** — the durable inbox: `enqueue_approval`, `list_pending`,
 `resolve_approval` (optimistic `PENDING → RESUMING/REJECTED` lock for exactly-once resume),
 `sweep_expired` / `run_sla_sweeper`.
@@ -285,6 +334,22 @@ unknown/not-allowed names, applies the risk gate, and routes through the same `r
 (re-checks the allowlist + writes an audit row). **HIGH-risk writes are listed but never
 auto-executed** — they return "requires human approval" with no side effect (audited as a
 proposal), preserving the exact governance the in-process agent enforces.
+
+## Platform surfaces — `platform/*`
+
+The "what are we running / what does it save" layer behind the DevOps and Client portals —
+four honest read endpoints, deliberately import-light. **`stack.py`** (`build_stack`) — the
+live software bill-of-materials from **actually-installed** versions via
+`importlib.metadata` (null when an optional-group dependency isn't installed — honest, not
+guessed), each row mapped to the Aegis module it powers. **`patches.py`** (`patch_check`) —
+installed vs latest against a **live PyPI** query; per-package resolution so one network
+failure marks only that row `unknown`, and with *no* package reachable it degrades to
+`online=false` rather than fabricating a clean bill of health. **`risk_map.py`**
+(`build_risk_map`) — the OWASP-Top-10-for-Agentic risk matrix, grounded verbatim in
+`docs/SECURITY_OWASP_AGENTIC.md` (each risk carries an honest likelihood/impact, its real
+Aegis mitigation, and a `control_ref` pointing at a real file; injection is never marked
+fully resolved). **`savings.py`** (`build_savings`) — baseline-vs-actual savings derived
+from the real gateway usage ledger (`core.llm.usage_tally`), conservative by design.
 
 ## The domain edge — `adapter/*`
 

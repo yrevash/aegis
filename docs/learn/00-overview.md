@@ -67,7 +67,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph FE["Frontend — React + Vite + TypeScript (frontend/src)"]
-        UI["Console · Dashboard · Memory · Self-improvement<br/>Approvals · Admin · Audit · Simulation"]
+        UI["4 role-scoped portals (admin · ai_team · devops · client)<br/>Console · Overview · Memory · Improvement · Approvals<br/>Governance · Audit · Roles&Access · Stack · Patches · Risk Map · Savings"]
     end
 
     subgraph BE["Backend — FastAPI (backend/src/app)"]
@@ -124,9 +124,17 @@ UI labels, and the code comments.
 | **Aegis Guardrails** | input/output rails: injection, PII, schema, content | programmatic + NeMo Colang | `guardrails/*` |
 | **Aegis Evals** | trace-level + answer evaluation | RAGAS-style proxies + LLM judge | `ops/trace_eval.py`, `eval/*` |
 | **Aegis Loop** | LLM-Ops self-improvement: trace → eval → diagnose → tiered release | native | `ops/*` |
-| **Aegis Governance** | multi-tenant RBAC, budgets, RLS, audit log | Postgres RLS + JWT | `data/*`, `core/governance.py`, `core/security.py` |
+| **Aegis Governance** | multi-tenant **four-role** RBAC (admin/ai_team/devops/client), budgets, RLS, audit log | Postgres RLS + JWT | `data/*`, `core/governance.py`, `core/security.py` |
 | **Aegis Trace** | end-to-end tracing (glass box) | OpenTelemetry → Phoenix | `observability/*` |
 | **Aegis Tools / MCP** | risk-tiered tool registry + human gate, exposed over MCP | native + MCP SDK | `adapter/tools.py`, `mcp/server.py` |
+
+> **RBAC & portals.** Authentication resolves one of **four** coarse roles — `admin`,
+> `ai_team`, `devops`, `client` (`Role` in `api/schemas.py`, a signed `coarse_role` JWT
+> claim in `core/security.py`) — and each gets its **own portal** with a focused surface
+> set (`frontend/src/routes/Portal.tsx` `ROLE_SECTIONS`). Four platform surfaces
+> (`backend/src/app/platform/*`) back the DevOps and Client portals: `GET /stack`,
+> `POST /stack/patch-check`, `GET /risk-map`, `GET /savings`. See `30-frontend.md` for the
+> per-role surface map and `docs/LEARNING_GUIDE.md` for the role/endpoint tables.
 
 ## Domain-agnostic core vs. adapter — the golden rule
 

@@ -43,6 +43,7 @@ The shipped example domain is an enterprise **customer-support / service-request
 | 40 | [`learn/40-request-flow.md`](learn/40-request-flow.md) | One request end-to-end, with a mermaid sequence diagram mapped to real nodes/files/events |
 | 50 | [`learn/50-extend-for-your-domain.md`](learn/50-extend-for-your-domain.md) | The adapter contract: exactly what a new team supplies to reuse Aegis (and what not to touch) |
 | 60 | [`learn/60-run-and-operate.md`](learn/60-run-and-operate.md) | Install + run (lite vs. full), env vars, the day-of runbook, how to verify |
+| 70 | [`learn/70-whats-new.md`](learn/70-whats-new.md) | **What's new** — a skimmable index of everything recently added/changed (RBAC + portals, platform surfaces, retrieval intelligence, eval gate, memory, frontend), each line naming its real file |
 
 ## The Aegis module map (branded name + honest tech)
 
@@ -63,6 +64,36 @@ underneath. Full detail in [`learn/20-backend.md`](learn/20-backend.md).
 | **Aegis Governance** — RBAC, budgets, RLS, audit | Postgres RLS + JWT | `data/*`, `core/*` |
 | **Aegis Trace** — end-to-end tracing (glass box) | OpenTelemetry → Phoenix | `observability/*` |
 | **Aegis Tools / MCP** — risk-tiered tools + human gate over MCP | native + MCP SDK | `adapter/tools.py`, `mcp/server.py` |
+
+## RBAC — four roles, four portals
+
+RBAC is a **four-valued** coarse role (`admin`, `ai_team`, `devops`, `client`), defined as
+`Role` in `backend/src/app/api/schemas.py`, carried as a signed `coarse_role` JWT claim
+(`core/security.py`) alongside the fine tier (`platform_admin` / `tenant_admin` / `user`).
+Per-role guards (`require_admin` / `require_devops` / `require_ai_team` / `require_client` /
+`require_roles`) live in `api/routes.py`; an admin reassigns roles via `POST
+/admin/users/{id}/role` (`data/governance.py::update_user_role`, with a last-platform-admin
+lockout guard). `GET /health` is public. Each role gets its **own portal** (frontend
+`src/routes/Portal.tsx` `ROLE_SECTIONS`, one route per role in `App.tsx`):
+
+| Role | Portal route | Surfaces |
+|---|---|---|
+| `admin` | `/admin` | Overview · Approvals · Governance · Audit · Roles & Access (oversight/delegation only) |
+| `ai_team` | `/ai-team` | Console · Overview · Memory · Improvement · Access demo |
+| `devops` | `/devops` | Overview · Tech Stack & Versions · Patch Check · Audit |
+| `client` | `/client` | Overview · Savings · Risk Map · Access demo |
+
+## Platform surfaces (the "what are we running / what does it save" layer)
+
+Four honest read endpoints back the DevOps and Client portals — implemented in
+`backend/src/app/platform/*`:
+
+| Endpoint | Backing file | What it is |
+|---|---|---|
+| `GET /stack` | `platform/stack.py` | Live software bill-of-materials from actually-installed versions (`importlib.metadata`) |
+| `POST /stack/patch-check` | `platform/patches.py` | Installed vs latest against live PyPI; honest `online=false` offline (never a fake clean bill) |
+| `GET /risk-map` | `platform/risk_map.py` | OWASP-Top-10-for-Agentic risk matrix, grounded in `docs/SECURITY_OWASP_AGENTIC.md` |
+| `GET /savings` | `platform/savings.py` | Baseline-vs-actual savings, derived from the real gateway usage ledger |
 
 ## The golden rule for changing it
 

@@ -14,9 +14,9 @@ flowchart TD
     GI -->|ok| RT[route<br/>Aegis Router]
     RT -->|role = memory| AM[answer_memory<br/>memory specialist]
     RT -->|role = qa default| RC[recall_memory<br/>silent unless memory active]
-    RC --> RET[retrieve<br/>hybrid RAG]
+    RC --> RET[retrieve<br/>query rewrite → agentic/Self-RAG loop → hybrid RAG]
     RET --> ML[ml_predict<br/>Aegis Signal]
-    ML --> PL[plan<br/>reason & propose tools]
+    ML --> PL[plan<br/>answer-cache check → reason & propose tools]
     PL -->|tool calls| GT[gate<br/>risk gate + ML evidence]
     PL -->|no tools| GEN[generate]
     GT -->|HIGH risk| AP[approval<br/>interrupt / human gate]
@@ -40,7 +40,7 @@ Key wiring facts (all from `graph.py`):
 - `route` dispatches to `answer_memory` **only** when the role is `memory`; every other
   role (the `qa` default) falls through to the normal pipeline via `recall_memory`.
 - `recall_memory` and `persist_memory` are wired **plain** (not timed). When memory is
-  inactive they return `{}` and emit *nothing*, so a single-shot run's event stream is
+  inactive they return `{}` and emit *nothing*, so a memory-inactive run's event stream is
   byte-for-byte unchanged.
 - `plan` increments a counter; `reflect` can only ever *reduce* the remaining budget
   (`config.max_plan_iterations`, default 2), so the plan→act→reflect loop is guaranteed
@@ -62,7 +62,7 @@ sequenceDiagram
     participant INBOX as Approvals inbox<br/>(durable row)
 
     FE->>API: POST /query {query, persona, session_id?} (SSE opens)
-    API->>API: require_auth (JWT) · _resolve_persona · _resolve_governance
+    API->>API: require_auth (JWT + coarse_role) · _resolve_persona · _resolve_governance
     API->>ORC: run_agent(query, persona, role, session_id, memory_subject)
     ORC-->>FE: run_started (opens OTel trace "agent.run")
 
@@ -74,12 +74,14 @@ sequenceDiagram
     Note over G: recall_memory (silent unless memory + session active)
     G-->>ST: memory.assemble → working-memory block
     G-->>FE: memory(recalled facts/messages)
-    Note over G: retrieve — hybrid RAG
-    G->>ST: vector + graph + BM25 → RRF → LLM rerank
+    Note over G: retrieve — query rewrite → agentic loop → hybrid RAG
+    G->>GW: rewrite_query (cheap) · sufficiency judge per round (cheap)
+    G->>ST: vector + graph + BM25 → RRF → LLM rerank (re-retrieve if insufficient)
     G-->>FE: retrieval(started · candidates · reranked · done) + provenance
     Note over G: ml_predict — Aegis Signal (best-effort)
     G->>G: features_for → predict_explain (XGBoost + conformal + SHAP)
-    Note over G: plan — reason & propose tools
+    Note over G: plan — answer-cache check, then reason & propose tools
+    G->>ST: answer_cache.get(query_vec, scope=tenant+persona+role) — hit ⇒ skip generation
     G->>GW: complete(GENERATION, tools=…)
     G-->>FE: reasoning(chunks)
     Note over G: gate — risk gate + ML evidence
@@ -136,18 +138,30 @@ builders live in `backend/src/app/agent/events.py`; the wire union is
    `deps.memory.assemble` builds the working-memory block (profile + top facts + skills +
    summary + recent turns, under a token budget) and emits **`memory`**. Otherwise it
    emits nothing. — `graph.py::recall_memory`, `agent/deps.py::MemoryDeps`.
-7. **`retrieve`** (Aegis Retrieval): `deps.retrieve` runs hybrid RAG (vector + graph +
-   BM25 → Reciprocal Rank Fusion → LLM rerank), spotlights the context (untrusted, marked
-   reference-only), and returns sources + a graph delta. Emits **`retrieval`** (`started`
-   → `candidates` → `reranked` → `done`) and **`provenance`**. — `graph.py::retrieve`.
+7. **`retrieve`** (Aegis Retrieval): a **context-aware query rewrite** (`query_rewrite.py`,
+   one cheap call resolving pronouns/back-references against history) feeds a **bounded
+   agentic / Self-RAG loop** (`agent/retrieval_loop.py::agentic_retrieve`): retrieve →
+   judge sufficiency → re-retrieve with a focused follow-up if needed → merge, capped by
+   `agentic_retrieval_max_rounds`. Each round runs the real hybrid RAG (vector + graph +
+   BM25 → Reciprocal Rank Fusion → LLM rerank); the context is spotlighted (untrusted,
+   marked reference-only). Both are ON in production with honest deterministic fallbacks,
+   and the rewrite/judge model spend is accrued into the run's per-run telemetry. Emits
+   **`retrieval`** (`started` → `candidates` → `reranked` → `done`) + reasoning events
+   surfacing the rewrite/rounds, and **`provenance`**. — `graph.py::retrieve`.
 8. **`ml_predict`** (Aegis Signal): best-effort. `deps.features_for(query, persona)`
    resolves a subject record; if found, `deps.predict_explain` returns a calibrated
    prediction + conformal interval + SHAP drivers, stored for the planner and answer. No
    subject → the run continues with zero ML. Never blocks. — `graph.py::ml_predict`.
-9. **`plan`**: `deps.complete(GENERATION, messages, tools=…)` reasons over context +
-   working memory + the ML summary and either proposes tool calls or answers directly. On
-   a re-plan it feeds back the previous failed outcome. Emits **`reasoning`** chunks;
-   increments `plan_iterations`. — `graph.py::plan`.
+9. **`plan`**: on a `qa` turn it **first consults the answer-level semantic cache**
+   (`deps.answer_cache.get(query_vec, scope=tenant+persona+role)`, `retrieval/answer_cache.py`):
+   a hit short-circuits planning — the cached answer is returned and the expensive
+   generation call is skipped (the output rail still runs). The scope partition means an
+   answer can never cross a tenant/persona/role boundary; the lookup is skipped on a
+   self-repair re-plan and when no real query embedding exists. Otherwise
+   `deps.complete(GENERATION, messages, tools=…)` reasons over context + working memory +
+   the ML summary and either proposes tool calls or answers directly. On a re-plan it feeds
+   back the previous failed outcome. Emits **`reasoning`** chunks; increments
+   `plan_iterations`. — `graph.py::plan`.
 10. **`gate`**: computes the top proposed-tool risk. Gates when any call is at or above
     `config.gate_min_risk` (`HIGH`). Emits **`ml_explanation`** (informational only). Sets
     `gated`. If no tool calls, `plan` routed straight to `generate`. — `graph.py::gate`.

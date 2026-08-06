@@ -46,8 +46,9 @@ The repo ships day-of scripts (`scripts/`) with Windows `.ps1` and mac/Linux `.s
 .\scripts\start.ps1 -Mode lite
 ```
 
-Then open **http://localhost:5173** and log in with **admin / admin**. Lite mode installs
-the same packages as full — the switch is the `STORES` env var, not the install.
+Then open **http://localhost:5173** and log in with **admin / demo** (or use a role
+quick-login button). Lite mode installs the same packages as full — the switch is the
+`STORES` env var, not the install.
 
 ## Manual setup
 
@@ -72,9 +73,21 @@ cp .env.example .env.local
 pnpm dev                                                   # → http://localhost:5173
 ```
 
-Demo logins (dev only): `admin/admin` (persona `operations_lead`) and `user/user` (persona
-`client`). A real deployment seeds the `users` table with Argon2-hashed passwords and a
-`tenant_id`, so login yields a **tenant-scoped** JWT and runs are governed.
+Demo logins (dev only) — one per RBAC role, all with password `demo` (`_DEMO_USERS` in
+`api/routes.py`):
+
+| Username | Role → portal | Persona |
+|---|---|---|
+| `admin` | `admin` → `/admin` | `operations_lead` |
+| `ai` (or `aiteam`) | `ai_team` → `/ai-team` | `operations_lead` |
+| `devops` | `devops` → `/devops` | `operations_lead` |
+| `client` | `client` → `/client` | `client` |
+
+The demo backdoor is dev-only (closed when `APP_ENV != dev` or a real user row exists). A
+real deployment seeds the `users` table with Argon2-hashed passwords, a coarse `role`, and a
+`tenant_id`, so login yields a JWT carrying the signed `coarse_role` claim and a
+**tenant-scoped** identity, and runs are governed. An admin reassigns roles via `POST
+/admin/users/{id}/role` (with a last-platform-admin lockout guard).
 
 ## Key environment variables
 
@@ -88,6 +101,9 @@ All backend settings are typed in `backend/src/app/config.py`; nothing else read
 | `STORES` | `on` | `on` = real stores (Postgres-primary); `off` = **lite** (no databases). Read as `settings.stores_enabled` |
 | `DB_BOOTSTRAP` | `false` | Create tables on startup (best-effort; the run scripts set `true`) |
 | `GUARDRAILS_ENGINE` | `programmatic` | `programmatic` (fast Python rails) or `nemo` (executes the NeMo Colang policy). *Silently downgrades to programmatic if the NeMo package is absent* |
+| `QUERY_REWRITE_ENABLED` | `true` | Context-aware query rewrite before retrieval (`retrieval/query_rewrite.py`) |
+| `AGENTIC_RETRIEVAL_ENABLED` / `AGENTIC_RETRIEVAL_MAX_ROUNDS` | `true` / `2` | Bounded Self-RAG retrieval loop (`agent/retrieval_loop.py`) |
+| `ANSWER_CACHE_ENABLED` / `ANSWER_CACHE_THRESHOLD` / `ANSWER_CACHE_TTL_SECONDS` | `true` / `0.97` / `1800` | Answer-level semantic cache, scoped per tenant+persona+role (needs Redis; off in lite) |
 | `AGENT_CHECKPOINTER` | `memory` | `memory` (single-process `InMemorySaver`) or `postgres` (durable `PostgresSaver` → resumable HITL across restart/worker) |
 | `LOG_LEVEL` | `INFO` | Root log level (applied by `main.create_app` via `logging.basicConfig(force=True)`; unknown → INFO) |
 | `APP_ENV` | `dev` | `dev` enables the demo logins + insecure JWT fallback; any other value locks both down |
@@ -138,7 +154,7 @@ trained fallback, so a missing artifact never crashes a run.
 
 **Backend** (from `backend/`, venv active):
 ```bash
-python -m pytest tests -q      # expect: 266 passed, 1 skipped (the opt-in LLM-judge)
+python -m pytest tests -q      # expect a green suite (the one skip is the opt-in LLM-judge)
 ruff check src tests           # All checks passed!
 ruff format --check src        # formatting
 ```
@@ -146,7 +162,10 @@ ruff format --check src        # formatting
 The offline **quality gate** runs in the suite (`tests/eval/test_eval_gate.py`): it drives
 the *real* hybrid retrieval path over a fixed seed corpus and **fails** if
 context-precision/recall or groundedness regress below threshold. Set
-`TAIF_EVAL_LLM_JUDGE=1` to additionally run the reasoning-model LLM-as-judge pass.
+`TAIF_EVAL_LLM_JUDGE=1` to additionally run the reasoning-model LLM-as-judge pass. A second,
+**DeepEval-pattern** regression gate (`app/eval/regression.py`, `python -m
+app.eval.regression`) adds per-metric thresholds *plus* an agentic tool-selection case and
+is wired as the pass/fail bar inside `scripts/preflight.{sh,ps1}` (see `docs/EVAL_STRATEGY.md`).
 Lite/end-to-end coverage lives in `tests/retrieval/test_memory.py` and `tests/integration/`
 (governed-budget block, durable approval round-trip, RRF hybrid provenance, cross-tenant
 isolation).
