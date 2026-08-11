@@ -60,6 +60,6 @@ comes after the pieces it composes.
 ## Progress
 
 - [x] Foundations: `aegis.core`, `aegis.guardrails`, AG-UI streaming spine.
-- [x] 1. `aegis.ml` (DONE — d427739,cfb6d64; SHAP+conformal stream) · [x] 2. `aegis.retrieval` (DONE 2026-08-12, MERGE-READY — a3a45a7,0a26011,546bb5e; aegis 164 pass w/o heavy deps, backend parity green; citations stream; agentic loop moved in; +aegis.core.models.ModelRole) · [ ] 3. `aegis.gateway` · [ ] 4. `aegis.memory`
+- [x] 1. `aegis.ml` (DONE — d427739,cfb6d64; SHAP+conformal stream) · [x] 2. `aegis.retrieval` (DONE 2026-08-12, MERGE-READY — a3a45a7,0a26011,546bb5e; aegis 164 pass w/o heavy deps, backend parity green; citations stream; agentic loop moved in; +aegis.core.models.ModelRole) · [x] 3. `aegis.gateway` (DONE 2026-08-12, MERGE-READY — dc2505a,c6f61a7; LiteLLM shape byte-identical, governance+observability injected hooks, enforce-before-spend + fail-closed preserved, BudgetExceededError identity intact, model_call stream; aegis 193 pass, backend budget parity 10 pass) · [ ] 4. `aegis.memory`
   · [ ] 5. `aegis.agent` · [ ] 6. `aegis.governance` · [ ] 7. `aegis.evals` · [ ] 8. `aegis.observability`
 - [ ] Whole-platform verification agent · [ ] `docs/module/` learning docs
