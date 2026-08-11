@@ -15,7 +15,19 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from aegis.core.types import GuardVerdict  # noqa: F401 - re-exported, see class docstring below
+from aegis.core.types import (  # noqa: F401 - re-exported for identity, see docstrings below
+    GuardVerdict,
+    RiskLevel,
+)
+from aegis.governance.types import (  # noqa: F401 - re-exported: identity with aegis.governance
+    AdminUserRow,
+    AuditLogRow,
+    BudgetRow,
+    Role,
+    TenantRow,
+    UsageByModel,
+    UsageSeriesPoint,
+)
 from aegis.ml.types import (  # noqa: F401 - re-exported: identity with the ML spine's types
     MLExplainResponse,
     ShapFeature,
@@ -33,27 +45,9 @@ from pydantic import BaseModel, Field
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class Role(StrEnum):
-    """Authenticated role; drives RBAC and which portal/surface is served.
-
-    Four real personas back the platform's RBAC (§3.3):
-
-    - ``ADMIN`` — the operator/governance role. Split at the fine tier into
-      ``platform_admin`` (no tenant, global) and ``tenant_admin`` (scoped) — see
-      :func:`app.core.security.principal_role`.
-    - ``AI_TEAM`` — the AI/ML engineering role (owns the LLM-Ops surfaces).
-    - ``DEVOPS`` — the platform/operations role.
-    - ``CLIENT`` — the business/end-user role (the former coarse ``user``), always
-      self-scoped to its own data.
-
-    ``CLIENT`` is the direct successor of the retired ``user`` value: any principal
-    that used to be a plain ``user`` is now a ``client``.
-    """
-
-    ADMIN = "admin"
-    AI_TEAM = "ai_team"
-    DEVOPS = "devops"
-    CLIENT = "client"
+# ``Role`` (the four-valued RBAC role) now lives in ``aegis.governance.types`` — a
+# governance concept — and is re-exported above under its historical name/location so
+# every existing importer (routes, agent, schemas) is unchanged.
 
 
 class RunStatus(StrEnum):
@@ -78,12 +72,9 @@ class GuardStage(StrEnum):
 # importer (``pass`` | ``block`` | ``redact``, plus an additive ``flag``).
 
 
-class RiskLevel(StrEnum):
-    """Coarse risk tier for an action; drives the human-gate threshold."""
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+# ``RiskLevel`` now lives in ``aegis.core.types`` (a shared cross-module contract, like
+# ``GuardVerdict``) and is re-exported above under its historical name/location so the
+# approvals model and every existing importer are unchanged.
 
 
 class AutonomyBand(StrEnum):
@@ -658,18 +649,8 @@ class ApprovalDecisionResponse(BaseModel):
     )
 
 
-class AuditLogRow(BaseModel):
-    """One row of the first-class audit trail (see `docs/security.md` §6)."""
-
-    id: int
-    ts: str = Field(description="Record timestamp as an ISO 8601 UTC string.")
-    action: str = Field(description="The action performed, e.g. 'tool:update_request_status'.")
-    actor: str | None = Field(default=None, description="Principal that initiated the action.")
-    model: str | None = Field(default=None, description="Model deployment id involved, if any.")
-    trace_id: str | None = Field(default=None, description="OTel trace id correlating spans.")
-    approved_by: str | None = Field(
-        default=None, description="Human who approved the action at the HITL gate, if any."
-    )
+# ``AuditLogRow`` now lives in ``aegis.governance.types`` and is re-exported above under
+# its historical name so the audit response wrapper and every importer are unchanged.
 
 
 class AuditLogResponse(BaseModel):
@@ -683,30 +664,14 @@ class AuditLogResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TenantRow(BaseModel):
-    """One tenant in the platform-admin `GET /admin/tenants` listing."""
-
-    id: int
-    name: str
-    status: str = Field(description="Lifecycle status: 'active' | 'suspended'.")
-    created_at: str = Field(description="ISO 8601 UTC creation time.")
+# ``TenantRow`` / ``AdminUserRow`` now live in ``aegis.governance.types`` and are
+# re-exported above under their historical names/location.
 
 
 class AdminTenantsResponse(BaseModel):
     """Body for `GET /admin/tenants` — every tenant (platform-admin only)."""
 
     rows: list[TenantRow]
-
-
-class AdminUserRow(BaseModel):
-    """One user in the tenant-scoped `GET /admin/users` listing."""
-
-    id: int
-    username: str
-    role: Role
-    tenant_id: int | None = None
-    email: str | None = None
-    is_active: bool = True
 
 
 class AdminUsersResponse(BaseModel):
@@ -721,17 +686,7 @@ class UserRoleUpdateRequest(BaseModel):
     role: Role = Field(description="The new coarse role to assign the user.")
 
 
-class BudgetRow(BaseModel):
-    """One hierarchical spend/rate cap row (`GET /admin/budgets`; §3.3)."""
-
-    id: int
-    scope_type: str = Field(description="'tenant' | 'user'.")
-    scope_id: int = Field(description="Id of the tenant or user the cap governs.")
-    window: str = Field(description="'day' | 'month'.")
-    token_cap: int | None = None
-    usd_cap: float | None = None
-    rpm: int | None = None
-    tpm: int | None = None
+# ``BudgetRow`` now lives in ``aegis.governance.types`` and is re-exported above.
 
 
 class AdminBudgetsResponse(BaseModel):
@@ -905,19 +860,8 @@ class MemoryFactDeleteResponse(BaseModel):
     deleted: bool
 
 
-class UsageByModel(BaseModel):
-    """Per-model spend rollup for the usage dashboard."""
-
-    model: str
-    cost_usd: float
-    tokens: int
-
-
-class UsageSeriesPoint(BaseModel):
-    """One time-bucketed spend point for the usage sparkline."""
-
-    ts: str = Field(description="ISO 8601 UTC bucket start.")
-    cost_usd: float
+# ``UsageByModel`` / ``UsageSeriesPoint`` now live in ``aegis.governance.types`` and are
+# re-exported above under their historical names/location.
 
 
 class AdminUsageResponse(BaseModel):

@@ -14,6 +14,11 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
+
+# ``set_tenant_scope`` now lives in ``aegis.governance.rls`` (the RLS seam); re-export it
+# under its historical name so ``app.data.governance`` / the orchestrator are unchanged.
+from aegis.governance.rls import set_tenant_scope  # noqa: F401 - re-exported for importers
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -148,68 +153,17 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-# Tenant-scoped tables that carry a ``tenant_id`` column and therefore get a
-# Postgres Row-Level Security policy filtering on the ``app.tenant_id`` GUC (§3.3,
-# decision D3). App-level ``WHERE tenant_id = :ctx`` scoping is the belt-and-
-# suspenders layer over these DB-enforced policies.
-_RLS_TABLES = ("users", "usage_ledger", "approvals")
-
-
-async def set_tenant_scope(session: AsyncSession, tenant_id: int | None) -> None:
-    """Bind ``app.tenant_id`` for the session's connection so RLS policies apply.
-
-    Applied inside the governed data-layer calls (H1) — the usage ledger, budget
-    reads, user/usage listings, and the approvals inbox — so the bootstrapped
-    per-tenant RLS policies engage on Postgres for every governed request. The
-    app-level ``WHERE tenant_id = :ctx`` scoping remains the belt-and-suspenders
-    layer over these DB-enforced policies (and the only layer on SQLite).
-
-    RLS is **Postgres-only**: this emits ``SET app.tenant_id = '<id>'`` on PostgreSQL
-    (a no-op ``RESET`` when the request is unscoped); on SQLite (the test database)
-    it does nothing, since RLS and session GUCs are Postgres-only.
-
-    Args:
-        session: The async session whose connection to pin.
-        tenant_id: The tenant to scope to, or ``None`` to clear the scope.
-    """
-    bind = session.get_bind()
-    if bind.dialect.name != "postgresql":
-        return
-    if tenant_id is None:
-        await session.execute(text("RESET app.tenant_id"))
-    else:
-        await session.execute(
-            text("SET app.tenant_id = :tid"), {"tid": str(tenant_id)}
-        )
-
-
 async def bootstrap_rls(engine: AsyncEngine | None = None) -> None:
-    """Enable Row-Level Security + a per-tenant policy on tenant-scoped tables.
+    """Enable Row-Level Security + a per-tenant policy on the tenant-scoped tables.
 
-    Postgres-only and idempotent: each table gets ``ENABLE ROW LEVEL SECURITY`` and a
-    policy that admits a row only when its ``tenant_id`` matches the
-    ``current_setting('app.tenant_id')`` GUC set per request by :func:`set_tenant_scope`
-    (an unset/empty GUC admits nothing, failing closed). A no-op on other dialects.
+    Delegates to :func:`aegis.governance.rls.bootstrap_rls` (the RLS policy on
+    ``users`` / ``usage_ledger`` / ``approvals``, failing closed on an unset GUC).
+    Postgres-only and idempotent; a no-op on other dialects.
 
     Args:
         engine: Engine to configure; defaults to the process-wide engine.
     """
-    engine = engine or get_engine()
-    if engine.dialect.name != "postgresql":
-        return
-    async with engine.begin() as conn:
-        for table in _RLS_TABLES:
-            await conn.execute(
-                text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
-            )
-            await conn.execute(text(f"DROP POLICY IF EXISTS tenant_isolation ON {table}"))
-            await conn.execute(
-                text(
-                    f"CREATE POLICY tenant_isolation ON {table} USING "
-                    "(tenant_id = NULLIF(current_setting('app.tenant_id', true), '')"
-                    "::int)"
-                )
-            )
+    await _aegis_bootstrap_rls(engine or get_engine())
 
 
 async def bootstrap(engine: AsyncEngine | None = None) -> None:
@@ -224,10 +178,12 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
         engine: Engine to bootstrap; defaults to the process-wide engine.
     """
     engine = engine or get_engine()
-    # Import the memory models so their tables register on the aegis data metadata before
-    # create_all. They now live in ``aegis.memory.stores`` (re-exported by the
-    # ``app.memory.stores`` shim) and register on ``aegis.data.AegisBase`` — a separate
+    # Import the memory + governance models so their tables register on the aegis data
+    # metadata before create_all. They live in ``aegis.memory.stores`` /
+    # ``aegis.governance.models`` (re-exported by the ``app.memory.stores`` /
+    # ``app.data.models`` shims) and register on ``aegis.data.AegisBase`` — a separate
     # metadata from the platform's ``app.data`` Base — so both must be created.
+    import aegis.governance.models  # noqa: F401,PLC0415 - registration side-effect only
     from aegis.data import AegisBase  # noqa: PLC0415 - local to avoid an import-time dep
 
     import app.memory.stores  # noqa: F401,PLC0415 - registration side-effect only
