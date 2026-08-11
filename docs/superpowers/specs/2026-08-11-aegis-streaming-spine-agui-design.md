@@ -40,6 +40,14 @@ modularize the platform breadth-first onto it (see §7 roadmap).
 
 ## 3. The spine — `aegis.core.stream`
 
+**Design principle — one parent spine, à la carte usage.** There is exactly ONE streaming primitive
+(`AegisEmitter`) that every module imports. But **no module is required to use all of it** — each module
+calls only the helpers relevant to what it does, and the helpers it never calls simply never fire. There
+is no base class a module must fully implement, no mandatory event set, no dead ceremony. Examples:
+guardrails → `step()` + `custom("guardrail_verdict")`; agent → `reasoning()` + `tool_*()` + `text_*()`;
+retrieval → `step()` + `custom("retrieval_citations")`; ml → `custom("shap_explanation")` +
+`custom("conformal_interval")`. Same import, different subset.
+
 New module `aegis/src/aegis/core/stream.py` (+ `aegis/src/aegis/core/stream_names.py`):
 
 ```python
