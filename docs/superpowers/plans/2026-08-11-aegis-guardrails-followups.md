@@ -48,6 +48,13 @@ None is a security regression.
 7. **ml artifact absent in fresh clones** (`aegis/src/aegis/ml/artifacts/ml_spine.joblib` is gitignored) — a fresh clone's `get_model()` trains a FALLBACK noise model (feature_0..3) until the domain trains it. Correct-by-design for a domain-agnostic package (it must NOT ship a service-request model), but if shippable defaults are wanted, `git add -f` a generic-but-real artifact or ship as package-data. Backend trains the real domain artifact on first use.
 8. **`app/ml/_domain_spec()` masks adapter breakage** (returns None → FALLBACK noise) — inherited verbatim from legacy `resolve_spec`; if `app.adapter` genuinely breaks, backend would silently train a noise model. Pre-existing; consider failing loud in a follow-up.
 
+## Module-rollout cross-cutting findings (surfaced during extraction + docs)
+
+9. **Two leaf-to-leaf import violations** (debt against a future multi-wheel split; harmless in the single `aegis` package today): `aegis.memory` imports `aegis.retrieval.{fusion,vectors,spotlight,models}` (reuses RRF/cosine/spotlighting); `aegis.governance` imports `BudgetExceededError` from `aegis.gateway.types`. The Module Contract says leaves import only `aegis.core`. Clean fix (follow-on): move the shared retrieval primitives (fusion/vectors/spotlight) into `aegis.core` (or a shared `aegis.util`), and move `BudgetExceededError` into `aegis.core.types` so gateway+governance both import from core.
+10. **`aegis.guardrails` base pipeline needs no extra** (pure code) — there is no `guardrails` extra; only NeMo is gated (`aegis[nemo]`). Correct-by-design; just document `pip install aegis` suffices for the core rails.
+11. **Frontend AG-UI surface is currently a name-registry mirror + SSE decoder only** — no per-event React dispatcher/console yet renders the module CustomEvents (guardrail/shap/conformal/citations/reasoning/model_call/eval_result/memory_recall). The full "process rail" console is the deferred frontend follow-on (streaming-spine design spec §6): build the `event.type → React component` dispatcher + renderers.
+12. **retrieval RERANKER span** removed when the package went observability-agnostic — re-add via `aegis.observability` wiring or when `stream_retrieve` is wired into the live path.
+
 ## Next component work (from the design spec §6 rollout)
 
 Process rail (frontend "show your work") → rest of Set 1 (token-optimization, evals) → retrieval/ML
