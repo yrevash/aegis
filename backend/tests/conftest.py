@@ -20,6 +20,15 @@ _SRC = str(Path(__file__).resolve().parents[1] / "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
+# Same guard for the sibling ``aegis`` package: its editable install's .pth is
+# subject to the identical interpreter quirk (observed on macOS, where the
+# generated .pth can end up carrying the OS-level "hidden" file flag, which the
+# hardened stdlib ``site.py`` silently skips). Falling back to a direct sys.path
+# entry keeps ``import aegis`` working regardless of whether that .pth was honoured.
+_AEGIS_SRC = Path(__file__).resolve().parents[2] / "aegis" / "src"
+if _AEGIS_SRC.is_dir() and str(_AEGIS_SRC) not in sys.path:
+    sys.path.insert(0, str(_AEGIS_SRC))
+
 from typing import TYPE_CHECKING  # noqa: E402
 
 import pytest  # noqa: E402

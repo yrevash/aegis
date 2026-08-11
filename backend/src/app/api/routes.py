@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
@@ -719,6 +720,61 @@ async def about() -> AboutResponse:
         tagline=PRODUCT_TAGLINE,
         modules=len(AEGIS_MODULES),
     )
+
+
+@router.get("/stream/guardrail-demo", tags=["platform"])
+async def guardrail_demo(q: str) -> StreamingResponse:
+    """Demonstrator: stream a guardrail check as a real AG-UI SSE stream.
+
+    Proves the wire format end to end — RUN_STARTED → STEP_STARTED →
+    CUSTOM(guardrail_verdict) → STEP_FINISHED → RUN_FINISHED — by running a real
+    :class:`~aegis.guardrails.Guardrails` input check through an
+    :class:`~aegis.core.stream.AegisEmitter` and forwarding each encoded SSE frame
+    to the client as it is produced. Unauthenticated by design, matching the
+    public ``/health`` convention: it touches no tenant data and exists purely to
+    demonstrate the streaming spine.
+
+    Args:
+        q: The text to run the guardrail input check against.
+
+    Returns:
+        A ``text/event-stream`` response of AG-UI SSE frames.
+    """
+    import asyncio
+    import uuid
+
+    from aegis.core.stream import AegisEmitter
+    from aegis.guardrails import Guardrails
+
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def sink(frame: str) -> None:
+        """Push one encoded AG-UI SSE frame onto the queue for the generator to pull."""
+        await queue.put(frame)
+
+    async def run() -> None:
+        """Run the bracketed guardrail check, then signal completion to the sink."""
+        em = AegisEmitter(thread_id=uuid.uuid4().hex, run_id=uuid.uuid4().hex, sink=sink)
+        try:
+            await em.run_started()
+            await Guardrails().stream_check_input_agui(q, em)
+            await em.run_finished()
+        finally:
+            await queue.put(None)
+
+    async def body() -> AsyncIterator[str]:
+        """Yield queued SSE frames until the run task signals completion."""
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                frame = await queue.get()
+                if frame is None:
+                    break
+                yield frame
+        finally:
+            await task
+
+    return StreamingResponse(body(), media_type="text/event-stream")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
