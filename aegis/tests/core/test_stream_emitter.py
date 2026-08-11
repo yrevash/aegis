@@ -103,3 +103,35 @@ async def test_text_bracketing_and_guard() -> None:
     assert types == expected
     with pytest.raises(RuntimeError):
         await em.text_delta("never-started", "x")
+
+
+@pytest.mark.asyncio
+async def test_tool_bracketing() -> None:
+    """Test tool_start/args/end/result event bracketing."""
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+    await em.tool_start("tc1", "update_status")
+    await em.tool_args("tc1", '{"id":')
+    await em.tool_args("tc1", '"r1"}')
+    await em.tool_end("tc1")
+    await em.tool_result("tc1", "m2", "ok")
+    types = [e["type"] for e in _events(sink.frames)]
+    expected = [
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+        "TOOL_CALL_RESULT",
+    ]
+    assert types == expected
+
+
+@pytest.mark.asyncio
+async def test_custom_rejects_unknown_name() -> None:
+    """Test custom() accepts known stream names and rejects unknown."""
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+    await em.custom(stream_names.GUARDRAIL_VERDICT, {"verdict": "pass"})
+    assert _events(sink.frames)[0]["name"] == stream_names.GUARDRAIL_VERDICT
+    with pytest.raises(ValueError):
+        await em.custom("not-registered", {})

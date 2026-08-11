@@ -21,6 +21,10 @@ from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
 
@@ -79,6 +83,7 @@ class AegisEmitter:
         self._sink = sink
         self._encoder = EventEncoder()
         self._open_text: set[str] = set()
+        self._open_tool: set[str] = set()
 
     async def _emit(self, event: object) -> None:
         """Encode ``event`` to an SSE frame and hand it to the sink.
@@ -196,3 +201,85 @@ class AegisEmitter:
         await self._emit(
             TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=message_id)
         )
+
+    async def tool_start(self, tool_call_id: str, name: str) -> None:
+        """Begin a bracketed tool call.
+
+        Args:
+            tool_call_id: Unique identifier for this tool call.
+            name: Name of the tool being called.
+        """
+        self._open_tool.add(tool_call_id)
+        await self._emit(
+            ToolCallStartEvent(
+                type=EventType.TOOL_CALL_START,
+                tool_call_id=tool_call_id,
+                tool_call_name=name,
+            )
+        )
+
+    async def tool_args(self, tool_call_id: str, delta: str) -> None:
+        """Append a partial-JSON args delta to an open tool call.
+
+        Args:
+            tool_call_id: Identifier of the tool call.
+            delta: Partial JSON string representing the tool arguments.
+
+        Raises:
+            RuntimeError: if ``tool_call_id`` was not started.
+        """
+        if tool_call_id not in self._open_tool:
+            raise RuntimeError(f"tool_args for {tool_call_id!r} not started")
+        await self._emit(
+            ToolCallArgsEvent(
+                type=EventType.TOOL_CALL_ARGS,
+                tool_call_id=tool_call_id,
+                delta=delta,
+            )
+        )
+
+    async def tool_end(self, tool_call_id: str) -> None:
+        """End a bracketed tool call.
+
+        Args:
+            tool_call_id: Identifier of the tool call.
+
+        Raises:
+            RuntimeError: if ``tool_call_id`` was not started.
+        """
+        if tool_call_id not in self._open_tool:
+            raise RuntimeError(f"tool_end for {tool_call_id!r} not started")
+        self._open_tool.discard(tool_call_id)
+        await self._emit(ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tool_call_id))
+
+    async def tool_result(self, tool_call_id: str, message_id: str, content: str) -> None:
+        """Emit a tool result.
+
+        Args:
+            tool_call_id: Identifier of the tool call.
+            message_id: Identifier of the message containing the result.
+            content: Result content (string; JSON-encode structured output first).
+        """
+        await self._emit(
+            ToolCallResultEvent(
+                type=EventType.TOOL_CALL_RESULT,
+                message_id=message_id,
+                tool_call_id=tool_call_id,
+                content=content,
+            )
+        )
+
+    async def custom(self, name: str, value: dict) -> None:
+        """Emit a domain CustomEvent.
+
+        Args:
+            name: The name of the custom event (must be in stream_names.ALL).
+            value: Dictionary value for the custom event.
+
+        Raises:
+            ValueError: if ``name`` is not in :data:`aegis.core.stream_names.ALL`.
+        """
+        if not stream_names.is_known(name):
+            msg = f"unknown CustomEvent name {name!r}; add it to aegis.core.stream_names"
+            raise ValueError(msg)
+        await self._emit(CustomEvent(type=EventType.CUSTOM, name=name, value=value))
