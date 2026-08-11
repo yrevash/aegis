@@ -43,6 +43,11 @@ None is a security regression.
 5. **Emitter run-level ordering not programmatically enforced** (`aegis/src/aegis/core/stream.py`) — message/tool id bracketing is enforced (raises on delta/end without start), but `run_started/finished/error` and open-step-at-run-end are not state-guarded; ordering relies on caller discipline. Optional: track a run-state flag and raise on out-of-order lifecycle calls.
 6. **`redaction_spans` computed regardless of verdict** (`aegis/src/aegis/guardrails/pipeline.py`) — `stream_check_input_agui` runs `pii.scan(text)` even when the input is BLOCKED by injection, so the payload could list PII spans that were never redacted. Fix: only populate spans when `verdict is REDACT`, or label them "detected" vs "redacted". Matters once the UI renders spans.
 
+## aegis.ml minors (module review, non-blocking)
+
+7. **ml artifact absent in fresh clones** (`aegis/src/aegis/ml/artifacts/ml_spine.joblib` is gitignored) — a fresh clone's `get_model()` trains a FALLBACK noise model (feature_0..3) until the domain trains it. Correct-by-design for a domain-agnostic package (it must NOT ship a service-request model), but if shippable defaults are wanted, `git add -f` a generic-but-real artifact or ship as package-data. Backend trains the real domain artifact on first use.
+8. **`app/ml/_domain_spec()` masks adapter breakage** (returns None → FALLBACK noise) — inherited verbatim from legacy `resolve_spec`; if `app.adapter` genuinely breaks, backend would silently train a noise model. Pre-existing; consider failing loud in a follow-up.
+
 ## Next component work (from the design spec §6 rollout)
 
 Process rail (frontend "show your work") → rest of Set 1 (token-optimization, evals) → retrieval/ML

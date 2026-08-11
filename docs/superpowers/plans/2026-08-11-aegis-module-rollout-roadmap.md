@@ -60,6 +60,6 @@ comes after the pieces it composes.
 ## Progress
 
 - [x] Foundations: `aegis.core`, `aegis.guardrails`, AG-UI streaming spine.
-- [ ] 1. `aegis.ml`  · [ ] 2. `aegis.retrieval` · [ ] 3. `aegis.gateway` · [ ] 4. `aegis.memory`
+- [x] 1. `aegis.ml` (DONE 2026-08-12, MERGE-READY — commits d427739, cfb6d64; aegis 68 pass, backend ml parity green; SHAP+conformal stream) · [ ] 2. `aegis.retrieval` · [ ] 3. `aegis.gateway` · [ ] 4. `aegis.memory`
   · [ ] 5. `aegis.agent` · [ ] 6. `aegis.governance` · [ ] 7. `aegis.evals` · [ ] 8. `aegis.observability`
 - [ ] Whole-platform verification agent · [ ] `docs/module/` learning docs
