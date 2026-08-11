@@ -10,4 +10,5 @@ export const STREAM_NAMES = {
   ROUTING: "routing",
   MEMORY_RECALL: "memory_recall",
   MODEL_CALL: "model_call",
+  EVAL_RESULT: "eval_result",
 } as const;
