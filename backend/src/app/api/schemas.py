@@ -16,8 +16,11 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from aegis.core.types import (  # noqa: F401 - re-exported for identity, see docstrings below
+    ApprovalDecision,
+    GuardStage,
     GuardVerdict,
     RiskLevel,
+    RunStatus,
 )
 from aegis.governance.types import (  # noqa: F401 - re-exported: identity with aegis.governance
     AdminUserRow,
@@ -50,20 +53,9 @@ from pydantic import BaseModel, Field
 # every existing importer (routes, agent, schemas) is unchanged.
 
 
-class RunStatus(StrEnum):
-    """Terminal status of a query run."""
-
-    COMPLETED = "completed"
-    BLOCKED = "blocked"        # a guardrail stopped the run
-    AWAITING_APPROVAL = "awaiting_approval"
-    ERROR = "error"
-
-
-class GuardStage(StrEnum):
-    """Which rail stage produced a verdict — input or output."""
-
-    INPUT = "input"
-    OUTPUT = "output"
+# ``RunStatus`` and ``GuardStage`` now live in ``aegis.core.types`` (shared cross-module
+# contracts driven by ``aegis.agent``) and are re-exported above under their historical
+# name/location so every existing importer (routes, agent, schemas) is unchanged.
 
 
 # GuardVerdict now lives in ``aegis.core.types`` (imported above) so the backend
@@ -575,11 +567,9 @@ class MetricsResponse(BaseModel):
     )
 
 
-class ApprovalDecision(StrEnum):
-    """A human's decision at the approval gate."""
-
-    APPROVE = "approve"
-    REJECT = "reject"
+# ``ApprovalDecision`` now lives in ``aegis.core.types`` (a shared cross-module contract
+# consumed by ``aegis.agent``'s approvals + orchestrator) and is re-exported above under
+# its historical name/location so every existing importer is unchanged.
 
 
 class ApprovalRequest(BaseModel):

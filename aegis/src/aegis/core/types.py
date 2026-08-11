@@ -35,6 +35,34 @@ class RiskLevel(StrEnum):
     HIGH = "high"
 
 
+class RunStatus(StrEnum):
+    """Terminal status of a query run.
+
+    Shared cross-module contract driven by :mod:`aegis.agent` (the orchestrator's
+    terminal event) and re-exported by the host's API schema layer. Lives here so
+    the agent core never imports the host's ``app.api.schemas``.
+    """
+
+    COMPLETED = "completed"
+    BLOCKED = "blocked"  # a guardrail stopped the run
+    AWAITING_APPROVAL = "awaiting_approval"
+    ERROR = "error"
+
+
+class GuardStage(StrEnum):
+    """Which rail stage produced a verdict — input or output."""
+
+    INPUT = "input"
+    OUTPUT = "output"
+
+
+class ApprovalDecision(StrEnum):
+    """A human's decision at the approval gate."""
+
+    APPROVE = "approve"
+    REJECT = "reject"
+
+
 class PIIMatch(BaseModel):
     """One span of detected personally-identifiable information."""
 

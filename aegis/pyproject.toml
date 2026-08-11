@@ -27,6 +27,16 @@ governance = [
 ]
 observability = ["opentelemetry-sdk>=1.27", "opentelemetry-api>=1.27"]
 phoenix = ["arize-phoenix>=5.0", "arize-phoenix-otel>=0.6"]
+# The LangGraph orchestration core. The durable Postgres checkpointer
+# (``langgraph-checkpoint-postgres``) stays a host/backend concern, injected via
+# the composition root; ``aegis.agent`` needs only the in-memory saver + the
+# observability span helpers (a real, cheap dependency it imports directly).
+agent = [
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+]
 ml = [
     "xgboost>=2.1",
     "scikit-learn>=1.5",
@@ -37,7 +47,7 @@ ml = [
     "numpy>=1.26",
     "joblib>=1.4",
 ]
-all = ["aegis[redis,nemo,postgres,retrieval,ml,gateway,data,governance,observability,phoenix]"]
+all = ["aegis[redis,nemo,postgres,retrieval,ml,gateway,data,governance,observability,phoenix,agent]"]
 dev = ["ruff>=0.7", "pytest>=8.3", "pytest-asyncio>=0.24", "aiosqlite>=0.20"]
 
 [tool.ruff]
