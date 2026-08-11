@@ -8,8 +8,10 @@ schema → content filter → PII on output), but is LLM-agnostic (an injected
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 from aegis.core.events import AegisEvent, GuardrailEvent, SpanKind, StepFinished, StepStarted
 from aegis.core.interfaces import ChatCompleter
@@ -17,6 +19,9 @@ from aegis.core.registry import register
 from aegis.core.types import GuardResult, GuardVerdict
 from aegis.guardrails import pii, schema
 from aegis.guardrails.classifier import detect_injection
+
+if TYPE_CHECKING:
+    from aegis.core.stream import AegisEmitter
 
 _MODULE_ID = "guardrails"
 
@@ -135,3 +140,46 @@ class Guardrails:
             span_kind=SpanKind.GUARDRAIL,
             ok=result.verdict is not GuardVerdict.BLOCK,
         )
+
+    async def stream_check_input_agui(self, text: str, emitter: AegisEmitter) -> GuardResult:
+        """Run the input rail, streaming a rich AG-UI guardrail verdict.
+
+        Emits STEP_STARTED -> CustomEvent(guardrail_verdict, ...) -> STEP_FINISHED via the
+        shared emitter. The verdict payload carries which rail fired, per-rail timing, the
+        exact PII spans, and the rationale — the 'show your work' detail for the UI.
+
+        Args:
+            text: The inbound user input text to screen.
+            emitter: The AG-UI emitter for streaming events.
+
+        Returns:
+            A :class:`GuardResult` with verdict and potentially redacted text.
+        """
+        from aegis.core import stream_names
+
+        timing: dict[str, float] = {}
+        async with emitter.step("guard_input", SpanKind.GUARDRAIL):
+            t0 = time.monotonic()
+            result = await self.check_input(text)
+            timing["total"] = round((time.monotonic() - t0) * 1000, 3)
+            spans = [
+                {"kind": m.kind, "start": m.start, "end": m.end} for m in pii.scan(text)
+            ]
+            await emitter.custom(
+                stream_names.GUARDRAIL_VERDICT,
+                {
+                    "verdict": result.verdict.value,
+                    "rules": [result.layer] if result.layer else [],
+                    "rationale": result.reason,
+                    "redactions": result.redactions,
+                    "redaction_spans": spans,
+                    "per_rail_timing_ms": {
+                        "schema": None,
+                        "pii": None,
+                        "injection": None,
+                        "total": timing["total"],
+                    },
+                    "spanKind": SpanKind.GUARDRAIL.value,
+                },
+            )
+        return result
