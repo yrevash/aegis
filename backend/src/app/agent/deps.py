@@ -1,15 +1,17 @@
-"""Dependency injection for the agent graph — the seam that makes it testable.
+"""Backend composition root: wire ``aegis.agent``'s DI contract to the real modules.
 
-Every cross-module capability the graph needs (the LLM gateway, retrieval, the
-guardrails, the ML spine, the action tools, the audit sink) is reached through a
-callable on :class:`AgentDeps`. Production wiring comes from :meth:`AgentDeps.default`,
-which binds the real module functions lazily (so importing the agent never drags in
-``litellm`` or opens a socket). Tests inject fakes and drive the entire vertical
-slice with no live infrastructure, no API keys, and no network.
+The DI *contract* — :class:`AgentConfig`, the :class:`AgentDeps` dataclass, the
+:class:`MemoryDeps`/``AnswerCache`` Protocols and the risk-ordering helpers — lives
+in the standalone ``aegis.agent.deps``. This module is the strangler shim + the
+composition root: it re-exports that contract by identity, provides the concrete,
+DB-backed :class:`MemoryDeps` implementation (which opens tenant-scoped sessions and
+writes the memory stores — the host coupling that could not move), and binds
+:meth:`AgentDeps.default` to the live gateway, retrieval, guardrails, ML spine,
+domain adapter and durable data layer — mirroring the ``gateway.configure(...)``
+pattern every other module proved.
 
-:class:`AgentConfig` holds the human-gate threshold: the minimum tool risk that
-forces a human approval gate (the money-shot). ML is a supporting solution signal,
-never a flow decider.
+Nothing about the graph's behaviour changes: every existing
+``from app.agent.deps import ...`` / ``AgentDeps.default()`` call site is unchanged.
 """
 
 from __future__ import annotations
@@ -17,9 +19,22 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from aegis.agent.deps import (
+    AgentConfig,
+    ToolOutcome,
+    risk_at_least,
+    risk_rank,
+)
+from aegis.agent.deps import (
+    AgentDeps as _AegisAgentDeps,
+)
+from aegis.agent.deps import (
+    MemoryDeps as MemoryDepsProtocol,
+)
+from aegis.agent.router import load_roster as _core_load_roster
 
 from app.api.schemas import MLExplainResponse, RiskLevel
 
@@ -34,96 +49,15 @@ __all__ = [
     "AgentConfig",
     "AgentDeps",
     "MemoryDeps",
+    "MemoryDepsProtocol",
+    "ToolOutcome",
     "risk_at_least",
     "risk_rank",
 ]
 
 
-# Structural aliases for the injected callables (kept loose to avoid coupling).
-CompleteFn = Callable[..., Awaitable[Any]]
-RetrieveFn = Callable[..., Awaitable[Any]]
-GuardFn = Callable[[str], Awaitable[Any]]
-PredictFn = Callable[[dict[str, Any]], MLExplainResponse]
-ToolDefsFn = Callable[[str], list[dict[str, Any]]]
-RiskFn = Callable[[str], RiskLevel]
-RenderPromptFn = Callable[..., str]
-FeaturesFn = Callable[[str, str | None], dict[str, Any]]
-DescribeFn = Callable[[MLExplainResponse], str]
-RosterFn = Callable[[], Any]
-
-# Relative order used to compare risk levels.
-_RISK_RANK: dict[RiskLevel, int] = {
-    RiskLevel.LOW: 0,
-    RiskLevel.MEDIUM: 1,
-    RiskLevel.HIGH: 2,
-}
-
-
-def risk_rank(risk: RiskLevel) -> int:
-    """Return the ordinal severity of ``risk`` (LOW=0, MEDIUM=1, HIGH=2)."""
-    return _RISK_RANK[risk]
-
-
-def risk_at_least(risk: RiskLevel, floor: RiskLevel) -> bool:
-    """Return whether ``risk`` is at least as severe as ``floor``."""
-    return _RISK_RANK[risk] >= _RISK_RANK[floor]
-
-
-class ToolOutcome(Protocol):
-    """Structural view of an action-tool result (see adapter ``ToolActionResult``)."""
-
-    ok: bool
-    summary: str
-
-
-RunToolFn = Callable[..., Awaitable[ToolOutcome]]
-
-
-@dataclass
-class AgentConfig:
-    """Human-gate threshold and streaming knobs.
-
-    **ML never gates.** By founder decision the human-in-the-loop gate is driven by
-    **tool risk only** (``gate_min_risk``): a proposed action at or above that tier
-    routes to the human approval inbox — the money-shot. ML is a *solution signal*,
-    not a flow decider; a low-confidence or failed prediction never defers, abstains,
-    or terminates a run.
-
-    Attributes:
-        gate_min_risk: The minimum tool risk that forces the human gate. This is the
-            **only** gating signal (risk-driven, never ML).
-        run_ml: Whether to run the best-effort ML solution step when a subject is
-            resolved. The prediction is injected as supporting evidence, never gates.
-        stream_chunk_words: How many words per streamed answer ``token`` event.
-        approval_park_timeout: Seconds the live ``/query`` socket holds a gate open
-            before *parking* the run (durable row remains the source of truth).
-            ``None`` (default) waits indefinitely — the live money-shot gate.
-        max_plan_iterations: The iteration budget for the bounded self-repair loop —
-            the maximum number of planning rounds a single run may take (a HARD cap
-            that guarantees termination). ``1`` disables looping (single linear pass);
-            the default ``2`` allows one re-plan after a failed/insufficient action.
-    """
-
-    gate_min_risk: RiskLevel = RiskLevel.HIGH
-    run_ml: bool = True
-    stream_chunk_words: int = 4
-    max_plan_iterations: int = 2
-    approval_park_timeout: float | None = None
-    #: Retrieval intelligence (docs/EVAL_STRATEGY.md). ``query_rewrite_enabled`` runs a
-    #: cheap-model, context-aware rewrite before retrieval; ``agentic_retrieval_enabled``
-    #: runs the bounded Self-RAG/FLARE loop (retrieve → judge sufficiency → reformulate →
-    #: re-retrieve, capped by ``agentic_retrieval_max_rounds``); ``answer_cache_enabled``
-    #: reuses a semantically-equivalent prior answer (scoped per tenant+persona+role),
-    #: skipping the generation call. All ON in production; test fakes pin them off for
-    #: deterministic single-shot behaviour.
-    query_rewrite_enabled: bool = True
-    agentic_retrieval_enabled: bool = True
-    agentic_retrieval_max_rounds: int = 2
-    answer_cache_enabled: bool = True
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Long-term memory capability (the two silent, inert-by-default graph nodes)
+# Long-term memory capability (the concrete, DB-backed impl behind the Protocol)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Live background consolidation tasks, kept referenced so the event loop cannot GC
@@ -158,14 +92,15 @@ def _current_tenant_id() -> int | None:
 class MemoryDeps:
     """Long-term-memory capability consumed by the ``recall_memory``/``persist_memory`` nodes.
 
-    Holds the memory :class:`~app.memory.config.MemoryConfig` plus the injected
+    The concrete implementation behind ``aegis.agent``'s :class:`MemoryDeps` Protocol:
+    it holds the memory :class:`~app.memory.config.MemoryConfig` plus the injected
     ``complete`` (LLM) and ``embed`` (retrieval embedding) callables, and opens its own
     tenant-scoped DB session per call so the agent graph never threads a session. Test
     fakes leave ``AgentDeps.memory = None`` so the nodes stay silent no-ops.
     """
 
     config: MemoryConfig
-    complete: CompleteFn
+    complete: Any  # CompleteFn: (role, messages, ...) -> Awaitable[LLMResult]
     embed: Any  # retrieval EmbedFn: (list[str]) -> Awaitable[list[list[float]]]
 
     async def assemble(
@@ -353,32 +288,21 @@ class MemoryDeps:
 
 
 @dataclass
-class AgentDeps:
-    """The concrete capabilities the graph calls, injectable for testing."""
+class AgentDeps(_AegisAgentDeps):
+    """The concrete capabilities the graph calls (``aegis.agent`` contract) + host wiring.
 
-    complete: CompleteFn
-    retrieve: RetrieveFn
-    check_input: GuardFn
-    check_output: GuardFn
-    predict_explain: PredictFn
-    tool_definitions_for: ToolDefsFn
-    run_tool: RunToolFn
-    tool_risk: RiskFn
-    render_system_prompt: RenderPromptFn
-    features_for: FeaturesFn
-    describe_prediction: DescribeFn
-    #: Supervisor roster provider — returns the adapter's routable specialists. Defaults
-    #: to the adapter contract (with a defensive ``qa``-only fallback in the router), so
-    #: test fakes that omit it still route through the real roster.
-    agent_roster: RosterFn = field(default=lambda: _default_agent_roster())
-    config: AgentConfig = field(default_factory=AgentConfig)
-    #: Long-term memory capability. ``None`` (the test-fake default) makes the
-    #: ``recall_memory``/``persist_memory`` nodes silent no-ops — today's exact stream.
-    memory: MemoryDeps | None = None
-    #: Answer-level semantic cache (skip the generation call on a semantically-
-    #: equivalent prior answer). ``None`` (the test-fake default, or when stores/answer
-    #: cache are disabled) makes the qa cache lookup/store a silent no-op.
-    answer_cache: AnswerCache | None = None
+    Subclasses the standalone :class:`aegis.agent.deps.AgentDeps` to add the host-side
+    :meth:`default` composition root and to bind the ``agent_roster`` default to the
+    **domain adapter's** roster (the core's own default is only a ``qa``-only fallback).
+    The injected-callable shape is unchanged: a plain ``AgentDeps(...)`` still constructs
+    it, so test fakes that omit ``agent_roster`` route through the real adapter roster —
+    exactly as before the extraction.
+    """
+
+    def __post_init__(self) -> None:
+        """Bind the adapter-backed roster when the caller left the core default in place."""
+        if self.agent_roster is _core_load_roster:
+            self.agent_roster = _default_agent_roster
 
     @classmethod
     def default(cls, config: AgentConfig | None = None) -> AgentDeps:
@@ -389,8 +313,10 @@ class AgentDeps:
 
         Returns:
             An :class:`AgentDeps` wired to the live gateway, retrieval, guardrails,
-            ML spine and adapter tools.
+            ML spine and adapter tools, plus the durable seams (tenant scope + route
+            audit) ``aegis.agent`` reaches through injected callables.
         """
+        from app.adapter import DEFAULT_PERSONA_ID
         from app.config import get_settings
         from app.core.llm import complete
         from app.guardrails import check_input, check_output
@@ -402,6 +328,7 @@ class AgentDeps:
         # overrides of the retrieval-intelligence flags actually take effect.
         if config is None:
             config = AgentConfig(
+                default_persona_id=DEFAULT_PERSONA_ID,
                 query_rewrite_enabled=settings.query_rewrite_enabled,
                 agentic_retrieval_enabled=settings.agentic_retrieval_enabled,
                 agentic_retrieval_max_rounds=settings.agentic_retrieval_max_rounds,
@@ -420,9 +347,12 @@ class AgentDeps:
             render_system_prompt=_default_render_system_prompt,
             features_for=_default_features_for,
             describe_prediction=_default_describe_prediction,
+            agent_roster=_default_agent_roster,
             config=config,
             memory=MemoryDeps.default(),
             answer_cache=_default_answer_cache(settings),
+            current_tenant_id=_current_tenant_id,
+            record_audit=_default_record_audit,
         )
 
 
@@ -531,6 +461,22 @@ def _default_agent_roster() -> Any:  # noqa: ANN401 - adapter AgentRoster duck-t
     from app.agent.router import load_roster
 
     return load_roster()
+
+
+async def _default_record_audit(**kwargs: Any) -> None:  # noqa: ANN401 - audit payload
+    """Persist a best-effort supervisor-hand-off audit row (gated on ``stores_enabled``).
+
+    The route-audit seam ``aegis.agent`` reaches through ``deps.record_audit``. Gated on
+    ``stores_enabled`` so the offline "lite"/test path skips it silently, matching the
+    original in-graph behaviour.
+    """
+    from app.config import get_settings
+
+    if not get_settings().stores_enabled:
+        return
+    from app.data import record_audit
+
+    await record_audit(**kwargs)
 
 
 # Matches an id-like token (e.g. ``req-000123``) referenced in a query's text.

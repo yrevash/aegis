@@ -1,19 +1,21 @@
-"""Drive the agent graph and expose it as a single stamped event stream.
+"""Backend composition root for the agent orchestrator.
 
-:func:`run_agent` is the one coroutine the API layer consumes. It runs the
-LangGraph with ``astream(stream_mode=["custom", "updates"])``, forwarding each
-node-emitted event after stamping it with the run id and a monotonic sequence
-number, and it owns the human-in-the-loop rendezvous:
+The **pure** run loop (stream + gate rendezvous) lives in
+``aegis.agent.orchestrator.run_agent`` as a host-agnostic coroutine over five injected
+seams. This module binds those seams to the platform's durable machinery and keeps the
+durable decision glue that could not move:
 
-1. On the first interrupt it emits ``approval_required`` and **registers** the
-   gate in the :class:`~app.agent.approvals.ApprovalRegistry` *before* awaiting,
-   so a fast ``POST /approval`` can never race past the wait.
-2. When the decision arrives it resumes the same checkpointed graph with
-   ``Command(resume=...)`` and keeps streaming into the still-open SSE response.
+- :func:`run_agent` — a thin wrapper that injects the real event-validator
+  (``app.agent.events.stamp``), the shared/durable checkpointer
+  (``get_agent_checkpointer``), the durable approvals-inbox writer (:func:`_enqueue_gate`),
+  the post-run trace-eval hook (:func:`_fire_trace_eval`) and the approver tier.
+- :func:`decide_approval` — the one shared resolve path (live gate + async inbox) over
+  the durable ``app.data`` optimistic transition.
+- :func:`resume_parked_run` — rehydrate a parked run from the shared checkpoint (by
+  in-process handle or by ``thread_id``) and drive it headless via the core helper.
 
-The stream is bookended by ``run_started`` and ``run_finished`` (carrying the
-final usage/cost/cache-hit), and any failure is surfaced as an ``error`` event
-followed by a terminal ``run_finished``.
+The API layer (``app.api.routes``) consumes :func:`run_agent`/:func:`decide_approval`
+unchanged.
 """
 
 from __future__ import annotations
@@ -22,25 +24,20 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
 
-from langgraph.types import Command
+from aegis.agent.approvals import ApprovalRegistry
+from aegis.agent.orchestrator import resume_parked_run as _core_resume
+from aegis.agent.orchestrator import run_agent as _core_run_agent
 
+from app.agent.approvals import get_approval_registry, get_parked_runs
+from app.agent.deps import AgentDeps
 from app.api.schemas import (
     ApprovalDecision,
     ApprovalDecisionResponse,
-    RiskLevel,
-    RunStatus,
     StreamEvent,
 )
-from app.core.llm import BudgetExceededError
-from app.observability import get_tracer, semconv
-from app.observability.otel import current_trace_id
 
 from . import events
-from .approvals import ApprovalRegistry, get_approval_registry, get_parked_runs
-from .deps import AgentDeps
-from .graph import build_agent
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +49,8 @@ logger = logging.getLogger(__name__)
 # ``create_task`` (so the loop cannot GC it mid-flight) with a done-callback that
 # surfaces any swallowed exception. The grade opens its own DB session and writes
 # ``EvalResult`` rows via ``app.ops.trace_eval.evaluate_run``. It is best-effort:
-# a failure is logged, never raised, and it never blocks or delays the stream.
+# a failure is logged, never raised, and it never blocks or delays the stream. It is
+# wired into the core loop as the injected ``on_terminal`` hook.
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: Live post-run trace-eval tasks, kept referenced so the event loop cannot GC one
@@ -181,7 +179,8 @@ def _fire_trace_eval(
 
     Gated on ``settings.stores_enabled`` — writing ``EvalResult`` needs the DB, so the
     offline "lite" demo (no database) skips it silently. Scheduling failures are
-    swallowed: the grade must never disturb the run's terminal event.
+    swallowed: the grade must never disturb the run's terminal event. This is the
+    injected ``on_terminal`` hook the core loop fires after ``run_finished``.
     """
     try:
         from app.config import get_settings
@@ -213,7 +212,12 @@ async def run_agent(
     session_id: str | None = None,
     memory_subject: str | None = None,
 ) -> AsyncIterator[StreamEvent]:
-    """Run one query end-to-end, yielding the ordered stream of events.
+    """Run one query end-to-end, yielding the ordered stream of ``StreamEvent``.
+
+    A thin composition-root wrapper over ``aegis.agent.run_agent`` that binds the five
+    injected seams to this platform's durable machinery: the locked ``StreamEvent``
+    validator, the shared/durable checkpointer, the durable approvals-inbox writer, the
+    post-run trace-eval hook and the approver tier.
 
     Args:
         query: The user's question.
@@ -222,208 +226,46 @@ async def run_agent(
         deps: Injected capabilities; defaults to the live wiring.
         registry: The approval rendezvous; defaults to the process-wide registry.
         run_id: An explicit run id; a random one is minted when omitted.
-        session_id: Conversation/session id for multi-turn memory. ``None`` (default)
-            keeps the run single-shot — the memory nodes stay inert and the stream is
-            identical to today.
-        memory_subject: The adapter-resolved subject memory is scoped to (the app-level
-            isolation key). ``None`` disables memory for this run.
+        session_id: Conversation/session id for multi-turn memory (``None`` → single-shot).
+        memory_subject: The adapter-resolved subject memory is scoped to.
 
     Yields:
         Validated :data:`~app.api.schemas.StreamEvent` variants in wire order.
     """
+    from app.data.session import get_agent_checkpointer
+
     deps = deps or AgentDeps.default()
-    registry = registry or get_approval_registry()
-    run_id = run_id or uuid4().hex
-    graph = _durable_graph(deps)
-    config: dict[str, Any] = {"configurable": {"thread_id": run_id}}
-
-    seq = 0
-
-    # Guardrail verdicts are emitted as stream events (not retained in graph state);
-    # collect them so the post-run trace-eval can grade the GUARDRAIL trajectory steps.
-    guardrail_events: list[dict[str, Any]] = []
-
-    def emit(payload: dict[str, Any]) -> StreamEvent:
-        nonlocal seq
-        event = events.stamp(payload, run_id=run_id, seq=seq)
-        seq += 1
-        return event
-
-    tracer = get_tracer()
-    with tracer.start_as_current_span("agent.run") as run_span:
-        # Root of the trace tree: mark it AGENT so Phoenix nests every child span
-        # (nodes, retrieval, guardrails, tools, LLM/embedding calls) beneath it.
-        run_span.set_attribute(
-            semconv.OPENINFERENCE_SPAN_KIND, semconv.SpanKind.AGENT.value
-        )
-        trace_id = current_trace_id() or run_id
-        yield emit(events.run_started(trace_id))
-
-        stream_input: Any = {
-            "run_id": run_id,
-            "trace_id": trace_id,
-            "query": query,
-            "persona": persona,
-            "role": role,
-            # Long-term memory seeds (all None/0 on the single-shot path → nodes inert).
-            "session_id": session_id,
-            "memory_subject": memory_subject,
-            "turn_index": 0,
-            "messages": [],
-            "tool_calls": [],
-            "tool_results": [],
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "cost_usd": 0.0,
-        }
-
-        try:
-            while True:
-                interrupt_value: dict[str, Any] | None = None
-                async for mode, chunk in graph.astream(
-                    stream_input, config, stream_mode=["custom", "updates"]
-                ):
-                    if mode == "custom":
-                        if isinstance(chunk, dict) and chunk.get("type") == "guardrail":
-                            guardrail_events.append(dict(chunk))
-                        yield emit(chunk)
-                    elif mode == "updates" and _is_interrupt(chunk):
-                        interrupt_value = chunk["__interrupt__"][0].value
-
-                if interrupt_value is None:
-                    break
-
-                # Human gate. Register the notify future BEFORE emitting so a fast
-                # decision can never race past the wait.
-                approval_id = uuid4().hex
-                registry.register(approval_id)
-                action = str(interrupt_value.get("action", "unknown"))
-                args = dict(interrupt_value.get("args", {}))
-                risk = RiskLevel(interrupt_value.get("risk", RiskLevel.LOW.value))
-                rationale = str(interrupt_value.get("rationale", ""))
-
-                # Persist the durable inbox row — the source of truth for the paused
-                # run — and retain a resumable handle so an out-of-band decision can
-                # continue this run from its checkpoint if the socket parks.
-                sla_deadline = await _enqueue_gate(
-                    approval_id,
-                    run_id=run_id,
-                    trace_id=trace_id,
-                    persona=persona,
-                    action=action,
-                    args=args,
-                    risk=risk,
-                    rationale=rationale,
-                    ml_snapshot=_ml_snapshot(graph, config),
-                )
-                get_parked_runs().register(run_id, graph, config)
-
-                yield emit(events.node_started("approval", "Human approval gate"))
-                yield emit(
-                    events.approval_queued(
-                        approval_id,
-                        action=action,
-                        args=args,
-                        risk=risk,
-                        rationale=rationale,
-                        sla_deadline=sla_deadline,
-                        assignee_tier=_default_tier(),
-                    )
-                )
-                yield emit(
-                    events.approval_required(
-                        approval_id,
-                        action=action,
-                        args=args,
-                        risk=risk,
-                        rationale=rationale,
-                    )
-                )
-                try:
-                    outcome = await registry.wait(
-                        approval_id, timeout=deps.config.approval_park_timeout
-                    )
-                except TimeoutError:
-                    # Park: the run is NOT lost — it survives as a durable PENDING row
-                    # plus a checkpoint, to be resumed out-of-band from the inbox.
-                    logger.info("Run %s parked awaiting approval %s", run_id, approval_id)
-                    yield emit(events.run_finished(RunStatus.AWAITING_APPROVAL))
-                    return
-                stream_input = Command(
-                    resume={"approved": outcome.approved, "approver": outcome.approver}
-                )
-
-            # Live run completed within the socket — drop the resumable handle.
-            get_parked_runs().pop(run_id)
-            final = graph.get_state(config).values
-            status = RunStatus(final.get("status", RunStatus.COMPLETED.value))
-            yield emit(
-                events.run_finished(
-                    status,
-                    prompt_tokens=int(final.get("prompt_tokens", 0)),
-                    completion_tokens=int(final.get("completion_tokens", 0)),
-                    cost_usd=float(final.get("cost_usd", 0.0)),
-                    cache_hit=bool(final.get("cache_hit", False)),
-                )
-            )
-            # Terminal run reached: grade it OFF the hot path (tracked task; best-effort).
-            # This never blocks or delays the stream — the run_finished above is already
-            # yielded — and a failure is logged, never raised.
-            _fire_trace_eval(
-                run_id=run_id,
-                query=query,
-                final=dict(final),
-                guardrail_events=guardrail_events,
-            )
-        except BudgetExceededError as exc:
-            # A per-tenant/user cap tripped at the LiteLLM chokepoint before spend:
-            # end the run cleanly as blocked, not a crash (§3.3).
-            logger.info("Agent run %s blocked by budget: %s", run_id, exc.message)
-            get_parked_runs().pop(run_id)
-            yield emit(
-                events.budget_exceeded(
-                    scope=exc.scope,
-                    scope_id=exc.scope_id,
-                    limit_type=exc.limit_type,
-                    limit=exc.limit,
-                    used=exc.used,
-                    message=exc.message,
-                )
-            )
-            yield emit(events.run_finished(RunStatus.BLOCKED))
-        except Exception as exc:  # noqa: BLE001 - report any failure as an event
-            logger.exception("Agent run %s failed", run_id)
-            yield emit(events.error(str(exc)))
-            yield emit(events.run_finished(RunStatus.ERROR))
-
-
-def _is_interrupt(chunk: Any) -> bool:  # noqa: ANN401 - opaque astream chunk
-    """Return whether an ``updates`` chunk carries a LangGraph interrupt."""
-    return isinstance(chunk, dict) and "__interrupt__" in chunk
+    async for event in _core_run_agent(
+        query,
+        persona=persona,
+        role=role,
+        deps=deps,
+        registry=registry,
+        run_id=run_id,
+        session_id=session_id,
+        memory_subject=memory_subject,
+        checkpointer=get_agent_checkpointer(),
+        stamp=events.stamp,
+        enqueue_approval=_enqueue_gate,
+        on_terminal=_fire_trace_eval,
+        default_tier=_default_tier(),
+        parked_runs=get_parked_runs(),
+    ):
+        yield event
 
 
 def _durable_graph(deps: AgentDeps) -> Any:  # noqa: ANN401 - CompiledStateGraph
     """Compile the agent graph bound to the process-wide durable checkpoint store.
 
-    The graph *topology* comes from :func:`build_agent`; we re-bind it (via the public
-    ``builder`` seam) to the shared checkpointer from
-    :func:`app.data.session.get_agent_checkpointer`, so every run in the process — and,
-    with the ``PostgresSaver``, every worker — checkpoints into ONE store. That shared
-    store is what lets a *fresh* graph resume a parked run by ``thread_id`` without the
-    originating in-process ``ParkedRun`` handle (finding #8). No graph node logic is
-    touched; only the checkpointer it is compiled with.
+    The graph topology comes from :func:`app.agent.graph.build_agent`; the shared
+    checkpointer from :func:`app.data.session.get_agent_checkpointer` is what lets a
+    *fresh* graph resume a parked run by ``thread_id`` without the originating
+    in-process ``ParkedRun`` handle (finding #8).
     """
+    from app.agent.graph import build_agent
     from app.data.session import get_agent_checkpointer
 
-    return build_agent(deps).builder.compile(checkpointer=get_agent_checkpointer())
-
-
-def _ml_snapshot(graph: Any, config: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
-    """Return the ML explanation frozen in graph state at gate time (or ``{}``)."""
-    try:
-        return dict(graph.get_state(config).values.get("ml") or {})
-    except Exception:  # noqa: BLE001 - snapshot is best-effort metadata
-        return {}
+    return build_agent(deps, checkpointer=get_agent_checkpointer())
 
 
 def _default_tier() -> str:
@@ -441,15 +283,16 @@ async def _enqueue_gate(
     persona: str | None,
     action: str,
     args: dict[str, Any],
-    risk: RiskLevel,
+    risk: Any,  # noqa: ANN401 - RiskLevel
     rationale: str,
     ml_snapshot: dict[str, Any],
 ) -> str | None:
     """Persist the durable approvals-inbox row (best-effort), returning its SLA ISO.
 
-    Best-effort so the offline "lite" demo (no database) still runs the live gate:
-    a write failure is logged, the ``approval_queued`` event simply carries no SLA
-    deadline, and the in-process notify path resolves the gate.
+    The durable-inbox seam ``aegis.agent``'s ``run_agent`` calls at the gate. Best-effort
+    so the offline "lite" demo (no database) still runs the live gate: a write failure is
+    logged, the ``approval_queued`` event simply carries no SLA deadline, and the
+    in-process notify path resolves the gate.
 
     Returns:
         The row's ``sla_deadline`` as an ISO string, or ``None`` if the write failed.
@@ -563,27 +406,17 @@ async def resume_parked_run(
     Two entry conditions converge on the *same* checkpoint-driven resume:
 
     1. **In-process handle present** (the run parked on *this* worker). The retained
-       :class:`~app.agent.approvals.ParkedRun` handle is consumed and its graph resumed.
+       :class:`~aegis.agent.approvals.ParkedRun` handle is consumed and its graph resumed.
     2. **No handle** (a *fresh* worker — after a restart, or a different process took
        the decision). We **rehydrate**: rebuild the compiled graph bound to the shared
        durable checkpointer (:func:`_durable_graph`) and resume the run *by
-       ``thread_id == run_id``* straight from the checkpoint — the real cross-worker
-       path (finding #8). If the shared store holds no resumable checkpoint for that
-       ``thread_id`` (e.g. a truly separate process on the in-memory saver, with no
-       Postgres), there is nothing to rehydrate and we report ``False``.
+       ``thread_id == run_id``* straight from the checkpoint (finding #8). If the shared
+       store holds no resumable checkpoint for that ``thread_id`` there is nothing to
+       rehydrate and we report ``False``.
 
-    Either way the graph is resumed with ``Command(resume=...)`` and the gated tool
-    executes **exactly once**: the caller has already won the optimistic ``PENDING →
-    RESUMING`` transition keyed by ``approval_id``, so no second decision reaches here
-    even across processes. On completion the row is finalised to ``APPROVED``.
-
-    Args:
-        approval_id: The gate id (the tool idempotency key) to finalise.
-        run_id: The parked run to resume (``thread_id``); a no-op when ``None``.
-        decision: The resolved decision to feed the gate node.
-        approver: Who approved, threaded onto the audited action.
-        deps: Capabilities used to rebuild the graph on the rehydrate path; defaults
-            to the live wiring (:meth:`AgentDeps.default`).
+    Either way the headless drive runs the gated tool **exactly once** (the caller has
+    already won the optimistic ``PENDING → RESUMING`` transition keyed by
+    ``approval_id``). On completion the row is finalised to ``APPROVED``.
 
     Returns:
         ``True`` if the run was resumed to completion (via handle *or* rehydration);
@@ -591,10 +424,6 @@ async def resume_parked_run(
     """
     if run_id is None:
         return False
-
-    resume_cmd = Command(
-        resume={"approved": decision is ApprovalDecision.APPROVE, "approver": approver}
-    )
 
     handle = get_parked_runs().pop(run_id)
     if handle is not None:
@@ -604,24 +433,13 @@ async def resume_parked_run(
         # checkpointer and resume from the checkpoint keyed by ``thread_id``.
         graph = _durable_graph(deps or AgentDeps.default())
         config = {"configurable": {"thread_id": run_id}}
-        if not graph.get_state(config).next:
-            # No resumable checkpoint in the shared store for this thread — a real
-            # cross-process resume needs the durable (Postgres) saver to be enabled.
-            logger.info(
-                "No resumable checkpoint for run %s; cannot rehydrate", run_id
-            )
-            return False
 
-    try:
-        async for _mode, _chunk in graph.astream(
-            resume_cmd, config, stream_mode=["custom", "updates"]
-        ):
-            pass  # drive headless to completion; the tool runs exactly once
-    except Exception:  # noqa: BLE001 - a resume failure must not crash the decision
-        logger.exception("Headless resume of run %s failed", run_id)
-        return False
-    await _safe_finalize(approval_id)
-    return True
+    resumed = await _core_resume(
+        run_id, decision, graph=graph, config=config, approver=approver
+    )
+    if resumed:
+        await _safe_finalize(approval_id)
+    return resumed
 
 
 async def _safe_resolve(

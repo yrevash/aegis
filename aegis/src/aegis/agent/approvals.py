@@ -1,8 +1,8 @@
 """The human-in-the-loop approval **notify cache** over the durable inbox.
 
-Bounded autonomy pauses a run at a gate. The durable source of truth is the
-``approvals`` table (see :mod:`app.data.approvals`); this module is the fast in-
-process layer over it that keeps the *live* money-shot gate dramatic:
+Bounded autonomy pauses a run at a gate. The durable source of truth is the host's
+approvals inbox (persisted through the injected durable-store seam); this module is
+the fast in-process layer over it that keeps the *live* money-shot gate dramatic:
 
 - :class:`ApprovalRegistry` is a notify cache — the streaming ``/query`` run
   registers a future keyed by ``approval_id`` and awaits it, and a decision resolves

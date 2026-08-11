@@ -44,7 +44,12 @@ from aegis.observability import get_tracer, semconv
 from aegis.observability.otel import current_trace_id
 
 from . import events
-from .approvals import ApprovalRegistry, get_approval_registry, get_parked_runs
+from .approvals import (
+    ApprovalRegistry,
+    ParkedRunRegistry,
+    get_approval_registry,
+    get_parked_runs,
+)
 from .deps import AgentDeps
 from .graph import build_agent
 
@@ -92,6 +97,7 @@ async def run_agent(
     enqueue_approval: EnqueueApprovalFn | None = None,
     on_terminal: OnTerminalFn | None = None,
     default_tier: str | None = None,
+    parked_runs: ParkedRunRegistry | None = None,
 ) -> AsyncIterator[Any]:
     """Run one query end-to-end, yielding the ordered stream of stamped events.
 
@@ -116,6 +122,9 @@ async def run_agent(
         on_terminal: Best-effort post-run hook fired after ``run_finished``; defaults to
             a no-op.
         default_tier: The approver tier stamped on a freshly queued gate.
+        parked_runs: The parked-run handle registry a gated run registers into; defaults
+            to the process-wide registry. A host that owns its own registry (so an
+            out-of-band resumer can wipe it to simulate a fresh worker) injects it here.
 
     Yields:
         Stamped events in wire order (validated by the injected ``stamp``).
@@ -131,6 +140,7 @@ async def run_agent(
     enqueue_approval = enqueue_approval or _noop_enqueue_approval
     on_terminal = on_terminal or _noop_on_terminal
     checkpointer = checkpointer or InMemorySaver()
+    parked_runs = parked_runs if parked_runs is not None else get_parked_runs()
     graph = build_agent(deps, checkpointer=checkpointer)
     config: dict[str, Any] = {"configurable": {"thread_id": run_id}}
 
@@ -213,7 +223,7 @@ async def run_agent(
                     rationale=rationale,
                     ml_snapshot=_ml_snapshot(graph, config),
                 )
-                get_parked_runs().register(run_id, graph, config)
+                parked_runs.register(run_id, graph, config)
 
                 yield emit(events.node_started("approval", "Human approval gate"))
                 yield emit(
@@ -251,7 +261,7 @@ async def run_agent(
                 )
 
             # Live run completed within the socket — drop the resumable handle.
-            get_parked_runs().pop(run_id)
+            parked_runs.pop(run_id)
             final = graph.get_state(config).values
             status = RunStatus(final.get("status", RunStatus.COMPLETED.value))
             yield emit(
@@ -276,7 +286,7 @@ async def run_agent(
             # A per-tenant/user cap tripped at the LiteLLM chokepoint before spend:
             # end the run cleanly as blocked, not a crash (§3.3).
             logger.info("Agent run %s blocked by budget: %s", run_id, exc.message)
-            get_parked_runs().pop(run_id)
+            parked_runs.pop(run_id)
             yield emit(
                 events.budget_exceeded(
                     scope=exc.scope,
