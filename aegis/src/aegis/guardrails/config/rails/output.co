@@ -1,0 +1,20 @@
+# Output rail — runs before any text reaches the user / downstream.
+# Layer order mirrors aegis/guardrails/pipeline.py: schema + content-filter -> PII.
+# Colang 1.0. Each `execute` call resolves to a custom action in ../actions.py.
+
+define bot refuse output
+  "The response was withheld by the output guardrail."
+
+# 1. Output schema validation + content filter. Guards against insecure output
+#    handling (LLM02) and obvious system-prompt leakage before anything is used
+#    downstream.
+define flow guardrail output schema
+  $valid = execute validate_output_schema
+  if not $valid
+    bot refuse output
+    stop
+
+# 2. PII redaction on the outbound path (sensitive information disclosure, LLM06).
+#    The action rewrites the bot message with any PII masked.
+define flow guardrail output pii
+  $bot_message = execute redact_pii_output
