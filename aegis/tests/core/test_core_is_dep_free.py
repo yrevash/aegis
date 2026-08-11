@@ -18,7 +18,7 @@ def test_core_imports_no_heavy_deps() -> None:
         AssertionError: If any banned module appears in sys.modules after importing aegis.core.
     """
     code = (
-        "import sys; import aegis.core; "
+        "import sys; import aegis.core; import aegis.core.stream; "
         "banned = {'litellm','torch','langgraph','xgboost','fastapi','redis','nemoguardrails'}; "
         "hit = banned & set(sys.modules); assert not hit, hit"
     )
