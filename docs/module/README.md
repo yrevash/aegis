@@ -18,7 +18,4 @@ snippet, its install extra, the AG-UI events it emits, and its honest-infra desi
 | [`aegis-governance.md`](./aegis-governance.md) | Who's allowed to do what, how much they can spend, and whether you can prove it afterward: tenants, RBAC, RLS, budgets, audit. |
 | [`aegis-evals-ops.md`](./aegis-evals-ops.md) | Two halves of one loop: `aegis.evals` measures quality, `aegis.ops` gates releases on it. |
 | [`aegis-observability.md`](./aegis-observability.md) | The OTel/OpenInference tracing stack that exports the same span vocabulary every module stamps its events with. |
-
-Not yet documented: `aegis.agent` (the LangGraph orchestrator that will eventually call all of the
-above) is still mid-extraction — see `.superpowers/sdd/module-agent-map.md` — and will get its own
-doc once it lands.
+| [`aegis-agent.md`](./aegis-agent.md) | The finale: the LangGraph plan→gate→act→reflect graph that composes every other module through the `AgentDeps` injection seam. |

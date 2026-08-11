@@ -15,10 +15,14 @@ Every module obeys one shared **Module Contract**, made of three pillars, and sp
 shared **streaming spine**. This document explains both, shows how the modules relate, and points
 to the per-module docs (`aegis-core.md`, `aegis-data.md`, `aegis-guardrails.md`, `aegis-ml.md`,
 `aegis-retrieval.md`, `aegis-gateway.md`, `aegis-memory.md`, `aegis-governance.md`,
-`aegis-evals-ops.md`, `aegis-observability.md`) that each teach one package in depth.
-`aegis.agent` — the LangGraph orchestrator that will eventually call all of the others — is still
-being extracted (see `.superpowers/sdd/module-agent-map.md`) and is intentionally **not**
-documented yet; today it lives partly in `backend/src/app/agent/` and partly in shims.
+`aegis-evals-ops.md`, `aegis-observability.md`, `aegis-agent.md`) that each teach one package in
+depth. `aegis.agent` — the LangGraph plan→gate→act→reflect graph that composes all of the
+others through its `AgentDeps` injection seam — is the last and final module extracted (module 8
+of 8; see `.superpowers/sdd/module-agent-map.md` and `.superpowers/sdd/module-agent-report.md`).
+It sits above the leaf-module boundary described below by design: gluing the other modules
+together through injected callables is its entire job, and the durable app-side wiring
+(`AgentDeps.default()`) still lives in `backend/src/app/agent/` as the composition root, mirroring
+the `gateway.configure(...)` pattern every other module proved. See `aegis-agent.md`.
 
 ## The Module Contract — three pillars
 
@@ -131,7 +135,9 @@ graph TD
         observability["aegis.observability<br/>OTel/OpenInference export"]
     end
 
-    agent["aegis.agent (planned)<br/>LangGraph orchestrator —<br/>calls all of the above"]
+    subgraph orchestration["Orchestration — composes every module above"]
+        agent["aegis.agent<br/>LangGraph plan→gate→act→reflect graph —<br/>AgentDeps injection seam"]
+    end
 
     core --> guardrails
     core --> ml
@@ -147,12 +153,13 @@ graph TD
 
     evals -.->|gates| ops
 
-    agent -.->|will call| guardrails
-    agent -.->|will call| ml
-    agent -.->|will call| retrieval
-    agent -.->|will call| gateway
-    agent -.->|will call| memory
-    agent -.->|will call| governance
+    agent -->|deps.check_input/check_output| guardrails
+    agent -->|deps.predict_explain| ml
+    agent -->|deps.retrieve, agentic_retrieve| retrieval
+    agent -->|deps.complete| gateway
+    agent -->|deps.memory: MemoryDeps Protocol| memory
+    agent -->|deps.record_audit; BudgetExceededError| governance
+    agent -->|span/SpanKind/semconv (real import)| observability
 
     guardrails -->|AegisEmitter.custom<br/>guardrail_verdict| stream["AG-UI event stream<br/>(SSE, ag-ui-protocol)"]
     ml -->|shap_explanation<br/>conformal_interval| stream
@@ -160,13 +167,14 @@ graph TD
     gateway -->|model_call| stream
     memory -->|memory_recall| stream
     evals -->|eval_result| stream
-    agent -.->|reasoning, routing<br/>(planned)| stream
+    agent -->|reasoning, routing, tool_call,<br/>approval_required, reflection, ... via<br/>the legacy StreamEvent seam (stamp=)| legacyStream["Legacy StreamEvent union<br/>(app.api.schemas, locked SSE contract)"]
 
+    legacyStream -.->|AG-UI migration<br/>deferred follow-on| stream
     stream --> frontendDecode["frontend/src/agui<br/>streamNames.ts + decode.ts"]
     stream --> otel["Same stream, tagged with<br/>OpenInference SpanKind →<br/>OTel export (aegis.observability)"]
 
     style foundations fill:#eef,stroke:#448
-    style agent fill:#fee,stroke:#a44,stroke-dasharray: 5 5
+    style orchestration fill:#efe,stroke:#484
 ```
 
 ## Modules at a glance
@@ -184,10 +192,14 @@ graph TD
 | `aegis.evals` | RAGAS-style metrics + LLM-judge harness | none — installs with bare `pip install aegis` | `eval_result` |
 | `aegis.ops` | Diagnose, eval-gated release/promotion | `data` (no dedicated `evals`/`ops` extra exists; needs SQLAlchemy) | none (no `stream.py`) |
 | `aegis.observability` | OTel/OpenInference span export (consumes the same event contract) | `observability` (+ optional `phoenix` for Arize Phoenix export) | none — it is the trace *exporter*, not an emitter |
+| `aegis.agent` | Plan→gate→act→reflect orchestration graph — composes every module above through `AgentDeps` | `agent` (langgraph + langchain-core + otel) | none via `AegisEmitter` — emits through the legacy `StreamEvent` union instead (see below) |
 
-Two names are reserved in `aegis.core.stream_names` but not yet emitted by any extracted module:
-`reasoning` and `routing` are wired for `aegis.agent`'s live-thinking and router-decision output —
-they will light up once that module lands.
+`reasoning` and `routing` are reserved in `aegis.core.stream_names` specifically for
+`aegis.agent`'s live-thinking and router-decision output, and both now fire — but through
+`aegis.agent`'s own dict-builder + injected-`stamp` seam (`aegis.agent.events`, validated against
+the legacy `StreamEvent` union), not through `AegisEmitter`. Migrating the agent graph onto the
+AG-UI `CustomEvent` contract every other module now uses is explicit deferred follow-on work (see
+`aegis-agent.md`), so it does not yet appear in the `AegisEmitter`/`stream_names` column above.
 
 ## Reading order
 
@@ -197,4 +209,7 @@ Then `aegis-guardrails.md` is the best worked example of the full contract end-t
 pilot module). After that the remaining docs (`aegis-ml.md`, `aegis-retrieval.md`,
 `aegis-gateway.md`, `aegis-memory.md`, `aegis-governance.md`, `aegis-evals-ops.md`,
 `aegis-observability.md`) can be read in any order — see `docs/module/README.md` for a one-line
-hook on each.
+hook on each. Read `aegis-agent.md` last: it assumes you already know the `AgentDeps` seam it
+injects (the gateway's `complete`, retrieval's `retrieve`/`agentic_retrieve`, guardrails'
+`check_input`/`check_output`, ML's `predict_explain`, memory's `MemoryDeps` Protocol) is exactly
+what those earlier docs already taught.
