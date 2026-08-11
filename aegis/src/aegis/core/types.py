@@ -22,6 +22,19 @@ class GuardVerdict(StrEnum):
     FLAG = "flag"
 
 
+class RiskLevel(StrEnum):
+    """Coarse risk tier for an action; drives the human-gate threshold.
+
+    A shared cross-module contract (like :class:`GuardVerdict`): the approvals ORM
+    row and the agent's human-gate logic both key on it, so it lives in
+    ``aegis.core.types`` (pydantic/stdlib only) rather than any one consumer.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class PIIMatch(BaseModel):
     """One span of detected personally-identifiable information."""
 

@@ -25,6 +25,7 @@ from aegis.core.types import (
     GuardVerdict,
     InjectionVerdict,
     PIIMatch,
+    RiskLevel,
 )
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "GuardrailEvent",
     "InjectionVerdict",
     "PIIMatch",
+    "RiskLevel",
     "SpanKind",
     "StepFinished",
     "StepStarted",

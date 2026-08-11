@@ -19,6 +19,12 @@ retrieval = [
 ]
 gateway = ["litellm>=1.52"]
 data = ["sqlalchemy[asyncio]>=2.0", "pgvector>=0.3"]
+governance = [
+    "sqlalchemy[asyncio]>=2.0",
+    "pgvector>=0.3",
+    "pyjwt>=2.9",
+    "argon2-cffi>=23.1",
+]
 ml = [
     "xgboost>=2.1",
     "scikit-learn>=1.5",
@@ -29,7 +35,7 @@ ml = [
     "numpy>=1.26",
     "joblib>=1.4",
 ]
-all = ["aegis[redis,nemo,postgres,retrieval,ml,gateway,data]"]
+all = ["aegis[redis,nemo,postgres,retrieval,ml,gateway,data,governance]"]
 dev = ["ruff>=0.7", "pytest>=8.3", "pytest-asyncio>=0.24", "aiosqlite>=0.20"]
 
 [tool.ruff]
