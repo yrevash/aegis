@@ -7,3 +7,43 @@ it stays cheap to install.
 """
 
 from __future__ import annotations
+
+from aegis.core.config import AegisMode, CoreSettings
+from aegis.core.events import (
+    AegisEvent,
+    GuardrailEvent,
+    SpanKind,
+    StepFinished,
+    StepStarted,
+)
+from aegis.core.interfaces import ChatCompleter, Guardrail
+from aegis.core.lazy import require
+from aegis.core.registry import available, get, register
+from aegis.core.types import (
+    FormatCheck,
+    GuardResult,
+    GuardVerdict,
+    InjectionVerdict,
+    PIIMatch,
+)
+
+__all__ = [
+    "AegisEvent",
+    "AegisMode",
+    "ChatCompleter",
+    "CoreSettings",
+    "FormatCheck",
+    "Guardrail",
+    "GuardResult",
+    "GuardVerdict",
+    "GuardrailEvent",
+    "InjectionVerdict",
+    "PIIMatch",
+    "SpanKind",
+    "StepFinished",
+    "StepStarted",
+    "available",
+    "get",
+    "register",
+    "require",
+]
