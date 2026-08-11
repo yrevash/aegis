@@ -16,10 +16,12 @@ def test_core_imports_no_heavy_deps() -> None:
     """Assert importing aegis.core adds none of the banned heavy dependencies to sys.modules.
 
     Banned deps: litellm, torch, langgraph, xgboost, fastapi, redis, nemoguardrails,
-    sqlalchemy, jwt, argon2. ``sqlalchemy``/``jwt``/``argon2`` live in ``aegis.data`` /
-    ``aegis.governance`` (the ``aegis[data]`` / ``aegis[governance]`` extras), never in
-    ``aegis.core`` — core stays pydantic-only. These must be imported *only* through
-    aegis.require() / the relevant extra when explicitly installed.
+    sqlalchemy, jwt, argon2, opentelemetry. ``sqlalchemy``/``jwt``/``argon2`` live in
+    ``aegis.data`` / ``aegis.governance`` (the ``aegis[data]`` / ``aegis[governance]``
+    extras), and ``opentelemetry`` lives in ``aegis.observability`` (the
+    ``aegis[observability]`` extra) — never in ``aegis.core``, which stays
+    pydantic-only. These must be imported *only* through aegis.require() / the
+    relevant extra when explicitly installed.
 
     The subprocess resolves ``aegis`` from the source tree via ``PYTHONPATH`` so the guard
     tests the real import graph deterministically, independent of editable-install state.
@@ -30,7 +32,7 @@ def test_core_imports_no_heavy_deps() -> None:
     code = (
         "import sys; import aegis.core; import aegis.core.stream; "
         "banned = {'litellm','torch','langgraph','xgboost','fastapi','redis',"
-        "'nemoguardrails','sqlalchemy','jwt','argon2'}; "
+        "'nemoguardrails','sqlalchemy','jwt','argon2','opentelemetry'}; "
         "hit = banned & set(sys.modules); assert not hit, hit"
     )
     proc = subprocess.run(

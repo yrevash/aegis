@@ -153,6 +153,7 @@ class GovernanceHook(Protocol):
         ...
 
 
+@runtime_checkable
 class ObservabilitySink(Protocol):
     """Span + usage instrumentation, injected so the gateway has no OTel dep."""
 
