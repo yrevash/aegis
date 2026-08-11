@@ -16,6 +16,10 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from aegis.core.types import GuardVerdict  # noqa: F401 - re-exported, see class docstring below
+from aegis.ml.types import (  # noqa: F401 - re-exported: identity with the ML spine's types
+    MLExplainResponse,
+    ShapFeature,
+)
 from pydantic import BaseModel, Field
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,14 +252,6 @@ class ToolResult(_BaseEvent):
     call_id: str
     ok: bool
     summary: str
-
-
-class ShapFeature(BaseModel):
-    """One feature's signed SHAP contribution to a prediction."""
-
-    feature: str
-    value: float
-    contribution: float = Field(description="Signed SHAP attribution.")
 
 
 class MLExplanation(_BaseEvent):
@@ -590,17 +586,6 @@ class MLExplainRequest(BaseModel):
     """Body for `POST /ml/explain` — the features for one prediction."""
 
     features: dict = Field(description="Feature name → value for one prediction.")
-
-
-class MLExplainResponse(BaseModel):
-    """Response for `POST /ml/explain` — prediction, conformal interval, SHAP."""
-
-    prediction: float | str
-    conformal_interval: tuple[float, float] | None = None
-    conformal_confidence: float | None = None
-    interval_width: float | None = None
-    prediction_set_size: int | None = None
-    shap_attribution: list[ShapFeature] = Field(default_factory=list)
 
 
 class MetricsResponse(BaseModel):

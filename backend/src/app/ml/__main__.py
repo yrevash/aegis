@@ -2,7 +2,8 @@
 
 Run once during setup (the ``*.joblib`` artifact is intentionally git-ignored) to
 train the trustworthy-ML ensemble on the **real domain** feature frame resolved from
-the adapter and persist it to :data:`app.ml.model.DEFAULT_ARTIFACT_PATH`::
+the adapter and persist it to :data:`app.ml.model.DEFAULT_ARTIFACT_PATH` (delegated
+to :mod:`aegis.ml`)::
 
     python -m app.ml
 
