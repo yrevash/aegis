@@ -10,6 +10,13 @@ dependencies = ["pydantic>=2.9", "pydantic-settings>=2.6", "ag-ui-protocol~=0.1.
 redis = ["redis>=5.1"]
 nemo = ["nemoguardrails>=0.23"]
 postgres = ["asyncpg>=0.29", "pgvector>=0.3"]
+retrieval = [
+    "lightrag-hku>=1.0",
+    "neo4j>=5.24",
+    "redis>=5.1",
+    "pgvector>=0.3",
+    "asyncpg>=0.29",
+]
 ml = [
     "xgboost>=2.1",
     "scikit-learn>=1.5",
@@ -20,7 +27,7 @@ ml = [
     "numpy>=1.26",
     "joblib>=1.4",
 ]
-all = ["aegis[redis,nemo,postgres,ml]"]
+all = ["aegis[redis,nemo,postgres,retrieval,ml]"]
 dev = ["ruff>=0.7", "pytest>=8.3", "pytest-asyncio>=0.24"]
 
 [tool.ruff]
