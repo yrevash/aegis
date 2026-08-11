@@ -11,15 +11,20 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from ag_ui.core import (
+    CustomEvent,
     EventType,
     RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
     StepFinishedEvent,
     StepStartedEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
 )
 from ag_ui.encoder import EventEncoder
 
+from aegis.core import stream_names
 from aegis.core.events import SpanKind
 
 Sink = Callable[[str], Awaitable[None]]
@@ -73,6 +78,7 @@ class AegisEmitter:
         self._run_id = run_id
         self._sink = sink
         self._encoder = EventEncoder()
+        self._open_text: set[str] = set()
 
     async def _emit(self, event: object) -> None:
         """Encode ``event`` to an SSE frame and hand it to the sink.
@@ -127,3 +133,66 @@ class AegisEmitter:
             An async context manager (_StepScope) that emits bracketing events.
         """
         return _StepScope(self, name, span_kind)
+
+    async def reasoning(self, delta: str, *, message_id: str = "reasoning") -> None:
+        """Stream one delta of live agent thinking (CustomEvent name='reasoning').
+
+        Args:
+            delta: Text delta representing thinking.
+            message_id: Identifier for this reasoning stream (default: "reasoning").
+        """
+        await self._emit(
+            CustomEvent(
+                type=EventType.CUSTOM,
+                name=stream_names.REASONING,
+                value={"messageId": message_id, "delta": delta},
+            )
+        )
+
+    async def text_start(self, message_id: str, role: str = "assistant") -> None:
+        """Begin a bracketed assistant text message.
+
+        Args:
+            message_id: Identifier for this text message.
+            role: Role of the message sender (default: "assistant").
+        """
+        self._open_text.add(message_id)
+        await self._emit(
+            TextMessageStartEvent(
+                type=EventType.TEXT_MESSAGE_START, message_id=message_id, role=role
+            )
+        )
+
+    async def text_delta(self, message_id: str, delta: str) -> None:
+        """Append a text delta to an open message.
+
+        Args:
+            message_id: Identifier for this text message.
+            delta: Text delta to append.
+
+        Raises:
+            RuntimeError: if ``message_id`` was not started.
+        """
+        if message_id not in self._open_text:
+            raise RuntimeError(f"text_delta for message {message_id!r} not started")
+        await self._emit(
+            TextMessageContentEvent(
+                type=EventType.TEXT_MESSAGE_CONTENT, message_id=message_id, delta=delta
+            )
+        )
+
+    async def text_end(self, message_id: str) -> None:
+        """End a bracketed assistant text message.
+
+        Args:
+            message_id: Identifier for this text message.
+
+        Raises:
+            RuntimeError: if ``message_id`` was not started.
+        """
+        if message_id not in self._open_text:
+            raise RuntimeError(f"text_end for message {message_id!r} not started")
+        self._open_text.discard(message_id)
+        await self._emit(
+            TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=message_id)
+        )

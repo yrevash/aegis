@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from aegis.core import stream_names
 from aegis.core.events import SpanKind
 from aegis.core.stream import AegisEmitter
 
@@ -70,3 +71,35 @@ async def test_step_brackets() -> None:
     evs = _events(sink.frames)
     assert [e["type"] for e in evs] == ["STEP_STARTED", "STEP_FINISHED"]
     assert evs[0]["stepName"] == "guard_input"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_is_custom_event() -> None:
+    """Test reasoning() emits a CUSTOM event with stream_names.REASONING."""
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+    await em.reasoning("thinking about the refund policy")
+    ev = _events(sink.frames)[0]
+    assert ev["type"] == "CUSTOM" and ev["name"] == stream_names.REASONING
+    assert ev["value"]["delta"] == "thinking about the refund policy"
+
+
+@pytest.mark.asyncio
+async def test_text_bracketing_and_guard() -> None:
+    """Test text_* bracketing and guard on delta/end without start."""
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+    await em.text_start("m1")
+    await em.text_delta("m1", "Hello ")
+    await em.text_delta("m1", "world")
+    await em.text_end("m1")
+    types = [e["type"] for e in _events(sink.frames)]
+    expected = [
+        "TEXT_MESSAGE_START",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",
+    ]
+    assert types == expected
+    with pytest.raises(RuntimeError):
+        await em.text_delta("never-started", "x")
