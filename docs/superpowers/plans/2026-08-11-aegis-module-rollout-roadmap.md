@@ -65,4 +65,6 @@ comes after the pieces it composes.
 
 **=== ALL 8 MODULES EXTRACTED + MERGE-READY (2026-08-12). aegis.core + aegis.data foundations + AG-UI streaming spine done. ===**
 
-- [x] `docs/module/` learning docs (12 files + diagrams; aegis.agent doc pending) · [ ] Whole-platform verify-all agent · [ ] agent doc + platform-overview finalize
+- [x] `docs/module/` learning docs (14 files + mermaid diagrams — all modules + overview + index) · [x] Whole-platform verify-all agent (**VERIFIED, 0 issues** — `docs/module/VERIFICATION.md`) · [x] agent doc + platform-overview finalize
+
+**=== ROLLOUT COMPLETE (2026-08-12). All 8 modules + foundations extracted, each MERGE-READY; whole-platform VERIFIED; docs/module/ complete. Branch feat/aegis-module-contract (unmerged). ===**
