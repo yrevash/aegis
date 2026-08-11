@@ -60,7 +60,22 @@ async def redact_pii_input(context: dict | None = None) -> str:
 async def self_check_injection(context: dict | None = None) -> bool:
     """Return ``True`` if the inbound message is *safe* (not prompt injection).
 
-    PII is redacted before the classifier call so no secret leaves for the API.
+    PII is redacted before the injection check so no secret would leak to a
+    model-based classifier call.
+
+    Note:
+        This Colang action currently runs **deterministic-only** injection
+        screening (``completer=None``): the Colang engine has no first-class
+        way to inject this platform's ``ChatCompleter`` into a custom action,
+        so the declarative front door enforces the offline signature backstop
+        only, same as calling :func:`aegis.guardrails.classifier.detect_injection`
+        with no completer anywhere else — logged, not silent (see
+        :func:`aegis.guardrails.classifier.detect_injection`). Wiring a real
+        completer into the NeMo engine (e.g. via a rails config callback or a
+        closure-based action factory) is a documented follow-on; the fast
+        programmatic rail (:func:`aegis.guardrails.pipeline.Guardrails.check_input`)
+        already runs the full model-based layer and is the primary enforcement
+        path.
 
     Args:
         context: The NeMo conversation context (``user_message`` is read).
@@ -70,7 +85,7 @@ async def self_check_injection(context: dict | None = None) -> bool:
     """
     text = (context or {}).get("user_message", "")
     redacted, _ = pii.redact(text)
-    verdict = await classifier.detect_injection(redacted)
+    verdict = await classifier.detect_injection(redacted, completer=None)
     return not verdict.injection
 
 
