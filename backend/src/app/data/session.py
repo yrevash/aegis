@@ -224,13 +224,17 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
         engine: Engine to bootstrap; defaults to the process-wide engine.
     """
     engine = engine or get_engine()
-    # Import the memory models so their tables register on Base.metadata before
-    # create_all (they live in app.memory.stores; this module isn't imported there,
-    # so there is no cycle).
+    # Import the memory models so their tables register on the aegis data metadata before
+    # create_all. They now live in ``aegis.memory.stores`` (re-exported by the
+    # ``app.memory.stores`` shim) and register on ``aegis.data.AegisBase`` — a separate
+    # metadata from the platform's ``app.data`` Base — so both must be created.
+    from aegis.data import AegisBase  # noqa: PLC0415 - local to avoid an import-time dep
+
     import app.memory.stores  # noqa: F401,PLC0415 - registration side-effect only
 
     async with engine.begin() as conn:
         if engine.dialect.name == "postgresql":
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(AegisBase.metadata.create_all)
     await bootstrap_rls(engine)
