@@ -267,36 +267,25 @@ async def test_ingest_captures_section_metadata():
     assert chunk.text.startswith("[Billing]")  # contextual retrieval prefix
 
 
-async def test_rerank_emits_a_reranker_span(monkeypatch):
-    """The rerank stage emits a real RERANKER span (N candidates → K survivors)."""
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-        InMemorySpanExporter,
-    )
+async def test_rerank_stage_runs_without_a_tracer_seam():
+    """Rerank completes offline; ``Retriever`` no longer owns OTel span plumbing.
 
-    import app.observability.otel as otel_mod
-    from app.observability import semconv
-
-    provider = TracerProvider()
-    exporter = InMemorySpanExporter()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(otel_mod, "_provider", provider)
-
+    DEVIATION (aegis.retrieval extraction, see
+    ``.superpowers/sdd/module-retrieval-report.md``): prior to the extraction this
+    test opened a real OTel span around the rerank stage (a RERANKER-kind span
+    emitted from inside ``Retriever.retrieve``) and asserted on its attributes.
+    ``aegis.retrieval.pipeline`` is observability-agnostic by design (per the
+    extraction spec, `app.observability` couplings are severed, not ported) — the
+    same tracing seam belongs to a future host-supplied tracer/emitter, not this
+    pure-logic package. This test now pins the resulting behaviour: rerank still
+    narrows N candidates to K survivors correctly with no tracer wired at all.
+    """
     complete = RecordingComplete('{"scores": [{"id": 0, "score": 3}, {"id": 1, "score": 8}]}')
     embed = SequenceEmbed([1.0, 0.0])
     backend = FakeBackend(make_recall())
     retriever = _retriever(complete, embed, backend)
 
-    await retriever.retrieve("why is the sky blue?", persona=None)
+    result = await retriever.retrieve("why is the sky blue?", persona=None)
 
-    rerank_spans = [
-        s
-        for s in exporter.get_finished_spans()
-        if dict(s.attributes).get(semconv.OPENINFERENCE_SPAN_KIND)
-        == semconv.SpanKind.RERANKER.value
-    ]
-    assert len(rerank_spans) == 1
-    attrs = dict(rerank_spans[0].attributes)
-    assert attrs[semconv.RERANK_INPUT_COUNT] == 2  # wide-recall pool (N)
-    assert attrs[semconv.RERANK_OUTPUT_COUNT] == 2  # survivors (K)
+    assert result.num_candidates == 2  # wide-recall pool (N)
+    assert len(result.sources) == 2  # survivors (K)

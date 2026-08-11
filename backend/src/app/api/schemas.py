@@ -20,6 +20,12 @@ from aegis.ml.types import (  # noqa: F401 - re-exported: identity with the ML s
     MLExplainResponse,
     ShapFeature,
 )
+from aegis.retrieval.types import (  # noqa: F401 - re-exported: identity with aegis.retrieval
+    FusionMethod,
+    GraphEdge,
+    GraphNode,
+    RetrievalOrigin,
+)
 from pydantic import BaseModel, Field
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,21 +106,9 @@ class AutonomyBand(StrEnum):
     ABSTAIN = "abstain"
 
 
-class RetrievalOrigin(StrEnum):
-    """Where a retrieved candidate came from, for honest provenance (§4.3)."""
-
-    VECTOR = "vector"
-    GRAPH = "graph"
-    BM25 = "bm25"
-    CACHE = "cache"
-
-
-class FusionMethod(StrEnum):
-    """How multiple ranked recall lists were combined into one (§4.3)."""
-
-    NONE = "none"        # single list, no fusion applied
-    RRF = "rrf"          # reciprocal rank fusion
-    MIX = "mix"          # delegated to LightRAG's internal graph+vector blend
+# RetrievalOrigin, FusionMethod re-exported above from aegis.retrieval.types (§4.3);
+# GraphNode, GraphEdge re-exported below at their original position in this file so
+# the class ordering (and any doc anchors referencing it) stays stable.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -198,22 +192,6 @@ class Guardrail(_BaseEvent):
     after: str | None = Field(
         default=None, description="The masked/redacted text forwarded downstream."
     )
-
-
-class GraphNode(BaseModel):
-    """A node in the knowledge-graph visualisation."""
-
-    id: str
-    label: str
-    kind: str = Field(description="Entity kind/type for colouring the viz.")
-
-
-class GraphEdge(BaseModel):
-    """A directed, labelled edge between two graph nodes."""
-
-    source: str
-    target: str
-    relation: str
 
 
 class ScoredSource(BaseModel):
