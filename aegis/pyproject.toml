@@ -1,0 +1,40 @@
+[project]
+name = "aegis"
+version = "0.1.0"
+description = "Aegis — modular, importable agentic-AI platform components."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.9"]
+
+[project.optional-dependencies]
+redis = ["redis>=5.1"]
+nemo = ["nemoguardrails>=0.23"]
+all = ["aegis[redis,nemo]"]
+dev = ["ruff>=0.7", "pytest>=8.3", "pytest-asyncio>=0.24"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "D"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aegis"]
