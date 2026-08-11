@@ -10,10 +10,10 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import aegis.gateway.llm as llm_mod
 import pytest
 from sqlalchemy import select
 
-import app.core.llm as llm_mod
 from app.core.governance import (
     GovernanceContext,
     reset_governance_context,

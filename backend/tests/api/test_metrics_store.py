@@ -6,9 +6,9 @@ that both completed cleanly and retrieved backing context (touched graph nodes).
 
 from __future__ import annotations
 
+import aegis.gateway.llm as llm_mod
 import pytest
 
-import app.core.llm as llm_mod
 from app.api.routes import MetricsStore
 from app.api.schemas import RunStatus
 
