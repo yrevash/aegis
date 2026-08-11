@@ -13,7 +13,13 @@ dependencies = [
     "litellm>=1.52",
     "httpx>=0.27",
     "python-dotenv>=1.0",
+    # The sibling `aegis` package (aegis.core + aegis.guardrails): the legacy
+    # guardrail stack delegates to it via a strangler shim (app/guardrails).
+    "aegis",
 ]
+
+[tool.uv.sources]
+aegis = { path = "../aegis", editable = true }
 
 # Feature dependencies are grouped per module. Owning agents verify exact names /
 # versions against current docs and report any correction; the orchestrator

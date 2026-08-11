@@ -2,18 +2,23 @@
 
 Finding #5 of the honesty audit: the NeMo config existed but was never loaded or
 run. These tests instantiate the real ``LLMRails`` engine over the bundled Colang
-config and assert the input/output rails enforce for real — offline. The injection
-classifier API is stubbed so only the *policy engine* (Colang flows + our custom
-actions + the deterministic backstop) is exercised; no network, no ``main`` model.
+config (now sourced from ``aegis.guardrails.config``, via the ``app.guardrails.nemo``
+shim) and assert the input/output rails enforce for real — offline. The one
+network seam — the platform's cheap-model gateway, ``app.core.llm.complete``,
+reached through ``app.guardrails._gateway_completer`` -> the corrected
+``self_check_injection`` Colang action (see ``app/guardrails/nemo.py``) — is
+stubbed so only the *policy engine* (Colang flows + our custom actions + the
+deterministic backstop) is exercised; no network, no ``main`` model.
 """
 
 from __future__ import annotations
 
 import pytest
 
+import app.core.llm as llm_module
 from app.api.schemas import GuardVerdict
+from app.core.llm import LLMResult
 from app.guardrails import nemo
-from app.guardrails.models import InjectionVerdict
 
 pytestmark = pytest.mark.asyncio
 
@@ -30,13 +35,14 @@ def _isolate_engine():
 
 @pytest.fixture
 def _stub_classifier(monkeypatch):
-    """Stub the cheap-model injection API so benign text needs no network."""
-    from app.guardrails import classifier
+    """Stub the platform's cheap-model gateway so benign text needs no network."""
 
-    async def _benign(_text: str) -> InjectionVerdict:
-        return InjectionVerdict(injection=False, reason="stubbed benign")
+    async def _benign(
+        role, messages, *, tools=None, temperature=0.0, response_format=None, max_tokens=None
+    ):
+        return LLMResult(content='{"injection": false, "reason": "stubbed benign"}')
 
-    monkeypatch.setattr(classifier, "classify_injection", _benign)
+    monkeypatch.setattr(llm_module, "complete", _benign)
 
 
 try:  # Building the engine loads a small embedding model; skip cleanly if it can't.

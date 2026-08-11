@@ -84,13 +84,15 @@ class Settings(BaseSettings):
     memory_sweeper_batch: int = Field(default=10)
 
     # ── Guardrails engine (one policy, two front doors; docs/security.md §3) ──
-    # "programmatic" (default) runs the fast, offline-testable Python rails
-    # (app/guardrails/rails.py) the agent graph calls directly. "nemo" routes the
-    # same input/output checks through the **NeMo Guardrails Colang** policy
-    # (app/guardrails/config/*.co) via ``LLMRails`` — the declarative twin. Both
-    # enforce one policy; the live day-of config sets ``GUARDRAILS_ENGINE=nemo`` so
-    # the readable Colang artifact is the executing engine. Defaults to
-    # "programmatic" so the offline test suite never needs the optional package.
+    # Two front doors enforce the same policy: the fast, offline-testable
+    # programmatic rails (``app.guardrails.check_input``/``check_output``,
+    # delegating to ``aegis.guardrails``) the agent graph calls directly, and the
+    # declarative **NeMo Guardrails Colang** policy (``app.guardrails.nemo``,
+    # delegating to ``aegis.guardrails.nemo``) callable directly for the jury's
+    # readable security artifact. This field is currently unused for automatic
+    # dispatch (the strangler shim onto ``aegis.guardrails`` — see
+    # docs/superpowers/sdd/2026-08-11-aegis-core-guardrails-pilot/ — always uses
+    # the programmatic rails); kept for forward compatibility / config parity.
     guardrails_engine: str = Field(default="programmatic")
 
     # ── Observability ────────────────────────────────────────────────────────

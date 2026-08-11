@@ -15,6 +15,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
+from aegis.core.types import GuardVerdict  # noqa: F401 - re-exported, see class docstring below
 from pydantic import BaseModel, Field
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,12 +62,10 @@ class GuardStage(StrEnum):
     OUTPUT = "output"
 
 
-class GuardVerdict(StrEnum):
-    """A guardrail's decision on a piece of content."""
-
-    PASS = "pass"
-    BLOCK = "block"
-    REDACT = "redact"
+# GuardVerdict now lives in ``aegis.core.types`` (imported above) so the backend
+# and the ``aegis`` package can never define diverging verdict enums — this
+# module re-exports it under its historical name/location for every existing
+# importer (``pass`` | ``block`` | ``redact``, plus an additive ``flag``).
 
 
 class RiskLevel(StrEnum):
