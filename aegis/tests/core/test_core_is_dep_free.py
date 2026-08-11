@@ -15,8 +15,10 @@ _SRC = str(Path(__file__).resolve().parents[2] / "src")
 def test_core_imports_no_heavy_deps() -> None:
     """Assert importing aegis.core adds none of the banned heavy dependencies to sys.modules.
 
-    Banned deps: litellm, torch, langgraph, xgboost, fastapi, redis, nemoguardrails.
-    These must be imported *only* through aegis.require() when explicitly installed as extras.
+    Banned deps: litellm, torch, langgraph, xgboost, fastapi, redis, nemoguardrails,
+    sqlalchemy. ``sqlalchemy`` lives in ``aegis.data`` (the ``aegis[data]`` extra), never in
+    ``aegis.core`` — core stays pydantic-only. These must be imported *only* through
+    aegis.require() / the relevant extra when explicitly installed.
 
     The subprocess resolves ``aegis`` from the source tree via ``PYTHONPATH`` so the guard
     tests the real import graph deterministically, independent of editable-install state.
@@ -26,7 +28,8 @@ def test_core_imports_no_heavy_deps() -> None:
     """
     code = (
         "import sys; import aegis.core; import aegis.core.stream; "
-        "banned = {'litellm','torch','langgraph','xgboost','fastapi','redis','nemoguardrails'}; "
+        "banned = {'litellm','torch','langgraph','xgboost','fastapi','redis',"
+        "'nemoguardrails','sqlalchemy'}; "
         "hit = banned & set(sys.modules); assert not hit, hit"
     )
     proc = subprocess.run(
