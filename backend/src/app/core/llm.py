@@ -18,8 +18,9 @@ wires ``aegis.gateway.configure(...)`` with three adapters —
   preserving the exact fail-closed-unless-``budget_fail_open`` semantics of the
   original ``_enforce_governance``, and the "ungoverned (no tenant) request is a
   full no-op" semantics of the original ``_governed`` gate;
-* an observability sink wrapping ``app.observability``'s ``genai_span``/
-  ``set_usage``/``current_trace_id``.
+* the standalone ``aegis.observability.OtelObservabilitySink`` — the concrete
+  implementation of the gateway's ``ObservabilitySink`` Protocol, wired
+  directly with no bespoke adapter of this app's own.
 
 then re-exports the public surface (``complete``, ``embed``, ``record_call``,
 ``usage_tally``, ``last_trace_id``, ``BudgetExceededError``, ``LLMResult``,
@@ -32,7 +33,6 @@ shim over ``aegis.core.models``/``aegis.gateway.routing``.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import aegis.gateway as gateway
 from aegis.gateway import (
@@ -46,11 +46,10 @@ from aegis.gateway import (
     record_call,
     usage_tally,
 )
+from aegis.observability import OtelObservabilitySink
 
 from app.config import get_settings
 from app.core.governance import GovernanceContext, get_governance_context
-from app.observability import GenAIOperation, genai_span, set_usage
-from app.observability.otel import current_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -193,55 +192,12 @@ class _GovernanceHook:
         )
 
 
-class _ObservabilitySink:
-    """Wires the platform's OTel ``gen_ai.*`` spans into the gateway's hook seam."""
-
-    def span(
-        self,
-        operation: Any,  # noqa: ANN401 - aegis.gateway.llm.GenAIOperation, kept opaque here
-        model: str,
-        *,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-    ) -> Any:  # noqa: ANN401 - the async context manager returned by genai_span
-        """Open a ``gen_ai.*`` span for ``operation``/``model`` (see ``genai_span``)."""
-        # `operation.value` is "chat"/"embeddings" — identical to this app's own
-        # GenAIOperation values, so this maps without importing aegis's enum.
-        return genai_span(
-            GenAIOperation(operation.value),
-            model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-
-    def set_usage(
-        self,
-        span: Any,  # noqa: ANN401 - the opaque span yielded by `span`
-        *,
-        input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        cost_usd: float | None = None,
-        response_model: str | None = None,
-    ) -> None:
-        """Record token usage, cost and the responding model on ``span``."""
-        set_usage(
-            span,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=cost_usd,
-            response_model=response_model,
-        )
-
-    def trace_id(self) -> str | None:
-        """Return the active OTel trace id (hex), for audit correlation."""
-        return current_trace_id()
-
-
 # Wire the injected hooks once, at import time — every existing call site
 # (`from app.core.llm import complete`, etc.) then goes through the real gateway
-# with this platform's config/governance/observability bound in.
+# with this platform's config/governance bound in, and the standalone
+# `aegis.observability.OtelObservabilitySink` wired with no bespoke adapter.
 gateway.configure(
     config=_SettingsGatewayConfig(),
     governance=_GovernanceHook(),
-    observability=_ObservabilitySink(),
+    observability=OtelObservabilitySink(),
 )

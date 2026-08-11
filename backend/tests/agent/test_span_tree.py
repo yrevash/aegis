@@ -9,6 +9,7 @@ observability instrumentation, these assertions fail — the span tree is load-b
 
 from __future__ import annotations
 
+import aegis.observability.otel as otel_mod
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -16,7 +17,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-import app.observability.otel as otel_mod
 from app.agent import run_agent
 from app.observability import semconv
 
