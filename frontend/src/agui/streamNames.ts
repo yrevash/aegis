@@ -9,4 +9,5 @@ export const STREAM_NAMES = {
   RETRIEVAL_CITATIONS: "retrieval_citations",
   ROUTING: "routing",
   MEMORY_RECALL: "memory_recall",
+  MODEL_CALL: "model_call",
 } as const;
