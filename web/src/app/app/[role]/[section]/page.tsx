@@ -6,6 +6,7 @@ import { CacheMount } from '@/components/cache/CacheView'
 import { RiskMount } from '@/components/client/RiskMap'
 import { SavingsMount } from '@/components/client/SavingsView'
 import { ConsoleMount } from '@/components/console/ConsoleMount'
+import { AdminDashboardMount } from '@/components/dashboard/AdminCommandCenter'
 import { DashboardMount } from '@/components/dashboard/Dashboard'
 import { PatchMount } from '@/components/devops/PatchCheck'
 import { StackMount } from '@/components/devops/StackVersions'
@@ -70,8 +71,10 @@ export default async function SectionPage({
   if (section === 'savings') return <SavingsMount />
   if (section === 'risk') return <RiskMount />
   if (section === 'simulation') return <SimulationMount />
-  // Overview: wired for devops + client only. The admin Overview stays a
-  // placeholder (owner's pending pause item).
-  if (section === 'dashboard' && role !== 'admin') return <DashboardMount role={role} />
+  // Overview: the admin portal gets the comprehensive command center (all
+  // business + governance + safety figures, composed from the live accessors);
+  // devops + client get the money-shot metrics dashboard.
+  if (section === 'dashboard' && role === 'admin') return <AdminDashboardMount />
+  if (section === 'dashboard') return <DashboardMount role={role} />
   return <SectionPlaceholder section={def} />
 }
