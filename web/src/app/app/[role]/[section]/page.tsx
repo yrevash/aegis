@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { ConsoleMount } from '@/components/console/ConsoleMount'
+import { MLOpsMount } from '@/components/ml/MLOpsView'
 import { SectionPlaceholder } from '@/components/portal/SectionPlaceholder'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
 
@@ -25,5 +26,6 @@ export default async function SectionPage({
 
   const def = SECTIONS[section]
   if (def.console) return <ConsoleMount role={role} />
+  if (section === 'mlops') return <MLOpsMount />
   return <SectionPlaceholder section={def} />
 }
