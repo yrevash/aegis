@@ -11,6 +11,7 @@ import { beatFromSignal } from '@/components/console/motion'
 import { QueryBar } from '@/components/console/QueryBar'
 import { ReasoningLane } from '@/components/console/ReasoningLane'
 import { StreamBanners } from '@/components/console/StreamBanners'
+import { NodeGantt } from '@/components/charts/NodeGantt'
 import { GuardrailReveal } from '@/components/guardrail/GuardrailReveal'
 import { TrustBar } from '@/components/layout/TrustBar'
 import { EfficiencyPanel } from '@/components/metrics/EfficiencyPanel'
@@ -18,7 +19,7 @@ import { ConfidenceCard } from '@/components/ml/ConfidenceCard'
 import { ShapPanel } from '@/components/ml/ShapPanel'
 import { RerankScoreboard } from '@/components/retrieval/RerankScoreboard'
 import { RevealOnScroll } from '@/components/shared'
-import { Card, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AgentTracePanel } from '@/components/trace/AgentTracePanel'
 import { personasForRole } from '@/config/personas'
 import { useMetrics } from '@/state/useMetrics'
@@ -145,6 +146,19 @@ export function MoneyShotConsole(): ReactElement {
           <RevealOnScroll delayMs={120}>
             <AnswerPanel state={state} />
           </RevealOnScroll>
+
+          {state.nodeLedger.length > 0 && (
+            <RevealOnScroll delayMs={140}>
+              <Card>
+                <CardHeader className="flex-row items-center gap-2 space-y-0">
+                  <CardTitle>Glass box</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <NodeGantt nodes={state.nodeLedger} />
+                </CardContent>
+              </Card>
+            </RevealOnScroll>
+          )}
 
           <RevealOnScroll delayMs={160}>
             <GuardrailReveal guardrails={state.guardrails} />

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { NodeFinished } from '@/types/stream'
 
-import { buildGantt, formatCost, formatMs } from './nodeGantt'
+import { buildGantt, formatCost, formatMs } from './ganttLayout'
 
 const node = (
   name: string,

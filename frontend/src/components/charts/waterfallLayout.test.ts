@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ShapFeature } from '@/types/stream'
 
-import { buildWaterfall, waterfallPercent } from './shapWaterfall'
+import { buildWaterfall, waterfallPercent } from './waterfallLayout'
 
 const feat = (feature: string, value: number, contribution: number): ShapFeature => ({
   feature,

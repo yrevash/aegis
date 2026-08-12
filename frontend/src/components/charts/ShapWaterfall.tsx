@@ -1,9 +1,8 @@
 import type { ReactElement } from 'react'
 
-import { cn } from '@/lib/utils'
 import type { ShapFeature } from '@/types/stream'
 
-import { buildWaterfall, waterfallPercent } from './shapWaterfall'
+import { buildWaterfall, waterfallPercent } from './waterfallLayout'
 
 interface ShapWaterfallProps {
   /** The model's base/expected value the walk starts from. */
@@ -114,9 +113,7 @@ export function ShapWaterfall({
           )}
         </div>
         <span
-          className={cn(
-            'tabular font-mono text-[1.1rem] font-bold tracking-tight',
-          )}
+          className="tabular font-mono text-[1.1rem] font-bold tracking-tight"
           style={{ color: 'var(--ml-ink)' }}
         >
           {fmt(prediction, unit)}
