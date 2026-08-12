@@ -87,6 +87,11 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
     () => new Set(state.touchedEdges.map((e) => edgeKey(e.source, e.target, e.relation))),
     [state.touchedEdges],
   )
+  // Distinct entity kinds in this run's evidence, for the colour legend.
+  const kindLegend = useMemo(
+    () => [...new Set(state.touchedNodes.map((n) => n.kind))].sort(),
+    [state.touchedNodes],
+  )
 
   // The active-node halo shares the current beat hue (falls back to retrieval).
   const haloHex = beat?.hex ?? SIGNALS.graph.hex
@@ -224,13 +229,27 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
           </div>
         )}
 
-        {/* Caption: scoped-to-evidence when a run has traversed, else idle hint. */}
-        <div className="pointer-events-none absolute bottom-2 left-3 flex flex-wrap gap-x-3 gap-y-1">
+        {/* Caption + entity-kind legend when a run has traversed, else idle hint. */}
+        <div className="pointer-events-none absolute bottom-2 left-3 flex max-w-[92%] flex-col gap-1">
           <span className="font-mono text-[0.62rem] text-muted-foreground/70">
             {hasRun
-              ? `evidence for this answer · ${state.touchedNodes.length} source${state.touchedNodes.length === 1 ? '' : 's'} · hover to read`
+              ? `evidence for this answer · ${state.touchedNodes.length} entit${state.touchedNodes.length === 1 ? 'y' : 'ies'} · hover to read`
               : 'graph idle · run a query to traverse'}
           </span>
+          {hasRun && kindLegend.length > 0 && (
+            <div className="flex flex-wrap gap-x-2.5 gap-y-1">
+              {kindLegend.map((kind) => (
+                <span key={kind} className="flex items-center gap-1 font-mono text-[0.58rem] text-muted-foreground">
+                  <span
+                    aria-hidden
+                    className="inline-block size-2 rounded-full"
+                    style={{ background: colorForKind(kind) }}
+                  />
+                  {kind}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </Card>

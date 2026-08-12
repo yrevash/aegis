@@ -83,12 +83,29 @@ export function signalForRisk(risk: RiskLevel): Signal {
 }
 
 /**
- * Stable colour for a graph node kind. Domain-agnostic: any unseen kind is
- * assigned a hue deterministically so the viz stays legible for any adapter.
+ * Explicit hues for the known knowledge-graph entity types (the extractor's
+ * `_ENTITY_TYPES` vocabulary), so real entity kinds read as distinct colours
+ * instead of a hashed near-collision. Unknown kinds fall back to a deterministic
+ * hash, keeping the viz legible for any adapter's custom types.
  */
+export const KIND_COLORS: Record<string, string> = {
+  organization: '#1570ef', // blue
+  person: '#7a5af8', // violet
+  product: '#0e9488', // teal
+  policy: '#dc6803', // amber
+  procedure: '#12b76a', // green
+  issue: '#d92d20', // rose
+  system: '#4b56c9', // indigo
+  category: '#0891b2', // cyan
+  location: '#db2777', // magenta
+  event: '#ea580c', // orange
+}
+
 const KIND_PALETTE = ['#1570ef', '#0e9488', '#7a5af8', '#dc6803', '#12b76a', '#d92d20']
 
 export function colorForKind(kind: string): string {
+  const known = KIND_COLORS[kind.toLowerCase()]
+  if (known) return known
   let hash = 0
   for (let i = 0; i < kind.length; i += 1) {
     hash = (hash * 31 + kind.charCodeAt(i)) >>> 0
