@@ -17,6 +17,7 @@
 import {
   Brain,
   Coins,
+  Cpu,
   DatabaseZap,
   GitCompareArrows,
   Inbox,
@@ -146,6 +147,14 @@ export const SECTIONS: Record<string, Section> = {
     tooltip:
       'Aegis Knowledge Graph — the typed entity graph (organizations, people, products, policies…) and the real relations between them; a run highlights the evidence subgraph the answer stood on',
   },
+  harness: {
+    id: 'harness',
+    label: 'Harness',
+    icon: Cpu,
+    hint: 'graph · tweak',
+    tooltip:
+      'Aegis Harness — the agentic graph made legible: every tunable knob (gate, self-repair, retrieval loop, caches) with its value/default/bounds, and a live run folded into one glass-box trace record (node timeline · gate · tools · outcome)',
+  },
   simulation: {
     id: 'simulation',
     label: 'Access demo',
@@ -222,7 +231,7 @@ export const SECTIONS: Record<string, Section> = {
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
-  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
+  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }

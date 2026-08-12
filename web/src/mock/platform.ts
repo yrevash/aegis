@@ -173,41 +173,100 @@ export function mockGatewayOptimization(): GatewayOptimizationResponse & { sampl
 
 // ── Harness · tweakable config ───────────────────────────────────────────────
 
-/** Mock `GET /harness/config`. The real default knob set the graph reads. */
+/**
+ * Mock `GET /harness/config`. The full, ordered knob catalogue the real graph
+ * reads — a faithful mirror of `aegis.agent.harness_config()` (every
+ * `AgentConfig` field, all-defaults) so the offline harness panel shows the same
+ * 11 knobs, types, defaults and bounds as the live backend.
+ */
 export function mockHarnessConfig(): HarnessConfigResponse {
-  return {
-    knobs: [
-      {
-        key: 'gate_min_risk',
-        type: 'enum',
-        value: 'high',
-        default: 'high',
-        doc: 'Minimum tool-risk tier that forces the human approval gate. This is the ONLY gating signal (risk-driven, never ML).',
-        allowed: ['low', 'medium', 'high'],
-      },
-      {
-        key: 'max_plan_iterations',
-        type: 'int',
-        value: 2,
-        default: 2,
-        doc: 'Hard cap on the self-repair loop (guarantees termination).',
-        minimum: 1,
-        maximum: 5,
-      },
-      {
-        key: 'default_persona',
-        type: 'str',
-        value: 'operations_lead',
-        default: 'operations_lead',
-        doc: 'The persona id a run falls back to when the request names none.',
-      },
-    ],
-    effective: {
-      gate_min_risk: 'high',
-      max_plan_iterations: 2,
-      default_persona: 'operations_lead',
+  const knobs: HarnessConfigResponse['knobs'] = [
+    {
+      key: 'gate_min_risk',
+      type: 'enum',
+      value: 'high',
+      default: 'high',
+      doc: 'Minimum tool-risk tier that forces the human approval gate. This is the ONLY gating signal (risk-driven, never ML).',
+      allowed: ['low', 'medium', 'high'],
     },
-  }
+    {
+      key: 'run_ml',
+      type: 'bool',
+      value: true,
+      default: true,
+      doc: 'Run the best-effort ML solution signal before planning. Injected as supporting evidence only — it never gates, defers or terminates a run.',
+    },
+    {
+      key: 'self_repair_enabled',
+      type: 'bool',
+      value: true,
+      default: true,
+      doc: 'Enable the bounded Reflexion self-repair loop (reflect → re-plan after a failed or insufficient action). Off = a single linear pass.',
+    },
+    {
+      key: 'max_plan_iterations',
+      type: 'int',
+      value: 2,
+      default: 2,
+      doc: 'Hard cap on planning rounds — guarantees termination. 1 = single linear pass; the default 2 allows one re-plan.',
+      minimum: 1,
+    },
+    {
+      key: 'query_rewrite_enabled',
+      type: 'bool',
+      value: true,
+      default: true,
+      doc: 'Run a cheap, context-aware query rewrite before retrieval.',
+    },
+    {
+      key: 'agentic_retrieval_enabled',
+      type: 'bool',
+      value: true,
+      default: true,
+      doc: 'Run the bounded Self-RAG/FLARE loop (retrieve → judge sufficiency → reformulate → re-retrieve).',
+    },
+    {
+      key: 'agentic_retrieval_max_rounds',
+      type: 'int',
+      value: 2,
+      default: 2,
+      doc: 'Maximum rounds the agentic-retrieval loop may take before finalising.',
+      minimum: 1,
+    },
+    {
+      key: 'answer_cache_enabled',
+      type: 'bool',
+      value: true,
+      default: true,
+      doc: 'Reuse a semantically-equivalent prior answer (scoped per tenant+persona+role), skipping the generation call.',
+    },
+    {
+      key: 'stream_chunk_words',
+      type: 'int',
+      value: 4,
+      default: 4,
+      doc: "How many words per streamed answer 'token' event.",
+      minimum: 1,
+    },
+    {
+      key: 'approval_park_timeout',
+      type: 'float',
+      value: null,
+      default: null,
+      doc: 'Seconds the live socket holds a gate open before parking the run. None waits indefinitely (the live money-shot gate).',
+      minimum: 0,
+      nullable: true,
+    },
+    {
+      key: 'default_persona_id',
+      type: 'str',
+      value: 'default',
+      default: 'default',
+      doc: 'The persona id a run falls back to when the request names none.',
+    },
+  ]
+  const effective = Object.fromEntries(knobs.map((k) => [k.key, k.value]))
+  return { knobs, effective }
 }
 
 // ── Governance dashboard ─────────────────────────────────────────────────────

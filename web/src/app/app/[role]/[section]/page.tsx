@@ -5,6 +5,7 @@ import { EvalsMount } from '@/components/evals/EvalsView'
 import { TokenOptMount } from '@/components/gateway/TokenOptView'
 import { GraphMount } from '@/components/graph/GraphView'
 import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
+import { HarnessMount } from '@/components/harness/HarnessView'
 import { MLOpsMount } from '@/components/ml/MLOpsView'
 import { MemoryMount } from '@/components/memory/MemoryView'
 import { LLMOpsMount } from '@/components/ops/LLMOpsView'
@@ -34,6 +35,7 @@ export default async function SectionPage({
 
   const def = SECTIONS[section]
   if (def.console) return <ConsoleMount role={role} />
+  if (section === 'harness') return <HarnessMount role={role} />
   if (section === 'mlops') return <MLOpsMount />
   if (section === 'llmops') return <LLMOpsMount />
   if (section === 'evals') return <EvalsMount />
