@@ -12,7 +12,7 @@ lazily, inside each function body and via :func:`__getattr__` for the
 other light submodule) free of the heavy ML stack; see
 ``tests/ml/test_types_is_dep_free.py``.
 
-Typical lifecycle::
+Typical lifecycle (default / module-level singleton)::
 
     from aegis.ml import train, predict_explain
 
@@ -21,6 +21,25 @@ Typical lifecycle::
     resp.conformal_interval      # calibrated bounds (guaranteed coverage)
     resp.conformal_confidence    # the guaranteed coverage rate, e.g. 0.9
     resp.shap_attribution        # signed per-feature contributions
+
+Bring-your-own spec (the hackathon path — inject *what* to predict)::
+
+    from aegis.ml import ResolvedSpec, TrustworthyModel
+
+    # A custom spec: features + target + task (+ optional categoricals / frame provider).
+    spec = ResolvedSpec(
+        features=["age", "region", "tenure"],
+        target="churned",
+        task="classification",
+        categorical_features=["region"],
+    )
+    model = TrustworthyModel.train(spec, frame=my_dataframe, path=None)
+    resp = model.predict_explain({"age": 41, "region": "emea", "tenure": 3})
+    card = model.model_card()    # honest, measured metadata for the MLOps UI
+
+``ResolvedSpec`` is the concrete, constructible spec; :class:`MLSpec` is the
+structural Protocol any adapter-shaped object can satisfy instead (read leniently
+by :func:`resolve_spec`).
 """
 
 from __future__ import annotations
@@ -29,19 +48,23 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aegis.ml.spec import FALLBACK_SPEC, MLSpec, ResolvedSpec, TaskType, resolve_spec
+from aegis.ml.types import EnsembleMember, MLExplainResponse, ModelCard, ShapFeature
 
 if TYPE_CHECKING:
     import pandas as pd
 
     from aegis.ml.model import TrustworthyModel
     from aegis.ml.spec import MLSpec as _MLSpec
-    from aegis.ml.types import MLExplainResponse
 
 __all__ = [
     "DEFAULT_ARTIFACT_PATH",
     "FALLBACK_SPEC",
+    "EnsembleMember",
+    "MLExplainResponse",
     "MLSpec",
+    "ModelCard",
     "ResolvedSpec",
+    "ShapFeature",
     "TaskType",
     "TrustworthyModel",
     "get_model",

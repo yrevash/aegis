@@ -74,7 +74,7 @@ from xgboost import XGBClassifier, XGBRegressor
 
 from aegis.ml.dataset import resolve_training_frame
 from aegis.ml.spec import ResolvedSpec, TaskType, resolve_spec
-from aegis.ml.types import MLExplainResponse, ShapFeature
+from aegis.ml.types import EnsembleMember, MLExplainResponse, ModelCard, ShapFeature
 
 if TYPE_CHECKING:
     from aegis.ml.spec import MLSpec
@@ -193,6 +193,12 @@ class TrustworthyModel:
             numeric inputs at inference time.
         feature_modes: Per-categorical-feature training mode used to impute missing
             categorical inputs at inference time.
+        training_n: Rows the ensemble was fitted on (recorded for the model card).
+        calibration_n: Rows in the disjoint calibration split fed to MAPIE.
+        data_source: How the training frame was sourced — ``"provided"`` (caller
+            frame), ``"spec_provider"`` (the spec's own frame provider) or
+            ``"synthetic"`` (the built-in fallback synthesiser). Labels a
+            synthetic-fallback model so it is never mistaken for a real one.
     """
 
     estimator: VotingRegressor | VotingClassifier
@@ -208,6 +214,9 @@ class TrustworthyModel:
     confidence_level: float
     feature_medians: dict[str, float] = field(default_factory=dict)
     feature_modes: dict[str, str] = field(default_factory=dict)
+    training_n: int = 0
+    calibration_n: int = 0
+    data_source: str = "synthetic"
 
     # ── construction ────────────────────────────────────────────────────────
     @classmethod
@@ -239,6 +248,14 @@ class TrustworthyModel:
             A ready-to-serve :class:`TrustworthyModel`.
         """
         resolved: ResolvedSpec = resolve_spec(spec)
+        # Label the provenance honestly (mirrors resolve_training_frame's priority):
+        # an explicit caller frame, else the spec's own provider, else the synthesiser.
+        if frame is not None:
+            data_source = "provided"
+        elif resolved.frame_provider is not None:
+            data_source = "spec_provider"
+        else:
+            data_source = "synthetic"
         data = resolve_training_frame(resolved, frame, random_state=random_state)
 
         raw_x = data[resolved.features]
@@ -286,6 +303,9 @@ class TrustworthyModel:
             confidence_level=confidence_level,
             feature_medians=medians,
             feature_modes=modes,
+            training_n=int(len(x_train)),
+            calibration_n=int(len(x_cal)),
+            data_source=data_source,
         )
         if path is not None:
             model.save(path)
@@ -542,6 +562,46 @@ class TrustworthyModel:
             return {name: 1.0 / len(names) for name in names}
         total = float(sum(raw)) or 1.0
         return {name: float(w) / total for name, w in zip(names, raw, strict=False)}
+
+    # ── observability ─────────────────────────────────────────────────────────
+    def model_card(self) -> ModelCard:
+        """Return honest, **measured** metadata describing this fitted spine.
+
+        Every field is read off the live model — the fitted ensemble members and
+        their voting weights, the encoded matrix width, the MAPIE class backing the
+        coverage guarantee and the stored split sizes — never hardcoded. This is the
+        data the MLOps UI later renders; it is also the audit trail proving *which*
+        model (real domain-trained vs synthetic fallback, via ``data_source``) is
+        actually serving.
+
+        Returns:
+            A :class:`~aegis.ml.types.ModelCard` snapshot of this model.
+        """
+        weights = self._member_weights()
+        members = [
+            EnsembleMember(
+                name=name,
+                kind=type(member).__name__,
+                weight=weights.get(name, 0.0),
+            )
+            for name, member in self.estimator.named_estimators_.items()
+        ]
+        return ModelCard(
+            task=self.task,
+            target=self.target,
+            features=list(self.feature_names),
+            n_features=len(self.feature_names),
+            categorical_features=list(self.categorical_features),
+            numeric_features=list(self.numeric_features),
+            encoded_feature_count=len(self.encoded_names),
+            ensemble_members=members,
+            conformal_method="split_conformal",
+            conformal_predictor=type(self.conformal).__name__,
+            conformal_coverage=self.confidence_level,
+            calibration_size=getattr(self, "calibration_n", 0),
+            training_size=getattr(self, "training_n", 0),
+            data_source=getattr(self, "data_source", "synthetic"),
+        )
 
     # ── persistence ─────────────────────────────────────────────────────────
     def __getstate__(self) -> dict[str, Any]:

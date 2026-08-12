@@ -32,7 +32,9 @@ from aegis.governance.types import (  # noqa: F401 - re-exported: identity with 
     UsageSeriesPoint,
 )
 from aegis.ml.types import (  # noqa: F401 - re-exported: identity with the ML spine's types
+    EnsembleMember,
     MLExplainResponse,
+    ModelCard,
     ShapFeature,
 )
 from aegis.retrieval.types import (  # noqa: F401 - re-exported: identity with aegis.retrieval

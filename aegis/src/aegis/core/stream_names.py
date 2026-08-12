@@ -12,6 +12,9 @@ GUARDRAIL_VERDICT = "guardrail_verdict"
 GUARDRAIL_CACHE = "guardrail_cache"
 SHAP_EXPLANATION = "shap_explanation"
 CONFORMAL_INTERVAL = "conformal_interval"
+#: An ML model-card event — the honest, measured metadata of the model that is
+#: serving (ensemble members, target/features, conformal coverage, split sizes).
+ML_MODEL = "ml_model"
 RETRIEVAL_CITATIONS = "retrieval_citations"
 #: A retrieval semantic-cache event (hit / miss), carrying the cache provenance
 #: (near-exact vs semantic, original query, cached-at) so the UI can show it.
@@ -27,8 +30,8 @@ EVAL_RESULT = "eval_result"
 
 ALL: frozenset[str] = frozenset(
     {REASONING, GUARDRAIL_VERDICT, GUARDRAIL_CACHE, SHAP_EXPLANATION, CONFORMAL_INTERVAL,
-     RETRIEVAL_CITATIONS, RETRIEVAL_CACHE, ROUTING, MEMORY_RECALL, MEMORY_WRITE, MEMORY_CACHE,
-     MODEL_CALL, EVAL_RESULT}
+     ML_MODEL, RETRIEVAL_CITATIONS, RETRIEVAL_CACHE, ROUTING, MEMORY_RECALL, MEMORY_WRITE,
+     MEMORY_CACHE, MODEL_CALL, EVAL_RESULT}
 )
 
 

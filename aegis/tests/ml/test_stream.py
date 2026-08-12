@@ -9,7 +9,7 @@ import pytest
 from aegis.core import stream_names
 from aegis.core.stream import AegisEmitter
 from aegis.ml.model import TrustworthyModel
-from aegis.ml.stream import stream_predict_explain
+from aegis.ml.stream import stream_model_card, stream_predict_explain
 
 
 class CaptureSink:
@@ -100,3 +100,57 @@ async def test_stream_predict_explain_classification_has_no_interval(
     assert interval_value["lower"] is None
     assert interval_value["upper"] is None
     assert interval_value["prediction_set_size"] is not None
+
+
+@pytest.mark.asyncio
+async def test_stream_model_card_emits_ml_model_event(regression_spec, regression_frame):
+    """STEP_STARTED('ml_model') -> CUSTOM(ml_model, card) -> STEP_FINISHED."""
+    model = TrustworthyModel.train(regression_spec, regression_frame, path=None)
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+
+    card = await stream_model_card(em, model=model)
+
+    payloads = _payloads(sink.frames)
+    assert [p["type"] for p in payloads] == ["STEP_STARTED", "CUSTOM", "STEP_FINISHED"]
+
+    event = payloads[1]
+    assert event["name"] == stream_names.ML_MODEL
+    value = event["value"]
+    # The streamed payload is the measured card verbatim.
+    assert value == card.model_dump()
+    assert value["target"] == "y"
+    assert value["conformal_coverage"] == 0.9
+    assert {m["name"] for m in value["ensemble_members"]} == {"xgboost", "hist_gbr"}
+    assert value["data_source"] == "provided"
+
+
+@pytest.mark.asyncio
+async def test_stream_predict_explain_can_lead_with_model_card(
+    regression_spec, regression_frame
+):
+    """emit_model_card=True prepends the ML_MODEL bracket before the predict step."""
+    model = TrustworthyModel.train(regression_spec, regression_frame, path=None)
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+
+    await stream_predict_explain(
+        {"f0": 1.0, "f1": -1.0, "f2": 0.5}, em, model=model, emit_model_card=True
+    )
+
+    types = [p["type"] for p in _payloads(sink.frames)]
+    assert types == [
+        "STEP_STARTED",  # ml_model
+        "CUSTOM",  # ml_model card
+        "STEP_FINISHED",
+        "STEP_STARTED",  # ml_predict
+        "CUSTOM",  # conformal_interval
+        "CUSTOM",  # shap_explanation
+        "STEP_FINISHED",
+    ]
+    names = [p["name"] for p in _payloads(sink.frames) if p["type"] == "CUSTOM"]
+    assert names == [
+        stream_names.ML_MODEL,
+        stream_names.CONFORMAL_INTERVAL,
+        stream_names.SHAP_EXPLANATION,
+    ]
