@@ -1,0 +1,377 @@
+'use client'
+
+import { CheckCircle2, Gauge, HelpCircle, ShieldCheck, WifiOff, XCircle } from 'lucide-react'
+import { useEffect, useState, type ReactElement } from 'react'
+
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
+import { getEvalsReport } from '@/lib/api/client'
+import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
+import type { EvalMetricConfig, EvalsReportResponse } from '@/lib/api/platform'
+import { cn } from '@/lib/utils'
+
+/** A minimal async-load result, mirroring the LLMOps view's fetch pattern. */
+interface Loaded<T> {
+  data: T | null
+  loading: boolean
+  error: string | null
+}
+
+/** Load once on mount with a live/mock-aware call. */
+function useLoad<T>(fn: () => Promise<T>): Loaded<T> {
+  const [state, setState] = useState<Loaded<T>>({ data: null, loading: true, error: null })
+  useEffect(() => {
+    let alive = true
+    fn()
+      .then((data) => {
+        if (alive) setState({ data, loading: false, error: null })
+      })
+      .catch(() => {
+        if (alive)
+          setState({ data: null, loading: false, error: 'Could not load. Is the backend running?' })
+      })
+    return () => {
+      alive = false
+    }
+    // fn is recreated per render; this loads exactly once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return state
+}
+
+/** Percent string for a [0,1] score (null → em dash). */
+function pct(value: number | null | undefined): string {
+  return value == null ? '—' : `${(value * 100).toFixed(1)}%`
+}
+
+/** Turn a raw metric id (context_precision@1) into a readable label. */
+function metricLabel(name: string): string {
+  const base = name
+    .replace(/_/g, ' ')
+    .replace(/@(\d+)/, ' @$1')
+    .replace(/\baccuracy\b/, 'accuracy')
+  return base.charAt(0).toUpperCase() + base.slice(1)
+}
+
+/** A short human gloss per known metric family (honest, no fabrication). */
+function metricGloss(name: string): string {
+  if (name.startsWith('context_precision')) return 'Is the right passage ranked at the top?'
+  if (name.startsWith('context_recall')) return 'Did retrieval surface the gold passage at all?'
+  if (name.startsWith('groundedness')) return 'Is the answer supported by the retrieved context?'
+  if (name.startsWith('tool_selection')) return 'Did the agent pick the correct tool?'
+  return 'Deterministic overlap metric — no LLM.'
+}
+
+/** One metric card: value, threshold, direction, pass/fail, case count. */
+function MetricCard({ m }: { m: EvalMetricConfig }): ReactElement {
+  const pass = m.passed
+  const cmp = m.higherIsBetter ? '≥' : '≤'
+  return (
+    <div
+      className={cn(
+        'rounded-2xl border bg-card p-5 shadow-card transition-shadow hover:shadow-hover md:p-6',
+        pass ? 'border-ok/40' : 'border-block/50',
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-foreground">{metricLabel(m.name)}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{metricGloss(m.name)}</p>
+        </div>
+        <Badge tone={pass ? 'ok' : 'block'} className="shrink-0">
+          {pass ? <CheckCircle2 className="size-3.5" /> : <XCircle className="size-3.5" />}
+          {pass ? 'Pass' : 'Fail'}
+        </Badge>
+      </div>
+
+      <div className="mt-4 flex items-end justify-between">
+        <div>
+          <p
+            className={cn(
+              't-metric tabular',
+              pass ? 'text-[color:var(--success)]' : 'text-[color:var(--danger)]',
+            )}
+          >
+            {pct(m.value)}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            threshold {cmp} <span className="tabular">{pct(m.threshold)}</span>
+          </p>
+        </div>
+        <span className="rounded-full bg-surface-2 px-2.5 py-0.5 text-xs text-muted-foreground">
+          {m.cases} {m.cases === 1 ? 'case' : 'cases'}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Evals — the offline regression gate. Reads `getEvalsReport()` (→ `/evals/report`),
+ * the deterministic RAGAS/DeepEval-pattern gate scored with **no LLM**. Leads with the
+ * gate verdict (overall vs threshold + honest `source` badge), then a metric card per
+ * `metric_configs` entry (value, threshold, direction, pass/fail, case count), an honest
+ * "answer-relevancy not computed" panel (needs an LLM judge — never faked), and the
+ * per-case breakdown table. Every figure comes straight from the accessor.
+ */
+function EvalsView(): ReactElement {
+  const token: string | null = null
+  const report = useLoad<EvalsReportResponse>(() => getEvalsReport(token))
+  const data = report.data
+
+  const metrics = data?.metrics ?? []
+  const cases = data?.cases ?? []
+  const overallPass = data?.passed ?? false
+  // The gate passes iff every gated metric passes; its bar is each metric's own
+  // threshold. We surface the tightest per-metric threshold as the headline bar.
+  const gateThreshold = metrics.length
+    ? Math.min(...metrics.map((m) => m.threshold))
+    : null
+
+  return (
+    <div className="space-y-6">
+      {/* Section header */}
+      <div>
+        <p className="eyebrow mb-1">retrieval quality · offline regression gate</p>
+        <h1 className="t-hero text-foreground">Evals</h1>
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+          The Aegis regression gate — deterministic RAGAS/DeepEval-pattern metrics over the seed
+          corpus, scored with token/substring overlap and <strong>no LLM</strong>. Reproducible,
+          network-free, and honest about what a judge model would be needed to measure.
+        </p>
+      </div>
+
+      {report.error ? (
+        <Card>
+          <CardBody className="text-sm text-muted-foreground">{report.error}</CardBody>
+        </Card>
+      ) : null}
+
+      {/* Row 1 — the gate verdict. */}
+      <Card className={cn(overallPass ? 'ring-1 ring-ok/40' : 'ring-1 ring-block/50')}>
+        <CardHeader
+          eyebrow="release verdict"
+          title="Regression gate"
+          description="Deterministic · reproducible · no LLM judge in the loop."
+          actions={
+            <span
+              className={cn(
+                'grid size-8 place-items-center rounded-lg',
+                overallPass ? 'bg-ok/15' : 'bg-block/20',
+              )}
+            >
+              <ShieldCheck
+                className={cn(
+                  'size-4',
+                  overallPass ? 'text-ok-ink' : 'text-block-ink',
+                )}
+              />
+            </span>
+          }
+        />
+        <CardBody>
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <span
+                className={cn(
+                  'grid size-14 place-items-center rounded-2xl',
+                  overallPass ? 'bg-ok/15 text-ok-ink' : 'bg-block/20 text-block-ink',
+                )}
+              >
+                {overallPass ? (
+                  <CheckCircle2 className="size-7" />
+                ) : (
+                  <XCircle className="size-7" />
+                )}
+              </span>
+              <div>
+                <p
+                  className={cn(
+                    't-metric tabular',
+                    overallPass ? 'text-[color:var(--success)]' : 'text-[color:var(--danger)]',
+                  )}
+                >
+                  {pct(data?.overall)}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  mean score across {metrics.length} gated metric
+                  {metrics.length === 1 ? '' : 's'}
+                  {gateThreshold != null ? (
+                    <>
+                      {' '}· tightest bar ≥ <span className="tabular">{pct(gateThreshold)}</span>
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col items-start gap-2 sm:items-end">
+              <Badge tone={overallPass ? 'ok' : 'block'}>
+                {overallPass ? 'Gate passed' : 'Gate failed'}
+              </Badge>
+              <Badge tone="neutral" className="font-mono lowercase">
+                source: {data?.source ?? '—'}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                honest · deterministic · no LLM
+              </span>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Row 2 — one card per computed metric. */}
+      <div>
+        <p className="eyebrow mb-3">per-metric readings</p>
+        {report.loading ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-40 animate-pulse rounded-2xl border border-border bg-surface-2/50"
+              />
+            ))}
+          </div>
+        ) : metrics.length ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {metrics.map((m) => (
+              <MetricCard key={m.name} m={m} />
+            ))}
+          </div>
+        ) : (
+          <Card>
+            <CardBody className="text-sm text-muted-foreground">No metrics reported.</CardBody>
+          </Card>
+        )}
+      </div>
+
+      {/* Row 3 — the honest answer-relevancy panel (never faked). */}
+      <Card className="border-dashed">
+        <CardHeader
+          eyebrow="ragas · answer relevancy"
+          title="Answer relevancy — not computed"
+          description="Shown honestly rather than fabricated."
+          actions={
+            <span className="grid size-8 place-items-center rounded-lg bg-surface-2">
+              <HelpCircle className="size-4 text-muted-foreground" />
+            </span>
+          }
+        />
+        <CardBody>
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge tone="neutral">
+              <Gauge className="size-3.5" />
+              needs an LLM judge
+            </Badge>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              RAGAS answer-relevancy needs a judge model to score how well an answer addresses the
+              question. The offline gate runs with <strong>no LLM</strong>, so this metric is
+              reported as <span className="font-mono">computed = false</span> — an honest blank, not
+              a faked pass.
+            </p>
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Row 4 — the per-case breakdown. */}
+      <Card>
+        <CardHeader
+          eyebrow="seed corpus"
+          title="Per-case breakdown"
+          description="Each seed case with its per-metric score, threshold and verdict."
+        />
+        <CardBody className="px-0 py-0 md:px-0 md:py-0">
+          {report.loading ? (
+            <div className="px-6 py-8 text-sm text-muted-foreground">Loading cases…</div>
+          ) : cases.length ? (
+            <Table>
+              <THead>
+                <TH className="pl-6">Case</TH>
+                <TH>Metric</TH>
+                <TH className="text-right">Score</TH>
+                <TH className="text-right">Threshold</TH>
+                <TH className="pr-6 text-right">Verdict</TH>
+              </THead>
+              <TBody>
+                {cases.flatMap((c) =>
+                  c.metrics.map((m, i) => (
+                    <TR key={`${c.name}-${m.name}`}>
+                      <TD className="max-w-md pl-6">
+                        {i === 0 ? (
+                          <span className="line-clamp-2 text-sm text-foreground" title={c.name}>
+                            {c.name}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground/40">↳</span>
+                        )}
+                      </TD>
+                      <TD className="whitespace-nowrap font-mono text-xs text-muted-foreground">
+                        {m.name}
+                      </TD>
+                      <TD className="tabular text-right">{pct(m.value)}</TD>
+                      <TD className="tabular text-right text-muted-foreground">
+                        {m.higherIsBetter ? '≥' : '≤'} {pct(m.threshold)}
+                      </TD>
+                      <TD className="pr-6 text-right">
+                        <Badge tone={m.passed ? 'ok' : 'block'}>
+                          {m.passed ? 'Pass' : 'Fail'}
+                        </Badge>
+                      </TD>
+                    </TR>
+                  )),
+                )}
+              </TBody>
+            </Table>
+          ) : (
+            <div className="px-6 py-8 text-sm text-muted-foreground">
+              The report carries no per-case rows.
+            </div>
+          )}
+        </CardBody>
+      </Card>
+    </div>
+  )
+}
+
+/**
+ * Client entry for the Evals section. Runs the boot probe once (live-first, mock
+ * fallback) before mounting the view, so the `/evals/report` fetch reads the resolved
+ * mode; the offline demo seeds from the mock fixture and is labelled with the honest
+ * banner — mirrors `LLMOpsMount` / `MLOpsMount`.
+ */
+export function EvalsMount(): ReactElement {
+  const [mode, setMode] = useState<ResolvedMode | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void probeBackend().then((resolved) => {
+      if (alive) setMode(resolved)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (mode === null) {
+    return (
+      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+        Connecting…
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {mode.mode === 'mock' && (
+        <div
+          role="status"
+          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
+        >
+          <WifiOff className="size-3.5 shrink-0" />
+          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+        </div>
+      )}
+      <EvalsView />
+    </div>
+  )
+}

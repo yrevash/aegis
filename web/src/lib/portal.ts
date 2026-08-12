@@ -18,6 +18,7 @@ import {
   Brain,
   GitCompareArrows,
   Inbox,
+  Gauge,
   KeyRound,
   Layers,
   LayoutDashboard,
@@ -85,6 +86,14 @@ export const SECTIONS: Record<string, Section> = {
     icon: Sigma,
     hint: 'SHAP · conformal',
     tooltip: 'Aegis ML — model card, SHAP drivers & calibrated confidence · XGBoost + MAPIE',
+  },
+  evals: {
+    id: 'evals',
+    label: 'Evals',
+    icon: Gauge,
+    hint: 'RAGAS · DeepEval',
+    tooltip:
+      'Aegis Evals — the offline regression gate: deterministic RAGAS/DeepEval-pattern metrics scored with no LLM',
   },
   memory: {
     id: 'memory',
@@ -169,7 +178,7 @@ export const SECTIONS: Record<string, Section> = {
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
-  ai_team: ['console', 'mlops', 'llmops', 'memory', 'simulation'],
+  ai_team: ['console', 'mlops', 'llmops', 'evals', 'memory', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
