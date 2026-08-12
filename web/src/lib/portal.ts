@@ -23,6 +23,7 @@ import {
   Inbox,
   Gauge,
   KeyRound,
+  Landmark,
   Layers,
   LayoutDashboard,
   Lock,
@@ -224,12 +225,20 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Aegis Tools/MCP — human gate on risky actions',
     group: 'Governance',
   },
+  governance: {
+    id: 'governance',
+    label: 'Governance',
+    icon: Landmark,
+    hint: 'tenants · budgets',
+    tooltip: 'Aegis Governance — tenants, budgets, usage & RBAC read straight from the ledger',
+    group: 'Governance',
+  },
   admin: {
     id: 'admin',
-    label: 'Governance',
+    label: 'Settings',
     icon: SlidersHorizontal,
     hint: 'tenants · budgets',
-    tooltip: 'Aegis Governance — tenants · budgets · usage · RBAC',
+    tooltip: 'Aegis Governance settings — tenants · budgets · usage · RBAC',
     group: 'Governance',
   },
   audit: {
@@ -260,7 +269,7 @@ export const SECTIONS: Record<string, Section> = {
 
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
-  admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
+  admin: ['dashboard', 'governance', 'approvals', 'audit', 'roles'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],

@@ -3,6 +3,7 @@ import { CacheMount } from '@/components/cache/CacheView'
 import { ConsoleMount } from '@/components/console/ConsoleMount'
 import { EvalsMount } from '@/components/evals/EvalsView'
 import { TokenOptMount } from '@/components/gateway/TokenOptView'
+import { GovernanceMount } from '@/components/governance/GovernanceView'
 import { GraphMount } from '@/components/graph/GraphView'
 import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
 import { HarnessMount } from '@/components/harness/HarnessView'
@@ -51,5 +52,6 @@ export default async function SectionPage({
   if (section === 'security') return <SecurityMount />
   if (section === 'redteam') return <RedteamMount />
   if (section === 'latency') return <LatencyMount />
+  if (section === 'governance') return <GovernanceMount />
   return <SectionPlaceholder section={def} />
 }
