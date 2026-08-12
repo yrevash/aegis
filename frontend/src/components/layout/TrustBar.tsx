@@ -110,7 +110,7 @@ export function TrustBar({ state, beat = null, idle = false }: TrustBarProps): R
               <span
                 className={cn(
                   'text-xs font-medium whitespace-nowrap transition-colors',
-                  done ? token.text : 'text-muted-foreground/70',
+                  done ? token.text : 'text-muted-foreground',
                 )}
               >
                 {stage.label}

@@ -109,6 +109,18 @@ export function MoneyShotConsole(): ReactElement {
       <TrustBar state={state} beat={beat} idle={idle} />
       <StreamBanners state={state} />
 
+      {/* First-run cue — on a cold, empty console point the eye at the one
+          action that lights everything up, instead of a wall of empty panels. */}
+      {idle && (
+        <div className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-3 text-center">
+          <p className="text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">Run a query</span> — or tap a
+            sample above — to watch the agent reason, retrieve, score, and self-check.
+            Confidence, sources, guardrails and cost light up below in real time.
+          </p>
+        </div>
+      )}
+
       {/*
         Fluid multi-column console. The layout collapses in two honest steps so
         nothing is ever squeezed to an unreadable width or clipped:

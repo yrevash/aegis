@@ -321,6 +321,7 @@ export function Portal({ role }: { role: Role }): ReactElement {
       title={current.title}
       portalLabel={portalLabelFor(role)}
       presenting={presenting}
+      onEnterPresent={() => setPresenting(true)}
       onExitPresent={() => setPresenting(false)}
     >
       {/* Keyed on the active section so switching tabs remounts the boundary

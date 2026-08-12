@@ -1,5 +1,5 @@
 import { Minimize2 } from 'lucide-react'
-import type { CSSProperties, ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 
 import { useAuth } from '@/auth/AuthContext'
 
@@ -15,6 +15,8 @@ interface AppShellProps {
   children: ReactNode
   /** Projector/present mode: hides the chrome and enlarges the console. */
   presenting?: boolean
+  /** Enter present mode (surfaces a button in the header + the F shortcut). */
+  onEnterPresent?: () => void
   /** Exit handler for present mode (also bound to Esc/F in the portal). */
   onExitPresent?: () => void
 }
@@ -34,9 +36,11 @@ export function AppShell({
   portalLabel,
   children,
   presenting = false,
+  onEnterPresent,
   onExitPresent,
 }: AppShellProps): ReactNode {
   const { session, signOut } = useAuth()
+  const [navOpen, setNavOpen] = useState(false)
   if (session === null) return null
 
   // Present mode: strip the sidebar + topbar and maximise the console grid.
@@ -62,6 +66,7 @@ export function AppShell({
 
   return (
     <div className="flex h-full overflow-hidden">
+      {/* Desktop rail (hidden below lg). */}
       <Sidebar
         items={nav}
         active={active}
@@ -69,8 +74,40 @@ export function AppShell({
         portalLabel={portalLabel}
         onSignOut={signOut}
       />
+
+      {/* Mobile / narrow-screen drawer — the only way to switch sections below
+          lg. Backdrop dismisses; selecting a section closes it. */}
+      {navOpen && (
+        <div className="fixed inset-0 z-40 lg:hidden">
+          <button
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => setNavOpen(false)}
+            className="absolute inset-0 bg-foreground/30 backdrop-blur-sm"
+          />
+          <div className="absolute inset-y-0 left-0 shadow-pop">
+            <Sidebar
+              items={nav}
+              active={active}
+              onSelect={(id) => {
+                onSelect(id)
+                setNavOpen(false)
+              }}
+              portalLabel={portalLabel}
+              onSignOut={signOut}
+              mobile
+            />
+          </div>
+        </div>
+      )}
+
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar session={session} title={title} />
+        <Topbar
+          session={session}
+          title={title}
+          onMenu={() => setNavOpen(true)}
+          onPresent={onEnterPresent}
+        />
         <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 lg:p-6">
           {children}
         </main>

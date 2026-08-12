@@ -25,6 +25,8 @@ interface SidebarProps {
   portalLabel: string
   /** Optional sign-out handler; renders a logout row in the footer when set. */
   onSignOut?: () => void
+  /** Render as an always-visible drawer (mobile) instead of the lg-only rail. */
+  mobile?: boolean
 }
 
 const DEFAULT_GROUP = 'Workspace'
@@ -93,12 +95,16 @@ export function Sidebar({
   onSelect,
   portalLabel,
   onSignOut,
+  mobile = false,
 }: SidebarProps): ReactElement {
   const groups = groupItems(items)
   return (
     <nav
       aria-label="Primary"
-      className="hidden w-[244px] shrink-0 flex-col border-r border-border bg-card lg:flex"
+      className={cn(
+        'w-[244px] shrink-0 flex-col border-r border-border bg-card',
+        mobile ? 'flex h-full' : 'hidden lg:flex',
+      )}
     >
       {/* Brand lockup */}
       <div className="flex h-16 items-center gap-2.5 px-5">
