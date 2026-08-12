@@ -30,6 +30,13 @@ from __future__ import annotations
 
 from . import semconv
 from .genai import GenAIOperation, genai_span, genai_span_sync, set_usage
+from .latency import (
+    LatencySummary,
+    NodeLatency,
+    latency_summary,
+    record_run_latency,
+    reset_latency_window,
+)
 from .otel import current_trace_id, get_tracer, init_observability
 from .semconv import SpanKind
 from .sink import OtelObservabilitySink
@@ -37,6 +44,8 @@ from .spans import set_span_attribute, set_span_attributes, span
 
 __all__ = [
     "GenAIOperation",
+    "LatencySummary",
+    "NodeLatency",
     "OtelObservabilitySink",
     "SpanKind",
     "current_trace_id",
@@ -44,6 +53,9 @@ __all__ = [
     "genai_span_sync",
     "get_tracer",
     "init_observability",
+    "latency_summary",
+    "record_run_latency",
+    "reset_latency_window",
     "semconv",
     "set_span_attribute",
     "set_span_attributes",

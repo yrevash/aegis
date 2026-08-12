@@ -41,6 +41,7 @@ from langgraph.types import Command
 from aegis.core.types import ApprovalDecision, RiskLevel, RunStatus
 from aegis.gateway.types import BudgetExceededError
 from aegis.observability import get_tracer, semconv
+from aegis.observability.latency import record_run_latency
 from aegis.observability.otel import current_trace_id
 
 from . import events
@@ -150,6 +151,11 @@ async def run_agent(
     # collect them so a post-run hook can grade the GUARDRAIL trajectory steps.
     guardrail_events: list[dict[str, Any]] = []
 
+    # Real per-node wall-clock timings (from each ``node_finished``'s ``duration_ms``),
+    # collected side-effect-only so a completed run can be folded into the in-process
+    # latency window. Never touches the emitted stream.
+    node_latencies: list[dict[str, Any]] = []
+
     def emit(payload: dict[str, Any]) -> Any:  # noqa: ANN401 - stamped event (host type)
         nonlocal seq
         event = stamp(payload, run_id=run_id, seq=seq)
@@ -191,8 +197,17 @@ async def run_agent(
                     stream_input, config, stream_mode=["custom", "updates"]
                 ):
                     if mode == "custom":
-                        if isinstance(chunk, dict) and chunk.get("type") == "guardrail":
-                            guardrail_events.append(dict(chunk))
+                        if isinstance(chunk, dict):
+                            ctype = chunk.get("type")
+                            if ctype == "guardrail":
+                                guardrail_events.append(dict(chunk))
+                            elif ctype == "node_finished":
+                                node_latencies.append(
+                                    {
+                                        "node": chunk.get("node"),
+                                        "duration_ms": chunk.get("duration_ms"),
+                                    }
+                                )
                         yield emit(chunk)
                     elif mode == "updates" and _is_interrupt(chunk):
                         interrupt_value = chunk["__interrupt__"][0].value
@@ -282,6 +297,9 @@ async def run_agent(
                 final=dict(final),
                 guardrail_events=guardrail_events,
             )
+            # Fold this completed run's REAL measured per-node timings into the
+            # in-process latency window (side-effect-only telemetry; never raises).
+            record_run_latency(node_latencies)
         except BudgetExceededError as exc:
             # A per-tenant/user cap tripped at the LiteLLM chokepoint before spend:
             # end the run cleanly as blocked, not a crash (§3.3).

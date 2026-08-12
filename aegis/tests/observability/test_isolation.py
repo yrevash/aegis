@@ -34,6 +34,7 @@ def test_importing_observability_pulls_no_fastapi_litellm_or_phoenix() -> None:
         "import aegis.observability.genai; "
         "import aegis.observability.semconv; "
         "import aegis.observability.sink; "
+        "import aegis.observability.latency; "
         "banned = {'litellm', 'torch', 'langgraph', 'xgboost', 'fastapi', "
         "'redis', 'nemoguardrails', 'lightrag', 'neo4j', 'asyncpg', 'pgvector', "
         "'phoenix'}; "
