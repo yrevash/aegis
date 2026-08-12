@@ -285,6 +285,16 @@ export function defaultSectionFor(role: Role): string {
   return ROLE_SECTIONS[role][0]
 }
 
+/**
+ * The home route a role owns — its portal's default section. This is the single
+ * source of truth for RBAC redirects (login lands here; a session reaching the
+ * wrong portal is sent back here). Mirrors `homePathFor` in the Vite app's
+ * RequireRole guard.
+ */
+export function homePathFor(role: Role): string {
+  return `/app/${role}/${defaultSectionFor(role)}`
+}
+
 /** Whether `section` is valid for `role`. */
 export function isValidSection(role: Role, section: string): boolean {
   return ROLE_SECTIONS[role]?.includes(section) ?? false

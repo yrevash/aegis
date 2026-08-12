@@ -110,6 +110,7 @@ import {
   mockSecurityPosture,
 } from '@/mock/platform'
 
+import { getAuthToken } from './authToken'
 import { API_BASE } from './config'
 import { isMock } from './mode'
 
@@ -120,7 +121,10 @@ async function request<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
-  if (token) headers.set('Authorization', `Bearer ${token}`)
+  // Per-call token wins; otherwise fall back to the signed-in session's token so
+  // RBAC-scoped backend routes authorize even where the caller passes null.
+  const bearer = token ?? getAuthToken()
+  if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     throw new Error(`${init.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}`)

@@ -8,6 +8,7 @@
 
 import type { ApprovalDecision } from '@/lib/api/types'
 
+import { getAuthToken } from './authToken'
 import { postApproval } from './client'
 import { API_BASE } from './config'
 import { readSSEStream } from './sse'
@@ -18,10 +19,12 @@ export function createLiveTransport(): RunTransport {
   return {
     start(query, persona, token, handlers): RunController {
       const controller = new AbortController()
+      // Per-call token wins; else fall back to the signed-in session's token.
+      const bearer = token ?? getAuthToken()
 
       const run = async (): Promise<void> => {
         const headers = new Headers({ 'Content-Type': 'application/json' })
-        if (token) headers.set('Authorization', `Bearer ${token}`)
+        if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
         const res = await fetch(`${API_BASE}/query`, {
           method: 'POST',
           headers,
@@ -43,7 +46,7 @@ export function createLiveTransport(): RunTransport {
 
       return {
         resolveApproval(approvalId: string, decision: ApprovalDecision): void {
-          void postApproval({ approval_id: approvalId, decision }, token).catch(
+          void postApproval({ approval_id: approvalId, decision }, bearer).catch(
             (error: unknown) =>
               handlers.onError(error instanceof Error ? error : new Error(String(error))),
           )
