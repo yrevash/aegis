@@ -87,6 +87,28 @@ import {
   mockOpsRollback,
   mockRecallDebug,
 } from '@/mock/memoryOps'
+import type {
+  EvalsReportResponse,
+  GatewayOptimizationResponse,
+  GovernanceDashboardResponse,
+  HarnessConfigResponse,
+  LatencyResponse,
+  ModelCardResponse,
+  OpsParamsResponse,
+  RedteamReportResponse,
+  SecurityPostureResponse,
+} from '@/lib/api/platform'
+import {
+  mockEvalsReport,
+  mockGatewayOptimization,
+  mockGovernanceDashboard,
+  mockHarnessConfig,
+  mockLatency,
+  mockModelCard,
+  mockOpsParams,
+  mockRedteamRun,
+  mockSecurityPosture,
+} from '@/mock/platform'
 
 import { API_BASE } from './config'
 import { isMock } from './mode'
@@ -512,4 +534,74 @@ export async function assignUserRole(
     { method: 'POST', body: JSON.stringify({ role }) },
     token,
   )
+}
+
+// ── Platform read-surfaces (MLOps / LLMOps / evals / token-opt / harness /
+//    governance / security / latency / red-team) ─────────────────────────────
+
+/** Fetch the live model's measured model card (MLOps; admin/ai_team). */
+export async function getModelCard(token: string | null): Promise<ModelCardResponse> {
+  if (isMock()) return mockModelCard()
+  return request<ModelCardResponse>('/ml/model-card', { method: 'GET' }, token)
+}
+
+/** Fetch the offline regression-gate rollup (evals; admin/ai_team). */
+export async function getEvalsReport(token: string | null): Promise<EvalsReportResponse> {
+  if (isMock()) return mockEvalsReport()
+  return request<EvalsReportResponse>('/evals/report', { method: 'GET' }, token)
+}
+
+/** Fetch the tunable LLM-Ops self-improvement knobs (LLMOps; admin/ai_team). */
+export async function getOpsParams(token: string | null): Promise<OpsParamsResponse> {
+  if (isMock()) return mockOpsParams()
+  return request<OpsParamsResponse>('/ops/params', { method: 'GET' }, token)
+}
+
+/** Fetch the token-optimization surface (savings summary + routing config). */
+export async function getGatewayOptimization(
+  token: string | null,
+): Promise<GatewayOptimizationResponse> {
+  if (isMock()) return mockGatewayOptimization()
+  return request<GatewayOptimizationResponse>('/gateway/optimization', { method: 'GET' }, token)
+}
+
+/** Fetch the agent-harness tweakable-config record (harness; admin/ai_team). */
+export async function getHarnessConfig(token: string | null): Promise<HarnessConfigResponse> {
+  if (isMock()) return mockHarnessConfig()
+  return request<HarnessConfigResponse>('/harness/config', { method: 'GET' }, token)
+}
+
+/** Fetch the governance dashboard snapshot for a tenant scope (admin-only). */
+export async function getGovernanceDashboard(
+  token: string | null,
+  opts: { tenantId?: number | null; window?: string } = {},
+): Promise<GovernanceDashboardResponse> {
+  if (isMock()) return mockGovernanceDashboard(opts.tenantId ?? null, opts.window ?? 'day')
+  const params = new URLSearchParams()
+  if (opts.tenantId != null) params.set('tenant_id', String(opts.tenantId))
+  if (opts.window != null) params.set('window', opts.window)
+  const q = params.toString()
+  return request<GovernanceDashboardResponse>(
+    `/governance/dashboard${q ? `?${q}` : ''}`,
+    { method: 'GET' },
+    token,
+  )
+}
+
+/** Fetch the live threat → control security posture (security; admin/devops). */
+export async function getSecurityPosture(token: string | null): Promise<SecurityPostureResponse> {
+  if (isMock()) return mockSecurityPosture()
+  return request<SecurityPostureResponse>('/security/posture', { method: 'GET' }, token)
+}
+
+/** Fetch per-node + per-run latency percentiles (latency; admin/devops). */
+export async function getLatency(token: string | null): Promise<LatencyResponse> {
+  if (isMock()) return mockLatency()
+  return request<LatencyResponse>('/latency', { method: 'GET' }, token)
+}
+
+/** Run the offline red-team attack battery and return the verdicts (admin/devops). */
+export async function runRedteam(token: string | null): Promise<RedteamReportResponse> {
+  if (isMock()) return mockRedteamRun()
+  return request<RedteamReportResponse>('/redteam/run', { method: 'POST' }, token)
 }

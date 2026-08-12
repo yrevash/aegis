@@ -47,9 +47,14 @@ from app.api.schemas import (
     BudgetRow,
     BudgetUpsertRequest,
     CapabilitiesResponse,
+    EvalsReportResponse,
+    GatewayOptimizationResponse,
+    GovernanceDashboard,
     GraphEdge,
     GraphNode,
     GraphResponse,
+    HarnessConfigResponse,
+    LatencyResponse,
     LoginRequest,
     LoginResponse,
     MemoryFactDeleteResponse,
@@ -66,11 +71,13 @@ from app.api.schemas import (
     MetricsResponse,
     MLExplainRequest,
     MLExplainResponse,
+    ModelCard,
     OpsActivePromptResponse,
     OpsDiagnoseRequest,
     OpsDiagnoseResponse,
     OpsEvalRow,
     OpsEvalsResponse,
+    OpsParamsResponse,
     OpsPendingReleasesResponse,
     OpsPromptsResponse,
     OpsPromptVersionRow,
@@ -86,10 +93,12 @@ from app.api.schemas import (
     QueryRequest,
     RecallDebugItem,
     RecallDebugResponse,
+    RedteamReportResponse,
     RiskMapResponse,
     Role,
     RunStatus,
     SavingsResponse,
+    SecurityPostureResponse,
     StackResponse,
     StreamEvent,
     UserRoleUpdateRequest,
@@ -2164,6 +2173,231 @@ async def ops_release_decide(
         prompt_key=decision.prompt_key,
         active_version=decision.active_version,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform read-surfaces (`/ml`, `/evals`, `/gateway`, `/harness`, `/governance`,
+# `/security`, `/latency`, `/redteam`) — thin, RBAC-scoped, read-only projections
+# of the domain-agnostic ``aegis.*`` accessors that back the platform dashboards
+# (MLOps / LLMOps / evals / token-opt / harness / governance / security / latency /
+# red-team). Every handler is side-effect free (``/redteam/run`` merely runs the
+# offline attack battery) and honest about empty state (Phase-3 · Task 3).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Process-wide cache of the offline evals gate. The regression gate is a
+# deterministic, network-free computation (~1s) over the seed corpus, so its result
+# is stable for the process lifetime — memoised once so repeated dashboard polls do
+# not re-run it. ``None`` until first computed.
+_evals_report_cache: EvalsReportResponse | None = None
+
+
+@router.get("/ml/model-card", response_model=ModelCard, tags=["ml"])
+async def ml_model_card(
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> ModelCard:
+    """Return the live model's honest, **measured** model card (admin/ai_team — MLOps).
+
+    Reads :meth:`aegis.ml.TrustworthyModel.model_card` off the process-wide fitted
+    spine (via the backend ``app.ml`` shim, which wires the real domain spec). Every
+    field is read off the actual model — ensemble members + weights, encoded-matrix
+    width, the MAPIE class backing the coverage guarantee, the stored split sizes —
+    never hardcoded. ``data_source`` labels how the training frame was obtained, so a
+    synthetic-fallback model is never mistaken for a real domain-trained one.
+    """
+    from app.ml import get_model
+
+    return get_model().model_card()
+
+
+@router.get("/evals/report", response_model=EvalsReportResponse, tags=["evals"])
+async def evals_report(
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> EvalsReportResponse:
+    """Return the offline regression-gate rollup (admin/ai_team — the evals surface).
+
+    Runs :func:`aegis.evals.run_regression_gate` with **no LLM** — the deterministic,
+    network-free DeepEval-pattern gate over the seed corpus — and projects
+    :meth:`RegressionReport.as_dict`. These are real, reproducible numbers (not a live
+    LLM-judge pass); ``source`` says so. The result is memoised process-wide (the gate
+    is deterministic) so repeated dashboard polls are cheap.
+    """
+    global _evals_report_cache
+    if _evals_report_cache is None:
+        from aegis.evals import run_regression_gate
+
+        report = await run_regression_gate()
+        _evals_report_cache = EvalsReportResponse(**report.as_dict())
+    return _evals_report_cache
+
+
+@router.get("/ops/params", response_model=OpsParamsResponse, tags=["ops"])
+async def ops_params(
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> OpsParamsResponse:
+    """Return the tunable LLM-Ops self-improvement knobs (admin/ai_team — LLMOps).
+
+    Mirrors :func:`aegis.ops.config.get_loop_params` — the effective loop params the
+    release gate reads (eval margin, blast-radius fractions, safety-term list, config
+    markers, tunable keys/bounds, auto-promote ceiling). Read-only; tuning is a
+    separate, audited mutation.
+    """
+    from aegis.ops.config import get_loop_params
+
+    return OpsParamsResponse(**get_loop_params().as_dict())
+
+
+@router.get(
+    "/gateway/optimization",
+    response_model=GatewayOptimizationResponse,
+    tags=["gateway"],
+)
+async def gateway_optimization(
+    auth: AuthContext = Depends(require_auth),
+) -> GatewayOptimizationResponse:
+    """Return the token-optimization surface (any authenticated principal — token-opt).
+
+    ``summary`` is :func:`aegis.gateway.optimization_summary` (measured per-role savings
+    vs the frontier baseline); ``config`` is :func:`aegis.gateway.optimization_config`
+    (the effective routing / fallback / baseline knobs). ``require_auth`` because these
+    are aggregate efficiency figures, present on every portal's token-optimization view
+    (matching the ``/metrics`` / ``/savings`` convention) — not per-tenant spend. Before
+    any real call the summary figures are honest zeros / ``None`` (nothing fabricated).
+    """
+    from aegis.gateway import optimization_config, optimization_summary
+
+    return GatewayOptimizationResponse(
+        summary=optimization_summary(), config=optimization_config()
+    )
+
+
+@router.get("/harness/config", response_model=HarnessConfigResponse, tags=["agent"])
+async def harness_config_route(
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> HarnessConfigResponse:
+    """Return the agent-harness tweakable-config record (admin/ai_team — the harness).
+
+    Mirrors :func:`aegis.agent.harness_config`: ``knobs`` is the ordered list of knob
+    descriptors a UI renders an editable form from (key, type, effective value, default,
+    doc, bounds); ``effective`` is the flat effective-values map the graph actually
+    reads. Read-only.
+    """
+    from aegis.agent import harness_config
+
+    return HarnessConfigResponse(**harness_config())
+
+
+@router.get(
+    "/governance/dashboard",
+    response_model=GovernanceDashboard,
+    tags=["governance"],
+)
+async def governance_dashboard_route(
+    tenant_id: int | None = None,
+    window: str = "day",
+    auth: AuthContext = Depends(require_tenant_admin),
+) -> GovernanceDashboard:
+    """Return the governance dashboard snapshot for the caller's tenant scope (admin).
+
+    Assembles :func:`aegis.governance.governance_dashboard` — tenants, per-cap
+    budget/spend/remaining, users, the usage rollup and the recent audit tail — every
+    figure tenant-scoped. **RBAC-scoped (C1/H2):** a platform-admin may target any
+    tenant (or the platform view); a tenant-admin is pinned to its own tenant, so an
+    omitted ``tenant_id`` defaults to its own and a request for a *different* tenant is
+    forbidden — a tenant's dashboard never leaks another tenant's rows. Degrades to an
+    honest empty snapshot when the stores are unavailable (lite/offline mode).
+    """
+    from aegis.governance import governance_dashboard
+    from aegis.governance.types import UsageSummary
+
+    scoped = _scope_tenant(auth, tenant_id)
+    try:
+        return await governance_dashboard(scoped, window=window)
+    except Exception:  # noqa: BLE001 - stores are optional; degrade to an honest empty
+        logger.debug("governance_dashboard read failed — degrading to empty.", exc_info=True)
+        return GovernanceDashboard(
+            tenant_id=scoped,
+            window=window,
+            tenants=[],
+            budgets=[],
+            users=[],
+            usage=UsageSummary(
+                tenant_id=scoped,
+                window=window,
+                total_prompt_tokens=0,
+                total_completion_tokens=0,
+                total_tokens=0,
+                total_cost_usd=0.0,
+                calls=0,
+                by_model=[],
+                series=[],
+            ),
+            recent_audit=[],
+        )
+
+
+@router.get("/security/posture", response_model=SecurityPostureResponse, tags=["platform"])
+async def security_posture_route(
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> SecurityPostureResponse:
+    """Return the live threat → control security posture (admin/devops — the security view).
+
+    ``entries`` is :func:`aegis.security.security_posture` (one entry per major OWSAP /
+    agentic threat, each with a ``status`` derived from the live wiring at call time —
+    ``enforced`` / ``partial`` / ``not_covered``, never a fudged green); ``signals`` is
+    the :func:`aegis.security.read_signals` snapshot the statuses were derived from.
+    Dependency-light and side-effect free — reading it never spends.
+    """
+    from aegis.security import read_signals, security_posture
+
+    signals = read_signals()
+    return SecurityPostureResponse(
+        entries=security_posture(signals), signals=signals
+    )
+
+
+@router.get("/latency", response_model=LatencyResponse, tags=["metrics"])
+async def latency(
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> LatencyResponse:
+    """Return per-node + per-run latency percentiles (admin/devops — the latency view).
+
+    Mirrors :meth:`aegis.observability.latency_summary().as_dict`. Every figure is from
+    real samples in the per-process rolling window (fed by finished runs); when no runs
+    have been recorded the summary is an honest *empty* state (``empty=True``, no
+    per-node rows, ``None`` run percentiles) — never fabricated zeros. ``source`` /
+    ``window_capacity`` document that the window is per-process and resets on restart.
+    """
+    from aegis.observability import latency_summary
+
+    return LatencyResponse(**latency_summary().as_dict())
+
+
+@router.post("/redteam/run", response_model=RedteamReportResponse, tags=["platform"])
+async def redteam_run(
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> RedteamReportResponse:
+    """Run the offline attack battery and return the real verdicts (admin/devops).
+
+    Runs :func:`aegis.redteam.run_redteam` with **no completer** — the deterministic
+    guardrail backstops only, fully offline and side-effect free (it spends nothing and
+    writes nothing) — and projects :meth:`RedTeamReport.as_dict`: the pass verdict, the
+    ``overall`` roll-up (real ``blockRate`` + false-positive rate), the thresholds,
+    per-category reports, the leaked attacks and every attack's verdict. POST because it
+    *runs* the battery; the numbers are the actual verdicts, never fabricated.
+    """
+    from aegis.redteam import run_redteam
+
+    report = await run_redteam()
+    await _safe_audit(
+        "redteam.run",
+        auth.username,
+        payload={
+            "attacks_total": report.attacks_total,
+            "block_rate": round(report.block_rate, 4),
+            "passed": report.passed,
+        },
+    )
+    return RedteamReportResponse(**report.as_dict())
 
 
 def _update_dashboards(

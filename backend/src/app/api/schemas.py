@@ -13,7 +13,7 @@ the variant's `type` and whose `data:` field is the model's JSON.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from aegis.core.types import (  # noqa: F401 - re-exported for identity, see docstrings below
     ApprovalDecision,
@@ -26,6 +26,7 @@ from aegis.governance.types import (  # noqa: F401 - re-exported: identity with 
     AdminUserRow,
     AuditLogRow,
     BudgetRow,
+    GovernanceDashboard,
     Role,
     TenantRow,
     UsageByModel,
@@ -43,7 +44,11 @@ from aegis.retrieval.types import (  # noqa: F401 - re-exported: identity with a
     GraphNode,
     RetrievalOrigin,
 )
-from pydantic import BaseModel, Field
+from aegis.security.posture import (  # noqa: F401 - re-exported: identity with aegis.security
+    PostureEntry,
+    PostureSignals,
+)
+from pydantic import BaseModel, ConfigDict, Field
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enums
@@ -1126,3 +1131,136 @@ class SavingsResponse(BaseModel):
     saved_pct: float = Field(description="Fraction saved vs baseline, 0..1.")
     note: str = Field(description="Honest framing of the figure (flags any estimate).")
     breakdown: list[SavingsBreakdownRow] = Field(default_factory=list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform read-surfaces — thin, read-only projections of the ``aegis.*``
+# accessors that back the MLOps / LLMOps / evals / token-opt / harness /
+# governance / security / latency / red-team dashboards (Phase-3 · Task 3).
+#
+# Each mirrors exactly what its accessor returns, so the routes stay thin and
+# the frontend renders the same shape in mock and live mode.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class EvalsReportResponse(BaseModel):
+    """Body for `GET /evals/report` — the offline regression-gate rollup.
+
+    Projects :meth:`aegis.evals.RegressionReport.as_dict` verbatim: the overall
+    score, the gate verdict, one authoritative reading per metric, and the per-case
+    breakdown. Computed by running the deterministic **offline** regression gate
+    (``run_regression_gate`` with no LLM) — real, reproducible numbers, never a live
+    LLM-judge pass. ``source`` names how the figures were produced.
+    """
+
+    overall: float = Field(description="Mean of the per-metric aggregate values.")
+    passed: bool = Field(description="The CI gate verdict.")
+    metrics: list[dict[str, Any]] = Field(
+        default_factory=list, description="One MetricConfig-as-dict per metric."
+    )
+    cases: list[dict[str, Any]] = Field(
+        default_factory=list, description="Per-case metric breakdown."
+    )
+    source: str = Field(
+        default="offline_regression_gate",
+        description="How the figures were produced (deterministic offline gate).",
+    )
+
+
+class OpsParamsResponse(BaseModel):
+    """Body for `GET /ops/params` — the tunable LLM-Ops self-improvement knobs.
+
+    Mirrors :meth:`aegis.ops.config.LoopParams.as_dict` — the effective loop params the
+    release gate reads (eval margin, blast-radius fractions, safety-term list, config
+    markers, tunable keys/bounds, auto-promote ceiling).
+    """
+
+    eval_margin: float
+    high_diff_fraction: float
+    low_diff_fraction: float
+    safety_terms: list[str]
+    critical_config_markers: list[str]
+    tunable_config_keys: list[str]
+    tunable_max_delta: dict[str, float]
+    auto_promote_ceiling: str
+
+
+class GatewayOptimizationResponse(BaseModel):
+    """Body for `GET /gateway/optimization` — the token-optimization surface.
+
+    ``summary`` is :func:`aegis.gateway.optimization_summary` (measured per-role savings
+    vs the frontier baseline); ``config`` is :func:`aegis.gateway.optimization_config`
+    (the effective routing/fallback knobs). Offline, before any real call, the summary
+    figures are honest zeros / ``None`` (nothing fabricated).
+    """
+
+    summary: dict[str, Any] = Field(description="Measured savings roll-up + per-role breakdown.")
+    config: dict[str, Any] = Field(description="Effective routing / fallback / baseline knobs.")
+
+
+class HarnessConfigResponse(BaseModel):
+    """Body for `GET /harness/config` — the agent-harness tweakable-config record.
+
+    Mirrors :func:`aegis.agent.harness_config`: ``knobs`` is the ordered list of knob
+    descriptors a UI renders an editable form from; ``effective`` is the flat
+    effective-values map the graph actually reads.
+    """
+
+    knobs: list[dict[str, Any]] = Field(default_factory=list)
+    effective: dict[str, Any] = Field(default_factory=dict)
+
+
+class SecurityPostureResponse(BaseModel):
+    """Body for `GET /security/posture` — the live threat → control posture table.
+
+    ``entries`` is :func:`aegis.security.security_posture` (one entry per major threat,
+    each with a status derived from live wiring); ``signals`` is the
+    :func:`aegis.security.read_signals` snapshot the statuses were derived from, so a
+    caller can see *which* knob each status tracks.
+    """
+
+    entries: list[PostureEntry] = Field(default_factory=list)
+    signals: PostureSignals
+
+
+class LatencyResponse(BaseModel):
+    """Body for `GET /latency` — per-node + per-run latency percentiles.
+
+    Mirrors :meth:`aegis.observability.LatencySummary.as_dict`. All figures are from
+    real samples in the per-process rolling window; ``empty`` is ``True`` (with no
+    per-node rows and ``None`` run percentiles) when no runs have been recorded yet —
+    an honest empty state, never fabricated zeros. ``source`` / ``window_capacity``
+    document where the numbers came from.
+    """
+
+    run_count: int
+    per_node: list[dict[str, Any]] = Field(default_factory=list)
+    run_p50_ms: float | None = None
+    run_p95_ms: float | None = None
+    run_max_ms: float | None = None
+    slowest_node: str | None = None
+    source: str
+    window_capacity: int | None = None
+    empty: bool = False
+
+
+class RedteamReportResponse(BaseModel):
+    """Body for `POST /redteam/run` — the offline attack-battery report.
+
+    Mirrors :meth:`aegis.redteam.RedTeamReport.as_dict`: the pass verdict, the
+    ``overall`` roll-up (block rate + false-positive rate), the thresholds, per-category
+    reports, the leaked attacks, and every attack's verdict. Runs the deterministic
+    backstops only (no completer) so it is fully offline and side-effect free.
+    """
+
+    passed: bool
+    overall: dict[str, Any] = Field(description="attacksTotal / attacksBlocked / blockRate / ...")
+    thresholds: dict[str, Any]
+    categories: list[dict[str, Any]] = Field(default_factory=list)
+    leaked: list[dict[str, Any]] = Field(default_factory=list)
+    false_positive_detail: list[dict[str, Any]] = Field(
+        default_factory=list, alias="falsePositiveDetail"
+    )
+    attacks: list[dict[str, Any]] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
