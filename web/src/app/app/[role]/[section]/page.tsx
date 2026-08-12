@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { ConsolePlaceholder } from '@/components/console/ConsolePlaceholder'
+import { ConsoleMount } from '@/components/console/ConsoleMount'
 import { SectionPlaceholder } from '@/components/portal/SectionPlaceholder'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
 
@@ -24,6 +24,6 @@ export default async function SectionPage({
   if (!isRole(role) || !isValidSection(role, section)) notFound()
 
   const def = SECTIONS[section]
-  if (def.console) return <ConsolePlaceholder />
+  if (def.console) return <ConsoleMount role={role} />
   return <SectionPlaceholder section={def} />
 }

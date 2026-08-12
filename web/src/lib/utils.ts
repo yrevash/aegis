@@ -1,7 +1,12 @@
+import { clsx, type ClassValue } from 'clsx'
+import { twMerge } from 'tailwind-merge'
+
 /**
- * Minimal className joiner — no clsx/tailwind-merge dependency in the scaffold.
- * Filters falsy values and joins with a space.
+ * Merge conditional class names and de-duplicate conflicting Tailwind utilities.
+ *
+ * @param inputs - Class values (strings, arrays, or conditionals).
+ * @returns A single merged, conflict-resolved class string.
  */
-export function cn(...parts: Array<string | false | null | undefined>): string {
-  return parts.filter(Boolean).join(' ')
+export function cn(...inputs: ClassValue[]): string {
+  return twMerge(clsx(inputs))
 }

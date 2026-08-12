@@ -1,274 +1,346 @@
 /**
- * REST response contracts for the non-streaming endpoints.
+ * Endpoint request/response contracts — a faithful TypeScript mirror of the
+ * non-streaming Pydantic models in `backend/src/app/api/schemas.py`.
  *
- * These are LEAN scaffold mirrors of the Vite app's frontend/src/types/api.ts
- * (and types/memory.ts, types/ops.ts): enough shape to type the client and the
- * placeholder surfaces. Full-fidelity field-by-field parity is a follow-up as
- * each surface is wired. The stream/event contract lives in `@/lib/stream`.
+ * @see backend/src/app/api/schemas.py
  */
 
-import type { Role, GraphNode, GraphEdge, RiskLevel, ShapFeature } from '@/lib/stream'
+import type { GraphEdge, GraphNode, RiskLevel, Role, ShapFeature } from '@/lib/stream'
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+/** Body for `POST /auth/login`. */
 export interface LoginRequest {
   username: string
   password: string
 }
+
+/**
+ * Response from `POST /auth/login`. `token` is now a signed JWT (stored and sent
+ * as a Bearer token); `role` scopes the served portal and `tenant_id` pins the
+ * session to its tenant for multi-tenant governance.
+ */
 export interface LoginResponse {
-  role: Role
   token: string
-  tenant_id: number
+  role: Role
+  /** The tenant this session belongs to, or null (platform scope). */
+  tenant_id: number | null
 }
 
-// ── Graph / metrics ────────────────────────────────────────────────────────────
+/** Body for `POST /query` (the response is the SSE stream, not JSON). */
+export interface QueryRequest {
+  query: string
+  /** Adapter persona id; scopes data + tools. */
+  persona?: string | null
+}
+
+/** Body for `GET /graph` — the current context graph for the viz. */
 export interface GraphResponse {
   nodes: GraphNode[]
   edges: GraphEdge[]
 }
-export interface MetricsResponse {
-  [key: string]: number | string | boolean | null
-}
 
-// ── ML explain ─────────────────────────────────────────────────────────────────
+/** Body for `POST /ml/explain`. */
 export interface MLExplainRequest {
+  /** Feature name → value for one prediction. */
   features: Record<string, number | string>
 }
+
+/** Response from `POST /ml/explain`. */
 export interface MLExplainResponse {
   prediction: number | string
   conformal_interval: [number, number] | null
   conformal_confidence: number | null
+  /** Conformal interval width (upper − lower); the deferral signal, or null. */
+  interval_width: number | null
+  /** Conformal prediction-set size (classification; 1 = singleton), or null. */
+  prediction_set_size: number | null
   shap_attribution: ShapFeature[]
 }
 
-// ── Approvals ──────────────────────────────────────────────────────────────────
+/** Body for `GET /metrics` — live figures for the efficiency dashboard. */
+export interface MetricsResponse {
+  cache_hit_rate: number
+  small_model_share: number
+  cost_per_1k_queries_usd: number
+  /**
+   * A measured **grounding proxy**, not an eval-harness/LLM-judge score: the
+   * fraction of completed runs that both finished cleanly and retrieved backing
+   * context (touched at least one knowledge-graph node before answering). Null
+   * before any run.
+   */
+  quality_score: number | null
+  /** Effective role → model map. */
+  routing: Record<string, string>
+  /**
+   * Cumulative USD saved versus running every query on the frontier model —
+   * the headline efficiency win. The backend tallies this from small-model
+   * routing only; cache hits bypass the tally, so caching is not counted here.
+   */
+  cost_saved_usd: number
+  /** What the same workload would have cost on the frontier model, in USD. */
+  baseline_cost_usd: number
+}
+
+/** Whether a paused action was approved or rejected by the human gate. */
 export type ApprovalDecision = 'approve' | 'reject'
+
+/** Body for `POST /approval` — resolve a paused action. */
 export interface ApprovalRequest {
   approval_id: string
   decision: ApprovalDecision
 }
+
+/** Response from `POST /approval`. */
 export interface ApprovalResponse {
   approval_id: string
-  status: string
   accepted: boolean
 }
+
+/**
+ * One row of the append-only audit trail (admin-only).
+ * Mirrors the `AuditLog` record surfaced by `GET /audit` on the backend.
+ */
+export interface AuditLogRow {
+  id: number
+  /** ISO 8601 timestamp of when the action was recorded. */
+  ts: string
+  action: string
+  actor: string | null
+  model: string | null
+  trace_id: string | null
+  approved_by: string | null
+}
+
+/** Response from `GET /audit` — newest-first list of audit rows. */
+export interface AuditLogResponse {
+  rows: AuditLogRow[]
+}
+
+// ── Approvals inbox (durable, async approval path) ──────────────────────────
+
+/** The ML readout captured with an approval row (for the inbox card). */
+export interface ApprovalMlSnapshot {
+  prediction?: number | string | null
+  conformal_confidence?: number | null
+  conformal_interval?: [number, number] | null
+  /** The autonomy band that routed this to the inbox, e.g. 'defer'. */
+  band?: string | null
+}
+
+/**
+ * One row of the persisted approvals inbox. Mirrors the backend `approvals`
+ * table surfaced by `GET /approvals`.
+ */
 export interface ApprovalRow {
   id: number
+  run_id: string
   action: string
   args: Record<string, unknown>
   risk: RiskLevel
   rationale: string
+  /** e.g. 'pending' | 'approved' | 'rejected' | 'escalated' | 'expired'. */
   status: string
-  created_at: string
+  persona: string | null
+  /** ISO 8601 SLA deadline, or null. */
   sla_deadline: string | null
+  /** ISO 8601 creation time. */
+  created_at: string
+  ml_snapshot: ApprovalMlSnapshot | null
 }
+
+/** Response from `GET /approvals`. */
 export interface ApprovalsResponse {
-  approvals: ApprovalRow[]
+  rows: ApprovalRow[]
 }
+
+/** Body for `POST /approvals/{id}/decision`. */
+export interface ApprovalDecisionRequest {
+  decision: ApprovalDecision
+}
+
+/** Response from `POST /approvals/{id}/decision`. */
 export interface ApprovalDecisionResponse {
   id: number
   status: string
   accepted: boolean
 }
 
-// ── Audit ──────────────────────────────────────────────────────────────────────
-export interface AuditRow {
-  id: number
-  ts: string
-  actor: string
-  action: string
-  detail: string
-  trace_id: string | null
-}
-export interface AuditLogResponse {
-  rows: AuditRow[]
-}
+// ── Admin: tenants, users, budgets, usage (multi-tenant governance) ─────────
 
-// ── Admin: tenants / users / budgets / usage ───────────────────────────────────
+/** A tenant (enterprise client). */
 export interface Tenant {
   id: number
   name: string
+  status: string
+  created_at: string
 }
+
+/** Response from `GET /admin/tenants`. */
 export interface TenantsResponse {
-  tenants: Tenant[]
+  rows: Tenant[]
 }
+
+/** A user within a tenant. */
 export interface AdminUser {
   id: number
   username: string
-  role: Role
-  tenant_id: number
-}
-export interface UsersResponse {
-  users: AdminUser[]
-}
-export type BudgetScope = 'tenant' | 'user' | 'global'
-export interface Budget {
-  id: number
-  scope_type: BudgetScope
-  scope_id: number | null
-  limit_type: string
-  limit: number
-  used: number
-}
-export interface BudgetsResponse {
-  budgets: Budget[]
-}
-export interface CreateBudgetRequest {
-  scope_type: BudgetScope
-  scope_id: number | null
-  limit_type: string
-  limit: number
-}
-export interface UsageResponse {
-  window: string
-  total_cost_usd: number
-  total_tokens: number
-  by_model: Array<{ model: string; cost_usd: number; tokens: number }>
-  trend: Array<{ date: string; cost_usd: number }>
-}
-
-// ── Memory (glass-box) ─────────────────────────────────────────────────────────
-export interface MemoryFact {
-  id: string
-  subject: string
-  predicate: string
-  object: string
-  valid: boolean
-  updated_at: string
-}
-export interface MemoryFactsResponse {
-  facts: MemoryFact[]
-}
-export interface MemoryProfileResponse {
-  subject: string
-  profile: Record<string, unknown>
-}
-export interface MemorySession {
-  id: string
-  summary: string
-  started_at: string
-}
-export interface MemorySessionsResponse {
-  sessions: MemorySession[]
-}
-export interface MemoryMessage {
+  email: string | null
   role: string
-  content: string
-  ts: string
-}
-export interface MemoryMessagesResponse {
-  messages: MemoryMessage[]
-}
-export interface MemoryWrite {
-  op: string
-  fact: string
-  ts: string
-}
-export interface MemoryWritesResponse {
-  writes: MemoryWrite[]
-}
-export interface RecallDebugResponse {
-  query: string
-  ranked_facts: Array<{ fact: string; score: number }>
-  assembled_context: string
+  tenant_id: number | null
+  is_active: boolean
 }
 
-// ── LLM-Ops (prompts / evals / releases) ───────────────────────────────────────
-export interface OpsPromptVersion {
-  version_id: string
-  status: string
-  created_at: string
-  note: string | null
-}
-export interface OpsPromptsResponse {
-  prompt_key: string
-  versions: OpsPromptVersion[]
-}
-export interface OpsActivePromptResponse {
-  prompt_key: string
-  version_id: string
-  system_prompt: string
-  config: Record<string, unknown>
-}
-export interface OpsEvalRow {
-  run_id: string
-  metric: string
-  score: number
-  ts: string
-}
-export interface OpsEvalsResponse {
-  evals: OpsEvalRow[]
-}
-export interface OpsPendingRelease {
-  approval_id: string
-  prompt_key: string
-  version_id: string
-  eval_delta: number
-  risk_tier: string
-}
-export interface OpsPendingReleasesResponse {
-  pending: OpsPendingRelease[]
-}
-export interface OpsDiagnoseRequest {
-  prompt_key: string
-  limit?: number
-}
-export interface OpsDiagnoseResponse {
-  draft_id: string
-  rationale: string
-  failure_breakdown: Record<string, number>
-  risk_tier: string
-}
-export interface OpsReleaseRequest {
-  prompt_key: string
-  draft_id: string
-}
-export interface OpsReleaseResponse {
-  outcome: 'promoted' | 'staged_for_approval' | 'rejected'
-  version_id: string
-  eval_delta: number
-}
-export interface OpsRollbackResponse {
-  prompt_key: string
-  reverted_to: string
-}
-export interface OpsReleaseDecisionResponse {
-  approval_id: string
-  approved: boolean
-  applied: boolean
+/** Response from `GET /admin/users`. */
+export interface UsersResponse {
+  rows: AdminUser[]
 }
 
-// ── DevOps: stack + patch check ────────────────────────────────────────────────
+/** Which entity a budget caps. */
+export type BudgetScope = 'tenant' | 'user'
+
+/** The rolling window a budget resets on. */
+export type BudgetWindow = 'day' | 'month'
+
+/** A hierarchical spend / rate cap. */
+export interface Budget {
+  id?: number
+  scope_type: BudgetScope
+  scope_id: number
+  window: BudgetWindow
+  token_cap: number | null
+  usd_cap: number | null
+  rpm: number | null
+  tpm: number | null
+}
+
+/** Response from `GET /admin/budgets`. */
+export interface BudgetsResponse {
+  rows: Budget[]
+}
+
+/** Body for `POST /admin/budgets`. */
+export type CreateBudgetRequest = Budget
+
+// ── DevOps: tech stack + patch check (supply-chain transparency) ────────────
+
+/** One dependency in the running Aegis stack. */
 export interface StackComponent {
   name: string
-  version: string
-  kind: string
-}
-export interface StackResponse {
-  components: StackComponent[]
-}
-export interface PatchRow {
-  name: string
-  installed: string
-  latest: string
-  outdated: boolean
-}
-export interface PatchCheckResponse {
-  packages: PatchRow[]
+  category: 'runtime' | 'backend' | 'frontend' | 'infra'
+  /** The installable package / image name. */
+  package: string
+  /** Resolved version, or null when it could not be determined. */
+  version: string | null
+  /** Which Aegis module this component powers, or null for shared infra. */
+  aegis_module: string | null
 }
 
-// ── Client: risk map + savings ─────────────────────────────────────────────────
-export interface RiskCell {
+/** Response from `GET /stack` — the full software bill of materials. */
+export interface StackResponse {
+  /** ISO 8601 timestamp the stack was inventoried. */
+  generated_at: string
+  components: StackComponent[]
+}
+
+/** One package's freshness verdict from the patch check. */
+export interface PatchResult {
+  name: string
+  installed: string | null
+  latest: string | null
+  status: 'current' | 'outdated' | 'unknown'
+  note?: string
+}
+
+/**
+ * Body for `POST /stack/patch-check` — optionally narrow the check to a subset
+ * of packages; omit to check the whole stack.
+ */
+export interface PatchCheckRequest {
+  packages?: string[]
+}
+
+/** Response from `POST /stack/patch-check` — installed vs latest per package. */
+export interface PatchCheckResponse {
+  /** ISO 8601 timestamp the check ran. */
+  checked_at: string
+  /** Whether the registry could be reached (false ⇒ results are best-effort). */
+  online: boolean
+  note: string
+  results: PatchResult[]
+}
+
+// ── Client: risk map + savings (value + assurance) ──────────────────────────
+
+/** One entry on the risk heat-map (OWASP-Agentic-aligned). */
+export interface RiskEntry {
   id: string
-  label: string
-  severity: RiskLevel
-  control: string
+  title: string
+  category: string
+  /** 1..5 likelihood band. */
+  likelihood: number
+  /** 1..5 impact band. */
+  impact: number
+  mitigation: string
+  /** The control / requirement this maps to. */
+  control_ref: string
+  /** Residual risk after mitigation. */
+  residual: 'low' | 'medium' | 'high'
 }
+
+/** Response from `GET /risk-map` — the agent-risk heat-map + its scale. */
 export interface RiskMapResponse {
-  risks: RiskCell[]
+  /** ISO 8601 timestamp the map was generated. */
+  generated_at: string
+  note: string
+  scale: {
+    likelihood: number[]
+    impact: number[]
+  }
+  risks: RiskEntry[]
 }
-export interface SavingsResponse {
-  baseline_usd: number
-  actual_usd: number
+
+/** One contributor to the total savings. */
+export interface SavingsBreakdownRow {
+  source: string
   saved_usd: number
+  explanation: string
+}
+
+/** Response from `GET /savings` — baseline vs actual spend and what drove it. */
+export interface SavingsResponse {
+  /** ISO 8601 timestamp the figures were computed. */
+  generated_at: string
+  baseline_cost_usd: number
+  actual_cost_usd: number
+  saved_usd: number
+  /** Fraction saved vs baseline, 0..1. */
   saved_pct: number
+  note: string
+  breakdown: SavingsBreakdownRow[]
+}
+
+/** Body for `POST /admin/users/{id}/role` — reassign a user's portal role. */
+export interface UserRoleUpdateRequest {
+  role: Role
+}
+
+/** Per-model usage roll-up row. */
+export interface UsageModelRow {
+  model: string
+  cost_usd: number
+  tokens: number
+}
+
+/** One point on the usage cost trend. */
+export interface UsageSeriesPoint {
+  ts: string
+  cost_usd: number
+}
+
+/** Response from `GET /admin/usage` — spend + tokens by model, plus a trend. */
+export interface UsageResponse {
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_cost_usd: number
+  by_model: UsageModelRow[]
+  series: UsageSeriesPoint[]
 }

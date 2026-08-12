@@ -260,6 +260,187 @@
   }
 }
 
+/* ── Console motion + type utilities (ported from frontend/src/index.css) ─────
+ * Additive utility classes + keyframes the money-shot console depends on. No
+ * token VALUES change here; everything decorative is neutralised by the
+ * reduced-motion block that stays last in this file. */
+@layer utilities {
+  /* Extra type-scale steps the console panels use. */
+  .t-body {
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    font-weight: 400;
+  }
+  .t-label {
+    font-family: var(--font-sans);
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    font-weight: 500;
+  }
+  .t-mono {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    font-weight: 400;
+  }
+
+  /* Deepest elevation state (dialogs / spotlight). */
+  .shadow-pop {
+    box-shadow:
+      0 4px 8px rgba(16, 24, 40, 0.06),
+      0 24px 60px -20px rgba(16, 24, 40, 0.22);
+  }
+
+  /* Page rhythm helpers. */
+  .section-rhythm > * + * {
+    margin-top: 2rem;
+  }
+  .title-gap {
+    margin-bottom: 0.75rem;
+  }
+
+  /* Trace pip pulse. */
+  @keyframes pip-pulse {
+    0% {
+      box-shadow: 0 0 0 0 var(--pip-color, var(--agent));
+      opacity: 1;
+    }
+    70% {
+      box-shadow: 0 0 0 7px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+      opacity: 0.85;
+    }
+  }
+  .animate-pip {
+    animation: pip-pulse 1.6s ease-out infinite;
+  }
+
+  /* Trace row entrance. */
+  @keyframes trace-in {
+    from {
+      opacity: 0;
+      transform: translateX(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  .animate-trace-in {
+    animation: trace-in 0.28s ease-out both;
+  }
+
+  /* Idle graph scanline sweep. */
+  @keyframes scanline {
+    from {
+      transform: translateY(-100%);
+    }
+    to {
+      transform: translateY(100%);
+    }
+  }
+  .animate-scan {
+    animation: scanline 2.4s linear infinite;
+  }
+
+  /* Active-beat — one synchronized same-hue pulse fired on every stream event.
+   * Consumers set `--beat` to the signal hex and re-key on `seq` to re-fire. */
+  @keyframes active-beat {
+    0% {
+      box-shadow: 0 0 0 0 var(--beat, var(--agent));
+    }
+    70% {
+      box-shadow: 0 0 0 6px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+  .animate-beat {
+    animation: active-beat 0.9s ease-out;
+  }
+
+  /* Graph halo — SVG-safe (scales around its own centre). */
+  @keyframes flow-pulse {
+    0% {
+      transform: scale(0.8);
+      opacity: 0.9;
+    }
+    100% {
+      transform: scale(1.9);
+      opacity: 0;
+    }
+  }
+  .animate-flow-pulse {
+    animation: flow-pulse 1s ease-out;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* Idle attract-loop — gentle breathing for dormant panels before a run. */
+  @keyframes idle-breathe {
+    0%,
+    100% {
+      opacity: 0.6;
+      transform: scale(0.996);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.004);
+    }
+  }
+  .animate-idle-breathe {
+    animation: idle-breathe 4.5s ease-in-out infinite;
+  }
+
+  /* Idle trust-bar shimmer — a slow highlight sweep across the dormant bar. */
+  @keyframes trust-shimmer {
+    0% {
+      transform: translateX(-130%);
+    }
+    100% {
+      transform: translateX(130%);
+    }
+  }
+  .animate-trust-shimmer {
+    animation: trust-shimmer 3.8s ease-in-out infinite;
+  }
+
+  /* Reveal-on-scroll — fade + rise, staggered by tile index. */
+  @keyframes reveal-rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-reveal {
+    animation: reveal-rise var(--dur-slow) var(--ease-out) both;
+  }
+
+  /* Chart draw-in — a CSS complement to recharts' isAnimationActive. */
+  @keyframes chart-in {
+    from {
+      opacity: 0;
+      transform: scaleY(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+  }
+  .animate-chart-in {
+    animation: chart-in 700ms var(--ease-out) both;
+    transform-origin: bottom;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
