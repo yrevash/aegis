@@ -85,6 +85,10 @@ class RetrievalConfig:
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
     redis_url: str = "redis://localhost:6379/0"
+    #: Qdrant is the **vector** store (Postgres stays for KV/doc-status only). ``qdrant_url``
+    #: points the full path at a live Qdrant node; ``qdrant_api_key`` secures it if set.
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
     #: Whether the real databases (Neo4j/pgvector/Redis) are expected to be in use.
     #: Purely informational at this layer — callers decide what to build from it
     #: (e.g. `build_default_retriever` vs `aegis.retrieval.memory.build_lite_retriever`).

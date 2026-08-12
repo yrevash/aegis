@@ -1,13 +1,15 @@
-"""LightRAG-backed knowledge store (Neo4j graph + pgvector vectors).
+"""LightRAG-backed knowledge store (Neo4j graph + Qdrant vectors).
 
 LightRAG is the *pipeline* (chunk → extract entities/relationships → embed → write
-graph and vectors → retrieve over both); Neo4j and Postgres/pgvector are the
-*stores*. Entity/relationship extraction and embeddings run via the injected
-`complete`/`embed` callables, so nothing heavy runs locally beyond LightRAG's own
-in-process bookkeeping.
+graph and vectors → retrieve over both); Neo4j (graph), **Qdrant** (vectors), and
+Postgres (KV + doc-status only) are the *stores*. The vector store is Qdrant — not
+pgvector — so dense recall runs on a purpose-built ANN engine; Postgres stays for the
+relational/KV bookkeeping LightRAG needs. Entity/relationship extraction and embeddings
+run via the injected `complete`/`embed` callables, so nothing heavy runs locally beyond
+LightRAG's own in-process bookkeeping.
 
-Everything that touches the `lightrag`, `neo4j`, or `redis` packages is imported
-lazily inside methods, so this module (and the whole `aegis.retrieval` package)
+Everything that touches the `lightrag`, `neo4j`, `qdrant_client`, or `redis` packages is
+imported lazily inside methods, so this module (and the whole `aegis.retrieval` package)
 imports cleanly with no LightRAG install and no live stores.
 """
 
@@ -54,19 +56,30 @@ _ENTITY_TYPES: tuple[str, ...] = (
 
 
 def _apply_store_env(config: object) -> None:
-    """Export Neo4j/Postgres connection settings as the env vars LightRAG reads.
+    """Export Neo4j/Qdrant/Postgres connection settings as the env vars LightRAG reads.
 
-    LightRAG's Neo4j and Postgres storage impls read connection details from the
-    environment (`NEO4J_*`, `POSTGRES_*`) rather than constructor kwargs, so we
-    translate the store config into those variables before building the instance.
+    LightRAG's storage impls read connection details from the environment (`NEO4J_*`,
+    `QDRANT_*`, `POSTGRES_*`) rather than constructor kwargs, so we translate the store
+    config into those variables before building the instance. Qdrant is the vector store;
+    Postgres remains only for the KV + doc-status stores.
 
     Args:
         config: An object exposing ``neo4j_uri``/``neo4j_user``/``neo4j_password``/
-            ``postgres_dsn`` (duck-typed — a `RetrievalConfig` in practice).
+            ``qdrant_url``/``qdrant_api_key``/``postgres_dsn`` (duck-typed — a
+            `RetrievalConfig` in practice).
     """
     os.environ.setdefault("NEO4J_URI", config.neo4j_uri)
     os.environ.setdefault("NEO4J_USERNAME", config.neo4j_user)
     os.environ.setdefault("NEO4J_PASSWORD", config.neo4j_password)
+
+    # Qdrant is the vector store. LightRAG's QdrantVectorDBStorage reads QDRANT_URL /
+    # QDRANT_API_KEY from the environment.
+    qdrant_url = getattr(config, "qdrant_url", "") or ""
+    if qdrant_url:
+        os.environ.setdefault("QDRANT_URL", qdrant_url)
+    qdrant_api_key = getattr(config, "qdrant_api_key", "") or ""
+    if qdrant_api_key:
+        os.environ.setdefault("QDRANT_API_KEY", qdrant_api_key)
 
     pg = urlparse(config.postgres_dsn)
     if pg.hostname:
@@ -81,7 +94,7 @@ def _apply_store_env(config: object) -> None:
 
 
 class LightRAGBackend:
-    """A `KnowledgeBackend` implemented on LightRAG with Neo4j + pgvector.
+    """A `KnowledgeBackend` implemented on LightRAG with Neo4j + Qdrant (+ Postgres KV).
 
     The instance is built lazily on first use and reused thereafter. Construction is
     injected with `complete`/`embed` so extraction and embedding route through
@@ -160,7 +173,9 @@ class LightRAGBackend:
                 func=lambda texts: embed(texts),
             ),
             kv_storage="PGKVStorage",
-            vector_storage="PGVectorStorage",
+            # Vectors live in Qdrant (purpose-built ANN), not pgvector. Postgres remains
+            # only for the KV + doc-status stores below.
+            vector_storage="QdrantVectorDBStorage",
             graph_storage="Neo4JStorage",
             doc_status_storage="PGDocStatusStorage",
             # Steer extraction into typed, domain-relevant nodes and re-glean once so

@@ -19,7 +19,9 @@ retrieval = [
     "lightrag-hku>=1.0",
     "neo4j>=5.24",
     "redis>=5.1",
-    "pgvector>=0.3",
+    # Qdrant is the vector store for retrieval (replaces pgvector). Postgres stays for
+    # LightRAG's KV + doc-status stores, hence asyncpg — but not pgvector.
+    "qdrant-client>=1.12",
     "asyncpg>=0.29",
 ]
 gateway = ["litellm>=1.52"]

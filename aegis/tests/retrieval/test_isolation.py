@@ -21,7 +21,8 @@ def test_importing_retrieval_pulls_no_heavy_deps() -> None:
     """Verify importing aegis.retrieval does not pull heavy/optional-extra deps.
 
     Covers the platform megadeps (litellm/torch/langgraph/xgboost/fastapi) plus the
-    retrieval extra's own heavy packages (lightrag/neo4j/redis/asyncpg/pgvector). The
+    retrieval extra's own heavy packages (lightrag/neo4j/redis/asyncpg/qdrant_client;
+    pgvector is checked too, now that it has been dropped from the retrieval extra). The
     subprocess resolves ``aegis`` from the source tree via ``PYTHONPATH`` so the guard
     tests the real import graph deterministically, independent of editable-install
     state.
@@ -35,8 +36,10 @@ def test_importing_retrieval_pulls_no_heavy_deps() -> None:
         "import aegis.retrieval.lightrag_backend; "
         "import aegis.retrieval.answer_cache; "
         "import aegis.retrieval.cache; "
+        "import aegis.retrieval.vector_store; "
         "banned = {'litellm', 'torch', 'langgraph', 'xgboost', 'fastapi', "
-        "'redis', 'nemoguardrails', 'lightrag', 'neo4j', 'asyncpg', 'pgvector'}; "
+        "'redis', 'nemoguardrails', 'lightrag', 'neo4j', 'asyncpg', 'pgvector', "
+        "'qdrant_client'}; "
         "hit = banned & set(sys.modules); "
         "print('HIT', hit); assert not hit, hit"
     )
