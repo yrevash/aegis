@@ -48,3 +48,4 @@ Thumbs.db
 
 # superpowers scratch (sdd reports, brainstorm mockups)
 .superpowers/
+.frontend-templates/
