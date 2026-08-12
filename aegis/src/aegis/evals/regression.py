@@ -41,7 +41,7 @@ from dataclasses import dataclass
 
 from .corpus import SEED_CASES
 from .harness import build_eval_retriever
-from .metrics import aggregate, score_case
+from .metrics import MetricConfig, aggregate, score_case
 
 #: A chat-completion callable (shape of a gateway ``complete``). When ``None`` (the
 #: default, offline path) the retriever's reranker falls back to RRF order and an
@@ -73,17 +73,29 @@ class Metric:
     def evaluate(self, value: float) -> MetricResult:
         """Score a measured ``value`` against this metric's threshold + direction."""
         passed = value >= self.threshold if self.higher_is_better else value <= self.threshold
-        return MetricResult(name=self.name, value=value, threshold=self.threshold, passed=passed)
+        return MetricResult(
+            name=self.name,
+            value=value,
+            threshold=self.threshold,
+            passed=passed,
+            higher_is_better=self.higher_is_better,
+        )
 
 
 @dataclass(frozen=True)
 class MetricResult:
-    """One metric measured for one case, with its pass/fail verdict."""
+    """One metric measured for one case, with its pass/fail verdict.
+
+    ``higher_is_better`` is carried through from the :class:`Metric` that produced this
+    result so any downstream surface (accessor/stream/row) can re-derive the pass rule
+    without reaching back to the metric definition.
+    """
 
     name: str
     value: float
     threshold: float
     passed: bool
+    higher_is_better: bool = True
 
 
 @dataclass(frozen=True)
@@ -105,6 +117,111 @@ class RegressionReport:
     def failures(self) -> list[GateCaseResult]:
         """Return only the failing cases (empty when the gate passed)."""
         return [case for case in self.cases if not case.passed]
+
+    def metric_configs(self) -> list[MetricConfig]:
+        """Aggregate the per-case metric results into one :class:`MetricConfig` per metric.
+
+        Metrics that recur across cases (e.g. ``context_recall`` on every seed case) are
+        folded into a single entry whose ``value`` is the mean of the case readings and
+        whose ``passed`` is ``True`` only if every contributing case passed. Insertion
+        order (first appearance across the cases) is preserved so the surface is stable.
+
+        This is the **single source** the stream payload and the persisted rows read from —
+        there is exactly one authoritative number per metric.
+        """
+        order: list[str] = []
+        buckets: dict[str, list[MetricResult]] = {}
+        for case in self.cases:
+            for m in case.metrics:
+                if m.name not in buckets:
+                    buckets[m.name] = []
+                    order.append(m.name)
+                buckets[m.name].append(m)
+        configs: list[MetricConfig] = []
+        for name in order:
+            results = buckets[name]
+            value = sum(m.value for m in results) / len(results)
+            configs.append(
+                MetricConfig(
+                    name=name,
+                    threshold=results[0].threshold,
+                    higher_is_better=results[0].higher_is_better,
+                    value=value,
+                    passed=all(m.passed for m in results),
+                    cases=len(results),
+                )
+            )
+        return configs
+
+    def overall(self) -> float:
+        """Return the overall score — the mean of the per-metric aggregate values.
+
+        Defined once, here, so ``evaluate()``/stream/rows never compute an ``overall`` a
+        different way. ``0.0`` when the report carries no metrics.
+        """
+        configs = self.metric_configs()
+        return sum(c.value for c in configs) / len(configs) if configs else 0.0
+
+    def as_dict(self) -> dict[str, object]:
+        """Return the whole report as a plain dict: overall, passed, per-metric, per-case.
+
+        The lossless, authoritative projection every downstream surface (stream event,
+        persisted rows, dashboard accessor) is built from — so *computed == streamed ==
+        persisted == accessor* holds by construction (no recompute, no rounding).
+        """
+        return {
+            "overall": self.overall(),
+            "passed": self.passed,
+            "metrics": [c.as_dict() for c in self.metric_configs()],
+            "cases": [
+                {
+                    "name": case.name,
+                    "passed": case.passed,
+                    "metrics": [
+                        {
+                            "name": m.name,
+                            "value": m.value,
+                            "threshold": m.threshold,
+                            "higherIsBetter": m.higher_is_better,
+                            "passed": m.passed,
+                        }
+                        for m in case.metrics
+                    ],
+                }
+                for case in self.cases
+            ],
+        }
+
+    def to_eval_rows(
+        self, *, run_id: str | None = None, prompt_key: str | None = None
+    ) -> list[dict[str, object]]:
+        """Project the aggregated metrics into ``EvalResult``-column-shaped rows.
+
+        Returns one plain dict per :class:`MetricConfig` with exactly the columns of the
+        ``eval_results`` table (:class:`aegis.ops.models.EvalResult`) — ``run_id``,
+        ``prompt_key``, ``metric``, ``score``, ``passed``, ``detail`` — using the *same*
+        aggregate ``value`` the accessor and stream carry. A host persists these as-is, so
+        the number written to the row equals the number computed and streamed.
+
+        Kept ORM-free on purpose (returns dicts, not model instances) so ``aegis.evals``
+        pulls no SQLAlchemy; the caller constructs the rows.
+        """
+        return [
+            {
+                "run_id": run_id,
+                "prompt_key": prompt_key,
+                "metric": c.name,
+                "score": c.value,
+                "passed": c.passed,
+                "detail": {
+                    "threshold": c.threshold,
+                    "higherIsBetter": c.higher_is_better,
+                    "cases": c.cases,
+                    "source": "regression_gate",
+                },
+            }
+            for c in self.metric_configs()
+        ]
 
 
 # ── DeepEval-style default metrics (thresholds set conservatively below observed) ──

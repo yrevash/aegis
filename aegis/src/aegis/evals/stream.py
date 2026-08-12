@@ -28,6 +28,7 @@ async def emit_eval_result(
     overall: float,
     passed: bool,
     metrics: dict[str, float],
+    metric_configs: list[dict] | None = None,
 ) -> None:
     """Emit one `STEP(evaluate, EVALUATOR)` bracket carrying an `EVAL_RESULT` custom event.
 
@@ -36,12 +37,19 @@ async def emit_eval_result(
         overall: The run's overall score in ``[0, 1]``.
         passed: Whether the run cleared its gate.
         metrics: The per-metric ``name → value`` breakdown.
+        metric_configs: Optional richer per-metric config list (name/threshold/
+            higherIsBetter/value/passed) for the dashboard; added as ``metricConfigs``
+            only when supplied so the minimal payload shape is preserved by default.
     """
+    payload: dict = {
+        "overall": float(overall),
+        "passed": bool(passed),
+        "metrics": dict(metrics),
+    }
+    if metric_configs is not None:
+        payload["metricConfigs"] = metric_configs
     async with emitter.step(_STEP_NAME, SpanKind.EVALUATOR):
-        await emitter.custom(
-            stream_names.EVAL_RESULT,
-            {"overall": float(overall), "passed": bool(passed), "metrics": dict(metrics)},
-        )
+        await emitter.custom(stream_names.EVAL_RESULT, payload)
 
 
 async def stream_regression_report(
@@ -49,8 +57,10 @@ async def stream_regression_report(
 ) -> RegressionReport:
     """Stream a :class:`~aegis.evals.regression.RegressionReport` over the emitter.
 
-    Flattens the per-case metric results into a ``name → value`` map, derives an overall
-    score as the mean of every measured metric value, and emits the standard
+    Reads the report's single authoritative projection (:meth:`RegressionReport.as_dict`):
+    the aggregate per-metric ``name → value`` map, the overall score, and the full metric
+    config list — so the streamed numbers are **identical** to what the accessor returns
+    and what the persisted rows carry (no recompute, no rounding). Emits the standard
     `STEP(evaluate, EVALUATOR)` + `EVAL_RESULT` pair.
 
     Args:
@@ -60,11 +70,14 @@ async def stream_regression_report(
     Returns:
         The same ``report`` (so callers can stream-and-forward in one expression).
     """
-    values = [m.value for case in report.cases for m in case.metrics]
-    metrics = {m.name: m.value for case in report.cases for m in case.metrics}
-    overall = sum(values) / len(values) if values else 0.0
+    configs = report.metric_configs()
+    metrics = {c.name: c.value for c in configs}
     await emit_eval_result(
-        emitter, overall=overall, passed=report.passed, metrics=metrics
+        emitter,
+        overall=report.overall(),
+        passed=report.passed,
+        metrics=metrics,
+        metric_configs=[c.as_dict() for c in configs],
     )
     return report
 

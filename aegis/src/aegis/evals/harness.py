@@ -25,7 +25,7 @@ from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 
 from .corpus import SEED_CASES, EvalCase, corpus_chunks
 from .judge import JudgeSummary, JudgeVerdict, judge_answer, summarize_verdicts
-from .metrics import AggregateScore, CaseScore, aggregate, score_case
+from .metrics import AggregateScore, CaseScore, MetricConfig, aggregate, score_case
 
 #: A chat-completion callable (matching a gateway ``complete``'s shape) that the
 #: LLM-as-judge is driven through. When ``evaluate`` is given one, the judge runs; when
@@ -102,6 +102,111 @@ class EvalReport:
                 f"groundedness {agg.groundedness:.3f} < {thr.min_groundedness:.3f}"
             )
         return reasons
+
+    def metric_configs(self) -> list[MetricConfig]:
+        """Return the effective per-metric config + current aggregate reading.
+
+        Three deterministic RAGAS-style proxies (context precision@k / recall /
+        groundedness) carry their computed aggregate value and pass verdict; **answer
+        relevancy is surfaced honestly as not-computed** (``computed=False``, ``value=None``)
+        because it needs a generation + semantic-similarity model — it is *not* faked.
+
+        This is the single source the stream payload, the persisted rows, and the dashboard
+        all read, so the numbers cannot drift between surfaces.
+        """
+        agg, thr = self.aggregate, self.thresholds
+        return [
+            MetricConfig(
+                name=f"context_precision@{thr.precision_k}",
+                threshold=thr.min_context_precision,
+                higher_is_better=True,
+                value=agg.context_precision,
+                passed=agg.context_precision >= thr.min_context_precision,
+                cases=agg.cases,
+            ),
+            MetricConfig(
+                name="context_recall",
+                threshold=thr.min_context_recall,
+                higher_is_better=True,
+                value=agg.context_recall,
+                passed=agg.context_recall >= thr.min_context_recall,
+                cases=agg.cases,
+            ),
+            MetricConfig(
+                name="groundedness",
+                threshold=thr.min_groundedness,
+                higher_is_better=True,
+                value=agg.groundedness,
+                passed=agg.groundedness >= thr.min_groundedness,
+                cases=agg.cases,
+            ),
+            MetricConfig(
+                name="answer_relevancy",
+                threshold=0.0,
+                higher_is_better=True,
+                value=None,
+                passed=True,
+                cases=0,
+                computed=False,
+            ),
+        ]
+
+    def as_dict(self) -> dict[str, object]:
+        """Return the whole report as a plain, JSON-ready dict (the lossless projection).
+
+        Carries the exact aggregate, per-case, per-metric numbers plus the pass flag and
+        the (optional) LLM-as-judge summary. Every downstream surface is derived from this,
+        so *computed == streamed == persisted == accessor* holds by construction.
+        """
+        return {
+            "passed": self.passed,
+            "aggregate": self.aggregate.as_dict(),
+            "metrics": [c.as_dict() for c in self.metric_configs()],
+            "cases": [c.as_dict() for c in self.cases],
+            "thresholds": {
+                "minContextPrecision": self.thresholds.min_context_precision,
+                "minContextRecall": self.thresholds.min_context_recall,
+                "minGroundedness": self.thresholds.min_groundedness,
+                "precisionK": self.thresholds.precision_k,
+            },
+            "judge": (
+                None
+                if self.judge is None
+                else {
+                    "groundedness": self.judge.groundedness,
+                    "relevance": self.judge.relevance,
+                    "cases": self.judge.cases,
+                }
+            ),
+        }
+
+    def to_eval_rows(
+        self, *, run_id: str | None = None, prompt_key: str | None = None
+    ) -> list[dict[str, object]]:
+        """Project the computed metrics into ``EvalResult``-column-shaped rows.
+
+        One plain dict per *computed* metric (answer relevancy, being not-computed, is
+        omitted — a row must carry a real ``score``), with exactly the ``eval_results``
+        columns and the same aggregate ``value`` the accessor + stream carry. ORM-free by
+        design: the caller constructs the rows.
+        """
+        return [
+            {
+                "run_id": run_id,
+                "prompt_key": prompt_key,
+                "metric": c.name,
+                "score": c.value,
+                "passed": c.passed,
+                "detail": {
+                    "threshold": c.threshold,
+                    "higherIsBetter": c.higher_is_better,
+                    "cases": c.cases,
+                    "source": "evaluate",
+                },
+            }
+            for c in self.metric_configs()
+            if c.computed and c.value is not None
+        ]
 
 
 async def _fake_complete(

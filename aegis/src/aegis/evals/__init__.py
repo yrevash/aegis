@@ -33,7 +33,7 @@ from .judge import (
     judge_enabled,
     summarize_verdicts,
 )
-from .metrics import AggregateScore, CaseScore, aggregate, score_case
+from .metrics import AggregateScore, CaseScore, MetricConfig, aggregate, score_case
 from .regression import (
     DEFAULT_METRICS,
     ROUTER_EVAL_CASES,
@@ -61,6 +61,7 @@ __all__ = [
     "JudgeSummary",
     "JudgeVerdict",
     "Metric",
+    "MetricConfig",
     "MetricResult",
     "RegressionReport",
     "RouterEvalCase",

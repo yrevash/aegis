@@ -74,6 +74,20 @@ class CaseScore:
     groundedness: float
     retrieved_docs: tuple[str, ...]
 
+    def as_dict(self) -> dict[str, object]:
+        """Return this case's exact per-metric numbers as a plain, JSON-ready dict.
+
+        The values are the *same* floats the aggregate is built from and the stream/row
+        surfaces carry — no rounding, so ``as_dict`` is a lossless projection.
+        """
+        return {
+            "query": self.query,
+            "contextPrecision": self.context_precision,
+            "contextRecall": self.context_recall,
+            "groundedness": self.groundedness,
+            "retrievedDocs": list(self.retrieved_docs),
+        }
+
 
 @dataclass(frozen=True)
 class AggregateScore:
@@ -83,6 +97,63 @@ class AggregateScore:
     context_recall: float
     groundedness: float
     cases: int
+
+    def as_dict(self) -> dict[str, object]:
+        """Return the corpus-level means as a plain dict (the authoritative aggregate)."""
+        return {
+            "contextPrecision": self.context_precision,
+            "contextRecall": self.context_recall,
+            "groundedness": self.groundedness,
+            "cases": self.cases,
+        }
+
+
+@dataclass(frozen=True)
+class MetricConfig:
+    """The effective, aggregated configuration + current reading for one metric.
+
+    The single dashboard-facing view of a metric shared by both eval surfaces (the
+    RAGAS-style :class:`~aegis.evals.harness.EvalReport` and the DeepEval-pattern
+    :class:`~aegis.evals.regression.RegressionReport`): its declarative definition
+    (``name`` / ``threshold`` / ``higher_is_better``), the current aggregate ``value``, the
+    aggregate pass verdict, how many cases contributed, and whether the value was actually
+    ``computed`` (``False`` marks an honestly-not-computed metric such as RAGAS answer
+    relevancy, whose ``value`` is then ``None``).
+
+    It is the one authoritative per-metric number — the stream payload and the persisted
+    rows are both derived from it, so they can never drift.
+
+    Attributes:
+        name: Stable metric id (matches a :class:`Metric.name`).
+        threshold: The effective pass bar (the injected/overridden one, if any).
+        higher_is_better: Pass direction (``value >= threshold`` when ``True``).
+        value: Aggregate reading (mean across contributing cases); ``None`` when
+            ``computed`` is ``False``.
+        passed: Aggregate verdict — ``True`` iff every contributing case passed.
+        cases: How many cases contributed to ``value``.
+        computed: Whether this metric is deterministically computed offline. ``False`` is
+            the honest signal that the number needs an LLM and is *not* faked here.
+    """
+
+    name: str
+    threshold: float
+    higher_is_better: bool
+    value: float | None
+    passed: bool
+    cases: int
+    computed: bool = True
+
+    def as_dict(self) -> dict[str, object]:
+        """Return this metric's config + reading as a plain, JSON-ready dict."""
+        return {
+            "name": self.name,
+            "threshold": self.threshold,
+            "higherIsBetter": self.higher_is_better,
+            "value": self.value,
+            "passed": self.passed,
+            "cases": self.cases,
+            "computed": self.computed,
+        }
 
 
 def _source_doc(source: object) -> str:
