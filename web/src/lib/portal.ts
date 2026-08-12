@@ -34,6 +34,7 @@ import {
   Sigma,
   SlidersHorizontal,
   Sparkles,
+  Swords,
   Timer,
   Waypoints,
   Workflow,
@@ -189,6 +190,15 @@ export const SECTIONS: Record<string, Section> = {
       'Aegis Latency — per-node and per-run p50/p95/max drawn from real samples in a per-process rolling window (resets on restart); no runs yet reads as an honest empty state, never fake zeros',
     group: 'Operations',
   },
+  redteam: {
+    id: 'redteam',
+    label: 'Red-team',
+    icon: Swords,
+    hint: 'attacks · block-rate',
+    tooltip:
+      'Aegis Red-team — the offline attack battery (prompt injection, jailbreak, system-prompt leak, PII extraction, content safety) scored against the guardrail stack: overall block-rate, gate pass/fail, per-category bars and the probes that leaked',
+    group: 'Operations',
+  },
   security: {
     id: 'security',
     label: 'Security',
@@ -252,7 +262,7 @@ export const SECTIONS: Record<string, Section> = {
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
-  devops: ['dashboard', 'stack', 'patch', 'security', 'latency', 'audit'],
+  devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
 

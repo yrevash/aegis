@@ -11,6 +11,7 @@ import { MLOpsMount } from '@/components/ml/MLOpsView'
 import { MemoryMount } from '@/components/memory/MemoryView'
 import { LLMOpsMount } from '@/components/ops/LLMOpsView'
 import { RagMount } from '@/components/retrieval/RagView'
+import { RedteamMount } from '@/components/redteam/RedteamView'
 import { SecurityMount } from '@/components/security/SecurityView'
 import { SectionPlaceholder } from '@/components/portal/SectionPlaceholder'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
@@ -48,6 +49,7 @@ export default async function SectionPage({
   if (section === 'tokenopt') return <TokenOptMount />
   if (section === 'guardrails') return <GuardrailsMount />
   if (section === 'security') return <SecurityMount />
+  if (section === 'redteam') return <RedteamMount />
   if (section === 'latency') return <LatencyMount />
   return <SectionPlaceholder section={def} />
 }
