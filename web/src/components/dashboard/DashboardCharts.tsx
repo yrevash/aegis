@@ -9,15 +9,16 @@ import { BentoTile } from '@/components/shared/BentoGrid'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import type { MetricsResponse } from '@/lib/api/types'
 
-import { COST_TREND, QUERY_VOLUME } from './data'
-import { modelMixData } from './overview'
+import { costTrendSeries, modelMixData, queryVolumeSeries } from './overview'
 
 /**
  * The three-chart row of the Overview bento: **Cost trend** (`AreaChart`),
- * **Model mix** (`DonutChart`, live from `/metrics`) and **Query volume**
- * (`BarChart`). Real recharts, each drawing in on mount. The trend and volume
- * series are illustrative fixtures (no backend field yet) and keep their honest
- * "sample" badge; the model-mix donut is backed by real `/metrics` data.
+ * **Model mix** (`DonutChart`) and **Query volume** (`BarChart`). Real recharts,
+ * each drawing in on mount. All three are now **measured**: the cost trend and
+ * query volume are derived from the real in-session `/metrics` samples (the
+ * polled history), and the model-mix donut from the live `small_model_share`.
+ * Before enough samples have accumulated each series shows an honest
+ * "accumulating…" state rather than a fabricated constant series.
  */
 
 /** A tile header — short title, an ⓘ for detail, and a live/sample marker. */
@@ -52,26 +53,48 @@ function ChartHead({
   )
 }
 
-export function DashboardCharts({ metrics }: { metrics: MetricsResponse | null }): ReactElement {
+/** An honest placeholder while a measured series is still accumulating samples. */
+function Accumulating(): ReactElement {
+  return (
+    <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">
+      Accumulating…
+    </div>
+  )
+}
+
+export function DashboardCharts({
+  metrics,
+  history = [],
+}: {
+  metrics: MetricsResponse | null
+  /** The real in-session `/metrics` samples, oldest → newest. */
+  history?: readonly MetricsResponse[]
+}): ReactElement {
   const share = metrics?.small_model_share ?? null
   const modelMix: DonutDatum[] = modelMixData(share)
+  const costTrend = costTrendSeries(history)
+  const queryVolume = queryVolumeSeries(history)
 
   return (
     <>
       <BentoTile span={4} reveal index={0}>
         <ChartHead
           title="Cost trend"
-          sample
-          info="Blended cost per 1,000 queries over recent intervals — trending down as routing and caching take effect."
+          live={costTrend.length >= 2}
+          info="Blended cost per 1,000 queries across the polled /metrics samples — a measured in-session trend, not a fixture. It fills in as the dashboard polls."
         />
-        <AreaChart
-          data={COST_TREND}
-          index="t"
-          category="cost"
-          color="ok"
-          valueFormatter={(v) => `$${v.toFixed(2)}`}
-          height={200}
-        />
+        {costTrend.length < 2 ? (
+          <Accumulating />
+        ) : (
+          <AreaChart
+            data={costTrend}
+            index="t"
+            category="cost"
+            color="ok"
+            valueFormatter={(v) => `$${v.toFixed(2)}`}
+            height={200}
+          />
+        )}
       </BentoTile>
 
       <BentoTile span={4} reveal index={1}>
@@ -98,10 +121,14 @@ export function DashboardCharts({ metrics }: { metrics: MetricsResponse | null }
       <BentoTile span={4} reveal index={2}>
         <ChartHead
           title="Query volume"
-          sample
-          info="Requests handled across a working day — the throughput the cost and quality figures are measured over."
+          live={queryVolume.length >= 1}
+          info="LLM calls served between successive /metrics polls — the real per-interval throughput, derived from the measured cumulative call count. It fills in as the dashboard polls."
         />
-        <BarChart data={QUERY_VOLUME} index="hour" category="queries" color="graph" height={200} />
+        {queryVolume.length < 1 ? (
+          <Accumulating />
+        ) : (
+          <BarChart data={queryVolume} index="t" category="calls" color="graph" height={200} />
+        )}
       </BentoTile>
     </>
   )

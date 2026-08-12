@@ -128,6 +128,7 @@ from app.core.security import (
 )
 from app.data import (
     LastPlatformAdminError,
+    count_approved,
     effective_limits,
     get_approval,
     list_budgets,
@@ -570,7 +571,18 @@ class MetricsStore:
         routed to a small model (from the gateway tally); before any call it
         falls back to the config-derived share of the routing table.
         ``quality_score`` is the running grounding proxy (``None`` before any run).
+
+        ``total_calls`` (the gateway tally's process-wide chat-completion count) and
+        ``p95_latency_ms`` (the per-process latency window's run p95) are the honest
+        real sources for the Overview's throughput + latency tiles — cheap, sync and
+        side-effect-free. ``p95_latency_ms`` is ``None`` before any run is recorded
+        (never a fabricated zero). ``actions_approved`` is left at ``0`` here (it
+        needs an async store read) and is populated by the ``/metrics`` handler.
         """
+        # Lazy import mirrors the ``/latency`` route: the summary reads the in-process
+        # rolling window, so it stays cheap and never touches the network.
+        from aegis.observability import latency_summary
+
         routing = routing_table()
         tally = usage_tally()
         measured_share = tally["small_model_share"]
@@ -590,6 +602,8 @@ class MetricsStore:
             routing=routing,
             cost_saved_usd=tally["cost_saved_usd"],
             baseline_cost_usd=tally["baseline_cost_usd"],
+            total_calls=int(tally["total_calls"]),
+            p95_latency_ms=latency_summary().run_p95_ms,
         )
 
 
@@ -939,8 +953,18 @@ async def metrics(
     figures** (cache-hit rate, small-model share, cost-per-1k, measured savings) — not
     per-tenant spend, tenant listings or budget mutation, which stay admin-gated. Any
     authenticated principal may read the platform's own efficiency posture.
+
+    ``actions_approved`` (cleared human gates) is folded in here — it needs an async
+    store read, so it lives at the handler rather than in the sync snapshot. The read
+    is a single ``COUNT`` and degrades to the honest ``0`` when the store is
+    unavailable, never fabricating a figure.
     """
-    return metrics_store.snapshot()
+    snapshot = metrics_store.snapshot()
+    try:
+        snapshot.actions_approved = await count_approved()
+    except Exception:  # noqa: BLE001 - the store is optional; degrade to an honest 0
+        logger.debug("actions_approved count failed — honest 0.", exc_info=True)
+    return snapshot
 
 
 # Upper bound on how many audit rows one /audit call may return.

@@ -572,6 +572,30 @@ class MetricsResponse(BaseModel):
         default=0.0,
         description="What the chat calls would have cost at the generation rate.",
     )
+    total_calls: int = Field(
+        default=0,
+        description=(
+            "Measured chat completions served since this process started (the "
+            "gateway usage tally). Not a per-day figure — the honest process-wide "
+            "count of LLM calls; resets on restart."
+        ),
+    )
+    actions_approved: int = Field(
+        default=0,
+        description=(
+            "Count of human-gate approvals that were cleared (durable approvals "
+            "rows in the terminal APPROVED state). 0 when none / the store is "
+            "unavailable — never fabricated."
+        ),
+    )
+    p95_latency_ms: float | None = Field(
+        default=None,
+        description=(
+            "95th-percentile whole-run duration in milliseconds, from the "
+            "per-process latency window (aegis.observability.latency_summary). "
+            "Null when no runs have been recorded — an honest empty state."
+        ),
+    )
 
 
 # ``ApprovalDecision`` now lives in ``aegis.core.types`` (a shared cross-module contract

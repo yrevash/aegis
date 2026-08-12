@@ -78,6 +78,23 @@ export interface MetricsResponse {
   cost_saved_usd: number
   /** What the same workload would have cost on the frontier model, in USD. */
   baseline_cost_usd: number
+  /**
+   * Measured chat completions served since the backend process started (the
+   * gateway usage tally). Not a per-day figure — the honest process-wide count
+   * of LLM calls; resets on restart.
+   */
+  total_calls: number
+  /**
+   * Count of human-gate approvals cleared to the terminal APPROVED state (from
+   * the durable approvals store). 0 when none — never fabricated.
+   */
+  actions_approved: number
+  /**
+   * 95th-percentile whole-run duration in milliseconds, from the backend's
+   * per-process latency window. Null before any run is recorded — an honest
+   * empty state, not a fabricated zero.
+   */
+  p95_latency_ms: number | null
 }
 
 /** Whether a paused action was approved or rejected by the human gate. */

@@ -92,6 +92,13 @@ export function mockMetrics(): MetricsResponse {
     },
     baseline_cost_usd: baselineCostPer1k,
     cost_saved_usd: baselineCostPer1k - costPer1k,
+    // Offline demo figures. total_calls climbs monotonically so the derived
+    // per-interval query-volume bars read as real deltas between polls; p95 and
+    // actions_approved are steady illustrative values (the offline banner marks
+    // the whole surface as mock — honest without a per-tile "sample" badge).
+    total_calls: 1240 + baselineTick,
+    actions_approved: 41,
+    p95_latency_ms: 1900 + Math.round(wobble * 400),
   }
 }
 

@@ -29,6 +29,50 @@ export function sessionSavedDelta(history: readonly MetricsResponse[]): number |
   return gain > 0 ? gain : null
 }
 
+/** One measured point of the cost-per-1k trend, from a polled `/metrics` sample. */
+export interface CostTrendPoint {
+  t: string
+  cost: number
+}
+
+/**
+ * Build the **measured** cost-per-1k trend from the polled `/metrics` history —
+ * genuine in-session data (like the Vite `useMetricsSeries`), not a fabricated
+ * fixture. Newest sample is `T-0`, older ones count back. Non-finite samples are
+ * dropped so a transient blip never distorts the line.
+ */
+export function costTrendSeries(history: readonly MetricsResponse[]): CostTrendPoint[] {
+  const costs = history
+    .map((m) => m.cost_per_1k_queries_usd)
+    .filter((v) => Number.isFinite(v))
+  return costs.map((cost, i) => ({
+    t: `T-${costs.length - 1 - i}`,
+    cost: Number(cost.toFixed(2)),
+  }))
+}
+
+/** One measured point of query volume — calls served between two polls. */
+export interface QueryVolumePoint {
+  t: string
+  calls: number
+}
+
+/**
+ * Derive per-interval query volume from the polled `total_calls` history: the
+ * difference in the cumulative call count between consecutive samples — the real
+ * throughput measured over each poll window. Needs at least two samples to yield
+ * a point; a negative delta (a backend restart reset the counter) is clamped to 0
+ * rather than inventing a spike.
+ */
+export function queryVolumeSeries(history: readonly MetricsResponse[]): QueryVolumePoint[] {
+  const totals = history.map((m) => m.total_calls).filter((v) => Number.isFinite(v))
+  const points: QueryVolumePoint[] = []
+  for (let i = 1; i < totals.length; i += 1) {
+    points.push({ t: `T-${totals.length - 1 - i}`, calls: Math.max(0, totals[i] - totals[i - 1]) })
+  }
+  return points
+}
+
 /** One slice of the model-mix donut (signal-named colour, no recharts import). */
 export interface ModelMixSlice {
   name: string

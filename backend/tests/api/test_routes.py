@@ -81,6 +81,37 @@ async def test_metrics_quality_score_measured_after_grounded_run(
     assert body["quality_score"] == 1.0
 
 
+async def test_metrics_exposes_new_real_fields(client, db, admin_headers):
+    """The three formerly-fabricated tiles are now real, additive /metrics fields."""
+    body = (await client.get("/metrics", headers=admin_headers)).json()
+    # All three are present in the shape (additive; the Vite app reads it too).
+    assert "total_calls" in body
+    assert "actions_approved" in body
+    assert "p95_latency_ms" in body
+    # Honest empty state on a fresh store: no gates cleared, and p95 is null (never a
+    # fabricated zero) until a run is recorded.
+    assert body["actions_approved"] == 0
+    assert body["p95_latency_ms"] is None
+    assert body["total_calls"] >= 0
+
+
+async def test_metrics_actions_approved_counts_cleared_gates(client, db, admin_headers):
+    """actions_approved reflects real approvals cleared to the terminal APPROVED state."""
+    from app.api.schemas import ApprovalDecision
+    from app.data import enqueue_approval, finalize_resumed, resolve_approval
+
+    # Enqueue a gate, approve it, and finalise its resume → terminal APPROVED.
+    await enqueue_approval(approval_id="gate-1", run_id="run-1", action="issue_refund")
+    resolution = await resolve_approval(
+        "gate-1", ApprovalDecision.APPROVE, approver="admin"
+    )
+    assert resolution.won
+    await finalize_resumed("gate-1")
+
+    body = (await client.get("/metrics", headers=admin_headers)).json()
+    assert body["actions_approved"] == 1
+
+
 async def test_metrics_quality_score_zero_when_input_blocked(
     client, db, admin_headers, make_deps
 ):

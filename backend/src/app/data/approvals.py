@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import ApprovalDecision, ApprovalRow, RiskLevel
@@ -215,6 +215,36 @@ async def list_pending(
             stmt = stmt.with_for_update(skip_locked=True)
         rows = (await session.execute(stmt)).scalars().all()
         return [to_row(r) for r in rows]
+
+
+async def count_approved(tenant_id: int | None = None) -> int:
+    """Return how many human-gate approvals have been cleared (the Overview figure).
+
+    Counts durable :class:`Approval` rows in the terminal ``APPROVED`` state — a gate
+    a human approved *and* whose resume finalised (an approve decision moves the row
+    ``PENDING → RESUMING`` and finalisation flips it to ``APPROVED``). This is the
+    honest "actions approved" tally: an in-flight ``RESUMING`` row is not yet counted,
+    and there is never a fabricated figure. Cheap and side-effect-free (a single
+    ``COUNT``); the caller degrades to ``0`` when the store is unavailable.
+
+    Args:
+        tenant_id: When given, restrict the count to this tenant's rows (and engage
+            Postgres RLS for the connection); ``None`` counts platform-wide.
+
+    Returns:
+        The number of ``APPROVED`` approval rows in scope.
+    """
+    async with get_sessionmaker()() as session:
+        # Engage Postgres RLS for this connection (no-op on SQLite; H1).
+        await set_tenant_scope(session, tenant_id)
+        stmt = (
+            select(func.count())
+            .select_from(Approval)
+            .where(Approval.status == ApprovalStatus.APPROVED)
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(Approval.tenant_id == tenant_id)
+        return int((await session.execute(stmt)).scalar_one())
 
 
 async def resolve_approval(

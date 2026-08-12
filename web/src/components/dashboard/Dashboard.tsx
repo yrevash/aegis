@@ -99,6 +99,9 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
   const costPer1k = metrics?.cost_per_1k_queries_usd ?? null
   const cacheHit = metrics?.cache_hit_rate ?? null
   const quality = metrics?.quality_score ?? null
+  const llmCalls = metrics?.total_calls ?? null
+  const actionsApproved = metrics?.actions_approved ?? null
+  const p95Ms = metrics?.p95_latency_ms ?? null
   const reduction = reductionPct(baseline, costPer1k)
   const savedTrend = costSavedTrend(series.history)
   const savedDelta = sessionSavedDelta(series.history)
@@ -148,24 +151,23 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
 
         <BentoTile span={4} reveal index={0}>
           <StatCard
-            label="Queries today"
-            value={2870}
+            label="LLM calls"
+            value={llmCalls}
             icon={Zap}
             signal="graph"
-            delta={{ value: 8, direction: 'up', tone: 'good', suffix: '%' }}
-            sample
-            info="Illustrative daily throughput — no backend counter is wired yet."
+            live={llmCalls != null}
+            info="Chat completions served since the backend started — measured from the gateway usage tally on GET /metrics. Process-wide (not per-day); resets on restart."
           />
         </BentoTile>
 
         <BentoTile span={4} reveal index={1}>
           <StatCard
             label="Actions approved"
-            value={41}
+            value={actionsApproved}
             icon={ListChecks}
             signal="ok"
-            sample
-            info="Illustrative count of human-gated actions cleared — no backend counter is wired yet."
+            live={actionsApproved != null}
+            info="Human-gated actions cleared to the terminal approved state — counted from the durable approvals store on GET /metrics."
           />
         </BentoTile>
 
@@ -174,12 +176,12 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
         <BentoTile span={4} reveal index={3}>
           <StatCard
             label="p95 latency"
-            value={1.9}
-            format={(n) => `${n.toFixed(1)}s`}
+            value={p95Ms}
+            format={(n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${Math.round(n)} ms`)}
             icon={Timer}
             signal="graph"
-            sample
-            info="Illustrative 95th-percentile response time — no backend latency histogram is wired yet."
+            live={p95Ms != null}
+            info="95th-percentile whole-run duration from the backend's per-process latency window on GET /metrics. Dash until a run has been recorded — an honest empty state, not a fabricated figure."
           />
         </BentoTile>
 
@@ -198,7 +200,7 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
 
       {/* ── Charts row — real recharts, drawing in on scroll. ── */}
       <BentoGrid>
-        <DashboardCharts metrics={metrics} />
+        <DashboardCharts metrics={metrics} history={series.history} />
       </BentoGrid>
 
       {/* ── Value spine — the four outcomes a buyer signs off on (admin sees it

@@ -7,6 +7,7 @@ that both completed cleanly and retrieved backing context (touched graph nodes).
 from __future__ import annotations
 
 import aegis.gateway.llm as llm_mod
+import aegis.observability as obs
 import pytest
 
 from app.api.routes import MetricsStore
@@ -59,6 +60,48 @@ def test_snapshot_exposes_cost_saved_and_baseline(monkeypatch) -> None:
     assert snap.cost_saved_usd == pytest.approx(
         snap.baseline_cost_usd - llm_mod.usage_tally()["total_cost_usd"]
     )
+
+
+def test_snapshot_total_calls_and_p95_honest_empty(monkeypatch) -> None:
+    """A fresh process reports 0 calls and a null p95 — never fabricated figures."""
+    monkeypatch.setattr(llm_mod, "_tally", llm_mod._UsageTally())
+    obs.reset_latency_window()
+    snap = MetricsStore().snapshot()
+    assert snap.total_calls == 0
+    assert snap.p95_latency_ms is None
+    # actions_approved is folded in by the /metrics handler (async store read); the
+    # sync snapshot leaves it at the honest default.
+    assert snap.actions_approved == 0
+
+
+def test_snapshot_total_calls_tracks_gateway_tally(monkeypatch) -> None:
+    """total_calls mirrors the measured gateway chat-completion count."""
+    monkeypatch.setattr(llm_mod, "_tally", llm_mod._UsageTally())
+    llm_mod.record_call(
+        "genailab-maas-gpt-4o-mini", 0.0002, prompt_tokens=10, completion_tokens=10
+    )
+    llm_mod.record_call(
+        "genailab-maas-llama-3.3-70b", 0.001, prompt_tokens=10, completion_tokens=10
+    )
+    assert MetricsStore().snapshot().total_calls == 2
+
+
+def test_snapshot_p95_from_recorded_runs() -> None:
+    """p95_latency_ms comes from real samples in the per-process latency window."""
+    obs.reset_latency_window()
+    try:
+        obs.record_run_latency(
+            [
+                {"node": "plan", "duration_ms": 100.0},
+                {"node": "act", "duration_ms": 200.0},
+            ]
+        )
+        obs.record_run_latency([{"node": "plan", "duration_ms": 50.0}])
+        snap = MetricsStore().snapshot()
+        assert snap.p95_latency_ms is not None
+        assert snap.p95_latency_ms > 0.0
+    finally:
+        obs.reset_latency_window()
 
 
 def test_quality_score_is_a_running_average() -> None:

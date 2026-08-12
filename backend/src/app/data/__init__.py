@@ -15,6 +15,7 @@ from __future__ import annotations
 from .approvals import (
     ApprovalResolution,
     SweepAction,
+    count_approved,
     enqueue_approval,
     finalize_resumed,
     get_approval,
@@ -87,6 +88,7 @@ __all__ = [
     "bootstrap",
     "bootstrap_rls",
     "configure_engine",
+    "count_approved",
     "effective_limits",
     "enforce_governance",
     "enqueue_approval",
