@@ -88,7 +88,9 @@ def build_fake_deps(
             )
         return GuardResult(verdict=GuardVerdict.PASS, reason="clean", text=text)
 
-    async def check_output(text: str) -> GuardResult:
+    async def check_output(
+        text: str, contexts: list[str] | None = None
+    ) -> GuardResult:  # noqa: ARG001 - contexts accepted for the grounding-aware signature
         return GuardResult(verdict=GuardVerdict.PASS, reason="clean", text=text)
 
     async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:

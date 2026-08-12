@@ -38,7 +38,11 @@ __all__ = [
 # Structural aliases for the injected callables (kept loose to avoid coupling).
 CompleteFn = Callable[..., Awaitable[Any]]
 RetrieveFn = Callable[..., Awaitable[Any]]
-GuardFn = Callable[[str], Awaitable[Any]]
+# The input rail takes the query text; the output rail additionally accepts the
+# retrieved ``contexts`` (keyword) so the grounding self-check can run on the same
+# passages the answer was generated from. Kept loose (``...``) so a plain
+# ``check_output(text)`` fake and a ``check_output(text, contexts=...)`` one both fit.
+GuardFn = Callable[..., Awaitable[Any]]
 PredictFn = Callable[[dict[str, Any]], MLExplainResponse]
 ToolDefsFn = Callable[[str], list[dict[str, Any]]]
 RiskFn = Callable[[str], RiskLevel]

@@ -75,7 +75,15 @@ async def _gateway_completer(
 
 #: The process-wide guardrail pipeline, wired with the platform's cheap-model
 #: completer. A single instance is fine — ``Guardrails`` holds no per-call state.
-_guard = Guardrails(completer=_gateway_completer)
+#: ``ground_answers=True`` activates the output grounding self-check (OWASP LLM09):
+#: when :func:`check_output` is given the retrieved ``contexts``, the answer is judged
+#: for groundedness against them (advisory FLAG by default; ``grounding_block`` in
+#: settings flips it to a hard BLOCK). With no contexts the grounding rail is a no-op.
+_guard = Guardrails(
+    completer=_gateway_completer,
+    ground_answers=True,
+    grounding_block=get_settings().grounding_block,
+)
 
 
 def _use_nemo_engine() -> bool:
@@ -137,26 +145,35 @@ async def check_input(text: str) -> GuardResult:
     return await _guard.check_input(text)
 
 
-async def check_output(text: str) -> GuardResult:
-    """Run the full output rail (schema -> content filter -> PII) via aegis.
+async def check_output(
+    text: str, contexts: list[str] | None = None
+) -> GuardResult:
+    """Run the full output rail (schema -> content filter -> grounding -> PII) via aegis.
 
     Routes through the engine selected by ``settings.guardrails_engine`` (see
     :func:`check_input`). A NeMo engine error fails closed to a BLOCK.
 
     Args:
         text: The model's answer text (assumed complete; see streaming caveat).
+        contexts: The retrieved passages the answer was generated from. When
+            provided, the output grounding self-check judges the answer against
+            them (advisory FLAG by default; ``settings.grounding_block`` hard-blocks).
+            ``None``/empty (the default, and every non-graph call site) is a
+            grounding no-op, so existing callers are unaffected. The programmatic
+            path only — the NeMo Colang engine has no grounding action.
 
     Returns:
         A :class:`GuardResult`. ``block`` when the output is malformed or trips
         the content filter; ``redact`` when it carried PII (``text`` is the
-        redacted form); otherwise ``pass``.
+        redacted form); ``flag`` when it was judged ungrounded (advisory);
+        otherwise ``pass``.
     """
     if _use_nemo_engine():
         try:
             return await nemo.nemo_check_output(text)
         except Exception as exc:  # noqa: BLE001 - fail closed, never silently pass
             return _fail_closed("output", exc)
-    return await _guard.check_output(text)
+    return await _guard.check_output(text, contexts=contexts)
 
 
 __all__ = [

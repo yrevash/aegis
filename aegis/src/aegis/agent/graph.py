@@ -828,7 +828,14 @@ def build_agent(
         breaks the run).
         """
         writer = get_stream_writer()
-        result = await deps.check_output(state.get("answer", ""))
+        # Ground the answer against the SAME retrieved context it was generated from
+        # (state["context"], set by the retrieve node from result.answer_context) — not
+        # a re-fetch. Empty context ⇒ no contexts ⇒ the grounding rail is a no-op PASS.
+        # The output rail emits an advisory FLAG (verdict="flag", layer="grounding") that
+        # streams via events.guardrail below, so the console can surface "ungrounded".
+        answer_context = state.get("context", "")
+        contexts = [answer_context] if answer_context.strip() else None
+        result = await deps.check_output(state.get("answer", ""), contexts=contexts)
         _stamp_guardrail(GuardStage.OUTPUT, result)
         writer(
             events.guardrail(

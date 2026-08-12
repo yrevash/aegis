@@ -101,6 +101,13 @@ class Settings(BaseSettings):
     # the programmatic rails); kept for forward compatibility / config parity.
     guardrails_engine: str = Field(default="programmatic")
 
+    # ── Output grounding rail (OWASP LLM09; docs/security.md §3) ──
+    # The output rail self-checks the answer against the retrieved contexts it was
+    # generated from (NeMo self-check-facts / RAGAS groundedness). Advisory by
+    # default: an ungrounded answer is surfaced as a non-blocking FLAG in the trace,
+    # never withheld. Flip ``grounding_block`` to hard-block ungrounded answers.
+    grounding_block: bool = Field(default=False)
+
     # ── Observability ────────────────────────────────────────────────────────
     phoenix_enabled: bool = Field(default=True)
 
