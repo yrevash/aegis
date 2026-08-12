@@ -1,0 +1,275 @@
+'use client'
+
+import { ChevronDown, DatabaseZap, ListChecks, Route, Target, Timer, WifiOff, Zap } from 'lucide-react'
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+
+import { StatCard } from '@/components/metrics/StatCard'
+import { BentoGrid, BentoTile } from '@/components/shared/BentoGrid'
+import { KpiHero } from '@/components/shared/KpiHero'
+import { Card } from '@/components/primitives/card'
+import { Gauge } from '@/components/primitives/Gauge'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { TooltipProvider } from '@/components/primitives/tooltip'
+import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
+import { useMetricsSeries } from '@/state/useMetrics'
+import type { Role } from '@/lib/stream'
+
+import DashboardCharts from './DashboardCharts'
+import { costSavedTrend, reductionPct, sessionSavedDelta } from './overview'
+import { formatUsd } from './roi'
+import { RoiPanel } from './RoiPanel'
+import { RoutingTable } from './RoutingTable'
+import { ValueSpine } from './ValueSpine'
+
+/** A small section kicker (eyebrow + optional detail tooltip). */
+function SectionHead({ label, info }: { label: string; info?: ReactNode }): ReactElement {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="eyebrow text-foreground">{label}</span>
+      {info != null && <InfoTip label={label}>{info}</InfoTip>}
+    </div>
+  )
+}
+
+/** A collapsible "one layer down" disclosure, styled as a calm card. */
+function Expander({ summary, children }: { summary: string; children: ReactNode }): ReactElement {
+  return (
+    <Card className="overflow-hidden">
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 select-none">
+          <span className="t-title text-foreground">{summary}</span>
+          <ChevronDown className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180" />
+        </summary>
+        <div className="border-t border-border/70 px-5 py-4">{children}</div>
+      </details>
+    </Card>
+  )
+}
+
+/** The Quality gauge tile — a live grounding-proxy read-out. */
+function QualityTile({ quality }: { quality: number | null }): ReactElement {
+  return (
+    <BentoTile span={4} reveal index={2}>
+      <div className="flex h-full flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <span className="grid size-6 shrink-0 place-items-center rounded-md bg-ml/12">
+            <Target className="size-3.5 text-ml-ink" />
+          </span>
+          <span className="eyebrow">Quality</span>
+          <InfoTip label="About Quality">
+            Share of completed runs that retrieved backing context before
+            answering — a measured grounding proxy from GET /metrics, not an
+            LLM-judge score.
+          </InfoTip>
+          {quality != null && (
+            <span
+              className="animate-pip ml-auto size-1.5 shrink-0 rounded-full bg-ok"
+              style={{ ['--pip-color' as string]: 'var(--ok)' }}
+              title="live from /metrics"
+            />
+          )}
+        </div>
+        <div className="grid flex-1 place-items-center">
+          {quality == null ? (
+            <span className="t-metric text-muted-foreground">—</span>
+          ) : (
+            <Gauge value={quality} color="ml" size={116} />
+          )}
+        </div>
+      </div>
+    </BentoTile>
+  )
+}
+
+/**
+ * The Overview surface — the surface leadership sees, built as a non-linear bento
+ * with the **money as the hero**: a giant live "Cost saved" KpiHero, a band of
+ * operational stats (queries · actions · quality · latency · cache), a row of
+ * real recharts (cost trend · model mix · query volume), and a four-tile value
+ * spine (Savings · Security · Performance · Audit). Every live figure carries a
+ * green dot and every illustrative one keeps its honest "sample" badge.
+ */
+export function Dashboard({ role, token }: { role: Role; token: string | null }): ReactElement {
+  const series = useMetricsSeries(token)
+  const metrics = series.latest
+  const isAdmin = role === 'admin'
+
+  const saved = metrics?.cost_saved_usd ?? null
+  const baseline = metrics?.baseline_cost_usd ?? null
+  const costPer1k = metrics?.cost_per_1k_queries_usd ?? null
+  const cacheHit = metrics?.cache_hit_rate ?? null
+  const quality = metrics?.quality_score ?? null
+  const reduction = reductionPct(baseline, costPer1k)
+  const savedTrend = costSavedTrend(series.history)
+  const savedDelta = sessionSavedDelta(series.history)
+
+  // The "Value" spine — the four outcomes leadership signs off on. Admin (the
+  // oversight role) leads with it at the very top; the other roles see it after
+  // the hero + charts.
+  const valueSection = (
+    <section className="flex flex-col gap-3">
+      <SectionHead
+        label="Value"
+        info="The four things leadership signs off on — savings, security, performance at least cost, and auditability. Live figures carry a green dot; illustrative ones are badged sample."
+      />
+      <BentoGrid>
+        <ValueSpine metrics={metrics} />
+      </BentoGrid>
+    </section>
+  )
+
+  return (
+    <div className="flex flex-col gap-8">
+      {isAdmin && valueSection}
+      {/* ── Hero band — money leads, operational stats fill beside it. ── */}
+      <BentoGrid>
+        {saved != null ? (
+          <KpiHero
+            className="col-span-12 lg:col-span-8 lg:row-span-2"
+            label="Cost saved"
+            value={saved}
+            format={(n) => formatUsd(n, 0)}
+            signal="ok"
+            trend={savedTrend}
+            delta={
+              reduction != null
+                ? { value: reduction, direction: 'up', tone: 'good', suffix: '% vs frontier' }
+                : savedDelta != null
+                  ? { value: Math.round(savedDelta), direction: 'up', tone: 'good', suffix: 'this session' }
+                  : undefined
+            }
+            info="Cumulative USD saved versus running every query on the frontier model — measured live from GET /metrics. The tally comes from small-model routing; cache hits bypass it, so this is the conservative figure."
+          />
+        ) : (
+          <Card className="col-span-12 flex min-h-[200px] items-center justify-center p-6 shadow-pop lg:col-span-8 lg:row-span-2">
+            <span className="text-sm text-muted-foreground">Awaiting live metrics…</span>
+          </Card>
+        )}
+
+        <BentoTile span={4} reveal index={0}>
+          <StatCard
+            label="Queries today"
+            value={2870}
+            icon={Zap}
+            signal="graph"
+            delta={{ value: 8, direction: 'up', tone: 'good', suffix: '%' }}
+            sample
+            info="Illustrative daily throughput — no backend counter is wired yet."
+          />
+        </BentoTile>
+
+        <BentoTile span={4} reveal index={1}>
+          <StatCard
+            label="Actions approved"
+            value={41}
+            icon={ListChecks}
+            signal="ok"
+            sample
+            info="Illustrative count of human-gated actions cleared — no backend counter is wired yet."
+          />
+        </BentoTile>
+
+        <QualityTile quality={quality} />
+
+        <BentoTile span={4} reveal index={3}>
+          <StatCard
+            label="p95 latency"
+            value={1.9}
+            format={(n) => `${n.toFixed(1)}s`}
+            icon={Timer}
+            signal="graph"
+            sample
+            info="Illustrative 95th-percentile response time — no backend latency histogram is wired yet."
+          />
+        </BentoTile>
+
+        <BentoTile span={4} reveal index={4}>
+          <StatCard
+            label="Cache hit"
+            value={cacheHit != null ? cacheHit * 100 : null}
+            format={(n) => `${Math.round(n)}%`}
+            icon={DatabaseZap}
+            signal="ok"
+            live={cacheHit != null}
+            info="Share of requests served from the fast cache path — measured live from GET /metrics."
+          />
+        </BentoTile>
+      </BentoGrid>
+
+      {/* ── Charts row — real recharts, drawing in on scroll. ── */}
+      <BentoGrid>
+        <DashboardCharts metrics={metrics} />
+      </BentoGrid>
+
+      {/* ── Value spine — the four outcomes a buyer signs off on (admin sees it
+          at the very top instead). ── */}
+      {!isAdmin && valueSection}
+
+      {/* ── Detail, one layer down. ── */}
+      <div className="flex flex-col gap-4">
+        <Expander summary="Cost breakdown">
+          <RoiPanel metrics={metrics} />
+        </Expander>
+        {isAdmin && metrics && (
+          <Expander summary="Model routing">
+            <div className="flex items-center gap-2 pb-3">
+              <Route className="size-3.5 text-agent-ink" />
+              <span className="eyebrow">Role → deployment</span>
+              <InfoTip label="About model routing">
+                How heterogeneous routing sends cheap work to small models — the
+                mechanism behind the small-model share and the savings.
+              </InfoTip>
+            </div>
+            <RoutingTable routing={metrics.routing} />
+          </Expander>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Client entry for the Overview section (devops + client portals). Runs the boot
+ * probe once (live-first, mock fallback), shows the honest offline banner, then
+ * mounts the money-shot dashboard wired to the metrics poller.
+ *
+ * The admin Overview is intentionally NOT wired to this — it stays a placeholder.
+ */
+export function DashboardMount({ role }: { role: Role }): ReactElement {
+  const [mode, setMode] = useState<ResolvedMode | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void probeBackend().then((resolved) => {
+      if (alive) setMode(resolved)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (mode === null) {
+    return (
+      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+        Connecting…
+      </div>
+    )
+  }
+
+  return (
+    <TooltipProvider>
+      <div>
+        {mode.mode === 'mock' && (
+          <div
+            role="status"
+            className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
+          >
+            <WifiOff className="size-3.5 shrink-0" />
+            <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+          </div>
+        )}
+        <Dashboard role={role} token={null} />
+      </div>
+    </TooltipProvider>
+  )
+}

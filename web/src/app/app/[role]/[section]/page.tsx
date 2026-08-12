@@ -1,6 +1,14 @@
 import { notFound } from 'next/navigation'
+import { AuditMount } from '@/components/admin/AuditLog'
+import { RolesAccessMount } from '@/components/admin/RolesAccess'
+import { ApprovalsMount } from '@/components/approvals/ApprovalsInbox'
 import { CacheMount } from '@/components/cache/CacheView'
+import { RiskMount } from '@/components/client/RiskMap'
+import { SavingsMount } from '@/components/client/SavingsView'
 import { ConsoleMount } from '@/components/console/ConsoleMount'
+import { DashboardMount } from '@/components/dashboard/Dashboard'
+import { PatchMount } from '@/components/devops/PatchCheck'
+import { StackMount } from '@/components/devops/StackVersions'
 import { EvalsMount } from '@/components/evals/EvalsView'
 import { TokenOptMount } from '@/components/gateway/TokenOptView'
 import { GovernanceMount } from '@/components/governance/GovernanceView'
@@ -14,6 +22,7 @@ import { LLMOpsMount } from '@/components/ops/LLMOpsView'
 import { RagMount } from '@/components/retrieval/RagView'
 import { RedteamMount } from '@/components/redteam/RedteamView'
 import { SecurityMount } from '@/components/security/SecurityView'
+import { SimulationMount } from '@/components/sim/SimulationView'
 import { SectionPlaceholder } from '@/components/portal/SectionPlaceholder'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
 
@@ -53,5 +62,16 @@ export default async function SectionPage({
   if (section === 'redteam') return <RedteamMount />
   if (section === 'latency') return <LatencyMount />
   if (section === 'governance') return <GovernanceMount />
+  if (section === 'approvals') return <ApprovalsMount />
+  if (section === 'roles') return <RolesAccessMount />
+  if (section === 'audit') return <AuditMount />
+  if (section === 'stack') return <StackMount />
+  if (section === 'patch') return <PatchMount />
+  if (section === 'savings') return <SavingsMount />
+  if (section === 'risk') return <RiskMount />
+  if (section === 'simulation') return <SimulationMount />
+  // Overview: wired for devops + client only. The admin Overview stays a
+  // placeholder (owner's pending pause item).
+  if (section === 'dashboard' && role !== 'admin') return <DashboardMount role={role} />
   return <SectionPlaceholder section={def} />
 }
