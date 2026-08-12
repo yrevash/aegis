@@ -6,6 +6,7 @@ import { TokenOptMount } from '@/components/gateway/TokenOptView'
 import { GraphMount } from '@/components/graph/GraphView'
 import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
 import { HarnessMount } from '@/components/harness/HarnessView'
+import { LatencyMount } from '@/components/latency/LatencyView'
 import { MLOpsMount } from '@/components/ml/MLOpsView'
 import { MemoryMount } from '@/components/memory/MemoryView'
 import { LLMOpsMount } from '@/components/ops/LLMOpsView'
@@ -47,5 +48,6 @@ export default async function SectionPage({
   if (section === 'tokenopt') return <TokenOptMount />
   if (section === 'guardrails') return <GuardrailsMount />
   if (section === 'security') return <SecurityMount />
+  if (section === 'latency') return <LatencyMount />
   return <SectionPlaceholder section={def} />
 }

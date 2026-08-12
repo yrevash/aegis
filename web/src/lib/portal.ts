@@ -34,6 +34,7 @@ import {
   Sigma,
   SlidersHorizontal,
   Sparkles,
+  Timer,
   Waypoints,
   Workflow,
   type LucideIcon,
@@ -179,6 +180,15 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Flags outdated dependencies before a known-CVE lapse — installed compared to latest',
     group: 'Operations',
   },
+  latency: {
+    id: 'latency',
+    label: 'Latency',
+    icon: Timer,
+    hint: 'p50 · p95',
+    tooltip:
+      'Aegis Latency — per-node and per-run p50/p95/max drawn from real samples in a per-process rolling window (resets on restart); no runs yet reads as an honest empty state, never fake zeros',
+    group: 'Operations',
+  },
   security: {
     id: 'security',
     label: 'Security',
@@ -242,7 +252,7 @@ export const SECTIONS: Record<string, Section> = {
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
-  devops: ['dashboard', 'stack', 'patch', 'security', 'audit'],
+  devops: ['dashboard', 'stack', 'patch', 'security', 'latency', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
 
