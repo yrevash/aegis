@@ -44,6 +44,12 @@ from aegis.memory.stores import (
     MemoryWriteLog,
     WriteOp,
 )
+from aegis.memory.vector_ops import (
+    MemoryVectorIndex,
+    get_default_index,
+    reset_default_index,
+    set_default_index,
+)
 from aegis.memory.working import (
     AssembledMemory,
     assemble_working_memory,
@@ -64,6 +70,7 @@ __all__ = [
     "MemoryProfile",
     "MemorySession",
     "MemorySpec",
+    "MemoryVectorIndex",
     "MemoryWriteLog",
     "RecallBundle",
     "RecallCandidate",
@@ -72,6 +79,7 @@ __all__ = [
     "build_working_text",
     "consolidate",
     "enqueue_consolidation",
+    "get_default_index",
     "get_default_spec",
     "load_raw_window",
     "minmax",
@@ -79,8 +87,10 @@ __all__ = [
     "rank_top",
     "recall",
     "recency_decay",
+    "reset_default_index",
     "resolve_spec",
     "score_candidates",
+    "set_default_index",
     "set_default_spec",
     "sweep_pending",
 ]

@@ -8,10 +8,12 @@ orders. It does **selection**, not layout — no token budget, no spotlighting h
 ``tenant_id`` when given) in its ``WHERE`` clause — the primary, NULL-safe, dialect-
 independent isolator. Postgres RLS is only an additive belt and is never relied upon.
 
-**Dual-path vectors (BLOCKER 1).** All cosine search goes through
-:func:`aegis.memory.vector_ops.topk_by_cosine`, which is portable across the SQLite test
-DB and Postgres. When ``query_vec`` is ``None`` (e.g. an exact-cache hit never computed
-one, or a lite 256-dim vector is not recall-comparable) facts fall back to recency-only SQL.
+**Semantic vectors via Qdrant.** All vector recall goes through
+:func:`aegis.memory.vector_ops.topk_by_cosine`, now a real Qdrant ANN search (subject/
+tenant payload-filtered, then joined back to the authoritative SQL row) rather than an
+in-Python cosine scan. When ``query_vec`` is ``None`` (e.g. an exact-cache hit never
+computed one, or a lite 256-dim vector is not recall-comparable) facts fall back to
+recency-only SQL.
 
 The domain seam (profile rendering, skill selection) is the injected
 :class:`~aegis.memory.spec.MemorySpec`; pass ``spec=`` or configure a process-wide default.
@@ -109,7 +111,7 @@ async def _recall_facts(
     config: MemoryConfig,
     tenant_id: int | None,
 ) -> list[RecallCandidate]:
-    """Semantic facts: pgvector/Python top-k over VALID facts → composite → top-n.
+    """Semantic facts: Qdrant ANN top-k over VALID facts → composite → top-n.
 
     Falls back to recency-only (``ORDER BY valid_at DESC``) when there is no comparable
     query vector, so recall still serves under the degradation ladder.

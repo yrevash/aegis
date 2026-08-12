@@ -12,7 +12,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from aegis.data import AegisBase
-from aegis.memory import set_default_spec
+from aegis.memory import reset_default_index, set_default_spec
 
 from ._spec import FAKE_SPEC
 
@@ -21,6 +21,14 @@ from ._spec import FAKE_SPEC
 def _default_spec():
     """Configure the process-wide default MemorySpec for every memory test."""
     set_default_spec(FAKE_SPEC)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_vector_index():
+    """Give every test a pristine embedded Qdrant index (no cross-test point bleed)."""
+    reset_default_index()
+    yield
+    reset_default_index()
 
 
 @pytest_asyncio.fixture
