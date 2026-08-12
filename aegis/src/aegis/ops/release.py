@@ -31,37 +31,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aegis.ops import config, registry
+from aegis.ops.config import RISK_ORDER, LoopParams
 from aegis.ops.models import PromptStatus, PromptVersion
 
 logger = logging.getLogger(__name__)
-
-#: Fraction of changed lines at/above which a text diff is treated as high blast-radius.
-_HIGH_DIFF_FRACTION = 0.40
-
-#: Fraction of changed lines at/below which a text diff counts as a small wording nudge.
-_LOW_DIFF_FRACTION = 0.15
-
-#: Terms whose presence/count changing between prompts signals a safety-relevant edit —
-#: rewriting guardrail/tool/approval/policy wording is never "low risk".
-_SAFETY_TERMS: tuple[str, ...] = (
-    "ignore",
-    "guardrail",
-    "safety",
-    "tool",
-    "approval",
-    "never",
-    "policy",
-    "system prompt",
-)
-
-#: Config keys that change the model/tool/permission surface — any change here is HIGH.
-_CRITICAL_CONFIG_MARKERS: tuple[str, ...] = ("model", "tool", "permission", "role", "scope")
-
-#: Config keys that may be tweaked within bounds and still count as LOW risk.
-_TUNABLE_CONFIG_KEYS: tuple[str, ...] = ("temperature", "top_k", "top_p")
-
-#: Bounds on a "bounded tweak" for the tunable keys (delta at/below → still LOW).
-_TUNABLE_MAX_DELTA: dict[str, float] = {"temperature": 0.5, "top_k": 5, "top_p": 0.3}
 
 
 @dataclass
@@ -121,17 +94,19 @@ def _term_count(text: str, term: str) -> int:
     return len(re.findall(pattern, (text or "").lower()))
 
 
-def _changed_safety_terms(old: str, new: str) -> list[str]:
+def _changed_safety_terms(old: str, new: str, safety_terms: tuple[str, ...]) -> list[str]:
     """Return safety terms whose occurrence count changed between the two prompts."""
     changed = []
-    for term in _SAFETY_TERMS:
+    for term in safety_terms:
         if _term_count(old, term) != _term_count(new, term):
             changed.append(term)
     return changed
 
 
 def _critical_config_changes(
-    old_config: dict[str, Any] | None, new_config: dict[str, Any] | None
+    old_config: dict[str, Any] | None,
+    new_config: dict[str, Any] | None,
+    markers: tuple[str, ...],
 ) -> list[str]:
     """Return critical (model/tool/permission/...) config keys that changed."""
     old_config = old_config or {}
@@ -139,7 +114,7 @@ def _critical_config_changes(
     changed = []
     for key in set(old_config) | set(new_config):
         lowered = key.lower()
-        if any(marker in lowered for marker in _CRITICAL_CONFIG_MARKERS) and (
+        if any(marker in lowered for marker in markers) and (
             old_config.get(key) != new_config.get(key)
         ):
             changed.append(key)
@@ -147,26 +122,29 @@ def _critical_config_changes(
 
 
 def _config_changes_within_bounds(
-    old_config: dict[str, Any] | None, new_config: dict[str, Any] | None
+    old_config: dict[str, Any] | None,
+    new_config: dict[str, Any] | None,
+    tunable_keys: tuple[str, ...],
+    tunable_max_delta: dict[str, float],
 ) -> bool:
     """Whether every config change is a bounded tweak of a tunable key (else ``False``).
 
     Returns ``True`` when the configs are identical or differ *only* on the tunable keys
-    (``temperature``/``top_k``/``top_p``) by at most the per-key bound. Any other changed
-    key, or an out-of-bounds delta, returns ``False``.
+    (``temperature``/``top_k``/``top_p`` by default) by at most the per-key bound. Any other
+    changed key, or an out-of-bounds delta, returns ``False``.
     """
     old_config = old_config or {}
     new_config = new_config or {}
     for key in set(old_config) | set(new_config):
         if old_config.get(key) == new_config.get(key):
             continue
-        if key not in _TUNABLE_CONFIG_KEYS:
+        if key not in tunable_keys:
             return False
         try:
             delta = abs(float(new_config.get(key, 0)) - float(old_config.get(key, 0)))
         except (TypeError, ValueError):
             return False
-        if delta > _TUNABLE_MAX_DELTA[key]:
+        if delta > tunable_max_delta.get(key, 0.0):
             return False
     return True
 
@@ -176,34 +154,49 @@ def classify_change(
     new_prompt: str,
     old_config: dict[str, Any] | None = None,
     new_config: dict[str, Any] | None = None,
+    *,
+    params: LoopParams | None = None,
 ) -> ChangeRisk:
     """Classify the risk of moving from ``old_prompt``/``old_config`` to the new pair.
 
-    Deterministic heuristics (no model call):
+    Deterministic heuristics (no model call), all tunable via :class:`LoopParams`:
 
-    * **HIGH** — a large diff (>40% of lines changed), a change to any safety/guardrail/
-      tool/approval/policy term, or a change to a model/tool/permission config field.
-    * **LOW** — a small wording/format-only nudge (≤15% of lines changed) with either no
-      config change or only a bounded ``temperature``/``top_k``/``top_p`` tweak.
+    * **HIGH** — a large diff (``> high_diff_fraction`` of lines changed), a change to any
+      safety/guardrail/tool/approval/policy term (``safety_terms``), or a change to a
+      model/tool/permission config field (``critical_config_markers``).
+    * **LOW** — a small wording/format-only nudge (``<= low_diff_fraction`` of lines
+      changed) with either no config change or only a bounded tweak of a tunable key.
     * **MEDIUM** — anything in between.
+
+    Args:
+        old_prompt: The baseline system prompt.
+        new_prompt: The candidate system prompt.
+        old_config: The baseline config (optional).
+        new_config: The candidate config (optional).
+        params: The loop knobs to classify against; defaults to the configured effective
+            params (:func:`aegis.ops.config.get_loop_params`), whose defaults reproduce the
+            historical thresholds/term-lists exactly.
 
     Returns:
         A :class:`ChangeRisk` with the level and the human-readable reasons behind it.
     """
+    params = params or config.get_loop_params()
     reasons: list[str] = []
     high = False
 
     fraction = _changed_line_fraction(old_prompt, new_prompt)
-    if fraction > _HIGH_DIFF_FRACTION:
+    if fraction > params.high_diff_fraction:
         high = True
         reasons.append(f"large diff: {fraction:.0%} of lines changed")
 
-    safety = _changed_safety_terms(old_prompt, new_prompt)
+    safety = _changed_safety_terms(old_prompt, new_prompt, params.safety_terms)
     if safety:
         high = True
         reasons.append("safety/guardrail terms changed: " + ", ".join(safety))
 
-    critical = _critical_config_changes(old_config, new_config)
+    critical = _critical_config_changes(
+        old_config, new_config, params.critical_config_markers
+    )
     if critical:
         high = True
         reasons.append("model/tool/permission config changed: " + ", ".join(critical))
@@ -211,8 +204,10 @@ def classify_change(
     if high:
         return ChangeRisk(level="high", reasons=reasons)
 
-    small_text = fraction <= _LOW_DIFF_FRACTION
-    config_low_ok = _config_changes_within_bounds(old_config, new_config)
+    small_text = fraction <= params.low_diff_fraction
+    config_low_ok = _config_changes_within_bounds(
+        old_config, new_config, params.tunable_config_keys, params.tunable_max_delta
+    )
     if small_text and config_low_ok:
         detail = f"small wording change ({fraction:.0%} of lines)"
         if (old_config or {}) != (new_config or {}):
@@ -250,8 +245,9 @@ async def release(
     eval_fn: Any,  # noqa: ANN401 - async eval_fn(system_prompt: str) -> float
     approval_enqueue: Any,  # noqa: ANN401 - async approval_enqueue(...) -> str
     autonomy: str = "tiered",
-    margin: float = 0.0,
+    margin: float | None = None,
     render_floor_prompt: Callable[[str], str] | None = None,
+    params: LoopParams | None = None,
 ) -> ReleaseResult:
     """Run the eval gate + tiered decision on a draft and act on it.
 
@@ -259,8 +255,8 @@ async def release(
     ``eval_fn``. If the draft does not beat ``baseline + margin`` it is **rejected** and
     archived. Otherwise the change is classified and the outcome depends on ``autonomy``:
 
-    * ``"tiered"`` (default) — LOW risk ⇒ promote autonomously; MEDIUM/HIGH ⇒ enqueue for
-      approval and stage the draft.
+    * ``"tiered"`` (default) — risk at/below ``params.auto_promote_ceiling`` ⇒ promote
+      autonomously; a riskier change ⇒ enqueue for approval and stage the draft.
     * ``"auto"`` — promote any eval-passing draft regardless of risk.
     * ``"manual"`` — always enqueue for approval, whatever the risk.
 
@@ -271,10 +267,14 @@ async def release(
         approval_enqueue: Async ``approval_enqueue(*, prompt_key, draft_version_id, risk,
             reason) -> str`` — enqueues a durable approval and returns its id.
         autonomy: ``"tiered"`` | ``"auto"`` | ``"manual"`` (default ``"tiered"``).
-        margin: How much the draft must beat the baseline by (default ``0.0``).
+        margin: How much the draft must beat the baseline by. ``None`` (default) uses
+            ``params.eval_margin`` so an operator can tune the pass bar centrally.
         render_floor_prompt: Optional ``render_floor_prompt(prompt_key) -> str`` override
             for the no-active-version baseline floor; defaults to the value configured via
             :func:`aegis.ops.config.configure_ops`.
+        params: The loop knobs for the eval margin, the change-risk classifier, and the
+            auto-promote ceiling; defaults to the configured effective params
+            (:func:`aegis.ops.config.get_loop_params`).
 
     Returns:
         A :class:`ReleaseResult` describing the outcome, scores, risk and any approval id.
@@ -282,6 +282,8 @@ async def release(
     Raises:
         ValueError: If ``draft_version_id`` does not exist.
     """
+    params = params or config.get_loop_params()
+    effective_margin = params.eval_margin if margin is None else margin
     draft = await session.get(PromptVersion, draft_version_id)
     if draft is None:
         raise ValueError(f"No PromptVersion with id={draft_version_id}")
@@ -301,11 +303,15 @@ async def release(
     baseline_score = float(await eval_fn(baseline_prompt))
 
     risk = classify_change(
-        baseline_prompt, draft.system_prompt, baseline_config, dict(draft.config or {})
+        baseline_prompt,
+        draft.system_prompt,
+        baseline_config,
+        dict(draft.config or {}),
+        params=params,
     )
 
     # (a) EVAL GATE — a draft that does not beat the baseline by the margin is rejected.
-    if draft_score < baseline_score + margin:
+    if draft_score < baseline_score + effective_margin:
         draft.status = PromptStatus.ARCHIVED
         await session.flush()
         return ReleaseResult(
@@ -315,7 +321,7 @@ async def release(
             baseline_score=baseline_score,
             reason=(
                 f"eval gate failed: draft {draft_score:.3f} < "
-                f"baseline {baseline_score:.3f} + margin {margin:.3f}"
+                f"baseline {baseline_score:.3f} + margin {effective_margin:.3f}"
             ),
             approval_id=None,
         )
@@ -356,9 +362,10 @@ async def release(
         return await _promote(f"autonomy=auto: {beat}")
     if autonomy == "manual":
         return await _stage(f"autonomy=manual: {beat}; awaiting human approval")
-    # "tiered" (default, enterprise-safe).
-    if risk.level == "low":
-        return await _promote(f"low-risk change auto-promoted: {beat}")
+    # "tiered" (default, enterprise-safe): auto-promote iff risk <= the configured ceiling.
+    ceiling = RISK_ORDER.get(params.auto_promote_ceiling, RISK_ORDER["low"])
+    if RISK_ORDER.get(risk.level, RISK_ORDER["high"]) <= ceiling:
+        return await _promote(f"{risk.level}-risk change auto-promoted: {beat}")
     return await _stage(
         f"{risk.level}-risk change staged for approval: {beat}"
     )

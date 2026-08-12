@@ -27,11 +27,18 @@ MEMORY_WRITE = "memory_write"
 MEMORY_CACHE = "memory_cache"
 MODEL_CALL = "model_call"
 EVAL_RESULT = "eval_result"
+#: The LLM-Ops self-improvement loop feed (aegis.ops). A Reflexion diagnose draft
+#: (draft id + rationale + failure breakdown + risk tier).
+OPS_DIAGNOSE = "ops_diagnose"
+#: The release eval-gate + change-risk verdict (eval delta vs margin, risk tier, verdict).
+OPS_GATE_DECISION = "ops_gate_decision"
+#: The release outcome (promoted | staged_for_approval | rejected, version id, eval delta).
+OPS_RELEASE = "ops_release"
 
 ALL: frozenset[str] = frozenset(
     {REASONING, GUARDRAIL_VERDICT, GUARDRAIL_CACHE, SHAP_EXPLANATION, CONFORMAL_INTERVAL,
      ML_MODEL, RETRIEVAL_CITATIONS, RETRIEVAL_CACHE, ROUTING, MEMORY_RECALL, MEMORY_WRITE,
-     MEMORY_CACHE, MODEL_CALL, EVAL_RESULT}
+     MEMORY_CACHE, MODEL_CALL, EVAL_RESULT, OPS_DIAGNOSE, OPS_GATE_DECISION, OPS_RELEASE}
 )
 
 

@@ -107,7 +107,9 @@ async def db(tmp_path) -> async_sessionmaker:
         approval_model=FakeApproval,
         approval_status=FakeApprovalStatus,
     )
+    config.reset_loop_params()  # historical defaults unless a test opts in
     registry.clear_cache()
     yield sessionmaker
+    config.reset_loop_params()
     registry.clear_cache()
     await engine.dispose()
