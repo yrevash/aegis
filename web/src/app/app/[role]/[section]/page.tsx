@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation'
+import { CacheMount } from '@/components/cache/CacheView'
 import { ConsoleMount } from '@/components/console/ConsoleMount'
 import { EvalsMount } from '@/components/evals/EvalsView'
 import { TokenOptMount } from '@/components/gateway/TokenOptView'
@@ -34,6 +35,7 @@ export default async function SectionPage({
   if (section === 'llmops') return <LLMOpsMount />
   if (section === 'evals') return <EvalsMount />
   if (section === 'memory') return <MemoryMount />
+  if (section === 'cache') return <CacheMount />
   if (section === 'tokenopt') return <TokenOptMount />
   return <SectionPlaceholder section={def} />
 }
