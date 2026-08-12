@@ -30,7 +30,7 @@ interface D3Force {
 
 /** The subset of imperative methods this component calls. */
 interface ForceMethods {
-  zoomToFit: (durationMs?: number, paddingPx?: number) => void
+  zoomToFit: (durationMs?: number, paddingPx?: number, nodeFilter?: (node: object) => boolean) => void
   d3Force: (name: string) => D3Force | undefined
   d3ReheatSimulation: () => void
 }
@@ -66,6 +66,7 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
   const [wrapRef, size] = useElementSize<HTMLDivElement>()
   const fgRef = useRef<ForceMethods | null>(null)
   const [reduced] = useState(prefersReducedMotion)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
 
   // Build the graph data once per base graph so the layout stays stable while
   // highlights change (react-force-graph mutates node objects in place).
@@ -90,14 +91,28 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
   // The active-node halo shares the current beat hue (falls back to retrieval).
   const haloHex = beat?.hex ?? SIGNALS.graph.hex
 
-  // Fit the graph to view on mount and whenever a fresh run begins.
-  useEffect(() => {
-    const timer = setTimeout(() => fgRef.current?.zoomToFit(500, 70), 500)
-    return () => clearTimeout(timer)
-  }, [size.width, size.height, state.runId])
+  // Once a run has touched nodes, scope the *visible* graph to that run's
+  // evidence subgraph — the accumulated cross-run nodes are hidden, so the
+  // picture reads as "what THIS answer stood on", not every doc ever retrieved.
+  // The underlying force layout is left intact (stable), we just stop painting
+  // the untouched nodes/edges and fit the view to what's shown.
+  const hasRun = state.touchedNodes.length > 0
+  const isNodeShown = (id: string): boolean => !hasRun || touchedNodes.has(id)
 
   const isLinkTouched = (link: GraphLinkObj): boolean =>
     touchedEdges.has(edgeKey(nodeId(link.source), nodeId(link.target), link.relation))
+  const isLinkShown = (link: GraphLinkObj): boolean => !hasRun || isLinkTouched(link)
+
+  // Fit the view to the shown subgraph on mount, on a fresh run, and as the
+  // evidence nodes arrive (so the camera closes in on this query's subgraph).
+  useEffect(() => {
+    const timer = setTimeout(
+      () => fgRef.current?.zoomToFit(600, 60, (n: object) => isNodeShown((n as GraphNodeObj).id)),
+      500,
+    )
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.width, size.height, state.runId, state.touchedNodes.length])
 
   return (
     <Card className="flex h-full flex-col overflow-hidden">
@@ -127,10 +142,16 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
               backgroundColor="rgba(0,0,0,0)"
               cooldownTicks={120}
               nodeRelSize={5}
-              linkColor={(link: object) =>
-                isLinkTouched(link as GraphLinkObj) ? SIGNALS.graph.hex : LINK_IDLE
-              }
-              linkWidth={(link: object) => (isLinkTouched(link as GraphLinkObj) ? 2 : 1)}
+              linkColor={(link: object) => {
+                const l = link as GraphLinkObj
+                if (!isLinkShown(l)) return 'rgba(0,0,0,0)'
+                return isLinkTouched(l) ? SIGNALS.graph.hex : LINK_IDLE
+              }}
+              linkWidth={(link: object) => {
+                const l = link as GraphLinkObj
+                if (!isLinkShown(l)) return 0
+                return isLinkTouched(l) ? 2 : 1
+              }}
               linkDirectionalParticles={(link: object) =>
                 isLinkTouched(link as GraphLinkObj) ? 3 : 0
               }
@@ -138,10 +159,14 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
               linkDirectionalParticleColor={() => SIGNALS.graph.hex}
               nodeCanvasObject={(node: object, ctx: CanvasRenderingContext2D, scale: number) => {
                 const n = node as GraphNodeObj
+                // Scope: once a run is active, don't paint the accumulated
+                // cross-run nodes — only this query's evidence subgraph.
+                if (!isNodeShown(n.id)) return
                 const x = n.x ?? 0
                 const y = n.y ?? 0
                 const touched = touchedNodes.has(n.id)
                 const active = activeNodes.has(n.id)
+                const hovered = n.id === hoveredId
                 const r = active ? 6 : touched ? 5 : 3.5
                 const kindColor = colorForKind(n.kind)
 
@@ -164,17 +189,25 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
                   ctx.stroke()
                 }
 
-                if (touched || scale > 1.4) {
-                  const fontSize = Math.max(10 / scale, 2.5)
+                // Label ONLY the active (frontier) node and whatever is hovered,
+                // so filenames never stamp on top of each other. Everything else
+                // is readable on hover. (Idle: labels appear when zoomed in.)
+                const showLabel = active || hovered || (!hasRun && scale > 1.6)
+                if (showLabel) {
+                  const fontSize = Math.max(hovered || active ? 11 / scale : 10 / scale, 2.5)
                   ctx.font = `${fontSize}px "JetBrains Mono", monospace`
                   ctx.textAlign = 'center'
                   ctx.textBaseline = 'top'
                   ctx.fillStyle = touched ? LABEL_ON : LABEL_OFF
-                  ctx.fillText(n.label, x, y + r + 1.5)
+                  ctx.fillText(truncate(n.label, 26), x, y + r + 1.5)
                 }
               }}
+              onNodeHover={(node: object | null) =>
+                setHoveredId(node ? (node as GraphNodeObj).id : null)
+              }
               nodePointerAreaPaint={(node: object, color: string, ctx: CanvasRenderingContext2D) => {
                 const n = node as GraphNodeObj
+                if (!isNodeShown(n.id)) return
                 ctx.fillStyle = color
                 ctx.beginPath()
                 ctx.arc(n.x ?? 0, n.y ?? 0, 7, 0, 2 * Math.PI)
@@ -191,17 +224,22 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
           </div>
         )}
 
-        {/* Kind legend / idle hint */}
+        {/* Caption: scoped-to-evidence when a run has traversed, else idle hint. */}
         <div className="pointer-events-none absolute bottom-2 left-3 flex flex-wrap gap-x-3 gap-y-1">
-          {state.touchedNodes.length === 0 && (
-            <span className="font-mono text-[0.62rem] text-muted-foreground/70">
-              graph idle · run a query to traverse
-            </span>
-          )}
+          <span className="font-mono text-[0.62rem] text-muted-foreground/70">
+            {hasRun
+              ? `evidence for this answer · ${state.touchedNodes.length} source${state.touchedNodes.length === 1 ? '' : 's'} · hover to read`
+              : 'graph idle · run a query to traverse'}
+          </span>
         </div>
       </div>
     </Card>
   )
+}
+
+/** Truncate a label with an ellipsis so long filenames never sprawl. */
+function truncate(label: string, max: number): string {
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label
 }
 
 /** Expand a #rrggbb hex to an `rgba()` string at the given alpha. */
