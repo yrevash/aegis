@@ -314,9 +314,6 @@ export function RiskMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">OWASP-Agentic</p>
           <h1 className="t-hero text-foreground">Risk Map</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            How an autonomous agent can go wrong — and the control holding each risk down.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div

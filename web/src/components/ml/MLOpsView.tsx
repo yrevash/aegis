@@ -126,10 +126,6 @@ function MLOpsView(): ReactElement {
       <div>
         <p className="eyebrow mb-1">SHAP · conformal · XGBoost + MAPIE</p>
         <h1 className="t-hero text-foreground">MLOps</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The measured model card and a calibrated, explained prediction — the two things that make
-          a score trustworthy.
-        </p>
       </div>
 
       {/* ── Model card ─────────────────────────────────────────────────────────── */}

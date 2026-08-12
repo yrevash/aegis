@@ -267,10 +267,6 @@ export function ApprovalsMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">human gate</p>
           <h1 className="t-hero text-foreground">Approvals</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Aegis Tools/MCP — the durable human gate on risky actions, with an SLA and the model read
-            that routed each one here.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div

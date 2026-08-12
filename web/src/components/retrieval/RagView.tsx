@@ -118,12 +118,6 @@ function RagView({ role, mock }: { role: Role; mock: boolean }): ReactElement {
       <div>
         <p className="eyebrow mb-1">hybrid · rerank</p>
         <h1 className="t-hero text-foreground">RAG</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The retrieval arsenal, made observable. Every arm, fusion, and post-filter that fired for a
-          query — with real, measured counts. Run a query below to measure a live retrieval; offline
-          the panels render an illustrative{' '}
-          <span className="font-medium text-foreground">sample</span>, never a live aggregate.
-        </p>
       </div>
 
       <QueryBar

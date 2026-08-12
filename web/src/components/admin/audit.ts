@@ -82,17 +82,49 @@ export function actorsOf(rows: AuditLogRow[]): string[] {
   return [...set].sort((a, b) => a.localeCompare(b))
 }
 
-/** Active filter for the audit table. `result: null` / `actor: null` = all. */
+/** Distinct, sorted model names present in the rows (excludes null/blank). */
+export function modelsOf(rows: AuditLogRow[]): string[] {
+  const set = new Set<string>()
+  for (const r of rows) if (r.model) set.add(r.model)
+  return [...set].sort((a, b) => a.localeCompare(b))
+}
+
+/**
+ * Active filter for the audit table. `null`/empty on any field means "all":
+ * `result` (completed/blocked), `actor`, `model`, and a free-text `search` that
+ * matches across action, actor, model, trace and approver.
+ */
 export interface AuditFilter {
   result: AuditResult | null
   actor: string | null
+  model?: string | null
+  search?: string
 }
 
-/** Apply a result + actor filter to the rows (pure). */
+/** Apply the result + actor + model + free-text filter to the rows (pure). */
 export function filterRows(rows: AuditLogRow[], filter: AuditFilter): AuditLogRow[] {
+  const q = (filter.search ?? '').trim().toLowerCase()
   return rows.filter((r) => {
     if (filter.result != null && resultOf(r.action) !== filter.result) return false
     if (filter.actor != null && r.actor !== filter.actor) return false
+    if (filter.model != null && r.model !== filter.model) return false
+    if (q) {
+      const hay = `${r.action} ${r.actor ?? ''} ${r.model ?? ''} ${r.trace_id ?? ''} ${r.approved_by ?? ''}`.toLowerCase()
+      if (!hay.includes(q)) return false
+    }
     return true
   })
+}
+
+/** Serialise the (filtered) rows to a CSV string for export/download. */
+export function rowsToCsv(rows: AuditLogRow[]): string {
+  const esc = (v: unknown): string => {
+    const s = v == null ? '' : String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const head = ['time', 'action', 'actor', 'model', 'trace_id', 'approved_by', 'result']
+  const lines = rows.map((r) =>
+    [r.ts, r.action, r.actor, r.model, r.trace_id, r.approved_by, resultOf(r.action)].map(esc).join(','),
+  )
+  return [head.join(','), ...lines].join('\n')
 }

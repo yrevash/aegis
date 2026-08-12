@@ -157,12 +157,6 @@ function RedteamView(): ReactElement {
         <div>
           <p className="eyebrow mb-1">attacks · block-rate</p>
           <h1 className="t-hero text-foreground">Red-team</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            The offline red-team attack battery run against the guardrail stack — prompt injection,
-            jailbreak, system-prompt leak, PII extraction and content safety, plus benign controls
-            that measure false positives. Honest, deterministic verdicts: a real block rate and 0%
-            false-positive, never massaged.
-          </p>
         </div>
         <button
           type="button"

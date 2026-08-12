@@ -135,11 +135,6 @@ function EvalsView(): ReactElement {
       <div>
         <p className="eyebrow mb-1">retrieval quality · offline regression gate</p>
         <h1 className="t-hero text-foreground">Evals</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The Aegis regression gate — deterministic RAGAS/DeepEval-pattern metrics over the seed
-          corpus, scored with token/substring overlap and <strong>no LLM</strong>. Reproducible,
-          network-free, and honest about what a judge model would be needed to measure.
-        </p>
       </div>
 
       {report.error ? (
@@ -263,12 +258,6 @@ function EvalsView(): ReactElement {
               <Gauge className="size-3.5" />
               needs an LLM judge
             </Badge>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              RAGAS answer-relevancy needs a judge model to score how well an answer addresses the
-              question. The offline gate runs with <strong>no LLM</strong>, so this metric is
-              reported as <span className="font-mono">computed = false</span> — an honest blank, not
-              a faked pass.
-            </p>
           </div>
         </CardBody>
       </Card>

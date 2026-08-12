@@ -249,7 +249,7 @@ function RailCard({
   const status = posture ? statusBadge(posture.status) : null
 
   return (
-    <li className="relative rounded-xl border border-border bg-surface-2/40 p-4">
+    <div className="relative rounded-xl border border-border bg-surface-2/40 p-4">
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-card">
           <Icon className="size-5 text-muted-foreground" />
@@ -286,7 +286,7 @@ function RailCard({
           </div>
         </div>
       </div>
-    </li>
+    </div>
   )
 }
 
@@ -512,13 +512,6 @@ function GuardrailsView({ mock }: { mock: boolean }): ReactElement {
       <div>
         <p className="eyebrow mb-1">rails · verdicts</p>
         <h1 className="t-hero text-foreground">Guardrails</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The real defense-in-depth rail stack — schema, PII (Presidio), prompt injection
-          (deterministic backstop + fail-closed classifier), MLCommons content safety, topical scope
-          and grounding — run on every request as input then output rails. Each card shows the rail&apos;s
-          true method, OWASP mapping and verdict semantics; the status comes from the live security
-          posture where an OWASP row exists.
-        </p>
       </div>
 
       <EngineIndicator signals={posture?.signals ?? null} />

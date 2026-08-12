@@ -114,10 +114,6 @@ function LLMOpsView(): ReactElement {
       <div>
         <p className="eyebrow mb-1">trace → eval → diagnose → release</p>
         <h1 className="t-hero text-foreground">LLMOps</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The Aegis loop — the system improves its own prompts under a human gate. Watch quality,
-          diagnose the failure mode, gate the risky change, and roll back on demand.
-        </p>
       </div>
 
       {/* Row 1 — quality trend hero + the live loop strip. */}

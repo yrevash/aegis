@@ -25,16 +25,23 @@ export function Card({
   )
 }
 
-/** Card header — title (display face) + optional eyebrow/description + actions. */
+/**
+ * Card header — title (display face) + optional eyebrow + actions.
+ *
+ * `description` is accepted for source-compatibility with existing call sites but
+ * intentionally **not rendered**: the portals are for operators who already know
+ * the surface, so per-card explainer prose is dropped to keep every page dense
+ * and scannable.
+ */
 export function CardHeader({
   title,
   eyebrow,
-  description,
   actions,
   className,
 }: {
   title: ReactNode
   eyebrow?: ReactNode
+  /** Accepted but not rendered — see the note above. */
   description?: ReactNode
   actions?: ReactNode
   className?: string
@@ -44,7 +51,6 @@ export function CardHeader({
       <div className="min-w-0">
         {eyebrow ? <p className="eyebrow mb-1">{eyebrow}</p> : null}
         <h3 className="t-title truncate text-foreground">{title}</h3>
-        {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {actions ? <div className="shrink-0">{actions}</div> : null}
     </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { CheckCircle2, Copy, ListChecks, Loader2, ScrollText, ShieldAlert, WifiOff } from 'lucide-react'
+import { CheckCircle2, Copy, Download, ListChecks, Loader2, ScrollText, Search, ShieldAlert, WifiOff } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 
 import { getAudit } from '@/lib/api/client'
@@ -15,7 +15,16 @@ import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { AuditLogRow } from '@/lib/api/types'
 
-import { actorsOf, auditCounts, eventsPerHour, filterRows, resultOf, type AuditResult } from './audit'
+import {
+  actorsOf,
+  auditCounts,
+  eventsPerHour,
+  filterRows,
+  modelsOf,
+  resultOf,
+  rowsToCsv,
+  type AuditResult,
+} from './audit'
 
 /** Load state for the audit fetch. */
 type LoadState =
@@ -49,6 +58,8 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [result, setResult] = useState<AuditResult | null>(null)
   const [actor, setActor] = useState<string | null>(null)
+  const [model, setModel] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -74,7 +85,22 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
   const counts = useMemo(() => auditCounts(rows), [rows])
   const perHour = useMemo(() => eventsPerHour(rows, 12), [rows])
   const actors = useMemo(() => actorsOf(rows), [rows])
-  const filtered = useMemo(() => filterRows(rows, { result, actor }), [rows, result, actor])
+  const models = useMemo(() => modelsOf(rows), [rows])
+  const filtered = useMemo(
+    () => filterRows(rows, { result, actor, model, search }),
+    [rows, result, actor, model, search],
+  )
+
+  /** Download the currently-filtered rows as a CSV file. */
+  const exportCsv = (): void => {
+    const blob = new Blob([rowsToCsv(filtered)], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `aegis-audit-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -111,6 +137,16 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
 
           {load.status === 'ready' && rows.length > 0 && (
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/60" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search actions…"
+                  aria-label="Search the audit trail"
+                  className="h-7 w-44 rounded-md border border-border bg-card pr-2 pl-7 text-[0.72rem] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
               <FilterChip active={result === null} onClick={() => setResult(null)}>
                 All
               </FilterChip>
@@ -135,6 +171,29 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
                   ))}
                 </select>
               )}
+              {models.length > 0 && (
+                <select
+                  value={model ?? ''}
+                  onChange={(e) => setModel(e.target.value === '' ? null : e.target.value)}
+                  className="h-7 max-w-[10rem] rounded-md border border-border bg-card px-2 font-mono text-[0.68rem] text-muted-foreground"
+                  aria-label="Filter by model"
+                >
+                  <option value="">All models</option>
+                  {models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={exportCsv}
+                title="Export the filtered rows as CSV"
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-card px-2 font-mono text-[0.68rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+              >
+                <Download className="size-3.5" /> CSV
+              </button>
             </div>
           )}
         </CardHeader>
@@ -167,11 +226,11 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
 
           {load.status === 'ready' && rows.length > 0 && (
             <div className="max-h-[520px] overflow-auto">
-              <table className="w-full min-w-[760px] text-sm">
+              <table className="w-full min-w-[900px] text-sm [&_td]:pr-8 [&_td:last-child]:pr-0 [&_th]:pr-8 [&_th:last-child]:pr-0">
                 <thead className="sticky top-0 z-10 bg-card">
                   <tr className="border-b border-border/70 text-left">
                     {COLUMNS.map((h) => (
-                      <th key={h} className="eyebrow pb-2 font-normal">
+                      <th key={h} className="eyebrow pb-2 font-normal whitespace-nowrap">
                         {h}
                       </th>
                     ))}
@@ -181,24 +240,26 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
                   {filtered.map((r, i) => (
                     <tr
                       key={r.id}
-                      className="animate-trace-in border-b border-border/40 transition-colors last:border-0 hover:bg-surface-2/50"
+                      className="animate-trace-in border-b border-border/40 align-top transition-colors last:border-0 hover:bg-surface-2/50"
                       style={{ animationDelay: `${Math.min(i, 14) * 28}ms` }}
                     >
-                      <td className="tabular py-2.5 font-mono text-[0.72rem] text-muted-foreground">
+                      <td className="tabular py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
                         {formatTime(r.ts)}
                       </td>
-                      <td className="py-2.5 font-medium text-foreground">{r.action}</td>
-                      <td className="py-2.5 font-mono text-[0.72rem] text-muted-foreground">
+                      <td className="min-w-[16rem] py-2.5 font-medium text-foreground">{r.action}</td>
+                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
                         {r.actor ?? '—'}
                       </td>
-                      <td className="py-2.5 font-mono text-[0.72rem] text-agent-ink">{r.model ?? '—'}</td>
-                      <td className="py-2.5">
+                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-agent-ink">
+                        {r.model ?? '—'}
+                      </td>
+                      <td className="py-2.5 whitespace-nowrap">
                         <TraceChip traceId={r.trace_id} />
                       </td>
-                      <td className="py-2.5 font-mono text-[0.72rem] text-muted-foreground">
+                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
                         {r.approved_by ?? '—'}
                       </td>
-                      <td className="py-2.5">
+                      <td className="py-2.5 whitespace-nowrap">
                         <ResultDot result={resultOf(r.action)} />
                       </td>
                     </tr>
@@ -345,9 +406,6 @@ export function AuditMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">Postgres audit</p>
           <h1 className="t-hero text-foreground">Audit</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Append-only audit trail · Postgres (RLS), with trace links to Aegis Trace.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div

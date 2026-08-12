@@ -177,11 +177,6 @@ function LatencyView(): ReactElement {
       <div>
         <p className="eyebrow mb-1">latency · p50 · p95</p>
         <h1 className="t-hero text-foreground">Latency</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Per-run and per-node latency percentiles drawn from real samples in a per-process rolling
-          window. The window resets on restart, so before any run the view reads as an honest empty
-          state — never fabricated zeros.
-        </p>
       </div>
 
       {error ? (

@@ -148,20 +148,6 @@ export function RolesAccess({ token }: { token: string | null }): ReactElement {
           </div>
         )}
 
-        {/* Role legend — what each portal grants (the "why"). */}
-        {load.status === 'ready' && load.rows.length > 0 && (
-          <ul className="mb-5 grid gap-1.5 rounded-lg border border-border/60 bg-surface-2/40 p-3 sm:grid-cols-2">
-            {PORTAL_ROLES.map((r) => (
-              <li key={r} className="flex items-start gap-2 text-xs leading-relaxed">
-                <Badge variant={ROLE_CATALOG[r].chip} className="mt-px shrink-0">
-                  {ROLE_CATALOG[r].label}
-                </Badge>
-                <span className="text-muted-foreground">{ROLE_CATALOG[r].sees}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
         {load.status === 'loading' && (
           <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" /> Loading users…
@@ -351,9 +337,6 @@ export function RolesAccessMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">RBAC grants</p>
           <h1 className="t-hero text-foreground">Roles &amp; Access</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Who can reach which portal — the front line of least-privilege access.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div

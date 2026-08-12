@@ -175,11 +175,6 @@ function GovernanceView(): ReactElement {
       <div>
         <p className="eyebrow mb-1">tenants · budgets</p>
         <h1 className="t-hero text-foreground">Governance</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Tenants, budgets, usage and RBAC read straight from the governance ledger. Every spend
-          figure is computed from the ledger by the accessor — the bar is the real number, never an
-          estimate.
-        </p>
       </div>
 
       {error ? (

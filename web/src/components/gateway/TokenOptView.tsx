@@ -74,11 +74,6 @@ function TokenOptView(): ReactElement {
       <div>
         <p className="eyebrow mb-1">role→model routing · savings vs frontier baseline</p>
         <h1 className="t-hero text-foreground">Token optimization</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The Aegis gateway routes each role to the cheapest capable model and only escalates when it
-          must. What that routing saves against always running the frontier model — and the effective
-          routing table it runs on.
-        </p>
       </div>
 
       {error ? (

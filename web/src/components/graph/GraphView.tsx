@@ -130,13 +130,6 @@ function GraphView({ role }: { role: Role }): ReactElement {
       <div>
         <p className="eyebrow mb-1">entities · relations</p>
         <h1 className="t-hero text-foreground">Graph</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The typed entity knowledge graph — organizations, people, products, policies and the real
-          relations between them. Run a query below and the graph highlights the{' '}
-          <span className="font-medium text-foreground">evidence subgraph</span> the answer stood on;
-          the entity list and relations narrow to match. Offline the graph is a clearly-labelled{' '}
-          <span className="font-medium text-foreground">sample</span>.
-        </p>
       </div>
 
       <QueryBar

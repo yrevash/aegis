@@ -224,9 +224,6 @@ export function StackMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">SBOM</p>
           <h1 className="t-hero text-foreground">Tech Stack &amp; Versions</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Every runtime, library and service in production — so DevOps knows exactly what is running.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div

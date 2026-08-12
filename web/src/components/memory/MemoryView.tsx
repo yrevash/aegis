@@ -83,10 +83,6 @@ function MemoryView({ token }: { token: string | null }): ReactElement {
         <div>
           <p className="eyebrow mb-1">long-term memory · Postgres + pgvector</p>
           <h1 className="t-hero text-foreground">Memory</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            What the agent knows about a subject — the facts it believes, its past sessions, a
-            consolidated profile, and an auditable trace of why it recalled what it did.
-          </p>
         </div>
         <label className="flex items-center gap-2">
           <span className="eyebrow">subject</span>

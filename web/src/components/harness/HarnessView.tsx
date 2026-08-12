@@ -547,11 +547,6 @@ function HarnessView({ role, mock }: { role: Role; mock: boolean }): ReactElemen
       <div>
         <p className="eyebrow mb-1">graph · view + tweak</p>
         <h1 className="t-hero text-foreground">Harness</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          How the agentic graph is wired and what you can tune — every knob it reads, then a live
-          run folded into one glass-box record: the node timeline, the gate decision, the tools it
-          fired and what it cost.
-        </p>
       </div>
 
       {/* Config (view + tweak) */}

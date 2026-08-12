@@ -282,12 +282,6 @@ function CacheView({ mock }: { mock: boolean }): ReactElement {
       <div>
         <p className="eyebrow mb-1">semantic · TTL · hash</p>
         <h1 className="t-hero text-foreground">Cache</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          The three caches that make repeated work cheap — memory recall, retrieval + answers, and
-          guardrail verdicts. Each shows its real method and configuration; the hit-rate meters and
-          event feed are an illustrative <span className="font-medium text-foreground">sample</span>{' '}
-          offline, never a live measured aggregate.
-        </p>
       </div>
       {SPECS.map((spec) => (
         <CacheCard key={spec.kind} spec={spec} mock={mock} />

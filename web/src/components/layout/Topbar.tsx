@@ -2,9 +2,10 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Presentation, UserRound } from 'lucide-react'
+import { LogOut, UserRound } from 'lucide-react'
 import { portalLabelFor, SECTIONS, type Role } from '@/lib/portal'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { NotificationBell } from './NotificationBell'
 
 /**
  * Topbar — TailAdmin's header restyled to our tokens: a breadcrumb (portal ›
@@ -39,14 +40,7 @@ export function Topbar({ role }: { role: Role }) {
 
       {/* Right cluster */}
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          title="Present (projector mode) — wired later"
-          className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-        >
-          <Presentation className="size-4" />
-          <span className="hidden sm:inline">Present</span>
-        </button>
+        <NotificationBell />
         <div
           className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground"
           title={`${displayName} · ${portalLabelFor(role)}`}

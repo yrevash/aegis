@@ -13,7 +13,6 @@ export function SectionPlaceholder({ section }: { section: Section }) {
       <div>
         <p className="eyebrow mb-1">{section.hint}</p>
         <h1 className="t-hero text-foreground">{section.label}</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{section.tooltip}</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">

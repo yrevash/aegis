@@ -31,7 +31,7 @@ export function Sidebar({ role }: { role: Role }) {
   const groups = groupSections(sectionsFor(role))
 
   return (
-    <aside className="hidden w-[264px] shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
+    <aside className="sticky top-0 hidden h-dvh w-[264px] shrink-0 self-start border-r border-border bg-surface lg:flex lg:flex-col">
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-5 pt-7 pb-6">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
@@ -72,12 +72,7 @@ export function Sidebar({ role }: { role: Role }) {
                         )}
                       />
                       <Icon className="size-[18px] shrink-0" />
-                      <span className="flex min-w-0 flex-col leading-tight">
-                        <span className="truncate">{item.label}</span>
-                        <span className="truncate font-mono text-[0.62rem] tracking-wide text-muted-foreground/70">
-                          {item.hint}
-                        </span>
-                      </span>
+                      <span className="min-w-0 truncate">{item.label}</span>
                     </Link>
                   </li>
                 )

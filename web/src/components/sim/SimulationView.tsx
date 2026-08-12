@@ -359,9 +359,6 @@ export function SimulationMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">RBAC scope</p>
           <h1 className="t-hero text-foreground">Access demo</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Aegis Governance — same query, two roles · RBAC + retrieval scope.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div

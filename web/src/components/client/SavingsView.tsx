@@ -336,9 +336,6 @@ export function SavingsMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">baseline vs actual</p>
           <h1 className="t-hero text-foreground">Savings</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            What the workload would cost on the frontier model vs what it actually cost.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div

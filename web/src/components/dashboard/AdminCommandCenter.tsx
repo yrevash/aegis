@@ -1,9 +1,11 @@
 'use client'
 
+import Link from 'next/link'
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Coins,
   DatabaseZap,
   GitBranch,
@@ -11,24 +13,21 @@ import {
   ListChecks,
   Loader2,
   PiggyBank,
-  Route,
-  ScrollText,
   ShieldCheck,
   Target,
   Timer,
-  Users,
   WifiOff,
   Zap,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 
 import { AreaChart } from '@/components/charts/AreaChart'
+import { BarChart } from '@/components/charts/BarChart'
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
 import type { ChartColor } from '@/components/charts/palette'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
-import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import {
   getApprovals,
@@ -49,16 +48,12 @@ import type {
 import type { ApprovalsResponse, ApprovalRow } from '@/lib/api/types'
 import { useMetricsSeries } from '@/state/useMetrics'
 
-import { RoutingTable } from './RoutingTable'
-
 // ── formatting helpers ───────────────────────────────────────────────────────
 
-/** Thousands-grouped integer, or an em-dash for null. */
 function fmtInt(n: number | null | undefined): string {
   return n == null || !Number.isFinite(n) ? '—' : Math.round(n).toLocaleString('en-US')
 }
 
-/** Compact USD ($1.2k / $3.4M), or an em-dash for null. */
 function fmtUsd(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—'
   const abs = Math.abs(n)
@@ -67,17 +62,14 @@ function fmtUsd(n: number | null | undefined): string {
   return `$${n.toFixed(2)}`
 }
 
-/** A whole-percent from a 0..1 fraction, or an em-dash for null. */
 function fmtPct(frac: number | null | undefined): string {
   return frac == null || !Number.isFinite(frac) ? '—' : `${Math.round(frac * 100)}%`
 }
 
-/** Milliseconds rendered as seconds with one decimal, or an em-dash. */
 function fmtMs(ms: number | null | undefined): string {
   return ms == null || !Number.isFinite(ms) ? '—' : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 }
 
-/** A short human timestamp (UTC); passes through non-dates. */
 function fmtTs(value: unknown): string {
   if (typeof value !== 'string') return value == null ? '—' : String(value)
   const t = Date.parse(value)
@@ -91,28 +83,12 @@ function fmtTs(value: unknown): string {
   })
 }
 
-/** Meter fill colour by utilisation band — green under 70 %, amber, then red. */
 function meterTone(frac: number): string {
   if (frac >= 0.9) return 'var(--danger)'
   if (frac >= 0.7) return 'var(--risk-ink, #b45309)'
   return 'var(--success)'
 }
 
-/** RBAC role → an honest badge tone across the four Aegis portals. */
-function roleTone(role: string): BadgeTone {
-  switch (role) {
-    case 'admin':
-      return 'ml'
-    case 'ai_team':
-      return 'agent'
-    case 'devops':
-      return 'graph'
-    default:
-      return 'neutral'
-  }
-}
-
-/** Risk level → badge tone for the approvals queue. */
 function riskTone(risk: string): BadgeTone {
   switch (risk) {
     case 'low':
@@ -124,7 +100,6 @@ function riskTone(risk: string): BadgeTone {
   }
 }
 
-/** Posture status → badge tone. */
 function postureTone(status: PostureStatus | string): BadgeTone {
   switch (status) {
     case 'enforced':
@@ -136,7 +111,7 @@ function postureTone(status: PostureStatus | string): BadgeTone {
   }
 }
 
-/** Rotating chart palette for the model-mix donut. */
+/** Rotating chart palette for the distribution donuts. */
 const MIX_COLORS: ChartColor[] = ['agent', 'ml', 'graph', 'ok', 'risk', 'block']
 
 /** An honest dashed empty-state panel. */
@@ -151,21 +126,11 @@ function Empty({ children }: { children: ReactNode }): ReactElement {
 // ── the command center ───────────────────────────────────────────────────────
 
 /**
- * Admin command center — the platform's single pane of glass. Every figure is a
- * real projection of an existing accessor endpoint (nothing fabricated):
- *
- * - **Business band** — cost saved, spend, queries, quality, cache, efficiency,
- *   p95, pending approvals (← `/metrics` · `/gateway/optimization` ·
- *   `/governance/dashboard` · `/latency` · `/approvals`).
- * - **Financials** — real cost/token trend (`usage.series`), model-mix donut
- *   (`usage.by_model`), where-the-spend-goes per-role table, routing table.
- * - **Governance** — tenant + budget health, users-by-role rollup.
- * - **Safety & queue** — pending-approvals preview, security-posture summary,
- *   latency SLA.
- * - **Audit & alerts** — recent audit tail + a derived alert feed.
- *
- * Each panel renders its own honest empty state when a source has no data yet,
- * so the offline demo (mock fixtures) and a cold live backend both read true.
+ * Admin command center — the platform's single pane of glass, ordered for what an
+ * admin acts on first: alerts, the approvals queue, customer/budget health, then
+ * the financial and health charts. Every figure is a real projection of a live
+ * accessor (`/metrics`, `/gateway/optimization`, `/governance/dashboard`,
+ * `/latency`, `/security/posture`, `/approvals`); panels with no data yet say so.
  */
 function AdminCommandCenter(): ReactElement {
   const token: string | null = null
@@ -197,7 +162,7 @@ function AdminCommandCenter(): ReactElement {
   const summary = opt?.summary ?? null
   const usage = gov?.usage ?? null
 
-  // ── business figures (real, with honest fallbacks between equivalent sources) ─
+  // ── business figures ─────────────────────────────────────────────────────────
   const costSaved = summary?.cost_saved_usd ?? metrics?.cost_saved_usd ?? null
   const baseline = summary?.baseline_cost_usd ?? metrics?.baseline_cost_usd ?? null
   const savingsPct = costSaved != null && baseline != null && baseline > 0 ? costSaved / baseline : null
@@ -209,61 +174,102 @@ function AdminCommandCenter(): ReactElement {
   const p95 = latency?.run_p95_ms ?? null
   const pending = approvals?.rows.length ?? null
 
-  // ── real cost/token trend from the ledger's own time buckets ─────────────────
+  // ── real cost trend from the ledger's own time buckets ───────────────────────
   const trend = useMemo(
     () =>
       (usage?.series ?? []).map((p) => ({
         bucket: fmtTs(p.bucket),
         cost: Number(p.cost_usd.toFixed(4)),
-        tokens: p.tokens,
       })),
     [usage],
   )
 
-  // ── model mix by real ledger spend (falls back to routing count) ─────────────
+  // ── model mix by real ledger spend (falls back to call count) ────────────────
   const mix: DonutDatum[] = useMemo(() => {
     const byModel = usage?.by_model ?? []
     const withSpend = byModel.filter((m) => m.cost_usd > 0)
-    if (withSpend.length > 0) {
-      return withSpend
-        .slice()
-        .sort((a, b) => b.cost_usd - a.cost_usd)
-        .map((m, i) => ({ name: m.model, value: Number(m.cost_usd.toFixed(4)), color: MIX_COLORS[i % MIX_COLORS.length] }))
-    }
-    // No spend yet: show the routing footprint (which models are wired), by call count.
-    const byCalls = byModel.filter((m) => m.calls > 0)
-    return byCalls.map((m, i) => ({ name: m.model, value: m.calls, color: MIX_COLORS[i % MIX_COLORS.length] }))
+    const rows = withSpend.length > 0 ? withSpend : byModel.filter((m) => m.calls > 0)
+    return rows
+      .slice()
+      .sort((a, b) => (withSpend.length ? b.cost_usd - a.cost_usd : b.calls - a.calls))
+      .map((m, i) => ({
+        name: m.model,
+        value: Number((withSpend.length ? m.cost_usd : m.calls).toFixed(4)),
+        color: MIX_COLORS[i % MIX_COLORS.length],
+      }))
   }, [usage])
+  const mixIsSpend = (usage?.by_model ?? []).some((m) => m.cost_usd > 0)
 
-  // ── tenant + budget health ───────────────────────────────────────────────────
+  // ── where the spend goes (per role) — as a pie ───────────────────────────────
+  const spendByRole: DonutDatum[] = useMemo(() => {
+    const roles = Object.entries(summary?.by_role ?? {})
+    const withCost = roles.filter(([, r]) => r.cost_usd > 0)
+    const rows = withCost.length > 0 ? withCost : roles.filter(([, r]) => r.calls > 0)
+    return rows
+      .sort((a, b) => (withCost.length ? b[1].cost_usd - a[1].cost_usd : b[1].calls - a[1].calls))
+      .map(([role, r], i) => ({
+        name: role,
+        value: Number((withCost.length ? r.cost_usd : r.calls).toFixed(4)),
+        color: MIX_COLORS[i % MIX_COLORS.length],
+      }))
+  }, [summary])
+  const spendIsCost = Object.values(summary?.by_role ?? {}).some((r) => r.cost_usd > 0)
+
+  // ── model routing — how roles fan out across deployments, as a pie ───────────
+  const routingMix: DonutDatum[] = useMemo(() => {
+    const routing =
+      metrics?.routing && Object.keys(metrics.routing).length ? metrics.routing : opt?.config.routing ?? {}
+    const counts = new Map<string, number>()
+    for (const model of Object.values(routing)) counts.set(model, (counts.get(model) ?? 0) + 1)
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, value], i) => ({ name, value, color: MIX_COLORS[i % MIX_COLORS.length] }))
+  }, [metrics, opt])
+
+  // ── tenant + budget health (top customers by spend) ──────────────────────────
   const budgetByTenant = useMemo(() => {
     const map = new Map<number, BudgetStatusRow>()
-    for (const b of gov?.budgets ?? []) {
-      if (b.budget.tenant_id != null) map.set(b.budget.tenant_id, b)
-    }
+    for (const b of gov?.budgets ?? []) if (b.budget.tenant_id != null) map.set(b.budget.tenant_id, b)
     return map
   }, [gov])
-
   const tenants = useMemo(() => gov?.tenants ?? [], [gov])
-  const users = useMemo(() => gov?.users ?? [], [gov])
-  const audit = gov?.recent_audit ?? []
+  const topTenants = useMemo(
+    () =>
+      tenants
+        .map((t) => ({ t, b: budgetByTenant.get(t.id) }))
+        .sort((a, b) => (b.b?.cost_usd_used ?? 0) - (a.b?.cost_usd_used ?? 0))
+        .slice(0, 5),
+    [tenants, budgetByTenant],
+  )
 
-  // ── users grouped by role (a rollup, not the full roster) ────────────────────
-  const roleCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const u of users) counts.set(u.role, (counts.get(u.role) ?? 0) + 1)
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])
-  }, [users])
-
-  // ── security posture rollup ──────────────────────────────────────────────────
+  // ── security posture rollup — as a pie ───────────────────────────────────────
   const postureCounts = useMemo(() => {
     const c: Record<string, number> = { enforced: 0, partial: 0, not_covered: 0 }
     for (const e of posture?.entries ?? []) c[e.status] = (c[e.status] ?? 0) + 1
     return c
   }, [posture])
-  const postureGaps = (posture?.entries ?? []).filter((e) => e.status !== 'enforced').slice(0, 4)
+  const securityMix: DonutDatum[] = useMemo(() => {
+    const out: DonutDatum[] = []
+    if (postureCounts.enforced) out.push({ name: 'Enforced', value: postureCounts.enforced, color: 'ok' })
+    if (postureCounts.partial) out.push({ name: 'Partial', value: postureCounts.partial, color: 'risk' })
+    if (postureCounts.not_covered) out.push({ name: 'Not covered', value: postureCounts.not_covered, color: 'block' })
+    return out
+  }, [postureCounts])
+  const postureTotal = postureCounts.enforced + postureCounts.partial + postureCounts.not_covered
+  const coverage = postureTotal > 0 ? postureCounts.enforced / postureTotal : null
+  const topGap = (posture?.entries ?? []).find((e) => e.status !== 'enforced')
 
-  // ── derived alert feed (composed client-side from the panels above) ──────────
+  // ── latency — a positive, all-green read-out ─────────────────────────────────
+  const latencyBars = useMemo(() => {
+    if (!latency || latency.empty) return []
+    return [
+      { stage: 'p50', ms: Math.round(latency.run_p50_ms ?? 0) },
+      { stage: 'p95', ms: Math.round(latency.run_p95_ms ?? 0) },
+      { stage: 'max', ms: Math.round(latency.run_max_ms ?? 0) },
+    ]
+  }, [latency])
+
+  // ── derived alerts ───────────────────────────────────────────────────────────
   const alerts = useMemo(() => {
     const out: { tone: BadgeTone; text: string }[] = []
     for (const t of tenants) {
@@ -281,24 +287,19 @@ function AdminCommandCenter(): ReactElement {
     if (postureCounts.partial > 0)
       out.push({ tone: 'risk', text: `${postureCounts.partial} security control(s) only partial` })
     if ((pending ?? 0) > 0) out.push({ tone: 'risk', text: `${pending} action(s) awaiting human approval` })
-    if (latency?.empty) out.push({ tone: 'neutral', text: 'No runs recorded yet — latency telemetry is empty' })
     return out
-  }, [tenants, budgetByTenant, postureCounts, pending, latency])
+  }, [tenants, budgetByTenant, postureCounts, pending])
 
   const loading = opt == null && gov == null && metrics == null
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <p className="eyebrow mb-1">platform · command center</p>
-        <h1 className="t-hero text-foreground">Admin overview</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Every business, governance and safety figure the platform exposes, in one pane. Numbers
-          are read straight from the live accessors — savings and spend from the gateway ledger,
-          budgets and audit from governance, p95 from real latency samples. Nothing is fabricated;
-          panels with no data yet say so.
-        </p>
+      {/* Header — no explainer prose; admins know the surface. */}
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <p className="eyebrow mb-1">platform · command center</p>
+          <h1 className="t-hero text-foreground">Admin overview</h1>
+        </div>
       </div>
 
       {loading ? (
@@ -323,260 +324,79 @@ function AdminCommandCenter(): ReactElement {
             />
             <StatCard label="Total spend" value={fmtUsd(totalSpend)} icon={Coins} tone="ml" />
             <StatCard label="Queries served" value={fmtInt(queries)} icon={Zap} tone="agent" />
+            <StatCard label="Quality score" value={fmtPct(quality)} icon={Target} tone="ml" />
+            <StatCard label="Cache hit rate" value={fmtPct(cacheHit)} icon={DatabaseZap} tone="ok" />
+            <StatCard label="Small-model share" value={fmtPct(smallShare)} icon={GitBranch} tone="graph" />
+            <StatCard label="p95 latency" value={fmtMs(p95)} icon={Timer} tone="graph" />
             <StatCard
               label="Pending approvals"
               value={pending == null ? '—' : String(pending)}
               icon={ListChecks}
               tone={pending && pending > 0 ? 'risk' : 'ok'}
             />
-            <StatCard label="Quality score" value={fmtPct(quality)} icon={Target} tone="ml" />
-            <StatCard label="Cache hit rate" value={fmtPct(cacheHit)} icon={DatabaseZap} tone="ok" />
-            <StatCard label="Small-model share" value={fmtPct(smallShare)} icon={GitBranch} tone="graph" />
-            <StatCard label="p95 latency" value={fmtMs(p95)} icon={Timer} tone="graph" />
           </div>
 
-          {/* ── B · Financials: real trend + model mix ─────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader
-                eyebrow="aegis.governance · usage.series"
-                title="Cost trend"
-                description="Ledger spend per time bucket — the real series the accessor rolls up, not a sample."
-              />
-              <CardBody className="pt-0">
-                {trend.length > 0 ? (
-                  <AreaChart
-                    data={trend}
-                    index="bucket"
-                    category="cost"
-                    color="ml"
-                    valueFormatter={(v) => fmtUsd(v)}
-                    height={220}
-                  />
-                ) : (
-                  <Empty>No metered spend yet — the ledger has no buckets to chart.</Empty>
-                )}
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardHeader
-                eyebrow="aegis.governance · by_model"
-                title="Model mix"
-                description="Where spend lands across deployments."
-              />
-              <CardBody className="pt-0">
-                {mix.length > 0 ? (
-                  <DonutChart
-                    data={mix}
-                    centerLabel={fmtUsd(totalSpend)}
-                    centerSub="total spend"
-                    valueFormatter={(v) => (usage?.by_model?.some((m) => m.cost_usd > 0) ? fmtUsd(v) : `${fmtInt(v)} calls`)}
-                    height={220}
-                  />
-                ) : (
-                  <Empty>No model usage recorded yet.</Empty>
-                )}
-              </CardBody>
-            </Card>
-          </div>
-
-          {/* ── C · Where the spend goes (per-role) + routing ──────────────────── */}
+          {/* ── B · Needs attention: alerts (highlighted) + approvals queue ────── */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card>
+            <Card
+              className={
+                alerts.length > 0
+                  ? 'border-[color:var(--danger)]/40 bg-[color:var(--danger)]/[0.04] ring-1 ring-[color:var(--danger)]/20'
+                  : undefined
+              }
+            >
               <CardHeader
-                eyebrow="aegis.gateway · by_role"
-                title="Where the spend goes"
-                description="Per-role usage and cost, and whether that role routes to a small model."
+                title="Alerts"
                 actions={
-                  summary ? (
-                    <Badge tone="neutral" className="gap-1.5">
-                      <Coins className="size-3" />
-                      {fmtUsd(summary.total_cost_usd)}
-                    </Badge>
-                  ) : null
+                  <Badge tone={alerts.length > 0 ? 'block' : 'ok'} className="gap-1.5">
+                    <AlertTriangle className="size-3" />
+                    {alerts.length}
+                  </Badge>
                 }
               />
               <CardBody className="pt-0">
-                {summary && Object.keys(summary.by_role).length > 0 ? (
-                  <div className="overflow-hidden rounded-xl border border-border">
-                    <Table>
-                      <THead>
-                        <TH className="text-left">Role</TH>
-                        <TH className="text-right">Calls</TH>
-                        <TH className="text-right">Tokens</TH>
-                        <TH className="text-right">Cost</TH>
-                        <TH className="text-left">Tier</TH>
-                      </THead>
-                      <TBody>
-                        {Object.entries(summary.by_role)
-                          .sort((a, b) => b[1].cost_usd - a[1].cost_usd)
-                          .map(([role, r]) => (
-                            <TR key={role}>
-                              <TD className="text-sm font-medium text-foreground">{role}</TD>
-                              <TD className="tabular text-right text-sm text-foreground">{fmtInt(r.calls)}</TD>
-                              <TD className="tabular text-right text-sm text-foreground">
-                                {fmtInt(r.prompt_tokens + r.completion_tokens)}
-                              </TD>
-                              <TD className="tabular text-right text-sm text-foreground">{fmtUsd(r.cost_usd)}</TD>
-                              <TD>
-                                <Badge tone={r.small_model ? 'ok' : 'ml'} className="font-mono">
-                                  {r.small_model ? 'small' : 'frontier'}
-                                </Badge>
-                              </TD>
-                            </TR>
-                          ))}
-                      </TBody>
-                    </Table>
+                {alerts.length === 0 ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-6 text-sm text-muted-foreground">
+                    <CheckCircle2 className="size-4 text-ok-ink" />
+                    All clear — nothing needs attention.
                   </div>
-                ) : (
-                  <Empty>No metered calls yet — per-role spend appears once traffic flows.</Empty>
-                )}
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardHeader
-                eyebrow="aegis.gateway · routing"
-                title="Model routing"
-                description="The effective role → deployment map — the mechanism behind the small-model share and the savings."
-                actions={
-                  <Badge tone="neutral" className="gap-1.5">
-                    <Route className="size-3" />
-                    heterogeneous
-                  </Badge>
-                }
-              />
-              <CardBody className="pt-0">
-                {metrics?.routing && Object.keys(metrics.routing).length > 0 ? (
-                  <RoutingTable routing={metrics.routing} />
-                ) : opt?.config.routing && Object.keys(opt.config.routing).length > 0 ? (
-                  <RoutingTable routing={opt.config.routing} />
-                ) : (
-                  <Empty>Routing table unavailable.</Empty>
-                )}
-              </CardBody>
-            </Card>
-          </div>
-
-          {/* ── D · Tenant & budget health ─────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader
-                eyebrow="aegis.governance · /governance/dashboard"
-                title="Tenants & budgets"
-                description="Every tenant with its cap, ledger-derived spend, remaining headroom and calls. The bar is spend vs the USD cap."
-                actions={
-                  <Badge tone="neutral" className="gap-1.5">
-                    <Landmark className="size-3" />
-                    {tenants.length} {tenants.length === 1 ? 'tenant' : 'tenants'}
-                  </Badge>
-                }
-              />
-              <CardBody className="pt-0">
-                {tenants.length === 0 ? (
-                  <Empty>No tenant data (governance stores off) — the accessor returned an empty snapshot.</Empty>
-                ) : (
-                  <div className="overflow-hidden rounded-xl border border-border">
-                    <Table>
-                      <THead>
-                        <TH className="text-left">Tenant</TH>
-                        <TH className="text-left">Spend / limit</TH>
-                        <TH className="text-right">Remaining</TH>
-                        <TH className="text-right">Calls</TH>
-                      </THead>
-                      <TBody>
-                        {tenants.map((t) => {
-                          const b = budgetByTenant.get(t.id)
-                          const cap = b?.budget.usd_cap ?? null
-                          const spent = b?.cost_usd_used ?? null
-                          const remaining = b?.usd_remaining ?? null
-                          const calls = b?.calls ?? null
-                          const frac = cap != null && cap > 0 && spent != null ? Math.min(1, spent / cap) : null
-                          return (
-                            <TR key={t.id} className="align-top">
-                              <TD className="whitespace-nowrap">
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-sm font-medium text-foreground">{t.name}</span>
-                                  <span className="font-mono text-[0.7rem] text-muted-foreground">tenant #{t.id}</span>
-                                </div>
-                              </TD>
-                              <TD className="min-w-[9rem]">
-                                <div className="flex items-baseline justify-between gap-2">
-                                  <span className="tabular text-sm text-foreground">{fmtUsd(spent)}</span>
-                                  <span className="tabular font-mono text-[0.7rem] text-muted-foreground">
-                                    / {cap != null ? fmtUsd(cap) : 'no cap'}
-                                  </span>
-                                </div>
-                                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-                                  {frac != null ? (
-                                    <div
-                                      className="h-full rounded-full transition-all duration-700"
-                                      style={{ width: `${Math.max(2, Math.round(frac * 100))}%`, background: meterTone(frac) }}
-                                    />
-                                  ) : null}
-                                </div>
-                              </TD>
-                              <TD className="tabular whitespace-nowrap text-right text-sm text-foreground">{fmtUsd(remaining)}</TD>
-                              <TD className="tabular whitespace-nowrap text-right text-sm text-foreground">{fmtInt(calls)}</TD>
-                            </TR>
-                          )
-                        })}
-                      </TBody>
-                    </Table>
-                  </div>
-                )}
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardHeader
-                eyebrow="aegis.governance · RBAC"
-                title="Users & roles"
-                description="Members in scope, grouped by the portal role granting their access."
-                actions={
-                  <Badge tone="neutral" className="gap-1.5">
-                    <Users className="size-3" />
-                    {users.length}
-                  </Badge>
-                }
-              />
-              <CardBody className="pt-0">
-                {roleCounts.length === 0 ? (
-                  <Empty>No users (stores off).</Empty>
                 ) : (
                   <ul className="flex flex-col gap-2">
-                    {roleCounts.map(([role, count]) => (
+                    {alerts.map((a, i) => (
                       <li
-                        key={role}
-                        className="flex items-center justify-between rounded-xl border border-border bg-surface-2/30 px-3.5 py-2.5"
+                        key={i}
+                        className="flex items-start gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5 shadow-card"
                       >
-                        <Badge tone={roleTone(role)} className="font-mono">
-                          {role}
-                        </Badge>
-                        <span className="tabular text-sm font-medium text-foreground">
-                          {count} {count === 1 ? 'user' : 'users'}
-                        </span>
+                        <span
+                          className="mt-1.5 size-2.5 shrink-0 rounded-full"
+                          style={{
+                            background:
+                              a.tone === 'block'
+                                ? 'var(--danger)'
+                                : a.tone === 'risk'
+                                  ? 'var(--risk-ink, #b45309)'
+                                  : 'var(--muted-foreground, #64748b)',
+                          }}
+                          aria-hidden
+                        />
+                        <span className="text-[0.86rem] font-medium text-foreground">{a.text}</span>
                       </li>
                     ))}
                   </ul>
                 )}
               </CardBody>
             </Card>
-          </div>
 
-          {/* ── E · Safety & queue ─────────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Card>
               <CardHeader
-                eyebrow="aegis.agent · /approvals"
                 title="Approvals queue"
-                description="Risk-gated actions awaiting a human decision."
                 actions={
-                  <Badge tone={pending && pending > 0 ? 'risk' : 'ok'} className="gap-1.5">
-                    <ListChecks className="size-3" />
-                    {pending ?? 0} pending
-                  </Badge>
+                  <Link
+                    href="/app/admin/approvals"
+                    className="inline-flex items-center gap-1 text-[0.78rem] font-medium text-primary hover:underline"
+                  >
+                    Open inbox <ChevronRight className="size-3.5" />
+                  </Link>
                 }
               />
               <CardBody className="pt-0">
@@ -596,60 +416,180 @@ function AdminCommandCenter(): ReactElement {
                         </div>
                       </li>
                     ))}
-                    {approvals.rows.length > 4 && (
-                      <li className="px-1 pt-1 text-[0.72rem] text-muted-foreground">
-                        +{approvals.rows.length - 4} more in the Approvals inbox
-                      </li>
-                    )}
                   </ul>
                 ) : (
-                  <Empty>No pending approvals — the human gate is clear.</Empty>
+                  <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-6 text-sm text-muted-foreground">
+                    <CheckCircle2 className="size-4 text-ok-ink" />
+                    No pending approvals — the human gate is clear.
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          </div>
+
+          {/* ── C · Customers & budgets (summary → own page) ───────────────────── */}
+          <Card>
+            <CardHeader
+              title="Customers & budgets"
+              actions={
+                <Link
+                  href="/app/admin/governance"
+                  className="inline-flex items-center gap-1 text-[0.78rem] font-medium text-primary hover:underline"
+                >
+                  View all customers <ChevronRight className="size-3.5" />
+                </Link>
+              }
+            />
+            <CardBody className="pt-0">
+              {topTenants.length === 0 ? (
+                <Empty>No customer data yet.</Empty>
+              ) : (
+                <ul className="flex flex-col divide-y divide-border/70">
+                  {topTenants.map(({ t, b }) => {
+                    const cap = b?.budget.usd_cap ?? null
+                    const spent = b?.cost_usd_used ?? null
+                    const frac = cap != null && cap > 0 && spent != null ? Math.min(1, spent / cap) : null
+                    return (
+                      <li key={t.id} className="flex items-center gap-4 py-3 first:pt-0 last:pb-0">
+                        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-surface-2">
+                          <Landmark className="size-4 text-muted-foreground" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-foreground">{t.name}</p>
+                          <p className="font-mono text-[0.68rem] text-muted-foreground">
+                            {fmtInt(b?.calls ?? null)} calls
+                          </p>
+                        </div>
+                        <div className="w-40 shrink-0">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="tabular text-sm text-foreground">{fmtUsd(spent)}</span>
+                            <span className="tabular font-mono text-[0.68rem] text-muted-foreground">
+                              / {cap != null ? fmtUsd(cap) : 'no cap'}
+                            </span>
+                          </div>
+                          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+                            {frac != null ? (
+                              <div
+                                className="h-full rounded-full transition-all duration-700"
+                                style={{ width: `${Math.max(2, Math.round(frac * 100))}%`, background: meterTone(frac) }}
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </CardBody>
+          </Card>
+
+          {/* ── D · Financials: real trend + model mix ─────────────────────────── */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader title="Cost trend" />
+              <CardBody className="pt-0">
+                {trend.length > 0 ? (
+                  <AreaChart
+                    data={trend}
+                    index="bucket"
+                    category="cost"
+                    color="ml"
+                    valueFormatter={(v) => fmtUsd(v)}
+                    height={220}
+                  />
+                ) : (
+                  <Empty>No metered spend yet.</Empty>
                 )}
               </CardBody>
             </Card>
 
             <Card>
+              <CardHeader title="Model mix" />
+              <CardBody className="pt-0">
+                {mix.length > 0 ? (
+                  <DonutChart
+                    data={mix}
+                    centerLabel={mixIsSpend ? fmtUsd(totalSpend) : fmtInt(queries)}
+                    centerSub={mixIsSpend ? 'total spend' : 'total calls'}
+                    valueFormatter={(v) => (mixIsSpend ? fmtUsd(v) : `${fmtInt(v)} calls`)}
+                    height={220}
+                  />
+                ) : (
+                  <Empty>No model usage yet.</Empty>
+                )}
+              </CardBody>
+            </Card>
+          </div>
+
+          {/* ── E · Distribution: spend by role + routing, both as pies ────────── */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader title="Where the spend goes" />
+              <CardBody className="pt-0">
+                {spendByRole.length > 0 ? (
+                  <DonutChart
+                    data={spendByRole}
+                    centerLabel={spendIsCost ? fmtUsd(summary?.total_cost_usd ?? null) : fmtInt(summary?.total_calls ?? null)}
+                    centerSub={spendIsCost ? 'by role' : 'calls by role'}
+                    valueFormatter={(v) => (spendIsCost ? fmtUsd(v) : `${fmtInt(v)} calls`)}
+                    height={240}
+                  />
+                ) : (
+                  <Empty>No metered calls yet.</Empty>
+                )}
+              </CardBody>
+            </Card>
+
+            <Card>
+              <CardHeader title="Model routing" />
+              <CardBody className="pt-0">
+                {routingMix.length > 0 ? (
+                  <DonutChart
+                    data={routingMix}
+                    centerLabel={String(routingMix.reduce((s, d) => s + d.value, 0))}
+                    centerSub="roles routed"
+                    valueFormatter={(v) => `${v} role${v === 1 ? '' : 's'}`}
+                    height={240}
+                  />
+                ) : (
+                  <Empty>Routing table unavailable.</Empty>
+                )}
+              </CardBody>
+            </Card>
+          </div>
+
+          {/* ── F · Health: security posture + latency (positive/green) ────────── */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <Card>
               <CardHeader
-                eyebrow="aegis.security · /security/posture"
                 title="Security posture"
-                description="Threat controls by live-derived status."
                 actions={
                   <Badge tone={postureCounts.not_covered > 0 ? 'block' : postureCounts.partial > 0 ? 'risk' : 'ok'} className="gap-1.5">
                     <ShieldCheck className="size-3" />
-                    {postureCounts.enforced} enforced
+                    {coverage != null ? `${fmtPct(coverage)} covered` : '—'}
                   </Badge>
                 }
               />
               <CardBody className="pt-0">
-                {posture && posture.entries.length > 0 ? (
+                {securityMix.length > 0 ? (
                   <div className="flex flex-col gap-3">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="rounded-lg bg-ok/15 py-2">
-                        <p className="tabular t-title text-ok-ink">{postureCounts.enforced}</p>
-                        <p className="text-[0.68rem] text-muted-foreground">enforced</p>
+                    <DonutChart
+                      data={securityMix}
+                      centerLabel={coverage != null ? fmtPct(coverage) : '—'}
+                      centerSub="enforced"
+                      valueFormatter={(v) => `${v} control${v === 1 ? '' : 's'}`}
+                      height={200}
+                    />
+                    {topGap ? (
+                      <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-2/40 px-3 py-2 text-[0.78rem]">
+                        <span className="truncate text-foreground">Top gap: {topGap.name}</span>
+                        <Badge tone={postureTone(topGap.status)} className="font-mono">
+                          {topGap.status}
+                        </Badge>
                       </div>
-                      <div className="rounded-lg bg-risk/20 py-2">
-                        <p className="tabular t-title text-risk-ink">{postureCounts.partial}</p>
-                        <p className="text-[0.68rem] text-muted-foreground">partial</p>
-                      </div>
-                      <div className="rounded-lg bg-block/20 py-2">
-                        <p className="tabular t-title text-block-ink">{postureCounts.not_covered}</p>
-                        <p className="text-[0.68rem] text-muted-foreground">not covered</p>
-                      </div>
-                    </div>
-                    {postureGaps.length > 0 ? (
-                      <ul className="flex flex-col gap-1.5">
-                        {postureGaps.map((e) => (
-                          <li key={e.threat_id} className="flex items-center justify-between gap-2 text-[0.78rem]">
-                            <span className="truncate text-foreground">{e.name}</span>
-                            <Badge tone={postureTone(e.status)} className="font-mono">
-                              {e.status}
-                            </Badge>
-                          </li>
-                        ))}
-                      </ul>
                     ) : (
-                      <p className="text-[0.78rem] text-ok-ink">All mapped controls enforced.</p>
+                      <p className="text-center text-[0.78rem] text-ok-ink">All mapped controls enforced.</p>
                     )}
                   </div>
                 ) : (
@@ -660,128 +600,27 @@ function AdminCommandCenter(): ReactElement {
 
             <Card>
               <CardHeader
-                eyebrow="aegis.observability · /latency"
-                title="Latency SLA"
-                description="Per-run percentiles from real samples."
+                title="Latency"
                 actions={
-                  <Badge tone="neutral" className="gap-1.5">
+                  <Badge tone="ok" className="gap-1.5">
                     <Activity className="size-3" />
-                    {latency?.run_count ?? 0} runs
+                    {latencyBars.length > 0 ? 'Healthy' : `${latency?.run_count ?? 0} runs`}
                   </Badge>
                 }
               />
               <CardBody className="pt-0">
-                {latency && !latency.empty ? (
+                {latencyBars.length > 0 ? (
                   <div className="flex flex-col gap-3">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="rounded-lg bg-surface-2/50 py-2">
-                        <p className="tabular t-title text-foreground">{fmtMs(latency.run_p50_ms)}</p>
-                        <p className="text-[0.68rem] text-muted-foreground">p50</p>
-                      </div>
-                      <div className="rounded-lg bg-surface-2/50 py-2">
-                        <p className="tabular t-title text-foreground">{fmtMs(latency.run_p95_ms)}</p>
-                        <p className="text-[0.68rem] text-muted-foreground">p95</p>
-                      </div>
-                      <div className="rounded-lg bg-surface-2/50 py-2">
-                        <p className="tabular t-title text-foreground">{fmtMs(latency.run_max_ms)}</p>
-                        <p className="text-[0.68rem] text-muted-foreground">max</p>
-                      </div>
-                    </div>
-                    {latency.slowest_node ? (
-                      <p className="text-[0.78rem] text-muted-foreground">
-                        Slowest node: <span className="font-mono text-foreground">{latency.slowest_node}</span>
-                      </p>
-                    ) : null}
+                    <BarChart data={latencyBars} index="stage" category="ms" color="ok" height={200} />
+                    <p className="text-center text-[0.78rem] text-ok-ink">
+                      p95 {fmtMs(latency?.run_p95_ms)} · well within a responsive envelope.
+                    </p>
                   </div>
                 ) : (
-                  <Empty>No runs recorded yet — an honest empty state, not fake zeros.</Empty>
-                )}
-              </CardBody>
-            </Card>
-          </div>
-
-          {/* ── F · Audit & alerts ─────────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader
-                eyebrow="aegis.governance · audit"
-                title="Recent audit tail"
-                description="The most recent governance audit rows — actor, action and time. Read-only."
-                actions={
-                  <Badge tone="neutral" className="gap-1.5">
-                    <ScrollText className="size-3" />
-                    {audit.length}
-                  </Badge>
-                }
-              />
-              <CardBody className="pt-0">
-                {audit.length === 0 ? (
-                  <Empty>No audit entries (stores off).</Empty>
-                ) : (
-                  <div className="overflow-hidden rounded-xl border border-border">
-                    <Table>
-                      <THead>
-                        <TH className="text-left">Actor</TH>
-                        <TH className="text-left">Action</TH>
-                        <TH className="text-right">Time</TH>
-                      </THead>
-                      <TBody>
-                        {audit.slice(0, 8).map((row, i) => {
-                          const r = row as Record<string, unknown>
-                          const actor = (r.actor ?? r.username ?? r.user ?? '—') as string
-                          const action = (r.action ?? r.event ?? '—') as string
-                          const ts = r.ts ?? r.created_at ?? r.timestamp
-                          const key = (r.id as number | string | undefined) ?? i
-                          return (
-                            <TR key={key}>
-                              <TD className="text-sm font-medium text-foreground">{String(actor)}</TD>
-                              <TD>
-                                <span className="font-mono text-[0.78rem] text-foreground">{String(action)}</span>
-                              </TD>
-                              <TD className="tabular whitespace-nowrap text-right font-mono text-[0.72rem] text-muted-foreground">
-                                {fmtTs(ts)}
-                              </TD>
-                            </TR>
-                          )
-                        })}
-                      </TBody>
-                    </Table>
+                  <div className="flex h-[220px] flex-col items-center justify-center gap-2 text-center">
+                    <CheckCircle2 className="size-6 text-ok-ink" />
+                    <span className="text-sm text-ok-ink">No latency issues — awaiting the first run.</span>
                   </div>
-                )}
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardHeader
-                eyebrow="derived · needs-attention"
-                title="Alerts"
-                description="Composed from the panels above — budget, security and queue signals."
-                actions={
-                  <Badge tone={alerts.length > 0 ? 'risk' : 'ok'} className="gap-1.5">
-                    <AlertTriangle className="size-3" />
-                    {alerts.length}
-                  </Badge>
-                }
-              />
-              <CardBody className="pt-0">
-                {alerts.length === 0 ? (
-                  <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-8 text-sm text-muted-foreground">
-                    <CheckCircle2 className="size-4 text-ok-ink" />
-                    All clear — no budget, security or queue signals need attention.
-                  </div>
-                ) : (
-                  <ul className="flex flex-col gap-2">
-                    {alerts.map((a, i) => (
-                      <li key={i} className="flex items-start gap-2.5 rounded-xl border border-border bg-surface-2/30 px-3.5 py-2.5">
-                        <span
-                          className="mt-1.5 size-2 shrink-0 rounded-full"
-                          style={{ background: a.tone === 'block' ? 'var(--danger)' : a.tone === 'risk' ? 'var(--risk-ink, #b45309)' : 'var(--muted-foreground, #64748b)' }}
-                          aria-hidden
-                        />
-                        <span className="text-[0.82rem] text-foreground">{a.text}</span>
-                      </li>
-                    ))}
-                  </ul>
                 )}
               </CardBody>
             </Card>

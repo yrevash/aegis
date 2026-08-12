@@ -132,11 +132,6 @@ function SecurityView(): ReactElement {
       <div>
         <p className="eyebrow mb-1">OWASP-Agentic · posture</p>
         <h1 className="t-hero text-foreground">Security</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Every OWASP-Agentic threat mapped to the live Aegis control that holds it down — with an
-          honest status read straight from the wiring. Partial controls are shown as partial, never
-          green.
-        </p>
       </div>
 
       {error ? (

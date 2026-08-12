@@ -288,9 +288,6 @@ export function PatchMount(): ReactElement {
         <div>
           <p className="eyebrow mb-1">installed vs latest</p>
           <h1 className="t-hero text-foreground">Patch Check</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Flags outdated dependencies before a known-CVE lapse — installed compared to latest.
-          </p>
         </div>
         {mode.mode === 'mock' && (
           <div
