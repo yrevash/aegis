@@ -752,10 +752,17 @@ def build_agent(
 
         done = bool(results) and all(r["ok"] for r in results)
         budget_left = iteration < budget
-        will_retry = (not done) and budget_left
+        # Self-repair master switch: when disabled, the reflect node still runs and
+        # reports the outcome but NEVER routes back to plan (a single linear pass).
+        will_retry = config.self_repair_enabled and (not done) and budget_left
 
         if done:
             reason = "goal met: every action succeeded."
+        elif not config.self_repair_enabled:
+            reason = (
+                "self-repair disabled; finalising with the best available result "
+                "(no re-plan)."
+            )
         elif not budget_left:
             reason = (
                 f"iteration budget exhausted ({iteration}/{budget}); "

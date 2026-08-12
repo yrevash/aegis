@@ -15,6 +15,9 @@ Public surface:
 - :func:`build_agent` — compile the graph with injected :class:`AgentDeps` +
   checkpointer.
 - :func:`resume_parked_run` — headless resume of a checkpointed parked run.
+- :func:`harness_config` — the tweakable-config schema (every knob + type/default/allowed)
+  as data for the harness UI; :func:`run_summary` — the structured per-run trace record
+  folded from the SAME emitted events.
 - :class:`AgentDeps` / :class:`AgentConfig` / :class:`MemoryDeps` — the DI contract +
   bounded-autonomy thresholds.
 - :class:`ApprovalRegistry` / :func:`get_approval_registry` /
@@ -45,6 +48,7 @@ from .deps import (
     risk_rank,
 )
 from .graph import build_agent
+from .harness import harness_config, run_summary
 from .orchestrator import resume_parked_run, run_agent
 from .router import RouterDecision, classify_deterministic, load_roster, route_query
 from .state import AgentState
@@ -66,10 +70,12 @@ __all__ = [
     "events",
     "get_approval_registry",
     "get_parked_runs",
+    "harness_config",
     "load_roster",
     "resume_parked_run",
     "risk_at_least",
     "risk_rank",
     "route_query",
     "run_agent",
+    "run_summary",
 ]

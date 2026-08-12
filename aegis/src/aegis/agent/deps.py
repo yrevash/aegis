@@ -109,6 +109,12 @@ class AgentConfig:
             the maximum number of planning rounds a single run may take (a HARD cap
             that guarantees termination). ``1`` disables looping (single linear pass);
             the default ``2`` allows one re-plan after a failed/insufficient action.
+        self_repair_enabled: Master switch for the bounded Reflexion self-repair loop.
+            ``True`` (default) keeps today's behaviour — a failed/insufficient action
+            re-plans while the ``max_plan_iterations`` budget remains. ``False`` forces a
+            single linear pass: the ``reflect`` node still runs and reports the outcome,
+            but never routes back to ``plan`` (a UI-friendly on/off that does not require
+            reasoning about the iteration budget).
         default_persona_id: The persona id a run falls back to when the request names
             none. Neutral by default; the host wires its adapter's default persona.
     """
@@ -117,6 +123,7 @@ class AgentConfig:
     run_ml: bool = True
     stream_chunk_words: int = 4
     max_plan_iterations: int = 2
+    self_repair_enabled: bool = True
     approval_park_timeout: float | None = None
     default_persona_id: str = "default"
     #: Retrieval intelligence (docs/EVAL_STRATEGY.md). ``query_rewrite_enabled`` runs a
@@ -130,6 +137,28 @@ class AgentConfig:
     agentic_retrieval_enabled: bool = True
     agentic_retrieval_max_rounds: int = 2
     answer_cache_enabled: bool = True
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the effective knob values as a plain JSON-friendly dict.
+
+        Every field is surfaced (enums as their string ``value``) so the harness UI —
+        and :func:`aegis.agent.harness_config` — can render and round-trip the effective
+        configuration without importing this dataclass or any host type. The set of keys
+        is the complete, authoritative list of tweakable knobs.
+        """
+        return {
+            "gate_min_risk": self.gate_min_risk.value,
+            "run_ml": self.run_ml,
+            "stream_chunk_words": self.stream_chunk_words,
+            "max_plan_iterations": self.max_plan_iterations,
+            "self_repair_enabled": self.self_repair_enabled,
+            "approval_park_timeout": self.approval_park_timeout,
+            "default_persona_id": self.default_persona_id,
+            "query_rewrite_enabled": self.query_rewrite_enabled,
+            "agentic_retrieval_enabled": self.agentic_retrieval_enabled,
+            "agentic_retrieval_max_rounds": self.agentic_retrieval_max_rounds,
+            "answer_cache_enabled": self.answer_cache_enabled,
+        }
 
 
 class MemoryDeps(Protocol):

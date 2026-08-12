@@ -32,6 +32,8 @@ from .deps import (
     risk_at_least,
     risk_rank,
 )
+from aegis.agent.harness import harness_config, run_summary
+
 from .graph import build_agent
 from .orchestrator import decide_approval, resume_parked_run, run_agent
 from .state import AgentState
@@ -49,8 +51,10 @@ __all__ = [
     "decide_approval",
     "get_approval_registry",
     "get_parked_runs",
+    "harness_config",
     "resume_parked_run",
     "risk_at_least",
     "risk_rank",
     "run_agent",
+    "run_summary",
 ]
