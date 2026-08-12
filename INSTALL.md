@@ -7,7 +7,7 @@
 
 Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
 
-- **Path A — Demo in 2 minutes (no backend, no infra):** the frontend ships a
+- **Path A — Demo in 2 minutes (no backend, no infra):** the console ships a
   full in-browser **mock transport**, so you can see the whole UI (streaming
   agent trace, animated knowledge graph, SHAP + conformal panel, human-approval
   gate, dashboards) with **zero backend or database**. Best for a quick look or a
@@ -28,8 +28,8 @@ Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
 |------|---------|-----|
 | **Python** | ≥ 3.11 | backend (`pyproject.toml` requires `>=3.11`) |
 | **uv** | latest | fast Python env + installer (`pip install uv` or see astral.sh/uv) |
-| **Node.js** | ≥ 18 (20+ recommended) | frontend build/dev |
-| **pnpm** | ≥ 9 | frontend package manager (`npm i -g pnpm`) |
+| **Node.js** | ≥ 18.18 (20+ recommended) | console (`web/`) build/dev |
+| **npm** | ≥ 10 (ships with Node) | console package manager |
 | **PostgreSQL** | ≥ 15 | relational + KV/doc-status + audit log *(Path B)* |
 | **Qdrant** | ≥ 1.12 (server) | vector DB — ANN for retrieval + memory recall *(Path B; dev uses embedded)* |
 | **Neo4j** | 5.x (Desktop/Community) | knowledge graph *(Path B)* |
@@ -39,19 +39,22 @@ Phoenix runs **in-process** (a pip dependency) — nothing to install separately
 
 ---
 
-## Path A — Frontend-only demo (mock mode)
+## Path A — Console-only demo (mock mode)
 
 ```bash
-cd frontend
-pnpm install
-cp .env.example .env.local     # VITE_USE_MOCK=true is the default
-pnpm dev                       # → http://localhost:5173
+cd web
+npm install
+cp .env.example .env.local     # leave NEXT_PUBLIC_API_BASE empty for the mock demo
+npm run dev                    # → http://localhost:3000
 ```
 
-Open <http://localhost:5173>. Log in with any of the demo roles (see
-[Demo logins](#demo-logins)). Everything is driven by the mock transport — no
-backend required. To point the console at a live backend instead, set
-`VITE_USE_MOCK=false` and `VITE_API_BASE=http://localhost:8000` in `.env.local`.
+Open <http://localhost:3000>. Log in with any of the demo roles (see
+[Demo logins](#demo-logins)). The console is **live-first with a labelled mock
+fallback**: it probes the backend once on boot and, finding none, plays the whole
+scenario from the in-browser mock transport — no backend required. Force the mock
+at any time with `NEXT_PUBLIC_USE_MOCK=true` (or `?mock=1` in the URL). To point
+the console at a live backend, set `NEXT_PUBLIC_API_BASE=http://localhost:8000`
+in `.env.local`.
 
 ---
 
@@ -93,7 +96,7 @@ source .venv/bin/activate                 # Windows: .venv\Scripts\activate
 
 # Install the core + every feature extra (data, auth, observability, agent,
 # retrieval, ml, guardrails) plus dev tools:
-uv pip install -e ".[data,auth,observability,agent,retrieval,ml,guardrails,dev]"
+uv pip install -e ".[data,auth,observability,agent,retrieval,ml,guardrails,mcp,dev]"
 
 cp .env.example .env                      # then fill in the secrets below
 ```
@@ -156,17 +159,17 @@ uvicorn app.main:app --reload --app-dir src   # → http://localhost:8000
 - **Admin governance:** `GET /admin/tenants` (platform-admin),
   `GET /admin/users`, `GET|POST /admin/budgets`, `GET /admin/usage` (tenant-scoped).
 
-### 3. Frontend against the live backend
+### 3. Console against the live backend
 
 ```bash
-cd frontend
-pnpm install
+cd web
+npm install
 cp .env.example .env.local
-# set VITE_USE_MOCK=false and VITE_API_BASE=http://localhost:8000 in .env.local
-pnpm dev                                   # → http://localhost:5173
+# set NEXT_PUBLIC_API_BASE=http://localhost:8000 in .env.local
+npm run dev                                # → http://localhost:3000
 ```
 
-The backend enables CORS for `http://localhost:5173` out of the box.
+The backend enables CORS for `http://localhost:3000` out of the box.
 
 ---
 
@@ -209,11 +212,11 @@ ruff format --check src        # formatting
 > First `pytest` run is slow (~30–60s) because SHAP/XGBoost trigger a one-time
 > numba JIT compile; subsequent runs are ~2s.
 
-**Frontend — build + lint** (from `frontend/`):
+**Console — build + lint** (from `web/`):
 
 ```bash
-pnpm build     # tsc (strict) + vite build — expect clean, all chunks < 500 kB
-pnpm lint      # oxlint — 0 errors
+npm run build  # next build (TypeScript strict) — expect clean
+npm run lint   # ESLint (next/core-web-vitals + next/typescript) — 0 errors
 ```
 
 ---
@@ -246,12 +249,13 @@ pnpm lint      # oxlint — 0 errors
 Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 `MODEL_GENERATION=genailab-maas-gpt-4o`). See `backend/src/app/core/models.py`.
 
-**Frontend (`frontend/.env.local`)**:
+**Console (`web/.env.local`)**:
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `VITE_USE_MOCK` | `true` | in-browser mock transport (no backend) |
-| `VITE_API_BASE` | `http://localhost:8000` | live backend base URL (when mock is off) |
+| `NEXT_PUBLIC_API_BASE` | *(empty ⇒ same-origin)* | live backend base URL, e.g. `http://localhost:8000` |
+| `NEXT_PUBLIC_HEALTH_PATH` | `/health` | path the boot probe hits to detect a reachable backend |
+| `NEXT_PUBLIC_USE_MOCK` | `false` | `true` forces the in-browser mock transport (`?mock=1` does the same per-tab) |
 
 ---
 
@@ -259,8 +263,8 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 
 - **`pytest` seems to hang the first time** — it's the one-time numba/SHAP JIT
   compile, not a hang. Give the first run 60s; later runs are ~2s.
-- **Vite build appears stuck at "transforming…"** — clear stale esbuild workers:
-  `pkill -f "esbuild --service"` then rebuild.
+- **`next build` appears stuck or reuses stale output** — remove the build cache
+  and rebuild: `rm -rf web/.next && (cd web && npm run build)`.
 - **Qdrant unreachable at boot (full stores mode)** — the backend fails loud if
   `QDRANT_URL` is down. Start the Qdrant server (`http://localhost:6333`) or set
   `STORES=off` for the databaseless lite demo. Dev keeps an embedded Qdrant engine.
@@ -275,7 +279,7 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 
 | Component | Local process | Port |
 |-----------|---------------|------|
-| Frontend (Vite dev) | `pnpm dev` | 5173 |
+| Console (Next.js dev) | `npm run dev` (from `web/`) | 3000 |
 | Backend (FastAPI/uvicorn) | `uvicorn app.main:app` | 8000 |
 | PostgreSQL | native install | 5432 |
 | Qdrant (vector DB) | native install / binary | 6333 |
@@ -283,4 +287,5 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 | Redis / Memurai | native install | 6379 |
 | Arize Phoenix | in-process (with backend) | 6006 (UI, if enabled) |
 
-See `docs/backend.md`, `docs/frontend.md`, and `README.md` for architecture.
+See `docs/backend.md`, `docs/frontend.md` (console context), and `README.md` for
+architecture.

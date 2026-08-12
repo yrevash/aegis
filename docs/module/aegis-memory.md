@@ -250,9 +250,9 @@ deps (the intermediate `redis` tier is future work).
   LLM call), so this event reflects a pure read-and-budget operation, not a generation.
 
 On the frontend, `memory_recall` is mirrored 1:1 in
-`frontend/src/agui/streamNames.ts` (`MEMORY_RECALL: "memory_recall"`). As of this
+`web/src/lib/streamNames.ts` (`MEMORY_RECALL: "memory_recall"`). As of this
 writing there is no dedicated renderer wired to this event anywhere in the frontend —
-`frontend/src/agui/decode.ts` can decode the raw SSE frame, but no per-event React
+`web/src/lib/api/sse.ts` can decode the raw SSE frame, but no per-event React
 component (e.g. a "recalled N facts, M turns, used K tokens" card) consumes it yet.
 
 ## Honest infra / design notes

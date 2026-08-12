@@ -201,7 +201,7 @@ async def test_budget_listing_is_tenant_scoped(client, db):
 
 async def test_metrics_requires_auth_but_open_to_every_role(client, db):
     """/metrics is the value-spine of the Overview surface, present in *every* role's
-    portal (see ``frontend/src/routes/Portal.tsx``), so its guard was relaxed from
+    portal (see ``web/src/lib/portal.ts``), so its guard was relaxed from
     ``require_platform_admin`` to ``require_auth`` (Wave-2). It exposes only *aggregate*
     efficiency figures (cache-hit rate, small-model share, measured savings), not
     per-tenant spend/tenant listings/budget mutation — those stay admin-gated (see the

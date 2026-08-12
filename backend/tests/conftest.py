@@ -259,12 +259,20 @@ async def client():
 
     Fresh graph/metrics stores are injected per test so accumulated state never
     leaks between tests. Dependency overrides are cleared on teardown.
+
+    The latency window is the one telemetry store that cannot be injected — it is a
+    process-global rolling buffer in ``aegis.observability`` — so it is cleared here
+    too. Without this, a test that asserts the honest empty state (``p95_latency_ms``
+    is ``None``) passes alone and fails in a full run, because an earlier test's run
+    left samples behind: an order-dependent false failure, not an endpoint defect.
     """
     import httpx
+    from aegis.observability import reset_latency_window
 
     from app.api import routes as api_routes
     from app.main import app
 
+    reset_latency_window()
     graph_store = api_routes.GraphStore()
     metrics_store = api_routes.MetricsStore()
     app.dependency_overrides[api_routes.get_graph_store] = lambda: graph_store

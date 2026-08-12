@@ -13,10 +13,11 @@ venv/
 .env.*
 !.env.example
 
-# Node / frontend
+# Node / web console (Next.js)
 node_modules/
 dist/
-.vite/
+.next/
+*.tsbuildinfo
 *.local
 
 # Data / models / artifacts (regenerated locally)

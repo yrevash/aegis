@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { getGatewayOptimization } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { GatewayOptimizationResponse } from '@/lib/api/platform'
 
@@ -45,15 +46,23 @@ function pct(value: number | null | undefined): string {
  * the illustrative numbers are never passed off as a live measurement.
  */
 function TokenOptView(): ReactElement {
-  const token: string | null = null
+  // Live session token — a constant `null` would 401 on a reload and, being
+  // constant in the dependency array, never retry once the session was restored.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
   const [data, setData] = useState<OptimizationData | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
     getGatewayOptimization(token)
       .then((d) => {
-        if (alive) setData(d)
+        if (alive) {
+          setData(d)
+          setError(null)
+        }
       })
       .catch(() => {
         if (alive) setError('Could not load the gateway optimization. Is the backend running?')
@@ -61,7 +70,7 @@ function TokenOptView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   const summary = data?.summary
   const config = data?.config

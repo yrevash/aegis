@@ -8,6 +8,7 @@ import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { AdminUser } from '@/lib/api/types'
@@ -38,9 +39,11 @@ type LoadState =
   | { status: 'ready'; rows: AdminUser[] }
 
 export function RolesAccess({ token }: { token: string | null }): ReactElement {
-  // Without a live auth session, the current admin cannot be identified — the
-  // guard falls back to protecting the last admin in scope for everyone.
-  const currentUsername: string | null = null
+  // The signed-in admin, so the self-lockout guard knows *who* is acting. With a
+  // constant `null` here the guard degraded to protecting the last admin in
+  // scope for everyone; the real username makes it precise.
+  const { session } = useAuth()
+  const currentUsername: string | null = session?.username ?? null
 
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   /** Ids with an in-flight assignment (select disabled while saving). */
@@ -311,6 +314,9 @@ function chipDot(role: Role): string {
  * roster wired to the typed client.
  */
 export function RolesAccessMount(): ReactElement {
+  // `/admin/users` is admin-only: hand the child the real session bearer, and
+  // hold it back until the persisted session has been restored.
+  const { session, hydrated } = useAuth()
   const [mode, setMode] = useState<ResolvedMode | null>(null)
 
   useEffect(() => {
@@ -323,7 +329,7 @@ export function RolesAccessMount(): ReactElement {
     }
   }, [])
 
-  if (mode === null) {
+  if (mode === null || !hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -347,7 +353,7 @@ export function RolesAccessMount(): ReactElement {
             <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
           </div>
         )}
-        <RolesAccess token={null} />
+        <RolesAccess token={session?.token ?? null} />
       </div>
     </TooltipProvider>
   )

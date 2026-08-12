@@ -25,6 +25,7 @@ import { StatCard } from '@/components/ui/StatCard'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { QueryBar } from '@/components/console/QueryBar'
 import { getHarnessConfig } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { HarnessConfigResponse, HarnessKnob } from '@/lib/api/platform'
 import { personasForRole } from '@/config/personas'
@@ -518,15 +519,23 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
  * trace from a clearly-labelled sample; a run replaces it with the real one.
  */
 function HarnessView({ role, mock }: { role: Role; mock: boolean }): ReactElement {
-  const token: string | null = null
+  // Live session token — a constant `null` would fetch (and stream runs) with no
+  // bearer on a reload and, being constant in the dependency array, never retry.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
   const [config, setConfig] = useState<HarnessConfigResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
     getHarnessConfig(token)
       .then((c) => {
-        if (alive) setConfig(c)
+        if (alive) {
+          setConfig(c)
+          setError(null)
+        }
       })
       .catch(() => {
         if (alive) setError('Could not load the harness config. Is the backend running?')
@@ -534,7 +543,7 @@ function HarnessView({ role, mock }: { role: Role; mock: boolean }): ReactElemen
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   const { state, running, start, reset } = useRunStream()
   const [personaId, setPersonaId] = useState<string>(() => personasForRole(role)[0]?.id ?? '')

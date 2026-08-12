@@ -15,6 +15,7 @@ import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { colorForKind } from '@/config/signals'
 import { personasForRole } from '@/config/personas'
 import { getGraph } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { GraphResponse } from '@/lib/api/types'
 import type { GraphEdge, GraphNode, Role } from '@/lib/stream'
@@ -102,14 +103,31 @@ function KindChip({ kind }: { kind: string }): ReactElement {
  * the nodes/edges are real and measured from the run stream.
  */
 function GraphView({ role }: { role: Role }): ReactElement {
-  const token: string | null = null
+  // Live session token — a constant `null` here would fetch (and stream runs)
+  // with no bearer on a reload, and never retry once the session was restored.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
   const { state, running, start, reset } = useRunStream()
   const [personaId, setPersonaId] = useState(personasForRole(role)[0]?.id ?? '')
   const [graph, setGraph] = useState<GraphResponse>(EMPTY_GRAPH)
 
   useEffect(() => {
-    void getGraph(token).then(setGraph).catch(() => setGraph(EMPTY_GRAPH))
-  }, [token])
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
+    let alive = true
+    void getGraph(token)
+      .then((g) => {
+        if (alive) setGraph(g)
+      })
+      // Fall back to the honest empty graph — the view renders its empty state
+      // rather than waiting on data that will never arrive.
+      .catch(() => {
+        if (alive) setGraph(EMPTY_GRAPH)
+      })
+    return () => {
+      alive = false
+    }
+  }, [token, hydrated])
 
   const beat = beatFromSignal(state.lastSignal)
   const idle = !running && state.events.length === 0

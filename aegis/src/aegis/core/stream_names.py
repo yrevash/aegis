@@ -1,7 +1,7 @@
 """Canonical CustomEvent names — the single source of truth shared by every module.
 
 AG-UI carries domain payloads via ``CustomEvent(name, value)``. These constants are the
-agreed ``name`` strings; the frontend mirrors them in ``frontend/src/agui/streamNames.ts``.
+agreed ``name`` strings; the console mirrors them in ``web/src/lib/streamNames.ts``.
 """
 
 from __future__ import annotations

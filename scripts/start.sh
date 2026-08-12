@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Start the TAIF S2 platform (macOS/Linux — rehearsal twin of start.ps1).
 # Usage: ./scripts/start.sh [safe|lite|full]   (default: lite)
-#   safe : frontend only, mock transport — no backend, no infra.
-#   lite : backend with NO databases (STORES=off, SQLite audit) + live frontend.
-#   full : backend with all stores (Postgres/pgvector + Neo4j + Redis) + frontend.
+#   safe : console only, mock transport — no backend, no infra.
+#   lite : backend with NO databases (STORES=off, SQLite audit) + live console.
+#   full : backend with all stores (Postgres/pgvector + Neo4j + Redis) + console.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-lite}"
@@ -28,10 +28,11 @@ if [ "$MODE" != "safe" ]; then
   echo "  backend  -> http://localhost:8000  (docs at /docs)"
 fi
 
-( cd "$ROOT/frontend"
-  VITE_USE_MOCK="$USE_MOCK" VITE_API_BASE='http://localhost:8000' exec pnpm dev --port 5173
+( cd "$ROOT/web"
+  NEXT_PUBLIC_USE_MOCK="$USE_MOCK" NEXT_PUBLIC_API_BASE='http://localhost:8000' \
+    NEXT_PUBLIC_HEALTH_PATH='/health' exec npm run dev -- --port 3000
 ) & pids+=($!)
-echo "  frontend -> http://localhost:5173  (login admin/admin)"
+echo "  console  -> http://localhost:3000  (login admin/admin)"
 
 [ "$MODE" = "lite" ] && echo -e "\nLite mode: no databases needed; only GENAILAB_API_KEY (backend/.env) for real answers."
 echo -e "\nCtrl-C to stop both.\n"

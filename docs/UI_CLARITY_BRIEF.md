@@ -3,7 +3,7 @@
 **Author:** product-design research pass
 **Date:** 2026-08-05
 **Scope:** clarity, hierarchy, and restraint *within* the existing light SnowUI system. This is **not** a reskin — same tokens, same palette, same components. We are removing competition for attention, not changing the identity.
-**Read this if:** you are implementing the de-clutter. Every recommendation is expressed in terms of the tokens and components that already exist in `frontend/src`.
+**Read this if:** you are implementing the de-clutter. Every recommendation is expressed in terms of the tokens and components that already exist in `web/src`.
 
 ---
 
@@ -53,7 +53,7 @@ These are the load-bearing patterns from clarity-first products (Stripe, Linear,
 
 ## 2. What our system already gives us (use these, don't invent)
 
-From `frontend/src/index.css` and the component library — the redesign stays inside this vocabulary:
+From `web/src/app/globals.css` and the component library — the redesign stays inside this vocabulary:
 
 - **Neutrals:** `--background #f9f9fa`, `--foreground #101828`, `--surface #fff`, `--surface-2 #f2f4f7` (inset track), `--border #e4e7ec` (hairline), `--muted-foreground #667085`. Radius `--radius: 0.75rem` (12px).
 - **Six semantic hues**, each with an `-ink` variant: `agent` (mint), `graph` (blue), `risk` (amber), `block` (rose), `ok` (green), `ml` (purple). **These are meant to be *signals*.** Today they're used as *categories* (one hue per KPI) — the single biggest color-clarity regression to fix.

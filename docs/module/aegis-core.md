@@ -200,12 +200,12 @@ defines the **vocabulary** every other module emits through:
   `memory_recall`, `model_call`, `eval_result`) must draw its `name` from — `emitter.custom()`
   raises on any name not in that set.
 
-On the frontend, `frontend/src/agui/streamNames.ts` mirrors this registry value-for-value, and
-`frontend/src/agui/decode.ts` provides a minimal SSE-frame decoder
-(`decodeAguiStream(text) -> AguiEvent[]`) used by the current decode tests. As of this writing the
+In the console, `web/src/lib/streamNames.ts` mirrors this registry value-for-value, and
+`web/src/lib/api/sse.ts` provides a minimal SSE-frame decoder
+(`decodeAguiStream(text) -> AguiEvent[]`). As of this writing the
 full per-event-type React renderer/dispatcher described in the Module Contract spec (a process-rail
 timeline expanding each step into a specialized card) is still a follow-on build — today's
-frontend AG-UI surface is the name registry + the decoder, not yet the rendered console.
+console AG-UI surface is the name registry + the decoder, not yet the rendered process rail.
 
 ## Honest infra / design notes
 

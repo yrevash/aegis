@@ -8,6 +8,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { getLatency } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import type { LatencyResponse, NodeLatency } from '@/lib/api/platform'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 
@@ -150,16 +151,24 @@ function LatencyEmpty({ data }: { data: LatencyResponse }): ReactElement {
  * zeros); the offline mock serves a labelled `sample` window.
  */
 function LatencyView(): ReactElement {
-  const token: string | null = null
+  // Live session token — a constant `null` would 401 on a reload and, being
+  // constant in the dependency array, never retry once the session was restored.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
 
   const [data, setData] = useState<LatencyResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
     getLatency(token)
       .then((d) => {
-        if (alive) setData(d)
+        if (alive) {
+          setData(d)
+          setError(null)
+        }
       })
       .catch(() => {
         if (alive) setError('Could not load latency. Is the backend running?')
@@ -167,7 +176,7 @@ function LatencyView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   const src = data ? sourceLabel(data.source) : null
 

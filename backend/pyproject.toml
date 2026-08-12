@@ -40,7 +40,10 @@ auth = [
 observability = [
     "opentelemetry-sdk>=1.27",
     "opentelemetry-api>=1.27",
-    "arize-phoenix>=5.0",
+    # Capped <15: arize-phoenix 15+ (and especially the 20.x line) fails to import on
+    # Python 3.11 — the 14.x line is the verified-good one for this stack. Without the
+    # cap a clean rebuild resolves 20.x and the whole app dies at import time.
+    "arize-phoenix>=14.6,<15",
     "arize-phoenix-otel>=0.6",
 ]
 agent = [
@@ -66,7 +69,11 @@ ml = [
     # Capped <2.4 to co-exist with nemoguardrails (guardrails extra), which pins
     # pandas below 2.4. The ML spine is verified on pandas 2.3.
     "pandas>=2.2,<2.4",
-    "numpy>=1.26",
+    # Capped <2.5 for two independent reasons: presidio-analyzer 2.2.364 (guardrails
+    # extra) declares ``numpy<2.5``, and numba/llvmlite (a shap dependency) have no
+    # release supporting numpy 2.5 — without the cap the resolver drags numba back to
+    # an ancient release. The ML spine is verified on numpy 2.4.x.
+    "numpy>=1.26,<2.5",
     "joblib>=1.4",
 ]
 # NeMo Guardrails is the declarative Colang policy engine (one policy, two front
@@ -75,11 +82,19 @@ ml = [
 # pandas <2.4 (reflected in the ml extra above).
 guardrails = [
     "nemoguardrails>=0.23",
+    # Presidio + spaCy back the PII layer that ``aegis.guardrails.pii`` delegates to
+    # (regex fallback when absent). The backend's redaction tests assert real NER
+    # entity kinds (PERSON), so the host must declare the extra it actually depends on
+    # — otherwise a clean rebuild silently ships the degraded regex-only engine.
+    # Runtime model: ``python -m spacy download en_core_web_sm`` (not a PyPI dep).
+    "aegis[pii]",
 ]
 # The MCP tool-server facade (app/mcp): exposes the adapter tool registry over a
 # real Model Context Protocol stdio server, preserving allowlist/audit/risk gates.
+# The code targets the 2.x API (``FastMCP`` handlers); 1.x is NOT compatible, hence
+# the floor, and <3 guards against an unreviewed next major.
 mcp = [
-    "mcp>=2.0",
+    "mcp>=2.0,<3",
 ]
 dev = [
     "ruff>=0.7",
@@ -131,3 +146,18 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/app"]
+
+[tool.uv]
+# Resolution constraints (NOT extra dependencies — these only bound versions of
+# packages already in the graph). They pin the three points where a free resolve
+# drifts away from the verified-good stack captured in ``uv.lock``:
+#   litellm            1.96.2 regressed the gateway path; 1.96.0 is the verified one.
+#   presidio-analyzer  a free resolve picks the older 2.2.362 (it back-solves around
+#                      pydantic/numpy); 2.2.364 is the version the PII layer is tested on.
+#   numba              a shap transitive; unconstrained the resolver falls back to an
+#                      ancient 0.4x release that cannot build against numpy 2.4.
+constraint-dependencies = [
+    "litellm==1.96.0",
+    "presidio-analyzer==2.2.364",
+    "numba==0.67.0",
+]

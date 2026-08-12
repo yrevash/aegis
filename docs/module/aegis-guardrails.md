@@ -175,11 +175,11 @@ plain `pip install aegis`. The two real optional extras are:
   for back-compat during the AG-UI migration.
 
 On the frontend, `guardrail_verdict` is one of the names mirrored 1:1 in
-`frontend/src/agui/streamNames.ts`. As of this writing there is no dedicated verdict-card renderer
-wired to the AG-UI stream yet (the current frontend console renders the older bespoke
-`types/stream.ts` event union); the Module Contract spec's process-rail + dispatcher for AG-UI
-CustomEvents is described as the next frontend build on top of the decode layer in
-`frontend/src/agui/decode.ts`.
+`web/src/lib/streamNames.ts`. As of this writing there is no dedicated verdict-card renderer
+wired to the AG-UI stream yet (the current console renders the older bespoke
+`web/src/lib/stream.ts` event union); the Module Contract spec's process-rail + dispatcher for
+AG-UI CustomEvents is described as the next console build on top of the decode layer in
+`web/src/lib/api/sse.ts`.
 
 ## Honest infra / design notes
 

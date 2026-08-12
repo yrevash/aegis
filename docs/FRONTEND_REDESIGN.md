@@ -1,5 +1,12 @@
 # Frontend Redesign Spec — Aegis Console
 
+> **Historical note (2026-08-13):** this spec was written and executed against the original
+> Vite console, which has since been retired and deleted in favour of the Next.js app in
+> `web/`. The *design* contract below (identity, layout, motion, honesty rules) still governs
+> the console; the *stack* lines name the old toolchain — the current one is Next.js 15 +
+> React 19 + Tailwind v4 (tokens in `web/src/app/globals.css`), verified with `npm run build`
+> / `npm run lint` from `web/`. See `docs/learn/30-frontend.md` for the console as it stands.
+
 > **Status:** contract for the build agents. This document is the source of truth for the
 > visual-maturity pass described in `ENTERPRISE_MATURITY_PLAN.md` §5. Build agents implement
 > to this spec; they do not re-derive it.

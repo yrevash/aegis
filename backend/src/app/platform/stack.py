@@ -7,9 +7,9 @@ rather than a made-up pin. Each component is mapped to the branded Aegis module 
 powers, resolved from :data:`app.capabilities.AEGIS_MODULES` (the single source of
 truth) so the branded names never drift from the manifest.
 
-The small frontend set is parsed from ``frontend/package.json`` at request time
-(best-effort; ``version=None`` on any read/parse failure), keeping the console's own
-stack honest without hand-maintaining a second copy.
+The small frontend set is parsed from the console's ``web/package.json`` at request
+time (best-effort; ``version=None`` on any read/parse failure), keeping the console's
+own stack honest without hand-maintaining a second copy.
 """
 
 from __future__ import annotations
@@ -62,10 +62,12 @@ _BACKEND_STACK: list[tuple[str, str, str, str | None]] = [
     ("Qdrant client", "infra", "qdrant-client", "memory"),
 ]
 
-# The frontend set read from ``frontend/package.json``: (label, npm package, module).
+# The frontend set read from ``web/package.json``: (label, npm package, module).
+# Every entry must exist in that manifest — a name that does not appear there reports
+# ``version=None`` forever, which reads as "not installed" rather than "mis-typed".
 _FRONTEND_SET: list[tuple[str, str, str | None]] = [
+    ("Next.js", "next", "Console"),
     ("React", "react", "Console"),
-    ("Vite", "vite", "Console"),
     ("TypeScript", "typescript", "Console"),
     ("Recharts", "recharts", "Console"),
     ("Tailwind CSS", "tailwindcss", "Console"),
@@ -88,12 +90,18 @@ def _installed_version(dist: str) -> str | None:
 
 
 def _find_frontend_package_json() -> Path | None:
-    """Best-effort locate ``frontend/package.json`` walking up from this file."""
+    """Best-effort locate the console's ``package.json`` walking up from this file.
+
+    The console is the Next.js app in ``web/``. The legacy Vite app in ``frontend/``
+    was deleted, so it is only a fallback for an older checkout — it is never
+    preferred over ``web/``.
+    """
     here = Path(__file__).resolve()
     for parent in here.parents:
-        candidate = parent / "frontend" / "package.json"
-        if candidate.is_file():
-            return candidate
+        for console_dir in ("web", "frontend"):
+            candidate = parent / console_dir / "package.json"
+            if candidate.is_file():
+                return candidate
     return None
 
 

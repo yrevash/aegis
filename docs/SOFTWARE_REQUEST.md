@@ -18,7 +18,7 @@
 | # | Software | Version | Why |
 |---|----------|---------|-----|
 | 5 | **Python** (64-bit) | 3.11.x or 3.12.x | Backend runtime. We use `uv` (single binary, no admin) for envs. |
-| 6 | **Node.js LTS** + **pnpm** (via Corepack) | 20.x LTS | Frontend (Vite + React) build/dev. |
+| 6 | **Node.js LTS** (npm ships with it) | 20.x LTS | Console (Next.js + React) build/dev. |
 | 7 | **Git for Windows** | latest | Version control (if not already present). |
 | 8 | **Microsoft C++ Build Tools** | VS 2022 Build Tools | Insurance so any Python package that lacks a prebuilt wheel can compile. |
 | 9 | **VS Code** + **Graphviz** | latest | Editor; Graphviz for architecture diagrams. Nice-to-have. |
@@ -30,7 +30,7 @@
 - The **GenAI Wi-Fi must allow outbound HTTPS** to:
   - the model gateway `https://genailab.tcs.in` (our only remote dependency),
   - **PyPI** (`pypi.org`, `files.pythonhosted.org`) and the **npm registry**
-    (`registry.npmjs.org`) — otherwise `pip`/`pnpm install` fails on the day.
+    (`registry.npmjs.org`) — otherwise `pip`/`npm install` fails on the day.
   If the network is locked down, we will pre-bundle dependencies offline instead —
   please tell us which.
 
@@ -45,5 +45,5 @@
 
 ## Our own mitigation
 
-We will prepare an **offline dependency bundle** (Python wheels via `uv`, a pnpm
-store) as a fallback in case registry access is restricted on the event network.
+We will prepare an **offline dependency bundle** (Python wheels via `uv`, an npm
+cache) as a fallback in case registry access is restricted on the event network.

@@ -35,8 +35,9 @@ Project is **Aegis** — a domain-agnostic agentic platform (FastAPI `backend/` 
    asked — "push does not need always pushing".)
 4. Remaining from the owner's list (later): audit already matured; Approvals text already
    trimmed; tenant-specific ingestion pipeline / guardrails / policies are future.
-5. Eventually: the **parity switch** (retire Vite `frontend/` → Next.js `web/`) — do a full
-   4-portal click-through first. Then Phase 4 (pipelines).
+5. The **parity switch is done** — the legacy Vite app has been deleted; `web/` is the only
+   console. Do a full 4-portal click-through to confirm nothing regressed. Then Phase 4
+   (pipelines).
 
 ## Environment gotchas (READ — this cost the last agent hours)
 - **The agent Bash sandbox has ~100× slow file I/O.** Reading 300 small files timed out >60s.

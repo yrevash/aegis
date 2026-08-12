@@ -8,6 +8,7 @@ import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { StackComponent, StackResponse } from '@/lib/api/types'
@@ -198,6 +199,10 @@ function Stat({
  * `GET /stack`.
  */
 export function StackMount(): ReactElement {
+  // Hand the child the real session bearer, and hold it back until the persisted
+  // session has been restored — mounting with a constant `null` would fetch with
+  // no `Authorization` header and never retry.
+  const { session, hydrated } = useAuth()
   const [mode, setMode] = useState<ResolvedMode | null>(null)
 
   useEffect(() => {
@@ -210,7 +215,7 @@ export function StackMount(): ReactElement {
     }
   }, [])
 
-  if (mode === null) {
+  if (mode === null || !hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -234,7 +239,7 @@ export function StackMount(): ReactElement {
             <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
           </div>
         )}
-        <StackVersions token={null} />
+        <StackVersions token={session?.token ?? null} />
       </div>
     </TooltipProvider>
   )

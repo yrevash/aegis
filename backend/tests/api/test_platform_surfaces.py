@@ -8,11 +8,14 @@ check) is mocked, so nothing here reaches the wire.
 
 from __future__ import annotations
 
+from importlib import metadata
+
 import pytest
 
 import app.platform.patches as patch_check_mod
 from app.core.security import create_access_token
 from app.platform.patches import RegistryUnreachableError
+from app.platform.stack import _installed_version
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,9 +52,31 @@ async def test_stack_shape_and_real_versions(client, db):
     langgraph = next(c for c in comps if c["package"] == "langgraph")
     assert langgraph["aegis_module"] == "Aegis Router"
     assert langgraph["version"] is not None
-    # An optional-group dep that isn't installed is honest null, never fabricated.
-    litellm = next(c for c in comps if c["package"] == "litellm")
-    assert litellm["version"] is None
+    # No version is ever fabricated: every backend/infra row must equal EXACTLY what
+    # the interpreter reports for that distribution, and be None when it is absent.
+    # (The old form asserted one named package — litellm — was *not* installed. That
+    # can never hold: litellm is a core `[project] dependencies` entry, so it is always
+    # present and /stack is right to report its real version. The honest-null property
+    # belongs on the resolver, not on whichever package happens to be missing.)
+    for c in comps:
+        if c["category"] not in {"backend", "infra"}:
+            continue
+        try:
+            expected = metadata.version(c["package"])
+        except metadata.PackageNotFoundError:
+            expected = None
+        assert c["version"] == expected, f"{c['package']} is not its real version"
+    # The absent-distribution path is an honest null, never a made-up pin.
+    assert _installed_version("aegis-package-that-is-not-installed") is None
+    # The console rows are parsed from the Next.js app's web/package.json — every
+    # tracked npm package must actually exist there (a renamed/removed one would
+    # silently report null forever, which is how the deleted Vite `frontend/` dir
+    # went unnoticed).
+    frontend = [c for c in comps if c["category"] == "frontend"]
+    assert frontend, "the console stack must not be empty"
+    assert {c["package"] for c in frontend} >= {"next", "react", "typescript"}
+    for c in frontend:
+        assert c["version"], f"{c['package']} must resolve to a real version"
 
 
 async def test_stack_devops_allowed_client_forbidden_unauth_401(client, db):

@@ -12,6 +12,7 @@ import {
   getOpsPendingReleases,
   getOpsPrompts,
 } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type {
   OpsActivePromptResponse,
@@ -35,10 +36,23 @@ interface Loaded<T> {
   error: string | null
 }
 
-/** Load once on mount (and whenever `nonce` changes) with a live/mock-aware call. */
-function useLoad<T>(fn: () => Promise<T>, nonce = 0): Loaded<T> {
+/**
+ * Load with a live/mock-aware call, re-running whenever `key` (the bearer token)
+ * or `nonce` changes, and held back until `enabled`.
+ *
+ * `AuthProvider` restores the persisted session in an effect that runs *after*
+ * this one on a reload, so fetching immediately would send no bearer and 401;
+ * `key` makes the call re-fire once the real token lands.
+ */
+function useLoad<T>(
+  fn: () => Promise<T>,
+  key: string | null,
+  enabled: boolean,
+  nonce = 0,
+): Loaded<T> {
   const [state, setState] = useState<Loaded<T>>({ data: null, loading: true, error: null })
   useEffect(() => {
+    if (!enabled) return
     let alive = true
     setState((s) => ({ ...s, loading: true, error: null }))
     fn()
@@ -46,15 +60,16 @@ function useLoad<T>(fn: () => Promise<T>, nonce = 0): Loaded<T> {
         if (alive) setState({ data, loading: false, error: null })
       })
       .catch(() => {
+        // Always resolve `loading` — a swallowed failure would spin forever.
         if (alive)
           setState({ data: null, loading: false, error: 'Could not load. Is the backend running?' })
       })
     return () => {
       alive = false
     }
-    // fn is recreated per render; nonce drives intentional reloads.
+    // `fn` is recreated per render; key/enabled/nonce are the real inputs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nonce])
+  }, [key, enabled, nonce])
   return state
 }
 
@@ -67,18 +82,33 @@ function useLoad<T>(fn: () => Promise<T>, nonce = 0): Loaded<T> {
  * accessors — nothing is fabricated.
  */
 function LLMOpsView(): ReactElement {
-  const token: string | null = null
+  // Live session token — a constant `null` would 401 every `/ops/*` accessor on a
+  // reload and, being constant, never retry once the session was restored.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
   const [pendingNonce, setPendingNonce] = useState(0)
   const reloadPending = useCallback(() => setPendingNonce((n) => n + 1), [])
 
-  const prompts = useLoad<{ rows: OpsPromptVersionRow[] }>(() => getOpsPrompts(token, PROMPT_KEY))
-  const active = useLoad<OpsActivePromptResponse>(() => getOpsActivePrompt(token, PROMPT_KEY))
-  const evals = useLoad<{ rows: OpsEvalRow[] }>(() =>
-    getOpsEvals(token, { promptKey: PROMPT_KEY, limit: 200 }),
+  const prompts = useLoad<{ rows: OpsPromptVersionRow[] }>(
+    () => getOpsPrompts(token, PROMPT_KEY),
+    token,
+    hydrated,
   )
-  const params = useLoad<OpsParamsResponse>(() => getOpsParams(token))
+  const active = useLoad<OpsActivePromptResponse>(
+    () => getOpsActivePrompt(token, PROMPT_KEY),
+    token,
+    hydrated,
+  )
+  const evals = useLoad<{ rows: OpsEvalRow[] }>(
+    () => getOpsEvals(token, { promptKey: PROMPT_KEY, limit: 200 }),
+    token,
+    hydrated,
+  )
+  const params = useLoad<OpsParamsResponse>(() => getOpsParams(token), token, hydrated)
   const pending = useLoad<{ rows: OpsReleaseApprovalRow[] }>(
     () => getOpsPendingReleases(token, 50),
+    token,
+    hydrated,
     pendingNonce,
   )
 

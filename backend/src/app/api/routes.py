@@ -821,7 +821,7 @@ async def stack(
 
     Backend versions are resolved from the **actually installed** distributions via
     ``importlib.metadata`` (null when an optional-group dependency isn't installed —
-    honest, not guessed); the small frontend set is parsed from ``frontend/package.json``
+    honest, not guessed); the small frontend set is parsed from ``web/package.json``
     at request time. Each row maps to the branded Aegis module it powers.
     """
     return build_stack()
@@ -954,7 +954,7 @@ async def metrics(
 
     RBAC relaxed from ``require_platform_admin`` to ``require_auth`` (Wave-2 portal
     reachability): the **Overview** surface is present in *every* role's portal
-    (``admin``/``ai_team``/``devops``/``client`` — see ``frontend/src/routes/Portal.tsx``)
+    (``admin``/``ai_team``/``devops``/``client`` — see ``web/src/lib/portal.ts``)
     and polls this endpoint via ``useMetrics``. Under the old platform-admin gate every
     non-admin portal 403'd on its landing page. These are **aggregate efficiency
     figures** (cache-hit rate, small-model share, cost-per-1k, measured savings) — not

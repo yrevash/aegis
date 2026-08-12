@@ -18,6 +18,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { getSecurityPosture } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import type {
   PostureEntry,
   PostureSignals,
@@ -105,16 +106,26 @@ function tally(entries: PostureEntry[]): Record<PostureStatus, number> {
  * where it is only half-wired.
  */
 function SecurityView(): ReactElement {
-  const token: string | null = null
+  // Read the live session token. `AuthProvider` restores the persisted session in
+  // an effect that runs *after* this component's own effect on a reload, so a
+  // constant `null` here would fetch with no bearer, 401 — and, being constant in
+  // the dependency array, never retry once the real token arrived.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
 
   const [data, setData] = useState<SecurityPostureResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Wait for the persisted session to hydrate; fetching now would send no bearer.
+    if (!hydrated) return
     let alive = true
     getSecurityPosture(token)
       .then((d) => {
-        if (alive) setData(d)
+        if (alive) {
+          setData(d)
+          setError(null)
+        }
       })
       .catch(() => {
         if (alive) setError('Could not load the security posture. Is the backend running?')
@@ -122,7 +133,7 @@ function SecurityView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   const counts = useMemo(() => (data ? tally(data.entries) : null), [data])
 

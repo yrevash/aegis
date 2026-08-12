@@ -1,86 +1,101 @@
 # 30 · The console (frontend)
 
-The frontend is a **React + Vite + TypeScript** app under `frontend/src/`, styled with
-**Tailwind CSS v4** (CSS-first). It is a *live-first* console: it talks to the real
-backend when reachable and falls back to a clearly-labelled in-browser mock otherwise.
-Charts use `recharts`; the knowledge graph uses `react-force-graph`. The console ships a
+The console is a **Next.js 15 (App Router) + React 19 + TypeScript** app under `web/src/`,
+styled with **Tailwind CSS v4** (CSS-first). It is a *live-first* console: it talks to the
+real backend when reachable and falls back to a clearly-labelled in-browser mock otherwise.
+Charts use `recharts`; the knowledge graph uses `react-force-graph-2d`. The console ships a
 **single light identity** — there is no dark mode (see *The design system* below).
 
 ## Surfaces and navigation
 
-There is a login surface plus **one role-gated portal route per role** (`App.tsx` →
-`AppRoutes`) — four portals, matching the four RBAC roles:
+Routing is the App Router file tree under `web/src/app/`. There is a login surface plus
+**one role-gated portal per role** — four portals, matching the four RBAC roles — and each
+portal's surfaces are **URL-addressable sections**, not local tab state:
 
 | Route | Renders |
 |---|---|
-| `/login` | `routes/LoginPage.tsx` |
-| `/admin` | `RequireRole role="admin"` → `Portal role="admin"` |
-| `/ai-team` | `RequireRole role="ai_team"` → `Portal role="ai_team"` |
-| `/devops` | `RequireRole role="devops"` → `Portal role="devops"` |
-| `/client` | `RequireRole role="client"` → `Portal role="client"` |
-| `/` and `*` | `RootRedirect` → `homePathFor(session.role)` or `/login` |
+| `/` | `app/page.tsx` → redirects to `/login` |
+| `/login` | `app/login/page.tsx` — real sign-in + four demo quick-in buttons |
+| `/app/[role]` | `app/app/[role]/page.tsx` → redirects to the role's default section |
+| `/app/[role]/[section]` | `app/app/[role]/[section]/page.tsx` — the section, inside the portal shell |
 
-`Role = 'admin' | 'ai_team' | 'devops' | 'client'` (`types/stream.ts`); `homePathFor`
-(`auth/RequireRole.tsx`) maps each role to its route. Everything else is a **tab inside
-`routes/Portal.tsx`**, switched by local `useState(active)` — *not* the router. `Portal`
-builds its tabs from `sectionsFor(role)`, which reads **`ROLE_SECTIONS`** (the per-role
-surface allowlist); each `Section` carries a `NavItem` (id, label, icon, mono `hint`) and a
-`render`. The list is handed to `AppShell` → `Sidebar`, which groups items by
-`NavItem.group`.
+`Role = 'admin' | 'ai_team' | 'devops' | 'client'` (`lib/stream.ts`). `homePathFor(role)`
+(`lib/portal.ts`) maps each role to `/app/<role>/<its default section>` — the single source
+of truth for RBAC redirects (login lands there; a session that reaches the wrong portal is
+sent back there).
+
+- **`app/app/[role]/layout.tsx`** is the portal shell: `PortalGuard` (client-side RBAC
+  gate) wrapping `Sidebar` + `Topbar` + `<main>`. An unknown role 404s.
+- **`app/app/[role]/[section]/page.tsx`** validates the pair against `ROLE_SECTIONS`
+  (`isValidSection`) and 404s on anything a role does not own, then dispatches to that
+  section's component. `generateStaticParams()` enumerates every valid role/section combo,
+  so `next build` prints the whole portal route tree.
+- **`lib/portal.ts`** is the catalogue: `SECTIONS` (id, label, `lucide` icon, mono `hint`,
+  plain-language `tooltip`, optional `group`) and `ROLE_SECTIONS` (the per-role allowlist,
+  in nav order). `Sidebar` groups items by `Section.group`.
 
 ```mermaid
 flowchart TB
-    App[App.tsx] --> Providers["BackendModeProvider → AuthProvider → TooltipProvider → BrowserRouter"]
-    Providers --> Routes[AppRoutes]
-    Routes --> Login[/login → LoginPage/]
-    Routes --> Portal["/admin · /ai-team · /devops · /client → Portal (RequireRole)"]
-    Portal --> Shell[AppShell = Sidebar + Topbar + main]
-    Shell --> Tabs{"active tab (useState), scoped by ROLE_SECTIONS"}
-    Tabs --> Console & Overview & Memory & Improvement & Approvals & Governance & Audit & Roles & Stack & Patches & Risk & Savings & AccessDemo
+    Root["/ → /login"] --> Login["/login — sign-in + quick-in"]
+    Login --> Home["homePathFor(role)"]
+    Home --> Portal["/app/[role]/[section]"]
+    Portal --> Layout["layout.tsx = PortalGuard + Sidebar + Topbar"]
+    Layout --> Dispatch{"section dispatch<br/>(validated against ROLE_SECTIONS)"}
+    Dispatch --> Console & Overview & Harness & MLOps & LLMOps & Evals & Memory & RAG & Graph & Cache & Guardrails & Governance & Approvals & Audit & Roles & Stack & Patch & Security & Redteam & Latency & Savings & Risk & AccessDemo
 ```
 
-Each role sees only the surfaces it owns (`ROLE_SECTIONS` in `Portal.tsx`):
+Each role sees only the surfaces it owns (`ROLE_SECTIONS` in `lib/portal.ts`):
 
 | Role | Portal surfaces (in nav order) |
 |---|---|
-| `admin` | Overview · Approvals · Governance · Audit · Roles & Access — **oversight/delegation only** (no hands-on AI/DevOps/Client work) |
-| `ai_team` | Console · Overview · Memory · Improvement · Access demo |
-| `devops` | Overview · Tech Stack & Versions · Patch Check · Audit |
+| `admin` | Overview · Governance · Approvals · Audit · Roles & Access — **oversight/delegation only** (no hands-on AI/DevOps/Client work) |
+| `ai_team` | Console · Harness · MLOps · LLMOps · Evals · Token opt · Memory · RAG · Graph · Cache · Guardrails · Access demo |
+| `devops` | Overview · Tech Stack & Versions · Patch Check · Security · Red-team · Latency · Audit |
 | `client` | Overview · Savings · Risk Map · Access demo |
 
-The full tab catalogue (note: several **labels differ from their id** — documented so the
-code and UI line up):
+The full section catalogue (note: several **labels differ from their id** — documented so
+the code and UI line up):
 
-| id | UI label | mono hint | Component | Shown in |
+| id | UI label | mono hint | Component (`web/src/components/…`) | Shown in |
 |---|---|---|---|---|
-| `console` | **Console** | `LangGraph` | `components/console/MoneyShotConsole.tsx` (eager) | ai_team |
-| `dashboard` | **Overview** | `value at a glance` | `components/dashboard/Dashboard.tsx` (lazy) | all portals |
-| `memory` | **Memory** | `pgvector` | `components/memory/MemoryView.tsx` (lazy) | ai_team |
-| `simulation` | **Access demo** | `RBAC scope` | `components/sim/SimulationView.tsx` (lazy) | ai_team, client |
-| `ops` | **Improvement** | `trace → eval → release` | `components/ops/OpsView.tsx` (lazy) | ai_team |
-| `approvals` | **Approvals** | `human gate` | `components/approvals/ApprovalsInbox.tsx` (lazy) | admin |
-| `admin` | **Governance** | `tenants · budgets` | `components/admin/AdminSettings.tsx` (lazy) | admin |
-| `audit` | **Audit** | `Postgres audit` | `components/admin/AuditLog.tsx` (lazy) | admin, devops |
-| `roles` | **Roles & Access** | `RBAC grants` | `components/admin/RolesAccess.tsx` (lazy) | admin |
-| `stack` | **Tech Stack & Versions** | `SBOM` | `components/devops/StackVersions.tsx` (lazy) | devops |
-| `patch` | **Patch Check** | `installed vs latest` | `components/devops/PatchCheck.tsx` (lazy) | devops |
-| `risk` | **Risk Map** | `OWASP-Agentic` | `components/client/RiskMap.tsx` (lazy) | client |
-| `savings` | **Savings** | `baseline vs actual` | `components/client/SavingsView.tsx` (lazy) | client |
+| `console` | **Console** | `LangGraph` | `console/ConsoleMount.tsx` → `MoneyShotConsole` | ai_team |
+| `dashboard` | **Overview** | `value at a glance` | `dashboard/AdminCommandCenter.tsx` (admin) · `dashboard/Dashboard.tsx` (devops, client) | all portals |
+| `harness` | **Harness** | `graph · tweak` | `harness/HarnessView.tsx` | ai_team |
+| `mlops` | **MLOps** | `SHAP · conformal` | `ml/MLOpsView.tsx` | ai_team |
+| `llmops` | **LLMOps** | `trace → eval → release` | `ops/LLMOpsView.tsx` | ai_team |
+| `evals` | **Evals** | `RAGAS · DeepEval` | `evals/EvalsView.tsx` | ai_team |
+| `tokenopt` | **Token opt** | `routing · savings` | `gateway/TokenOptView.tsx` | ai_team |
+| `memory` | **Memory** | `pgvector` | `memory/MemoryView.tsx` | ai_team |
+| `rag` | **RAG** | `hybrid · rerank` | `retrieval/RagView.tsx` | ai_team |
+| `graph` | **Graph** | `entities · relations` | `graph/GraphView.tsx` | ai_team |
+| `cache` | **Cache** | `semantic · TTL` | `cache/CacheView.tsx` | ai_team |
+| `guardrails` | **Guardrails** | `rails · verdicts` | `guardrail/GuardrailsView.tsx` | ai_team |
+| `simulation` | **Access demo** | `RBAC scope` | `sim/SimulationView.tsx` | ai_team, client |
+| `governance` | **Governance** | `tenants · budgets` | `governance/GovernanceView.tsx` | admin |
+| `approvals` | **Approvals** | `human gate` | `approvals/ApprovalsInbox.tsx` | admin |
+| `audit` | **Audit** | `Postgres audit` | `admin/AuditLog.tsx` | admin, devops |
+| `roles` | **Roles & Access** | `RBAC grants` | `admin/RolesAccess.tsx` | admin |
+| `stack` | **Tech Stack & Versions** | `SBOM` | `devops/StackVersions.tsx` | devops |
+| `patch` | **Patch Check** | `installed vs latest` | `devops/PatchCheck.tsx` | devops |
+| `security` | **Security** | `OWASP · posture` | `security/SecurityView.tsx` | devops |
+| `redteam` | **Red-team** | `attacks · block-rate` | `redteam/RedteamView.tsx` | devops |
+| `latency` | **Latency** | `p50 · p95` | `latency/LatencyView.tsx` | devops |
+| `risk` | **Risk Map** | `OWASP-Agentic` | `client/RiskMap.tsx` | client |
+| `savings` | **Savings** | `baseline vs actual` | `client/SavingsView.tsx` | client |
 
-Every non-console surface is code-split (`React.lazy` + a `<Suspense key={active}>` that
-cross-fades on tab change via `.animate-section`). Sub-panels behind the composite
-surfaces:
+Each section exports a `…Mount` client entry, so the heavy, browser-only trees (canvas graph,
+chart libraries) mount client-side via `next/dynamic` with `ssr: false` while the route
+itself stays a server component. Section changes cross-fade via `.animate-section` in the
+portal layout. Sub-panels behind the composite surfaces:
 
 - **Console** (`MoneyShotConsole`): the glass-box — reasoning lane, orchestration map,
   knowledge graph, rerank scoreboard, conformal + SHAP panels, guardrail reveal, approval
   spotlight, answer panel (assembled from `components/console/*`, `graph/*`, `ml/*`,
-  `retrieval/*`, `guardrail/*`).
+  `retrieval/*`, `guardrail/*`, `trace/*`).
 - **Memory** (`MemoryView`): `SemanticFactsPanel`, `StructuredProfilePanel`,
   `EpisodicSessionsPanel`, `WriteLogPanel`, `RecallDebugPanel`.
-- **Improvement / Ops** (`OpsView`): `DiagnosePanel`, `EvalTrend`, `PendingReleases`,
-  `PromptDiff`, `PromptTimeline`.
-- **Governance / Admin** (`AdminSettings`): `TenantsView`, `UsersView`, `BudgetsView`,
-  `UsageView`.
+- **LLMOps** (`LLMOpsView`): `DiagnosePanel`, `EvalTrend`, `ReleaseGate`, `PromptHistory`,
+  `LoopParams`.
 - **DevOps surfaces**: `StackVersions` (live software bill-of-materials, `stackDisplay.ts`)
   and `PatchCheck` (installed-vs-latest against PyPI) — `components/devops/*`.
 - **Client surfaces**: `SavingsView` (`savingsCalc.ts`) and `RiskMap`
@@ -88,19 +103,17 @@ surfaces:
 - **Roles & Access** (`components/admin/RolesAccess.tsx`): the admin's role-assignment
   surface (drives `POST /admin/users/{id}/role`).
 
-Bonus: **projector / present mode** — pressing `F` in `Portal` toggles `presenting`
-(`Esc` exits); `AppShell` then strips the chrome and enlarges the console.
-
 ## State management
 
 No Redux/Zustand — just **React Context + hooks + one pure reducer**.
 
-- **`auth/AuthContext.tsx`** provides `{ session, signIn, signOut }`. `Session =
-  { role, token, username, tenantId }` where `role` is one of the four RBAC roles,
-  persisted to `localStorage` under `aegis.session` and rehydrated on load (a refresh keeps
-  you logged in). `signIn` calls `apiLogin` from `api/client.ts`.
-- **`state/backendMode.tsx`** (`useBackendMode()`) runs the live/mock boot probe once and
-  exposes `{ mode, reason, ready }` (see next section).
+- **`lib/auth/AuthContext.tsx`** provides `{ session, signIn, signOut, hydrated }`.
+  `Session = { role, token, username, tenantId }` where `role` is one of the four RBAC
+  roles, persisted to `localStorage` and rehydrated on load (a refresh keeps you logged in).
+  `signIn` calls the login function in `lib/api/client.ts`. `PortalGuard` reads it to gate
+  each portal route.
+- **`lib/api/mode.ts`** runs the live/mock boot probe and caches `{ mode, reason }`
+  (see next section).
 
 The **console's SSE stream → UI state** pipeline is the important bit:
 
@@ -117,7 +130,7 @@ flowchart LR
 - `useRunStream` (`state/useRunStream.ts`) wraps `useReducer`. On `start` it creates the
   transport **per run** (so it reads the resolved live/mock mode at run time), then feeds
   each SSE event into the **pure** `runReducer` (`state/runReducer.ts`), which is
-  deterministic and unit-tested (`runReducer.test.ts`).
+  deterministic and side-effect free.
 - `runReducer` derives a `RunPhase` (`idle · streaming · awaiting_approval · abstained ·
   completed · blocked · error`) plus the structured views the console renders. This is a
   direct projection of the `StreamEvent` stream described in `40-request-flow.md`.
@@ -129,35 +142,36 @@ flowchart LR
 ## The API client and mock mode
 
 The app is **live-first with a labelled mock fallback**. The decision lives in
-`api/config.ts` + `api/mode.ts`:
+`lib/api/config.ts` + `lib/api/mode.ts`:
 
-- **Config** (`api/config.ts`) reads Vite env: `VITE_API_BASE` (base URL),
-  `VITE_HEALTH_PATH` (default `/health`), and `FORCE_MOCK = VITE_USE_MOCK === 'true' ||
-  ?mock=1`.
-- **Mode resolution** (`api/mode.ts`): `decideMode(forceMock, reachable)` →
-  `forced-mock` (env), `probe-failed` (unreachable), or `probe-live`.
-  `probeBackend()` does a `GET {API_BASE}{HEALTH_PATH}` with a 2.5s `AbortController`
-  timeout; any failure → mock. `BackendModeProvider` runs it once on mount; `factory.ts`
-  and `client.ts` read the cached result synchronously.
-- **Transport selection** (`api/factory.ts`): `createTransport()` returns
+- **Config** (`lib/api/config.ts`) reads the public Next env: `NEXT_PUBLIC_API_BASE` (base
+  URL; empty ⇒ same-origin), `NEXT_PUBLIC_HEALTH_PATH` (default `/health`), and
+  `FORCE_MOCK = NEXT_PUBLIC_USE_MOCK === 'true' || ?mock=1`.
+- **Mode resolution** (`lib/api/mode.ts`): the pure `decideMode(forceMock, reachable)` →
+  `forced-mock` (env), `probe-failed` (unreachable), or `probe-live`. `probeBackend()` does
+  a `GET {API_BASE}{HEALTH_PATH}` with an `AbortController` timeout; any failure → mock.
+  It runs once on mount; `factory.ts` and `client.ts` read the cached result synchronously.
+- **Transport selection** (`lib/api/factory.ts`): `createTransport()` returns
   `isMock() ? createMockTransport() : createLiveTransport()`. Both satisfy `RunTransport`
-  (`api/transport.ts`): `start(query, persona, token, handlers) → RunController`.
-- **REST client** (`api/client.ts`): every function checks `isMock()` first and returns
-  an in-browser fixture when mocking, else calls the real route through a private
-  `request<T>(path, init, token)` helper (adds `Authorization: Bearer <token>`, throws on
-  non-ok).
-- **Offline banner** (`components/layout/OfflineBanner.tsx`): renders only when
-  `mode === 'mock'`, above every route. It distinguishes forced mock ("Set
-  `VITE_USE_MOCK=false`…") from an unreachable backend ("Backend unreachable — showing
+  (`lib/api/transport.ts`): `start(query, persona, token, handlers) → RunController`. The
+  mock lives in `src/mock/` (`mockTransport.ts` + fixtures).
+- **REST client** (`lib/api/client.ts`, plus `memory.ts` / `ops.ts` / `platform.ts`): every
+  function checks `isMock()` first and returns an in-browser fixture when mocking, else
+  calls the real route through a private `request<T>(path, init, token)` helper (adds
+  `Authorization: Bearer <token>`, throws on non-ok).
+- **Offline banner** (`components/console/ConsoleMount.tsx`): renders only when the resolved
+  mode is `mock`. It distinguishes forced mock ("Unset `NEXT_PUBLIC_USE_MOCK` / drop
+  `?mock=1` to go live") from an unreachable backend ("Backend unreachable — showing
   scripted demo data").
 
 > The switch is driven by **env vars + a boot health probe**, not localStorage.
-> localStorage only stores the auth session (`aegis.session`).
+> localStorage only stores the auth session.
 
-**SSE detail** (`api/sse.ts`): `/query` is streamed with a hand-rolled `fetch` reader (not
-`EventSource`, because the stream needs a POST body). `readSSEStream` splits frames on
+**SSE detail** (`lib/api/sse.ts`): `/query` is streamed with a hand-rolled `fetch` reader
+(not `EventSource`, because the stream needs a POST body). `readSSEStream` splits frames on
 blank lines, `JSON.parse`s each `data:` line into a `StreamEvent`, and skips malformed
-frames rather than tearing down the stream.
+frames rather than tearing down the stream. The same module carries `decodeAguiStream` for
+the AG-UI wire format (see `docs/module/aegis-core.md`).
 
 ### Endpoints the client calls (all real backend routes)
 
@@ -180,16 +194,13 @@ These map one-to-one to the endpoints in `backend/src/app/api/routes.py` (see
 `20-backend.md` §API). Note `POST /approval` is live-only (the mock resolves approvals via
 the mock transport's controller instead).
 
-## The design system (`index.css`)
+## The design system (`app/globals.css`)
 
 Tailwind v4, CSS-first: tokens are CSS custom properties on `:root`, re-exported as
-utilities via `@theme inline`. **The console is light-only — there is no dark mode.**
-`components/layout/theme.ts` is explicit about this: it never reads a stored preference,
-never applies a `.dark` class or `data-theme="dark"`, and `useTheme()` returns a fixed
-`'light'` with a no-op `toggle`; `reflectLight()` forces the document root into the light
-state before first paint. (A `.dark` block survives in `index.css` only as inert defensive
-styling — it is never activated.) The app is also **responsive**: fluid desktop layouts
-with no horizontal overflow, and there is no notification icon in the top bar.
+utilities via `@theme inline`. **The console is light-only — there is no dark mode**; the
+stylesheet defines a single light identity and no `.dark` / `data-theme="dark"` variant is
+ever applied. The app is also **responsive**: fluid desktop layouts with no horizontal
+overflow.
 
 - **Radius:** `--radius: 0.75rem` (+ derived `--radius-sm/md/lg/xl`).
 - **Motion:** `--dur-fast` (120ms), `--dur-base` (200ms), `--dur-slow` (320ms),
@@ -202,21 +213,19 @@ with no horizontal overflow, and there is no notification icon in the top bar.
   `bg-block`, `text-agent-ink`. This palette is why each subsystem in the console has a
   consistent hue.
 - **Charts:** `--chart-1 … --chart-5`. **Semantic:** `--success`, `--danger`, tints.
-  **shadcn aliases:** `--primary`, `--secondary`, `--accent`, `--destructive`.
 - **Typography:** `--font-sans` (Inter), `--font-display` (Space Grotesk), `--font-mono`
   (JetBrains Mono); type-scale utilities `.t-hero`, `.t-metric`, `.t-title`, `.t-body`,
   `.t-label`, `.t-mono`.
 - **Elevation:** `.shadow-card`, `.shadow-hover`, `.shadow-pop`.
 - **Motion utilities** (all disabled under `prefers-reduced-motion`): `.animate-beat`
   (the active-subsystem pulse), `.animate-trace-in`, `.animate-flow-pulse`,
-  `.animate-reveal`, `.animate-section` (tab cross-fade), `.animate-chart-in`, etc.
+  `.animate-reveal`, `.animate-section` (section cross-fade), `.animate-chart-in`, etc.
 
-## Verify the frontend
+## Verify the console
 
-From `frontend/` (see `60-run-and-operate.md`):
+From `web/` (see `60-run-and-operate.md`):
 
 ```bash
-pnpm build   # tsc (strict) + vite build — clean, chunks < 500 kB
-pnpm lint    # oxlint — 0 errors
-pnpm test    # vitest (runReducer, mode, roi, sla, orchestration, … unit tests)
+npm run build   # next build (TypeScript strict) — clean
+npm run lint    # ESLint (next/core-web-vitals + next/typescript) — 0 errors
 ```

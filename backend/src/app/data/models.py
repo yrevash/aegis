@@ -27,7 +27,7 @@ from enum import StrEnum
 from typing import Any
 
 from aegis.core.types import RiskLevel
-from aegis.data import EMBED_DIM, JsonB, VectorColumn
+from aegis.data import EMBED_DIM, JsonB, UtcDateTime, VectorColumn
 from aegis.governance.models import (
     AuditLog,
     Budget,
@@ -85,7 +85,15 @@ class Base(DeclarativeBase):
 
     The tenancy/governance tables live on :class:`aegis.data.AegisBase` (via
     ``aegis.governance.models``); the host creates both metadatas at bootstrap.
+
+    Every ``Mapped[datetime]`` here materialises as :class:`aegis.data.UtcDateTime`
+    (``timestamptz`` on PostgreSQL, naive-UTC ``DATETIME`` on SQLite) — matching
+    ``AegisBase`` so both metadatas share one timestamp contract. The application layer
+    is aware-UTC throughout; a naive column made asyncpg reject every aware bind, which
+    is what silently killed the SLA sweeper (it threw once per cycle).
     """
+
+    type_annotation_map = {datetime: UtcDateTime}
 
 
 class Approval(Base):

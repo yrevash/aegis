@@ -182,8 +182,8 @@ same inject-only pattern `aegis.guardrails`' injection classifier uses.
   overall score derived as the mean of every measured metric.
 
 On the frontend, `eval_result` is one of the names mirrored in
-`frontend/src/agui/streamNames.ts`. As of this writing there is no dedicated eval-result
-card renderer wired to the AG-UI stream — the decode layer (`frontend/src/agui/decode.ts`)
+`web/src/lib/streamNames.ts`. As of this writing there is no dedicated eval-result
+card renderer wired to the AG-UI stream — the decode layer (`web/src/lib/api/sse.ts`)
 exists but the per-event React dispatcher described in the Module Contract spec is still a
 follow-on build, same as every other module in this series.
 

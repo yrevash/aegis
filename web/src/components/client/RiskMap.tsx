@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { SIGNALS } from '@/config/signals'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { RiskEntry, RiskMapResponse } from '@/lib/api/types'
@@ -288,6 +289,9 @@ function RiskCard({
  * to `GET /risk-map`.
  */
 export function RiskMount(): ReactElement {
+  // `GET /risk-map` is tenant-scoped: hand the view the real session bearer, and
+  // hold it back until the persisted session has been restored.
+  const { session, hydrated } = useAuth()
   const [mode, setMode] = useState<ResolvedMode | null>(null)
 
   useEffect(() => {
@@ -300,7 +304,7 @@ export function RiskMount(): ReactElement {
     }
   }, [])
 
-  if (mode === null) {
+  if (mode === null || !hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -324,7 +328,7 @@ export function RiskMount(): ReactElement {
             <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
           </div>
         )}
-        <RiskMap token={null} />
+        <RiskMap token={session?.token ?? null} />
       </div>
     </TooltipProvider>
   )

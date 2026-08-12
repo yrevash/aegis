@@ -135,3 +135,107 @@ def test_build_server_registers_mcp_handlers():
     assert [t.name for t in server.facade.list_tools()] == [
         d["function"]["name"] for d in tool_definitions_for(DEFAULT_PERSONA_ID)
     ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool annotations — the MCP-level safety hints
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_list_tools_carries_honest_risk_annotations():
+    """Every listed tool carries MCP annotations matching its registry risk tier.
+
+    The hints are asserted per tool rather than derived from risk, because risk does
+    not imply idempotency — so this guards the two cases a risk→annotation shortcut
+    would get wrong.
+    """
+    facade = AdapterToolServer(store=InMemoryRecordStore.from_dataset(generate_synthetic_sync()))
+    by_name = {t.name: t for t in facade.list_tools()}
+
+    # No adapter tool is a read; every one of them mutates the record store.
+    assert all(t.annotations.read_only_hint is False for t in by_name.values())
+
+    # LOW risk but NOT idempotent: each call appends another note.
+    note = by_name["add_case_note"]
+    assert note.annotations.idempotent_hint is False
+    assert note.annotations.destructive_hint is False
+    assert "low risk" in note.annotations.title
+
+    # MEDIUM risk, reversible, converges on re-run → idempotent, not destructive.
+    assign = by_name["assign_request"]
+    assert assign.annotations.idempotent_hint is True
+    assert assign.annotations.destructive_hint is False
+
+    # HIGH risk: the customer-visible write, flagged destructive to the client.
+    status = by_name["update_request_status"]
+    assert status.annotations.destructive_hint is True
+    assert "high risk" in status.annotations.title
+
+    # Closed domain — no tool reaches an open world.
+    assert all(t.annotations.open_world_hint is False for t in by_name.values())
+
+
+def test_unknown_tool_falls_back_to_conservative_annotations():
+    """A tool with no explicit annotation row is advertised cautiously."""
+    from app.api.schemas import RiskLevel
+    from app.mcp.server import _conservative_annotations
+
+    low = _conservative_annotations(RiskLevel.LOW)
+    assert low["read_only_hint"] is False
+    assert low["idempotent_hint"] is False
+    assert low["destructive_hint"] is False
+
+    # An unclassified HIGH-risk tool must never look safer than it is.
+    assert _conservative_annotations(RiskLevel.HIGH)["destructive_hint"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resources — the read-only context surface
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_list_resources_publishes_capabilities_and_policy():
+    """The server publishes exactly the two documented resource URIs."""
+    from app.mcp.server import CAPABILITIES_URI, TOOL_POLICY_URI
+
+    facade = AdapterToolServer()
+    uris = {str(r.uri) for r in facade.list_resources()}
+    assert uris == {CAPABILITIES_URI, TOOL_POLICY_URI}
+    assert all(r.mime_type == "application/json" for r in facade.list_resources())
+
+
+def test_capabilities_resource_is_the_real_manifest():
+    """The capabilities resource mirrors app.capabilities, not a hand-written copy."""
+    import json
+
+    from app.capabilities import AEGIS_MODULES, PRODUCT_NAME
+    from app.mcp.server import CAPABILITIES_URI
+
+    body = json.loads(AdapterToolServer().read_resource(CAPABILITIES_URI))
+    assert body["product"] == PRODUCT_NAME
+    assert body["module_count"] == len(AEGIS_MODULES)
+    assert len(body["modules"]) == len(AEGIS_MODULES)
+
+
+def test_tool_policy_resource_marks_high_risk_as_gated():
+    """The policy resource tells a client which tools are gated BEFORE it calls one."""
+    import json
+
+    from app.mcp.server import TOOL_POLICY_URI
+
+    body = json.loads(AdapterToolServer().read_resource(TOOL_POLICY_URI))
+    by_name = {t["name"]: t for t in body["tools"]}
+
+    # The policy must cover exactly the persona's allowlisted tools.
+    expected = {d["function"]["name"] for d in tool_definitions_for(DEFAULT_PERSONA_ID)}
+    assert set(by_name) == expected
+
+    assert by_name["update_request_status"]["risk"] == "high"
+    assert by_name["update_request_status"]["auto_executed"] is False
+    assert by_name["add_case_note"]["auto_executed"] is True
+
+
+def test_unknown_resource_uri_is_rejected():
+    """An unpublished URI raises rather than returning empty content."""
+    with pytest.raises(ValueError, match="Unknown resource URI"):
+        AdapterToolServer().read_resource("aegis://nope")

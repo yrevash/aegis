@@ -7,6 +7,7 @@ import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { postOpsReleaseDecision, postOpsRollback } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import type { ChartColor } from '@/components/charts/palette'
 import type { OpsReleaseApprovalRow } from '@/lib/api/ops'
@@ -26,7 +27,9 @@ function ReleaseRow({
   row: OpsReleaseApprovalRow
   onChanged: () => void
 }): ReactElement {
-  const token: string | null = null
+  // The decision is an RBAC-scoped write — send the real session bearer.
+  const { session } = useAuth()
+  const token = session?.token ?? null
   const [busy, setBusy] = useState<null | 'approve' | 'reject'>(null)
   const [decided, setDecided] = useState<Decided | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -112,8 +115,12 @@ interface Props {
  * one-click rollback to the last-good version.
  */
 export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactElement {
+  // The rollback is an RBAC-scoped write — send the real session bearer.
+  const { session } = useAuth()
+  const token = session?.token ?? null
   const [rollback, setRollback] = useState<null | { reverted: boolean; version: number | null }>(null)
   const [rollingBack, setRollingBack] = useState(false)
+  const [rollbackError, setRollbackError] = useState<string | null>(null)
 
   const riskMix = useMemo<DonutDatum[]>(() => {
     const counts = new Map<string, number>()
@@ -127,10 +134,14 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
 
   const doRollback = async (): Promise<void> => {
     setRollingBack(true)
+    setRollbackError(null)
     try {
-      const res = await postOpsRollback(null, PROMPT_KEY)
+      const res = await postOpsRollback(token, PROMPT_KEY)
       setRollback({ reverted: res.reverted, version: res.active_version })
       onChanged()
+    } catch (e) {
+      // Surface the failure instead of letting it reject unhandled and vanish.
+      setRollbackError(e instanceof Error ? e.message : 'Rollback failed')
     } finally {
       setRollingBack(false)
     }
@@ -196,6 +207,7 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
               <RotateCcw className="size-3.5" /> {rollingBack ? 'Rolling back…' : 'Roll back to last-good'}
             </button>
           )}
+          {rollbackError && <p className="w-full text-xs text-danger">{rollbackError}</p>}
         </div>
       </CardBody>
     </Card>

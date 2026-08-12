@@ -242,10 +242,11 @@ only wraps the *whole* `retrieve()` call (including recall, fusion, and rerank) 
 in `aegis.retrieval`. Reintroducing a rerank-stage span is explicitly left as follow-up work for a
 future `aegis.observability` module or a richer `stream_retrieve`.
 
-On the frontend, `retrieval_citations` is mirrored in `frontend/src/agui/streamNames.ts`, but as
-of this writing there is no dedicated renderer wired to this AG-UI `CustomEvent` path — the
-frontend has no component currently consuming `retrieval_citations` at all (a `grep` across
-`frontend/src` finds it only in `streamNames.ts`). The design spec's "live end-to-end: retrieval_
+In the console, `retrieval_citations` is mirrored in `web/src/lib/streamNames.ts`, but as
+of this writing there is no dedicated renderer wired to this AG-UI `CustomEvent` path — no
+component consumes `retrieval_citations` as a decoded event; outside `streamNames.ts` the
+name appears in `web/src` only in comments and the RAG dashboard's offline fixture. The
+design spec's "live end-to-end: retrieval_
 citations decodes on the frontend" testing goal, and wiring `stream_retrieve` into the backend's
 live `/query` SSE endpoint, are both noted in the extraction report as follow-on work not yet done.
 

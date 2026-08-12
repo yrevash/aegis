@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { getEvalsReport } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { EvalMetricConfig, EvalsReportResponse } from '@/lib/api/platform'
 import { cn } from '@/lib/utils'
@@ -18,25 +19,35 @@ interface Loaded<T> {
   error: string | null
 }
 
-/** Load once on mount with a live/mock-aware call. */
-function useLoad<T>(fn: () => Promise<T>): Loaded<T> {
+/**
+ * Load with a live/mock-aware call, re-running whenever `key` changes.
+ *
+ * `key` carries the bearer token, so the fetch re-fires once `AuthProvider` has
+ * restored the persisted session (its effect runs *after* this one on a reload).
+ * `enabled` holds the call back until then, so it never fires without a bearer
+ * and 401s into a permanently-stuck state.
+ */
+function useLoad<T>(fn: () => Promise<T>, key: string | null, enabled: boolean): Loaded<T> {
   const [state, setState] = useState<Loaded<T>>({ data: null, loading: true, error: null })
   useEffect(() => {
+    if (!enabled) return
     let alive = true
+    setState((prev) => ({ ...prev, loading: true }))
     fn()
       .then((data) => {
         if (alive) setState({ data, loading: false, error: null })
       })
       .catch(() => {
+        // Always resolve `loading` — a swallowed failure would spin forever.
         if (alive)
           setState({ data: null, loading: false, error: 'Could not load. Is the backend running?' })
       })
     return () => {
       alive = false
     }
-    // fn is recreated per render; this loads exactly once on mount.
+    // `fn` is recreated per render; `key` + `enabled` are the real inputs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [key, enabled])
   return state
 }
 
@@ -116,8 +127,9 @@ function MetricCard({ m }: { m: EvalMetricConfig }): ReactElement {
  * per-case breakdown table. Every figure comes straight from the accessor.
  */
 function EvalsView(): ReactElement {
-  const token: string | null = null
-  const report = useLoad<EvalsReportResponse>(() => getEvalsReport(token))
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
+  const report = useLoad<EvalsReportResponse>(() => getEvalsReport(token), token, hydrated)
   const data = report.data
 
   const metrics = data?.metrics ?? []

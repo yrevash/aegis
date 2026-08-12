@@ -3,6 +3,7 @@
 import { Suspense, lazy, useEffect, useState, type ReactElement } from 'react'
 
 import { getGraph } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { ApprovalCard } from '@/components/approval/ApprovalCard'
 import { AnswerPanel } from '@/components/console/AnswerPanel'
 import { ApprovalSpotlight } from '@/components/console/ApprovalSpotlight'
@@ -57,12 +58,16 @@ function GraphFallback(): ReactElement {
  * console idles with a gentle attract-loop. Numbers and state lead; the honest
  * technical depth lives one hover / expander down.
  *
- * Next port: auth is a stub in this build, so the console takes its `role` from
- * the route and runs token-less (the mock transport needs no auth; a live
- * backend can be wired to a real session later).
+ * The console takes its `role` from the route and its bearer from the live auth
+ * session, so live runs and the graph fetch carry `Authorization` (the mock
+ * transport needs no auth and is unaffected).
  */
 export function MoneyShotConsole({ role }: { role: Role }): ReactElement {
-  const token: string | null = null
+  // Live session token — a constant `null` would fetch the graph with no bearer
+  // on a reload and, being constant in the dependency array, never retry once
+  // `AuthProvider` restored the persisted session.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
 
   const { state, running, start, resolveApproval, reset } = useRunStream()
   const metrics = useMetrics(token)
@@ -72,8 +77,22 @@ export function MoneyShotConsole({ role }: { role: Role }): ReactElement {
   const [decided, setDecided] = useState(false)
 
   useEffect(() => {
-    void getGraph(token).then(setGraph).catch(() => setGraph(EMPTY_GRAPH))
-  }, [token])
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
+    let alive = true
+    void getGraph(token)
+      .then((g) => {
+        if (alive) setGraph(g)
+      })
+      // Fall back to the honest empty graph so the panel renders its empty state
+      // rather than waiting on data that will never arrive.
+      .catch(() => {
+        if (alive) setGraph(EMPTY_GRAPH)
+      })
+    return () => {
+      alive = false
+    }
+  }, [token, hydrated])
 
   const handleRun = (query: string): void => {
     setDecided(false)

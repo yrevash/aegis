@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { runRedteam } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import type { RedteamCategoryReport, RedteamReportResponse } from '@/lib/api/platform'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 
@@ -115,7 +116,11 @@ function CategoryBars({
  * battery. Offline re-serves the deterministic mock; live hits the endpoint.
  */
 function RedteamView(): ReactElement {
-  const token: string | null = null
+  // Live session token — see `AdminCommandCenter`: a constant `null` would fetch
+  // with no bearer on a reload and, being constant in the dependency array below,
+  // never retry once `AuthProvider` restored the persisted session.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
 
   const [report, setReport] = useState<RedteamReportResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -131,6 +136,8 @@ function RedteamView(): ReactElement {
   }
 
   useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
     setRunning(true)
     runRedteam(token)
@@ -146,7 +153,7 @@ function RedteamView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   const overall = report?.overall
 

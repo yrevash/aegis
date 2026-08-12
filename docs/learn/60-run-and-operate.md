@@ -13,7 +13,7 @@ green (`docs/RUNBOOK.md`):
 |---|---|---|
 | **Full** (`STORES=on`) | model gateway + Postgres/pgvector + Neo4j + Redis | Real RAG over stores, persisted audit/ledger/checkpoints, live Phoenix traces |
 | **Lite** ⭐ (`STORES=off`) | **gateway only** (no databases) | **Real** agent, LLM, streaming, tools, gate, token/cost — in-memory records/graph/cache, SQLite audit |
-| **Demo-safe** (frontend mock) | nothing | Full UI on the in-browser mock transport — cannot fail |
+| **Demo-safe** (console mock) | nothing | Full UI on the in-browser mock transport — cannot fail |
 
 **Default to Lite.** It removes the biggest day-of risk (databases not installing) while
 staying a *real* demo. The only secret you must set is `GENAILAB_API_KEY`.
@@ -21,7 +21,7 @@ staying a *real* demo. The only secret you must set is `GENAILAB_API_KEY`.
 ```mermaid
 flowchart TB
     P[preflight: what's UP?] --> Q{gateway?}
-    Q -->|down| SAFE["Demo-safe<br/>frontend mock, no backend"]
+    Q -->|down| SAFE["Demo-safe<br/>console mock, no backend"]
     Q -->|up| R{stores?}
     R -->|all up| FULL["Full — STORES=on"]
     R -->|missing| LITE["Lite ⭐ — STORES=off<br/>real agent, no databases"]
@@ -34,7 +34,7 @@ The repo ships day-of scripts (`scripts/`) with Windows `.ps1` and mac/Linux `.s
 
 ```bash
 # macOS / Linux
-./scripts/bootstrap.sh      # once: installs backend (all extras) + frontend, writes .env files
+./scripts/bootstrap.sh      # once: installs backend (all extras) + console (web/), writes .env files
 ./scripts/preflight.sh      # anytime: shows what's UP (gateway / stores)
 ./scripts/start.sh lite     # run it (lite = real agent, NO databases). Also: full | safe
 ```
@@ -46,31 +46,31 @@ The repo ships day-of scripts (`scripts/`) with Windows `.ps1` and mac/Linux `.s
 .\scripts\start.ps1 -Mode lite
 ```
 
-Then open **http://localhost:5173** and log in with **admin / demo** (or use a role
+Then open **http://localhost:3000** and log in with **admin / demo** (or use a role
 quick-login button). Lite mode installs the same packages as full — the switch is the
 `STORES` env var, not the install.
 
 ## Manual setup
 
-Prerequisites: **Python ≥ 3.11**, **uv**, **Node ≥ 18**, **pnpm ≥ 9**; for full mode also
+Prerequisites: **Python ≥ 3.11**, **uv**, **Node ≥ 18.18** (npm ships with it); for full mode also
 **PostgreSQL ≥ 15 + pgvector**, **Neo4j 5.x**, **Redis ≥ 7**. No Docker, no GPU (16 GB
 laptop target). Phoenix runs in-process.
 
 **Backend** (from `backend/`):
 ```bash
 uv venv && source .venv/bin/activate                      # Windows: .venv\Scripts\activate
-uv pip install -e ".[data,auth,observability,agent,retrieval,ml,guardrails,dev]"
+uv pip install -e ".[data,auth,observability,agent,retrieval,ml,guardrails,mcp,dev]"
 cp .env.example .env                                       # fill in GENAILAB_API_KEY (+ stores for full)
 uvicorn app.main:app --reload --app-dir src                # → http://localhost:8000  (/docs for OpenAPI)
 ```
 
-**Frontend** (from `frontend/`):
+**Console** (from `web/`):
 ```bash
-pnpm install
+npm install
 cp .env.example .env.local
-# mock demo:  keep VITE_USE_MOCK=true
-# live:       set VITE_USE_MOCK=false and VITE_API_BASE=http://localhost:8000
-pnpm dev                                                   # → http://localhost:5173
+# mock demo:  leave NEXT_PUBLIC_API_BASE empty (the boot probe falls back to mock)
+# live:       set NEXT_PUBLIC_API_BASE=http://localhost:8000
+npm run dev                                                # → http://localhost:3000
 ```
 
 Demo logins (dev only) — one per RBAC role, all with password `demo` (`_DEMO_USERS` in
@@ -120,15 +120,16 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 `MODEL_GENERATION=genailab-maas-gpt-4o`) — see `core/models.py`. Per-role cost overrides:
 `COST_<ROLE>_IN` / `COST_<ROLE>_OUT`.
 
-Frontend (`frontend/.env.local`): `VITE_USE_MOCK` (default `true`), `VITE_API_BASE`
-(default `http://localhost:8000`), `VITE_HEALTH_PATH` (default `/health`). `?mock=1` in the
-URL also forces mock.
+Console (`web/.env.local`): `NEXT_PUBLIC_API_BASE` (empty ⇒ same-origin),
+`NEXT_PUBLIC_HEALTH_PATH` (default `/health`), `NEXT_PUBLIC_USE_MOCK` (default `false` —
+the console is live-first and falls back to the mock only when the boot probe fails).
+`?mock=1` in the URL also forces mock.
 
 ## What listens where
 
 | Component | Process | Port | Needed in |
 |---|---|---|---|
-| Frontend (Vite) | `pnpm dev` | 5173 | all modes |
+| Console (Next.js, `web/`) | `npm run dev` | 3000 | all modes |
 | Backend (FastAPI/uvicorn) | `uvicorn app.main:app` | 8000 | lite, full |
 | PostgreSQL + pgvector | native install | 5432 | full |
 | Neo4j | native install | 7687 (bolt) | full |
@@ -173,11 +174,10 @@ isolation).
 > First `pytest` run is slow (~30–60 s) because SHAP/XGBoost trigger a one-time numba JIT
 > compile; later runs are ~2 s.
 
-**Frontend** (from `frontend/`):
+**Console** (from `web/`):
 ```bash
-pnpm build     # tsc (strict) + vite build — clean, all chunks < 500 kB
-pnpm lint      # oxlint — 0 errors
-pnpm test      # vitest unit tests
+npm run build  # next build (TypeScript strict) — clean
+npm run lint   # ESLint (next/core-web-vitals + next/typescript) — 0 errors
 ```
 
 ## Common day-of fixes (`docs/RUNBOOK.md`)
@@ -188,8 +188,8 @@ pnpm test      # vitest unit tests
 | Postgres/Neo4j/Redis DOWN | Don't fight it — run `start … lite` (needs none of them) |
 | Backend won't boot | Usually a missing venv — re-run `bootstrap`. Lite needs no databases |
 | `/audit` empty in lite | Expected until an action runs; it writes to `taif_lite.db` (SQLite) on the fly |
-| Frontend shows `—` everywhere | Backend not reachable or no query run yet; confirm `http://localhost:8000/docs` opens |
-| `pnpm dev` stuck at "transforming…" | `pkill -f "esbuild --service"` then re-run |
+| Console shows `—` everywhere | Backend not reachable or no query run yet; confirm `http://localhost:8000/docs` opens |
+| Console serving stale output | `rm -rf web/.next` then re-run `npm run dev` |
 
 See also: `INSTALL.md` (long-form setup + full env reference), `docs/RUNBOOK.md` (the
 one-page fallback ladder + connection map), and `README.md` (architecture).

@@ -14,6 +14,7 @@ import { Button } from '@/components/primitives/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
@@ -141,9 +142,11 @@ function Lane({
  * scripted split-screen. The comparison leads; the two lanes prove it.
  */
 export function SimulationView(): ReactElement {
-  // No auth session in the web portal shell; the mock/live transport reads the
-  // resolved mode at run time.
-  const token: string | null = null
+  // Live session token so the two live run streams carry `Authorization`; the
+  // mock transport ignores it. Both runs are user-triggered, so no hydration
+  // gate is needed — by click time the session has been restored.
+  const { session } = useAuth()
+  const token = session?.token ?? null
 
   const opsLead = useRunStream()
   const client = useRunStream()

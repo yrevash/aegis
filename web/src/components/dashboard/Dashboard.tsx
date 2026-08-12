@@ -10,6 +10,7 @@ import { Card } from '@/components/primitives/card'
 import { Gauge } from '@/components/primitives/Gauge'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { useMetricsSeries } from '@/state/useMetrics'
 import type { Role } from '@/lib/stream'
@@ -238,6 +239,9 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
  * The admin Overview is intentionally NOT wired to this — it stays a placeholder.
  */
 export function DashboardMount({ role }: { role: Role }): ReactElement {
+  // `/metrics` is RBAC-scoped: hand the dashboard the real session bearer, and
+  // hold it back until the persisted session has been restored.
+  const { session, hydrated } = useAuth()
   const [mode, setMode] = useState<ResolvedMode | null>(null)
 
   useEffect(() => {
@@ -250,7 +254,7 @@ export function DashboardMount({ role }: { role: Role }): ReactElement {
     }
   }, [])
 
-  if (mode === null) {
+  if (mode === null || !hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -270,7 +274,7 @@ export function DashboardMount({ role }: { role: Role }): ReactElement {
             <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
           </div>
         )}
-        <Dashboard role={role} token={null} />
+        <Dashboard role={role} token={session?.token ?? null} />
       </div>
     </TooltipProvider>
   )

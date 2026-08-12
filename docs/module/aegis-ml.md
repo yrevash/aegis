@@ -215,12 +215,12 @@ a PEP 562 `__getattr__`, never importing the heavy stack at package-import time.
 
 Both names (`conformal_interval`, `shap_explanation`) are pre-registered in
 `aegis.core.stream_names`, so `emitter.custom()` never rejects them. On the frontend,
-`frontend/src/agui/streamNames.ts` mirrors both names, but as of this writing there is no
+`web/src/lib/streamNames.ts` mirrors both names, but as of this writing there is no
 dedicated renderer wired to this AG-UI `CustomEvent` path — the frontend components that do render
-conformal intervals and SHAP attributions today (`frontend/src/components/ml/ConfidenceCard.tsx`,
-`frontend/src/components/approval/ApprovalCard.tsx`) consume the older, pre-AG-UI bespoke event
-union in `frontend/src/types/stream.ts` (an `ml_explanation` event), not `aegis.ml.stream`'s
-`CustomEvent`s decoded via `frontend/src/agui/decode.ts`. Wiring the AG-UI path into a live
+conformal intervals and SHAP attributions today (`web/src/components/ml/ConfidenceCard.tsx`,
+`web/src/components/approval/ApprovalCard.tsx`) consume the older, pre-AG-UI bespoke event
+union in `web/src/lib/stream.ts` (an `ml_explanation` event), not `aegis.ml.stream`'s
+`CustomEvent`s decoded via `web/src/lib/api/sse.ts`. Wiring the AG-UI path into a live
 endpoint and pointing those components (or new ones) at it is follow-on work.
 
 ## Honest infra / design notes

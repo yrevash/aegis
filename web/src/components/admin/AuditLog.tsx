@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitive
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { SIGNALS, type Signal } from '@/config/signals'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { AuditLogRow } from '@/lib/api/types'
@@ -380,6 +381,9 @@ function FilterChip({
  * trail wired to `GET /audit`.
  */
 export function AuditMount(): ReactElement {
+  // `GET /audit` is RBAC-scoped: hand the child the real session bearer, and hold
+  // it back until the persisted session has been restored.
+  const { session, hydrated } = useAuth()
   const [mode, setMode] = useState<ResolvedMode | null>(null)
 
   useEffect(() => {
@@ -392,7 +396,7 @@ export function AuditMount(): ReactElement {
     }
   }, [])
 
-  if (mode === null) {
+  if (mode === null || !hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -416,7 +420,7 @@ export function AuditMount(): ReactElement {
             <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
           </div>
         )}
-        <AuditLog token={null} />
+        <AuditLog token={session?.token ?? null} />
       </div>
     </TooltipProvider>
   )

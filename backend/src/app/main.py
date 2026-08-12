@@ -1,8 +1,8 @@
 """FastAPI application factory — the composition root of the backend.
 
 Wires the whole platform together: mounts the API + SSE router, initialises
-OpenTelemetry/Phoenix observability on startup, and enables CORS for the Vite
-frontend (``http://localhost:5173``). The rich OpenAPI metadata is deliberate —
+OpenTelemetry/Phoenix observability on startup, and enables CORS for the Next.js
+console (``http://localhost:3000``). The rich OpenAPI metadata is deliberate —
 ``docs/backend.md`` §1 counts the auto-generated docs as free documentation
 points that the AI reader parses.
 
@@ -50,11 +50,43 @@ Every autonomous action is uncertainty-bounded (conformal prediction), explainab
 (SHAP), guarded, gated (human-in-the-loop) and fully traced.
 """
 
-# Origins allowed to call the API from the browser (the Vite dev server).
+# Origins allowed to call the API from the browser: the Next.js dev server (:3000,
+# the current web app) and the legacy Vite dev server (:5173, the old frontend).
+# Without the :3000 entries the browser probe fails CORS and the web app silently
+# falls back to its offline mock fixtures.
 _CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
+
+def _supervise(task: asyncio.Task[None], name: str) -> None:
+    """Log loudly if a long-lived background task ever stops on its own.
+
+    A bare ``asyncio.create_task`` is a silent-failure seam: if the coroutine raises
+    before (or outside) its own ``try`` the task just ends, and the exception surfaces
+    only as a ``Task exception was never retrieved`` message at GC time — possibly
+    never. The process then keeps serving traffic with a dead sweeper and no signal.
+    This done-callback turns that into an explicit ERROR. Normal shutdown (the task is
+    cancelled in the lifespan's ``finally``) is not an error and stays quiet.
+
+    Args:
+        task: The background task to supervise.
+        name: Human name used in the log line.
+    """
+
+    def _done(finished: asyncio.Task[None]) -> None:
+        if finished.cancelled():
+            return
+        exc = finished.exception()
+        if exc is not None:
+            logger.error("Background task %s died: %r", name, exc, exc_info=exc)
+        else:
+            logger.error("Background task %s stopped unexpectedly.", name)
+
+    task.add_done_callback(_done)
 
 
 async def _run_memory_sweeper(stop: asyncio.Event) -> None:
@@ -151,6 +183,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.data import run_sla_sweeper
 
         sweeper_task = asyncio.create_task(run_sla_sweeper(sweeper_stop))
+        _supervise(sweeper_task, "sla-sweeper")
         # The memory consolidation sweeper (§D): an in-process asyncio task that drains
         # the durable ``memory_consolidation_job`` queue — the backstop for background
         # consolidations lost on restart/error. Same posture as the SLA sweeper: only
@@ -158,6 +191,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         memory_sweeper_task = asyncio.create_task(
             _run_memory_sweeper(sweeper_stop)
         )
+        _supervise(memory_sweeper_task, "memory-consolidation-sweeper")
 
     # Warm the ML spine off the hot path: load the artifact (or train it from the
     # real domain frame if absent) in a worker thread so the first live query never

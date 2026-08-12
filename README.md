@@ -15,7 +15,7 @@ ML confidence — decides when a run defers to a human).
 
 ```
                          ┌───────────────────────────────────────────────────────────┐
-  Browser (Vite+React)   │   SSE stream of structured agent-step events               │
+  Browser (Next.js)      │   SSE stream of structured agent-step events               │
   ──────────────────────▶│  JWT auth (tenant + coarse_role claim) ─▶ Governance       │
    4 role-scoped portals │  POST /query ─▶ Guardrail ─▶ rewrite ─▶ hybrid+agentic RAG  │
    admin  /admin         │  (RRF) ─▶ ml_predict (signal) ─▶ Plan ─▶ tool-risk gate     │
@@ -54,11 +54,11 @@ secure enough to buy — and it takes real actions, explainably.*
 | **Aegis Gateway** (LiteLLM)  | **LiteLLM** → custom OpenAI-compatible provider (`genailab.tcs.in`), budget-enforced chokepoint |
 | **Aegis Router** (LangGraph) | LangGraph (plan-and-execute + tool loop) · **durable `PostgresSaver`** checkpoints · durable approvals **inbox** (SLA sweeper + idempotent resumer) |
 | **Aegis Retrieval** (Neo4j/LightRAG + Qdrant) · **Aegis Cache** (Redis) | Context-aware **query rewrite** → bounded **agentic/Self-RAG retrieval loop** → hybrid: vector + graph + BM25 → **Reciprocal Rank Fusion** → LLM rerank · LightRAG · Neo4j · Qdrant vectors · Postgres KV · near-exact retrieval Redis cache **+ per-tenant/persona/role answer-level semantic cache** |
-| **Aegis Signal** (XGBoost + MAPIE + SHAP) | XGBoost + MAPIE (conformal) + SHAP · **solution signal only** — informs the plan; never gates/defers/abstains (the human gate fires on tool risk tier). Graded bands (autonomous/defer/abstain) exist as an inert contract used only by the frontend mock |
+| **Aegis Signal** (XGBoost + MAPIE + SHAP) | XGBoost + MAPIE (conformal) + SHAP · **solution signal only** — informs the plan; never gates/defers/abstains (the human gate fires on tool risk tier). Graded bands (autonomous/defer/abstain) exist as an inert contract used only by the console mock |
 | **Aegis Guardrails** (programmatic + NeMo Colang) | Guardrails AI / NeMo + API injection classifier · **Garak** red-team runner (`backend/scripts/garak_scan.py`, executed on the day) |
 | **Aegis Evals** (RAGAS-style proxies + LLM judge) | Offline deterministic gate (`app/eval/`) · optional reasoning-model LLM-as-judge |
 | **Aegis Trace** (OpenTelemetry → Phoenix) | OpenTelemetry `gen_ai.*` → Arize Phoenix (local, in-process) |
-| Frontend                     | Vite + React + TS + Tailwind/shadcn + Recharts (Tremor-style API) + react-force-graph |
+| Frontend (`web/`)            | Next.js 15 (App Router) + React 19 + TS + Tailwind v4 + Recharts + react-force-graph |
 
 ### Aegis modules
 
@@ -101,7 +101,7 @@ backend/src/app/
   observability/  # OTel spans + Phoenix (incl. A2A handoff span attributes)
   platform/       # role-portal surfaces: stack · patches · risk-map · savings
   adapter/        # the five domain-specific pieces (swapped on the day)
-frontend/         # Vite + React app
+web/              # Next.js (App Router) console — the four role portals
 docs/             # mission context + ADRs + threat model
 spikes/           # de-risk scripts (tool-calling, model list)
 ```
@@ -114,7 +114,7 @@ portable, no OS-specific assumptions.
 
 ## Getting started
 
-See `backend/README.md` (API) and `frontend/README.md` (UI). De-risk spikes in
+See `backend/README.md` (API) and `web/README.md` (UI). De-risk spikes in
 `spikes/`. Mission context and rubric mapping in `docs/`.
 
 ### Key docs

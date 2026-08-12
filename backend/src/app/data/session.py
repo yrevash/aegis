@@ -11,6 +11,7 @@ Verified against: SQLAlchemy 2.0.x asyncio API (``create_async_engine`` +
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -19,6 +20,7 @@ from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
 # ``set_tenant_scope`` now lives in ``aegis.governance.rls`` (the RLS seam); re-export it
 # under its historical name so ``app.data.governance`` / the orchestrator are unchanged.
 from aegis.governance.rls import set_tenant_scope  # noqa: F401 - re-exported for importers
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -29,6 +31,8 @@ from sqlalchemy.ext.asyncio import (
 from app.config import get_settings
 
 from .models import Base
+
+logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -165,13 +169,70 @@ async def bootstrap_rls(engine: AsyncEngine | None = None) -> None:
     await _aegis_bootstrap_rls(engine or get_engine())
 
 
+async def _align_timestamp_columns(
+    conn: Any,  # noqa: ANN401 - AsyncConnection, kept loose (no import-time asyncpg dep)
+    metadatas: tuple[Any, ...],
+) -> None:
+    """Convert pre-existing naive timestamp columns to ``timestamptz`` (PostgreSQL only).
+
+    ``create_all`` is ``CREATE TABLE IF NOT EXISTS``: it never alters a table that
+    already exists. A database bootstrapped before timestamps became
+    :class:`aegis.data.UtcDateTime` therefore still carries ``TIMESTAMP WITHOUT TIME
+    ZONE`` columns, and every aware-UTC bind from the application keeps failing
+    (``asyncpg.exceptions.DataError``) — the SLA sweeper's crash-per-cycle. With no
+    Alembic in this project, ``bootstrap`` is the schema owner, so the conversion lives
+    here: idempotent (it only touches columns still reported naive by
+    ``information_schema``), and a no-op on SQLite and on an already-converted database.
+
+    Existing values are reinterpreted with ``AT TIME ZONE 'UTC'`` — the meaning the
+    application already assigned to a stored naive timestamp everywhere it read one.
+
+    Args:
+        conn: An open (transactional) async connection.
+        metadatas: The metadata objects whose ``UtcDateTime`` columns to align.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    from aegis.data import UtcDateTime  # noqa: PLC0415 - local, mirrors bootstrap's style
+
+    wanted = {
+        (table.name, column.name)
+        for metadata in metadatas
+        for table in metadata.tables.values()
+        for column in table.columns
+        if isinstance(column.type, UtcDateTime)
+    }
+    if not wanted:
+        return
+    result = await conn.execute(
+        text(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND data_type = 'timestamp without time zone'"
+        )
+    )
+    naive = {(row[0], row[1]) for row in result}
+    for table_name, column_name in sorted(wanted & naive):
+        # Identifiers come from our own declarative metadata, never from user input.
+        await conn.execute(
+            text(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" '
+                f"TYPE timestamptz USING \"{column_name}\" AT TIME ZONE 'UTC'"
+            )
+        )
+        logger.info(
+            "converted %s.%s to timestamptz (naive → UTC-aware)", table_name, column_name
+        )
+
+
 async def bootstrap(engine: AsyncEngine | None = None) -> None:
     """Create every table (relational + JSON embeddings-of-record).
 
     Embeddings persist as JSON (``jsonb`` on PostgreSQL, ``JSON`` on SQLite) — vector
     ANN search runs on Qdrant, so no pgvector extension is required. On PostgreSQL,
     tenant Row-Level Security policies are installed after table creation (a no-op
-    elsewhere).
+    elsewhere), and any timestamp column left naive by an earlier bootstrap is converted
+    to ``timestamptz`` (see :func:`_align_timestamp_columns`).
 
     Args:
         engine: Engine to bootstrap; defaults to the process-wide engine.
@@ -191,4 +252,5 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(AegisBase.metadata.create_all)
+        await _align_timestamp_columns(conn, (Base.metadata, AegisBase.metadata))
     await bootstrap_rls(engine)

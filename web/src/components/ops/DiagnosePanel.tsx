@@ -8,6 +8,7 @@ import { CountUp } from '@/components/shared'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { postOpsDiagnose, postOpsRelease } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import type { OpsDiagnoseResponse, OpsReleaseResponse } from '@/lib/api/ops'
 
@@ -27,7 +28,9 @@ const OUTCOME_LABEL: Record<string, { tone: 'ok' | 'risk' | 'block'; label: stri
  * eval delta.
  */
 export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactElement {
-  const token: string | null = null
+  // Both actions below are RBAC-scoped writes — send the real session bearer.
+  const { session } = useAuth()
+  const token = session?.token ?? null
   const [diag, setDiag] = useState<OpsDiagnoseResponse | null>(null)
   const [release, setRelease] = useState<OpsReleaseResponse | null>(null)
   const [busy, setBusy] = useState<null | 'diagnose' | 'release'>(null)

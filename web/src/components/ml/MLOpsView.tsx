@@ -10,6 +10,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { Gauge } from '@/components/primitives/Gauge'
 import { getModelCard, mlExplain } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import type { MLExplainRequest, MLExplainResponse } from '@/lib/api/types'
 import type { ModelCardResponse } from '@/lib/api/platform'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
@@ -75,17 +76,25 @@ function Fact({
  * numbers/labels come straight from the accessors — nothing is fabricated.
  */
 function MLOpsView(): ReactElement {
-  const token: string | null = null
+  // Live session token — a constant `null` would 401 on a reload and, being
+  // constant in the dependency array, never retry once the session was restored.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
 
   // ── Model card ─────────────────────────────────────────────────────────────
   const [card, setCard] = useState<ModelCardResponse | null>(null)
   const [cardError, setCardError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
     getModelCard(token)
       .then((c) => {
-        if (alive) setCard(c)
+        if (alive) {
+          setCard(c)
+          setCardError(null)
+        }
       })
       .catch(() => {
         if (alive) setCardError('Could not load the model card. Is the backend running?')
@@ -93,7 +102,7 @@ function MLOpsView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   // ── Explain a prediction ─────────────────────────────────────────────────────
   const [result, setResult] = useState<MLExplainResponse | null>(null)
@@ -109,7 +118,12 @@ function MLOpsView(): ReactElement {
       .finally(() => setLoading(false))
   }, [token])
 
-  useEffect(explain, [explain])
+  // Same hydration gate: the auto-explain must not fire before the bearer exists,
+  // and must re-fire once it does (`explain` is keyed on `token`).
+  useEffect(() => {
+    if (!hydrated) return
+    explain()
+  }, [explain, hydrated])
 
   // SHAP is additive: base = prediction − Σ contribution (numeric targets only).
   const base = useMemo(() => {

@@ -90,6 +90,48 @@ MCP_ACTOR = "mcp"
 PERSONA_ENV_VAR = "MCP_PERSONA_ID"
 """Environment variable overriding the persona whose allowlist the server uses."""
 
+CAPABILITIES_URI = "aegis://platform/capabilities"
+"""Resource URI for the Aegis capabilities manifest."""
+
+TOOL_POLICY_URI = "aegis://tools/policy"
+"""Resource URI for the persona allowlist + risk policy this server enforces."""
+
+# Per-tool MCP annotations. These are asserted PER TOOL rather than derived from the
+# risk tier, because risk does not imply idempotency: ``add_case_note`` is LOW risk
+# but NOT idempotent (each call appends another note), while ``update_request_status``
+# is HIGH risk and IS idempotent (setting the same status twice is one state). A
+# risk→annotation shortcut would therefore ship a hint that is simply untrue, and per
+# the MCP spec these hints are advisory metadata a client may act on — so an honest
+# table beats a tidy formula. Tools absent here fall back to
+# :func:`_conservative_annotations`.
+_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
+    # Appends a note to a case. A write, reversible, but re-running it adds another
+    # note — so explicitly NOT idempotent.
+    "add_case_note": {
+        "read_only_hint": False,
+        "destructive_hint": False,
+        "idempotent_hint": False,
+        "open_world_hint": False,
+    },
+    # Reassigns ownership. Re-running with the same assignee converges on the same
+    # state, and the previous assignee is recoverable — non-destructive, idempotent.
+    "assign_request": {
+        "read_only_hint": False,
+        "destructive_hint": False,
+        "idempotent_hint": True,
+        "open_world_hint": False,
+    },
+    # Customer-visible status transition: the consequential write this platform gates
+    # behind human approval. Destructive in the MCP sense (it overwrites prior state),
+    # though idempotent for a repeated identical target status.
+    "update_request_status": {
+        "read_only_hint": False,
+        "destructive_hint": True,
+        "idempotent_hint": True,
+        "open_world_hint": False,
+    },
+}
+
 APPROVAL_REQUIRED_MESSAGE = (
     "This HIGH-risk write is a proposal only — it was NOT auto-executed via MCP "
     "and requires human approval through the platform's bounded-autonomy gate. The "
@@ -104,6 +146,28 @@ class _AuditDefault:
 
 _USE_DEFAULT_AUDIT = _AuditDefault()
 """Sentinel: resolve the platform's real ``record_audit`` sink lazily."""
+
+
+def _conservative_annotations(risk: RiskLevel) -> dict[str, bool]:
+    """Return safe-by-default MCP hints for a tool with no explicit entry.
+
+    Used only as a fallback for tools added to the registry without a matching
+    :data:`_TOOL_ANNOTATIONS` row. It assumes the cautious reading — a write, not
+    idempotent — and marks HIGH risk as destructive, so a new tool can never be
+    silently advertised to a client as safer than it is.
+
+    Args:
+        risk: The tool's registry risk tier.
+
+    Returns:
+        A mapping of MCP annotation hint names to values.
+    """
+    return {
+        "read_only_hint": False,
+        "destructive_hint": risk is RiskLevel.HIGH,
+        "idempotent_hint": False,
+        "open_world_hint": False,
+    }
 
 
 def _resolve_default_audit() -> AuditFn | None:
@@ -188,14 +252,131 @@ class AdapterToolServer:
         tools: list[mcp_types.Tool] = []
         for definition in tool_definitions_for(self.persona_id):
             function = definition["function"]
+            name = function["name"]
+            spec = TOOL_REGISTRY.get(name)
+            risk = spec.risk if spec is not None else RiskLevel.HIGH
+            hints = _TOOL_ANNOTATIONS.get(name) or _conservative_annotations(risk)
             tools.append(
                 mcp_types.Tool(
-                    name=function["name"],
+                    name=name,
                     description=function["description"],
                     inputSchema=function["parameters"],
+                    annotations=mcp_types.ToolAnnotations(
+                        # Surface the platform's own risk tier in the client-visible
+                        # title: an MCP client (and its user) should be able to see
+                        # that a call is gated before making it, not after.
+                        title=f"{name} ({risk.value} risk)",
+                        **hints,
+                    ),
                 )
             )
         return tools
+
+    def list_resources(self) -> list[mcp_types.Resource]:
+        """Return the read-only resources this server publishes.
+
+        Resources are the MCP primitive for *context* (application-controlled data)
+        as opposed to tools (model-controlled actions). Aegis publishes two, both
+        derived from live in-process state rather than a hand-written blurb:
+
+        * :data:`CAPABILITIES_URI` — the honest capabilities manifest, the same
+          :data:`app.capabilities.AEGIS_MODULES` source of truth served at
+          ``GET /platform/capabilities`` and read by the docs and the console.
+        * :data:`TOOL_POLICY_URI` — the persona's allowlist and per-tool risk tiers,
+          so a client can discover *before* calling that HIGH-risk writes are gated.
+
+        Returns:
+            A list of MCP :class:`~mcp.types.Resource` descriptors.
+        """
+        import mcp.types as mcp_types  # noqa: PLC0415
+
+        return [
+            mcp_types.Resource(
+                uri=CAPABILITIES_URI,
+                name="aegis-capabilities",
+                title="Aegis capabilities manifest",
+                description=(
+                    "Every Aegis module with its honest underlying technology, "
+                    "implementing module path and live/optional status."
+                ),
+                mimeType="application/json",
+            ),
+            mcp_types.Resource(
+                uri=TOOL_POLICY_URI,
+                name="aegis-tool-policy",
+                title="Tool allowlist and risk policy",
+                description=(
+                    f"The tools persona '{self.persona_id}' may call, each with its "
+                    "risk tier and whether it is auto-executed or gated behind "
+                    "human approval."
+                ),
+                mimeType="application/json",
+            ),
+        ]
+
+    def read_resource(self, uri: str) -> str:
+        """Return the JSON body of a published resource.
+
+        Args:
+            uri: One of :data:`CAPABILITIES_URI` or :data:`TOOL_POLICY_URI`.
+
+        Returns:
+            The resource body as a JSON string.
+
+        Raises:
+            ValueError: If ``uri`` is not a resource this server publishes.
+        """
+        if uri == CAPABILITIES_URI:
+            from app.capabilities import (  # noqa: PLC0415
+                AEGIS_MODULES,
+                PRODUCT_NAME,
+                PRODUCT_TAGLINE,
+            )
+
+            return json.dumps(
+                {
+                    "product": PRODUCT_NAME,
+                    "tagline": PRODUCT_TAGLINE,
+                    "module_count": len(AEGIS_MODULES),
+                    "modules": [m.model_dump() for m in AEGIS_MODULES],
+                },
+                indent=2,
+            )
+
+        if uri == TOOL_POLICY_URI:
+            tools = []
+            for definition in tool_definitions_for(self.persona_id):
+                name = definition["function"]["name"]
+                spec = TOOL_REGISTRY.get(name)
+                risk = spec.risk if spec is not None else RiskLevel.HIGH
+                gated = risk is RiskLevel.HIGH
+                tools.append(
+                    {
+                        "name": name,
+                        "risk": risk.value,
+                        "auto_executed": not gated,
+                        "disposition": (
+                            "proposal only — routed to the human approval gate"
+                            if gated
+                            else "executed through the platform's audited tool path"
+                        ),
+                    }
+                )
+            return json.dumps(
+                {
+                    "persona_id": self.persona_id,
+                    "actor": self.actor,
+                    "policy": (
+                        "An MCP client is a proposer, not an approver. LOW and MEDIUM "
+                        "risk tools execute through the audited in-process path; HIGH "
+                        "risk writes are never auto-executed over MCP."
+                    ),
+                    "tools": tools,
+                },
+                indent=2,
+            )
+
+        raise ValueError(f"Unknown resource URI: {uri}")
 
     async def call_tool(
         self, name: str, arguments: dict[str, Any] | None
@@ -345,15 +526,41 @@ def build_server(
     ) -> mcp_types.CallToolResult:
         return await facade.call_tool(params.name, params.arguments)
 
+    async def on_list_resources(
+        _ctx: ServerRequestContext[Any],
+        _params: mcp_types.PaginatedRequestParams | None,
+    ) -> mcp_types.ListResourcesResult:
+        return mcp_types.ListResourcesResult(resources=facade.list_resources())
+
+    async def on_read_resource(
+        _ctx: ServerRequestContext[Any],
+        params: mcp_types.ReadResourceRequestParams,
+    ) -> mcp_types.ReadResourceResult:
+        uri = str(params.uri)
+        return mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.TextResourceContents(
+                    uri=params.uri,
+                    mimeType="application/json",
+                    text=facade.read_resource(uri),
+                )
+            ]
+        )
+
     server: Server = Server(
         SERVER_NAME,
         version=SERVER_VERSION,
         instructions=(
             "Adapter action tools for the service-request domain. HIGH-risk "
-            "writes are gated behind human approval and are not auto-executed."
+            "writes are gated behind human approval and are not auto-executed. "
+            "Read aegis://tools/policy to see each tool's risk tier and whether it "
+            "is auto-executed, and aegis://platform/capabilities for the module "
+            "manifest."
         ),
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
+        on_list_resources=on_list_resources,
+        on_read_resource=on_read_resource,
     )
     server.facade = facade  # type: ignore[attr-defined]  # convenience handle
     return server

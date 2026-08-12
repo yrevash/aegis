@@ -178,9 +178,9 @@ lands in `sys.modules` from a bare import). Everything else `aegis.gateway` need
   before/after this one call (not the cumulative process total), so the payload
   reflects what *this* call alone saved.
 
-On the frontend, `model_call` is mirrored 1:1 in `frontend/src/agui/streamNames.ts`
+On the frontend, `model_call` is mirrored 1:1 in `web/src/lib/streamNames.ts`
 (`MODEL_CALL: "model_call"`). As of this writing there is no dedicated renderer
-wired to this event anywhere in the frontend — `frontend/src/agui/decode.ts` can
+wired to this event anywhere in the frontend — `web/src/lib/api/sse.ts` can
 decode the SSE frame, but no per-event React component consumes it yet.
 
 ## Honest infra / design notes

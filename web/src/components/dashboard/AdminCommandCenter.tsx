@@ -37,6 +37,7 @@ import {
   getSecurityPosture,
 } from '@/lib/api/client'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
+import { useAuth } from '@/lib/auth/AuthContext'
 import type {
   BudgetStatusRow,
   GatewayOptimizationResponse,
@@ -133,7 +134,13 @@ function Empty({ children }: { children: ReactNode }): ReactElement {
  * `/latency`, `/security/posture`, `/approvals`); panels with no data yet say so.
  */
 function AdminCommandCenter(): ReactElement {
-  const token: string | null = null
+  // Read the live session token. The module-level fallback in `request` is not
+  // enough here: `AuthProvider` restores the persisted session in an effect that
+  // runs *after* first paint, so on a reload this component's fetch effect would
+  // otherwise fire with no bearer and 401 — and, with a constant `null` in the
+  // dependency array, never retry once the token arrived.
+  const { session, hydrated } = useAuth()
+  const token: string | null = session?.token ?? null
 
   const series = useMetricsSeries(token)
   const metrics = series.latest
@@ -143,21 +150,31 @@ function AdminCommandCenter(): ReactElement {
   const [latency, setLatency] = useState<LatencyResponse | null>(null)
   const [posture, setPosture] = useState<SecurityPostureResponse | null>(null)
   const [approvals, setApprovals] = useState<ApprovalsResponse | null>(null)
+  // True once every accessor above has settled (fulfilled *or* rejected), so a
+  // failed fetch resolves the spinner into the honest per-panel empty states
+  // instead of leaving it spinning forever.
+  const [settled, setSettled] = useState(false)
 
   useEffect(() => {
+    // Wait for the persisted session to hydrate; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
     const set = <T,>(fn: (v: T) => void) => (v: T) => {
       if (alive) fn(v)
     }
-    void getGatewayOptimization(token).then(set(setOpt)).catch(() => {})
-    void getGovernanceDashboard(token).then(set(setGov)).catch(() => {})
-    void getLatency(token).then(set(setLatency)).catch(() => {})
-    void getSecurityPosture(token).then(set(setPosture)).catch(() => {})
-    void getApprovals(token, { status: 'pending' }).then(set(setApprovals)).catch(() => {})
+    void Promise.allSettled([
+      getGatewayOptimization(token).then(set(setOpt)),
+      getGovernanceDashboard(token).then(set(setGov)),
+      getLatency(token).then(set(setLatency)),
+      getSecurityPosture(token).then(set(setPosture)),
+      getApprovals(token, { status: 'pending' }).then(set(setApprovals)),
+    ]).then(() => {
+      if (alive) setSettled(true)
+    })
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   const summary = opt?.summary ?? null
   const usage = gov?.usage ?? null
@@ -290,7 +307,7 @@ function AdminCommandCenter(): ReactElement {
     return out
   }, [tenants, budgetByTenant, postureCounts, pending])
 
-  const loading = opt == null && gov == null && metrics == null
+  const loading = !settled && opt == null && gov == null && metrics == null
 
   return (
     <div className="space-y-6">

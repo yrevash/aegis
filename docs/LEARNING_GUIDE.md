@@ -73,15 +73,16 @@ RBAC is a **four-valued** coarse role (`admin`, `ai_team`, `devops`, `client`), 
 Per-role guards (`require_admin` / `require_devops` / `require_ai_team` / `require_client` /
 `require_roles`) live in `api/routes.py`; an admin reassigns roles via `POST
 /admin/users/{id}/role` (`data/governance.py::update_user_role`, with a last-platform-admin
-lockout guard). `GET /health` is public. Each role gets its **own portal** (frontend
-`src/routes/Portal.tsx` `ROLE_SECTIONS`, one route per role in `App.tsx`):
+lockout guard). `GET /health` is public. Each role gets its **own portal** (console
+`web/src/lib/portal.ts` `ROLE_SECTIONS`, one route subtree per role under
+`web/src/app/app/[role]/[section]`):
 
 | Role | Portal route | Surfaces |
 |---|---|---|
-| `admin` | `/admin` | Overview · Approvals · Governance · Audit · Roles & Access (oversight/delegation only) |
-| `ai_team` | `/ai-team` | Console · Overview · Memory · Improvement · Access demo |
-| `devops` | `/devops` | Overview · Tech Stack & Versions · Patch Check · Audit |
-| `client` | `/client` | Overview · Savings · Risk Map · Access demo |
+| `admin` | `/app/admin/…` | Overview · Governance · Approvals · Audit · Roles & Access (oversight/delegation only) |
+| `ai_team` | `/app/ai_team/…` | Console · Harness · MLOps · LLMOps · Evals · Token opt · Memory · RAG · Graph · Cache · Guardrails · Access demo |
+| `devops` | `/app/devops/…` | Overview · Tech Stack & Versions · Patch Check · Security · Red-team · Latency · Audit |
+| `client` | `/app/client/…` | Overview · Savings · Risk Map · Access demo |
 
 ## Platform surfaces (the "what are we running / what does it save" layer)
 
@@ -102,7 +103,8 @@ Four honest read endpoints back the DevOps and Client portals — implemented in
   reaches the domain only through the hooks in `agent/deps.py`. See
   [`learn/50-extend-for-your-domain.md`](learn/50-extend-for-your-domain.md).
 - **Everything is verified**: `cd backend && python -m pytest tests -q` and
-  `ruff check src tests` must stay green; frontend `pnpm build && pnpm lint`. The honesty
+  `ruff check src tests` must stay green; console `npm run build && npm run lint` (from
+  `web/`). The honesty
   audits (`docs/HONESTY_AUDIT.md`, `docs/AUDIT_ROUND2.md`) exist because "claimed but not
   real" is the one thing this project does not ship — where a feature is optional or
   not-wired, the docs say so plainly.

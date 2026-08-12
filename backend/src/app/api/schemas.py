@@ -1059,8 +1059,8 @@ class OpsReleaseDecisionResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # Platform surfaces — tech stack, patch check, agent risk-map, savings (§Wave-2)
 #
-# These mirror ``frontend/src/types/api.ts`` **exactly** — the field names and
-# unions here are the contract the React portal renders against. Keep them in
+# These mirror ``web/src/lib/api/types.ts`` **exactly** — the field names and
+# unions here are the contract the Next.js console renders against. Keep them in
 # lock-step. The logic that populates them lives in :mod:`app.platform`; these are
 # pure data shells.
 # ─────────────────────────────────────────────────────────────────────────────

@@ -66,8 +66,8 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph FE["Frontend — React + Vite + TypeScript (frontend/src)"]
-        UI["4 role-scoped portals (admin · ai_team · devops · client)<br/>Console · Overview · Memory · Improvement · Approvals<br/>Governance · Audit · Roles&Access · Stack · Patches · Risk Map · Savings"]
+    subgraph FE["Console — Next.js (App Router) + React + TypeScript (web/src)"]
+        UI["4 role-scoped portals (admin · ai_team · devops · client)<br/>Console · Overview · Harness · MLOps · LLMOps · Evals · Token opt · Memory<br/>RAG · Graph · Cache · Guardrails · Approvals · Governance · Audit · Roles&Access<br/>Stack · Patches · Security · Red-team · Latency · Risk Map · Savings"]
     end
 
     subgraph BE["Backend — FastAPI (backend/src/app)"]
@@ -131,7 +131,7 @@ UI labels, and the code comments.
 > **RBAC & portals.** Authentication resolves one of **four** coarse roles — `admin`,
 > `ai_team`, `devops`, `client` (`Role` in `api/schemas.py`, a signed `coarse_role` JWT
 > claim in `core/security.py`) — and each gets its **own portal** with a focused surface
-> set (`frontend/src/routes/Portal.tsx` `ROLE_SECTIONS`). Four platform surfaces
+> set (`web/src/lib/portal.ts` `ROLE_SECTIONS`). Four platform surfaces
 > (`backend/src/app/platform/*`) back the DevOps and Client portals: `GET /stack`,
 > `POST /stack/patch-check`, `GET /risk-map`, `GET /savings`. See `30-frontend.md` for the
 > per-role surface map and `docs/LEARNING_GUIDE.md` for the role/endpoint tables.

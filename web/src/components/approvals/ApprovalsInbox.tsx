@@ -8,6 +8,7 @@ import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
 import { BentoGrid, BentoTile, CountUp } from '@/components/shared'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { ApprovalDecision, ApprovalRow } from '@/lib/api/types'
 
@@ -241,6 +242,9 @@ export function ApprovalsInbox({ token }: ApprovalsInboxProps): ReactElement {
  * — the offline demo seeds from the mock fixture and carries the honest banner.
  */
 export function ApprovalsMount(): ReactElement {
+  // The approvals queue and its decisions are RBAC-scoped: hand the child the
+  // real session bearer, and hold it back until the session has been restored.
+  const { session, hydrated } = useAuth()
   const [mode, setMode] = useState<ResolvedMode | null>(null)
 
   useEffect(() => {
@@ -253,7 +257,7 @@ export function ApprovalsMount(): ReactElement {
     }
   }, [])
 
-  if (mode === null) {
+  if (mode === null || !hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -277,7 +281,7 @@ export function ApprovalsMount(): ReactElement {
             <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
           </div>
         )}
-        <ApprovalsInbox token={null} />
+        <ApprovalsInbox token={session?.token ?? null} />
       </div>
     </TooltipProvider>
   )

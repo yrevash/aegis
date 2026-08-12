@@ -103,14 +103,14 @@ retrieval uses `step()` + `custom("retrieval_citations")`; ml uses
 `custom("eval_result")`. Same emitter, same wire contract, different vocabulary per module — see
 the table below for exactly which events each module emits today.
 
-On the frontend, `frontend/src/agui/streamNames.ts` mirrors `aegis.core.stream_names` value-for-
-value and `frontend/src/agui/decode.ts` provides a minimal SSE-frame decoder
+On the frontend, `web/src/lib/streamNames.ts` mirrors `aegis.core.stream_names` value-for-
+value and `web/src/lib/api/sse.ts` provides a minimal SSE-frame decoder
 (`decodeAguiStream`). As of this writing that is the current state of the frontend AG-UI surface —
 the full process-rail timeline + per-event-type dispatcher described in the Module Contract spec
 (§4: a vertical step timeline, each row expanding to a specialized renderer — guardrail verdict
 card, citation cards, SHAP waterfall, conformal band, approval card — with an unknown-type JSON
 fallback) is designed but not yet built. The existing frontend console instead renders the older,
-bespoke 18+-member `StreamEvent` union (`frontend/src/types/stream.ts`), which predates the AG-UI
+bespoke 18+-member `StreamEvent` union (`web/src/lib/stream.ts`), which predates the AG-UI
 migration and is still the "locked" contract several backend paths (including today's agent graph)
 emit through.
 
@@ -170,7 +170,7 @@ graph TD
     agent -->|reasoning, routing, tool_call,<br/>approval_required, reflection, ... via<br/>the legacy StreamEvent seam (stamp=)| legacyStream["Legacy StreamEvent union<br/>(app.api.schemas, locked SSE contract)"]
 
     legacyStream -.->|AG-UI migration<br/>deferred follow-on| stream
-    stream --> frontendDecode["frontend/src/agui<br/>streamNames.ts + decode.ts"]
+    stream --> frontendDecode["web/src/lib<br/>streamNames.ts + api/sse.ts (decodeAguiStream)"]
     stream --> otel["Same stream, tagged with<br/>OpenInference SpanKind →<br/>OTel export (aegis.observability)"]
 
     style foundations fill:#eef,stroke:#448

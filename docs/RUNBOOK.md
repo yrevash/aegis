@@ -21,7 +21,7 @@ ladder. When something is red, the ladder tells you which mode still works.
 ./scripts/start.sh lite
 ```
 
-Then open **http://localhost:5173** and log in with **admin / admin**.
+Then open **http://localhost:3000** and log in with **admin / admin**.
 The only secret you must set is `GENAILAB_API_KEY` in `backend/.env`.
 
 ---
@@ -44,9 +44,10 @@ Run `preflight` first: gateway UP → Lite works; all UP → Full; nothing → D
 ## Connection map (every wire)
 
 ```
-Browser (http://localhost:5173, Vite)
-  │  VITE_USE_MOCK=false  → talks to the backend;  =true → in-browser mock (no backend)
-  │  VITE_API_BASE=http://localhost:8000
+Browser (http://localhost:3000, Next.js console in web/)
+  │  live-first: boots, probes the backend, falls back to the in-browser mock if it's down
+  │  NEXT_PUBLIC_USE_MOCK=true (or ?mock=1) forces the mock; =false → talks to the backend
+  │  NEXT_PUBLIC_API_BASE=http://localhost:8000
   ▼
 Backend (http://localhost:8000, FastAPI/uvicorn)   endpoints: /auth/login(JWT) /query(SSE)
   │   /graph /ml/explain /metrics /audit   HITL: /approval /approvals /approvals/{id}/decision
@@ -60,7 +61,7 @@ Backend (http://localhost:8000, FastAPI/uvicorn)   endpoints: /auth/login(JWT) /
 
 | Port | Service | Needed in |
 |---|---|---|
-| 5173 | Frontend (Vite) | all modes |
+| 3000 | Console (Next.js, `web/`) | all modes |
 | 8000 | Backend (FastAPI) | lite, full |
 | 5432 | Postgres + pgvector | full |
 | 7687 | Neo4j (bolt) | full |
@@ -72,7 +73,7 @@ Backend (http://localhost:8000, FastAPI/uvicorn)   endpoints: /auth/login(JWT) /
 ## What each layer installs (component-wise)
 
 `bootstrap` installs the backend with **all** extras below (from `backend/pyproject.toml`)
-plus the frontend via `pnpm`. You never install these by hand.
+plus the console (`web/`) via `npm`. You never install these by hand.
 
 | Extra | Powers | Key libs |
 |---|---|---|
@@ -83,7 +84,7 @@ plus the frontend via `pnpm`. You never install these by hand.
 | `guardrails` | input/output rails | nemoguardrails |
 | `observability` | OTel → Phoenix | opentelemetry-*, arize-phoenix |
 | `dev` | tests + lint | ruff, pytest, aiosqlite |
-| frontend | the console UI | react, vite, tailwind, recharts, react-force-graph |
+| `web/` | the console UI | next, react, tailwind, recharts, react-force-graph |
 
 > Lite mode installs the same packages but simply **doesn't connect** to Neo4j /
 > Redis / Postgres at runtime — the switch is the `STORES` env var, not the install.
@@ -102,7 +103,7 @@ plus the frontend via `pnpm`. You never install these by hand.
 | `AGENT_CHECKPOINTER` | `memory` (set `postgres` for full) | `memory` = single-process; `postgres` = durable, resumable HITL (ADR 0005). |
 | `JWT_SECRET` | `backend/.env` | HS256 signing secret — **set a real one for any shared deploy** (ADR 0008). |
 | `APPROVAL_SLA_SECONDS` | `backend/.env` | SLA before the sweeper auto-rejects a HIGH-risk pending gate. |
-| `VITE_USE_MOCK` | set by start script | `true` = frontend runs with no backend. |
+| `NEXT_PUBLIC_USE_MOCK` | set by start script | `true` = console runs with no backend. |
 
 ---
 
@@ -114,10 +115,10 @@ plus the frontend via `pnpm`. You never install these by hand.
 | Postgres/Neo4j/Redis DOWN | Don't fight it — run `start … lite`. It needs none of them. |
 | Backend won't boot | You're likely missing the venv — re-run `bootstrap`. Lite needs no databases, so it's almost always an install issue. |
 | `/audit` empty in lite | Expected until an action runs; it writes to `taif_lite.db` (SQLite) on the fly. |
-| Frontend shows `—` everywhere | Backend not reachable or no query run yet. Confirm `http://localhost:8000/docs` opens; run a query. |
-| `pnpm dev` stuck at "transforming…" | `pkill -f "esbuild --service"` (or close/reopen the window) and re-run. |
+| Console shows `—` everywhere | Backend not reachable or no query run yet. Confirm `http://localhost:8000/docs` opens; run a query. |
+| Console stuck on stale output | `rm -rf web/.next` and re-run `npm run dev`. |
 | First `pytest` is slow (~30–60s) | One-time SHAP/numba JIT compile; later runs are ~2s. |
-| Vite bundle warning | None expected — charts/graph are code-split. |
+| Console banner says "mock" unexpectedly | The boot probe couldn't reach the backend — check `NEXT_PUBLIC_API_BASE` and that `:8000` is up. |
 
 ---
 
@@ -128,9 +129,9 @@ plus the frontend via `pnpm`. You never install these by hand.
 python -m pytest tests -q          # 266 passed, 1 skipped (opt-in LLM-judge)
 ruff check src tests               # All checks passed!
 
-# frontend — from frontend/
-pnpm build                         # clean, chunks < 500 kB
-pnpm lint                          # 0 errors
+# console — from web/
+npm run build                      # next build (TS strict) — clean
+npm run lint                       # 0 errors
 ```
 
 Lite mode is covered by `tests/retrieval/test_memory.py` (retrieval runs with zero

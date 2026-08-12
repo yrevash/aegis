@@ -17,6 +17,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { getGovernanceDashboard } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import type { BudgetStatusRow, GovernanceDashboardResponse } from '@/lib/api/platform'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 
@@ -136,16 +137,25 @@ function TenantRow({
  * rather than fake zeros.
  */
 function GovernanceView(): ReactElement {
-  const token: string | null = null
+  // Live session token — `/governance/dashboard` is admin-only, so a constant
+  // `null` here 401s on a reload and, being constant in the dependency array,
+  // never retries once `AuthProvider` restored the persisted session.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
 
   const [data, setData] = useState<GovernanceDashboardResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
     getGovernanceDashboard(token)
       .then((d) => {
-        if (alive) setData(d)
+        if (alive) {
+          setData(d)
+          setError(null)
+        }
       })
       .catch(() => {
         if (alive) setError('Could not load the governance dashboard. Is the backend running?')
@@ -153,7 +163,7 @@ function GovernanceView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, hydrated])
 
   /** Budget rows keyed by tenant id, so each tenant row can find its budget. */
   const budgetByTenant = useMemo(() => {

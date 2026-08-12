@@ -6,7 +6,7 @@
 
 ## 1. Stack (finalized)
 
-- **Vite + React + TypeScript** — fast dev, typed, projector-ready web app (NOT React Native; the demo runs on a laptop/projector).
+- **Next.js (App Router) + React + TypeScript** — the console lives in `web/`: typed, projector-ready web app (NOT React Native; the demo runs on a laptop/projector).
 - **Tailwind CSS + shadcn/ui** — copy-owned components, no runtime overhead, full control of styling.
 - **Recharts (Tremor-style API)** — analytics dashboards and charts. We use Recharts directly with a thin Tremor-style component wrapper; the Tremor library itself is not a dependency.
 - **Graph visualization** — `react-force-graph` (2D) is the default for the live, animated knowledge graph. Alternatives if it fights you: `react-flow` or Neo4j's NVL. **AGENT: research current versions/APIs of the chosen graph lib before wiring — these libraries change.**
@@ -80,4 +80,4 @@
 - **Research before wiring** any library whose API you're unsure of (graph viz, Recharts chart props, SSE patterns) — verify current usage, don't rely on memory.
 - **Ask, don't guess**, on: the SSE event schema, persona/role definitions, and any visual-identity choices with tradeoffs.
 - **Do not over-build.** Build the six key views to a demoable state first; polish after the Day-1 slice works.
-- Document components as you go; keep the frontend README current.
+- Document components as you go; keep `web/README.md` current.

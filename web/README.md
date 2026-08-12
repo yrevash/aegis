@@ -1,16 +1,16 @@
-# Aegis Console — `web/` (Next.js rebuild)
+# Aegis Console — `web/`
 
-The Next.js (App Router) rebuild of the Aegis console, on the **TailAdmin** design
-base restyled to the Aegis **signal-palette** design system. **Light theme only.**
+The Aegis console: **Next.js 15** (App Router) + **React 19**, styled with the Aegis
+**signal-palette** design system. **Light theme only.**
 
-This lives alongside the existing Vite app in `../frontend/` (which stays live);
-`web/` is the new surface under active construction.
+This is *the* console. The original Vite app in `../frontend/` has been retired and
+deleted — `web/` fully replaced it.
 
 ## Stack
 
 - **Next.js 15** (App Router) + **React 19** + **TypeScript** (strict)
-- **Tailwind CSS v4** (CSS-first, `@tailwindcss/postcss`) — matches the templates
-- **lucide-react** icons
+- **Tailwind CSS v4** (CSS-first, `@tailwindcss/postcss`)
+- **lucide-react** icons, **Recharts** + **react-force-graph** for charts/graph
 - Fonts (Inter / Space Grotesk / JetBrains Mono) via a runtime `<link>` (not
   `next/font`) so `next build` never blocks on a font fetch
 
@@ -19,29 +19,61 @@ This lives alongside the existing Vite app in `../frontend/` (which stays live);
 ```bash
 npm install
 npm run dev     # http://localhost:3000  → /login
-npm run build   # production build (prerenders every portal/section route)
+npm run build   # production build
 npm run lint    # ESLint (next/core-web-vitals + next/typescript)
+```
+
+The dev server expects the backend on `http://localhost:8000`:
+
+```bash
+NEXT_PUBLIC_API_BASE=http://localhost:8000 NEXT_PUBLIC_HEALTH_PATH=/health npm run dev
 ```
 
 ## Routes
 
 - `/` → redirects to `/login`
-- `/login` — role-select stub (auth is wired later)
-- `/app/[role]` → redirects to the role's default section
-- `/app/[role]/[section]` — the portal shell + section page
+- `/login` — real credential login against `POST /auth/login`; the returned JWT
+  role decides which portal you land in
+- `/app/[role]` → redirects to that role's default section
+- `/app/[role]/[section]` — portal shell + section page, guarded by `PortalGuard`
 
-Four role portals mirror `ROLE_SECTIONS` from the Vite `Portal.tsx`:
+Four role portals, from `ROLE_SECTIONS` in `lib/portal.ts`:
 
-| Portal    | Sections (nav order)                                   |
-| --------- | ------------------------------------------------------ |
-| `admin`   | Overview · Approvals · Governance · Audit · Roles      |
-| `ai_team` | Console · MLOps · LLMOps · Memory · Access demo        |
-| `devops`  | Overview · Tech Stack · Patch Check · Audit            |
-| `client`  | Overview · Savings · Risk Map · Access demo            |
+| Portal    | Sections (nav order) |
+| --------- | -------------------- |
+| `admin`   | Overview · Governance · Approvals · Audit · Roles & Access |
+| `ai_team` | Console · Harness · MLOps · LLMOps · Evals · Token opt · Memory · RAG · Graph · Cache · Guardrails · Simulation |
+| `devops`  | Overview · Tech Stack & Versions · Patch Check · Security · Red-team · Latency · Audit |
+| `client`  | Overview · Savings · Risk Map · Simulation |
 
-Every section is a titled placeholder page for now, except **Console** (ai_team),
-which renders the query bar + a "live run will render here" canvas. Real SSE
-wiring lands in the next task.
+Every section renders a real view backed by a live accessor. Panels with no data
+say so rather than inventing numbers.
+
+## Auth & RBAC
+
+- `lib/auth/AuthContext.tsx` — session provider. Signs in via `POST /auth/login`,
+  persists the session to `localStorage`, and mirrors the JWT into
+  `lib/api/authToken.ts` so the REST client and SSE transport can attach
+  `Authorization: Bearer <token>` on every live call.
+- `components/auth/PortalGuard.tsx` — blocks children until the persisted session
+  has hydrated, and bounces a session that reaches the wrong portal.
+
+> **Note for view authors:** `AuthProvider` restores the session in an effect, and
+> React runs *child* effects before *parent* effects. A component that fetches on
+> mount must therefore read `const { session, hydrated } = useAuth()`, guard with
+> `if (!hydrated) return`, and include `[token, hydrated]` in its dependency array.
+> Never hardcode a `null` token, and never end a fetch chain in a bare
+> `.catch(() => {})` — a swallowed 401 leaves a spinner running forever.
+
+## Live vs. mock
+
+`lib/api/mode.ts` probes the backend on boot (`probeBackend`). Live-first: if the
+backend answers, every accessor reads real data. If it doesn't, the app falls back
+to the in-browser fixtures in `src/mock/` and renders an explicit
+**"Offline demo — mock data"** banner. The offline mode is a deliberate demo
+affordance, and it is always labelled — the UI never passes fixtures off as live.
+
+Force it either way with `NEXT_PUBLIC_USE_MOCK=true|false` or `?mock=1`.
 
 ## Layout
 
@@ -49,42 +81,31 @@ wiring lands in the next task.
 src/
   app/
     layout.tsx                     root layout (fonts + globals)
-    globals.css                    ported design tokens (light only)
+    globals.css                    design tokens (light only)
     page.tsx                       → /login
-    login/page.tsx                 role-select stub
+    login/page.tsx                 real login
     app/[role]/layout.tsx          portal shell (Sidebar + Topbar)
-    app/[role]/page.tsx            → default section
-    app/[role]/[section]/page.tsx  section page (+ generateStaticParams)
+    app/[role]/[section]/page.tsx  section page
   components/
-    layout/{Sidebar,Topbar}.tsx    TailAdmin shell → our tokens
-    ui/{Card,Badge,StatCard,Table,Chart}.tsx
-    console/ConsolePlaceholder.tsx
-    portal/SectionPlaceholder.tsx
+    layout/{Sidebar,Topbar}.tsx
+    auth/PortalGuard.tsx
+    dashboard/AdminCommandCenter.tsx
+    <section>/…View.tsx            one view per portal section
+    charts/, ui/, primitives/      chart + design-system primitives
   lib/
     portal.ts                      ROLE_SECTIONS + SECTIONS catalogue
-    stream.ts                      StreamEvent contract (ported verbatim)
-    streamNames.ts                 mirrors aegis.core.stream_names.ALL (17)
-    api/{config,client,sse,types}.ts   typed REST client + SSE decoder
+    auth/AuthContext.tsx           session + JWT
+    stream.ts / streamNames.ts     StreamEvent contract; mirrors
+                                   aegis.core.stream_names.ALL (17, exact match)
+    api/                           typed REST client, SSE decoder, live/mock mode
+  mock/                            offline-demo fixtures
 ```
 
-## Ported from the Vite app / backend
+## Honest caveats
 
-- **Design tokens** (`globals.css`) — the signal palette (agent/graph/risk/block/
-  ml/ok fill+ink), fonts, radius/shadow, `.eyebrow`/`.tabular`, type scale.
-  Dark theme intentionally dropped (light only).
-- **Stream contract** (`lib/stream.ts`) — copied verbatim from
-  `frontend/src/types/stream.ts`.
-- **Stream names** (`lib/streamNames.ts`) — mirrors **every** entry of
-  `aegis/src/aegis/core/stream_names.py::ALL` (17, exact set match).
-- **SSE decoder** (`lib/api/sse.ts`) — `readSSEStream` + `decodeAguiStream`.
-- **API client** (`lib/api/client.ts`) — every endpoint from
-  `frontend/src/api/client.ts` (`/query` SSE, `/graph`, `/metrics`, `/ml/explain`,
-  approvals, admin, memory, ops, stack, risk/savings). Live-only for now.
-
-## Not yet wired (honest caveats)
-
-- Auth (role/JWT) — login is a stub that routes straight into each portal.
-- Mock/live mode toggle (the Vite `api/mode.ts` probe) — client is live-only.
-- All section pages except Console are placeholders; Console is a static canvas.
-- `lib/api/types.ts` response shapes are lean scaffold mirrors, not yet the full
-  field-by-field fidelity of the Vite `types/api.ts`.
+- **Graph is empty without Neo4j.** `/graph` degrades to `{nodes: [], edges: []}`
+  when Neo4j isn't running; the view renders that honestly instead of faking nodes.
+- **Most surfaces are empty on a fresh database.** Cost, savings, approvals and
+  usage figures only populate after real agent runs.
+- **No test suite in `web/` yet.** Type safety is enforced by `tsc --noEmit` and
+  `next lint`; there are no component tests.

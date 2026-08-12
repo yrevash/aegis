@@ -19,6 +19,7 @@ import {
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { getSecurityPosture, runRedteam } from '@/lib/api/client'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type {
   PostureEntry,
@@ -475,33 +476,42 @@ function RedteamTeaser({
  * always-on parts of the pipeline, badged `wired`.
  */
 function GuardrailsView({ mock }: { mock: boolean }): ReactElement {
+  // Live session token — the literal `null`s these two accessors were called with
+  // sent no bearer, and an empty dependency array meant the calls never re-fired
+  // once `AuthProvider` had restored the persisted session.
+  const { session, hydrated } = useAuth()
+  const token = session?.token ?? null
   const [posture, setPosture] = useState<SecurityPostureResponse | null>(null)
   const [redteam, setRedteam] = useState<RedteamReportResponse | null>(null)
   const [redteamLoading, setRedteamLoading] = useState(true)
 
   useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
     let alive = true
-    void getSecurityPosture(null)
+    void getSecurityPosture(token)
       .then((p) => {
         if (alive) setPosture(p)
       })
       .catch(() => {
         /* honest: rail cards fall back to `wired` badges without posture */
       })
-    void runRedteam(null)
+    void runRedteam(token)
       .then((r) => {
         if (alive) setRedteam(r)
       })
       .catch(() => {
         /* honest: teaser shows its unavailable empty state */
       })
+      // `finally` always resolves the spinner — a failure shows the teaser's
+      // empty state rather than spinning forever.
       .finally(() => {
         if (alive) setRedteamLoading(false)
       })
     return () => {
       alive = false
     }
-  }, [])
+  }, [token, hydrated])
 
   const postureByThreat = new Map<string, PostureEntry>(
     (posture?.entries ?? []).map((e) => [e.threat_id, e]),

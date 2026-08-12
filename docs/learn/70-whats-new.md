@@ -18,15 +18,15 @@ Roles expanded from `{admin, user}` to **four**: `admin`, `ai_team`, `devops`, `
   `backend/src/app/data/governance.py::update_user_role`, with a last-platform-admin lockout
   guard (`LastPlatformAdminError`).
 - Public liveness `GET /health` — unauthenticated (`routes.py::health`).
-- One portal per role, each a distinct route (`frontend/src/App.tsx`) with a focused surface
-  set (`frontend/src/routes/Portal.tsx` `ROLE_SECTIONS`):
+- One portal per role, each its own route subtree (`web/src/app/app/[role]/[section]`) with
+  a focused surface set (`web/src/lib/portal.ts` `ROLE_SECTIONS`):
 
   | Role | Route | Surfaces |
   |---|---|---|
-  | `admin` | `/admin` | Overview · Approvals · Governance · Audit · Roles & Access (oversight/delegation only) |
-  | `ai_team` | `/ai-team` | Console · Overview · Memory · Improvement · Access demo |
-  | `devops` | `/devops` | Overview · Tech Stack & Versions · Patch Check · Audit |
-  | `client` | `/client` | Overview · Savings · Risk Map · Access demo |
+  | `admin` | `/app/admin/…` | Overview · Governance · Approvals · Audit · Roles & Access (oversight/delegation only) |
+  | `ai_team` | `/app/ai_team/…` | Console · Harness · MLOps · LLMOps · Evals · Token opt · Memory · RAG · Graph · Cache · Guardrails · Access demo |
+  | `devops` | `/app/devops/…` | Overview · Tech Stack & Versions · Patch Check · Security · Red-team · Latency · Audit |
+  | `client` | `/app/client/…` | Overview · Savings · Risk Map · Access demo |
 
 ## New platform surfaces + endpoints
 
@@ -68,10 +68,13 @@ Backed by `backend/src/app/platform/*` (honest throughout — no fabricated data
   (`memory/consolidate.py::prune_forgotten`, run inside `sweep_pending`), governed by
   `config.forget_floor` / `forget_min_age_days`. Never a hard delete.
 
-## Frontend
+## Console (`web/`)
 
-- **Light-theme only** — dark mode removed (`frontend/src/components/layout/theme.ts`:
-  `useTheme` returns a fixed `'light'`, no-op `toggle`; `.dark` in `index.css` is inert).
+- **Rebuilt on Next.js 15 (App Router) + React 19** in `web/` — the old Vite app has been
+  retired and deleted. Every surface is now a URL-addressable route
+  (`/app/[role]/[section]`) instead of local tab state.
+- **Light-theme only** — a single light identity in `web/src/app/globals.css`; no dark
+  variant is defined or applied.
 - **Responsive** fluid desktop layouts, no horizontal overflow.
-- **Notification icon removed** from the top bar.
-- **Admin portal trimmed** to oversight surfaces (`ROLE_SECTIONS.admin` in `Portal.tsx`).
+- **Admin portal trimmed** to oversight surfaces (`ROLE_SECTIONS.admin` in
+  `web/src/lib/portal.ts`).
