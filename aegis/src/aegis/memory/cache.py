@@ -403,15 +403,20 @@ class MemorySemanticCache:
         require_redis: bool = False,
         dims: int,
         name: str = "aegis_memory_cache",
-    ) -> MemorySemanticCache:
-        """Pick the backend from deployment context.
+    ) -> MemorySemanticCache | None:
+        """Pick the backend from deployment context, honoring ``config.cache_enabled``.
 
+        * ``config.cache_enabled=False``: returns ``None`` — the semantic cache is off;
+          callers pass ``None`` to the memory stream (recall always recomputes). The knob
+          is real, not decorative.
         * ``require_redis=True`` (full mode): a real Redis is **required** — with no
           ``redis_url`` this raises; with one it builds the RedisVL backend and lets any
           connection error propagate (fail loud, like Qdrant/Postgres).
         * otherwise: if a ``redis_url`` is given, use RedisVL; else the explicit in-memory
           fallback (a labeled, non-silent degrade).
         """
+        if not config.cache_enabled:
+            return None
         if require_redis:
             if not redis_url:
                 msg = (

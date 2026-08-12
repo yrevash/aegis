@@ -173,3 +173,11 @@ async def test_from_config_offline_defaults_to_in_memory():
     )
     assert cache.backend_label == BACKEND_MEMORY
     assert cache.is_redis is False
+
+
+async def test_cache_enabled_false_returns_none():
+    # The knob is real, not decorative: disabling it yields no cache (recall recomputes).
+    cache = MemorySemanticCache.from_config(
+        MemoryConfig(cache_enabled=False), embedder=_embedder, redis_url="redis://x", dims=2
+    )
+    assert cache is None

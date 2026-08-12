@@ -17,6 +17,8 @@ The graph shape, event order, and gate design are documented in
 
 from __future__ import annotations
 
+from aegis.agent.harness import harness_config, run_summary
+
 from .approvals import (
     ApprovalOutcome,
     ApprovalRegistry,
@@ -32,8 +34,6 @@ from .deps import (
     risk_at_least,
     risk_rank,
 )
-from aegis.agent.harness import harness_config, run_summary
-
 from .graph import build_agent
 from .orchestrator import decide_approval, resume_parked_run, run_agent
 from .state import AgentState
