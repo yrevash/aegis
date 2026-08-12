@@ -5,6 +5,10 @@
 define bot refuse input
   "I can't process that request — it was stopped by the input guardrail."
 
+# Advisory note for the topical rail (no `stop`; the request still proceeds).
+define bot inform off topic
+  "Heads up: that question looks outside this assistant's configured domain."
+
 # 1. Schema / format validation (cheapest, no I/O). Reject empty, oversized, or
 #    control-character payloads before spending any tokens on them.
 define flow guardrail input schema
@@ -35,3 +39,14 @@ define flow guardrail input content safety
   if not $safe
     bot refuse input
     stop
+
+# 5. Topical / off-topic dialog rail (OWASP LLM01-adjacent). ADVISORY by default:
+#    it screens the query against the host-configured business domain but does NOT
+#    `stop` — an off-topic query is recorded, never blocked, so a legitimate
+#    blind-domain demo is never broken. An enterprise that wants a hard block adds
+#    `bot refuse input` + `stop` under the branch below (matching topical_block in
+#    the programmatic pipeline). Disabled (no-op) when no allowed_topics are wired.
+define flow guardrail input topical
+  $on_topic = execute self_check_topic
+  if not $on_topic
+    bot inform off topic

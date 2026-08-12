@@ -67,6 +67,33 @@ def get_completer() -> ChatCompleter | None:
     """Return the ``ChatCompleter`` the NeMo custom actions should use, if any."""
     return _completer
 
+
+#: Process-wide allowed-topics config for the topical dialog rail, mirroring how
+#: ``_completer`` is wired. ``None``/empty disables the topical rail (a no-op
+#: PASS) — the offline default, so importing the policy touches no config. The
+#: host wires its blind-domain topic description via :func:`set_allowed_topics`.
+_allowed_topics: str | list[str] | None = None
+
+
+def set_allowed_topics(allowed_topics: str | list[str] | None) -> None:
+    """Wire the business-domain topics the NeMo topical rail screens against.
+
+    Idempotent; call once at host startup. ``None``/empty disables the topical
+    rail (the offline default). Domain-agnostic — the platform serves a blind
+    domain, so topics always come from config, never hardcoded.
+
+    Args:
+        allowed_topics: A description or list of permitted domain topics, or
+            ``None`` to disable the topical rail.
+    """
+    global _allowed_topics
+    _allowed_topics = allowed_topics
+
+
+def get_allowed_topics() -> str | list[str] | None:
+    """Return the configured allowed-topics for the NeMo topical rail, if any."""
+    return _allowed_topics
+
 # The exact refusal strings authored in the Colang policy (``config/rails/*.co``).
 # A generated turn equal to one of these means an input/output rail fired ``stop``.
 _INPUT_REFUSAL = "I can't process that request — it was stopped by the input guardrail."

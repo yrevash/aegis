@@ -21,7 +21,7 @@ offline unit tests. Verified against NeMo Guardrails 0.23, Colang 1.0.
 from __future__ import annotations
 
 from aegis.core.lazy import require
-from aegis.guardrails import classifier, content_safety, pii, schema
+from aegis.guardrails import classifier, content_safety, grounding, pii, schema, topical
 
 nemoguardrails_actions = require("aegis[nemo]", "nemoguardrails.actions")
 action = nemoguardrails_actions.action
@@ -119,6 +119,66 @@ async def self_check_content_safety(context: dict | None = None) -> bool:
     redacted, _ = pii.redact(text)
     verdict = await content_safety.screen_content(redacted, completer=_completer())
     return not verdict.unsafe
+
+
+@action(is_system_action=True)
+async def self_check_topic(context: dict | None = None) -> bool:
+    """Return ``True`` if the inbound message is within the configured domain.
+
+    Advisory dialog rail (OWASP LLM01-adjacent). Delegates to
+    :func:`aegis.guardrails.topical.screen_topic`, reading the host-wired business
+    domain from :func:`aegis.guardrails.nemo.get_allowed_topics` (mirroring how the
+    completer is wired). When no ``allowed_topics`` are configured the rail is a
+    no-op and returns ``True``. Advisory by default (``block=False``): an off-topic
+    query returns ``False`` for the flow to *note* — the bundled flow does not
+    ``stop`` — so a legitimate blind-domain demo is never broken. PII is redacted
+    first so nothing sensitive reaches the self-check.
+
+    Args:
+        context: The NeMo conversation context (``user_message`` is read).
+
+    Returns:
+        ``True`` when on-topic or the rail is disabled, ``False`` when off-topic.
+    """
+    from aegis.guardrails import nemo
+
+    text = (context or {}).get("user_message", "")
+    redacted, _ = pii.redact(text)
+    verdict = await topical.screen_topic(
+        redacted, allowed_topics=nemo.get_allowed_topics(), completer=_completer()
+    )
+    return verdict.on_topic
+
+
+@action(is_system_action=True)
+async def self_check_grounding(context: dict | None = None) -> bool:
+    """Return ``True`` if the answer is grounded in the retrieved context passages.
+
+    Advisory output rail (OWASP LLM09 Misinformation). Delegates to
+    :func:`aegis.guardrails.grounding.check_grounding`, the SOTA self-check-facts
+    pattern. Reads the answer from ``bot_message`` and the retrieved passages from
+    the NeMo ``relevant_chunks`` context variable (a string or list). When no
+    contexts are present the rail is a no-op and returns ``True``. Advisory by
+    default (``block=False``): an ungrounded answer returns ``False`` for the flow
+    to *note* — the bundled flow does not ``stop``.
+
+    Args:
+        context: The NeMo conversation context (``bot_message`` + ``relevant_chunks``).
+
+    Returns:
+        ``True`` when grounded or the rail is disabled, ``False`` when ungrounded.
+    """
+    ctx = context or {}
+    answer = ctx.get("bot_message", "")
+    chunks = ctx.get("relevant_chunks")
+    if isinstance(chunks, str):
+        contexts = [chunks] if chunks.strip() else []
+    elif isinstance(chunks, list):
+        contexts = [c for c in chunks if isinstance(c, str)]
+    else:
+        contexts = []
+    verdict = await grounding.check_grounding(answer, contexts, completer=_completer())
+    return verdict.grounded
 
 
 @action(is_system_action=True)

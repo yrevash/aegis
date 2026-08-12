@@ -40,8 +40,10 @@ rails:
       - guardrail input pii             # 2. PII redaction (before the model/classifier)
       - guardrail input injection       # 3. API injection / jailbreak classifier
       - guardrail input content safety  # 4. MLCommons hazard screen (S1–S13)
+      - guardrail input topical         # 5. topical / off-topic dialog rail (advisory, LLM01-adj)
   output:
     flows:
       - guardrail output schema         # 1. output schema + content filter (LLM02)
       - guardrail output content safety # 2. MLCommons hazard screen (LLM09)
-      - guardrail output pii            # 3. PII redaction on the outbound path (LLM06)
+      - guardrail output grounding      # 3. output grounding self-check (advisory, LLM09)
+      - guardrail output pii            # 4. PII redaction on the outbound path (LLM06)

@@ -21,6 +21,8 @@ from aegis.core.types import GuardResult, GuardVerdict
 from aegis.guardrails import pii, schema
 from aegis.guardrails.classifier import detect_injection
 from aegis.guardrails.content_safety import screen_content
+from aegis.guardrails.grounding import check_grounding
+from aegis.guardrails.topical import screen_topic
 
 if TYPE_CHECKING:
     from aegis.core.stream import AegisEmitter
@@ -51,6 +53,10 @@ class Guardrails:
         completer: ChatCompleter | None = None,
         input_rails: list[Rail] | None = None,
         output_rails: list[Rail] | None = None,
+        allowed_topics: str | list[str] | None = None,
+        topical_block: bool = False,
+        ground_answers: bool = False,
+        grounding_block: bool = False,
     ) -> None:
         """Create the pipeline.
 
@@ -59,10 +65,23 @@ class Guardrails:
                 content-safety self-checks. If None, only deterministic layers run.
             input_rails: Optional custom input rails, run after the built-ins.
             output_rails: Optional custom output rails, run after the built-ins.
+            allowed_topics: Optional description/list of the permitted business
+                domain. When set, the topical rail screens each inbound query; an
+                off-topic query is an advisory FLAG (does not stop the request)
+                unless ``topical_block`` is set. When None/empty the rail is off.
+            topical_block: Make the topical rail a hard BLOCK instead of advisory.
+            ground_answers: Enable the output grounding self-check. It runs only
+                when ``check_output`` is given retrieval ``contexts``; an
+                ungrounded answer is an advisory FLAG unless ``grounding_block``.
+            grounding_block: Make the grounding rail a hard BLOCK instead of advisory.
         """
         self._completer = completer
         self._input_rails = list(input_rails or [])
         self._output_rails = list(output_rails or [])
+        self._allowed_topics = allowed_topics
+        self._topical_block = topical_block
+        self._ground_answers = ground_answers
+        self._grounding_block = grounding_block
 
     @staticmethod
     async def _run_custom(text: str, rails: list[Rail]) -> GuardResult | None:
@@ -75,62 +94,157 @@ class Guardrails:
                 return result
         return None
 
+    async def _screen_topical(self, text: str) -> GuardResult | None:
+        """Run the topical rail; return a BLOCK/FLAG GuardResult, or None when off.
+
+        Advisory by default (an off-topic query is a non-blocking FLAG); a hard
+        BLOCK when ``topical_block`` is set. Returns None when unconfigured/on-topic.
+        """
+        if not self._allowed_topics:
+            return None
+        verdict = await screen_topic(
+            text,
+            allowed_topics=self._allowed_topics,
+            completer=self._completer,
+            block=self._topical_block,
+        )
+        if verdict.on_topic:
+            return None
+        outcome = GuardVerdict.BLOCK if self._topical_block else GuardVerdict.FLAG
+        prefix = "Off-topic query blocked" if self._topical_block else "Off-topic query flagged"
+        return GuardResult(
+            verdict=outcome,
+            reason=f"{prefix}: {verdict.reason}",
+            text=text,
+            layer="topical",
+        )
+
+    async def _screen_input(self, text: str) -> tuple[GuardResult, list[GuardResult]]:
+        """Run the input rail, returning ``(primary, advisories)``.
+
+        ``primary`` is the blocking / redaction / pass verdict (never FLAG); a
+        BLOCK short-circuits the chain. ``advisories`` collects non-blocking FLAGs
+        (e.g. off-topic) so they can be streamed without stopping the request.
+        """
+        fmt = schema.validate_input_format(text)
+        if not fmt.ok:
+            return (
+                GuardResult(
+                    verdict=GuardVerdict.BLOCK, reason=fmt.reason, text=text, layer="schema"
+                ),
+                [],
+            )
+        redacted, kinds = pii.redact(text)
+        verdict = await detect_injection(redacted, completer=self._completer)
+        if verdict.injection:
+            return (
+                GuardResult(
+                    verdict=GuardVerdict.BLOCK,
+                    reason=f"Prompt injection blocked: {verdict.reason}",
+                    text=redacted,
+                    layer="injection",
+                ),
+                [],
+            )
+        safety = await screen_content(redacted, completer=self._completer)
+        if safety.unsafe:
+            reason = f"Unsafe content blocked ({safety.label() or 'hazard'}): {safety.reason}"
+            return (
+                GuardResult(
+                    verdict=GuardVerdict.BLOCK,
+                    reason=reason,
+                    text=redacted,
+                    layer="content_safety",
+                ),
+                [],
+            )
+        advisories: list[GuardResult] = []
+        topical = await self._screen_topical(redacted)
+        if topical is not None:
+            if topical.verdict is GuardVerdict.BLOCK:
+                return topical, []
+            advisories.append(topical)
+        custom = await self._run_custom(redacted, self._input_rails)
+        if custom is not None:
+            return custom, advisories
+        if kinds:
+            return (
+                GuardResult(
+                    verdict=GuardVerdict.REDACT,
+                    reason=f"Redacted PII on the inbound path: {', '.join(kinds)}.",
+                    text=redacted,
+                    layer="pii",
+                    redactions=kinds,
+                ),
+                advisories,
+            )
+        return (
+            GuardResult(
+                verdict=GuardVerdict.PASS,
+                reason="Input passed schema, PII, injection, and content-safety rails.",
+                text=text,
+            ),
+            advisories,
+        )
+
     async def check_input(self, text: str) -> GuardResult:
-        """Run the full input rail (schema → PII redaction → injection).
+        """Run the full input rail (schema → PII → injection → content → topical).
 
         Args:
             text: The inbound user input text to screen.
 
         Returns:
-            A :class:`GuardResult` with verdict and potentially redacted text.
+            A :class:`GuardResult` with verdict and potentially redacted text. When
+            the core rails pass but an advisory (e.g. off-topic) fired, the
+            non-blocking FLAG is surfaced as the result so the single-result path
+            (the agent graph) still shows it; a BLOCK always takes precedence.
         """
-        fmt = schema.validate_input_format(text)
-        if not fmt.ok:
-            return GuardResult(
-                verdict=GuardVerdict.BLOCK, reason=fmt.reason, text=text, layer="schema"
-            )
-        redacted, kinds = pii.redact(text)
-        verdict = await detect_injection(redacted, completer=self._completer)
-        if verdict.injection:
-            return GuardResult(
-                verdict=GuardVerdict.BLOCK,
-                reason=f"Prompt injection blocked: {verdict.reason}",
-                text=redacted,
-                layer="injection",
-            )
-        safety = await screen_content(redacted, completer=self._completer)
-        if safety.unsafe:
-            return GuardResult(
-                verdict=GuardVerdict.BLOCK,
-                reason=f"Unsafe content blocked ({safety.label() or 'hazard'}): {safety.reason}",
-                text=redacted,
-                layer="content_safety",
-            )
-        custom = await self._run_custom(redacted, self._input_rails)
-        if custom is not None:
-            return custom
-        if kinds:
-            return GuardResult(
-                verdict=GuardVerdict.REDACT,
-                reason=f"Redacted PII on the inbound path: {', '.join(kinds)}.",
-                text=redacted,
-                layer="pii",
-                redactions=kinds,
-            )
+        primary, advisories = await self._screen_input(text)
+        if primary.verdict is GuardVerdict.PASS and advisories:
+            return advisories[0]
+        return primary
+
+    async def _screen_grounding(
+        self, text: str, contexts: list[str] | None
+    ) -> GuardResult | None:
+        """Run the grounding rail; return a BLOCK/FLAG GuardResult, or None when off.
+
+        Advisory by default (an ungrounded answer is a non-blocking FLAG); a hard
+        BLOCK when ``grounding_block`` is set. Returns None when grounding is
+        disabled, no contexts were supplied, or the answer is judged grounded.
+        """
+        if not self._ground_answers or not contexts:
+            return None
+        verdict = await check_grounding(
+            text, contexts, completer=self._completer, block=self._grounding_block
+        )
+        if verdict.grounded:
+            return None
+        blocking = self._grounding_block
+        outcome = GuardVerdict.BLOCK if blocking else GuardVerdict.FLAG
+        prefix = "Ungrounded answer blocked" if blocking else "Ungrounded answer flagged"
         return GuardResult(
-            verdict=GuardVerdict.PASS,
-            reason="Input passed schema, PII, injection, and content-safety rails.",
+            verdict=outcome,
+            reason=f"{prefix}: {verdict.reason}",
             text=text,
+            layer="grounding",
         )
 
-    async def check_output(self, text: str) -> GuardResult:
-        """Run the full output rail (schema → content filter → PII redaction).
+    async def check_output(
+        self, text: str, contexts: list[str] | None = None
+    ) -> GuardResult:
+        """Run the full output rail (schema → content filter → grounding → PII).
 
         Args:
             text: The outbound model response text to screen.
+            contexts: Optional retrieved passages the answer should be grounded in.
+                When provided and grounding is enabled, the answer is checked
+                against them (advisory FLAG by default). Omit to skip grounding.
 
         Returns:
-            A :class:`GuardResult` with verdict and potentially redacted text.
+            A :class:`GuardResult` with verdict and potentially redacted text. When
+            the core rails pass but the grounding advisory fired, the non-blocking
+            FLAG is surfaced as the result; a BLOCK/REDACT takes precedence.
         """
         fmt = schema.validate_output_format(text)
         if not fmt.ok:
@@ -153,6 +267,9 @@ class Guardrails:
         custom = await self._run_custom(text, self._output_rails)
         if custom is not None:
             return custom
+        grounding = await self._screen_grounding(text, contexts)
+        if grounding is not None and grounding.verdict is GuardVerdict.BLOCK:
+            return grounding
         redacted, kinds = pii.redact(text)
         if kinds:
             return GuardResult(
@@ -162,6 +279,8 @@ class Guardrails:
                 layer="pii",
                 redactions=kinds,
             )
+        if grounding is not None:  # a non-blocking FLAG; surface it on the clean path
+            return grounding
         return GuardResult(
             verdict=GuardVerdict.PASS,
             reason="Output passed schema, content-filter, content-safety, and PII rails.",
@@ -175,14 +294,17 @@ class Guardrails:
             text: The inbound user input text to screen.
 
         Yields:
-            :class:`AegisEvent` objects in order: :class:`StepStarted`,
-            :class:`GuardrailEvent`, and :class:`StepFinished`.
+            :class:`AegisEvent` objects in order: :class:`StepStarted`, the
+            primary :class:`GuardrailEvent`, one :class:`GuardrailEvent` per
+            non-blocking advisory (e.g. an off-topic ``verdict="flag"``), and
+            :class:`StepFinished`. An advisory FLAG is emitted but never sets
+            ``ok=False`` — only a BLOCK stops the request.
         """
         step_id = uuid.uuid4().hex
         yield StepStarted(
             module_id=_MODULE_ID, step_id=step_id, name="guard_input", span_kind=SpanKind.GUARDRAIL
         )
-        result = await self.check_input(text)
+        result, advisories = await self._screen_input(text)
         yield GuardrailEvent(
             module_id=_MODULE_ID,
             step_id=step_id,
@@ -191,6 +313,15 @@ class Guardrails:
             rationale=result.reason,
             redactions=result.redactions,
         )
+        for advisory in advisories:
+            yield GuardrailEvent(
+                module_id=_MODULE_ID,
+                step_id=step_id,
+                verdict=advisory.verdict.value,
+                rules=[advisory.layer] if advisory.layer else [],
+                rationale=advisory.reason,
+                redactions=advisory.redactions,
+            )
         yield StepFinished(
             module_id=_MODULE_ID,
             step_id=step_id,

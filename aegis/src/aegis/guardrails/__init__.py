@@ -13,13 +13,15 @@ from __future__ import annotations
 
 from aegis.core.interfaces import ChatCompleter
 from aegis.core.types import GuardResult
-from aegis.guardrails import content_safety, pii, schema
+from aegis.guardrails import content_safety, grounding, pii, schema, topical
 from aegis.guardrails.content_safety import (
     HAZARD_CATEGORIES,
     ContentSafetyVerdict,
     screen_content,
 )
+from aegis.guardrails.grounding import GroundingVerdict, check_grounding
 from aegis.guardrails.pipeline import Guardrails, Rail
+from aegis.guardrails.topical import TopicVerdict, screen_topic
 
 
 async def check_input(text: str, *, completer: ChatCompleter | None = None) -> GuardResult:
@@ -70,14 +72,20 @@ async def run_guards(
 
 __all__ = [
     "ContentSafetyVerdict",
+    "GroundingVerdict",
     "Guardrails",
     "HAZARD_CATEGORIES",
     "Rail",
+    "TopicVerdict",
+    "check_grounding",
     "check_input",
     "check_output",
     "content_safety",
+    "grounding",
     "pii",
     "run_guards",
     "schema",
     "screen_content",
+    "screen_topic",
+    "topical",
 ]

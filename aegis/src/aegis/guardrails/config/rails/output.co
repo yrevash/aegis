@@ -5,6 +5,10 @@
 define bot refuse output
   "The response was withheld by the output guardrail."
 
+# Advisory note for the grounding rail (no `stop`; the answer is still delivered).
+define bot inform ungrounded
+  "Note: this answer may not be fully grounded in the retrieved sources."
+
 # 1. Output schema validation + content filter. Guards against insecure output
 #    handling (LLM02) and obvious system-prompt leakage before anything is used
 #    downstream.
@@ -23,7 +27,18 @@ define flow guardrail output content safety
     bot refuse output
     stop
 
-# 3. PII redaction on the outbound path (sensitive information disclosure, LLM06).
+# 3. Output grounding / hallucination self-check (OWASP LLM09 Misinformation).
+#    ADVISORY by default: it judges whether the answer's claims are supported by
+#    the retrieved `relevant_chunks` but does NOT `stop` — an ungrounded answer is
+#    flagged, never withheld (matching the programmatic pipeline's FLAG posture).
+#    An enterprise that wants a hard block adds `bot refuse output` + `stop` under
+#    the branch. No-op when there are no retrieved contexts to ground against.
+define flow guardrail output grounding
+  $grounded = execute self_check_grounding
+  if not $grounded
+    bot inform ungrounded
+
+# 4. PII redaction on the outbound path (sensitive information disclosure, LLM06).
 #    The action rewrites the bot message with any PII masked.
 define flow guardrail output pii
   $bot_message = execute redact_pii_output
