@@ -62,6 +62,28 @@ async def test_stream_complete_emits_step_then_model_call_then_finished(fake_lit
     assert value["cost_usd"] == result.usage.cost_usd
     assert value["cost_saved_usd"] >= 0.0
     assert value["small_model"] is True  # "genailab-maas-gpt-4o-mini" -> small
+    # The served model equals the role's primary → no fallback fired.
+    assert value["primary_model"] == "genailab-maas-gpt-4o-mini"
+    assert value["fallback_fired"] is False
+
+
+async def test_stream_complete_flags_fallback_when_served_differs(monkeypatch):
+    """When the responding deployment differs from the role's primary, the event
+    reports a fallback fired — measured from the real ``response.model``."""
+    # role=CHEAP has primary "…gpt-4o-mini"; the gateway responds on the frontier
+    # deployment, i.e. LiteLLM fell back to a different tier.
+    fake = FakeLiteLLM(response=_make_response(content="hi", model="genailab-maas-gpt-4o"))
+    monkeypatch.setitem(sys.modules, "litellm", fake)
+
+    sink = CaptureSink()
+    emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+
+    await stream_complete(ModelRole.CHEAP, [{"role": "user", "content": "hi"}], emitter)
+
+    value = _payloads(sink.frames)[1]["value"]
+    assert value["primary_model"] == "genailab-maas-gpt-4o-mini"
+    assert value["model"] == "genailab-maas-gpt-4o"
+    assert value["fallback_fired"] is True
 
 
 async def test_stream_complete_returns_the_full_result(fake_litellm):

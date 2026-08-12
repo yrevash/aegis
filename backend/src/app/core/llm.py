@@ -43,6 +43,8 @@ from aegis.gateway import (
     complete,
     embed,
     last_trace_id,
+    optimization_config,
+    optimization_summary,
     record_call,
     usage_tally,
 )
@@ -61,6 +63,8 @@ __all__ = [
     "complete",
     "embed",
     "last_trace_id",
+    "optimization_config",
+    "optimization_summary",
     "record_call",
     "usage_tally",
 ]

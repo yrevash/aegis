@@ -15,7 +15,7 @@ import os
 
 from aegis.core.models import ModelRole
 
-__all__ = ["is_small_model", "model_for", "routing_table"]
+__all__ = ["baseline_role", "is_small_model", "model_for", "routing_table"]
 
 # Default role → deployment-id map. Override any entry via an env var of the form
 # ``MODEL_<ROLE>`` (e.g. ``MODEL_GENERATION=genailab-maas-DeepSeek-V3-0324``).
@@ -37,6 +37,31 @@ def model_for(role: ModelRole) -> str:
 def routing_table() -> dict[str, str]:
     """Return the effective role → model map (for a dashboard / docs)."""
     return {role.value: model_for(role) for role in ModelRole}
+
+
+#: The role whose model prices the *frontier baseline* the savings calc compares
+#: actual spend against — i.e. "what every call would have cost at the frontier".
+#: Defaults to ``GENERATION`` (the main answer-generation model); override with
+#: ``GATEWAY_BASELINE_ROLE`` (e.g. ``REASONING``) to reprice savings against a
+#: different tier without touching code.
+_DEFAULT_BASELINE_ROLE: ModelRole = ModelRole.GENERATION
+
+
+def baseline_role() -> ModelRole:
+    """Return the frontier-baseline role for the savings calc (env-overridable).
+
+    Read from ``GATEWAY_BASELINE_ROLE`` (case-insensitive role *name*, e.g.
+    ``GENERATION`` / ``REASONING``); an unset or unrecognised value falls back to
+    the default (``GENERATION``) rather than raising, so a typo can never break a
+    live call — it just leaves the baseline at its safe default.
+    """
+    raw = os.environ.get("GATEWAY_BASELINE_ROLE", "").strip().upper()
+    if not raw:
+        return _DEFAULT_BASELINE_ROLE
+    try:
+        return ModelRole[raw]
+    except KeyError:
+        return _DEFAULT_BASELINE_ROLE
 
 
 # Substrings that mark a deployment id as a small/cheap model, used by the

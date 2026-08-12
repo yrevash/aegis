@@ -35,3 +35,5 @@ def _reset_gateway_state(monkeypatch):
     monkeypatch.setattr(llm_mod, "_observability", llm_mod._NoOpObservability())
     monkeypatch.setattr(llm_mod, "_ssl_configured", False)
     monkeypatch.setattr(llm_mod, "_tally", llm_mod._UsageTally())
+    monkeypatch.setattr(llm_mod, "_fallbacks_override", None)
+    monkeypatch.setattr(llm_mod, "_baseline_role_override", None)
