@@ -42,7 +42,11 @@ data source (accessor / endpoint / stream event) — one source per number, noth
 
 **5. Token-opt** — savings hero (cost_saved_usd, small_model_share ← `/gateway/optimization`) · per-role breakdown Table (calls/tokens/cost, small-model flag) · routing config (role→model map, fallbacks, baseline) · `model_call` stream (fallback_fired).
 
-**6. Memory + Cache** — working-memory assembly · semantic facts (bitemporal) · episodic sessions · recall debug (checked + scores ← `memory_recall`) · **CRUD** (list/add/forget) · **Cache panel** (hit/miss/evict/TTL ← `memory_cache`) · write log (`memory_write`).
+**6. Memory** (own dashboard) — working-memory assembly · semantic facts (bitemporal) · episodic sessions · recall debug (checked + scores ← `memory_recall`) · **CRUD** (list/add/forget) · write log (`memory_write`).
+
+**6b. Cache** (own dashboard, own clean layout) — every cache in one view: memory semantic cache (hit/miss/evict/TTL ← `memory_cache`), retrieval answer/semantic cache (← `retrieval_cache` + CacheProvenance near-exact vs semantic), guardrail injection cache (← `guardrail_cache`). Hit-rate + TTL + backend (redis/in-memory) per cache; the method/keys behind each.
+
+**Guardrails** (own dashboard) — the rail stack (schema → PII(Presidio) → injection → content-safety(S1–S13) → topical → grounding), each rail's live verdicts (← `guardrail_verdict`), the NeMo-engine vs programmatic toggle, PII redaction spans, the injection-cache panel, and the red-team block-rate summary. Tweakable rail config.
 
 **7. RAG / Retrieval** — arsenal observability (arms fired vector/graph/bm25 + counts, RRF, rerank scores, spotlight applied, query-rewrite, Self-RAG rounds ← RetrievalObservability on `retrieval_citations`) · provenance donut · rerank scoreboard.
 
@@ -72,9 +76,10 @@ data source (accessor / endpoint / stream event) — one source per number, noth
 **22. Overview · Savings · Risk map · Access demo** — value/savings/risk/sim (port existing, real data).
 
 ## D. Build order (each: build → `next build`+lint+tsc green → renders with real/mock data → commit)
-Scaffold (done sep.) → **Console** → MLOps → LLMOps → Evals → Token-opt → Memory+Cache → RAG → Graph →
+Scaffold (done) → **Console** → MLOps → LLMOps → Evals → Token-opt → Memory → Cache → Guardrails → RAG → Graph →
 Agentic harness → Governance → Security → Red-team → Latency → Access-demo/Savings/Risk → **Admin dashboard (PAUSE)** →
 devops/client overviews + stack/patch/audit → **parity switch** (retire Vite `frontend/`).
+(One dashboard PER module — Cache and Guardrails each get their own dedicated surface.)
 
 ## E. Backend endpoint additions (thin, one commit early in Phase 3)
 Add the read-only routes in `backend/src/app/api/` that surface the Phase-1 accessors' `as_dict()`
