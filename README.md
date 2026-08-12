@@ -7,7 +7,7 @@
 
 ## Architecture (at a glance)
 
-Production-grade upgrade (see `docs/ARCHITECTURE_REVIEW.md` and ADRs 0005–0008):
+Production-grade upgrade (see `docs/adr/` 0005–0008):
 **multi-tenant governance** at the gateway, a **durable checkpointed** agent with an
 **async approvals inbox**, **explicit hybrid retrieval** (RRF), and a **risk-tiered
 human gate** (ML is a solution signal that informs the plan; the tool risk tier — not
@@ -114,12 +114,16 @@ portable, no OS-specific assumptions.
 
 ## Getting started
 
-See `backend/README.md` (API) and `web/README.md` (UI). De-risk spikes in
-`spikes/`. Mission context and rubric mapping in `docs/`.
+**Start with `docs/learn/00-what-aegis-is.md`** — a six-file teaching path that takes
+you from zero knowledge to the whole system. `INSTALL.md` is the setup manual;
+`docs/README.md` indexes every other doc. De-risk spikes live in `spikes/`.
 
 ### Key docs
 
-- `docs/LEARNING_GUIDE.md` — end-to-end walkthrough of the platform (backend + frontend + AI).
-- `docs/EVAL_STRATEGY.md` — the three-layer evaluation strategy (trace-level, deterministic retrieval gate, LLM-as-judge).
-- `docs/SECURITY_OWASP_AGENTIC.md` — OWASP Top-10-for-Agentic-Apps mapping to the controls in this codebase.
-- `docs/HONESTY_AUDIT.md`, `docs/AUDIT_ROUND2.md` — what is live vs. optional/not-wired, stated plainly.
+- `docs/learn/` — the teaching path: what Aegis is, architecture, backend, frontend,
+  the end-to-end pipelines, and how to run and extend it.
+- `docs/architecture/eval-strategy.md` — the three-layer evaluation strategy (trace-level, deterministic retrieval gate, LLM-as-judge).
+- `docs/security/owasp-agentic.md` — OWASP Top-10-for-Agentic-Apps mapping to the controls in this codebase.
+- `docs/module/` — per-module reference for the importable `aegis` package.
+- `docs/adr/` — the eight architecture decision records.
+- `docs/operations/runbook.md` — the one-page day-of guide and fallback ladder.

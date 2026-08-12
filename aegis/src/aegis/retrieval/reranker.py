@@ -2,8 +2,8 @@
 
 ## Why LLM-as-reranker
 
-`docs/backend.md` prescribes two-stage retrieval (wide recall → rerank → top-K), and
-`docs/AGENT_BRIEF.md` locks the reranker to **API-based only** — no local cross-encoder,
+`docs/architecture/backend.md` prescribes two-stage retrieval (wide recall → rerank → top-K), and
+`docs/module/MODULE_REFERENCE.md` locks the reranker to **API-based only** — no local cross-encoder,
 because the deploy target is a 16 GB, no-GPU machine and the model fleet
 has **no dedicated rerank deployment** in typical deployments. We therefore score relevance
 with a single cheap gateway call: the model grades each candidate 0–10 for how well it

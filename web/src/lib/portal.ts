@@ -116,8 +116,8 @@ export const SECTIONS: Record<string, Section> = {
     id: 'memory',
     label: 'Memory',
     icon: Brain,
-    hint: 'pgvector',
-    tooltip: 'Aegis Memory — long-term memory · Postgres + pgvector',
+    hint: 'Qdrant',
+    tooltip: 'Aegis Memory — long-term memory · Postgres + Qdrant',
   },
   rag: {
     id: 'rag',

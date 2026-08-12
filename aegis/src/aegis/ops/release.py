@@ -1,6 +1,6 @@
 """Release — the smart, tiered gate that decides if a DRAFT prompt goes live.
 
-The **Gate + Release** stage of the LLM-Ops closed loop (``docs/HARNESS_LLMOPS_PLAN.md``
+The **Gate + Release** stage of the LLM-Ops closed loop (``docs/learn/40-pipelines.md``
 Gap 2, "smart tiered"). :mod:`aegis.ops.diagnose` only ever proposes a *draft*; this module is
 the single place a draft can go live, and it never does so blindly:
 

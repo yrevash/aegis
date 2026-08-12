@@ -1,7 +1,7 @@
 # Threat Model — OWASP LLM Top 10 · OWASP Agentic (ASI) Top 10 · Lethal Trifecta
 
 One-page mapping of this platform to the industry AI-security frameworks, with
-our concrete mitigation per risk. Content sourced from `docs/security.md`;
+our concrete mitigation per risk. Content sourced from `docs/security/overview.md`;
 implementations live in `app/guardrails/`, `app/retrieval/spotlight.py`,
 `app/data/` (audit log), and the agent layer. Detection is **API-based or
 pure code — no local guardrail model** (16 GB / no-GPU constraint).
@@ -102,6 +102,6 @@ attack surface as well as a new control; the mitigations below are what makes th
 *Numbering note:* IDs follow the current **2025** OWASP LLM list (v2.0), in which
 Sensitive Information Disclosure is **LLM02**, Improper Output Handling is
 **LLM05**, and Excessive Agency is **LLM06** — a renumbering from the 2023 list
-referenced in `docs/security.md` (which used LLM06/LLM02/LLM08 respectively). The
+referenced in `docs/security/overview.md` (which used LLM06/LLM02/LLM08 respectively). The
 mitigations are unchanged; only the identifiers were reconciled to the current
 standard.

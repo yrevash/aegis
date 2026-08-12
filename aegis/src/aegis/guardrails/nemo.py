@@ -1,7 +1,7 @@
 """NeMo Guardrails wiring — load the Colang policy and run its rails.
 
 This is the orchestration layer named as a *locked decision* in
-``docs/AGENT_BRIEF.md`` (Guardrails = NeMo Guardrails; the Colang policy file is
+``docs/module/MODULE_REFERENCE.md`` (Guardrails = NeMo Guardrails; the Colang policy file is
 a readable security artifact). The policy lives under ``config/`` as a standard
 NeMo Guardrails config directory; its Colang flows call the custom actions in
 ``config/actions.py``, which delegate straight back to

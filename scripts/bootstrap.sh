@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-shot installer for the TAIF S2 platform (macOS/Linux — rehearsal twin of
 # bootstrap.ps1). Installs every backend + console (web/) dependency and the .env
-# files. Idempotent. No Docker, GPU, or database required. See docs/RUNBOOK.md.
+# files. Idempotent. No Docker, GPU, or database required. See docs/operations/runbook.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

@@ -1,7 +1,7 @@
 """Recall READ-path tests (SQLite): ranking, valid-only, dedup, isolation, skills.
 
 All isolation is proven with **RLS off** (SQLite) — the app-level ``WHERE subject_id`` is
-the sole isolator (``docs/MEMORY_SPEC.md`` BLOCKER 2).
+the sole isolator (``docs/architecture/memory-spec.md`` BLOCKER 2).
 """
 
 from __future__ import annotations

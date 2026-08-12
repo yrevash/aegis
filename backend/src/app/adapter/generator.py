@@ -33,7 +33,7 @@ module imports cleanly even before that core module exists).
 
 Targeted API: ``app.core.llm.complete(role, messages, *, tools, temperature,
 response_format) -> LLMResult`` (LLMResult has a ``.content: str``), matching the
-contract in ``docs/AGENT_BRIEF.md``.
+contract in ``docs/module/MODULE_REFERENCE.md``.
 """
 
 from __future__ import annotations
@@ -271,7 +271,7 @@ class DatasetQualityReport(BaseModel):
     These are the checks worth running on the day *before* trusting synthetic data:
     referential integrity (no dangling foreign keys), class coverage/balance, a
     learnable label present, temporal consistency, and PII-free-by-construction. See
-    ``docs/SYNTHETIC_DATA.md`` for what each check buys you.
+    ``docs/architecture/synthetic-data.md`` for what each check buys you.
     """
 
     referential_integrity: bool = Field(description="Every FK resolves to a record.")

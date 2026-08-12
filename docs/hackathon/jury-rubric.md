@@ -15,8 +15,7 @@ Every hour of work should move one of these levers.
 | **15%** | **Business Impact Assessment** | value proposition, key metrics | Cost-savings, quality/eval numbers — **measured, not claimed**. |
 | **10%** | **Roadmap for Production Scaling** | milestones, dependencies | The enterprise infra itself: Qdrant vector DB, Redis semantic cache, RLS multi-tenant governance, OTel/Phoenix observability, AEGIS_MODE. Keep an explicit milestones/dependencies story ready. |
 
-**Alignment of current work:** the "make-it-real / SOTA enterprise" program
-(`docs/superpowers/plans/2026-08-12-make-it-real-sota.md`) maps almost entirely to
-the top three levers — a **real working prototype (25%)**, an **innovative feasible
+**Alignment of current work:** the "make-it-real / SOTA enterprise" program maps
+almost entirely to the top three levers — a **real working prototype (25%)**, an **innovative feasible
 hypothesis (20%)**, and a **production-scaling roadmap (10%)**. The blind-domain
 adapter rehearsal de-risks the prototype + hypothesis on the day.

@@ -36,7 +36,7 @@ OpenAPI docs at `/docs` once running. Lint/format: `ruff check src` /
 ## Model routing
 
 Code requests a model by **role** (`core/models.py`), never by hard-coded id.
-Override any role via `MODEL_<ROLE>` env vars. See `docs/backend.md` §2.
+Override any role via `MODEL_<ROLE>` env vars. See `docs/architecture/backend.md` §2.
 
 ## De-risk spikes
 

@@ -1,6 +1,6 @@
 """Shared API contracts — the interface between backend and frontend.
 
-`docs/backend.md` §7 and `docs/frontend.md` §6 both insist this schema is agreed
+`docs/architecture/backend.md` §7 and `docs/learn/30-frontend.md` both insist this schema is agreed
 *before* either side builds against it. Everything the frontend renders during a
 run arrives as one of the `StreamEvent` variants below; every endpoint request /
 response is a model here. Keep this file the single source of truth and generate
@@ -454,7 +454,7 @@ StreamEvent = Annotated[
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Request / response models per endpoint (see docs/backend.md §10)
+# Request / response models per endpoint (see docs/architecture/backend.md §10)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -749,7 +749,7 @@ class BudgetUpsertRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Long-term memory read/admin surfaces (docs/MEMORY_SPEC.md §D)
+# Long-term memory read/admin surfaces (docs/architecture/memory-spec.md §D)
 # ─────────────────────────────────────────────────────────────────────────────
 
 

@@ -13,7 +13,7 @@ you can open.
 > injection — it claims **layers**: redact before the model sees anything, screen with a
 > deterministic backstop *and* a classifier, and — the decisive layer — **never let the
 > model take a consequential action without a human**. The security stance of
-> `docs/security.md` §3 is "security is layers, not one tool," and the code is built that way.
+> `docs/security/overview.md` §3 is "security is layers, not one tool," and the code is built that way.
 
 > **Naming note (honest).** The OWASP GenAI Security Project's agentic work is evolving;
 > the *category themes* below (excessive agency, tool misuse/hijacking, trust-chain abuse,
@@ -96,7 +96,7 @@ writing any report**. Two targets tell the "before vs after guardrails" story:
 Curated probes: `promptinject`, `dan`, `encoding`, `leakreplay`. `garak` is a **day-of dev
 tool (`pip install garak`), not a core runtime dependency.** Comparing the two targets'
 block rates is exactly what quantifies the ~50–84% base-model injection reality this doc
-opens with — and how much the layered rails mitigate it. See `docs/security.md` §3.
+opens with — and how much the layered rails mitigate it. See `docs/security/overview.md` §3.
 
 ---
 
@@ -129,5 +129,5 @@ Aegis's security value is **not** "we block prompt injection" — nobody credibl
 - **garak (NVIDIA)** — <https://github.com/NVIDIA/garak> (day-of red-team tool; runner at
   `backend/scripts/garak_scan.py`).
 - **Prompt-injection efficacy (~50–84%)** — the honest framing that best-effort defenses do
-  not "solve" injection; motivates the human-gate-as-safety-net posture (`docs/security.md`
+  not "solve" injection; motivates the human-gate-as-safety-net posture (`docs/security/overview.md`
   §3).

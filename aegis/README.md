@@ -77,4 +77,4 @@ Every Aegis module adheres to a single design contract enforcing modularity, obs
 
 ---
 
-**Design spec:** [Aegis Module Contract + Guardrails Pilot](../docs/superpowers/specs/2026-08-11-aegis-module-contract-design.md)
+**Design spec:** [Aegis Module Contract + Guardrails Pilot](../docs/module/00-overview.md)

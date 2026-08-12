@@ -5,7 +5,7 @@
 .PARAMETER Mode
   safe : console only, mock transport — no backend, no infra. Can't-fail demo.
   lite : backend with NO databases (STORES=off, SQLite audit) + live console.  [default]
-  full : backend with all stores (Postgres/pgvector + Neo4j + Redis) + live console.
+  full : backend with all stores (Postgres + Qdrant + Neo4j + Redis) + live console.
 .EXAMPLE
   .\scripts\start.ps1 -Mode lite
 #>
@@ -42,7 +42,7 @@ $consoleCmd = "Set-Location '$root\web'; " +
   "`$env:NEXT_PUBLIC_HEALTH_PATH='/health'; " +
   "npm run dev -- --port 3000"
 Start-Process powershell -ArgumentList '-NoExit','-Command', $consoleCmd
-Write-Host "  console  -> http://localhost:3000  (login admin/admin)" -f Green
+Write-Host "  console  -> http://localhost:3000  (login admin/demo)" -f Green
 
 Write-Host "`nTwo windows opened. Close them to stop.`n" -f Yellow
 if ($Mode -eq 'lite') { Write-Host "Lite mode: no databases needed. Only GENAILAB_API_KEY (in backend\.env) is required for real answers.`n" -f Cyan }

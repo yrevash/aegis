@@ -5,8 +5,8 @@
 Aegis is a domain-agnostic, agentic-AI platform that used to be one monolithic FastAPI backend
 (`backend/src/app/*`). On `feat/aegis-module-contract` it is being extracted, one component at a
 time, into standalone, independently-**importable** `aegis.*` packages under `aegis/src/aegis/`.
-The goal (see `docs/superpowers/specs/2026-08-11-aegis-module-contract-design.md`) is stated
-plainly in the design spec: Aegis must become **importable, not forkable** — a team building an
+The goal is stated
+plainly: Aegis must become **importable, not forkable** — a team building an
 unrelated agentic system should be able to run `pip install aegis[guardrails]` (or `[ml]`,
 `[retrieval]`, …) and get a SOTA-complete, production-shaped component, not a 15-line stub that
 only works bolted onto Aegis's own backend.

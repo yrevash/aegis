@@ -193,7 +193,7 @@ AG-UI CustomEvents is described as the next console build on top of the decode l
   call is made, so injection defense never depends solely on an LLM classifier that could be
   unavailable, slow, or itself fooled.
 - **No local model for PII.** Detection is pure regex + a Luhn checksum by design (per
-  `docs/security.md`'s constraint: PII detection must be pure code or an API call, never a local
+  `docs/security/overview.md`'s constraint: PII detection must be pure code or an API call, never a local
   model, given the 16 GB/no-GPU environment). Redaction tokens (`[REDACTED_EMAIL]`, etc.) preserve
   readability while removing the secret; only detector *kinds*, never raw values, are ever recorded
   in `redactions`.

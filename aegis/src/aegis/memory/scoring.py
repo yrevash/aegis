@@ -6,7 +6,7 @@ across the candidate set.
 No I/O, no ORM, no infra — every function here is deterministic and unit-testable in
 isolation (that is deliberate: recall ranking is where correctness bugs hide, so the
 math is separated from the stores and the Qdrant-ANN-vs-SQL plumbing). See
-``docs/MEMORY_SPEC.md`` §B.1.
+``docs/architecture/memory-spec.md`` §B.1.
 """
 
 from __future__ import annotations

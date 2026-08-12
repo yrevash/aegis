@@ -6,7 +6,7 @@
   (`app/schemas.py`, backing `MLExplanation.band` for the frontend).
 - **Date:** 2026-08-05
 - **Deciders:** Team
-- **Related:** `docs/ARCHITECTURE_REVIEW.md` §2, ADR 0004 (conformal prediction /
+- **Related:** ADR 0004 (conformal prediction /
   MAPIE), `app/agent/graph.py`, `app/agent/deps.py` (`classify_autonomy`,
   `AgentConfig`), `app/adapter/personas.py` (per-persona policy).
 

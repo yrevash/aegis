@@ -1,6 +1,6 @@
 """Memory READ path — working-memory assembly under a hard token budget.
 
-The second half of context engineering (``docs/MEMORY_SPEC.md`` §B). Given the recalled
+The second half of context engineering (``docs/architecture/memory-spec.md`` §B). Given the recalled
 material from :func:`aegis.memory.recall.recall`, this lays it out as one **extra system
 context block** — the graph adds the real system prompt and the user query separately, so
 neither is in this block. Two properties are load-bearing:

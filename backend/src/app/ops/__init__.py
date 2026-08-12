@@ -1,4 +1,4 @@
-"""LLM-Ops: the closed feedback loop over the agent (see ``docs/HARNESS_LLMOPS_PLAN.md``).
+"""LLM-Ops: the closed feedback loop over the agent (see ``docs/learn/40-pipelines.md``).
 
 Trace → Eval → Observe → Diagnose → Gate → Release, where Release writes a versioned,
 reversible system prompt/config back into the harness. Every stage is domain-agnostic

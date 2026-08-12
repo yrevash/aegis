@@ -1,6 +1,6 @@
 """Data layer: async SQLAlchemy over Postgres (relational + JSON embeddings-of-record).
 
-Public surface (per the shared contract in ``docs/AGENT_BRIEF.md``):
+Public surface (per the shared contract in ``docs/module/MODULE_REFERENCE.md``):
 
 - :func:`get_session` — FastAPI-style async session dependency.
 - :func:`record_audit` — write one row to the first-class audit log.

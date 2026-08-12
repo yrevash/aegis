@@ -1,4 +1,4 @@
-"""HTTP + SSE surface for the platform (see ``docs/backend.md`` §10).
+"""HTTP + SSE surface for the platform (see ``docs/architecture/backend.md`` §10).
 
 Every endpoint from :mod:`app.api.schemas` lives here:
 
@@ -538,7 +538,7 @@ class MetricsStore:
 
     Cache-hit rate and cost are measured from real runs. ``small_model_share`` is
     derived from the configured heterogeneous routing table (the cost-story
-    decision in ``docs/backend.md`` §2): the share of roles routed to a small
+    decision in ``docs/architecture/backend.md`` §2): the share of roles routed to a small
     model.
 
     ``quality_score`` is a **measured grounding proxy**, not an LLM judge: the
@@ -809,7 +809,7 @@ async def guardrail_demo(q: str) -> StreamingResponse:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Platform operations — live stack, patch freshness, agent risk-map, savings
-# (Wave-2 portal surfaces; see docs/SECURITY_OWASP_AGENTIC.md for the risk map)
+# (Wave-2 portal surfaces; see docs/security/owasp-agentic.md for the risk map)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -853,7 +853,7 @@ async def risk_map(
     """Return the agent-risk heat-map (admin/client — the assurance surface).
 
     OWASP-Top-10-for-Agentic-aligned, grounded verbatim in
-    ``docs/SECURITY_OWASP_AGENTIC.md``: each risk carries an honest 1..5
+    ``docs/security/owasp-agentic.md``: each risk carries an honest 1..5
     likelihood/impact, its real Aegis mitigation, and a ``control_ref`` pointing at a
     real file. Injection is never marked fully resolved — defense-in-depth, not
     prevention.
@@ -1343,7 +1343,7 @@ async def admin_usage(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Long-term memory read/admin surfaces (docs/MEMORY_SPEC.md §D)
+# Long-term memory read/admin surfaces (docs/architecture/memory-spec.md §D)
 #
 # Isolation is app-level (never RLS): every query filters ``subject_id`` (+ tenant).
 # A caller may read their own subject; an admin may read any subject in their tenant.
@@ -1872,7 +1872,7 @@ async def memory_delete_fact(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM-Ops closed loop (`/ops/*`) — prompt registry, trace-eval trend, and the
-# diagnose → release → rollback control surface (docs/HARNESS_LLMOPS_PLAN.md).
+# diagnose → release → rollback control surface (docs/learn/40-pipelines.md).
 #
 # Reads require auth; every mutation (diagnose/release/rollback/decide) is admin-only
 # and audited. All handlers degrade cleanly when the real stores are off: reads return

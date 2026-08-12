@@ -28,7 +28,7 @@ Deliverable: a **one-page threat model** mapping our app to these lists, with ou
 > *ID note:* IDs follow the current **OWASP Top 10 for LLM Applications v2.0
 > (2025)** — Sensitive Information Disclosure is **LLM02**, Improper/Insecure
 > Output Handling is **LLM05**, Excessive Agency is **LLM06** — matching
-> `docs/threat_model.md`. (The 2023 list numbered these LLM06 / LLM02 / LLM08.)
+> `docs/security/threat-model.md`. (The 2023 list numbered these LLM06 / LLM02 / LLM08.)
 
 ---
 

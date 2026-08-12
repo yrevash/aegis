@@ -1,360 +1,405 @@
-# 20 · Backend module reference
+# 20 · The backend
 
-The backend is a **FastAPI** app under `backend/src/app/`. This page walks every Aegis
-module: what it does, its files, and how it connects to the rest. Design rule throughout:
-**mechanism lives in the core (`app.*`); domain meaning comes from `app.adapter.*`**, and
-almost everything is dependency-injected (the LLM `complete`/`embed`, DB sessions) so each
-module is offline-testable with fakes.
+**What you'll learn:** how the FastAPI application is composed, every endpoint and who
+may call it, how authentication and role-based access control work, what the data layer
+persists, which background tasks run, and where each Aegis module actually lives.
 
-## Module dependency map
-
-```mermaid
-flowchart TB
-    API["api/routes.py + schemas.py<br/>(HTTP + SSE surface)"]
-    ORC["agent/orchestrator.py"]
-    G["agent/graph.py + router.py + deps.py + events.py"]
-    ADP["adapter/*<br/>(the only domain code)"]
-
-    GW["core/llm.py — Aegis Gateway<br/>core/models.py · governance.py · security.py"]
-    GRD["guardrails/*"]
-    RET["retrieval/*"]
-    MEM["memory/*"]
-    ML["ml/*"]
-    OPS["ops/*"]
-    EVAL["eval/*"]
-    OBS["observability/*"]
-    DATA["data/*"]
-    MCP["mcp/server.py"]
-    PLAT["platform/*<br/>(stack · patches · risk_map · savings)"]
-
-    API --> ORC --> G
-    API --> PLAT
-    G --> GRD & RET & MEM & ML & ADP
-    G --> GW
-    GRD & RET & MEM & ML & OPS & EVAL --> GW
-    RET -->|RRF, spotlight reused by| MEM
-    ORC -.post-run.-> OPS
-    OPS --> EVAL
-    OPS & MEM & DATA --> DATA
-    G & GW & RET -.spans.-> OBS
-    MCP --> ADP
-    MCP --> DATA
-    GW --> DATA
-    PLAT --> GW
-```
-
-Two things every module shares:
-- **`core/models.py::ModelRole`** is the routing currency — retrieval, memory, guardrails,
-  ops, and eval all request a model by *role*, never by id.
-- **`data/models.py::Base`, `EMBED_DIM` (3072), `VectorType`/`JsonB`** back both the
-  governance tables and `memory/stores.py`, with a SQLite fallback so tests need no
-  Postgres.
+Everything here is under `backend/src/app/`. Read [`10-architecture.md`](10-architecture.md)
+first if you have not — the shim relationship between `app.*` and `aegis.*` is assumed.
 
 ---
 
-## API surface — `api/routes.py`, `api/schemas.py`
+## 1. The composition root — `main.py`
 
-Every endpoint lives in `routes.py`; `schemas.py` holds the request/response models and the
-`StreamEvent` discriminated union that the SSE stream and the frontend share. RBAC is
-enforced with dependency guards over the **four coarse roles** (`Role` in `schemas.py`:
-`admin` / `ai_team` / `devops` / `client`): `require_auth`, per-role `require_admin` /
-`require_devops` / `require_ai_team` / `require_client`, the multi-role combinator
-`require_roles(*roles)` (e.g. `require_admin_or_devops` for `/audit` + `/stack`,
-`require_admin_or_ai_team` for the ops loop, `require_admin_or_client` for `/risk-map`), and
-the fine-tier `require_platform_admin` / `require_tenant_admin`. Every state-changing action
-writes an audit row.
+`create_app()` is the application factory. In order, it:
 
-| Group | Endpoints |
+1. Calls `settings.ensure_secure_secrets()` — a **fail-fast** guard that refuses to boot
+   a non-dev deployment carrying the default or a too-short `JWT_SECRET`.
+2. Applies `LOG_LEVEL` via `logging.basicConfig(force=True)`; an unknown level falls
+   back to `INFO`.
+3. Builds the `FastAPI` app with rich OpenAPI metadata (the module list in the
+   description mirrors `capabilities.py`) and the `lifespan` context manager.
+4. Adds CORS for `localhost:3000` / `127.0.0.1:3000` (and the retired Vite dev port
+   5173). Without these origins the console's boot probe fails CORS and the app
+   silently falls back to mock data.
+5. Mounts the single router from `api/routes.py`.
+
+The `lifespan` block is where the runtime actually comes alive:
+
+```mermaid
+flowchart TB
+    S["Startup"] --> OBS["init_observability(app)<br/>OTel provider → in-process Phoenix<br/>degrades to console export"]
+    OBS --> DB{"db_bootstrap?"}
+    DB -->|yes| CREATE["bootstrap() — create tables<br/>best-effort: an unreachable DB never blocks startup"]
+    DB -->|no| WARM
+    CREATE --> PROMPT
+    PROMPT["stores on? → registry.refresh_cache(session)<br/>warm every ACTIVE prompt into the in-process cache"] --> QD
+    QD{"stores on AND not dev?"} -->|yes| QDB["MemoryVectorIndex.server(qdrant_url)<br/>pings on construction — FAILS LOUD if down"]
+    QD -->|no| WARM
+    QDB --> SW
+    SW["stores on? → start two asyncio sweepers"] --> SW1["run_sla_sweeper — expires past-deadline approvals"]
+    SW --> SW2["_run_memory_sweeper — drains the consolidation queue"]
+    SW1 --> WARM
+    SW2 --> WARM
+    WARM["_warm_ml() in a worker thread<br/>load or train the ML artifact off the hot path"] --> READY["Serving"]
+```
+
+Two design points worth copying:
+
+- **`_supervise(task, name)`** attaches a done-callback to each long-lived background
+  task. A bare `asyncio.create_task` that dies leaves the process serving traffic with a
+  dead sweeper and no signal; this turns that into an explicit `ERROR` log. Normal
+  cancellation at shutdown stays quiet.
+- **Everything optional degrades, everything required fails loud.** Phoenix, DB
+  bootstrap, the prompt-cache warm and the ML warm-up are all best-effort. Qdrant in a
+  non-dev full-stores deployment is not: it pings at boot and raises.
+
+---
+
+## 2. The HTTP surface — `api/routes.py`
+
+One router, ~2 500 lines, holds every endpoint. `api/schemas.py` holds the request and
+response models plus the `StreamEvent` discriminated union that the SSE stream and the
+frontend share.
+
+### Authentication
+
+`POST /auth/login` → `_authenticate(username, password)`:
+
+```mermaid
+flowchart TB
+    L["POST /auth/login"] --> DB{"users row for this username?"}
+    DB -->|yes| VER{"active AND Argon2id verify?"}
+    VER -->|yes| OK["AuthContext from the row<br/>tenant_id + fine role"]
+    VER -->|no| REJ["401 — never falls through to the demo table"]
+    DB -->|"no row, or DB unreachable"| DEV{"APP_ENV == dev?"}
+    DEV -->|no| REJ
+    DEV -->|yes| DEMO{"in _DEMO_USERS with the right password?"}
+    DEMO -->|yes| OKD["AuthContext, platform-scoped<br/>tenant_id = None ⇒ ungoverned run"]
+    DEMO -->|no| REJ
+    OK --> MINT["_mint_token → HS256 JWT"]
+    OKD --> MINT
+```
+
+The demo table is a **dev-only** convenience and is closed two ways: a real `users` row
+always wins for that username, and `APP_ENV != dev` disables the table entirely. The
+five demo principals all use the password `demo`:
+
+| Username | Coarse role | Persona |
+|---|---|---|
+| `admin` | `admin` | `operations_lead` |
+| `ai` or `aiteam` | `ai_team` | `operations_lead` |
+| `devops` | `devops` | `operations_lead` |
+| `client` | `client` | `client` |
+
+### Two role vocabularies
+
+Aegis carries **two** role notions, and confusing them is the usual source of
+misreading the code:
+
+- **Coarse role** (`Role` in `api/schemas.py`): `admin` · `ai_team` · `devops` ·
+  `client`. This decides *which portal you get* and drives the per-role guards. It rides
+  in the JWT as a signed `coarse_role` claim.
+- **Fine tier** (`aegis.governance.security.principal_role`): `platform_admin` (an admin
+  with no tenant) · `tenant_admin` (an admin scoped to a tenant) · `user`. This decides
+  *how wide your admin reach is*. `coarse_role_from_fine` is its honest inverse.
+
+Both claims are minted into the token, so `require_auth` reads the four-valued role
+directly instead of re-deriving it.
+
+### The guards
+
+All defined in `routes.py`:
+
+| Guard | Admits |
 |---|---|
-| Auth | `POST /auth/login` (issues a JWT carrying the signed `coarse_role` claim) |
-| Platform (public/portal) | `GET /health` (**public**), `GET /about`, `GET /platform/capabilities` |
-| Platform surfaces | `GET /stack` · `POST /stack/patch-check` (admin/devops), `GET /risk-map` (admin/client), `GET /savings` (any auth) |
-| Agent | `POST /query` (SSE stream), `POST /approval`, `GET /approvals`, `POST /approvals/{id}/decision` |
-| Glass box | `GET /graph`, `POST /ml/explain`, `GET /metrics` (any auth — Overview is in every portal), `GET /audit` (admin/devops) |
-| Admin governance | `GET /admin/tenants`, `GET /admin/users`, `POST /admin/users/{id}/role`, `GET|POST /admin/budgets`, `GET /admin/usage` |
-| Memory | `GET /memory/{facts,profile,sessions,sessions/{id}/messages,writes,recall_debug}`, `POST /memory/forget`, `DELETE /memory/facts/{id}` |
-| Ops (LLM-Ops loop) | `GET /ops/{prompts,prompts/active,evals,releases/pending}`, `POST /ops/{diagnose,release,rollback,releases/{id}/decide}` (admin/ai_team; the human release decision stays admin-only) |
+| `require_auth` | any valid bearer token |
+| `require_admin` / `require_ai_team` / `require_devops` / `require_client` | that one coarse role |
+| `require_roles(*roles)` | the combinator behind the pairs below |
+| `require_admin_or_devops` | `admin`, `devops` |
+| `require_admin_or_ai_team` | `admin`, `ai_team` |
+| `require_admin_or_client` | `admin`, `client` |
+| `require_platform_admin` | fine tier `platform_admin` only |
+| `require_tenant_admin` | fine tier `tenant_admin` or above |
 
-Reads degrade to empty and mutations return a clean `503` when the stores are off (`STORES=off`);
-memory erasure returns `503` rather than faking success. Process-wide `GraphStore` and
-`MetricsStore` accumulate the per-persona knowledge graph and the efficiency figures from
-the live event stream (`_update_dashboards`).
+`_scope_tenant(auth, requested)` prevents a tenant-admin from reading another tenant's
+rows; `_resolve_persona(requested, auth)` prevents a `client` from borrowing an
+operations persona; `_authorize_subject` does the same for memory subjects.
 
-## The agent — `agent/*`
+### Every endpoint
 
-The Harness. Detailed flow is in `40-request-flow.md`; the files:
+| Group | Endpoint | Guard |
+|---|---|---|
+| **Auth** | `POST /auth/login` | public |
+| **Platform** | `GET /health` | **public** |
+| | `GET /about` | public |
+| | `GET /stream/guardrail-demo?q=` | **public** by design — a real AG-UI SSE demonstrator, touches no tenant data |
+| | `GET /platform/capabilities` | any auth |
+| **Ops surfaces** | `GET /stack` · `POST /stack/patch-check` | admin or devops |
+| | `GET /security/posture` · `GET /latency` · `POST /redteam/run` | admin or devops |
+| | `GET /risk-map` | admin or client |
+| | `GET /savings` · `GET /gateway/optimization` | any auth |
+| **Agent** | `POST /query` (SSE) | any auth |
+| | `GET /approvals` · `POST /approvals/{id}/decision` · `POST /approval` | admin |
+| | `GET /harness/config` | admin or ai_team |
+| **Glass box** | `GET /graph` · `GET /metrics` · `POST /ml/explain` | any auth |
+| | `GET /audit` | admin or devops |
+| | `GET /ml/model-card` · `GET /evals/report` | admin or ai_team |
+| **Governance** | `GET /governance/dashboard` | tenant-admin+ |
+| | `GET|POST /admin/tenants` | platform-admin |
+| | `GET|POST /admin/users` · `POST /admin/users/{id}/role` | tenant-admin+ |
+| | `GET|POST /admin/budgets` · `GET /admin/usage` | tenant-admin+ |
+| **Memory** | `GET /memory/facts` · `/profile` · `/sessions` · `/sessions/{id}/messages` · `/writes` · `/recall_debug` | any auth, subject-authorized |
+| | `POST /memory/forget` · `DELETE /memory/facts/{id}` | any auth, subject-authorized |
+| **LLM-Ops loop** | `GET /ops/prompts` · `/prompts/active` · `/evals` · `/params` | any auth |
+| | `POST /ops/diagnose` · `/release` · `/rollback` · `GET /ops/releases/pending` | admin or ai_team |
+| | `POST /ops/releases/{id}/decide` | **admin only** — the human release decision never delegates |
 
-- **`graph.py`** — the LangGraph state machine (`build_agent`). Nodes in order:
-  `guard_input → route → (recall_memory | answer_memory) → retrieve → ml_predict → plan →
-  gate → (approval) → act → reflect → generate → guard_output → stream → persist_memory`.
-  The `plan → act → reflect` loop is a **bounded self-repair loop** (capped by
-  `config.max_plan_iterations`). The human gate fires on **tool risk only**.
-- **`orchestrator.py`** — `run_agent` drives the graph with
-  `astream(stream_mode=["custom","updates"])`, stamps each event with `run_id`+`seq`, owns
-  the human-approval rendezvous (register → interrupt → resume, exactly-once, durable),
-  and fires the **post-run trace-eval** off the hot path. Also `decide_approval` /
-  `resume_parked_run` (the async inbox resume path).
-- **`router.py`** — the supervisor (**Aegis Router**): deterministic-first keyword
-  classification with a cheap-LLM tiebreak only on a genuine tie between two named
-  specialists. Reads the adapter roster defensively (falls back to a `qa`-only roster).
-- **`deps.py`** — `AgentDeps` / `MemoryDeps`: the dependency-injection seam. `AgentDeps.default()`
-  binds each capability to the real module lazily; `_default_*` wrappers are the exact
-  points the core reaches into `app.adapter.*` (see `50-extend-for-your-domain.md`).
-  `AgentConfig` holds `gate_min_risk` (default `HIGH`) and `max_plan_iterations` (default 2).
-- **`events.py`** — builders for every `StreamEvent` variant + `stamp`.
-- **`approvals.py`, `state.py`** — the in-process approval registry / parked-run handles,
-  and the graph's `AgentState` typed dict.
+Every state-changing action writes an audit row through `_safe_audit`, which swallows
+audit-sink failures so a logging blip never fails a request. When `STORES=off`, reads
+degrade to empty and mutations return a clean `503`; memory erasure returns `503`
+rather than faking success.
 
-## Aegis Gateway — `core/*`
+### The two in-process dashboard stores
 
-- **`core/llm.py`** — the single async chokepoint for every model call. `complete(role,
-  messages, ...)` and `embed(texts)` route by `ModelRole` through **LiteLLM** to the TCS
-  GenAI Lab (a custom OpenAI-compatible provider). Per call: a budget/rate check *before*
-  spend (`_enforce_governance`, **fail-closed** on a DB blip unless `budget_fail_open`), a
-  `max_tokens` cap, a per-call `timeout` + outer `asyncio.wait_for` backstop, a role
-  fallback chain, one JSON re-ask on invalid structured output, a usage-ledger write, and a
-  `gen_ai.*` OTel span. Raises `BudgetExceededError` (→ terminal `budget_exceeded` event).
-  A process-wide `_UsageTally` powers the dashboard's measured cost-saved / small-model
-  share.
-- **`core/models.py`** — the role → deployment-id table (`model_for`, `routing_table`,
-  `is_small_model`); env-overridable per role with `MODEL_<ROLE>`.
-- **`core/governance.py`** — per-request `GovernanceContext` (tenant/user + effective caps)
-  via `contextvars`, set at the request edge and read at the chokepoint.
-- **`core/security.py`** — JWT (`create/decode_access_token`, HS256) + Argon2id password
-  hashing. The token carries both the fine tier and a signed **`coarse_role`** claim (one of
-  the four `Role` values). `principal_role(role, tenant_id)` derives the fine-grained tier
-  (`platform_admin` = admin with no tenant / `tenant_admin` = admin scoped to a tenant /
-  `user`); `coarse_role_from_fine` is its honest inverse.
+`GraphStore` and `MetricsStore` are plain dataclasses held process-wide and fed from the
+live event stream by `_update_dashboards(event, ...)`:
 
-## Aegis Retrieval — `retrieval/*`
+- **`GraphStore`** accumulates the graph nodes and edges that retrieval emitted, **scoped
+  per persona** — a security control, so a `client`'s `/graph` never shows what an
+  operations persona retrieved. It is *not* a Neo4j query. It starts empty and resets on
+  restart.
+- **`MetricsStore`** counts queries, cache hits and cost, and computes a
+  `quality_score` that is an explicit **grounding proxy**, not an LLM judge: the fraction
+  of runs that both completed cleanly and touched at least one graph node. It reads
+  `small_model_share`, `cost_saved_usd` and `total_calls` from the gateway's usage tally,
+  and `p95_latency_ms` from the in-process latency window — `None` before any run, never
+  a fabricated zero.
 
-Hybrid RAG. `pipeline.py::Retriever.retrieve()`: **exact cache → semantic cache → hybrid
-wide recall (vector + graph + BM25) → RRF fusion → LLM rerank → spotlight → assemble →
-cache write-back**.
+---
 
-**Retrieval intelligence** (all ON in production, honest deterministic fallbacks; the
-extra model-call costs are accrued into the run's per-run telemetry — see
-`docs/EVAL_STRATEGY.md`):
+## 3. Module map inside the backend
 
-- **`query_rewrite.py`** — a context-aware **query rewrite** *before* retrieval: one cheap
-  gateway call resolves pronouns/ellipsis/back-references against the conversation history
-  into a standalone, retrieval-optimized query. Pure logic; any failure collapses to an
-  honest no-op (`changed=False`).
-- **`agent/retrieval_loop.py`** (`agentic_retrieve`) — a bounded **agentic / Self-RAG
-  retrieval loop**: retrieve, judge whether the context is sufficient (cheap-model JSON
-  call), and if not re-retrieve with a focused follow-up, then **merge** the evidence —
-  capped by `max_rounds`. Wired into `graph.py::retrieve`; degrades to a deterministic
-  "non-empty context ⇒ sufficient" rule with no judge.
-- **`answer_cache.py`** (`AnswerCache`) — an **answer-level semantic cache** scoped
-  per-`tenant+persona+role`: caches the *final generated answer* so a semantically
-  equivalent question skips the expensive generation call. Scope partitioning is a
-  correctness/security requirement (a hit under one scope can never be returned for
-  another). Checked in `graph.py` before generation; honest misses never raise.
+```mermaid
+flowchart TB
+    API["api/routes.py + schemas.py"]
+    ORC["app.agent.orchestrator → aegis.agent.orchestrator"]
+    G["app.agent.graph → aegis.agent.graph<br/>(shim binds the shared checkpointer)"]
+    DEPS["app/agent/deps.py<br/>AgentDeps.default — the adapter seam"]
+    ADP["app/adapter/*<br/>the only domain code"]
 
-- **`fusion.py`** — pure **Reciprocal Rank Fusion** (`reciprocal_rank_fusion`, k=60),
-  origin-tagged; reused by memory too.
-- **`spotlight.py`** — Azure Spotlighting: delimiting + datamarking so retrieved content is
-  marked untrusted data, defending against indirect prompt injection.
-- **`reranker.py`** — LLM-as-reranker (API-only, no local cross-encoder — 16 GB / no-GPU),
-  scores candidates 0–10 via `ModelRole.CHEAP`, falls back to recall order on parse failure.
-- **`lightrag_backend.py`** — production `KnowledgeBackend` over **LightRAG (Neo4j graph +
-  pgvector)**; `recall_ranked` issues two queries (`naive` = pure vector, `local` = graph
-  traversal) so RRF fuses genuinely distinct signals.
-- **`cache.py`** — two-tier Redis semantic cache (**Aegis Cache**) with honest
-  `CacheProvenance`.
-- **`memory.py`** — the in-memory *lite* backend + cache for `STORES=off` (real LLM, zero
-  infra): hash-based embeddings, brute-force cosine, Jaccard co-occurrence graph, same RRF.
-- **`gateway.py`** — lazy `default_complete`/`default_embed` resolvers. **`chunker.py`** —
-  heading-aware structured chunking. **`validation.py`** — write-time poisoning gate.
-  **`vectors.py`** — dependency-free cosine. **`models.py`** — the pydantic contracts
-  (`RetrievalResult`, `Source`, `GraphDelta`, `Provenance`, …). **`protocols.py`** — the
-  `KnowledgeBackend` / `MultiListBackend` typing seams.
+    GW["app/core/llm.py → aegis.gateway<br/>configure(config, governance, otel sink)"]
+    GRD["app/guardrails → aegis.guardrails"]
+    RET["app/retrieval → aegis.retrieval<br/>(+ host RetrievalConfig, lite fallback)"]
+    MEM["app/memory → aegis.memory"]
+    ML["app/ml → aegis.ml"]
+    OPS["app/ops → aegis.ops"]
+    EVAL["app/eval → aegis.evals"]
+    OBS["app/observability → aegis.observability"]
+    DATA["app/data/*<br/>models · session · governance · approvals · audit"]
+    PLAT["app/platform/*<br/>stack · patches · risk_map · savings"]
+    MCP["app/mcp/server.py"]
 
-## Aegis Memory — `memory/*`
+    API --> ORC --> G --> DEPS --> ADP
+    API --> PLAT
+    G --> GRD & RET & MEM & ML
+    GRD & RET & MEM & ML & OPS & EVAL --> GW
+    GW --> DATA
+    ORC -.->|"post-run, off the hot path"| OPS
+    OPS --> EVAL
+    OPS & MEM --> DATA
+    G & GW & RET -.->|"spans"| OBS
+    MCP --> ADP & DATA
+```
 
-Three-tier long-term memory (deep dive: `docs/MEMORY_SPEC.md`). Read path is deterministic
-and LLM-free; the write path is a deferred cheap-model job. Isolation is app-level-first:
-every query filters `subject_id` (+ optional `tenant_id`), with Postgres RLS as an additive
-belt.
+### Aegis Gateway — `core/llm.py` → `aegis.gateway`
+
+The single async chokepoint for every model call. `complete(role, messages, ...)` and
+`embed(texts)` route by `ModelRole` through LiteLLM to a custom OpenAI-compatible
+provider. Per call it performs: a budget and rate check **before** spend (fail-closed on
+a DB blip unless `BUDGET_FAIL_OPEN=true`), a `max_tokens` cap, a per-call timeout plus an
+outer `asyncio.wait_for` backstop, a role fallback chain, one corrective re-ask on
+invalid structured output, a usage-ledger write, and a `gen_ai.*` OTel span. A tripped
+cap raises `BudgetExceededError`, which the orchestrator turns into a terminal
+`budget_exceeded` event.
+
+`core/models.py` holds the `ModelRole` enum (`CHEAP`, `REASONING`, `GENERATION`,
+`EMBEDDING`, `VISION`, `VOICE`) and the role → deployment-id table. Code never names a
+model; it asks for a role. Any role is overridable with `MODEL_<ROLE>`, and per-role cost
+with `COST_<ROLE>_IN` / `COST_<ROLE>_OUT`. A process-wide usage tally is what makes the
+console's "small-model share" and "cost saved" *measured* rather than asserted.
+
+`core/governance.py` threads a per-request `GovernanceContext` through `contextvars`;
+`core/security.py` re-exports JWT creation/decoding and Argon2id hashing.
+
+### Aegis Guardrails — `app/guardrails` → `aegis.guardrails`
+
+Public contract: `check_input(text)` / `check_output(text)`. The pipeline
+(`aegis/src/aegis/guardrails/pipeline.py`) composes six layers — **schema**, **PII**,
+**injection classifier**, **content safety**, **topical scope**, **grounding** — and each
+layer can only tighten the verdict.
+
+The injection layer is a deterministic signature backstop *first*, then a
+`ModelRole.CHEAP` classifier, and it **fails closed**: any classifier error is treated as
+`injection=True`. Verdicts are cached (`guardrails/cache.py`) — Redis-backed in full
+mode, in-memory otherwise, degrading with a warning rather than refusing to construct.
+PII uses Microsoft Presidio + spaCy NER when installed (`aegis[pii]`), falling back to a
+pure-regex engine. `guardrails/nemo.py` plus the `config/*.co` Colang flows are the
+second front door onto the *same* check functions, selected with
+`GUARDRAILS_ENGINE=nemo`.
+
+### Aegis Retrieval — `app/retrieval` → `aegis.retrieval`
+
+`Retriever.retrieve()` runs: exact cache → semantic cache → hybrid wide recall (vector +
+graph + hand-rolled BM25) → RRF fusion → LLM rerank → spotlight → assemble → cache
+write-back. The shim adds the host pieces: building a `RetrievalConfig` from
+`app.config.Settings`, the lazily-built process-wide default retriever that honours
+`STORES`, and the module-level `retrieve`/`ingest` the graph calls.
+
+Supporting modules: `fusion.py` (pure RRF, k=60, origin-tagged, reused by memory),
+`spotlight.py` (delimiting + datamarking against indirect injection), `reranker.py`
+(LLM-as-reranker, API-only — no local cross-encoder, because the target machine has
+16 GB and no GPU), `lightrag_backend.py` (Neo4j graph + Qdrant vectors + Postgres KV),
+`chunker.py` (heading-aware), `validation.py` (write-time poisoning gate),
+`query_rewrite.py`, `agentic.py` (the bounded Self-RAG loop), `answer_cache.py`, and
+`memory.py` — the databaseless in-memory backend used when `STORES=off`.
+
+### Aegis Memory — `app/memory` → `aegis.memory`
+
+Three tiers: **episodic** (raw turns), **semantic** (durable facts, stored
+bitemporally — a contradicted fact is invalidated with a timestamp, never deleted), and
+**procedural** (skill markdown selected by keyword). The read path is deterministic and
+LLM-free; the write path is a deferred cheap-model job. Detail in
+[`40-pipelines.md`](40-pipelines.md) §4.
+
+### Aegis Signal — `app/ml` → `aegis.ml`
+
+`TrustworthyModel`: a soft-voting ensemble (XGBoost + sklearn HistGradientBoosting),
+MAPIE split-conformal intervals with a guaranteed coverage level, and SHAP TreeExplainer
+per member. `predict_explain(features) → MLExplainResponse` is the whole public
+inference contract. *What* to predict comes from `adapter/ml_spec.py`; *how* lives in the
+package. Train with `python -m app.ml`.
+
+### Aegis Loop — `app/ops` → `aegis.ops`
+
+`trace_eval.py` grades a finished run and each trajectory step, writing one `EvalResult`
+row per facet keyed by `run_id`/`prompt_key`. `diagnose.py` clusters recent *failing*
+evals and asks a reasoning model for an improved prompt — **as a draft only, never
+live**. `release.py` is the only place a draft goes live, and it never does so blindly:
+an always-on eval gate (must beat the baseline by `margin`), a deterministic
+change-risk classifier, then a tiered decision — low risk auto-promotes, medium/high is
+staged to the durable approval inbox. `registry.py` is the versioned prompt store the
+harness reads synchronously via `get_cached_active`, with the adapter's prompt as an
+inviolable floor.
+
+### Aegis Evals — `app/eval` → `aegis.evals`
+
+Deterministic RAGAS-*style* lexical proxies (context precision/recall, groundedness) over
+the real hybrid retriever on a frozen seed corpus, plus a DeepEval-*pattern* per-metric
+regression gate that also asserts the router still picks the right specialist. Both are
+hand-rolled — there is no `ragas` or `deepeval` dependency, and the default run makes no
+network call. The LLM judge is inject-only and off unless enabled.
+
+### Aegis Trace — `app/observability` → `aegis.observability`
+
+`init_observability(app)` wires the tracer provider and in-process Phoenix export,
+degrading to console. `span(kind, name, attrs)` stamps `openinference.span.kind` so
+Phoenix renders a run as a tree. `genai_span` covers `gen_ai.*` LLM and embedding spans.
+`semconv.py` holds the attribute keys plus the **A2A** labelled-handoff attributes
+stamped on the `route` node when the supervisor dispatches to a specialist.
+
+### Aegis Tools / MCP — `mcp/server.py`
+
+A real MCP stdio server (built on the `mcp` 2.x SDK's low-level `Server`) exposing the
+adapter tool registry to external clients such as Claude Desktop. It is a **facade, not a
+bypass**: `list_tools` returns only allowlist-filtered tools; `call_tool` rejects unknown
+or not-allowed names and routes through the same `run_tool` that re-checks the allowlist
+and writes an audit row. **HIGH-risk tools are listed but never auto-executed** — a call
+returns "requires human approval" with no side effect. An MCP client is a proposer, never
+an approver.
+
+### Platform surfaces — `platform/*`
+
+Four deliberately import-light read endpoints behind the DevOps and Client portals.
+`stack.py` builds the software bill-of-materials from actually-installed versions via
+`importlib.metadata`, mapping each row to the Aegis module it powers and reporting
+`null` for an uninstalled optional dependency. `patches.py` compares installed vs latest
+against live PyPI, per package, so one network failure marks only that row `unknown` and
+a total failure degrades to `online=false`. `risk_map.py` is the OWASP-Agentic risk
+matrix grounded in `docs/security/owasp-agentic.md`, each risk carrying a `control_ref`
+pointing at a real file — injection is never marked fully resolved. `savings.py` derives
+baseline-vs-actual savings from the real gateway usage ledger.
+
+---
+
+## 4. The data layer — `data/*`
+
+`data/models.py` defines the ORM on the shared `aegis.data.AegisBase`:
+
+| Table | Purpose |
+|---|---|
+| `tenants`, `users` | Multi-tenancy and identity |
+| `budgets` | Hierarchical token / USD / rate caps |
+| `usage_ledger` | One durable row per model call |
+| `approvals` | The durable HITL inbox |
+| `audit_log` | One row per action |
+| `chunks` | Retrieval chunk records (embedding-of-record as JSON) |
+| `eval_results`, `prompt_versions` | The LLM-Ops loop's substrate |
+| memory tables | Sessions, messages, facts, profiles, write log, consolidation jobs |
+
+`data/session.py` owns the async engine and sessionmaker, `bootstrap()` (create_all),
+`bootstrap_rls()` (enables Postgres Row-Level Security on `users`, `usage_ledger` and
+`approvals`; `audit_log` and `chunks` stay application-scoped), `set_tenant_scope` (emits
+the RLS GUC), and `get_agent_checkpointer()` — the single process-wide LangGraph
+checkpointer that makes cross-worker resume by `thread_id` possible.
+
+`data/governance.py` holds `enforce_governance` (the pre-spend budget check),
+`record_usage`, the admin rollups, and `update_user_role` — guarded by
+`LastPlatformAdminError` so the platform can never demote its last global platform-admin
+into a lockout.
+
+`data/approvals.py` is the durable inbox: `enqueue_approval`, `list_pending`,
+`resolve_approval` (an optimistic `PENDING → RESUMING/REJECTED` transition that
+guarantees exactly-once resume), `sweep_expired` and `run_sla_sweeper`.
+
+`data/audit.py` is `record_audit`.
+
+---
+
+## 5. Background work
+
+Two `asyncio` tasks, started in the lifespan and only when `STORES=on`. No cron, no
+Docker, no extra process:
 
 ```mermaid
 flowchart LR
-    subgraph Read["recall_memory (READ, no LLM)"]
-        RC[recall.py] --> SC[scoring.py<br/>relevance+recency+importance]
-        SC --> WK[working.py<br/>token-budgeted, ordered block]
+    subgraph SLA["SLA sweeper — data/approvals.py::run_sla_sweeper"]
+        S1["every APPROVAL_SWEEPER_INTERVAL_SECONDS (30s)"] --> S2["scan for past-deadline PENDING approvals"]
+        S2 --> S3["HIGH-risk past its SLA → auto-reject"]
     end
-    subgraph Write["persist_memory (WRITE, deferred)"]
-        CO[consolidate.py<br/>extract → reconcile → summarise]
+    subgraph MEMS["Memory sweeper — main.py::_run_memory_sweeper"]
+        M1["every MEMORY_SWEEPER_INTERVAL_SECONDS (60s)"] --> M2["memory.consolidate.sweep_pending(limit=batch)"]
+        M2 --> M3["distil episodic → semantic facts"]
+        M2 --> M4["prune_forgotten — bitemporal soft-archive"]
     end
-    STORES[(stores.py<br/>Session·Message·Fact·Profile·WriteLog·Job)]
-    Read --> STORES
-    Write --> STORES
 ```
 
-- **`stores.py`** — SQLAlchemy models on the shared `Base`: `MemorySession` (thread +
-  rolling summary), `MemoryMessage` (episodic; carries `embedding`+`embedding_dim`),
-  `MemoryFact` (semantic, **Zep bitemporal** — `valid_at`/`invalid_at` +
-  `created_at`/`expired_at`, `supersedes_id`), `MemoryProfile` (the always-injected human
-  block), `MemoryWriteLog` (append-only "why the agent believes X" trail),
-  `MemoryConsolidationJob` (durable queue).
-- **`scoring.py`** — pure Generative-Agents composite (`w_rel*rel + w_rec*rec + w_imp*imp +
-  w_freq*freq`, min-max normalized), `recency_decay`, `rank_top`.
-- **`recall.py`** — the READ selection: facts (pgvector/Python top-k over *valid* facts),
-  episodic (RRF of a recency window + a vector top-k), skills (markdown via
-  `memory_spec.select_skills`). Recall is **not read-only for scoring**: it bumps each
-  surfaced fact/turn's `access_count` (+1) and `last_access_at`, which feeds a **live**
-  frequency term in the composite (`scoring.py`, `config.w_freq = 0.1 > 0`) — frequency is
-  real, not inert.
-- **`working.py`** — assembles the budgeted, **lost-in-the-middle**-ordered block
-  (`profile, facts, skills, summary, episodic, raw`), greedy fill + eviction, episodic
-  wrapped in spotlighting. Returns `AssembledMemory` (≤ budget).
-- **`consolidate.py`** — mem0 two-phase write: **extract** durable facts (one cheap call),
-  **reconcile** each (dedup short-circuit, else ADD/UPDATE/INVALIDATE/NOOP), all audited;
-  `enqueue_consolidation`/`sweep_pending` for the durable queue. **Forgetting is wired**:
-  `sweep_pending` runs `prune_forgotten` — a Generative-Agents-style **soft-archive** pass
-  that closes stale, never-recalled, aged-out facts in transaction-time
-  (`expired_at = now`, so they drop out of hot recall) governed by `config.forget_floor` /
-  `forget_min_age_days`. It is a bitemporal soft-archival, **never a hard delete**.
-- **`config.py`** (`MemoryConfig` knobs), **`vector_ops.py`** (cosine top-k),
-  **`tokens.py`** (tiktoken or a `len//4` fallback).
+Both wrap each cycle in a try/except so a transient database error never kills the loop,
+and both are wired to the live `complete` and `embed` — the same path the request-side
+consolidation uses.
 
-## Aegis Signal — `ml/*`
+A third, one-shot task warms the ML spine in a worker thread so the first live query
+never pays the model-fit cost.
 
-The trustworthy-ML spine. *What* to predict comes from `adapter/ml_spec.py`; *how* lives
-here. A **solution signal only** — never gates a run.
+---
 
-- **`model.py`** — `TrustworthyModel`: a **soft-voting ensemble** (XGBoost +
-  sklearn HistGradientBoosting), **MAPIE split conformal** (calibrated interval / set with
-  a guaranteed coverage level), and **SHAP TreeExplainer** per member. `predict_explain(features)
-  → MLExplainResponse` is the public inference contract (point prediction + conformal
-  interval + coverage + signed per-feature SHAP drivers).
-- **`spec.py`** — `resolve_spec` reads the adapter's `ml_spec` defensively (or a fallback).
-  **`dataset.py`** — synthetic/adapter training-frame resolution.
-- **`__main__.py`** — `python -m app.ml` trains on the adapter's real
-  `training_frame` (the `resolution_hours` label) and persists the artifact.
-  **`__init__.py`** — process-wide singleton (`get_model` → singleton → artifact → freshly
-  trained).
+## 6. Reading order in the code
 
-## Aegis Guardrails — `guardrails/*`
+1. `main.py` — how it all boots.
+2. `api/routes.py` §auth and the guards — how identity becomes authorisation.
+3. `agent/deps.py` — the adapter seam, and therefore the whole extensibility story.
+4. `aegis/src/aegis/agent/graph.py` — the agent itself.
+5. `core/llm.py` — the chokepoint every module funnels through.
 
-Layered input/output rails, no local model. Public contract `check_input`/`check_output`
-(`rails.py`), each layer can only *tighten* the verdict.
-
-- **`rails.py`** — order: input = schema → PII redaction → injection classifier; output =
-  schema → content filter → PII redaction. `_use_nemo()` routes to the Colang path when
-  `GUARDRAILS_ENGINE=nemo`.
-- **`classifier.py`** — injection/jailbreak: a **deterministic signature backstop** first,
-  then a `ModelRole.CHEAP` classifier. **Fails closed** (any error → `injection=True`).
-- **`pii.py`** — pure-code detect/redact (email, SSN, card w/ Luhn, keys, IP, phone) →
-  `[REDACTED_<KIND>]`. **`schema.py`** — size/control-char checks + output denylist.
-- **`nemo.py`** + **`config/`** — the real NeMo Guardrails Colang policy (input/output
-  `.co` flows + custom actions delegating to the same `classifier`/`pii`/`schema`
-  functions — one policy, two front doors). *If the NeMo package is absent it silently
-  downgrades to the programmatic rails; see `docs/AUDIT_ROUND2.md`.*
-
-## Aegis Loop — `ops/*`
-
-The LLM-Ops self-improvement loop (control surface: the `/ops/*` endpoints).
-
-```mermaid
-flowchart LR
-    TE["trace_eval.py<br/>evaluate_run → EvalResult rows"] --> DG["diagnose.py<br/>cluster failures → DRAFT prompt"]
-    DG --> RL["release.py<br/>eval gate + change-risk → tiered decision"]
-    RL --> REG["registry.py<br/>versioned prompts (draft/staged/active/archived)"]
-    REG -->|get_cached_active| HARNESS[the harness reads the active prompt]
-```
-
-- **`trace_eval.py`** — `evaluate_run` grades the final answer (reasoning-model judge or a
-  lexical proxy) *and* each trajectory step (retrieval/tool/guardrail), writing one
-  `EvalResult` per facet keyed by `run_id`/`prompt_key`. Best-effort, never raises.
-- **`diagnose.py`** — clusters recent *failing* evals for a `prompt_key` and asks a
-  reasoning-model optimizer to write an improved prompt **as a DRAFT only**.
-- **`release.py`** — the only place a draft goes live: (1) an **eval gate** (must beat
-  baseline by `margin` via the injected `eval_fn`), (2) a **change-risk classifier**
-  (`classify_change`), (3) a **tiered decision** — low-risk auto-promote, risky → staged to
-  the durable approval inbox.
-- **`registry.py`** — the prompt-version registry (`create_draft`, `promote`, `rollback`,
-  and the synchronous `get_cached_active` the harness reads). The adapter default prompt is
-  always the floor.
-- **`gate.py`** — the *live* seams `release` is injected with: `make_eval_fn(complete)` is a
-  genuinely **prompt-dependent** scorer (retrieves real context, **generates under the
-  candidate prompt**, judges it); `enqueue_release_approval` / `decide_release` are the
-  release-inbox read/resolve path.
-
-## Aegis Evals — `eval/*`
-
-The offline eval suite `release.py` and CI use. **`harness.py`** — `evaluate(cases,
-thresholds, complete=None)` drives the *real* hybrid retriever over `SEED_CASES` and
-returns an `EvalReport(passed=…)` (the CI gate; `python -m app.eval.harness`). **`judge.py`**
-— optional LLM-as-judge (`judge_answer`, gated by `TAIF_EVAL_LLM_JUDGE`). **`metrics.py`**
-— deterministic RAGAS-*style* lexical proxies (context-precision/recall, groundedness).
-**`corpus.py`** — the frozen self-contained KB (`SEED_CORPUS`, `SEED_CASES`).
-**`regression.py`** — the **DeepEval-pattern** CI regression gate: declarative per-metric
-thresholds (`Metric` / `MetricResult` / `RegressionReport`) over the real hybrid retriever
-*plus* an **agentic / tool-use** case that asserts `app.agent.router.route_query` still
-selects the right specialist. Native (no `deepeval` package: no external judge, no network),
-run as `python -m app.eval.regression` — wired as the pass/fail bar in `scripts/preflight.*`.
-See `docs/EVAL_STRATEGY.md`.
-
-## Aegis Trace — `observability/*`
-
-OpenTelemetry → Phoenix. **`otel.py`** — `init_observability(app)` wires the tracer
-(exports to in-process Arize Phoenix, degrades to console); `get_tracer`, `current_trace_id`.
-**`spans.py`** — `span(kind, name, attributes)` context manager (stamps
-`openinference.span.kind` so Phoenix renders the run as a tree; no-op when untraced).
-**`genai.py`** — `genai_span` for `gen_ai.*` LLM/embedding spans + `set_usage`.
-**`semconv.py`** — the attribute keys, `DEFAULT_PROVIDER="tcs.genailab"`, `SpanKind`
-(`AGENT, CHAIN, TOOL, RETRIEVER, RERANKER, GUARDRAIL, LLM, EMBEDDING`), and the **A2A**
-labelled-handoff attributes (`A2A_FROM` / `A2A_TO` / `A2A_REASON` / `A2A_PROTOCOL`) stamped
-on the `route` node when the supervisor dispatches a turn to a specialist
-(`agent/graph.py`).
-
-## Aegis Governance — `data/*`
-
-Persistence + tenancy. **`models.py`** — the ORM on `Base`: `Tenant`, `User`, `Budget`
-(hierarchical token/USD/rate caps), `UsageLedger`, `Approval` (the durable HITL inbox row),
-`AuditLog`, `Chunk`, `EvalResult`, `PromptVersion`. **`session.py`** — async engine/session,
-**`get_agent_checkpointer()`** (the single process-wide LangGraph checkpointer enabling
-cross-worker resume by `thread_id`), **`set_tenant_scope`** (emits the Postgres RLS GUC),
-`bootstrap`/`bootstrap_rls`. **`governance.py`** — `enforce_governance` (the chokepoint
-budget check), `record_usage`, admin rollups, and **`update_user_role`** (the admin RBAC
-role-assignment behind `POST /admin/users/{id}/role`, guarded by `LastPlatformAdminError`
-so the platform can never demote its last global platform-admin into a lockout).
-**`audit.py`** — `record_audit`.
-**`approvals.py`** — the durable inbox: `enqueue_approval`, `list_pending`,
-`resolve_approval` (optimistic `PENDING → RESUMING/REJECTED` lock for exactly-once resume),
-`sweep_expired` / `run_sla_sweeper`.
-
-## Aegis Tools / MCP — `mcp/server.py`
-
-A real **MCP (Model Context Protocol) stdio server** exposing the adapter tool registry so
-external clients (e.g. Claude Desktop) can drive the same tools. It is a **facade, not a
-bypass**: `list_tools` returns only allowlist-filtered tools; `call_tool` rejects
-unknown/not-allowed names, applies the risk gate, and routes through the same `run_tool`
-(re-checks the allowlist + writes an audit row). **HIGH-risk writes are listed but never
-auto-executed** — they return "requires human approval" with no side effect (audited as a
-proposal), preserving the exact governance the in-process agent enforces.
-
-## Platform surfaces — `platform/*`
-
-The "what are we running / what does it save" layer behind the DevOps and Client portals —
-four honest read endpoints, deliberately import-light. **`stack.py`** (`build_stack`) — the
-live software bill-of-materials from **actually-installed** versions via
-`importlib.metadata` (null when an optional-group dependency isn't installed — honest, not
-guessed), each row mapped to the Aegis module it powers. **`patches.py`** (`patch_check`) —
-installed vs latest against a **live PyPI** query; per-package resolution so one network
-failure marks only that row `unknown`, and with *no* package reachable it degrades to
-`online=false` rather than fabricating a clean bill of health. **`risk_map.py`**
-(`build_risk_map`) — the OWASP-Top-10-for-Agentic risk matrix, grounded verbatim in
-`docs/SECURITY_OWASP_AGENTIC.md` (each risk carries an honest likelihood/impact, its real
-Aegis mitigation, and a `control_ref` pointing at a real file; injection is never marked
-fully resolved). **`savings.py`** (`build_savings`) — baseline-vs-actual savings derived
-from the real gateway usage ledger (`core.llm.usage_tally`), conservative by design.
-
-## The domain edge — `adapter/*`
-
-The only domain-specific code. Fully covered in `50-extend-for-your-domain.md`. In short:
-`schema.py` (entities), `generator.py` (synthetic world), `tools.py` (`TOOL_REGISTRY` +
-`ALLOWLIST`), `ml_spec.py` (`FEATURES`/`TARGET`/`latent_*`), `personas.py` + `prompts.py`,
-`roster.py`, `memory_spec.py`, `corpus/*.md`. The shipped domain is
-`service_request_management` — an enterprise customer-support / service-request assistant.
+Next: [`30-frontend.md`](30-frontend.md) for the console, or
+[`40-pipelines.md`](40-pipelines.md) for the flows these modules participate in.

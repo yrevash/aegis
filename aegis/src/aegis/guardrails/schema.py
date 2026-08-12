@@ -1,7 +1,7 @@
 """Schema / format validation rails and a lightweight output content filter.
 
 These are the cheapest, most deterministic layers in the defense-in-depth stack
-(``docs/security.md`` §3): before any text reaches the model (input rail) or the
+(``docs/security/overview.md`` §3): before any text reaches the model (input rail) or the
 user (output rail) it must be structurally well-formed. Malformed, oversized, or
 control-character-laden payloads are a classic vector for downstream
 "insecure output handling" (LLM02) and for smuggling instructions past naive

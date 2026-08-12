@@ -2,8 +2,9 @@
 
 > **Fastest path (no agent needed):** `scripts\bootstrap.ps1` → `scripts\preflight.ps1`
 > → `scripts\start.ps1 -Mode lite` (Windows; `.sh` twins for mac/Linux). The
-> one-page day-of guide with the fallback ladder is **`docs/RUNBOOK.md`**. The rest
-> of this file is the long-form manual.
+> one-page day-of guide with the fallback ladder is **`docs/operations/runbook.md`**;
+> the teaching path starts at **`docs/learn/00-what-aegis-is.md`**. The rest of this
+> file is the long-form manual.
 
 Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
 
@@ -175,12 +176,24 @@ The backend enables CORS for `http://localhost:3000` out of the box.
 
 ## Demo logins
 
-| Username | Password | Role  | Persona          |
-|----------|----------|-------|------------------|
-| `admin`  | `admin`  | admin | `operations_lead` |
-| `user`   | `user`   | user  | `client`          |
+| Username | Password | Coarse role | Persona           | Portal           |
+|----------|----------|-------------|-------------------|------------------|
+| `admin`  | `demo`   | `admin`     | `operations_lead` | `/app/admin/…`   |
+| `ai`     | `demo`   | `ai_team`   | `operations_lead` | `/app/ai_team/…` |
+| `aiteam` | `demo`   | `ai_team`   | `operations_lead` | `/app/ai_team/…` |
+| `devops` | `demo`   | `devops`    | `operations_lead` | `/app/devops/…`  |
+| `client` | `demo`   | `client`    | `client`          | `/app/client/…`  |
 
-Both demo principals now mint **signed JWTs** and map to the `platform_admin` tier
+Every operational role (`admin` / `ai_team` / `devops`) maps to the full
+`operations_lead` persona; `client` gets the self-scoped `client` persona.
+
+These are a **dev-only fallback** (`_DEMO_USERS` in `backend/src/app/api/routes.py`),
+consulted **only** when `APP_ENV=dev` *and* the username is not a real `users` row —
+so a seeded account is never overridden, and a wrong password for an existing user
+never falls through to the demo table. In any non-dev environment the demo table is
+disabled entirely. Being platform-scoped (no `tenant_id`), their runs are **ungoverned**.
+
+The demo principals mint **signed JWTs** and map to the `platform_admin` tier
 (global, un-tenanted) for back-compat. A real deployment seeds the `users` table with
 Argon2-hashed passwords and a `tenant_id`, so login yields a **tenant-scoped** JWT and
 runs are governed (budget + RLS). Tenant/user/budget management is under `/admin/*`
@@ -287,5 +300,5 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 | Redis / Memurai | native install | 6379 |
 | Arize Phoenix | in-process (with backend) | 6006 (UI, if enabled) |
 
-See `docs/backend.md`, `docs/frontend.md` (console context), and `README.md` for
-architecture.
+See `docs/learn/10-architecture.md` (the whole system), `docs/architecture/backend.md`,
+`web/README.md` (console context), and `README.md` for architecture.

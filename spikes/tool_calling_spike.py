@@ -1,7 +1,7 @@
 """
 THE critical de-risk spike — tool/function-calling through the TCS GenAI Lab gateway.
 
-See docs/hackathon.md §8 and docs/backend.md §9. Basic chat is already confirmed
+See docs/hackathon/brief.md §8 and docs/architecture/backend.md §9. Basic chat is already confirmed
 working; this tests the assumption the whole agent design depends on: does passing a
 `tools` parameter yield a `tool_calls` block back?
 
@@ -43,4 +43,4 @@ if response.tool_calls:
         print(f"   -> {tc['name']}({tc['args']})")
 else:
     print("\n❌ No tool_calls returned.")
-    print("   -> Pivot to ReAct / structured-output fallback (see docs/backend.md §9).")
+    print("   -> Pivot to ReAct / structured-output fallback (see docs/architecture/backend.md §9).")

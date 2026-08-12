@@ -126,7 +126,7 @@ class AgentConfig:
     self_repair_enabled: bool = True
     approval_park_timeout: float | None = None
     default_persona_id: str = "default"
-    #: Retrieval intelligence (docs/EVAL_STRATEGY.md). ``query_rewrite_enabled`` runs a
+    #: Retrieval intelligence (docs/architecture/eval-strategy.md). ``query_rewrite_enabled`` runs a
     #: cheap-model, context-aware rewrite before retrieval; ``agentic_retrieval_enabled``
     #: runs the bounded Self-RAG/FLARE loop (retrieve → judge sufficiency → reformulate →
     #: re-retrieve, capped by ``agentic_retrieval_max_rounds``); ``answer_cache_enabled``

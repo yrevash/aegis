@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     # How often the SLA sweeper scans the inbox (seconds).
     approval_sweeper_interval_seconds: float = Field(default=30.0)
 
-    # ── Long-term memory consolidation sweeper (docs/MEMORY_SPEC.md §D) ──────
+    # ── Long-term memory consolidation sweeper (docs/architecture/memory-spec.md §D) ──────
     # Fire-and-forget consolidation (``asyncio.create_task``) loses work on a
     # restart/error; the durable ``memory_consolidation_job`` queue is the backstop.
     # This in-process asyncio task (like the SLA sweeper — no cron, no Docker) drains
@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     # Max PENDING consolidation jobs drained per sweep pass.
     memory_sweeper_batch: int = Field(default=10)
 
-    # ── Guardrails engine (one policy, two front doors; docs/security.md §3) ──
+    # ── Guardrails engine (one policy, two front doors; docs/security/overview.md §3) ──
     # Two front doors enforce the same policy: the fast, offline-testable
     # programmatic rails (``app.guardrails.check_input``/``check_output``,
     # delegating to ``aegis.guardrails``) the agent graph calls directly, and the
@@ -97,11 +97,11 @@ class Settings(BaseSettings):
     # delegating to ``aegis.guardrails.nemo``) callable directly for the jury's
     # readable security artifact. This field is currently unused for automatic
     # dispatch (the strangler shim onto ``aegis.guardrails`` — see
-    # docs/superpowers/sdd/2026-08-11-aegis-core-guardrails-pilot/ — always uses
+    # docs/module/00-overview.md — always uses
     # the programmatic rails); kept for forward compatibility / config parity.
     guardrails_engine: str = Field(default="programmatic")
 
-    # ── Output grounding rail (OWASP LLM09; docs/security.md §3) ──
+    # ── Output grounding rail (OWASP LLM09; docs/security/overview.md §3) ──
     # The output rail self-checks the answer against the retrieved contexts it was
     # generated from (NeMo self-check-facts / RAGAS groundedness). Advisory by
     # default: an ungrounded answer is surfaced as a non-blocking FLAG in the trace,
@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     # ── Observability ────────────────────────────────────────────────────────
     phoenix_enabled: bool = Field(default=True)
 
-    # ── Retrieval intelligence (docs/EVAL_STRATEGY.md) ───────────────────────
+    # ── Retrieval intelligence (docs/architecture/eval-strategy.md) ───────────────────────
     # A cheap-model step rewrites the turn into a standalone, context-resolved
     # search query before retrieval (app/retrieval/query_rewrite.py).
     query_rewrite_enabled: bool = Field(default=True)
@@ -126,7 +126,7 @@ class Settings(BaseSettings):
     answer_cache_threshold: float = Field(default=0.97)
     answer_cache_ttl_seconds: int = Field(default=1800)
 
-    # ── Run mode (see docs/RUNBOOK.md) ───────────────────────────────────────
+    # ── Run mode (see docs/operations/runbook.md) ───────────────────────────────────────
     # "on" (default) uses the real stores — LightRAG over Neo4j + Qdrant with a
     # Redis semantic cache. "off" runs a self-contained in-memory backend + cache
     # (no databases) — the "lite" demo mode that needs only the model gateway.

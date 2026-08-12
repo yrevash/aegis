@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-05
 - **Deciders:** Team
-- **Related:** `docs/ARCHITECTURE_REVIEW.md` §3, `docs/security.md` §6.7 (enterprise
+- **Related:** `docs/security/overview.md` §6.7 (enterprise
   procurement), `app/core/security.py`, `app/core/governance.py`, `app/core/llm.py`,
   `app/data/governance.py`, `app/data/session.py` (RLS), `app/api/routes.py`.
 
@@ -15,7 +15,7 @@ roles and **no tenancy anywhere** — not in identity, not in the schema (`users
 process-global tally but **enforced nothing**). Any authenticated user was effectively
 global, the token dashboard could not be attributed per customer, and there was no
 backpressure against cost/DoS via tokens. This fails the "secure enough to buy" thesis
-and the enterprise-procurement framing (`docs/security.md` §6.7).
+and the enterprise-procurement framing (`docs/security/overview.md` §6.7).
 
 ## Decision
 

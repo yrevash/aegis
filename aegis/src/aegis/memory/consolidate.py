@@ -16,7 +16,7 @@ Two phases per session (mem0):
      predicate → NOOP with **no** second LLM call (just bump access stats).
    * otherwise a cheap ``decide_op`` call picks ADD | UPDATE | INVALIDATE | NOOP.
 
-Applied under Zep bitemporal rules (see ``docs/MEMORY_SPEC.md`` HARDENING CORRECTIONS):
+Applied under Zep bitemporal rules (see ``docs/architecture/memory-spec.md`` HARDENING CORRECTIONS):
 
 * **ADD** — insert a new valid fact.
 * **UPDATE** (refinement of the same value) — insert a superseding row and expire the old

@@ -3,7 +3,7 @@
 Every capability the platform ships is a first-class **Aegis module**: a branded
 name presented **together with the honest underlying tech** (branding, never
 hiding — this keeps the no-fakes bar). The canonical map lives in
-``docs/ENTERPRISE_MATURITY_PLAN.md`` §1 and is mirrored here as typed data so the
+``docs/learn/00-what-aegis-is.md`` and is mirrored here as typed data so the
 API (``GET /platform/capabilities``), the frontend Platform view and the docs all
 read one product from one place.
 

@@ -12,8 +12,8 @@ writing any report**.
 Why deferred: garak needs the gateway API key + network egress (or a running
 backend), which are only available on the hackathon machine on the day. The
 prerequisites are exactly those already required to run the platform live
-(``docs/RUNBOOK.md`` "Lite" rung), so this adds no new day-of dependency beyond
-``pip install garak`` itself. See ``docs/security.md`` §3.
+(``docs/operations/runbook.md`` "Lite" rung), so this adds no new day-of dependency beyond
+``pip install garak`` itself. See ``docs/security/overview.md`` §3.
 
 Two targets (choose with ``--target``):
 

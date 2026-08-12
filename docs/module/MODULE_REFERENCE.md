@@ -502,9 +502,8 @@ the locked frontend SSE contract stable.
 
 ## The honest debt list — tracked, not hidden
 
-All of this is written down in
-`docs/superpowers/plans/2026-08-11-aegis-guardrails-followups.md` and the module
-docs. None of it breaks anything today; all of it is real.
+All of this is written down here and in the module docs. None of it breaks anything
+today; all of it is real.
 
 - **Two leaf→leaf imports** — `memory → retrieval` (RRF/cosine/spotlight reuse) and
   `governance → gateway` (`BudgetExceededError`). Harmless in one package; debt

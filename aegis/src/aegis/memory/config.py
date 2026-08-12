@@ -4,7 +4,7 @@ Every value here is a *mechanism* parameter — domain-neutral. What a "fact" me
 the injected :class:`~aegis.memory.spec.MemorySpec`'s job; how much of one we keep, how
 we score it, and how we budget the context window is the core's job and lives here.
 
-See ``docs/MEMORY_SPEC.md`` for the derivation of the defaults (Generative-Agents
+See ``docs/architecture/memory-spec.md`` for the derivation of the defaults (Generative-Agents
 recall blend, mem0 consolidation cadence, lost-in-the-middle assembly).
 """
 

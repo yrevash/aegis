@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-05
 - **Deciders:** Team
-- **Related:** `docs/ARCHITECTURE_REVIEW.md` §4, ADR 0003 (LightRAG over GraphRAG),
+- **Related:** ADR 0003 (LightRAG over GraphRAG),
   `app/retrieval/fusion.py`, `app/retrieval/pipeline.py`, `app/retrieval/memory.py`.
 
 ## Context

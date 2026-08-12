@@ -190,9 +190,9 @@ cd backend && TAIF_EVAL_LLM_JUDGE=1 python -m pytest tests/eval -q
 ```
 
 > There is **no** GitHub Actions workflow or `Makefile` in this repo today — the "CI gate"
-> is the pytest suite above, run as the project's standing verification command
-> (`docs/LEARNING_GUIDE.md`: *"`python -m pytest tests -q` and `ruff check src tests` must
-> stay green"*). Layer 3 (`trace_eval`) runs automatically, post-run and best-effort, as
+> is the pytest suite above, run as the project's standing verification command:
+> `python -m pytest tests -q` and `ruff check src tests` must stay green (see
+> `docs/learn/50-run-and-extend.md` §4). Layer 3 (`trace_eval`) runs automatically, post-run and best-effort, as
 > part of the live LLM-Ops loop; Phoenix's local UI is launched by
 > `app.observability.otel.init_observability` when `arize-phoenix` is installed.
 

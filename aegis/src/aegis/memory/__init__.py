@@ -1,4 +1,4 @@
-"""Long-term memory + context engineering (SOTA; see ``docs/MEMORY_SPEC.md``).
+"""Long-term memory + context engineering (SOTA; see ``docs/architecture/memory-spec.md``).
 
 A domain-agnostic, importable core subsystem: persist raw turns cheaply, distil durable
 facts lazily with a cheap model (mem0-style ADD/UPDATE/INVALIDATE, Zep bitemporal), recall

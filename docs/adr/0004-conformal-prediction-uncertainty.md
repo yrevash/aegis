@@ -3,17 +3,17 @@
 - **Status:** Accepted
 - **Date:** 2026-08-03
 - **Deciders:** Team
-- **Related:** `docs/backend.md` §5 (ML spine), `docs/hackathon.md` §4 (the trust
-  stack), `docs/security.md` §2 (human gate on high-uncertainty), `app/ml/`.
+- **Related:** `docs/architecture/backend.md` §5 (ML spine), `docs/hackathon/brief.md` §4 (the trust
+  stack), `docs/security/overview.md` §2 (human gate on high-uncertainty), `app/ml/`.
 
 ## Context
 
 The platform's differentiator is the **trust stack**: *every autonomous action is
 uncertainty-bounded (conformal) → human gate → explainable (SHAP) → guarded
-(rails) → traced (OTel + audit log)* (`docs/hackathon.md` §4). The first link
+(rails) → traced (OTel + audit log)* (`docs/hackathon/brief.md` §4). The first link
 carries the rest: the human-in-the-loop gate fires when a prediction is
 **high-uncertainty**, so *what counts as uncertain* must be a **statistical
-guarantee, not a hand-picked number** (`docs/backend.md` §5, §3). A threshold like
+guarantee, not a hand-picked number** (`docs/architecture/backend.md` §5, §3). A threshold like
 "escalate if probability < 0.7" is arbitrary — it has no defensible coverage
 meaning, and a juror (human or AI) can ask "why 0.7?" and get no principled
 answer.
@@ -21,11 +21,11 @@ answer.
 We need an uncertainty layer that:
 
 1. wraps a **real supervised model** (XGBoost, CPU-only, light — already chosen in
-   `docs/backend.md` §5) without retraining it or changing its architecture;
+   `docs/architecture/backend.md` §5) without retraining it or changing its architecture;
 2. produces a **distribution-free** guarantee — no assumption that the model's
    raw scores are calibrated probabilities;
 3. exposes a single, explainable knob (a target **coverage rate**) that drives the
-   gate and reads cleanly on the SHAP/uncertainty demo panel (`docs/hackathon.md`
+   gate and reads cleanly on the SHAP/uncertainty demo panel (`docs/hackathon/brief.md`
    §7).
 
 ## Decision
@@ -65,7 +65,7 @@ Targeted versions (verified & smoke-tested 2026-08-03): **mapie 1.4**
 - **+** **Light and portable:** split conformal is a single held-out calibration
   pass — CPU-only, fits the 16 GB / no-GPU machine, no extra model to serve.
 - **+** Feeds the money-shot directly: interval + coverage rate + SHAP render as
-  one explanation panel (`docs/hackathon.md` §7) and complete the trust-stack
+  one explanation panel (`docs/hackathon/brief.md` §7) and complete the trust-stack
   sentence.
 - **−** A **calibration split** costs labelled data and is mandatory — calibrating
   on training rows silently voids the guarantee. Accepted and enforced in
@@ -93,5 +93,5 @@ Targeted versions (verified & smoke-tested 2026-08-03): **mapie 1.4**
   wrong assumptions for a CPU-only, on-the-day spine.
 - **A hand-tuned threshold** (e.g. escalate if score < 0.7). Simplest to ship and
   exactly what we are trying to avoid: arbitrary, undefendable, and the opposite
-  of the "measurable enough to trust" thesis (`docs/hackathon.md` §9). Conformal
+  of the "measurable enough to trust" thesis (`docs/hackathon/brief.md` §9). Conformal
   prediction replaces the magic number with a coverage guarantee.

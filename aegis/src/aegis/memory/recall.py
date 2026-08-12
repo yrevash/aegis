@@ -1,6 +1,6 @@
 """Memory READ path — per-tier recall (semantic / profile / episodic / procedural).
 
-This is the first half of context engineering (``docs/MEMORY_SPEC.md`` §B): gather the
+This is the first half of context engineering (``docs/architecture/memory-spec.md`` §B): gather the
 raw material the working-memory assembler (:mod:`aegis.memory.working`) later budgets and
 orders. It does **selection**, not layout — no token budget, no spotlighting here.
 

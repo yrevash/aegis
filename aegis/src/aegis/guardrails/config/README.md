@@ -22,7 +22,7 @@ validator), so they cannot drift apart.
 
 ## No local guardrail model
 
-Per `docs/security.md`, all detection is **pure code or a cheap API call**. There
+Per `docs/security/overview.md`, all detection is **pure code or a cheap API call**. There
 is no Llama Guard / Presidio-with-spaCy / local classifier — the 16 GB, no-GPU
 constraint rules them out. The injection classifier is a `ModelRole.CHEAP`
 (`gpt-4o-mini`) call through the LiteLLM gateway; PII detection is stdlib regex.
@@ -32,7 +32,7 @@ constraint rules them out. The injection classifier is a `ModelRole.CHEAP`
 The **output rail assumes the complete answer**. When the final answer is
 streamed to the frontend token-by-token, the output guard cannot scan-then-emit,
 because the offending token may already be on the wire. Two supported strategies
-(coordinate with `docs/frontend.md`):
+(coordinate with `docs/learn/30-frontend.md`):
 
 1. **Buffer briefly** — accumulate the answer (or fixed-size chunks) and run
    `check_output` on the buffered text *before* releasing it. Adds a little

@@ -9,9 +9,9 @@ agents, support requests, and knowledge documents) where the **structure is draw
 seeded random generator**, the **text is written by an LLM** (with a templated fallback),
 the **ML label is a real function of the features** so a model can actually learn it, and
 **no real personal data is ever involved**. Everything lives in
-[`backend/src/app/adapter/generator.py`](../backend/src/app/adapter/generator.py) and the
+[`backend/src/app/adapter/generator.py`](../../backend/src/app/adapter/generator.py) and the
 seed corpus in
-[`backend/src/app/adapter/corpus/`](../backend/src/app/adapter/corpus/).
+[`backend/src/app/adapter/corpus/`](../../backend/src/app/adapter/corpus/).
 
 ---
 
@@ -43,7 +43,7 @@ generator. We use exactly this, in three layers:
 ### Layer 1 — Schema-first, seeded structure
 
 Define the *shape of the world* as strict, typed models first
-([`adapter/schema.py`](../backend/src/app/adapter/schema.py)): enums for every categorical
+([`adapter/schema.py`](../../backend/src/app/adapter/schema.py)): enums for every categorical
 (priority, channel, region, tier…), foreign keys between entities, and a designated **ML
 target** field. Then draw all the *feature-bearing* fields from a single seeded
 `random.Random`. A fixed `seed` makes the entire structural world **reproducible** — rerun
@@ -66,7 +66,7 @@ schema-valid data and offline runs never break.
 ### Layer 3 — Inject a learnable signal for the ML target
 
 The target (`resolution_hours`) is **computed from the features** via
-[`adapter/ml_spec.py`](../backend/src/app/adapter/ml_spec.py) plus a small amount of seeded
+[`adapter/ml_spec.py`](../../backend/src/app/adapter/ml_spec.py) plus a small amount of seeded
 Gaussian noise. So higher priority resolves faster *on average*, but not deterministically
 — exactly the "signal + noise" a real supervised model must learn (and exactly what
 conformal prediction needs a calibration split to quantify). The generator's own test
@@ -93,7 +93,7 @@ asserts this: urgent tickets resolve faster than low-priority ones on average.
 ## 3. What to include for best quality
 
 When you sit down on the day, tune
-[`GeneratorConfig`](../backend/src/app/adapter/generator.py) so the dataset has all of
+[`GeneratorConfig`](../../backend/src/app/adapter/generator.py) so the dataset has all of
 these. This is the checklist that separates a demo that *looks* real from one that *is*
 useful:
 
@@ -123,7 +123,7 @@ useful:
 ## 4. Quality checks (run these before you trust the data)
 
 Never seed the stores from data you haven't checked. The generator ships a **pure,
-offline quality gate** — [`assess_quality(dataset)`](../backend/src/app/adapter/generator.py)
+offline quality gate** — [`assess_quality(dataset)`](../../backend/src/app/adapter/generator.py)
 — that returns a `DatasetQualityReport`:
 
 ```python
@@ -170,7 +170,7 @@ handful of records to make sure the text is coherent and on-topic.
 
 **How the documents reach retrieval.** `SyntheticDataset.documents` (LLM-written) and the
 hand-authored `adapter/corpus/*.md` files are ingested by the retrieval pipeline
-([`retrieval/pipeline.py`](../backend/src/app/retrieval/pipeline.py)), which chunks them
+([`retrieval/pipeline.py`](../../backend/src/app/retrieval/pipeline.py)), which chunks them
 **structure-aware** (heading-scoped chunks with overlap and a section prefix), validates
 each chunk for poisoning, deduplicates (exact **and** near-duplicate), and writes them into
 pgvector (vectors) and Neo4j (graph, via LightRAG). Re-ingesting the same corpus is

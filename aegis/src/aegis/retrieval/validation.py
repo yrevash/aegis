@@ -1,6 +1,6 @@
 """Content validation before writing to the knowledge graph (poisoning defense).
 
-`docs/security.md` calls for validating content *before* it enters the store so that
+`docs/security/overview.md` calls for validating content *before* it enters the store so that
 adversarial "documents" cannot plant instructions or junk that later gets retrieved
 (RAG/vector poisoning, memory poisoning). This is a cheap, deterministic, pure-code
 gate — no model call — that runs on every chunk during ingestion. Spotlighting

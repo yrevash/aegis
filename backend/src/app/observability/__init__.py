@@ -8,7 +8,7 @@ host coupling the extraction had to sever. All call sites (``app.agent.graph``,
 ``app.agent.orchestrator``, ``app.core.llm``) keep working unchanged through
 this shim.
 
-Public surface (per the shared contract in ``docs/AGENT_BRIEF.md``):
+Public surface (per the shared contract in ``docs/module/MODULE_REFERENCE.md``):
 
 - :func:`init_observability` — set up the tracer provider + local Phoenix export.
 - :func:`get_tracer` — the OTel tracer used across the app.

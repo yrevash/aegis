@@ -1,6 +1,6 @@
 """Agent-risk heat-map data for ``GET /risk-map``.
 
-A typed data module grounded verbatim in ``docs/SECURITY_OWASP_AGENTIC.md``.
+A typed data module grounded verbatim in ``docs/security/owasp-agentic.md``.
 Each entry is one **OWASP Top 10 for Agentic Applications (2026)** theme, placed on a
 1..5 likelihood × impact grid with an **honest** residual band after Aegis's real
 control. Every ``control_ref`` points at a **real file/module** you can open — the
@@ -22,13 +22,13 @@ from app.api.schemas import RiskEntry, RiskMapResponse, RiskScale
 _NOTE = (
     "This map reflects *this deployment's* own security posture, aligned to the OWASP "
     "Top 10 for Agentic Applications (2026). Bands are honest engineering judgement "
-    "grounded in docs/SECURITY_OWASP_AGENTIC.md — defense-in-depth, not prevention: "
+    "grounded in docs/security/owasp-agentic.md — defense-in-depth, not prevention: "
     "prompt injection is never marked fully resolved. Each control_ref names a real "
     "file. The map is repopulated per problem/deployment as controls change."
 )
 
 # Grounded verbatim in the "Risk → Aegis control → real file" table of
-# docs/SECURITY_OWASP_AGENTIC.md. Likelihood/impact are honest 1..5 bands.
+# docs/security/owasp-agentic.md. Likelihood/impact are honest 1..5 bands.
 _RISKS: tuple[RiskEntry, ...] = (
     RiskEntry(
         id="AA-01",

@@ -3,7 +3,7 @@
 Wires the whole platform together: mounts the API + SSE router, initialises
 OpenTelemetry/Phoenix observability on startup, and enables CORS for the Next.js
 console (``http://localhost:3000``). The rich OpenAPI metadata is deliberate —
-``docs/backend.md`` §1 counts the auto-generated docs as free documentation
+``docs/architecture/backend.md`` §1 counts the auto-generated docs as free documentation
 points that the AI reader parses.
 
 Run locally with::

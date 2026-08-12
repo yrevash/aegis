@@ -3,12 +3,12 @@
 - **Status:** Accepted
 - **Date:** 2026-08-03
 - **Deciders:** Team
-- **Related:** `docs/security.md` §3 (layered guardrail architecture),
-  `docs/threat_model.md`, ADR 0001 (LiteLLM gateway).
+- **Related:** `docs/security/overview.md` §3 (layered guardrail architecture),
+  `docs/security/threat-model.md`, ADR 0001 (LiteLLM gateway).
 
 ## Context
 
-`docs/security.md` mandates a **layered, RAM-friendly, defense-in-depth** rail
+`docs/security/overview.md` mandates a **layered, RAM-friendly, defense-in-depth** rail
 system wrapping *every* model interaction: an **input rail** (PII redaction +
 API injection classifier + schema validation) and an **output rail** (schema
 validation + PII redaction/content filter). Two constraints shape the choice:
@@ -17,11 +17,11 @@ validation + PII redaction/content filter). Two constraints shape the choice:
    no Docker, no GPU. Llama Guard, Presidio-with-spaCy, and any locally-served
    classifier are out. Detection must be **pure code or a cheap API call**.
 2. **Security must be *legible*.** The work is graded by a human jury *and* an AI
-   reader. `docs/security.md` §6 calls out "the Colang / guardrail policy
+   reader. `docs/security/overview.md` §6 calls out "the Colang / guardrail policy
    artifact — a human-readable policy file = *our security is codified, not
    vibes*" as a place points are won.
 
-The two orchestration options named in `docs/security.md` §3 are **Guardrails AI**
+The two orchestration options named in `docs/security/overview.md` §3 are **Guardrails AI**
 (composable Python validators) and **NeMo Guardrails** (a **Colang** policy DSL).
 Both can wrap input/output rails; both can call custom Python for the actual
 checks; neither *requires* a local model for our chosen rails.
@@ -75,7 +75,7 @@ call; PII detection is stdlib regex.
 - **Guardrails AI (composable validators).** Excellent, Pythonic, strong
   validator hub. But its artifact is Python/RAIL-XML config, which reads as code,
   not as a *policy* — it loses the "human-readable security artifact" scoring
-  angle that `docs/security.md` §6 explicitly calls out. Our checks are custom
+  angle that `docs/security/overview.md` §6 explicitly calls out. Our checks are custom
   and self-built anyway, so its validator hub is not decisive.
 - **Colang 2.x.** More powerful (imports, standard library, explicit `flow`
   activation), but still beta in 0.23, and the built-in guardrail catalogue "is

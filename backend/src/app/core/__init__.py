@@ -1,6 +1,6 @@
 """Core: the model registry and the LiteLLM gateway.
 
-Public surface (per the shared contract in ``docs/AGENT_BRIEF.md``):
+Public surface (per the shared contract in ``docs/module/MODULE_REFERENCE.md``):
 
 - :func:`complete` / :func:`embed` — the async LLM gateway, routing by role.
 - :class:`LLMResult`, :class:`ToolCallResult`, :class:`Usage` — result types.

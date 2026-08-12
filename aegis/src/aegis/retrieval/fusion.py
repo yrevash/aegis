@@ -2,7 +2,7 @@
 
 The SOTA hybrid pipeline retrieves *wide* from several retrievers (dense vector ANN,
 graph traversal, BM25/keyword) and fuses their ranked lists into one before reranking.
-`docs/ARCHITECTURE_REVIEW.md` §4 locks RRF as the fusion method: it needs only the
+`docs/learn/10-architecture.md` locks RRF as the fusion method: it needs only the
 *rank* of a document in each list, so it is robust to the incomparable score scales of a
 cosine similarity, a graph-proximity score, and a BM25 score — no fragile weighting.
 

@@ -16,7 +16,7 @@ Two chunkers live here:
   the graph extractor both see where the passage sits in the document. This mirrors the
   current recommendation — start from a recursive/structure-aware splitter at ~400–512
   tokens with 10–20 % overlap, add section context — rather than naive fixed windows
-  (see ``docs/SYNTHETIC_DATA.md`` refs).
+  (see ``docs/architecture/synthetic-data.md`` refs).
 
 Chunk size is measured in whitespace-delimited words as a portable, dependency-free
 approximation of tokens (roughly ~0.75 tokens/word for English).

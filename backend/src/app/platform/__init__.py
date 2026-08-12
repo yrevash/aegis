@@ -12,7 +12,7 @@ Everything here is deliberately real and honest:
   PyPI registry query and — when the network is unavailable — refuses to fabricate a
   clean bill of health, returning ``online=False`` with every status ``unknown``.
 * :mod:`~app.platform.risk_map` is a typed data module grounded verbatim in
-  ``docs/SECURITY_OWASP_AGENTIC.md``: each OWASP-Top-10-for-Agentic risk with its real
+  ``docs/security/owasp-agentic.md``: each OWASP-Top-10-for-Agentic risk with its real
   Aegis mitigation and a ``control_ref`` pointing at a real file.
 * :mod:`~app.platform.savings` derives the baseline-vs-actual spend from the real
   gateway usage ledger and says plainly which parts are measured vs estimated.

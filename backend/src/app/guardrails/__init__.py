@@ -1,7 +1,7 @@
 """Backend shim: the guardrail system now lives in ``aegis.guardrails``.
 
 This package used to own the full layered, RAM-friendly, defense-in-depth
-guardrail implementation described in ``docs/security.md`` §3. That
+guardrail implementation described in ``docs/security/overview.md`` §3. That
 implementation has moved to the standalone, LLM-agnostic ``aegis.guardrails``
 package (see ``/aegis``) so it can be imported by any component without pulling
 in this platform's LLM gateway. This module is the **strangler shim**: it

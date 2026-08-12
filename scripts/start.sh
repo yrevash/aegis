@@ -3,7 +3,7 @@
 # Usage: ./scripts/start.sh [safe|lite|full]   (default: lite)
 #   safe : console only, mock transport — no backend, no infra.
 #   lite : backend with NO databases (STORES=off, SQLite audit) + live console.
-#   full : backend with all stores (Postgres/pgvector + Neo4j + Redis) + console.
+#   full : backend with all stores (Postgres + Qdrant + Neo4j + Redis) + console.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-lite}"
@@ -32,7 +32,7 @@ fi
   NEXT_PUBLIC_USE_MOCK="$USE_MOCK" NEXT_PUBLIC_API_BASE='http://localhost:8000' \
     NEXT_PUBLIC_HEALTH_PATH='/health' exec npm run dev -- --port 3000
 ) & pids+=($!)
-echo "  console  -> http://localhost:3000  (login admin/admin)"
+echo "  console  -> http://localhost:3000  (login admin/demo)"
 
 [ "$MODE" = "lite" ] && echo -e "\nLite mode: no databases needed; only GENAILAB_API_KEY (backend/.env) for real answers."
 echo -e "\nCtrl-C to stop both.\n"

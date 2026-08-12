@@ -1,6 +1,6 @@
 """Two-tier semantic cache in front of retrieval (Redis).
 
-`docs/backend.md` §4: "Semantic cache in front — exact-match tier first, semantic tier on
+`docs/architecture/backend.md` §4: "Semantic cache in front — exact-match tier first, semantic tier on
 top; hit returns instantly, miss runs retrieval then writes back with TTL." This is a
 first-class part of the cost story surfaced on the metrics dashboard (cache-hit rate).
 

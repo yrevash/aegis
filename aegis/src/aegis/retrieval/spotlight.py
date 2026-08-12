@@ -1,6 +1,6 @@
 """Azure **Spotlighting** — marking retrieved content as data, not instructions.
 
-Indirect prompt injection is the top RAG-specific risk in `docs/security.md`: an
+Indirect prompt injection is the top RAG-specific risk in `docs/security/overview.md`: an
 attacker plants instructions in a document that later gets retrieved and silently
 obeyed. Spotlighting (Microsoft, arXiv 2403.14720; MSRC 2025 guidance) defends against
 this by giving the model an unmistakable signal about which spans are untrusted DATA.

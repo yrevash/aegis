@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-05
 - **Deciders:** Team
-- **Related:** `docs/ARCHITECTURE_REVIEW.md` §1, `docs/security.md` §4.1
+- **Related:** `docs/security/overview.md` §4.1
   (statelessness → horizontal scale), `app/agent/graph.py`,
   `app/agent/orchestrator.py`, `app/data/approvals.py`.
 
@@ -15,7 +15,7 @@ its first form was entirely in-process: the graph compiled with LangGraph's
 `asyncio.Future` registry (`app/agent/approvals.py`). A crash, a restart, or a second
 Uvicorn worker between the `interrupt` and the decision lost the paused run — directly
 contradicting the platform's own "stateless workers → horizontal scale" principle
-(`docs/security.md` §4.1). There was no queue an admin could list, no SLA, no
+(`docs/security/overview.md` §4.1). There was no queue an admin could list, no SLA, no
 timeout/escalation, and the approver had to answer while the SSE socket stayed open.
 
 We need durable pause/resume **and** an async "approve later from an inbox" surface,
