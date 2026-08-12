@@ -25,6 +25,7 @@ import {
   KeyRound,
   Layers,
   LayoutDashboard,
+  Lock,
   Network,
   PiggyBank,
   ScrollText,
@@ -178,6 +179,15 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Flags outdated dependencies before a known-CVE lapse — installed compared to latest',
     group: 'Operations',
   },
+  security: {
+    id: 'security',
+    label: 'Security',
+    icon: Lock,
+    hint: 'OWASP · posture',
+    tooltip:
+      'Aegis Security posture — every OWASP-Agentic threat mapped to the live Aegis control holding it down, with an honest enforced / partial / not-covered status derived from real wiring signals',
+    group: 'Operations',
+  },
   llmops: {
     id: 'llmops',
     label: 'LLMOps',
@@ -232,7 +242,7 @@ export const SECTIONS: Record<string, Section> = {
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
-  devops: ['dashboard', 'stack', 'patch', 'audit'],
+  devops: ['dashboard', 'stack', 'patch', 'security', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
 
