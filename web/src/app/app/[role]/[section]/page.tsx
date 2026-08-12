@@ -3,6 +3,7 @@ import { CacheMount } from '@/components/cache/CacheView'
 import { ConsoleMount } from '@/components/console/ConsoleMount'
 import { EvalsMount } from '@/components/evals/EvalsView'
 import { TokenOptMount } from '@/components/gateway/TokenOptView'
+import { GraphMount } from '@/components/graph/GraphView'
 import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
 import { MLOpsMount } from '@/components/ml/MLOpsView'
 import { MemoryMount } from '@/components/memory/MemoryView'
@@ -38,6 +39,7 @@ export default async function SectionPage({
   if (section === 'evals') return <EvalsMount />
   if (section === 'memory') return <MemoryMount />
   if (section === 'rag') return <RagMount role={role} />
+  if (section === 'graph') return <GraphMount role={role} />
   if (section === 'cache') return <CacheMount />
   if (section === 'tokenopt') return <TokenOptMount />
   if (section === 'guardrails') return <GuardrailsMount />

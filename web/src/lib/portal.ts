@@ -32,6 +32,7 @@ import {
   Sigma,
   SlidersHorizontal,
   Sparkles,
+  Waypoints,
   Workflow,
   type LucideIcon,
 } from 'lucide-react'
@@ -137,6 +138,14 @@ export const SECTIONS: Record<string, Section> = {
     tooltip:
       'Aegis Guardrails — the defense-in-depth rail stack (schema → PII → injection → content-safety → topical → grounding), the active engine (programmatic vs NeMo Colang), the live verdict feed, and a red-team block-rate teaser',
   },
+  graph: {
+    id: 'graph',
+    label: 'Graph',
+    icon: Waypoints,
+    hint: 'entities · relations',
+    tooltip:
+      'Aegis Knowledge Graph — the typed entity graph (organizations, people, products, policies…) and the real relations between them; a run highlights the evidence subgraph the answer stood on',
+  },
   simulation: {
     id: 'simulation',
     label: 'Access demo',
@@ -213,7 +222,7 @@ export const SECTIONS: Record<string, Section> = {
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
-  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'cache', 'guardrails', 'simulation'],
+  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
