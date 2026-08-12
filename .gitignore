@@ -45,3 +45,6 @@ Thumbs.db
 
 # Linked worktrees (carry venv/node_modules) — never scan or track
 .claude/
+
+# superpowers scratch (sdd reports, brainstorm mockups)
+.superpowers/
