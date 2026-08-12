@@ -27,11 +27,14 @@ from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.fusion import RankedList, collect_origins, reciprocal_rank_fusion
 from aegis.retrieval.lightrag_backend import LightRAGBackend
 from aegis.retrieval.models import (
+    ArmReport,
     Candidate,
     Chunk,
     GraphDelta,
     IngestReport,
     Provenance,
+    RerankReport,
+    RetrievalObservability,
     RetrievalResult,
     Source,
 )
@@ -72,11 +75,30 @@ class RetrievalConfig:
     recall_top_k: int = 20
     final_top_k: int = 6
     rerank_role: ModelRole = ModelRole.CHEAP
+    #: Second-stage LLM rerank toggle. When ``False`` the fused RRF order is kept
+    #: (truncated to ``final_top_k``) with **no** rerank model call — a real behaviour
+    #: change a consumer can observe via ``observability.rerank.ran``.
+    rerank_enabled: bool = True
+    #: Microsoft-Spotlighting toggle for the assembled answer context. When ``False``
+    #: the context is assembled un-spotlighted (raw fenced sources) — observable via
+    #: ``observability.spotlight_applied``. Defaults ON (the injection defence).
+    spotlight_enabled: bool = True
     chunk_size: int = 400
     chunk_overlap: int = 60
     cache_ttl_seconds: int = 3600
     semantic_threshold: float = 0.985
+    #: RRF damping constant (the only RRF tunable — RRF is deliberately *rank-based and
+    #: weightless* per ``docs/ARCHITECTURE_REVIEW.md`` §4, so there are no per-arm
+    #: fusion weights to expose; a higher ``k`` flattens the rank weighting).
     rrf_k: int = 60
+    #: Default upper bound on Self-RAG retrieval passes, read by
+    #: :func:`aegis.retrieval.agentic.agentic_retrieve` when a caller does not override
+    #: ``max_rounds``. ``1`` disables iteration (single-shot).
+    agentic_max_rounds: int = 2
+    #: Whether a context-aware query rewrite should run before retrieval. Declarative
+    #: default for the orchestration layer that owns the rewrite call (the rewrite
+    #: itself lives in :mod:`aegis.retrieval.query_rewrite`, outside ``retrieve()``).
+    query_rewrite_enabled: bool = True
     #: Dimensionality of a "real" (non-lite) query embedding; gates `query_vec` reuse.
     embed_dim: int = EMBED_DIM
     #: Store connection settings (only read by the LightRAG-backed production path).
@@ -136,21 +158,35 @@ class Retriever:
         if semantic is not None:
             return semantic
 
-        fused, origins, nodes, edges = await self._recall_and_fuse(query, persona)
-        top = await rerank(
-            query,
-            fused,
-            complete=self.complete,
-            top_k=self.config.final_top_k,
-            role=self.config.rerank_role,
-        )
+        fused, origins, nodes, edges, arms = await self._recall_and_fuse(query, persona)
+        if self.config.rerank_enabled:
+            top = await rerank(
+                query,
+                fused,
+                complete=self.complete,
+                top_k=self.config.final_top_k,
+                role=self.config.rerank_role,
+            )
+            rerank_ran = True
+        else:
+            # Knob off: keep the fused RRF order, no rerank model call.
+            top = fused[: self.config.final_top_k]
+            rerank_ran = False
 
+        rerank_report = RerankReport(
+            ran=rerank_ran,
+            input_candidates=len(fused),
+            kept=len(top),
+            top_scores=[c.score for c in top],
+        )
         result = self._assemble(
             top,
             num_candidates=len(fused),
             recall_nodes=nodes,
             recall_edges=edges,
             origins=origins,
+            arms=arms,
+            rerank=rerank_report,
         )
         await self.cache.set(query, persona, query_vec, result)
         # Surface the query embedding for the "free" episodic-write reuse — but only on
@@ -166,7 +202,13 @@ class Retriever:
 
     async def _recall_and_fuse(
         self, query: str, persona: str | None
-    ) -> tuple[list[Candidate], list[RetrievalOrigin], list[GraphNode], list[GraphEdge]]:
+    ) -> tuple[
+        list[Candidate],
+        list[RetrievalOrigin],
+        list[GraphNode],
+        list[GraphEdge],
+        list[ArmReport],
+    ]:
         """Run hybrid wide recall and fuse the ranked lists with RRF.
 
         Produces the dense/graph list(s) from the backend, adds a BM25/keyword list
@@ -178,14 +220,25 @@ class Retriever:
             persona: Active persona (scopes store access where supported).
 
         Returns:
-            A tuple ``(fused_candidates, origins, nodes, edges)`` where ``origins`` are
-            the distinct retrieval origins that produced a surviving candidate.
+            A tuple ``(fused_candidates, origins, nodes, edges, arms)`` where
+            ``origins`` are the distinct retrieval origins that produced a surviving
+            candidate and ``arms`` are the per-arm measured candidate counts
+            (vector / graph / bm25) *before* fusion.
         """
         lists, nodes, edges = await self._recall_lists(query, persona)
         pool = _unique_candidates(lists)
         keyword = _bm25_ranked_list(query, pool)
-        fused = reciprocal_rank_fusion([*lists, keyword], k=self.config.rrf_k)
-        return fused, collect_origins(fused), nodes, edges
+        all_lists = [*lists, keyword]
+        fused = reciprocal_rank_fusion(all_lists, k=self.config.rrf_k)
+        arms = [
+            ArmReport(
+                origins=list(ranked.origins),
+                candidates=len(ranked.candidates),
+                fired=bool(ranked.candidates),
+            )
+            for ranked in all_lists
+        ]
+        return fused, collect_origins(fused), nodes, edges, arms
 
     async def _recall_lists(
         self, query: str, persona: str | None
@@ -217,6 +270,8 @@ class Retriever:
         recall_nodes: list[GraphNode],
         recall_edges: list[GraphEdge],
         origins: list[RetrievalOrigin],
+        arms: list[ArmReport],
+        rerank: RerankReport,
     ) -> RetrievalResult:
         """Build a `RetrievalResult` from reranked candidates and the graph slice.
 
@@ -228,8 +283,15 @@ class Retriever:
             recall_nodes: Graph nodes touched during recall.
             recall_edges: Graph edges touched during recall.
             origins: Distinct retrieval origins that contributed to the fused pool.
+            arms: Per-arm measured candidate counts (vector / graph / bm25).
+            rerank: Whether rerank ran and the top scores it produced.
         """
-        answer_context = build_spotlighted_context([c.text for c in top])
+        spotlight_on = self.config.spotlight_enabled
+        answer_context = (
+            build_spotlighted_context([c.text for c in top])
+            if spotlight_on
+            else _plain_context([c.text for c in top])
+        )
         sources = [
             Source(id=c.id, text=c.text, score=c.score, metadata=c.metadata) for c in top
         ]
@@ -240,6 +302,13 @@ class Retriever:
             graph_delta=GraphDelta(nodes=recall_nodes, edges=recall_edges),
             cache_hit=False,
             provenance=Provenance(origins=origins, fusion=FusionMethod.RRF),
+            observability=RetrievalObservability(
+                arms=arms,
+                fusion=FusionMethod.RRF,
+                fused_candidates=num_candidates,
+                rerank=rerank,
+                spotlight_applied=spotlight_on and bool(top),
+            ),
         )
 
     async def ingest(self, docs: Sequence[object]) -> IngestReport:
@@ -311,6 +380,19 @@ class Retriever:
             report.entities = entities
             report.relations = relations
         return report
+
+
+def _plain_context(chunks: list[str]) -> str:
+    """Assemble reranked chunks into an *un-spotlighted* context block.
+
+    Used only when the ``spotlight_enabled`` knob is off: sources are still numbered
+    and fenced for readability, but the Microsoft-Spotlighting datamarking/instruction
+    layer is deliberately omitted (so ``observability.spotlight_applied`` is ``False``).
+    Off by choice, never silently — the injection defence is ON by default.
+    """
+    if not chunks:
+        return ""
+    return "\n\n".join(f"[source {i}]\n{chunk}" for i, chunk in enumerate(chunks, 1))
 
 
 def _coerce_doc(doc: object, index: int) -> tuple[str, str]:

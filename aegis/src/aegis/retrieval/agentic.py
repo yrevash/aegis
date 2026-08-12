@@ -31,7 +31,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from aegis.core.models import ModelRole
-from aegis.retrieval.models import RetrievalResult, Source
+from aegis.retrieval.models import (
+    AgenticReport,
+    RetrievalResult,
+    RewriteReport,
+    Source,
+)
 from aegis.retrieval.protocols import CompleteFn
 from aegis.retrieval.query_rewrite import CallUsage, RewriteResult, usage_of
 from aegis.retrieval.spotlight import build_spotlighted_context
@@ -240,6 +245,7 @@ async def agentic_retrieve(
 
     # Optional context-aware rewrite of the entry query before the first retrieval.
     active_query = query
+    rewrite: RewriteResult | None = None
     if rewrite_fn is not None:
         rewrite = await rewrite_fn(query, history=None)
         total_usage += rewrite.usage
@@ -276,6 +282,38 @@ async def agentic_retrieve(
             )
         )
 
+    # Stamp loop-level observability onto the (merged) result so a single
+    # RetrievalResult.observability carries the WHOLE arsenal story: the round-1 arms /
+    # fusion / rerank / spotlight measured by the pipeline, PLUS whether a rewrite and
+    # the Self-RAG loop actually ran. All measured, never fabricated. Mutated in place
+    # (never a fresh object) so the single-shot result's identity is preserved.
+    _stamp_loop_observability(
+        result, rewrite=rewrite, rounds=rounds, used_rounds=used_rounds, max_rounds=rounds_cap
+    )
     return AgenticRetrievalResult(
         result=result, rounds=rounds, used_rounds=used_rounds, usage=total_usage
+    )
+
+
+def _stamp_loop_observability(
+    result: RetrievalResult,
+    *,
+    rewrite: RewriteResult | None,
+    rounds: list[RetrievalRound],
+    used_rounds: int,
+    max_rounds: int,
+) -> None:
+    """Attach rewrite + Self-RAG observability to ``result.observability`` (in place)."""
+    if rewrite is not None:
+        result.observability.rewrite = RewriteReport(
+            ran=True,
+            changed=rewrite.changed,
+            original=rewrite.original,
+            rewritten=rewrite.rewritten,
+        )
+    result.observability.agentic = AgenticReport(
+        ran=True,
+        used_rounds=used_rounds,
+        max_rounds=max_rounds,
+        round_queries=[r.query for r in rounds],
     )

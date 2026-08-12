@@ -26,6 +26,8 @@ Self-RAG/FLARE iterative loop in :mod:`aegis.retrieval.agentic` (`agentic_retrie
 from __future__ import annotations
 
 from aegis.retrieval.models import (
+    AgenticReport,
+    ArmReport,
     CacheProvenance,
     Candidate,
     Chunk,
@@ -33,7 +35,10 @@ from aegis.retrieval.models import (
     IngestReport,
     Provenance,
     Recall,
+    RerankReport,
+    RetrievalObservability,
     RetrievalResult,
+    RewriteReport,
     Source,
 )
 from aegis.retrieval.pipeline import (
@@ -46,6 +51,8 @@ from aegis.retrieval.types import FusionMethod, GraphEdge, GraphNode, RetrievalO
 
 __all__ = [
     "EMBED_DIM",
+    "AgenticReport",
+    "ArmReport",
     "CacheProvenance",
     "Candidate",
     "Chunk",
@@ -56,10 +63,13 @@ __all__ = [
     "IngestReport",
     "Provenance",
     "Recall",
+    "RerankReport",
     "RetrievalConfig",
+    "RetrievalObservability",
     "RetrievalOrigin",
     "RetrievalResult",
     "Retriever",
+    "RewriteReport",
     "Source",
     "build_default_retriever",
 ]

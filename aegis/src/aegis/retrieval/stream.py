@@ -40,6 +40,54 @@ def _source_label(metadata: dict) -> str | None:
     return None
 
 
+def _observability_payload(result: RetrievalResult) -> dict:
+    """Serialise the "which arsenal methods ran" record for the citations event.
+
+    Every number here is measured by the pipeline (arm candidate counts, fused pool
+    size, rerank scores, iteration count) — the UI renders exactly what ran, never a
+    fabricated funnel.
+    """
+    obs = result.observability
+    return {
+        "arms": [
+            {
+                "origins": [o.value for o in arm.origins],
+                "candidates": arm.candidates,
+                "fired": arm.fired,
+            }
+            for arm in obs.arms
+        ],
+        "fusion": obs.fusion.value,
+        "fused_candidates": obs.fused_candidates,
+        "rerank": {
+            "ran": obs.rerank.ran,
+            "input_candidates": obs.rerank.input_candidates,
+            "kept": obs.rerank.kept,
+            "top_scores": obs.rerank.top_scores,
+        },
+        "spotlight_applied": obs.spotlight_applied,
+        "rewrite": (
+            {
+                "ran": obs.rewrite.ran,
+                "changed": obs.rewrite.changed,
+                "rewritten": obs.rewrite.rewritten,
+            }
+            if obs.rewrite is not None
+            else None
+        ),
+        "agentic": (
+            {
+                "ran": obs.agentic.ran,
+                "used_rounds": obs.agentic.used_rounds,
+                "max_rounds": obs.agentic.max_rounds,
+                "round_queries": obs.agentic.round_queries,
+            }
+            if obs.agentic is not None
+            else None
+        ),
+    }
+
+
 async def stream_retrieve(
     retriever: RetrieveLike,
     query: str,
@@ -116,6 +164,7 @@ async def stream_retrieve(
                         for e in result.graph_delta.edges
                     ],
                 },
+                "observability": _observability_payload(result),
             },
         )
     return result

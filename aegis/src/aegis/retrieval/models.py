@@ -134,6 +134,114 @@ class Provenance(BaseModel):
     cache: CacheProvenance | None = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Observability: WHICH arsenal methods actually ran, with REAL measured numbers.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ArmReport(BaseModel):
+    """One recall arm's measured contribution, before fusion.
+
+    A "fired" arm is one that produced at least one candidate for this query — so a
+    consumer can see, honestly, that (say) the graph arm ran but returned nothing
+    while the vector and bm25 arms did produce candidates.
+
+    Attributes:
+        origins: The retrieval origin(s) this arm represents (usually one; a
+            pre-blended backend list may carry several, e.g. vector+graph).
+        candidates: The number of candidates this arm produced (pre-fusion, measured).
+        fired: Whether this arm produced any candidate (``candidates > 0``).
+    """
+
+    origins: list[RetrievalOrigin] = Field(default_factory=list)
+    candidates: int = 0
+    fired: bool = False
+
+
+class RerankReport(BaseModel):
+    """Whether the LLM reranker ran, and the top rerank scores it produced.
+
+    Attributes:
+        ran: Whether the second-stage LLM rerank executed (``False`` when the
+            ``rerank_enabled`` knob is off — the fused RRF order is kept instead).
+        input_candidates: How many fused candidates were offered to rerank (measured).
+        kept: How many candidates survived into the final sources (``final_top_k`` cap).
+        top_scores: The survivors' scores in final order — real rerank grades when
+            ``ran`` is true, else the fused RRF scores that were kept.
+    """
+
+    ran: bool = False
+    input_candidates: int = 0
+    kept: int = 0
+    top_scores: list[float] = Field(default_factory=list)
+
+
+class RewriteReport(BaseModel):
+    """Whether a context-aware query rewrite ran before retrieval.
+
+    Populated by the layer that owns the rewrite (the agentic loop / orchestrator),
+    ``None`` when this result came straight from a single ``retrieve()`` with no rewrite.
+
+    Attributes:
+        ran: Whether a rewrite call was made at all.
+        changed: Whether the rewrite actually differed from the original query.
+        original: The query as it came in.
+        rewritten: The standalone query retrieval actually ran with.
+    """
+
+    ran: bool = False
+    changed: bool = False
+    original: str | None = None
+    rewritten: str | None = None
+
+
+class AgenticReport(BaseModel):
+    """Whether the bounded Self-RAG loop iterated, and how many times.
+
+    Populated by :func:`aegis.retrieval.agentic.agentic_retrieve`; ``None`` for a
+    single-shot ``retrieve()``.
+
+    Attributes:
+        ran: Whether the agentic loop wrapped this retrieval.
+        used_rounds: How many retrieval passes actually ran (``>= 1``, ``<= max``).
+        max_rounds: The configured upper bound on retrieval passes.
+        round_queries: The query actually retrieved with, per round, in order.
+    """
+
+    ran: bool = False
+    used_rounds: int = 1
+    max_rounds: int = 1
+    round_queries: list[str] = Field(default_factory=list)
+
+
+class RetrievalObservability(BaseModel):
+    """The honest "which methods ran" record for one retrieval, with real numbers.
+
+    Every field is *measured* by the pipeline, never fabricated: a consumer (or the
+    UI) can read exactly which recall arms fired and how many candidates each
+    produced, that fusion ran (and which method), whether rerank ran and its top
+    scores, whether spotlighting was applied, and — when the higher layers wrapped the
+    call — whether a query rewrite and the Self-RAG loop iterated.
+
+    Attributes:
+        arms: Per-recall-arm candidate counts (vector / graph / bm25), pre-fusion.
+        fusion: The fusion method applied to the arms (RRF on the hybrid path).
+        fused_candidates: The fused wide-recall pool size (the honest ``N``).
+        rerank: Whether rerank ran and the top scores it produced.
+        spotlight_applied: Whether the answer context was Microsoft-spotlighted.
+        rewrite: Query-rewrite observability, or ``None`` if no rewrite layer ran.
+        agentic: Self-RAG-loop observability, or ``None`` if single-shot.
+    """
+
+    arms: list[ArmReport] = Field(default_factory=list)
+    fusion: FusionMethod = FusionMethod.NONE
+    fused_candidates: int = 0
+    rerank: RerankReport = Field(default_factory=RerankReport)
+    spotlight_applied: bool = False
+    rewrite: RewriteReport | None = None
+    agentic: AgenticReport | None = None
+
+
 class RetrievalResult(BaseModel):
     """The public result of `retrieve()`.
 
@@ -154,6 +262,10 @@ class RetrievalResult(BaseModel):
         query_vec_dim: The dimensionality of the computed query embedding (even when
             ``query_vec`` is left ``None`` because it did not match the configured
             dimension), or ``None`` when no embedding was computed (cache hit).
+        observability: The honest "which arsenal methods ran" record for this
+            retrieval — measured arm counts, fusion, rerank scores, spotlight, and
+            (when a higher layer wrapped the call) rewrite / Self-RAG iteration. Empty
+            default so a bare-constructed result and a cache hit are unaffected.
     """
 
     answer_context: str
@@ -165,6 +277,7 @@ class RetrievalResult(BaseModel):
     graph_delta: GraphDelta = Field(default_factory=GraphDelta)
     cache_hit: bool = False
     provenance: Provenance = Field(default_factory=Provenance)
+    observability: RetrievalObservability = Field(default_factory=RetrievalObservability)
     query_vec: list[float] | None = Field(
         default=None,
         description="Query embedding reusable for episodic write; only a real "
