@@ -1,0 +1,209 @@
+'use client'
+
+import { GitPullRequestArrow, WifiOff } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactElement } from 'react'
+
+import { CapabilityMap, type Capability } from '@/components/shared'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import {
+  getOpsActivePrompt,
+  getOpsEvals,
+  getOpsParams,
+  getOpsPendingReleases,
+  getOpsPrompts,
+} from '@/lib/api/client'
+import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
+import type {
+  OpsActivePromptResponse,
+  OpsEvalRow,
+  OpsPromptVersionRow,
+  OpsReleaseApprovalRow,
+} from '@/lib/api/ops'
+import type { OpsParamsResponse } from '@/lib/api/platform'
+
+import { DiagnosePanel } from './DiagnosePanel'
+import { EvalTrend } from './EvalTrend'
+import { LoopParams } from './LoopParams'
+import { PromptHistory } from './PromptHistory'
+import { ReleaseGate } from './ReleaseGate'
+import { PROMPT_KEY } from './opsShared'
+
+/** A minimal async-load result, mirroring the MLOps view's fetch pattern. */
+interface Loaded<T> {
+  data: T | null
+  loading: boolean
+  error: string | null
+}
+
+/** Load once on mount (and whenever `nonce` changes) with a live/mock-aware call. */
+function useLoad<T>(fn: () => Promise<T>, nonce = 0): Loaded<T> {
+  const [state, setState] = useState<Loaded<T>>({ data: null, loading: true, error: null })
+  useEffect(() => {
+    let alive = true
+    setState((s) => ({ ...s, loading: true, error: null }))
+    fn()
+      .then((data) => {
+        if (alive) setState({ data, loading: false, error: null })
+      })
+      .catch(() => {
+        if (alive)
+          setState({ data: null, loading: false, error: 'Could not load. Is the backend running?' })
+      })
+    return () => {
+      alive = false
+    }
+    // fn is recreated per render; nonce drives intentional reloads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonce])
+  return state
+}
+
+/**
+ * LLMOps — the `aegis` self-improvement loop surface. It leads with the quality
+ * trend the loop watches, shows the four loop steps as a live strip, then the
+ * diagnosis (draft a fix), the tiered release gate (approve / reject / roll
+ * back), the prompt version history with a diff, and the read-only loop
+ * parameters the gate runs on. Every figure comes straight from the `/ops/*`
+ * accessors — nothing is fabricated.
+ */
+function LLMOpsView(): ReactElement {
+  const token: string | null = null
+  const [pendingNonce, setPendingNonce] = useState(0)
+  const reloadPending = useCallback(() => setPendingNonce((n) => n + 1), [])
+
+  const prompts = useLoad<{ rows: OpsPromptVersionRow[] }>(() => getOpsPrompts(token, PROMPT_KEY))
+  const active = useLoad<OpsActivePromptResponse>(() => getOpsActivePrompt(token, PROMPT_KEY))
+  const evals = useLoad<{ rows: OpsEvalRow[] }>(() =>
+    getOpsEvals(token, { promptKey: PROMPT_KEY, limit: 200 }),
+  )
+  const params = useLoad<OpsParamsResponse>(() => getOpsParams(token))
+  const pending = useLoad<{ rows: OpsReleaseApprovalRow[] }>(
+    () => getOpsPendingReleases(token, 50),
+    pendingNonce,
+  )
+
+  const promptRows = prompts.data?.rows ?? []
+  const evalRows = evals.data?.rows ?? []
+  const pendingRows = pending.data?.rows ?? []
+
+  // Live status of the four loop steps, derived from the loaded data.
+  const draftCount = promptRows.filter((r) => r.status === 'draft' || r.status === 'staged').length
+  const pendingCount = pendingRows.length
+  const loopSteps: Capability[] = [
+    {
+      name: 'Watch',
+      tech: evals.data ? 'scoring runs' : 'quality scores',
+      status: evals.data ? 'live' : 'idle',
+    },
+    {
+      name: 'Diagnose',
+      tech: draftCount > 0 ? `${draftCount} draft${draftCount === 1 ? '' : 's'} open` : 'propose a prompt',
+      status: draftCount > 0 ? 'pending' : 'idle',
+    },
+    {
+      name: 'Gate',
+      tech: pendingCount > 0 ? `${pendingCount} awaiting sign-off` : 'human approval',
+      status: pendingCount > 0 ? 'pending' : 'idle',
+    },
+    { name: 'Rollback', tech: 'one click, last-good', status: 'idle' },
+  ]
+
+  return (
+    <div className="space-y-6">
+      {/* Section header */}
+      <div>
+        <p className="eyebrow mb-1">trace → eval → diagnose → release</p>
+        <h1 className="t-hero text-foreground">LLMOps</h1>
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+          The Aegis loop — the system improves its own prompts under a human gate. Watch quality,
+          diagnose the failure mode, gate the risky change, and roll back on demand.
+        </p>
+      </div>
+
+      {/* Row 1 — quality trend hero + the live loop strip. */}
+      <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
+        <EvalTrend rows={evalRows} loading={evals.loading} error={evals.error} />
+        <Card>
+          <CardHeader
+            eyebrow="the loop"
+            title="Loop"
+            description="A closed, human-gated loop — its live state."
+            actions={
+              <span className="grid size-8 place-items-center rounded-lg bg-ml/12">
+                <GitPullRequestArrow className="size-4 text-ml-ink" />
+              </span>
+            }
+          />
+          <CardBody>
+            <CapabilityMap items={loopSteps} />
+          </CardBody>
+        </Card>
+      </div>
+
+      {/* Row 2 — release gate + diagnosis. */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <ReleaseGate
+          rows={pendingRows}
+          loading={pending.loading}
+          error={pending.error}
+          onChanged={reloadPending}
+        />
+        <DiagnosePanel onChanged={reloadPending} />
+      </div>
+
+      {/* Row 3 — prompt history: versions + diff. */}
+      <PromptHistory
+        rows={promptRows}
+        active={active.data}
+        loading={prompts.loading || active.loading}
+        error={prompts.error ?? active.error}
+      />
+
+      {/* Row 4 — the read-only loop parameters. */}
+      <LoopParams params={params.data} loading={params.loading} error={params.error} />
+    </div>
+  )
+}
+
+/**
+ * Client entry for the LLMOps section. Runs the boot probe once (live-first,
+ * mock fallback) before mounting the view, so every `/ops/*` fetch reads the
+ * resolved mode; the offline demo seeds from the mock fixtures and is labelled
+ * with the honest banner — mirrors `MLOpsMount` / `ConsoleMount`.
+ */
+export function LLMOpsMount(): ReactElement {
+  const [mode, setMode] = useState<ResolvedMode | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void probeBackend().then((resolved) => {
+      if (alive) setMode(resolved)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (mode === null) {
+    return (
+      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+        Connecting…
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {mode.mode === 'mock' && (
+        <div
+          role="status"
+          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
+        >
+          <WifiOff className="size-3.5 shrink-0" />
+          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+        </div>
+      )}
+      <LLMOpsView />
+    </div>
+  )
+}
