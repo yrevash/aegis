@@ -1,4 +1,4 @@
-import { Brain, GitCompareArrows, Inbox, KeyRound, Layers, LayoutDashboard, Loader2, PiggyBank, ScrollText, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Workflow } from 'lucide-react'
+import { Brain, GitCompareArrows, Inbox, KeyRound, Layers, LayoutDashboard, Loader2, PiggyBank, ScrollText, ShieldAlert, ShieldCheck, Sigma, SlidersHorizontal, Sparkles, Workflow } from 'lucide-react'
 import { Suspense, lazy, useEffect, useState, type ReactElement } from 'react'
 
 import { useAuth } from '@/auth/AuthContext'
@@ -31,6 +31,9 @@ const MemoryView = lazy(() =>
 )
 const OpsView = lazy(() =>
   import('@/components/ops/OpsView').then((m) => ({ default: m.OpsView })),
+)
+const MLOpsView = lazy(() =>
+  import('@/components/mlops/MLOpsView').then((m) => ({ default: m.MLOpsView })),
 )
 // Wave-2 surface stubs — new per-role surfaces the surface agents will flesh out.
 const StackVersions = lazy(() =>
@@ -106,6 +109,17 @@ const SECTIONS: Record<string, Section> = {
     title: 'Savings',
     render: (_r, token) => <SavingsView token={token} />,
   },
+  mlops: {
+    item: {
+      id: 'mlops',
+      label: 'MLOps',
+      icon: Sigma,
+      hint: 'SHAP · conformal',
+      tooltip: 'Aegis ML — model card, SHAP drivers & calibrated confidence · XGBoost + MAPIE',
+    },
+    title: 'MLOps',
+    render: (_r, token) => <MLOpsView token={token} />,
+  },
   memory: {
     item: {
       id: 'memory',
@@ -152,16 +166,16 @@ const SECTIONS: Record<string, Section> = {
     title: 'Patch Check',
     render: (_r, token) => <PatchCheck token={token} />,
   },
-  ops: {
+  llmops: {
     item: {
-      id: 'ops',
-      label: 'Improvement',
+      id: 'llmops',
+      label: 'LLMOps',
       icon: Workflow,
       hint: 'trace → eval → release',
       tooltip: 'Aegis Loop — self-improving prompts · trace → eval → release',
       group: 'Governance',
     },
-    title: 'Improvement',
+    title: 'LLMOps',
     render: (_r, token) => <OpsView token={token} />,
   },
   approvals: {
@@ -232,13 +246,13 @@ const SECTIONS: Record<string, Section> = {
  *   - admin    : oversight/governance/delegation only (Overview, Approvals,
  *                Governance, Audit, Roles & Access) — it does not do the
  *                AI-team / DevOps / Client hands-on work
- *   - ai_team  : builds/tunes the agent (Console, Overview, Memory, loop, access demo)
+ *   - ai_team  : builds/tunes the agent (Console, MLOps, LLMOps, Memory, access demo)
  *   - devops   : runs the stack (Overview, stack, patches, audit)
  *   - client   : the tenant end-user (value, risk, read-only access demo)
  */
 const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
-  ai_team: ['console', 'dashboard', 'memory', 'ops', 'simulation'],
+  ai_team: ['console', 'mlops', 'llmops', 'memory', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
