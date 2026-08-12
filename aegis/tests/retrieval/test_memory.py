@@ -80,8 +80,10 @@ async def test_backend_loads_supplied_corpus_and_recalls():
 
     assert recall.candidates, "a corpus-overlapping query should recall candidates"
     assert any(c.metadata.get("doc") == sample.doc_id for c in recall.candidates)
-    assert recall.nodes  # at least one source node for the viz
-    assert recall.nodes[0].kind == "source"
+    # The graph slice is the real entity subgraph, never the old source-doc chain:
+    # nodes carry entity kinds (not "source") and edges never use the fake "related".
+    assert all(n.kind != "source" for n in recall.nodes)
+    assert all(e.relation != "related" for e in recall.edges)
 
 
 async def test_lite_retriever_runs_end_to_end_and_caches():
@@ -141,7 +143,8 @@ async def test_recall_ranked_returns_vector_and_graph_lists_offline():
     origins = {o for rl in ranked.lists for o in rl.origins}
     assert origins == {RetrievalOrigin.VECTOR, RetrievalOrigin.GRAPH}
     assert any(rl.candidates for rl in ranked.lists)  # real candidates, no infra
-    assert ranked.nodes and ranked.nodes[0].kind == "source"
+    # Any graph nodes are real typed entities, not the retired source-doc chain.
+    assert all(n.kind != "source" for n in ranked.nodes)
 
 
 async def test_lite_result_carries_hybrid_provenance_offline():

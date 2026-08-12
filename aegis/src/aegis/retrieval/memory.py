@@ -29,6 +29,13 @@ from pathlib import Path
 from aegis.retrieval import chunker
 from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.fusion import RankedList, RankedRecall, reciprocal_rank_fusion
+from aegis.retrieval.graph_extract import (
+    Entity,
+    Extractor,
+    Relation,
+    build_extractor,
+    find_mentions,
+)
 from aegis.retrieval.models import Candidate, Chunk, Recall
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
@@ -116,8 +123,15 @@ class InMemoryKnowledgeBackend:
     hands the pipeline a **vector** list (brute-force cosine over local chunk
     embeddings) and a **graph** list (co-occurrence expansion), which RRF fuses with
     the pipeline's BM25 list. :meth:`recall` returns those two fused (for direct
-    callers). The graph slice (one node per source document) still animates a live
-    viz in lite mode.
+    callers).
+
+    Alongside recall it maintains a *genuine* knowledge graph: an injected
+    :class:`~aegis.retrieval.graph_extract.Extractor` turns chunk text into typed
+    entities and labelled relations, entities are **merged by normalised id** (so one
+    entity mentioned across many chunks is one node linking them all), and a literal
+    surface-form mention index records which chunk mentions which entity. The graph
+    slice the live viz animates is therefore the real entity subgraph the retrieved
+    chunks touched — not a chain of document nodes.
     """
 
     #: Advertised origins if a caller uses the single-list ``recall`` fallback path.
@@ -126,12 +140,25 @@ class InMemoryKnowledgeBackend:
         RetrievalOrigin.GRAPH,
     )
 
-    def __init__(self, chunks: list[Chunk]) -> None:
-        """Hold the corpus in memory and precompute vectors + co-occurrence adjacency."""
+    def __init__(self, chunks: list[Chunk], *, extractor: Extractor | None = None) -> None:
+        """Hold the corpus + graph extractor; precompute vectors + co-occurrence adjacency.
+
+        Args:
+            chunks: The initial corpus (may be empty).
+            extractor: Entity/relation extractor; defaults to the best available
+                deterministic one (spaCy, else a logged no-op) when none is injected.
+        """
         self._chunks = chunks
+        self._extractor = extractor or build_extractor()
         self._vectors: list[list[float]] = []
         self._tokens: list[set[str]] = []
         self._adjacency: list[list[tuple[int, float]]] = []
+        # Genuine in-memory knowledge graph, merged across chunks by entity id.
+        self.entities: dict[str, Entity] = {}
+        self.relations: set[Relation] = set()
+        self.mentions: dict[str, set[str]] = {}  # chunk_id -> {entity_id}
+        self.entity_chunks: dict[str, set[str]] = {}  # entity_id -> {chunk_id} (inverse)
+        self._extracted_ids: set[str] = set()  # chunk ids already run through extraction
         self._reindex()
 
     def _reindex(self) -> None:
@@ -165,6 +192,7 @@ class InMemoryKnowledgeBackend:
         docs: Sequence[str] | Sequence[tuple[str, str]] | None = None,
         chunk_size: int = 400,
         overlap: int = 60,
+        extractor: Extractor | None = None,
     ) -> InMemoryKnowledgeBackend:
         """Build a backend by chunking a caller-supplied corpus.
 
@@ -180,6 +208,9 @@ class InMemoryKnowledgeBackend:
                 ``(doc_id, text)`` pairs.
             chunk_size: Target chunk size in words, forwarded to the chunker.
             overlap: Word overlap between consecutive chunks, forwarded to the chunker.
+            extractor: Optional entity/relation extractor; defaults to the best
+                available deterministic one (see
+                :func:`~aegis.retrieval.graph_extract.build_extractor`).
 
         Returns:
             An :class:`InMemoryKnowledgeBackend` over the resulting chunks.
@@ -203,30 +234,83 @@ class InMemoryKnowledgeBackend:
                         entry.name, text, chunk_size=chunk_size, overlap=overlap
                     )
                 )
-        return cls(chunks)
+        return cls(chunks, extractor=extractor)
 
     async def ingest_chunks(
         self, chunks: Sequence[Chunk]
     ) -> tuple[int | None, int | None]:
-        """Append genuinely-new chunks (by id) to the store; reindex; return counts.
+        """Append genuinely-new chunks (by id), reindex, extract the graph; return counts.
 
         De-duplicating by chunk id makes a direct re-ingest idempotent even for callers
         that bypass the pipeline's content-hash ledger, so the lite store never grows on
         a repeated corpus load.
 
-        The lite backend performs **no entity/relationship extraction** (it is a
-        databaseless recall shim over chunks + a co-occurrence graph, not a knowledge
-        graph of typed entities). Reporting a chunk count as an "entity" count would be
-        dishonest, so both counts are ``None`` here — genuinely unknown in this mode,
-        never a fabricated number.
+        After the new chunks are added, the injected extractor runs over **them only**
+        and its entities are merged into the knowledge graph by normalised id, so the
+        returned counts are the **real** number of new entities and new relations this
+        ingest contributed — not ``None`` and never a fabricated number. Extraction is
+        cached (on disk for the LLM extractor), so a re-ingest replays for free/offline.
         """
         known = {c.id for c in self._chunks}
         fresh = [c for c in chunks if c.id not in known]
         if not fresh:
-            return (None, None)
+            return (0, 0)  # nothing new added → honest zero delta, not a fake count
         self._chunks.extend(fresh)
         self._reindex()
-        return (None, None)
+        return await self._ensure_extracted()
+
+    async def _ensure_extracted(self) -> tuple[int, int]:
+        """Run the extractor over any not-yet-extracted chunks; merge into the graph.
+
+        Idempotent and lazy: each chunk is extracted at most once (guarded by
+        ``_extracted_ids``), so calling this from both :meth:`ingest_chunks` and the
+        recall path is safe and cheap. Entities merge by id — the same entity seen in
+        many chunks stays one node — and only relations whose *both* endpoints are known
+        entities are kept (no dangling or fabricated edges). Returns the ``(entities,
+        relations)`` this call newly added.
+        """
+        pending = [c for c in self._chunks if c.id not in self._extracted_ids]
+        if not pending:
+            return (0, 0)
+
+        new_entity_ids: set[str] = set()
+        new_relations = 0
+        for chunk in pending:
+            entities, relations = await self._extractor.extract(chunk.text)
+            for ent in entities:
+                if ent.id not in self.entities:
+                    self.entities[ent.id] = ent
+                    new_entity_ids.add(ent.id)
+            for rel in relations:
+                if (
+                    rel.src_id in self.entities
+                    and rel.tgt_id in self.entities
+                    and rel not in self.relations
+                ):
+                    self.relations.add(rel)
+                    new_relations += 1
+            self._extracted_ids.add(chunk.id)
+
+        self._rebuild_mentions()
+        return (len(new_entity_ids), new_relations)
+
+    def _rebuild_mentions(self) -> None:
+        """Recompute the literal entity↔chunk mention index over the whole corpus.
+
+        A full recompute keeps the index correct when a newly-extracted entity turns out
+        to be mentioned in *older* chunks too — that cross-chunk linking is exactly what
+        makes the graph connected. Every link is a verifiable literal surface-form match
+        (see :func:`~aegis.retrieval.graph_extract.find_mentions`).
+        """
+        entities = list(self.entities.values())
+        self.mentions = {}
+        self.entity_chunks = {}
+        for chunk in self._chunks:
+            hits = find_mentions(chunk.text, entities)
+            if hits:
+                self.mentions[chunk.id] = hits
+                for entity_id in hits:
+                    self.entity_chunks.setdefault(entity_id, set()).add(chunk.id)
 
     def _vector_list(self, query: str, top_k: int) -> RankedList:
         """Rank chunks by cosine of their local embedding against the query (vector)."""
@@ -268,23 +352,36 @@ class InMemoryKnowledgeBackend:
     def _graph_slice(
         self, candidates: Sequence[Candidate]
     ) -> tuple[list[GraphNode], list[GraphEdge]]:
-        """Build the source-document node/edge slice for the live viz."""
-        docs = list(dict.fromkeys(c.metadata.get("doc") for c in candidates if c.metadata))
-        docs = [d for d in docs if d]
+        """Emit the real entity subgraph the retrieved chunks touched.
+
+        Nodes are exactly the entities *mentioned* by the seed candidates' chunks (via
+        the literal mention index), carrying their true entity ``kind``. Edges are every
+        extracted relation whose **both** endpoints are among those touched entities — so
+        an edge only appears when a real relation between two shown nodes was extracted
+        (no relation ⇒ no edge; honesty by construction). There is no synthetic
+        document-to-document chain.
+        """
+        touched: set[str] = set()
+        for candidate in candidates:
+            touched |= self.mentions.get(candidate.id, set())
+
         nodes = [
-            GraphNode(id=str(d), label=str(d).removesuffix(".md"), kind="source")
-            for d in docs
+            GraphNode(id=e.id, label=e.label, kind=e.kind)
+            for eid in touched
+            if (e := self.entities.get(eid)) is not None
         ]
         edges = [
-            GraphEdge(source=str(docs[i]), target=str(docs[i + 1]), relation="related")
-            for i in range(len(docs) - 1)
+            GraphEdge(source=r.src_id, target=r.tgt_id, relation=r.phrase)
+            for r in self.relations
+            if r.src_id in touched and r.tgt_id in touched
         ]
         return nodes, edges
 
     async def recall_ranked(
         self, query: str, *, top_k: int, persona: str | None = None
     ) -> RankedRecall:
-        """Return split vector + graph ranked lists plus the graph slice (hybrid-lite)."""
+        """Return split vector + graph ranked lists plus the entity graph slice."""
+        await self._ensure_extracted()  # lazily populate the KG (e.g. after from_corpus)
         vector_list = self._vector_list(query, top_k)
         graph_list = self._graph_list(query, top_k)
         seed = list(vector_list.candidates) or list(graph_list.candidates)
@@ -310,7 +407,11 @@ def _chunk_document(
 
 
 def build_lite_retriever(
-    *, complete: CompleteFn, embed: EmbedFn, config: RetrievalConfig | None = None
+    *,
+    complete: CompleteFn,
+    embed: EmbedFn,
+    config: RetrievalConfig | None = None,
+    working_dir: str = "rag_storage",
 ) -> Retriever:
     """Build a databaseless :class:`Retriever`: corpus recall + in-memory cache.
 
@@ -318,16 +419,23 @@ def build_lite_retriever(
     empty corpus — call :meth:`Retriever.ingest` or replace ``retriever.backend``
     with one built from :meth:`InMemoryKnowledgeBackend.from_corpus` to seed it.
 
+    The knowledge-graph extractor is the LLM-cached one (a completer is always available
+    here), so ingested chunks yield a genuine typed-entity graph; its per-chunk results
+    are cached under ``working_dir`` so re-ingest and restart replay offline. spaCy is the
+    fallback only when no completer exists (not this path).
+
     Args:
-        complete: The chat-completion callable used for reranking.
+        complete: The chat-completion callable used for reranking and graph extraction.
         embed: The embedding callable used for chunk/query vectors.
         config: Tunables; defaults to `RetrievalConfig()`.
+        working_dir: Directory for the graph-extraction disk cache.
 
     Returns:
         A `Retriever` over an in-memory backend and an in-memory semantic cache.
     """
     config = config or RetrievalConfig()
-    backend = InMemoryKnowledgeBackend([])
+    extractor = build_extractor(complete=complete, working_dir=working_dir, prefer="llm")
+    backend = InMemoryKnowledgeBackend([], extractor=extractor)
     cache = SemanticCache(
         InMemoryRedis(),
         ttl_seconds=config.cache_ttl_seconds,
