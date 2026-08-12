@@ -15,6 +15,12 @@ models register on :class:`aegis.data.AegisBase`; the host owns the engine and d
 
 from __future__ import annotations
 
+from aegis.memory.cache import (
+    BACKEND_MEMORY,
+    BACKEND_REDIS,
+    MemoryCacheHit,
+    MemorySemanticCache,
+)
 from aegis.memory.config import MemoryBackend, MemoryConfig
 from aegis.memory.consolidate import (
     ConsolidationResult,
@@ -23,6 +29,7 @@ from aegis.memory.consolidate import (
     prune_forgotten,
     sweep_pending,
 )
+from aegis.memory.crud import forget_fact, get_fact, list_facts
 from aegis.memory.recall import RecallBundle, load_raw_window, recall
 from aegis.memory.scoring import (
     ForgetPolicy,
@@ -44,6 +51,7 @@ from aegis.memory.stores import (
     MemoryWriteLog,
     WriteOp,
 )
+from aegis.memory.stream import stream_add, stream_assemble, stream_forget
 from aegis.memory.vector_ops import (
     MemoryVectorIndex,
     get_default_index,
@@ -57,17 +65,21 @@ from aegis.memory.working import (
 )
 
 __all__ = [
+    "BACKEND_MEMORY",
+    "BACKEND_REDIS",
     "AssembledMemory",
     "ConsolidationResult",
     "ConsolidationStatus",
     "ForgetPolicy",
     "MemoryBackend",
+    "MemoryCacheHit",
     "MemoryConfig",
     "MemoryConsolidationJob",
     "MemoryFact",
     "MemoryMessage",
     "MemoryOrigin",
     "MemoryProfile",
+    "MemorySemanticCache",
     "MemorySession",
     "MemorySpec",
     "MemoryVectorIndex",
@@ -79,8 +91,11 @@ __all__ = [
     "build_working_text",
     "consolidate",
     "enqueue_consolidation",
+    "forget_fact",
     "get_default_index",
     "get_default_spec",
+    "get_fact",
+    "list_facts",
     "load_raw_window",
     "minmax",
     "prune_forgotten",
@@ -92,5 +107,8 @@ __all__ = [
     "score_candidates",
     "set_default_index",
     "set_default_spec",
+    "stream_add",
+    "stream_assemble",
+    "stream_forget",
     "sweep_pending",
 ]

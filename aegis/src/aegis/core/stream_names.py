@@ -13,12 +13,17 @@ CONFORMAL_INTERVAL = "conformal_interval"
 RETRIEVAL_CITATIONS = "retrieval_citations"
 ROUTING = "routing"
 MEMORY_RECALL = "memory_recall"
+#: A durable memory write (add/update/invalidate/delete/expire) — the memory changelog feed.
+MEMORY_WRITE = "memory_write"
+#: A semantic-cache event for recall (hit / miss / evict), with backend + similarity.
+MEMORY_CACHE = "memory_cache"
 MODEL_CALL = "model_call"
 EVAL_RESULT = "eval_result"
 
 ALL: frozenset[str] = frozenset(
     {REASONING, GUARDRAIL_VERDICT, SHAP_EXPLANATION, CONFORMAL_INTERVAL,
-     RETRIEVAL_CITATIONS, ROUTING, MEMORY_RECALL, MODEL_CALL, EVAL_RESULT}
+     RETRIEVAL_CITATIONS, ROUTING, MEMORY_RECALL, MEMORY_WRITE, MEMORY_CACHE,
+     MODEL_CALL, EVAL_RESULT}
 )
 
 

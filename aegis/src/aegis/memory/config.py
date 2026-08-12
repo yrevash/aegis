@@ -14,13 +14,17 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 MemoryBackend = Literal["postgres", "redis", "off"]
-"""Intended degradation ladder: full Postgres stores → Redis rolling window → off.
+"""Degradation ladder for the **authoritative store**: full Postgres → off.
 
 **Wired today:** ``postgres`` (the full three-tier subsystem) is the live path, and
 memory is effectively **off** whenever the host provides no memory deps/``session_id``
-(the graph nodes no-op) — so the two ends of the ladder are real. The intermediate
-``redis`` rolling-window tier is a documented target, **not yet wired**. Read the honest
-status here rather than assuming all three tiers are active.
+(the graph nodes no-op) — so the two ends of the ladder are real.
+
+The ``redis`` value never named a *store* tier (durable facts always live in SQL); Redis
+is now wired as the **derived semantic cache** in front of recall — see
+:class:`~aegis.memory.cache.MemorySemanticCache` and the ``cache_*`` knobs below. The
+literal is retained only for API/back-compat; selecting it behaves like ``postgres`` for
+the authoritative store. Do not read it as "facts live in Redis".
 """
 
 
@@ -68,7 +72,14 @@ class MemoryConfig:
         forget_floor: Prune-sweep archival decay floor.
         forget_min_age_days: Prune-sweep minimum age before archival.
         per_tier_caps: Per-tier fraction ceilings for the assembler.
-        memory_backend: Active store tier (see :data:`MemoryBackend`).
+        memory_backend: Active authoritative store tier (see :data:`MemoryBackend`).
+        cache_enabled: Whether the derived semantic recall cache is active.
+        cache_ttl_seconds: TTL written on every cached (subject, query) recall entry.
+        cache_distance_threshold: Max cosine *distance* (``1 - similarity``) for a cache
+            hit — a near-identity front layer, not a broad quality shortcut. ``0.05`` ⇒
+            cosine similarity ``>= 0.95``.
+        cache_max_entries: Per-cache soft ceiling; the in-memory fallback evicts the
+            oldest entry past it (Redis relies on TTL + its own ``maxmemory`` policy).
     """
 
     raw_window_turns: int = 40
@@ -93,6 +104,10 @@ class MemoryConfig:
     forget_min_age_days: float = 90.0
     per_tier_caps: dict[str, float] = field(default_factory=_default_tier_caps)
     memory_backend: MemoryBackend = "postgres"
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = 900
+    cache_distance_threshold: float = 0.05
+    cache_max_entries: int = 512
 
     @property
     def enabled(self) -> bool:

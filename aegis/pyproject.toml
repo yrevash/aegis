@@ -7,7 +7,10 @@ requires-python = ">=3.11"
 dependencies = ["pydantic>=2.9", "pydantic-settings>=2.6", "ag-ui-protocol~=0.1.19"]
 
 [project.optional-dependencies]
-redis = ["redis>=5.1"]
+# ``redisvl`` brings the industry-standard semantic cache (RediSearch vector index) used by
+# aegis.memory.cache.MemorySemanticCache; ``redis`` is its async client. Both are optional —
+# offline the memory cache uses an explicit, labeled in-memory fallback (never RedisVL faked).
+redis = ["redis>=5.1", "redisvl>=0.25"]
 nemo = ["nemoguardrails>=0.23"]
 # Industry-standard PII detection/redaction (Microsoft Presidio + spaCy NER). The
 # public ``aegis.guardrails.pii`` API falls back to a pure-code regex engine when

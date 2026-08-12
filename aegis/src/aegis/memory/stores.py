@@ -50,6 +50,7 @@ class WriteOp(StrEnum):
     INVALIDATE = "invalidate"
     NOOP = "noop"
     PRUNE = "prune"  # soft-archived out of hot recall by the forgetting sweep (never deleted)
+    DELETE = "delete"  # explicit, subject-initiated forget (right-to-be-forgotten; soft by default)
 
 
 class ConsolidationStatus(StrEnum):
