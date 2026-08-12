@@ -76,7 +76,10 @@ async def test_check_output_redact_carries_layer_and_kinds(monkeypatch):
     )
     assert result.verdict is GuardVerdict.REDACT
     assert result.layer == "pii"
-    assert set(result.redactions) == {"EMAIL", "PHONE"}
+    # The Presidio-backed PII engine additionally recognises "John" as a PERSON — a
+    # genuine detection upgrade over the legacy regex engine, which could not catch
+    # names. Names are PII, so redacting one is more correct, not a regression.
+    assert set(result.redactions) == {"EMAIL", "PHONE", "PERSON"}
 
 
 async def test_check_input_redacts_pii_before_classifier(monkeypatch):

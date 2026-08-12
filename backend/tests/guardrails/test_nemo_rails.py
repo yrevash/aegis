@@ -69,9 +69,12 @@ async def test_colang_input_rail_redacts_pii():
 
 
 async def test_colang_output_rail_redacts_pii():
-    result = await nemo.nemo_check_output("You can reach the agent at agent@corp.example.")
+    # Uses a fully-qualified domain: the Presidio-backed engine validates email TLDs
+    # and (correctly) does not treat the bare reserved pseudo-TLD "corp.example" as a
+    # real address. A well-formed address exercises the same output-rail redaction.
+    result = await nemo.nemo_check_output("You can reach the agent at agent@corp.example.com.")
     assert result.verdict is GuardVerdict.REDACT
-    assert "agent@corp.example" not in result.text
+    assert "agent@corp.example.com" not in result.text
 
 
 async def test_colang_output_rail_passes_clean():

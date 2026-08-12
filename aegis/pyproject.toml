@@ -9,6 +9,11 @@ dependencies = ["pydantic>=2.9", "pydantic-settings>=2.6", "ag-ui-protocol~=0.1.
 [project.optional-dependencies]
 redis = ["redis>=5.1"]
 nemo = ["nemoguardrails>=0.23"]
+# Industry-standard PII detection/redaction (Microsoft Presidio + spaCy NER). The
+# public ``aegis.guardrails.pii`` API falls back to a pure-code regex engine when
+# these are absent, so this extra is optional. Needs the ``en_core_web_sm`` spaCy
+# model at runtime: ``python -m spacy download en_core_web_sm``.
+pii = ["presidio-analyzer>=2.2", "presidio-anonymizer>=2.2", "spacy>=3.7"]
 postgres = ["asyncpg>=0.29", "pgvector>=0.3"]
 retrieval = [
     "lightrag-hku>=1.0",
@@ -47,7 +52,7 @@ ml = [
     "numpy>=1.26",
     "joblib>=1.4",
 ]
-all = ["aegis[redis,nemo,postgres,retrieval,ml,gateway,data,governance,observability,phoenix,agent]"]
+all = ["aegis[redis,nemo,pii,postgres,retrieval,ml,gateway,data,governance,observability,phoenix,agent]"]
 dev = ["ruff>=0.7", "pytest>=8.3", "pytest-asyncio>=0.24", "aiosqlite>=0.20"]
 
 [tool.ruff]

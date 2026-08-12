@@ -1,137 +1,99 @@
-"""Self-built PII detection and redaction (no local model, no network).
+"""PII detection and redaction — Microsoft Presidio backed, with a regex fallback.
 
-The inbound *and* outbound guardrails both need to find and mask personally
-identifiable information, and ``docs/security.md`` is explicit that detection
-must be **pure code or an API call — never a local model** (16 GB, no GPU). This
-module is the pure-code half: a curated set of anchored regexes plus cheap
-heuristics (a Luhn check on candidate card numbers) that run in microseconds.
+This is the stable public facade the whole pipeline and its tests depend on. The
+detection engine underneath is now **Microsoft Presidio** (``presidio-analyzer``), the
+industry-standard open-source PII engine — a deliberate move away from homegrown
+regexes toward a battle-tested library that recognises far more PII (people, IBANs,
+``phonenumbers``-validated phones, and more) while keeping the exact same interface:
 
-Design notes:
-    * Patterns are **anchored and specific** to keep the false-positive rate low
-      — an over-eager PII filter that mangles ordinary prose is worse than none.
-    * Overlapping matches are resolved by preferring the **longest** span at each
-      position, so a 16-digit card is never mis-attributed to a phone rail.
-    * Redaction replaces each span with a stable ``[REDACTED_<KIND>]`` token,
-      which keeps the text readable for the model/user while removing the secret.
+    * ``scan(text) -> list[PIIMatch]``     — ordered, non-overlapping spans.
+    * ``redact(text) -> (masked, kinds)``  — ``[REDACTED_<KIND>]`` tokens; sorted kinds.
+    * ``contains_pii(text) -> bool``.
+    * ``_luhn_valid(candidate) -> bool``   — re-exported for the card-heuristic tests.
 
-The pattern table is data, not code — extend it by appending a
-:class:`_Detector` rather than touching the scan logic.
+Engine selection is **lazy and self-healing**: the heavy Presidio/spaCy dependencies
+are imported only on first use, and if they are unavailable (not installed, or the
+spaCy model is missing) the module transparently falls back to the pure-code regex
+engine in :mod:`._pii_regex` and logs which engine is live. It never crashes and never
+silently stops redacting. Call :func:`active_engine` to see which engine is running.
+
+The engine can be pinned via the ``AEGIS_PII_ENGINE`` environment variable
+(``"presidio"`` or ``"regex"``); tests use this seam to exercise the fallback path.
 """
 
 from __future__ import annotations
 
-import re
-from collections.abc import Callable
-from typing import NamedTuple
+import logging
+import os
+from types import ModuleType
 
 from aegis.core.types import PIIMatch
 
+from . import _pii_regex
+from ._pii_regex import _luhn_valid  # noqa: F401 - re-exported; exercised by PII tests
 
-def _luhn_valid(candidate: str) -> bool:
-    """Return ``True`` if ``candidate``'s digits pass the Luhn checksum.
+__all__ = ["PIIMatch", "active_engine", "contains_pii", "redact", "scan"]
 
-    Used to suppress false positives: any 13–16 digit run *looks* like a card,
-    but only Luhn-valid runs are treated as real card numbers.
+_LOG = logging.getLogger(__name__)
 
-    Args:
-        candidate: The raw matched text (may contain spaces or dashes).
+#: Optional pin: "presidio" | "regex" (case-insensitive). Read lazily so tests can
+#: monkeypatch ``os.environ`` / this attribute and reset the cache.
+_ENGINE_ENV = "AEGIS_PII_ENGINE"
 
-    Returns:
-        Whether the stripped digit string is a valid Luhn sequence.
+#: Cached selected engine module (either ``_pii_presidio`` or ``_pii_regex``).
+_engine: ModuleType | None = None
+
+
+def _select_engine() -> ModuleType:
+    """Pick and cache the detection engine: Presidio when available, else regex.
+
+    Honours the ``AEGIS_PII_ENGINE`` pin. Falls back to the regex engine on any
+    Presidio import/model failure. Logs the active engine exactly once per selection.
     """
-    digits = [int(c) for c in candidate if c.isdigit()]
-    if not 13 <= len(digits) <= 16:
-        return False
-    checksum = 0
-    parity = len(digits) % 2
-    for index, digit in enumerate(digits):
-        if index % 2 == parity:
-            digit *= 2
-            if digit > 9:
-                digit -= 9
-        checksum += digit
-    return checksum % 10 == 0
+    pin = os.getenv(_ENGINE_ENV, "").strip().lower()
+
+    if pin == "regex":
+        _LOG.info("PII engine: regex (pinned via %s)", _ENGINE_ENV)
+        return _pii_regex
+
+    try:
+        from . import _pii_presidio
+    except Exception as exc:  # noqa: BLE001 - defensive; import should not fail on its own
+        if pin == "presidio":
+            raise
+        _LOG.warning("PII engine: could not import Presidio adapter (%s); using regex", exc)
+        return _pii_regex
+
+    if _pii_presidio.is_available():
+        _LOG.info("PII engine: presidio (spaCy-backed, industry-standard)")
+        return _pii_presidio
+
+    if pin == "presidio":
+        raise RuntimeError(
+            "AEGIS_PII_ENGINE=presidio but Presidio/spaCy are unavailable "
+            "(install 'aegis[pii]' and the en_core_web_sm model)."
+        )
+    _LOG.warning("PII engine: presidio unavailable; falling back to regex")
+    return _pii_regex
 
 
-class _Detector(NamedTuple):
-    """One PII pattern: a kind, its regex, its redaction token, and a validator."""
-
-    kind: str
-    placeholder: str
-    pattern: re.Pattern[str]
-    validator: Callable[[str], bool] | None
-
-
-# Ordered by specificity. Overlap resolution prefers the longest span, but the
-# ordering keeps ties deterministic and the table self-documenting.
-_DETECTORS: tuple[_Detector, ...] = (
-    _Detector(
-        "EMAIL",
-        "[REDACTED_EMAIL]",
-        re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-        None,
-    ),
-    _Detector(
-        "SSN",
-        "[REDACTED_SSN]",
-        re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
-        None,
-    ),
-    _Detector(
-        "CREDIT_CARD",
-        "[REDACTED_CC]",
-        re.compile(r"\b\d(?:[ -]?\d){12,15}\b"),
-        _luhn_valid,
-    ),
-    _Detector(
-        "AWS_ACCESS_KEY",
-        "[REDACTED_AWS_KEY]",
-        re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b"),
-        None,
-    ),
-    _Detector(
-        "API_KEY",
-        "[REDACTED_API_KEY]",
-        re.compile(r"\b(?:sk|pk|rk|api)[-_][A-Za-z0-9]{16,}\b"),
-        None,
-    ),
-    _Detector(
-        "IP_ADDRESS",
-        "[REDACTED_IP]",
-        re.compile(
-            r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
-        ),
-        None,
-    ),
-    _Detector(
-        "PHONE",
-        "[REDACTED_PHONE]",
-        re.compile(
-            r"\b(?:\+?\d{1,3}[ .-]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}\b"
-        ),
-        None,
-    ),
-)
+def _active() -> ModuleType:
+    """Return the cached engine module, selecting it on first use."""
+    global _engine
+    if _engine is None:
+        _engine = _select_engine()
+    return _engine
 
 
-def _resolve_overlaps(matches: list[PIIMatch]) -> list[PIIMatch]:
-    """Drop overlapping matches, keeping the longest span at each position.
+def _reset_engine_cache() -> None:
+    """Clear the cached engine selection (test seam; forces re-selection next call)."""
+    global _engine
+    _engine = None
 
-    Args:
-        matches: All raw detector hits, in any order.
 
-    Returns:
-        A non-overlapping, start-sorted subset.
-    """
-    # Longest-first so the greedy pass keeps the widest span; then earliest-start.
-    ordered = sorted(matches, key=lambda m: (m.start, -(m.end - m.start)))
-    kept: list[PIIMatch] = []
-    last_end = -1
-    for match in ordered:
-        if match.start >= last_end:
-            kept.append(match)
-            last_end = match.end
-    return kept
+def active_engine() -> str:
+    """Return the name of the live detection engine: ``"presidio"`` or ``"regex"``."""
+    return getattr(_active(), "ENGINE_NAME", "unknown")
 
 
 def scan(text: str) -> list[PIIMatch]:
@@ -143,20 +105,7 @@ def scan(text: str) -> list[PIIMatch]:
     Returns:
         Detected :class:`PIIMatch` spans, ordered by position. Empty when clean.
     """
-    hits: list[PIIMatch] = []
-    for detector in _DETECTORS:
-        for match in detector.pattern.finditer(text):
-            if detector.validator is not None and not detector.validator(match.group()):
-                continue
-            hits.append(
-                PIIMatch(
-                    kind=detector.kind,
-                    start=match.start(),
-                    end=match.end(),
-                    placeholder=detector.placeholder,
-                )
-            )
-    return _resolve_overlaps(hits)
+    return _active().scan(text)
 
 
 def redact(text: str) -> tuple[str, list[str]]:
@@ -167,7 +116,8 @@ def redact(text: str) -> tuple[str, list[str]]:
 
     Returns:
         A ``(redacted_text, kinds)`` tuple where ``kinds`` is the sorted list of
-        unique detector names that fired (empty when nothing was redacted).
+        unique detector names that fired (empty when nothing was redacted). Masks use
+        the stable ``[REDACTED_<KIND>]`` form (e.g. ``[REDACTED_EMAIL]``).
     """
     matches = scan(text)
     if not matches:
