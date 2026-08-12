@@ -557,10 +557,16 @@ export async function getOpsParams(token: string | null): Promise<OpsParamsRespo
   return request<OpsParamsResponse>('/ops/params', { method: 'GET' }, token)
 }
 
-/** Fetch the token-optimization surface (savings summary + routing config). */
+/**
+ * Fetch the token-optimization surface (savings summary + routing config).
+ *
+ * The optional `sample`/`note` fields are set ONLY by the offline mock fixture —
+ * a live gateway returns measured figures with neither field. The UI reads them
+ * to badge the mock savings as illustrative sample data, never as real metering.
+ */
 export async function getGatewayOptimization(
   token: string | null,
-): Promise<GatewayOptimizationResponse> {
+): Promise<GatewayOptimizationResponse & { sample?: boolean; note?: string }> {
   if (isMock()) return mockGatewayOptimization()
   return request<GatewayOptimizationResponse>('/gateway/optimization', { method: 'GET' }, token)
 }

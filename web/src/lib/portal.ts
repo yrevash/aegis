@@ -16,6 +16,7 @@
 
 import {
   Brain,
+  Coins,
   GitCompareArrows,
   Inbox,
   Gauge,
@@ -86,6 +87,14 @@ export const SECTIONS: Record<string, Section> = {
     icon: Sigma,
     hint: 'SHAP · conformal',
     tooltip: 'Aegis ML — model card, SHAP drivers & calibrated confidence · XGBoost + MAPIE',
+  },
+  tokenopt: {
+    id: 'tokenopt',
+    label: 'Token opt',
+    icon: Coins,
+    hint: 'routing · savings',
+    tooltip:
+      'Aegis Gateway — role→model routing, fallback chains, and savings vs the frontier baseline · metered from live calls',
   },
   evals: {
     id: 'evals',
@@ -178,7 +187,7 @@ export const SECTIONS: Record<string, Section> = {
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
-  ai_team: ['console', 'mlops', 'llmops', 'evals', 'memory', 'simulation'],
+  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
