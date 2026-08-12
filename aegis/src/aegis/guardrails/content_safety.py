@@ -73,12 +73,15 @@ class ContentSafetyVerdict:
 #: never false-positives on ordinary enterprise queries; nuance is the model
 #: layer's job. A hit is a hard block that needs no API call.
 _HAZARD_SIGNATURES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\bhow\s+to\s+(make|build|synthesi[sz]e|produce)\s+(a\s+)?(bomb|explosive|nerve\s+agent|sarin|bioweapon|dirty\s+bomb)", re.I), "S9"),
+    (re.compile(r"\bhow\s+to\s+(make|build|synthesi[sz]e|produce)\s+(a\s+)?"
+                r"(bomb|explosive|nerve\s+agent|sarin|bioweapon|dirty\s+bomb)", re.I), "S9"),
     (re.compile(r"\b(enrich|weaponi[sz]e)\s+uranium\b", re.I), "S9"),
-    (re.compile(r"\b(synthesi[sz]e|culture|weaponi[sz]e)\s+(anthrax|ricin|smallpox|a\s+pathogen)", re.I), "S9"),
+    (re.compile(r"\b(synthesi[sz]e|culture|weaponi[sz]e)\s+"
+                r"(anthrax|ricin|smallpox|a\s+pathogen)", re.I), "S9"),
     (re.compile(r"\b(child\s+por|csam|underage\s+(sexual|nude))", re.I), "S4"),
     (re.compile(r"\bhow\s+to\s+(kill|hang|poison|cut)\s+myself\b", re.I), "S11"),
-    (re.compile(r"\bmost\s+(effective|painless)\s+way\s+to\s+(die|kill\s+myself|commit\s+suicide)", re.I), "S11"),
+    (re.compile(r"\bmost\s+(effective|painless)\s+way\s+to\s+"
+                r"(die|kill\s+myself|commit\s+suicide)", re.I), "S11"),
 )
 
 _SAFETY_SYSTEM_PROMPT = (

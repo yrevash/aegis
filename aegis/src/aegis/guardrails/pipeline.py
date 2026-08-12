@@ -8,9 +8,10 @@ schema → content filter → PII on output), but is LLM-agnostic (an injected
 
 from __future__ import annotations
 
+import inspect
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from aegis.core.events import AegisEvent, GuardrailEvent, SpanKind, StepFinished, StepStarted
@@ -26,19 +27,53 @@ if TYPE_CHECKING:
 
 _MODULE_ID = "guardrails"
 
+#: A custom rail: given the (already PII-redacted) text, return a GuardResult to
+#: block/redact/flag, or ``None`` to abstain. Sync or async. Give it a distinct
+#: ``layer`` and it streams to the console like any built-in rail — this is the
+#: extension seam for domain-specific policies ("block competitor names",
+#: "enforce a JSON contract", "no medical advice") without forking the pipeline.
+Rail = Callable[[str], "GuardResult | None | Awaitable[GuardResult | None]"]
+
 
 @register("guardrail", "default")
 class Guardrails:
-    """SOTA, LLM-agnostic input/output guardrail pipeline."""
+    """SOTA, LLM-agnostic input/output guardrail pipeline.
 
-    def __init__(self, *, completer: ChatCompleter | None = None) -> None:
-        """Create the pipeline, optionally with a completer for the model injection layer.
+    Extensible: pass ``input_rails`` / ``output_rails`` to bolt domain-specific
+    rails onto the built-in defense-in-depth chain. Custom rails run after the
+    built-ins and any non-PASS verdict they return short-circuits the chain and
+    streams to the frontend with its own ``layer`` label.
+    """
+
+    def __init__(
+        self,
+        *,
+        completer: ChatCompleter | None = None,
+        input_rails: list[Rail] | None = None,
+        output_rails: list[Rail] | None = None,
+    ) -> None:
+        """Create the pipeline.
 
         Args:
-            completer: Optional chat completer for model-based injection detection.
-                If None, only deterministic injection signatures are checked.
+            completer: Optional chat completer for the model-based injection and
+                content-safety self-checks. If None, only deterministic layers run.
+            input_rails: Optional custom input rails, run after the built-ins.
+            output_rails: Optional custom output rails, run after the built-ins.
         """
         self._completer = completer
+        self._input_rails = list(input_rails or [])
+        self._output_rails = list(output_rails or [])
+
+    @staticmethod
+    async def _run_custom(text: str, rails: list[Rail]) -> GuardResult | None:
+        """Run custom rails in order; return the first non-PASS verdict, else None."""
+        for rail in rails:
+            result = rail(text)
+            if inspect.isawaitable(result):
+                result = await result
+            if result is not None and result.verdict is not GuardVerdict.PASS:
+                return result
+        return None
 
     async def check_input(self, text: str) -> GuardResult:
         """Run the full input rail (schema → PII redaction → injection).
@@ -71,6 +106,9 @@ class Guardrails:
                 text=redacted,
                 layer="content_safety",
             )
+        custom = await self._run_custom(redacted, self._input_rails)
+        if custom is not None:
+            return custom
         if kinds:
             return GuardResult(
                 verdict=GuardVerdict.REDACT,
@@ -112,6 +150,9 @@ class Guardrails:
                 text=text,
                 layer="content_safety",
             )
+        custom = await self._run_custom(text, self._output_rails)
+        if custom is not None:
+            return custom
         redacted, kinds = pii.redact(text)
         if kinds:
             return GuardResult(

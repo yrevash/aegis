@@ -19,7 +19,7 @@ from aegis.guardrails.content_safety import (
     ContentSafetyVerdict,
     screen_content,
 )
-from aegis.guardrails.pipeline import Guardrails
+from aegis.guardrails.pipeline import Guardrails, Rail
 
 
 async def check_input(text: str, *, completer: ChatCompleter | None = None) -> GuardResult:
@@ -72,6 +72,7 @@ __all__ = [
     "ContentSafetyVerdict",
     "Guardrails",
     "HAZARD_CATEGORIES",
+    "Rail",
     "check_input",
     "check_output",
     "content_safety",
