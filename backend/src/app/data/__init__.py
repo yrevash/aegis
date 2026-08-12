@@ -1,10 +1,10 @@
-"""Data layer: async SQLAlchemy over Postgres + pgvector.
+"""Data layer: async SQLAlchemy over Postgres (relational + JSON embeddings-of-record).
 
 Public surface (per the shared contract in ``docs/AGENT_BRIEF.md``):
 
 - :func:`get_session` — FastAPI-style async session dependency.
 - :func:`record_audit` — write one row to the first-class audit log.
-- :func:`bootstrap` — enable the ``vector`` extension and create all tables.
+- :func:`bootstrap` — create all tables (vector ANN search lives in Qdrant, not pgvector).
 
 Also exported: the ORM models (:class:`User`, :class:`AuditLog`, :class:`Chunk`,
 :class:`EvalResult`) and engine helpers for wiring/tests.
@@ -52,7 +52,7 @@ from .models import (
     TenantStatus,
     UsageLedger,
     User,
-    VectorType,
+    VectorColumn,
 )
 from .session import (
     bootstrap,
@@ -83,7 +83,7 @@ __all__ = [
     "TenantStatus",
     "UsageLedger",
     "User",
-    "VectorType",
+    "VectorColumn",
     "bootstrap",
     "bootstrap_rls",
     "configure_engine",

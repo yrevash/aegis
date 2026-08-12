@@ -30,7 +30,7 @@ async def test_session_message_vector_roundtrip(db):
                 role="user",
                 origin=MemoryOrigin.USER,
                 content="hello",
-                embedding=[0.1, 0.2, 0.3],  # VectorType → JSON on SQLite
+                embedding=[0.1, 0.2, 0.3],  # VectorColumn → JSON on SQLite
                 embedding_dim=3,
             )
         )

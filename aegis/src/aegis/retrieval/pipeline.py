@@ -89,7 +89,7 @@ class RetrievalConfig:
     #: points the full path at a live Qdrant node; ``qdrant_api_key`` secures it if set.
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
-    #: Whether the real databases (Neo4j/pgvector/Redis) are expected to be in use.
+    #: Whether the real databases (Neo4j/Qdrant/Redis) are expected to be in use.
     #: Purely informational at this layer — callers decide what to build from it
     #: (e.g. `build_default_retriever` vs `aegis.retrieval.memory.build_lite_retriever`).
     stores_enabled: bool = True
@@ -422,7 +422,7 @@ def build_default_retriever(
         config: Tunables + store connection settings; defaults to `RetrievalConfig()`.
 
     Returns:
-        A `Retriever` wired to a `LightRAGBackend` (Neo4j + pgvector) and a Redis
+        A `Retriever` wired to a `LightRAGBackend` (Neo4j + Qdrant) and a Redis
         `SemanticCache`.
     """
     config = config or RetrievalConfig()

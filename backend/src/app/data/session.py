@@ -1,4 +1,4 @@
-"""Async engine, session factory and bootstrap for the Postgres/pgvector store.
+"""Async engine, session factory and bootstrap for the Postgres store.
 
 The engine and session factory are created lazily and cached so that merely
 importing this module never opens a connection or requires the ``asyncpg`` driver
@@ -19,7 +19,6 @@ from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
 # ``set_tenant_scope`` now lives in ``aegis.governance.rls`` (the RLS seam); re-export it
 # under its historical name so ``app.data.governance`` / the orchestrator are unchanged.
 from aegis.governance.rls import set_tenant_scope  # noqa: F401 - re-exported for importers
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -167,12 +166,12 @@ async def bootstrap_rls(engine: AsyncEngine | None = None) -> None:
 
 
 async def bootstrap(engine: AsyncEngine | None = None) -> None:
-    """Create every table, enabling the ``vector`` extension first on Postgres.
+    """Create every table (relational + JSON embeddings-of-record).
 
-    The extension must exist before ``create_all`` so the pgvector column type
-    can be resolved. On non-Postgres dialects (the SQLite test database) the
-    extension step is skipped. On PostgreSQL, tenant Row-Level Security policies are
-    installed after table creation (a no-op elsewhere).
+    Embeddings persist as JSON (``jsonb`` on PostgreSQL, ``JSON`` on SQLite) — vector
+    ANN search runs on Qdrant, so no pgvector extension is required. On PostgreSQL,
+    tenant Row-Level Security policies are installed after table creation (a no-op
+    elsewhere).
 
     Args:
         engine: Engine to bootstrap; defaults to the process-wide engine.
@@ -190,8 +189,6 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     import app.memory.stores  # noqa: F401,PLC0415 - registration side-effect only
 
     async with engine.begin() as conn:
-        if engine.dialect.name == "postgresql":
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(AegisBase.metadata.create_all)
     await bootstrap_rls(engine)

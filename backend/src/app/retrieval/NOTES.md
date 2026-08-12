@@ -31,10 +31,11 @@ Source of truth: `HKUDS/LightRAG` `lightrag/lightrag.py`, `lightrag/base.py`,
   versions return a plain `str`. Our backend handles both shapes defensively.
 - Backends are configured by **env vars** read inside LightRAG's storage impls:
   Neo4j → `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`;
-  Postgres/pgvector → `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
+  Qdrant (vectors) → `QDRANT_URL` (+ optional `QDRANT_API_KEY`);
+  Postgres (KV + doc-status only) → `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
   `POSTGRES_PASSWORD`, `POSTGRES_DATABASE`. `LightRAGBackend` derives these from
-  `settings.neo4j_uri`/`settings.postgres_dsn` and sets them on `os.environ` before
-  constructing LightRAG (LightRAG offers no direct kwargs for them).
+  `settings.neo4j_uri`/`settings.qdrant_url`/`settings.postgres_dsn` and sets them on
+  `os.environ` before constructing LightRAG (LightRAG offers no direct kwargs for them).
 
 ## Reranker — LLM-as-reranker (design decision)
 

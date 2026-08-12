@@ -12,7 +12,7 @@ Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
   agent trace, animated knowledge graph, SHAP + conformal panel, human-approval
   gate, dashboards) with **zero backend or database**. Best for a quick look or a
   projector demo.
-- **Path B — Full stack:** FastAPI backend + local stores (Postgres/pgvector,
+- **Path B — Full stack:** FastAPI backend + local stores (Postgres, Qdrant,
   Neo4j, Redis) + Arize Phoenix, streaming live over SSE.
 
 > **Environment target:** 16 GB laptop, **no Docker, no GPU**. Everything is a
@@ -30,7 +30,8 @@ Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
 | **uv** | latest | fast Python env + installer (`pip install uv` or see astral.sh/uv) |
 | **Node.js** | ≥ 18 (20+ recommended) | frontend build/dev |
 | **pnpm** | ≥ 9 | frontend package manager (`npm i -g pnpm`) |
-| **PostgreSQL** | ≥ 15 + `pgvector` | vectors + relational + audit log *(Path B)* |
+| **PostgreSQL** | ≥ 15 | relational + KV/doc-status + audit log *(Path B)* |
+| **Qdrant** | ≥ 1.12 (server) | vector DB — ANN for retrieval + memory recall *(Path B; dev uses embedded)* |
 | **Neo4j** | 5.x (Desktop/Community) | knowledge graph *(Path B)* |
 | **Redis** | ≥ 7 (or Memurai on Windows) | semantic cache *(Path B)* |
 
@@ -58,14 +59,22 @@ backend required. To point the console at a live backend instead, set
 
 ### 1. Local infrastructure
 
-**PostgreSQL + pgvector**
+**PostgreSQL**
 
 ```sql
--- once, as a superuser, in the target database (default name: taif)
+-- once, as a superuser, create the target database (default name: taif)
 CREATE DATABASE taif;
-\c taif
-CREATE EXTENSION IF NOT EXISTS vector;
 ```
+
+Postgres holds the relational tables, LightRAG's KV + doc-status stores, and the audit
+log. No `pgvector` extension is needed — vector ANN search runs on **Qdrant**.
+
+**Qdrant** — the vector DB (ANN for retrieval + memory recall). Run a local server (e.g.
+the `qdrant/qdrant` binary/container) listening on `http://localhost:6333`, and set
+`QDRANT_URL` (+ optional `QDRANT_API_KEY`). In full stores mode a reachable Qdrant is
+**required** and the backend fails loud at boot if it is down (exactly like Postgres/
+Redis). Dev/tests use the explicit **embedded** Qdrant engine — a real on-disk/in-memory
+HNSW index, never a silent RAM fallback.
 
 **Neo4j** — install Neo4j Desktop or Community, start a local DB, and set a
 password. Default bolt URI is `bolt://localhost:7687`, user `neo4j`.
@@ -128,7 +137,8 @@ LOG_LEVEL=INFO
 
 > **Postgres-primary posture.** In the full stack one local PostgreSQL is the primary
 > store for *everything durable* — tenants, users, budgets, the usage ledger, the
-> approvals inbox, the LangGraph checkpoints, the audit log, and pgvector chunks. Set
+> approvals inbox, the LangGraph checkpoints, and the audit log. Vector embeddings live
+> in **Qdrant** (Postgres keeps only the JSON embedding-of-record). Set
 > `AGENT_CHECKPOINTER=postgres` for durable, resumable HITL runs; the `memory` default
 > keeps single-process/offline runs zero-dependency.
 
@@ -217,7 +227,9 @@ pnpm lint      # oxlint — 0 errors
 | `GENAILAB_BASE_URL` | `https://genailab.tcs.in` | model gateway base URL |
 | `GENAILAB_API_KEY` | *(empty)* | gateway API key — **required for live calls** |
 | `GENAILAB_SSL_VERIFY` | `false` | verify gateway TLS (self-signed cert → false) |
-| `POSTGRES_DSN` | `postgresql://postgres:postgres@localhost:5432/taif` | Postgres/pgvector DSN (the primary durable store) |
+| `POSTGRES_DSN` | `postgresql://postgres:postgres@localhost:5432/taif` | Postgres DSN (relational + KV + audit; the primary durable store) |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant vector DB — **required** in full stores mode (fails loud at boot if unreachable) |
+| `QDRANT_API_KEY` | *(empty)* | optional API key for a secured Qdrant node |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | `bolt://localhost:7687` / `neo4j` / *(empty)* | Neo4j |
 | `REDIS_URL` | `redis://localhost:6379/0` | near-exact semantic cache |
 | `JWT_SECRET` | *(dev-insecure default)* | HS256 signing secret — **set a real one in prod** (ADR 0008) |
@@ -249,9 +261,9 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
   compile, not a hang. Give the first run 60s; later runs are ~2s.
 - **Vite build appears stuck at "transforming…"** — clear stale esbuild workers:
   `pkill -f "esbuild --service"` then rebuild.
-- **`vector` type errors / `CREATE EXTENSION vector` fails** — install the
-  `pgvector` extension for your Postgres, then re-run the `CREATE EXTENSION`.
-  The ORM degrades to JSON on SQLite (tests), but Postgres needs the extension.
+- **Qdrant unreachable at boot (full stores mode)** — the backend fails loud if
+  `QDRANT_URL` is down. Start the Qdrant server (`http://localhost:6333`) or set
+  `STORES=off` for the databaseless lite demo. Dev keeps an embedded Qdrant engine.
 - **TLS errors calling the gateway** — the gateway uses a self-signed cert;
   keep `GENAILAB_SSL_VERIFY=false` (a documented, scoped exception).
 - **Windows Redis** — use Memurai or Redis under WSL2; the default `REDIS_URL`
@@ -265,7 +277,8 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 |-----------|---------------|------|
 | Frontend (Vite dev) | `pnpm dev` | 5173 |
 | Backend (FastAPI/uvicorn) | `uvicorn app.main:app` | 8000 |
-| PostgreSQL + pgvector | native install | 5432 |
+| PostgreSQL | native install | 5432 |
+| Qdrant (vector DB) | native install / binary | 6333 |
 | Neo4j | native install | 7687 (bolt) / 7474 (http) |
 | Redis / Memurai | native install | 6379 |
 | Arize Phoenix | in-process (with backend) | 6006 (UI, if enabled) |

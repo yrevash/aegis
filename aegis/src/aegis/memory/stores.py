@@ -2,8 +2,9 @@
 
 These register on the shared :class:`aegis.data.AegisBase` metadata, so a host's
 ``AegisBase.metadata.create_all`` materialises them — on PostgreSQL with native
-``vector``/``jsonb`` columns, and on the SQLite test database via the cross-dialect
-``VectorType``/``JsonB`` decorators (vectors stored as JSON).
+``jsonb`` columns, and on the SQLite test database via the cross-dialect
+``VectorColumn``/``JsonB`` decorators (embeddings stored as JSON of record; ANN search
+runs on Qdrant, not pgvector).
 
 **Isolation is app-level first.** Every recall/persist query MUST filter by
 ``subject_id`` (and ``tenant_id`` when present) in the ``WHERE`` clause — this is the
@@ -29,7 +30,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from aegis.data import EMBED_DIM, AegisBase, JsonB, VectorType
+from aegis.data import EMBED_DIM, AegisBase, JsonB, VectorColumn
 
 
 class MemoryOrigin(StrEnum):
@@ -102,7 +103,7 @@ class MemoryMessage(AegisBase):
     )
     content: Mapped[str] = mapped_column(Text())
     embedding: Mapped[list[float] | None] = mapped_column(
-        VectorType(EMBED_DIM), default=None
+        VectorColumn(EMBED_DIM), default=None
     )
     embedding_dim: Mapped[int | None] = mapped_column(default=None)
     importance: Mapped[int] = mapped_column(default=5)
@@ -137,7 +138,7 @@ class MemoryFact(AegisBase):
     object: Mapped[str] = mapped_column(String(1024), default="")
     text: Mapped[str] = mapped_column(Text())
     embedding: Mapped[list[float] | None] = mapped_column(
-        VectorType(EMBED_DIM), default=None
+        VectorColumn(EMBED_DIM), default=None
     )
     confidence: Mapped[float] = mapped_column(default=1.0)
     importance: Mapped[int] = mapped_column(default=5)

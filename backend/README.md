@@ -12,7 +12,7 @@ src/app/
   api/              # routes + Pydantic contracts + SSE event schema
   core/             # config-driven model registry + LiteLLM gateway
   agent/            # LangGraph orchestration (plan-and-execute + tool loop)
-  retrieval/        # LightRAG + Neo4j + pgvector + Redis semantic cache
+  retrieval/        # LightRAG + Neo4j + Qdrant + Redis semantic cache
   ml/               # XGBoost + MAPIE (conformal) + SHAP
   guardrails/       # input/output rails
   data/             # DB models, audit log

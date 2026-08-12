@@ -59,7 +59,7 @@ _BACKEND_STACK: list[tuple[str, str, str, str | None]] = [
     ("Redis", "infra", "redis", "cache"),
     ("Neo4j driver", "infra", "neo4j", "retrieval"),
     ("LightRAG", "infra", "lightrag-hku", "retrieval"),
-    ("pgvector", "infra", "pgvector", "memory"),
+    ("Qdrant client", "infra", "qdrant-client", "memory"),
 ]
 
 # The frontend set read from ``frontend/package.json``: (label, npm package, module).

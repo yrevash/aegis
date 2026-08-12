@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(default="neo4j")
     neo4j_password: str = Field(default="")
     redis_url: str = Field(default="redis://localhost:6379/0")
+    # Qdrant is the vector DB — the ANN engine behind retrieval + memory recall (pgvector
+    # was removed; the SQL ``embedding`` columns are now only the JSON source-of-record).
+    # In full stores mode a reachable Qdrant node is REQUIRED (fail loud at boot, exactly
+    # like Postgres/Redis); dev/tests use the explicit embedded engine, never a RAM fallback.
+    qdrant_url: str = Field(default="http://localhost:6333")
+    qdrant_api_key: str = Field(default="")
 
     # ── Agent checkpointer (durable-execution seam; §1.3) ────────────────────
     # "memory" (default, used by tests) compiles the graph with LangGraph's
@@ -114,7 +120,7 @@ class Settings(BaseSettings):
     answer_cache_ttl_seconds: int = Field(default=1800)
 
     # ── Run mode (see docs/RUNBOOK.md) ───────────────────────────────────────
-    # "on" (default) uses the real stores — LightRAG over Neo4j + pgvector with a
+    # "on" (default) uses the real stores — LightRAG over Neo4j + Qdrant with a
     # Redis semantic cache. "off" runs a self-contained in-memory backend + cache
     # (no databases) — the "lite" demo mode that needs only the model gateway.
     stores: str = Field(default="on")
@@ -146,7 +152,7 @@ class Settings(BaseSettings):
 
     @property
     def stores_enabled(self) -> bool:
-        """Whether the real databases (Neo4j/pgvector/Redis) are in use."""
+        """Whether the real databases (Neo4j/Qdrant/Redis) are in use."""
         return self.stores.strip().lower() not in {"off", "false", "0", "none"}
 
     @property

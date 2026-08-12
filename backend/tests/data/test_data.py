@@ -1,8 +1,8 @@
 """Unit tests for the data layer (async SQLAlchemy models + audit + bootstrap).
 
 No Postgres required: an aiosqlite database (temp file) is bound via
-``configure_engine``; the pgvector and JSONB columns degrade to JSON so the schema
-materialises and rows round-trip.
+``configure_engine``; the JSON embedding-of-record and JSONB columns degrade to JSON so
+the schema materialises and rows round-trip.
 """
 
 from __future__ import annotations

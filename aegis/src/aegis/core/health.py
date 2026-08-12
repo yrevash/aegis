@@ -68,32 +68,27 @@ async def probe_postgres(url: str, *, conn: Any | None = None) -> DependencyStat
         return DependencyStatus(name="postgres", status="down", detail=str(exc))
 
 
-async def probe_pgvector(url: str, *, conn: Any | None = None) -> DependencyStatus:  # noqa: ANN401
-    """Check that the ``vector`` extension is installed in Postgres.
+async def probe_qdrant(url: str, *, client: Any | None = None) -> DependencyStatus:  # noqa: ANN401
+    """Reach the Qdrant vector DB and report whether it answered.
+
+    Qdrant is the ANN engine behind retrieval + memory recall; in full mode it is a
+    hard dependency, exactly like Postgres/Redis. The probe lists the collections
+    (the cheapest authenticated round-trip) and reports ``up`` only on a real answer —
+    never a silent embedded fallback.
 
     Args:
-        url: PostgreSQL connection string.
-        conn: Optional injected connection object for testing. If None, uses lazy loading.
+        url: Qdrant server URL (e.g. 'http://localhost:6333').
+        client: Optional injected Qdrant client for testing. If None, uses lazy loading.
 
     Returns:
-        DependencyStatus with status "up" (extension present) or "down" (missing or error).
+        DependencyStatus with status "up" (node reachable) or "down" (unreachable/error).
     """
-    query = "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
     try:
-        if conn is not None:
-            row = await conn.fetchrow(query)
-            present = row is not None
-        else:
-            asyncpg = require("aegis[postgres]", "asyncpg")
-            connection = await asyncpg.connect(url)
-            try:
-                present = await connection.fetchrow(query) is not None
-            finally:
-                await connection.close()
-        return (
-            DependencyStatus(name="pgvector", status="up", detail="extension present")
-            if present
-            else DependencyStatus(name="pgvector", status="down", detail="extension missing")
-        )
+        qdrant_client = client
+        if qdrant_client is None:
+            qdrant = require("aegis[retrieval]", "qdrant_client")
+            qdrant_client = qdrant.QdrantClient(url=url)
+        qdrant_client.get_collections()
+        return DependencyStatus(name="qdrant", status="up")
     except Exception as exc:  # noqa: BLE001 - a probe reports failure, never raises
-        return DependencyStatus(name="pgvector", status="down", detail=str(exc))
+        return DependencyStatus(name="qdrant", status="down", detail=str(exc))

@@ -12,7 +12,7 @@ the durable usage ledger, the audit writer, the tenancy ORM (on
   optionally, the ``set_tenant_scope`` RLS binder, for both the enforcement and audit
   data layers.
 
-Heavy deps (``sqlalchemy`` / ``pgvector`` / ``pyjwt`` / ``argon2-cffi``) live under the
+Heavy deps (``sqlalchemy`` / ``pyjwt`` / ``argon2-cffi``) live under the
 ``aegis[governance]`` extra. Importing this package pulls those, but none of the
 retrieval/gateway/agent megadeps (no ``litellm`` / ``fastapi`` / ``langgraph``).
 """

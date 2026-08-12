@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.0 ORM for the relational + vector store (Postgres/pgvector).
+"""SQLAlchemy 2.0 ORM for the relational store (Postgres) + embeddings-of-record.
 
 The **tenancy/governance tables** (``Tenant``, ``User``, ``Budget``, ``UsageLedger``,
 ``AuditLog`` + their enums) now live in the standalone ``aegis.governance.models`` on the
@@ -27,7 +27,7 @@ from enum import StrEnum
 from typing import Any
 
 from aegis.core.types import RiskLevel
-from aegis.data import EMBED_DIM, JsonB, VectorType
+from aegis.data import EMBED_DIM, JsonB, VectorColumn
 from aegis.governance.models import (
     AuditLog,
     Budget,
@@ -61,7 +61,7 @@ __all__ = [
     "TenantStatus",
     "UsageLedger",
     "User",
-    "VectorType",
+    "VectorColumn",
 ]
 
 
@@ -127,11 +127,11 @@ class Approval(Base):
 
 
 class Chunk(Base):
-    """A retrievable text chunk plus its embedding (reused by the retrieval module).
+    """A retrievable text chunk plus its embedding-of-record (reused by retrieval).
 
-    The vector column is the shared home for chunk embeddings; the retrieval
-    pipeline writes here at ingest time and runs nearest-neighbour search at
-    query time.
+    The embedding column is the durable JSON source-of-record for chunk vectors; the
+    retrieval pipeline writes here at ingest time. Nearest-neighbour (ANN) search runs
+    on Qdrant — this column is the mirror source, not a search index.
     """
 
     __tablename__ = "chunks"
@@ -140,7 +140,7 @@ class Chunk(Base):
     doc_id: Mapped[str] = mapped_column(String(255), index=True)
     persona: Mapped[str | None] = mapped_column(String(128), default=None, index=True)
     content: Mapped[str] = mapped_column(String())
-    embedding: Mapped[list[float]] = mapped_column(VectorType(EMBED_DIM))
+    embedding: Mapped[list[float]] = mapped_column(VectorColumn(EMBED_DIM))
     meta: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
 
 

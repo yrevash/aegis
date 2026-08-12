@@ -29,8 +29,8 @@ ML confidence — decides when a run defers to a human).
    → genailab.tcs.in fleet               │   cost + routing + **per-tenant budget/RPM/TPM**
                                          │
    Durable inbox: approvals table (PENDING→RESUMING lock) + SLA sweeper + resumer
-   Stores:  Neo4j (graph) · Postgres+pgvector (tenants/users/budgets/ledger/
-            approvals/checkpoints/audit/vectors) · Redis (near-exact cache) · Phoenix
+   Stores:  Neo4j (graph) · Qdrant (vectors — ANN) · Postgres (tenants/users/budgets/
+            ledger/approvals/checkpoints/audit) · Redis (near-exact cache) · Phoenix
 
    Trust stack:  conformal signal (MAPIE) + SHAP → tool-risk human gate → guardrails
                  → per-tenant governance → OTel + audit  (ML informs; risk tier gates)
@@ -53,7 +53,7 @@ secure enough to buy — and it takes real actions, explainably.*
 | **Aegis Governance** (Postgres RLS + JWT) | **JWT** (`pyjwt`) + **Argon2id** (`argon2-cffi`) · **four-role RBAC** (`admin`/`ai_team`/`devops`/`client`, a signed `coarse_role` claim + fine `platform_admin`/`tenant_admin`/`user` tier; per-role guards + admin role-assignment with last-platform-admin lockout) · per-tenant budget/RPM/TPM + usage ledger · Postgres RLS enabled at startup (`create_all` + `bootstrap_rls()`, not a migration) on `users`/`usage_ledger`/`approvals`; `audit_log`/`chunks` are application-scoped |
 | **Aegis Gateway** (LiteLLM)  | **LiteLLM** → custom OpenAI-compatible provider (`genailab.tcs.in`), budget-enforced chokepoint |
 | **Aegis Router** (LangGraph) | LangGraph (plan-and-execute + tool loop) · **durable `PostgresSaver`** checkpoints · durable approvals **inbox** (SLA sweeper + idempotent resumer) |
-| **Aegis Retrieval** (Neo4j/LightRAG + pgvector) · **Aegis Cache** (Redis) | Context-aware **query rewrite** → bounded **agentic/Self-RAG retrieval loop** → hybrid: vector + graph + BM25 → **Reciprocal Rank Fusion** → LLM rerank · LightRAG · Neo4j · Postgres/pgvector · near-exact retrieval Redis cache **+ per-tenant/persona/role answer-level semantic cache** |
+| **Aegis Retrieval** (Neo4j/LightRAG + Qdrant) · **Aegis Cache** (Redis) | Context-aware **query rewrite** → bounded **agentic/Self-RAG retrieval loop** → hybrid: vector + graph + BM25 → **Reciprocal Rank Fusion** → LLM rerank · LightRAG · Neo4j · Qdrant vectors · Postgres KV · near-exact retrieval Redis cache **+ per-tenant/persona/role answer-level semantic cache** |
 | **Aegis Signal** (XGBoost + MAPIE + SHAP) | XGBoost + MAPIE (conformal) + SHAP · **solution signal only** — informs the plan; never gates/defers/abstains (the human gate fires on tool risk tier). Graded bands (autonomous/defer/abstain) exist as an inert contract used only by the frontend mock |
 | **Aegis Guardrails** (programmatic + NeMo Colang) | Guardrails AI / NeMo + API injection classifier · **Garak** red-team runner (`backend/scripts/garak_scan.py`, executed on the day) |
 | **Aegis Evals** (RAGAS-style proxies + LLM judge) | Offline deterministic gate (`app/eval/`) · optional reasoning-model LLM-as-judge |
@@ -71,9 +71,9 @@ manifest in `backend/src/app/capabilities.py`, served at `GET /platform/capabili
 |---|---|---|---|
 | **Aegis Gateway** | LiteLLM | Single model chokepoint: role routing, budgets, timeout, retry, usage ledger | live |
 | **Aegis Router** | LangGraph | Multi-agent supervisor — routes a turn to the right specialist | live |
-| **Aegis Memory** | Postgres + pgvector | Long-term memory: episodic · semantic · procedural, bitemporal, consolidated | live |
+| **Aegis Memory** | Postgres + Qdrant | Long-term memory: episodic · semantic · procedural, bitemporal, consolidated | live |
 | **Aegis Cache** | Redis | Semantic response cache | live |
-| **Aegis Retrieval** | Neo4j/LightRAG + pgvector | Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank, spotlighting | live |
+| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank, spotlighting | live |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | Trustworthy ML: ensemble + calibrated conformal intervals + SHAP | live |
 | **Aegis Guardrails** | programmatic + NeMo Colang | Input/output rails: injection, PII, schema, content | live |
 | **Aegis Evals** | RAGAS-style proxies + LLM judge | Trace-level + answer evaluation | live |

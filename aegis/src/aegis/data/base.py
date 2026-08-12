@@ -8,19 +8,21 @@ only the *shape* of the store.
 
 Portability note: the vector and JSON columns are declared with cross-dialect type
 decorators so the schema materialises on SQLite (used by unit tests, which must run with
-no Postgres) as well as on PostgreSQL. On PostgreSQL the columns compile to the native
-``vector`` and ``jsonb`` types; on other dialects they fall back to ``JSON`` so
-``metadata.create_all`` still succeeds.
+no Postgres) as well as on PostgreSQL. The embedding-of-record column is a portable
+``list[float]`` stored as JSON — ``jsonb`` on PostgreSQL, ``JSON`` elsewhere — **not** a
+pgvector ``vector`` type: ANN search runs on Qdrant
+(:class:`aegis.retrieval.vector_store.QdrantVectorStore`), so the SQL column is only the
+durable source-of-record that the memory mirror reads, never a search index.
 
 This module imports nothing from any host application — it is self-contained under the
-``aegis[data]`` extra (``sqlalchemy[asyncio]`` + ``pgvector``).
+``aegis[data]`` extra (just ``sqlalchemy[asyncio]``; pgvector was removed once vector
+search moved to Qdrant).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase
@@ -35,26 +37,31 @@ EMBED_DIM = 3072
 JsonB = JSON().with_variant(JSONB, "postgresql")
 
 
-class VectorType(TypeDecorator[list[float]]):
-    """A pgvector column that degrades to ``JSON`` on non-Postgres dialects.
+class VectorColumn(TypeDecorator[list[float]]):
+    """A portable embedding-of-record column: a ``list[float]`` stored as JSON.
 
-    On PostgreSQL this compiles to ``vector(dim)`` and supports the pgvector
-    distance operators; on SQLite (unit tests) it stores the vector as a JSON
-    array so the table can still be created and rows round-tripped.
+    The vector is persisted as a JSON array — native ``jsonb`` on PostgreSQL, portable
+    ``JSON`` on every other dialect (e.g. the SQLite unit-test database). It is the
+    durable *source-of-record* embedding that the memory index lazily mirrors into
+    Qdrant; it is **not** a search index and carries no pgvector distance operators.
+    ANN search runs on :class:`aegis.retrieval.vector_store.QdrantVectorStore`.
+
+    ``dim`` is retained for documentation/parity with the embedding dimensionality;
+    JSON storage does not enforce it (the mirror skips off-dim rows at query time).
     """
 
-    impl = Vector
+    impl = JSON
     cache_ok = True
 
-    def __init__(self, dim: int) -> None:
-        """Store the vector dimensionality and initialise the underlying type."""
+    def __init__(self, dim: int | None = None) -> None:
+        """Record the (documentary) embedding dimensionality and init the JSON impl."""
         self.dim = dim
-        super().__init__(dim)
+        super().__init__()
 
     def load_dialect_impl(self, dialect: Any) -> Any:  # noqa: ANN401 - SQLAlchemy hook
-        """Return ``vector`` on PostgreSQL, ``JSON`` on every other dialect."""
+        """Return native ``jsonb`` on PostgreSQL, portable ``JSON`` elsewhere."""
         if dialect.name == "postgresql":
-            return dialect.type_descriptor(Vector(self.dim))
+            return dialect.type_descriptor(JSONB())
         return dialect.type_descriptor(JSON())
 
 
@@ -67,4 +74,4 @@ class AegisBase(DeclarativeBase):
     """
 
 
-__all__ = ["EMBED_DIM", "AegisBase", "JsonB", "VectorType"]
+__all__ = ["EMBED_DIM", "AegisBase", "JsonB", "VectorColumn"]

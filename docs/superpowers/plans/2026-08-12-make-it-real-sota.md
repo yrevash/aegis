@@ -40,6 +40,35 @@ Replace the fake linear `_graph_slice` chain with a genuine entity+relation grap
 NER fallback (spaCy/GLiNER — take the SOTA lib). Typed entity nodes + real relations;
 frontend palette/legend for the real `entity_type` kinds. (Design already scoped.)
 
+### T-VECTOR — Remove pgvector; adopt Qdrant (dedicated SOTA vector DB), strictly enforced
+Foundational (blocks memory + retrieval real-ness). **Remove pgvector from the whole project**
+and use **Qdrant** as the single vector store:
+- **Strict enforcement, no silent RAM fallback** (the original sin): in `full` mode a configured
+  Qdrant **server** is required — fail loud if unreachable, like Postgres/Redis. Dev/offline uses
+  **embedded Qdrant** (`qdrant-client` local mode — the real engine, on-disk/`:memory:`), which is
+  an EXPLICIT config, still real Qdrant, never a Python dict of chunks.
+- **Rip out pgvector everywhere:** `aegis.data` (delete `VectorType`; embeddings leave SQL),
+  `aegis.retrieval` (LightRAG `PGVectorStorage` → `QdrantVectorDBStorage`; replace the in-memory
+  brute-force cosine path with an embedded-Qdrant collection), `aegis.memory` (vector recall via
+  Qdrant), `aegis.governance`/all `pyproject` extras (drop `pgvector`, add `qdrant-client`),
+  backend config + `AEGIS_MODE` boot check (Qdrant is a required dependency in full mode).
+- Tenant/subject isolation preserved via Qdrant payload filters. Tests use embedded Qdrant.
+
+### T-MEMORY — SOTA real multi-agent memory (NOT a showpiece)
+The audit found the Redis tier in `MemoryConfig.memory_backend` is a documented target, NOT
+wired. Make memory genuinely enterprise-grade + real:
+- **Redis semantic cache** via **RedisVL `SemanticCache`** (industry standard) for recall/query
+  results, with **TTL + eviction/scaling** knobs. Used when Redis is present; honest in-memory
+  fallback offline (labeled, never silent).
+- **DB handling:** the durable Postgres/pgvector bitemporal tier stays authoritative (facts:
+  Zep versioning; consolidation: mem0 EXTRACT→RECONCILE; recall: GenAgents composite). Confirm
+  real, wired, tenant-scoped, and shared across agents (multi-agent read/write the same memory).
+- **Frontend visibility of ALL operations:** the Memory surface must show every recall query,
+  what was checked/retrieved (with scores), every add (raw turn + distilled fact + consolidation),
+  and every delete/expiry/invalidation — streamed. Add memory stream events + render them.
+- **SDK bar:** constructible with a custom `MemorySpec`; all CRUD methods present + a `stream_*`
+  method to the console. Real for multi-agentic use, not a demo.
+
 ### T5 — `aegis.ml` to the SDK bar
 Confirm/complete: construct with a custom spec, all methods/datatypes present, and a
 `stream_*` method to the console. Reuse the existing SOTA stack (XGBoost + MAPIE + SHAP).

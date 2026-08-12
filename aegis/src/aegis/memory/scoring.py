@@ -5,7 +5,7 @@ across the candidate set.
 
 No I/O, no ORM, no infra — every function here is deterministic and unit-testable in
 isolation (that is deliberate: recall ranking is where correctness bugs hide, so the
-math is separated from the stores and the pgvector-vs-SQLite plumbing). See
+math is separated from the stores and the Qdrant-ANN-vs-SQL plumbing). See
 ``docs/MEMORY_SPEC.md`` §B.1.
 """
 
@@ -22,9 +22,9 @@ from aegis.memory.config import MemoryConfig
 class RecallCandidate:
     """One scorable memory item (a fact or a past turn), decoupled from the ORM.
 
-    ``relevance`` is a precomputed similarity in [0, 1] (cosine from pgvector on
-    Postgres, or Python ``cosine_similarity`` on the SQLite path) so the scoring math
-    never touches embeddings or a database. ``payload`` carries the source row for the
+    ``relevance`` is a precomputed similarity in [0, 1] (the cosine score returned by
+    the Qdrant ANN search) so the scoring math never touches embeddings or a database.
+    ``payload`` carries the source row for the
     caller to render after selection.
 
     Attributes:

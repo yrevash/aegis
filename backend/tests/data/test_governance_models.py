@@ -2,7 +2,7 @@
 
 The four new tables (``tenants``, ``budgets``, ``usage_ledger``, ``approvals``)
 and the extended ``users`` columns must materialise through ``bootstrap`` on the
-aiosqlite test database (the pgvector/JSONB columns degrade to JSON) and round-trip
+aiosqlite test database (the JSON embedding + JSONB columns degrade to JSON) and round-trip
 rows, with no Postgres present.
 """
 

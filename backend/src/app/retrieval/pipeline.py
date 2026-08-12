@@ -37,6 +37,8 @@ def _config_from_settings(settings: Settings) -> RetrievalConfig:
         neo4j_user=settings.neo4j_user,
         neo4j_password=settings.neo4j_password,
         redis_url=settings.redis_url,
+        qdrant_url=settings.qdrant_url,
+        qdrant_api_key=settings.qdrant_api_key,
         stores_enabled=settings.stores_enabled,
     )
 
@@ -48,7 +50,7 @@ def build_default_retriever(settings: Settings | None = None) -> Retriever:
         settings: Application settings (defaults to the process singleton).
 
     Returns:
-        A `Retriever` wired to LightRAG (Neo4j + pgvector), the Redis semantic cache, and
+        A `Retriever` wired to LightRAG (Neo4j + Qdrant), the Redis semantic cache, and
         the shared LLM gateway.
     """
     settings = settings or get_settings()
@@ -72,7 +74,7 @@ def _get_retriever() -> Retriever:
 
     Honours the ``STORES`` run-mode setting: ``off`` builds the databaseless
     in-memory retriever (corpus recall + in-memory cache) so ``/query`` streams
-    with no Neo4j/Redis/pgvector; anything else uses the real store-backed one.
+    with no Neo4j/Redis/Qdrant; anything else uses the real store-backed one.
     """
     global _default_retriever
     if _default_retriever is None:

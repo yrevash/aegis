@@ -1,6 +1,6 @@
 import pytest
 
-from aegis.core.health import DependencyStatus, probe_pgvector, probe_postgres, probe_redis
+from aegis.core.health import DependencyStatus, probe_postgres, probe_qdrant, probe_redis
 
 
 class _OkRedis:
@@ -32,9 +32,14 @@ class _DownPostgres:
         pass
 
 
-class _NoPgvectorPostgres:
-    async def fetchrow(self, query: str) -> None:
-        return None
+class _OkQdrant:
+    def get_collections(self) -> object:
+        return object()
+
+
+class _DownQdrant:
+    def get_collections(self) -> None:
+        raise ConnectionError("qdrant unreachable")
 
 
 @pytest.mark.asyncio
@@ -66,14 +71,15 @@ async def test_probe_postgres_down() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probe_pgvector_up() -> None:
-    s = await probe_pgvector("postgresql://x", conn=_OkPostgres())
+async def test_probe_qdrant_up() -> None:
+    s = await probe_qdrant("http://x:6333", client=_OkQdrant())
     assert isinstance(s, DependencyStatus)
+    assert s.name == "qdrant"
     assert s.status == "up"
 
 
 @pytest.mark.asyncio
-async def test_probe_pgvector_missing() -> None:
-    s = await probe_pgvector("postgresql://x", conn=_NoPgvectorPostgres())
+async def test_probe_qdrant_down() -> None:
+    s = await probe_qdrant("http://x:6333", client=_DownQdrant())
     assert s.status == "down"
-    assert "missing" in (s.detail or "")
+    assert "unreachable" in (s.detail or "")
