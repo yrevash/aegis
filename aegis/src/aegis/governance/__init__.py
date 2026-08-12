@@ -46,8 +46,12 @@ from aegis.governance.dashboard import (
     usage_summary,
 )
 from aegis.governance.enforcement import (
+    DuplicateTenantError,
+    DuplicateUserError,
     LastPlatformAdminError,
     configure_enforcement,
+    create_tenant,
+    create_user,
     effective_limits,
     enforce_governance,
     list_budgets,
@@ -152,6 +156,10 @@ __all__ = [
     "hash_password",
     "list_budgets",
     "list_recent_audit",
+    "DuplicateTenantError",
+    "DuplicateUserError",
+    "create_tenant",
+    "create_user",
     "list_tenants",
     "list_users",
     "principal_role",

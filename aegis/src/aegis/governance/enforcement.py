@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.gateway.types import BudgetExceededError
@@ -39,6 +40,7 @@ from aegis.governance.models import (
     User,
 )
 from aegis.governance.rls import set_tenant_scope as _default_set_tenant_scope
+from aegis.governance.security import hash_password
 from aegis.governance.types import (
     AdminUserRow,
     BudgetRow,
@@ -50,8 +52,12 @@ from aegis.governance.types import (
 )
 
 __all__ = [
+    "DuplicateTenantError",
+    "DuplicateUserError",
     "LastPlatformAdminError",
     "configure_enforcement",
+    "create_tenant",
+    "create_user",
     "effective_limits",
     "enforce_governance",
     "list_budgets",
@@ -320,6 +326,14 @@ async def record_usage(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class DuplicateTenantError(RuntimeError):
+    """Raised when creating a tenant whose name already exists (names are unique)."""
+
+
+class DuplicateUserError(RuntimeError):
+    """Raised when creating a user whose username already exists (usernames are unique)."""
+
+
 async def list_tenants() -> list[TenantRow]:
     """Return every tenant, newest first (platform-admin surface)."""
     async with _session() as session:
@@ -335,6 +349,90 @@ async def list_tenants() -> list[TenantRow]:
         )
         for t in rows
     ]
+
+
+async def create_tenant(name: str) -> TenantRow:
+    """Create a tenant (client) and return its row (platform-admin surface).
+
+    Tenant names are unique; a clash raises :class:`DuplicateTenantError` (the API
+    surface maps it to a 409) rather than a raw driver error. New tenants default to
+    the ``active`` status.
+
+    Raises:
+        DuplicateTenantError: If a tenant with this name already exists.
+    """
+    async with _session() as session:
+        tenant = Tenant(name=name)
+        session.add(tenant)
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise DuplicateTenantError(f"tenant name {name!r} already exists") from exc
+        await session.refresh(tenant)
+        return TenantRow(
+            id=tenant.id,
+            name=tenant.name,
+            status=tenant.status.value,
+            created_at=_iso_utc(tenant.created_at),
+        )
+
+
+async def create_user(
+    username: str,
+    *,
+    role: Role,
+    tenant_id: int | None,
+    email: str | None = None,
+    password: str | None = None,
+) -> AdminUserRow:
+    """Create a user with a hashed password and return its admin row.
+
+    The password (when given) is Argon2-hashed via
+    :func:`aegis.governance.security.hash_password` before it is ever persisted —
+    the plaintext is never stored. Usernames are unique; a clash raises
+    :class:`DuplicateUserError` (the API maps it to a 409). The tenant scope is
+    applied for the belt-and-suspenders RLS layer, mirroring the other admin writes.
+
+    Args:
+        username: The new principal's unique login name.
+        role: The coarse :class:`~aegis.governance.types.Role` to grant.
+        tenant_id: The tenant the user belongs to (``None`` for a platform user).
+        email: Optional contact email.
+        password: Optional plaintext password; hashed on write. ``None`` leaves the
+            row without a usable password (an operator-provisioned shell account).
+
+    Returns:
+        The created :class:`~aegis.governance.types.AdminUserRow`.
+
+    Raises:
+        DuplicateUserError: If the username already exists.
+    """
+    async with _session() as session:
+        await _set_tenant_scope(session, tenant_id)
+        user = User(
+            username=username,
+            role=role,
+            tenant_id=tenant_id,
+            email=email,
+            password_hash=hash_password(password) if password else None,
+            is_active=True,
+        )
+        session.add(user)
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise DuplicateUserError(f"username {username!r} already exists") from exc
+        await session.refresh(user)
+        return AdminUserRow(
+            id=user.id,
+            username=user.username,
+            role=user.role,
+            tenant_id=user.tenant_id,
+            email=user.email,
+            is_active=user.is_active,
+        )
 
 
 async def list_users(tenant_id: int | None = None) -> list[AdminUserRow]:

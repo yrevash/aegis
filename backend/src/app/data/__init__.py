@@ -26,7 +26,11 @@ from .approvals import (
 )
 from .audit import list_recent_audit, record_audit
 from .governance import (
+    DuplicateTenantError,
+    DuplicateUserError,
     LastPlatformAdminError,
+    create_tenant,
+    create_user,
     effective_limits,
     enforce_governance,
     list_budgets,
@@ -100,6 +104,10 @@ __all__ = [
     "list_budgets",
     "list_pending",
     "list_recent_audit",
+    "DuplicateTenantError",
+    "DuplicateUserError",
+    "create_tenant",
+    "create_user",
     "list_tenants",
     "list_users",
     "record_audit",

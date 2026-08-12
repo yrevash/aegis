@@ -707,6 +707,26 @@ class UserRoleUpdateRequest(BaseModel):
     role: Role = Field(description="The new coarse role to assign the user.")
 
 
+class AdminUserCreateRequest(BaseModel):
+    """Body for `POST /admin/users` — provision a new user with a role + password."""
+
+    username: str = Field(min_length=1, max_length=255, description="Unique login name.")
+    role: Role = Field(description="The coarse role to grant (admin/ai_team/devops/client).")
+    tenant_id: int | None = Field(
+        default=None, description="Tenant the user belongs to; null for a platform user."
+    )
+    email: str | None = Field(default=None, max_length=320, description="Optional contact email.")
+    password: str | None = Field(
+        default=None, min_length=8, description="Plaintext password; Argon2-hashed on write."
+    )
+
+
+class TenantCreateRequest(BaseModel):
+    """Body for `POST /admin/tenants` — create a client/tenant (platform-admin only)."""
+
+    name: str = Field(min_length=1, max_length=255, description="Unique tenant (client) name.")
+
+
 # ``BudgetRow`` now lives in ``aegis.governance.types`` and is re-exported above.
 
 

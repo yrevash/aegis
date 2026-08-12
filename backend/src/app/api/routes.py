@@ -35,6 +35,7 @@ from app.api.schemas import (
     AdminBudgetsResponse,
     AdminTenantsResponse,
     AdminUsageResponse,
+    AdminUserCreateRequest,
     AdminUserRow,
     AdminUsersResponse,
     AegisModuleRow,
@@ -101,6 +102,8 @@ from app.api.schemas import (
     SecurityPostureResponse,
     StackResponse,
     StreamEvent,
+    TenantCreateRequest,
+    TenantRow,
     UserRoleUpdateRequest,
 )
 from app.capabilities import (
@@ -127,8 +130,12 @@ from app.core.security import (
     verify_password,
 )
 from app.data import (
+    DuplicateTenantError,
+    DuplicateUserError,
     LastPlatformAdminError,
     count_approved,
+    create_tenant,
+    create_user,
     effective_limits,
     get_approval,
     list_budgets,
@@ -1113,6 +1120,26 @@ async def admin_tenants(
     return AdminTenantsResponse(rows=await list_tenants())
 
 
+@router.post("/admin/tenants", response_model=TenantRow, status_code=201, tags=["admin"])
+async def admin_create_tenant(
+    req: TenantCreateRequest,
+    auth: AuthContext = Depends(require_platform_admin),
+) -> TenantRow:
+    """Create a new client/tenant (platform-admin only).
+
+    Tenant names are unique — a clash returns 409 rather than a 500. The action is
+    audited so the trail records who onboarded each client.
+    """
+    try:
+        row = await create_tenant(req.name.strip())
+    except DuplicateTenantError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await _safe_audit(
+        "admin.tenant.create", auth.username, payload={"tenant_id": row.id, "name": row.name}
+    )
+    return row
+
+
 @router.get("/admin/users", response_model=AdminUsersResponse, tags=["admin"])
 async def admin_users(
     tenant_id: int | None = None,
@@ -1121,6 +1148,47 @@ async def admin_users(
     """List users, scoped to the caller's tenant (platform-admin may target any)."""
     scoped = _scope_tenant(auth, tenant_id)
     return AdminUsersResponse(rows=await list_users(scoped))
+
+
+@router.post("/admin/users", response_model=AdminUserRow, status_code=201, tags=["admin"])
+async def admin_create_user(
+    req: AdminUserCreateRequest,
+    auth: AuthContext = Depends(require_tenant_admin),
+) -> AdminUserRow:
+    """Provision a new user with a role + hashed password (admin action).
+
+    A platform-admin may create a user in any tenant (or a platform user with
+    ``tenant_id=null``); a tenant-admin is pinned to its own tenant — a create that
+    targets another tenant (or the platform scope) is a clean 403. A duplicate
+    username returns 409. The plaintext password is Argon2-hashed in the data layer
+    and never stored or logged. The action is audited.
+    """
+    tenant_id = req.tenant_id
+    if auth.fine_role == TENANT_ADMIN:
+        # A tenant-admin can only create users inside its own tenant.
+        if tenant_id is None:
+            tenant_id = auth.tenant_id
+        elif tenant_id != auth.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="A tenant-admin may only create users in its own tenant.",
+            )
+    try:
+        row = await create_user(
+            req.username.strip(),
+            role=req.role,
+            tenant_id=tenant_id,
+            email=req.email,
+            password=req.password,
+        )
+    except DuplicateUserError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await _safe_audit(
+        "admin.user.create",
+        auth.username,
+        payload={"user_id": row.id, "username": row.username, "role": req.role.value, "tenant_id": tenant_id},
+    )
+    return row
 
 
 @router.post(
