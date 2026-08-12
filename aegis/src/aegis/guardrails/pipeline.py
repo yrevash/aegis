@@ -8,18 +8,30 @@ schema → content filter → PII on output), but is LLM-agnostic (an injected
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
+from aegis.core.config import AegisMode, CoreSettings
 from aegis.core.events import AegisEvent, GuardrailEvent, SpanKind, StepFinished, StepStarted
 from aegis.core.interfaces import ChatCompleter
 from aegis.core.registry import register
-from aegis.core.types import GuardResult, GuardVerdict
+from aegis.core.types import GuardResult, GuardVerdict, InjectionVerdict
 from aegis.guardrails import pii, schema
-from aegis.guardrails.classifier import detect_injection
+from aegis.guardrails.cache import (
+    InjectionCache,
+    InMemoryInjectionCache,
+    make_injection_cache,
+)
+from aegis.guardrails.classifier import (
+    classify_injection,
+    detect_injection,
+    deterministic_injection,
+)
 from aegis.guardrails.content_safety import screen_content
 from aegis.guardrails.grounding import check_grounding
 from aegis.guardrails.topical import screen_topic
@@ -27,7 +39,36 @@ from aegis.guardrails.topical import screen_topic
 if TYPE_CHECKING:
     from aegis.core.stream import AegisEmitter
 
+logger = logging.getLogger(__name__)
+
 _MODULE_ID = "guardrails"
+
+
+def _default_injection_cache() -> InjectionCache:
+    """Build the injection cache the mode calls for, degrading loudly, never raising.
+
+    Honors ``AEGIS_MODE`` via :func:`~aegis.guardrails.cache.make_injection_cache`:
+    Redis-backed in ``full`` mode (when a ``REDIS_URL`` is configured), in-memory
+    otherwise. The cache is a pure optimization — it must never be the thing that
+    stops a :class:`Guardrails` from constructing — so a full-mode Redis that cannot
+    be built degrades to in-memory with a warning instead of the factory's hard raise.
+    """
+    settings = CoreSettings()
+    if settings.mode is AegisMode.full and settings.redis_url:
+        try:
+            import redis  # lazy: keeps lite/tests infra-free
+
+            client = redis.from_url(settings.redis_url)
+            return make_injection_cache(settings.mode, redis_client=client)
+        except Exception:  # noqa: BLE001 - the cache is an optimization; never block on it
+            logger.warning(
+                "InjectionCache: Redis unavailable; using in-memory (non-durable).",
+                exc_info=True,
+            )
+            return InMemoryInjectionCache()
+    # lite/auto — or full-without-URL — get the in-memory backend.
+    mode = AegisMode.lite if settings.mode is AegisMode.full else settings.mode
+    return make_injection_cache(mode)
 
 #: A custom rail: given the (already PII-redacted) text, return a GuardResult to
 #: block/redact/flag, or ``None`` to abstain. Sync or async. Give it a distinct
@@ -57,12 +98,19 @@ class Guardrails:
         topical_block: bool = False,
         ground_answers: bool = False,
         grounding_block: bool = False,
+        injection_cache: InjectionCache | None = None,
     ) -> None:
         """Create the pipeline.
 
         Args:
             completer: Optional chat completer for the model-based injection and
                 content-safety self-checks. If None, only deterministic layers run.
+            injection_cache: Optional cache for model-based injection verdicts, keyed
+                on a hash of the (already PII-redacted) text. Defaults to
+                :func:`_default_injection_cache` (Redis in full mode, in-memory
+                otherwise). Only the model-classifier verdict is cached; deterministic
+                signature hits run first and are never cached around. Cache errors
+                fail open (treated as a miss) — the cache never blocks a check.
             input_rails: Optional custom input rails, run after the built-ins.
             output_rails: Optional custom output rails, run after the built-ins.
             allowed_topics: Optional description/list of the permitted business
@@ -82,6 +130,9 @@ class Guardrails:
         self._topical_block = topical_block
         self._ground_answers = ground_answers
         self._grounding_block = grounding_block
+        self._injection_cache = (
+            injection_cache if injection_cache is not None else _default_injection_cache()
+        )
 
     @staticmethod
     async def _run_custom(text: str, rails: list[Rail]) -> GuardResult | None:
@@ -93,6 +144,100 @@ class Guardrails:
             if result is not None and result.verdict is not GuardVerdict.PASS:
                 return result
         return None
+
+    async def _detect_injection_cached(
+        self, text: str, *, emitter: AegisEmitter | None = None
+    ) -> InjectionVerdict:
+        """Screen ``text`` for injection, caching only the model-classifier verdict.
+
+        Layer order is preserved exactly: the deterministic signatures run first
+        (offline, no LLM) and a hit is returned immediately — **never cached around**,
+        since caching a free, deterministic decision buys nothing. Only text that
+        clears the signatures reaches the model classifier, and *that* verdict is
+        cached keyed on a SHA-256 of the (already PII-redacted) text. On a hit the LLM
+        call is skipped. Cache reads/writes fail open (a broken cache is a miss, never
+        a block). Emits a ``guardrail_cache`` hit/miss event when an emitter is given.
+
+        Args:
+            text: The (already PII-redacted) user text to screen.
+            emitter: Optional AG-UI emitter for the cache hit/miss event.
+
+        Returns:
+            The :class:`InjectionVerdict`; ``injection=True`` blocks the request.
+        """
+        hit = deterministic_injection(text)
+        if hit is not None:
+            return hit  # free, offline signature block — nothing to cache
+        if self._completer is None:
+            # Model layer explicitly disabled; defer to the classifier's own logged
+            # no-completer path. No LLM call happens, so there is nothing to cache.
+            return await detect_injection(text, completer=None)
+
+        key = self._injection_cache_key(text)
+        cached = self._cache_get(key)
+        if cached is not None:
+            verdict = self._parse_cached_verdict(cached)
+            if verdict is not None:
+                await self._emit_injection_cache(emitter, event="hit", verdict=verdict)
+                return verdict
+        verdict = await classify_injection(text, completer=self._completer)
+        self._cache_set(key, verdict.model_dump_json())
+        await self._emit_injection_cache(emitter, event="miss", verdict=verdict)
+        return verdict
+
+    @staticmethod
+    def _injection_cache_key(text: str) -> str:
+        """Return the cache key: a SHA-256 of the exact (redacted) text.
+
+        Keyed on the text alone — the verdict is a pure function of that exact string,
+        so there is no tenant/persona to leak (and no cross-tenant reuse risk).
+        """
+        return "inj:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _cache_get(self, key: str) -> str | None:
+        """Read ``key`` from the injection cache, failing open (a miss) on any error."""
+        try:
+            return self._injection_cache.get(key)
+        except Exception:  # noqa: BLE001 - a cache miss is safe; never block on the cache
+            logger.warning(
+                "Injection cache read failed; treating as a miss (fail-open).", exc_info=True
+            )
+            return None
+
+    def _cache_set(self, key: str, value: str) -> None:
+        """Write ``key`` to the injection cache, swallowing any error (fail-open)."""
+        try:
+            self._injection_cache.set(key, value)
+        except Exception:  # noqa: BLE001 - a failed write just means no cache hit later
+            logger.warning(
+                "Injection cache write failed; continuing uncached (fail-open).", exc_info=True
+            )
+
+    @staticmethod
+    def _parse_cached_verdict(raw: str) -> InjectionVerdict | None:
+        """Rehydrate a stored verdict, returning None on any corruption (→ recompute)."""
+        try:
+            return InjectionVerdict.model_validate_json(raw)
+        except Exception:  # noqa: BLE001 - a bad cache entry must not fail the check
+            return None
+
+    @staticmethod
+    async def _emit_injection_cache(
+        emitter: AegisEmitter | None, *, event: str, verdict: InjectionVerdict
+    ) -> None:
+        """Emit a ``guardrail_cache`` hit/miss CustomEvent (no-op without an emitter).
+
+        Carries only the outcome (event + the boolean verdict), never the raw or
+        redacted text — the cache is keyed on a hash, and the event stays PII-free.
+        """
+        if emitter is None:
+            return
+        from aegis.core import stream_names
+
+        await emitter.custom(
+            stream_names.GUARDRAIL_CACHE,
+            {"event": event, "layer": "injection", "injection": verdict.injection},
+        )
 
     async def _screen_topical(self, text: str) -> GuardResult | None:
         """Run the topical rail; return a BLOCK/FLAG GuardResult, or None when off.
@@ -119,12 +264,17 @@ class Guardrails:
             layer="topical",
         )
 
-    async def _screen_input(self, text: str) -> tuple[GuardResult, list[GuardResult]]:
+    async def _screen_input(
+        self, text: str, *, emitter: AegisEmitter | None = None
+    ) -> tuple[GuardResult, list[GuardResult]]:
         """Run the input rail, returning ``(primary, advisories)``.
 
         ``primary`` is the blocking / redaction / pass verdict (never FLAG); a
         BLOCK short-circuits the chain. ``advisories`` collects non-blocking FLAGs
         (e.g. off-topic) so they can be streamed without stopping the request.
+
+        ``emitter`` (when given) receives the ``guardrail_cache`` hit/miss event for
+        the model-based injection layer.
         """
         fmt = schema.validate_input_format(text)
         if not fmt.ok:
@@ -135,7 +285,7 @@ class Guardrails:
                 [],
             )
         redacted, kinds = pii.redact(text)
-        verdict = await detect_injection(redacted, completer=self._completer)
+        verdict = await self._detect_injection_cached(redacted, emitter=emitter)
         if verdict.injection:
             return (
                 GuardResult(
@@ -187,11 +337,14 @@ class Guardrails:
             advisories,
         )
 
-    async def check_input(self, text: str) -> GuardResult:
+    async def check_input(
+        self, text: str, *, emitter: AegisEmitter | None = None
+    ) -> GuardResult:
         """Run the full input rail (schema → PII → injection → content → topical).
 
         Args:
             text: The inbound user input text to screen.
+            emitter: Optional AG-UI emitter for the injection ``guardrail_cache`` event.
 
         Returns:
             A :class:`GuardResult` with verdict and potentially redacted text. When
@@ -199,7 +352,7 @@ class Guardrails:
             non-blocking FLAG is surfaced as the result so the single-result path
             (the agent graph) still shows it; a BLOCK always takes precedence.
         """
-        primary, advisories = await self._screen_input(text)
+        primary, advisories = await self._screen_input(text, emitter=emitter)
         if primary.verdict is GuardVerdict.PASS and advisories:
             return advisories[0]
         return primary
@@ -349,7 +502,7 @@ class Guardrails:
         timing: dict[str, float] = {}
         async with emitter.step("guard_input", SpanKind.GUARDRAIL):
             t0 = time.monotonic()
-            result = await self.check_input(text)
+            result = await self.check_input(text, emitter=emitter)
             timing["total"] = round((time.monotonic() - t0) * 1000, 3)
             spans = [
                 {"kind": m.kind, "start": m.start, "end": m.end} for m in pii.scan(text)

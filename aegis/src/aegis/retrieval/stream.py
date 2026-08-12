@@ -65,6 +65,23 @@ async def stream_retrieve(
     async with emitter.step(_STEP_NAME, SpanKind.RETRIEVER):
         result = await retriever.retrieve(query, persona=persona)
 
+        # Cache observability: the pipeline has already decided hit vs miss (a served
+        # result carries `cache_hit=True` + `provenance.cache`). Surface it as its own
+        # event, carrying the CacheProvenance (near-exact `cache-exact` vs semantic
+        # `cache-near`, original query, cached-at) so the UI can render the cache story
+        # without inferring it from the citations payload. This adds no caching logic —
+        # it only reports what `Retriever.retrieve` already resolved.
+        cache = result.provenance.cache
+        await emitter.custom(
+            stream_names.RETRIEVAL_CACHE,
+            {
+                "event": "hit" if result.cache_hit else "miss",
+                "kind": cache.kind if cache is not None else None,
+                "original_query": cache.original_query if cache is not None else None,
+                "cached_at": cache.cached_at if cache is not None else None,
+            },
+        )
+
         await emitter.custom(
             stream_names.RETRIEVAL_CITATIONS,
             {

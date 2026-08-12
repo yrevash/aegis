@@ -61,11 +61,20 @@ async def test_stream_retrieve_emits_step_then_citations_then_finished():
     result = await stream_retrieve(retriever, "refunds payment method", emitter, persona="ops")
 
     payloads = _payloads(sink.frames)
-    assert [p["type"] for p in payloads] == ["STEP_STARTED", "CUSTOM", "STEP_FINISHED"]
+    assert [p["type"] for p in payloads] == [
+        "STEP_STARTED",
+        "CUSTOM",
+        "CUSTOM",
+        "STEP_FINISHED",
+    ]
     assert payloads[0]["stepName"] == "retrieve"
-    assert payloads[2]["stepName"] == "retrieve"
+    assert payloads[3]["stepName"] == "retrieve"
 
-    citations = payloads[1]
+    cache = payloads[1]
+    assert cache["name"] == stream_names.RETRIEVAL_CACHE
+    assert cache["value"]["event"] == "miss"  # first-ever query: nothing cached yet
+
+    citations = payloads[2]
     assert citations["name"] == stream_names.RETRIEVAL_CITATIONS
     value = citations["value"]
     assert value["num_candidates"] == result.num_candidates
@@ -86,9 +95,39 @@ async def test_stream_retrieve_citations_reflect_real_sources():
 
     result = await stream_retrieve(retriever, "refund payment method original", emitter)
 
-    citations = _payloads(sink.frames)[1]["value"]
+    citations = _payloads(sink.frames)[2]["value"]
     assert [s["id"] for s in citations["sources"]] == [s.id for s in result.sources]
     assert citations["provenance"]["fusion"] == result.provenance.fusion.value
+
+
+@pytest.mark.asyncio
+async def test_stream_retrieve_emits_cache_miss_then_hit_with_provenance():
+    """A repeat query emits a ``retrieval_cache`` hit carrying the cache provenance."""
+    retriever = _retriever()
+
+    # First pass: cold cache → a miss, and the result is written back to the cache.
+    sink1 = CaptureSink()
+    em1 = AegisEmitter(thread_id="t", run_id="r1", sink=sink1)
+    await stream_retrieve(retriever, "refunds payment method", em1, persona="ops")
+    cache1 = next(
+        p["value"] for p in _payloads(sink1.frames)
+        if p.get("name") == stream_names.RETRIEVAL_CACHE
+    )
+    assert cache1["event"] == "miss"
+    assert cache1["kind"] is None
+
+    # Second pass: identical query+persona → an exact cache hit with provenance.
+    sink2 = CaptureSink()
+    em2 = AegisEmitter(thread_id="t", run_id="r2", sink=sink2)
+    result2 = await stream_retrieve(retriever, "refunds payment method", em2, persona="ops")
+    cache2 = next(
+        p["value"] for p in _payloads(sink2.frames)
+        if p.get("name") == stream_names.RETRIEVAL_CACHE
+    )
+    assert result2.cache_hit is True
+    assert cache2["event"] == "hit"
+    assert cache2["kind"] == "cache-exact"  # near-exact tier; semantic tier is "cache-near"
+    assert cache2["original_query"] == "refunds payment method"
 
 
 @pytest.mark.asyncio

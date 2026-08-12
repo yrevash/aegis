@@ -8,9 +8,14 @@ from __future__ import annotations
 
 REASONING = "reasoning"
 GUARDRAIL_VERDICT = "guardrail_verdict"
+#: An injection-classifier cache event (hit / miss) — the guardrail cost/observability feed.
+GUARDRAIL_CACHE = "guardrail_cache"
 SHAP_EXPLANATION = "shap_explanation"
 CONFORMAL_INTERVAL = "conformal_interval"
 RETRIEVAL_CITATIONS = "retrieval_citations"
+#: A retrieval semantic-cache event (hit / miss), carrying the cache provenance
+#: (near-exact vs semantic, original query, cached-at) so the UI can show it.
+RETRIEVAL_CACHE = "retrieval_cache"
 ROUTING = "routing"
 MEMORY_RECALL = "memory_recall"
 #: A durable memory write (add/update/invalidate/delete/expire) — the memory changelog feed.
@@ -21,8 +26,8 @@ MODEL_CALL = "model_call"
 EVAL_RESULT = "eval_result"
 
 ALL: frozenset[str] = frozenset(
-    {REASONING, GUARDRAIL_VERDICT, SHAP_EXPLANATION, CONFORMAL_INTERVAL,
-     RETRIEVAL_CITATIONS, ROUTING, MEMORY_RECALL, MEMORY_WRITE, MEMORY_CACHE,
+    {REASONING, GUARDRAIL_VERDICT, GUARDRAIL_CACHE, SHAP_EXPLANATION, CONFORMAL_INTERVAL,
+     RETRIEVAL_CITATIONS, RETRIEVAL_CACHE, ROUTING, MEMORY_RECALL, MEMORY_WRITE, MEMORY_CACHE,
      MODEL_CALL, EVAL_RESULT}
 )
 
