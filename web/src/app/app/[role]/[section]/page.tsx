@@ -7,6 +7,7 @@ import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
 import { MLOpsMount } from '@/components/ml/MLOpsView'
 import { MemoryMount } from '@/components/memory/MemoryView'
 import { LLMOpsMount } from '@/components/ops/LLMOpsView'
+import { RagMount } from '@/components/retrieval/RagView'
 import { SectionPlaceholder } from '@/components/portal/SectionPlaceholder'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
 
@@ -36,6 +37,7 @@ export default async function SectionPage({
   if (section === 'llmops') return <LLMOpsMount />
   if (section === 'evals') return <EvalsMount />
   if (section === 'memory') return <MemoryMount />
+  if (section === 'rag') return <RagMount role={role} />
   if (section === 'cache') return <CacheMount />
   if (section === 'tokenopt') return <TokenOptMount />
   if (section === 'guardrails') return <GuardrailsMount />

@@ -24,6 +24,7 @@ import {
   KeyRound,
   Layers,
   LayoutDashboard,
+  Network,
   PiggyBank,
   ScrollText,
   ShieldAlert,
@@ -111,6 +112,14 @@ export const SECTIONS: Record<string, Section> = {
     icon: Brain,
     hint: 'pgvector',
     tooltip: 'Aegis Memory — long-term memory · Postgres + pgvector',
+  },
+  rag: {
+    id: 'rag',
+    label: 'RAG',
+    icon: Network,
+    hint: 'hybrid · rerank',
+    tooltip:
+      'Aegis Retrieval — the arsenal made observable: which recall arms fired (vector/graph/bm25), RRF fusion, LLM rerank, spotlighting, query-rewrite and the bounded Self-RAG loop, with real measured counts',
   },
   cache: {
     id: 'cache',
@@ -204,7 +213,7 @@ export const SECTIONS: Record<string, Section> = {
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
-  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'cache', 'guardrails', 'simulation'],
+  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'cache', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
