@@ -28,7 +28,9 @@ def _mock_classifier(monkeypatch: pytest.MonkeyPatch, *, injection: bool, reason
     async def _fake(
         role, messages, *, tools=None, temperature=0.0, response_format=None, max_tokens=None
     ):
-        return LLMResult(content=f'{{"injection": {str(injection).lower()}, "reason": "{reason}"}}')
+        return LLMResult(
+            content=f'{{"injection": {str(injection).lower()}, "unsafe": false, "reason": "{reason}"}}'
+        )
 
     monkeypatch.setattr(llm_module, "complete", _fake)
 
@@ -67,7 +69,8 @@ async def test_check_input_injection_block_tags_layer(monkeypatch):
     assert result.layer == "injection"
 
 
-async def test_check_output_redact_carries_layer_and_kinds():
+async def test_check_output_redact_carries_layer_and_kinds(monkeypatch):
+    _mock_classifier(monkeypatch, injection=False, reason="benign")  # output content-safety self-check
     result = await check_output(
         "You can contact John at john.doe@example.com or 415-555-0132."
     )
@@ -83,7 +86,7 @@ async def test_check_input_redacts_pii_before_classifier(monkeypatch):
         role, messages, *, tools=None, temperature=0.0, response_format=None, max_tokens=None
     ):
         seen["user"] = messages[-1]["content"]
-        return LLMResult(content='{"injection": false, "reason": "benign"}')
+        return LLMResult(content='{"injection": false, "unsafe": false, "reason": "benign"}')
 
     monkeypatch.setattr(llm_module, "complete", _capture)
 
@@ -124,7 +127,8 @@ async def test_classifier_fails_closed_on_gateway_error(monkeypatch):
 
 
 # ── output rail ───────────────────────────────────────────────────────────────
-async def test_check_output_redacts_pii():
+async def test_check_output_redacts_pii(monkeypatch):
+    _mock_classifier(monkeypatch, injection=False, reason="benign")  # output content-safety self-check
     result = await check_output(
         "You can contact John at john.doe@example.com or 415-555-0132."
     )
@@ -134,7 +138,8 @@ async def test_check_output_redacts_pii():
     assert "[REDACTED_PHONE]" in result.text
 
 
-async def test_check_output_passes_clean_answer():
+async def test_check_output_passes_clean_answer(monkeypatch):
+    _mock_classifier(monkeypatch, injection=False, reason="benign")  # output content-safety self-check
     result = await check_output("Revenue grew twelve percent across three regions.")
     assert result.verdict is GuardVerdict.PASS
 

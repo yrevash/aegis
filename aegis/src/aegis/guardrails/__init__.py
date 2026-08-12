@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from aegis.core.interfaces import ChatCompleter
 from aegis.core.types import GuardResult
-from aegis.guardrails import pii, schema
+from aegis.guardrails import content_safety, pii, schema
+from aegis.guardrails.content_safety import (
+    HAZARD_CATEGORIES,
+    ContentSafetyVerdict,
+    screen_content,
+)
 from aegis.guardrails.pipeline import Guardrails
 
 
@@ -64,10 +69,14 @@ async def run_guards(
 
 
 __all__ = [
+    "ContentSafetyVerdict",
     "Guardrails",
+    "HAZARD_CATEGORIES",
     "check_input",
     "check_output",
+    "content_safety",
     "pii",
     "run_guards",
     "schema",
+    "screen_content",
 ]

@@ -19,6 +19,7 @@ from aegis.core.registry import register
 from aegis.core.types import GuardResult, GuardVerdict
 from aegis.guardrails import pii, schema
 from aegis.guardrails.classifier import detect_injection
+from aegis.guardrails.content_safety import screen_content
 
 if TYPE_CHECKING:
     from aegis.core.stream import AegisEmitter
@@ -62,6 +63,14 @@ class Guardrails:
                 text=redacted,
                 layer="injection",
             )
+        safety = await screen_content(redacted, completer=self._completer)
+        if safety.unsafe:
+            return GuardResult(
+                verdict=GuardVerdict.BLOCK,
+                reason=f"Unsafe content blocked ({safety.label() or 'hazard'}): {safety.reason}",
+                text=redacted,
+                layer="content_safety",
+            )
         if kinds:
             return GuardResult(
                 verdict=GuardVerdict.REDACT,
@@ -72,7 +81,7 @@ class Guardrails:
             )
         return GuardResult(
             verdict=GuardVerdict.PASS,
-            reason="Input passed schema, PII, and injection rails.",
+            reason="Input passed schema, PII, injection, and content-safety rails.",
             text=text,
         )
 
@@ -95,6 +104,14 @@ class Guardrails:
             return GuardResult(
                 verdict=GuardVerdict.BLOCK, reason=filtered.reason, text=text, layer="content"
             )
+        safety = await screen_content(text, completer=self._completer)
+        if safety.unsafe:
+            return GuardResult(
+                verdict=GuardVerdict.BLOCK,
+                reason=f"Unsafe output blocked ({safety.label() or 'hazard'}): {safety.reason}",
+                text=text,
+                layer="content_safety",
+            )
         redacted, kinds = pii.redact(text)
         if kinds:
             return GuardResult(
@@ -106,7 +123,7 @@ class Guardrails:
             )
         return GuardResult(
             verdict=GuardVerdict.PASS,
-            reason="Output passed schema, content-filter, and PII rails.",
+            reason="Output passed schema, content-filter, content-safety, and PII rails.",
             text=text,
         )
 

@@ -12,7 +12,7 @@ class _Benign:
     """Mock completer that always returns benign result."""
 
     async def __call__(self, messages, *, response_format=None):
-        return '{"injection": false, "reason": "benign"}'
+        return '{"injection": false, "unsafe": false, "reason": "benign"}'
 
 
 @pytest.mark.asyncio
