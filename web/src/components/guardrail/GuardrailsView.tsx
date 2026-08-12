@@ -1,0 +1,617 @@
+'use client'
+
+import {
+  ArrowDown,
+  Ban,
+  Cpu,
+  Crosshair,
+  Eraser,
+  FileCode2,
+  Filter,
+  Fingerprint,
+  ScanSearch,
+  ShieldAlert,
+  ShieldCheck,
+  Target,
+  WifiOff,
+  type LucideIcon,
+} from 'lucide-react'
+import { useEffect, useState, type ReactElement } from 'react'
+
+import { getSecurityPosture, runRedteam } from '@/lib/api/client'
+import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
+import type {
+  PostureEntry,
+  RedteamReportResponse,
+  SecurityPostureResponse,
+} from '@/lib/api/platform'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardBody } from '@/components/ui/Card'
+import {
+  GuardrailReveal,
+  type GuardrailEntry,
+} from '@/components/guardrail/GuardrailReveal'
+import { MiniMeter } from '@/components/memory/MiniMeter'
+import { TooltipProvider } from '@/components/primitives/tooltip'
+import { cn } from '@/lib/utils'
+
+/**
+ * One rail in the defense-in-depth pipeline. Every field here is honest,
+ * module-real config read straight from `aegis/src/aegis/guardrails/pipeline.py`
+ * (the `check_input` / `check_output` methods) — it is NOT a measured metric.
+ * `postureThreatId`, when set, is the `GET /security/posture` entry whose live
+ * status this rail's badge derives from; rails with no OWASP posture row are
+ * always-on parts of the pipeline and badged `wired` instead.
+ */
+interface RailSpec {
+  id: string
+  /** The `layer` string the rail streams on its `guardrail` verdict event. */
+  layer: string
+  name: string
+  icon: LucideIcon
+  /** What the rail checks — the true method, from the Python module. */
+  method: string
+  /** OWASP-Agentic / policy mapping. */
+  owasp: string
+  /** Verdict semantics the rail can emit. */
+  semantics: 'block' | 'redact' | 'block / flag'
+  /** Posture threat id whose live status this rail derives from, if any. */
+  postureThreatId?: string
+}
+
+/** Input rails, in the exact order `Guardrails.check_input` runs them. */
+const INPUT_RAILS: RailSpec[] = [
+  {
+    id: 'in-schema',
+    layer: 'schema',
+    name: 'Schema / format',
+    icon: FileCode2,
+    method: 'validate_input_format — the request parses & matches the expected shape',
+    owasp: 'LLM05 · improper input handling',
+    semantics: 'block',
+  },
+  {
+    id: 'in-pii',
+    layer: 'pii',
+    name: 'PII redaction (Presidio)',
+    icon: Fingerprint,
+    method: 'pii.redact — Presidio + anchored regex & Luhn mask PII before the model sees it',
+    owasp: 'LLM02 · sensitive-information disclosure',
+    semantics: 'redact',
+    postureThreatId: 'LLM02',
+  },
+  {
+    id: 'in-injection',
+    layer: 'injection',
+    name: 'Prompt injection',
+    icon: ShieldAlert,
+    method:
+      'deterministic_injection backstop + classify_injection (fail-closed — an unavailable classifier is treated as injection)',
+    owasp: 'LLM01 · prompt injection / jailbreak',
+    semantics: 'block',
+    postureThreatId: 'LLM01',
+  },
+  {
+    id: 'in-content',
+    layer: 'content_safety',
+    name: 'Content safety',
+    icon: ScanSearch,
+    method: 'screen_content — MLCommons hazard taxonomy S1–S13',
+    owasp: 'Content policy · MLCommons S1–S13',
+    semantics: 'block',
+  },
+  {
+    id: 'in-topical',
+    layer: 'topical',
+    name: 'Topical scope',
+    icon: Target,
+    method: 'screen_topic — off-domain / off-policy topic screen',
+    owasp: 'LLM06 · excessive agency (scope)',
+    semantics: 'block / flag',
+  },
+]
+
+/** Output rails, in the exact order `Guardrails.check_output` runs them. */
+const OUTPUT_RAILS: RailSpec[] = [
+  {
+    id: 'out-schema',
+    layer: 'schema',
+    name: 'Schema / format',
+    icon: FileCode2,
+    method: 'validate_output_format — the answer matches the expected output contract',
+    owasp: 'LLM05 · improper output handling',
+    semantics: 'block',
+  },
+  {
+    id: 'out-content-filter',
+    layer: 'content',
+    name: 'Content filter',
+    icon: Filter,
+    method: 'schema.content_filter — deterministic banned-content filter on the draft answer',
+    owasp: 'Content policy',
+    semantics: 'block',
+  },
+  {
+    id: 'out-content',
+    layer: 'content_safety',
+    name: 'Content safety',
+    icon: ScanSearch,
+    method: 'screen_content — MLCommons hazard taxonomy S1–S13 on the answer',
+    owasp: 'Content policy · MLCommons S1–S13',
+    semantics: 'block',
+  },
+  {
+    id: 'out-grounding',
+    layer: 'grounding',
+    name: 'Grounding',
+    icon: ShieldCheck,
+    method: 'check_grounding — the answer is supported by the retrieved context (anti-hallucination)',
+    owasp: 'LLM09 · misinformation',
+    semantics: 'block / flag',
+  },
+  {
+    id: 'out-pii',
+    layer: 'pii',
+    name: 'PII redaction (Presidio)',
+    icon: Fingerprint,
+    method: 'pii.redact — mask any PII in the answer before it reaches the user',
+    owasp: 'LLM02 · sensitive-information disclosure',
+    semantics: 'redact',
+    postureThreatId: 'LLM02',
+  },
+]
+
+/** Verdict-semantics → badge tone + icon. */
+const SEMANTICS_META: Record<
+  RailSpec['semantics'],
+  { tone: 'block' | 'risk' | 'neutral'; icon: LucideIcon }
+> = {
+  block: { tone: 'block', icon: Ban },
+  redact: { tone: 'risk', icon: Eraser },
+  'block / flag': { tone: 'neutral', icon: ShieldAlert },
+}
+
+/**
+ * An honest, illustrative SAMPLE verdict feed — the shape of the `guardrail`
+ * events the run stream emits, rendered offline so the glass box is populated
+ * without a live run. The strings are fabricated demo data, never real PII.
+ */
+const SAMPLE_VERDICTS: GuardrailEntry[] = [
+  {
+    stage: 'input',
+    verdict: 'redact',
+    layer: 'pii',
+    reason: 'Presidio masked 1 PII span before the model ever saw it.',
+    redactions: [{ kind: 'credit_card' }],
+    before_masked: 'please refund my card 4111-1111-1111-1111',
+    after: 'please refund my card [CREDIT_CARD]',
+  },
+  {
+    stage: 'input',
+    verdict: 'block',
+    layer: 'injection',
+    reason: "Prompt injection blocked: matched signature 'ignore previous instructions'.",
+    redactions: [],
+    before_masked: null,
+    after: null,
+  },
+  {
+    stage: 'input',
+    verdict: 'pass',
+    layer: 'content_safety',
+    reason: 'No MLCommons S1–S13 hazard detected in the request.',
+    redactions: [],
+    before_masked: null,
+    after: null,
+  },
+  {
+    stage: 'output',
+    verdict: 'pass',
+    layer: 'grounding',
+    reason: 'Answer grounded in 3 retrieved sources; no unsupported claims.',
+    redactions: [],
+    before_masked: null,
+    after: null,
+  },
+  {
+    stage: 'output',
+    verdict: 'redact',
+    layer: 'pii',
+    reason: 'Masked 1 PII span in the draft answer before returning it to the user.',
+    redactions: [{ kind: 'phone' }],
+    before_masked: 'you can reach the desk at 415-555-0132',
+    after: 'you can reach the desk at [PHONE]',
+  },
+]
+
+/** Posture status → badge tone + label. */
+function statusBadge(status: string): { tone: 'ok' | 'risk' | 'neutral'; label: string } {
+  if (status === 'enforced') return { tone: 'ok', label: 'enforced' }
+  if (status === 'partial') return { tone: 'risk', label: 'partial' }
+  if (status === 'not_covered') return { tone: 'neutral', label: 'not covered' }
+  return { tone: 'neutral', label: status }
+}
+
+/** One rail card in the stepped stack. */
+function RailCard({
+  spec,
+  index,
+  postureByThreat,
+}: {
+  spec: RailSpec
+  index: number
+  postureByThreat: Map<string, PostureEntry>
+}): ReactElement {
+  const Icon = spec.icon
+  const sem = SEMANTICS_META[spec.semantics]
+  const SemIcon = sem.icon
+  const posture = spec.postureThreatId ? postureByThreat.get(spec.postureThreatId) : undefined
+  const status = posture ? statusBadge(posture.status) : null
+
+  return (
+    <li className="relative rounded-xl border border-border bg-surface-2/40 p-4">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-card">
+          <Icon className="size-5 text-muted-foreground" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[0.62rem] tabular-nums text-muted-foreground">
+              {String(index + 1).padStart(2, '0')}
+            </span>
+            <h4 className="t-title text-foreground">{spec.name}</h4>
+            <code className="font-mono text-[0.68rem] text-muted-foreground">{spec.layer}</code>
+            {status ? (
+              <Badge tone={status.tone} className="ml-auto uppercase">
+                {status.label}
+              </Badge>
+            ) : (
+              <Badge tone="neutral" className="ml-auto uppercase">
+                wired
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1.5 text-sm text-muted-foreground">{spec.method}</p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <Badge tone="graph">{spec.owasp}</Badge>
+            <Badge tone={sem.tone} className="uppercase">
+              <SemIcon className="size-3" />
+              {spec.semantics}
+            </Badge>
+            {posture ? (
+              <span className="font-mono text-[0.62rem] text-muted-foreground">
+                posture {posture.threat_id}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </li>
+  )
+}
+
+/** A vertical stepped rail list (input or output), with connecting arrows. */
+function RailStack({
+  title,
+  eyebrow,
+  rails,
+  postureByThreat,
+}: {
+  title: string
+  eyebrow: string
+  rails: RailSpec[]
+  postureByThreat: Map<string, PostureEntry>
+}): ReactElement {
+  return (
+    <div>
+      <p className="eyebrow mb-1">{eyebrow}</p>
+      <h3 className="t-title mb-3 text-foreground">{title}</h3>
+      <ol className="space-y-2">
+        {rails.map((spec, i) => (
+          <li key={spec.id}>
+            <RailCard spec={spec} index={i} postureByThreat={postureByThreat} />
+            {i < rails.length - 1 && (
+              <div className="flex justify-center py-1" aria-hidden="true">
+                <ArrowDown className="size-4 text-muted-foreground/50" />
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+/** Engine indicator — programmatic pipeline vs NeMo Colang, both over one rail set. */
+function EngineIndicator({
+  signals,
+}: {
+  signals: SecurityPostureResponse['signals'] | null
+}): ReactElement {
+  const nemoAvailable = signals?.nemo_available ?? false
+  return (
+    <Card>
+      <CardBody>
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-agent/12">
+            <Cpu className="size-5 text-agent-ink" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="t-title text-foreground">Guardrail engine</h3>
+            <p className="text-sm text-muted-foreground">
+              One rail set, two front doors — the fast programmatic pipeline the agent graph calls,
+              and the declarative NeMo Colang policy the jury reads.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-foreground">Programmatic pipeline</span>
+              <Badge tone="ok" className="uppercase">
+                active
+              </Badge>
+            </div>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              <code className="font-mono text-[0.72rem]">guardrails.pipeline</code> — the default
+              engine; runs the rails in-process on every request.
+            </p>
+          </div>
+          <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-foreground">NeMo Colang</span>
+              <Badge tone={nemoAvailable ? 'graph' : 'neutral'} className="uppercase">
+                {nemoAvailable ? 'available' : 'not installed'}
+              </Badge>
+            </div>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              Colang flows delegate to the same <code className="font-mono text-[0.72rem]">check_input</code>
+              /<code className="font-mono text-[0.72rem]">check_output</code>; selected via{' '}
+              <code className="font-mono text-[0.72rem]">guardrails_engine</code>.
+            </p>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          The engine indicator reads the posture <code className="font-mono">nemo_available</code>{' '}
+          signal; the active-engine switch (<code className="font-mono">guardrails_engine</code>) is a
+          server setting not surfaced in posture, so the programmatic default is shown as active.
+        </p>
+      </CardBody>
+    </Card>
+  )
+}
+
+/** Red-team teaser — compact block-rate summary; the full report is its own dashboard. */
+function RedteamTeaser({
+  report,
+  loading,
+}: {
+  report: RedteamReportResponse | null
+  loading: boolean
+}): ReactElement {
+  // Attack categories only (drop the benign-control row, which measures false positives).
+  const attackCategories = (report?.categories ?? []).filter(
+    (c) => c.category !== 'benign_control',
+  )
+  const overall = report?.overall
+
+  return (
+    <Card>
+      <CardBody>
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-block/12">
+            <Crosshair className="size-5 text-block-ink" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="t-title text-foreground">Red-team block-rate</h3>
+            <p className="text-sm text-muted-foreground">
+              A teaser from the offline attack battery — the full report is the Red-team dashboard.
+            </p>
+          </div>
+        </div>
+
+        {loading ? (
+          <p className="mt-4 text-sm text-muted-foreground">Running the offline battery…</p>
+        ) : !report || !overall ? (
+          <div className="mt-4 rounded-lg border border-dashed border-border bg-surface-2/30 px-3 py-4 text-center text-xs text-muted-foreground">
+            Red-team battery unavailable — the full report lives on the Red-team dashboard.
+          </div>
+        ) : (
+          <>
+            <div className="mt-4 flex items-end gap-4">
+              <div>
+                <span className="tabular-nums text-3xl font-semibold text-foreground">
+                  {Math.round(overall.blockRate * 100)}%
+                </span>
+                <p className="eyebrow mt-0.5">overall block rate</p>
+              </div>
+              <div className="pb-1 text-sm text-muted-foreground">
+                {overall.attacksBlocked}/{overall.attacksTotal} attacks blocked ·{' '}
+                {Math.round(overall.falsePositiveRate * 100)}% false-positive on{' '}
+                {overall.controlsTotal} benign controls
+              </div>
+              <Badge tone={report.passed ? 'ok' : 'block'} className="mb-1 ml-auto uppercase">
+                {report.passed ? 'gate passed' : 'gate failed'}
+              </Badge>
+            </div>
+
+            <div className="mt-4 space-y-2.5">
+              {attackCategories.map((c) => (
+                <div key={c.category} className="grid grid-cols-[10rem_1fr_3rem] items-center gap-3">
+                  <span className="truncate text-sm text-foreground">
+                    {c.category.replace(/_/g, ' ')}
+                  </span>
+                  <MiniMeter
+                    value={c.blockRate}
+                    hex={c.blockRate >= 0.75 ? 'var(--ok)' : 'var(--block)'}
+                    height={8}
+                  />
+                  <span className="text-right font-mono text-[0.72rem] tabular-nums text-muted-foreground">
+                    {Math.round(c.blockRate * 100)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-4 text-xs text-muted-foreground">
+              Honest numbers from the deterministic offline battery (threshold ≥{' '}
+              {Math.round(report.thresholds.minBlockRate * 100)}% block, ≤{' '}
+              {Math.round(report.thresholds.maxFalsePositiveRate * 100)}% false-positive). Leaked
+              attacks are model-layer cases that need the live classifier.
+            </p>
+          </>
+        )}
+      </CardBody>
+    </Card>
+  )
+}
+
+/**
+ * Guardrails (§ rails) — the defense-in-depth pipeline made visible: the ordered
+ * input then output rails with their true method, OWASP mapping and verdict
+ * semantics; the active engine (programmatic vs NeMo Colang); a live verdict
+ * feed (sample offline); and a compact red-team block-rate teaser. Rail statuses
+ * derive from `GET /security/posture` where an OWASP row exists; the rest are
+ * always-on parts of the pipeline, badged `wired`.
+ */
+function GuardrailsView({ mock }: { mock: boolean }): ReactElement {
+  const [posture, setPosture] = useState<SecurityPostureResponse | null>(null)
+  const [redteam, setRedteam] = useState<RedteamReportResponse | null>(null)
+  const [redteamLoading, setRedteamLoading] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+    void getSecurityPosture(null)
+      .then((p) => {
+        if (alive) setPosture(p)
+      })
+      .catch(() => {
+        /* honest: rail cards fall back to `wired` badges without posture */
+      })
+    void runRedteam(null)
+      .then((r) => {
+        if (alive) setRedteam(r)
+      })
+      .catch(() => {
+        /* honest: teaser shows its unavailable empty state */
+      })
+      .finally(() => {
+        if (alive) setRedteamLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const postureByThreat = new Map<string, PostureEntry>(
+    (posture?.entries ?? []).map((e) => [e.threat_id, e]),
+  )
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="eyebrow mb-1">rails · verdicts</p>
+        <h1 className="t-hero text-foreground">Guardrails</h1>
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+          The real defense-in-depth rail stack — schema, PII (Presidio), prompt injection
+          (deterministic backstop + fail-closed classifier), MLCommons content safety, topical scope
+          and grounding — run on every request as input then output rails. Each card shows the rail&apos;s
+          true method, OWASP mapping and verdict semantics; the status comes from the live security
+          posture where an OWASP row exists.
+        </p>
+      </div>
+
+      <EngineIndicator signals={posture?.signals ?? null} />
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardBody>
+            <RailStack
+              title="Input rails"
+              eyebrow="on the request · before the model"
+              rails={INPUT_RAILS}
+              postureByThreat={postureByThreat}
+            />
+          </CardBody>
+        </Card>
+        <Card>
+          <CardBody>
+            <RailStack
+              title="Output rails"
+              eyebrow="on the answer · before the user"
+              rails={OUTPUT_RAILS}
+              postureByThreat={postureByThreat}
+            />
+          </CardBody>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="eyebrow">live verdict feed · guardrail events</p>
+            {mock && (
+              <Badge tone="neutral" className="uppercase">
+                sample
+              </Badge>
+            )}
+          </div>
+          <GuardrailReveal guardrails={mock ? SAMPLE_VERDICTS : []} />
+          {!mock && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              No active run — run a query in the Console to populate the verdict feed with live{' '}
+              <code className="font-mono">guardrail</code> events.
+            </p>
+          )}
+        </div>
+        <RedteamTeaser report={redteam} loading={redteamLoading} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Client entry for the Guardrails section. Runs the boot probe once (live-first,
+ * mock fallback) before mounting the view, mirroring `CacheMount`. Offline is
+ * labelled with the honest banner; the rail stack + engine indicator render from
+ * the module-real config, the verdict feed from a labelled sample, and the
+ * red-team teaser from the offline battery.
+ */
+export function GuardrailsMount(): ReactElement {
+  const [mode, setMode] = useState<ResolvedMode | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void probeBackend().then((resolved) => {
+      if (alive) setMode(resolved)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (mode === null) {
+    return (
+      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+        Connecting…
+      </div>
+    )
+  }
+
+  return (
+    <TooltipProvider>
+      {mode.mode === 'mock' && (
+        <div
+          role="status"
+          className={cn(
+            'mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white',
+          )}
+        >
+          <WifiOff className="size-3.5 shrink-0" />
+          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+        </div>
+      )}
+      <GuardrailsView mock={isMock()} />
+    </TooltipProvider>
+  )
+}

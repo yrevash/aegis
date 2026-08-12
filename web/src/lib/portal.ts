@@ -120,6 +120,14 @@ export const SECTIONS: Record<string, Section> = {
     tooltip:
       'Aegis Caches — the three real caches (memory recall, retrieval + answers, guardrail verdicts) with their true method, backend, TTL & thresholds · RedisVL / Redis / in-memory',
   },
+  guardrails: {
+    id: 'guardrails',
+    label: 'Guardrails',
+    icon: ShieldCheck,
+    hint: 'rails · verdicts',
+    tooltip:
+      'Aegis Guardrails — the defense-in-depth rail stack (schema → PII → injection → content-safety → topical → grounding), the active engine (programmatic vs NeMo Colang), the live verdict feed, and a red-team block-rate teaser',
+  },
   simulation: {
     id: 'simulation',
     label: 'Access demo',
@@ -196,7 +204,7 @@ export const SECTIONS: Record<string, Section> = {
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'approvals', 'admin', 'audit', 'roles'],
-  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'cache', 'simulation'],
+  ai_team: ['console', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'cache', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'audit'],
   client: ['dashboard', 'savings', 'risk', 'simulation'],
 }
