@@ -21,10 +21,23 @@ offline unit tests. Verified against NeMo Guardrails 0.23, Colang 1.0.
 from __future__ import annotations
 
 from aegis.core.lazy import require
-from aegis.guardrails import classifier, pii, schema
+from aegis.guardrails import classifier, content_safety, pii, schema
 
 nemoguardrails_actions = require("aegis[nemo]", "nemoguardrails.actions")
 action = nemoguardrails_actions.action
+
+
+def _completer():  # noqa: ANN202 - returns aegis.core.interfaces.ChatCompleter | None
+    """Return the host-wired ``ChatCompleter`` for the model-based rails, if any.
+
+    Read lazily (per call) from :mod:`aegis.guardrails.nemo` so the actions pick up
+    whatever completer the host wired via ``nemo.set_completer`` — exactly how the
+    programmatic pipeline (:class:`aegis.guardrails.Guardrails`) receives its
+    completer. ``None`` (the offline default) runs the deterministic backstop only.
+    """
+    from aegis.guardrails import nemo
+
+    return nemo.get_completer()
 
 
 @action(is_system_action=True)
@@ -63,19 +76,14 @@ async def self_check_injection(context: dict | None = None) -> bool:
     PII is redacted before the injection check so no secret would leak to a
     model-based classifier call.
 
-    Note:
-        This Colang action currently runs **deterministic-only** injection
-        screening (``completer=None``): the Colang engine has no first-class
-        way to inject this platform's ``ChatCompleter`` into a custom action,
-        so the declarative front door enforces the offline signature backstop
-        only, same as calling :func:`aegis.guardrails.classifier.detect_injection`
-        with no completer anywhere else — logged, not silent (see
-        :func:`aegis.guardrails.classifier.detect_injection`). Wiring a real
-        completer into the NeMo engine (e.g. via a rails config callback or a
-        closure-based action factory) is a documented follow-on; the fast
-        programmatic rail (:func:`aegis.guardrails.pipeline.Guardrails.check_input`)
-        already runs the full model-based layer and is the primary enforcement
-        path.
+    The full model-based layer runs when the host has wired a ``ChatCompleter``
+    via :func:`aegis.guardrails.nemo.set_completer` (the backend shim does this
+    with its cost-routed cheap-model gateway); with no completer wired the
+    deterministic signature backstop runs on its own (logged, not silent — see
+    :func:`aegis.guardrails.classifier.detect_injection`). This is the same
+    completer the programmatic pipeline
+    (:func:`aegis.guardrails.pipeline.Guardrails.check_input`) uses, so the two
+    front doors enforce identically.
 
     Args:
         context: The NeMo conversation context (``user_message`` is read).
@@ -85,8 +93,32 @@ async def self_check_injection(context: dict | None = None) -> bool:
     """
     text = (context or {}).get("user_message", "")
     redacted, _ = pii.redact(text)
-    verdict = await classifier.detect_injection(redacted, completer=None)
+    verdict = await classifier.detect_injection(redacted, completer=_completer())
     return not verdict.injection
+
+
+@action(is_system_action=True)
+async def self_check_content_safety(context: dict | None = None) -> bool:
+    """Return ``True`` if the message clears the MLCommons content-safety screen.
+
+    Screens against the MLCommons / Llama Guard hazard taxonomy (S1–S13) via
+    :func:`aegis.guardrails.content_safety.screen_content`, delegating to the same
+    primitive the programmatic pipeline uses on both the inbound and outbound path
+    — so the declarative NeMo policy covers the same layers. Reads ``bot_message``
+    on the output rail, falling back to ``user_message`` on the input rail. PII is
+    redacted first so no secret reaches a model-based safety call. Fails closed.
+
+    Args:
+        context: The NeMo conversation context (``bot_message``/``user_message``).
+
+    Returns:
+        ``True`` when safe to proceed, ``False`` to block.
+    """
+    ctx = context or {}
+    text = ctx.get("bot_message") or ctx.get("user_message", "")
+    redacted, _ = pii.redact(text)
+    verdict = await content_safety.screen_content(redacted, completer=_completer())
+    return not verdict.unsafe
 
 
 @action(is_system_action=True)

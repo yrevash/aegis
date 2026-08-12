@@ -26,3 +26,12 @@ define flow guardrail input injection
   if not $safe
     bot refuse input
     stop
+
+# 4. Content-safety screen over the MLCommons / Llama Guard hazard taxonomy
+#    (S1–S13). Mirrors the programmatic pipeline's content-safety layer so the
+#    declarative policy covers the same rails. Fails closed on an ambiguous verdict.
+define flow guardrail input content safety
+  $safe = execute self_check_content_safety
+  if not $safe
+    bot refuse input
+    stop

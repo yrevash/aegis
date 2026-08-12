@@ -14,7 +14,16 @@ define flow guardrail output schema
     bot refuse output
     stop
 
-# 2. PII redaction on the outbound path (sensitive information disclosure, LLM06).
+# 2. Content-safety screen over the MLCommons / Llama Guard hazard taxonomy
+#    (S1–S13), mirroring the programmatic pipeline's outbound content-safety layer
+#    (LLM09 harmful output). Fails closed on an ambiguous verdict.
+define flow guardrail output content safety
+  $safe = execute self_check_content_safety
+  if not $safe
+    bot refuse output
+    stop
+
+# 3. PII redaction on the outbound path (sensitive information disclosure, LLM06).
 #    The action rewrites the bot message with any PII masked.
 define flow guardrail output pii
   $bot_message = execute redact_pii_output

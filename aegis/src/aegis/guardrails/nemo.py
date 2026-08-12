@@ -33,7 +33,39 @@ from aegis.guardrails import pii
 if TYPE_CHECKING:  # pragma: no cover
     from nemoguardrails import LLMRails, RailsConfig
 
+    from aegis.core.interfaces import ChatCompleter
+
 logger = logging.getLogger(__name__)
+
+#: Process-wide ``ChatCompleter`` the Colang custom actions use for their
+#: model-based layers (injection + content-safety self-check), mirroring how the
+#: programmatic pipeline is wired (:class:`aegis.guardrails.Guardrails`). The
+#: Colang engine has no first-class way to thread a completer into a custom
+#: action, so the actions read it from here. Defaults to ``None`` — the offline,
+#: deterministic-only backstop — so importing the policy (and the unit tests)
+#: never touches a network. The host wires its cheap-model completer in via
+#: :func:`set_completer`.
+_completer: ChatCompleter | None = None
+
+
+def set_completer(completer: ChatCompleter | None) -> None:
+    """Wire the ``ChatCompleter`` the NeMo custom actions use for model layers.
+
+    Idempotent; call once at host startup (e.g. the backend guardrails shim wires
+    its cost-routed cheap-model gateway). Passing ``None`` restores the offline,
+    deterministic-only behaviour.
+
+    Args:
+        completer: An async chat-completion callable, or ``None`` to disable the
+            model-based layers (deterministic signatures only).
+    """
+    global _completer
+    _completer = completer
+
+
+def get_completer() -> ChatCompleter | None:
+    """Return the ``ChatCompleter`` the NeMo custom actions should use, if any."""
+    return _completer
 
 # The exact refusal strings authored in the Colang policy (``config/rails/*.co``).
 # A generated turn equal to one of these means an input/output rail fired ``stop``.
@@ -104,6 +136,7 @@ def register_actions(rails: Any) -> None:  # noqa: ANN401
     from aegis.guardrails.config import actions
 
     rails.register_action(actions.self_check_injection, name="self_check_injection")
+    rails.register_action(actions.self_check_content_safety, name="self_check_content_safety")
     rails.register_action(actions.redact_pii_input, name="redact_pii_input")
     rails.register_action(actions.validate_input_schema, name="validate_input_schema")
     rails.register_action(actions.redact_pii_output, name="redact_pii_output")
@@ -215,8 +248,17 @@ async def nemo_check_output(text: str) -> GuardResult:
     Returns:
         A :class:`GuardResult` mirroring :func:`aegis.guardrails.pipeline.check_output`.
     """
+    # The text under test is the *assistant* turn, so it must be presented as an
+    # ``assistant`` message (preceded by a placeholder user turn) for NeMo to run
+    # the output rails' ``execute``/``stop`` check flows against it. Passing it as a
+    # ``user`` message runs only the variable-assignment flows (e.g. PII redaction)
+    # and silently skips the schema + content-safety checks.
     result = await get_engine().generate_async(
-        messages=[{"role": "user", "content": text}], options=_output_only()
+        messages=[
+            {"role": "user", "content": ""},
+            {"role": "assistant", "content": text},
+        ],
+        options=_output_only(),
     )
     if _last_content(result).strip() == _OUTPUT_REFUSAL:
         return GuardResult(

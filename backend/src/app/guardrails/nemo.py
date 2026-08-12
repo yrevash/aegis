@@ -17,6 +17,7 @@ from aegis.guardrails.nemo import (
     _OUTPUT_REFUSAL,
     build_rails,
     config_path,
+    get_completer,
     get_engine,
     load_rails_config,
     nemo_available,
@@ -24,6 +25,7 @@ from aegis.guardrails.nemo import (
     nemo_check_output,
     register_actions,
     reset_engine,
+    set_completer,
 )
 
 __all__ = [
@@ -31,6 +33,7 @@ __all__ = [
     "_OUTPUT_REFUSAL",
     "build_rails",
     "config_path",
+    "get_completer",
     "get_engine",
     "load_rails_config",
     "nemo_available",
@@ -38,4 +41,5 @@ __all__ = [
     "nemo_check_output",
     "register_actions",
     "reset_engine",
+    "set_completer",
 ]
