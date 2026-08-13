@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the Aegis backend against the REAL native stores (no Docker):
-#   Postgres (taif db) · Redis · Neo4j (best-effort) · embedded Qdrant (dev).
+#   Postgres (taif db) · Redis · Neo4j · Qdrant — all NATIVE, never Docker.
 # Runs the backend in the background, waits for /health, and prints status.
 # The web app is started separately (Node runs fine everywhere).
 set -uo pipefail
@@ -22,6 +22,28 @@ elif command -v brew >/dev/null 2>&1 && brew services list 2>/dev/null | grep -q
 fi
 if (exec 3<>/dev/tcp/localhost/7687) 2>/dev/null; then exec 3>&- 3<&-; echo "  neo4j      : UP (7687)"; else
   echo "  neo4j      : down (non-blocking — graph retrieval degrades, dashboards fine)"; fi
+
+# ── Qdrant (native binary — the ANN engine behind retrieval + memory recall) ──
+# LightRAG's Qdrant storage connects over HTTP, so full-stores mode needs the server
+# on :6333. Started here if a native binary is present; never Docker.
+if ! curl -s -o /dev/null --max-time 2 http://127.0.0.1:6333/ 2>/dev/null; then
+  QBIN=""
+  for cand in "$HOME/.local/qdrant/qdrant" "$(command -v qdrant 2>/dev/null)"; do
+    [ -n "$cand" ] && [ -x "$cand" ] && QBIN="$cand" && break
+  done
+  if [ -n "$QBIN" ]; then
+    ( cd "$(dirname "$QBIN")" && nohup "$QBIN" >/tmp/aegis-qdrant.log 2>&1 </dev/null & )
+    for _ in $(seq 1 20); do
+      curl -s -o /dev/null --max-time 2 http://127.0.0.1:6333/ 2>/dev/null && break
+      sleep 1
+    done
+  fi
+fi
+if curl -s -o /dev/null --max-time 2 http://127.0.0.1:6333/ 2>/dev/null; then
+  echo "  qdrant     : UP (6333)"
+else
+  echo "  qdrant     : down — install the native binary (docs/learn/50-run-and-extend.md)"
+fi
 
 # ── Postgres check (started/prepared already) ────────────────────────────────
 if psql -h 127.0.0.1 -p 5432 -U postgres -d taif -tAc 'select 1' >/dev/null 2>&1; then

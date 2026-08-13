@@ -2,7 +2,8 @@
 
 Two halves, both offline (a SQLite DB + scripted fake ``complete``/``embed``; no network):
 
-1. **Multi-turn loop** (module functions directly, per ``docs/architecture/memory-spec.md`` §D): turn 1
+1. **Multi-turn loop** (module functions directly, per ``docs/architecture/memory-spec.md`` §D):
+turn 1
    persists raw turns and enqueues a durable consolidation job; draining that durable
    queue with :func:`sweep_pending` distils a bitemporal fact; turn 2's
    :func:`assemble_working_memory` recalls that fact into the injected working-memory

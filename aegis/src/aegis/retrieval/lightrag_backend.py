@@ -283,6 +283,61 @@ class LightRAGBackend:
             lists=[vector_list, graph_list], nodes=graph.nodes, edges=graph.edges
         )
 
+    async def knowledge_graph(
+        self, *, max_nodes: int = 500
+    ) -> tuple[list[GraphNode], list[GraphEdge]] | None:
+        """Return the live Neo4j knowledge graph as viz-ready nodes and edges.
+
+        This is the **whole** graph LightRAG's entity/relationship extractor has built
+        in Neo4j — not the slice one query happened to touch. It is what backs
+        ``GET /graph``, so the visualisation shows the platform's real accumulated
+        knowledge and survives a process restart (the in-memory alternative does not).
+
+        Args:
+            max_nodes: Upper bound on nodes requested from the store, so a large graph
+                cannot blow up the payload or the force-directed layout.
+
+        Returns:
+            A ``(nodes, edges)`` tuple, or ``None`` when the graph store is absent or
+            unreachable — the caller then reports honestly rather than showing an
+            empty graph that looks like "no knowledge".
+        """
+        rag = await self._ensure()
+        kg = await _read_knowledge_graph(rag, max_nodes=max_nodes)
+        if kg is None:
+            return None
+
+        raw_nodes = getattr(kg, "nodes", None) or []
+        raw_edges = getattr(kg, "edges", None) or []
+
+        nodes: list[GraphNode] = []
+        seen: set[str] = set()
+        for raw in raw_nodes:
+            node_id = str(getattr(raw, "id", "") or "")
+            if not node_id or node_id in seen:
+                continue
+            seen.add(node_id)
+            props = getattr(raw, "properties", None) or {}
+            # LightRAG stores the human name and entity type in node properties; fall
+            # back to the id and a neutral kind rather than inventing either.
+            label = str(props.get("entity_id") or props.get("entity_name") or node_id)
+            kind = str(props.get("entity_type") or "entity").strip().lower() or "entity"
+            nodes.append(GraphNode(id=node_id, label=label, kind=kind))
+
+        edges: list[GraphEdge] = []
+        for raw in raw_edges:
+            source = str(getattr(raw, "source", "") or "")
+            target = str(getattr(raw, "target", "") or "")
+            # Drop dangling edges: a force-directed viz cannot lay out an edge whose
+            # endpoint was trimmed by max_nodes.
+            if source not in seen or target not in seen:
+                continue
+            props = getattr(raw, "properties", None) or {}
+            relation = str(props.get("keywords") or getattr(raw, "type", "") or "related")
+            edges.append(GraphEdge(source=source, target=target, relation=relation))
+
+        return (nodes, edges)
+
     async def _context(self, rag: object, query: str, *, mode: str, top_k: int) -> Recall:
         """Run one LightRAG context query in ``mode`` and normalise it to a `Recall`."""
         from lightrag import QueryParam  # lazy
@@ -313,22 +368,7 @@ async def _graph_counts(rag: object) -> tuple[int | None, int | None]:
         A ``(node_count, edge_count)`` tuple; either element is ``None`` when it cannot
         be read from the graph store.
     """
-    graph = getattr(rag, "chunk_entity_relation_graph", None)
-    if graph is None:
-        return (None, None)
-    getter = getattr(graph, "get_knowledge_graph", None)
-    if getter is None:
-        return (None, None)
-
-    kg: object | None = None
-    for kwargs in ({"max_nodes": _GRAPH_SNAPSHOT_CAP}, {}):
-        try:
-            kg = await getter("*", **kwargs)
-            break
-        except TypeError:
-            continue  # older/newer signature — retry without the optional bound
-        except Exception:
-            return (None, None)  # store unavailable → honest unknown, not a fake count
+    kg = await _read_knowledge_graph(rag)
     if kg is None:
         return (None, None)
 
@@ -338,6 +378,40 @@ async def _graph_counts(rag: object) -> tuple[int | None, int | None]:
         len(nodes) if nodes is not None else None,
         len(edges) if edges is not None else None,
     )
+
+
+async def _read_knowledge_graph(
+    rag: object, *, max_nodes: int = _GRAPH_SNAPSHOT_CAP
+) -> object | None:
+    """Return LightRAG's live ``KnowledgeGraph`` (the Neo4j store), or ``None``.
+
+    The single place that talks to the graph store, shared by :func:`_graph_counts`
+    (which needs only the sizes) and :meth:`LightRAGBackend.knowledge_graph` (which
+    needs the nodes and edges themselves) so both report the *same* graph.
+
+    Args:
+        rag: The initialised LightRAG instance.
+        max_nodes: Upper bound passed to the accessor when its signature accepts one.
+
+    Returns:
+        The ``KnowledgeGraph`` object, or ``None`` when the store is missing or
+        unreachable — never a fabricated empty graph.
+    """
+    graph = getattr(rag, "chunk_entity_relation_graph", None)
+    if graph is None:
+        return None
+    getter = getattr(graph, "get_knowledge_graph", None)
+    if getter is None:
+        return None
+
+    for kwargs in ({"max_nodes": max_nodes}, {}):
+        try:
+            return await getter("*", **kwargs)
+        except TypeError:
+            continue  # older/newer signature — retry without the optional bound
+        except Exception:
+            return None  # store unavailable → honest unknown, not a fake graph
+    return None
 
 
 def _delta(before: int | None, after: int | None) -> int | None:

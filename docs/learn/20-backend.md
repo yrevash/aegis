@@ -160,15 +160,59 @@ audit-sink failures so a logging blip never fails a request. When `STORES=off`, 
 degrade to empty and mutations return a clean `503`; memory erasure returns `503`
 rather than faking success.
 
+### `GET /graph` — the durable Neo4j knowledge graph
+
+The graph visualisation reads **Neo4j**, not process memory:
+
+```mermaid
+flowchart LR
+  REQ["GET /graph"] --> RT["routes.py::graph"]
+  RT --> KG["app.retrieval.knowledge_graph()"]
+  KG --> CAP{"backend implements<br/>GraphBackend?"}
+  CAP -->|yes| LRB["LightRAGBackend.knowledge_graph()"]
+  LRB --> NEO[("Neo4j — durable base<br/>chunk_entity_relation_graph")]
+  CAP -->|no| NONE["None"]
+  RT --> GS["GraphStore slice<br/>(this process's runs, per persona)"]
+  NEO --> U(["union<br/>dedup by id / (src,tgt,rel)"])
+  GS --> U
+  NONE -.->|slice only| RESP["GraphResponse"]
+  U --> RESP
+```
+
+Two sources, unioned, because they answer different questions:
+
+| Source | Answers | Lifetime |
+|---|---|---|
+| **Neo4j** | everything the platform knows | durable, survives restart |
+| **`GraphStore` slice** | what the *current* runs just retrieved | this process only |
+
+Why not just one? `KnowledgeBackend.recall()` returns only the slice a query touched, so
+Neo4j alone would drop the **live delta** — nodes a run just retrieved would not appear
+until ingested, and the visualisation would stop moving during a demo. The slice alone
+would throw away the durable graph and reset on every restart. `GraphBackend`
+(an optional capability protocol alongside `MultiListBackend`) supplies the durable half.
+
+The accessor returns `None` — not an empty graph — when the store cannot be read, because
+*"we know nothing"* and *"we cannot see what we know"* are different claims. In that case
+the route serves the slice alone, which is also the whole story under `STORES=off`.
+
+| Piece | File |
+|---|---|
+| Capability protocol | `aegis/src/aegis/retrieval/protocols.py::GraphBackend` |
+| Neo4j read + mapping | `aegis/src/aegis/retrieval/lightrag_backend.py::knowledge_graph` |
+| Public accessor | `backend/src/app/retrieval/pipeline.py::knowledge_graph` |
+| Route | `backend/src/app/api/routes.py::graph` |
+
 ### The two in-process dashboard stores
 
 `GraphStore` and `MetricsStore` are plain dataclasses held process-wide and fed from the
 live event stream by `_update_dashboards(event, ...)`:
 
 - **`GraphStore`** accumulates the graph nodes and edges that retrieval emitted, **scoped
-  per persona** — a security control, so a `client`'s `/graph` never shows what an
-  operations persona retrieved. It is *not* a Neo4j query. It starts empty and resets on
-  restart.
+  per persona** — a security control, so a `client`'s slice never shows what an operations
+  persona retrieved. It starts empty and resets on restart. Since the Neo4j wiring below,
+  it is no longer what `GET /graph` normally serves: it is the **fallback** used only when
+  the durable graph cannot be read (`STORES=off`, or Neo4j unreachable).
 - **`MetricsStore`** counts queries, cache hits and cost, and computes a
   `quality_score` that is an explicit **grounding proxy**, not an LLM judge: the fraction
   of runs that both completed cleanly and touched at least one graph node. It reads

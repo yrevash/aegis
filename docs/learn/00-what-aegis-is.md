@@ -218,11 +218,13 @@ as code, not just as a slogan:
 
 The same standard applies to this documentation. Known caveats, stated plainly:
 
-- **`GET /graph` is an in-process accumulator, not a Neo4j query.** `GraphStore` in
-  `backend/src/app/api/routes.py` merges the graph slices that live runs emitted, scoped
-  per persona. On a freshly started backend it is empty, and it resets on restart. When
-  Neo4j is down, retrieval's graph arm returns nothing, so no graph-derived nodes ever
-  arrive.
+- **`GET /graph` reads Neo4j, and is empty until documents are ingested.** The endpoint
+  returns the whole knowledge graph LightRAG's entity/relationship extractor has written
+  to **Neo4j**, so it is durable and survives a restart. It is empty on a fresh install
+  simply because nothing has been ingested yet — and ingestion needs a working model
+  gateway, since entities are extracted by an LLM. The response is the **union** of that durable graph and
+  the current process's live retrieval deltas, so the visualisation still moves during a
+  run; when Neo4j is unreachable only the in-process slice is served.
 - **`GET /metrics` is also process-wide in-memory** (`MetricsStore`). Cost, cache-hit
   rate and the quality proxy are measured from real runs in *this* process and reset on
   restart. `p95_latency_ms` is `null` before any run rather than a fabricated zero.

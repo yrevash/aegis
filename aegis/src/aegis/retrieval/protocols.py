@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 from aegis.core.models import ModelRole
 from aegis.retrieval.fusion import RankedRecall
 from aegis.retrieval.models import Chunk, Recall
+from aegis.retrieval.types import GraphEdge, GraphNode
 
 
 @runtime_checkable
@@ -83,4 +84,23 @@ class MultiListBackend(Protocol):
         self, query: str, *, top_k: int, persona: str | None = None
     ) -> RankedRecall:
         """Return per-signal ranked lists plus the touched graph slice."""
+        ...
+
+
+@runtime_checkable
+class GraphBackend(Protocol):
+    """Optional capability: a backend whose knowledge graph can be read *whole*.
+
+    :meth:`KnowledgeBackend.recall` returns only the graph slice one query touched.
+    A backend implementing this protocol can additionally hand back the entire
+    accumulated knowledge graph from its store (Neo4j in production), which is what
+    the ``GET /graph`` visualisation reads. Because that store is durable, the graph
+    survives a process restart — unlike an in-memory accumulator, which starts empty
+    on every boot and so under-reports what the platform actually knows.
+    """
+
+    async def knowledge_graph(
+        self, *, max_nodes: int = 500
+    ) -> tuple[list[GraphNode], list[GraphEdge]] | None:
+        """Return the whole graph as ``(nodes, edges)``, or ``None`` if unreadable."""
         ...

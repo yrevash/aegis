@@ -40,6 +40,7 @@ from .pipeline import (
     Retriever,
     build_default_retriever,
     ingest,
+    knowledge_graph,
     retrieve,
 )
 
@@ -56,5 +57,6 @@ __all__ = [
     "Source",
     "build_default_retriever",
     "ingest",
+    "knowledge_graph",
     "retrieve",
 ]

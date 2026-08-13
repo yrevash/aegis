@@ -927,9 +927,46 @@ async def graph(
     auth: AuthContext = Depends(require_auth),
     graph_store: GraphStore = Depends(get_graph_store),
 ) -> GraphResponse:
-    """Return the caller's persona-scoped context graph for the visualisation."""
+    """Return the knowledge graph for the visualisation: **Neo4j ∪ this process's delta**.
+
+    Two sources, unioned, because they answer different questions:
+
+    * **Neo4j** (the durable base) — the whole knowledge graph LightRAG's
+      entity/relationship extractor has written. Everything the platform knows, it
+      survives restarts, and it is the source of truth.
+    * **The per-persona in-process slice** (:class:`GraphStore`) — the graph deltas the
+      *current* runs emitted. This is what makes the visualisation move live during a
+      query, and it is the only graph at all in databaseless ``STORES=off`` mode.
+
+    Serving only Neo4j would drop the live delta (nodes a run just retrieved would not
+    appear until they were ingested); serving only the slice would throw away the durable
+    graph and reset on every restart. The union keeps both, deduplicated by node id and
+    by ``(source, target, relation)``, with Neo4j's copy winning any conflict.
+
+    The persona scoping on the in-process slice is preserved — it is a security control
+    (a ``client`` must not see what an operations persona retrieved).
+    """
     persona = _resolve_persona(None, auth)
-    return graph_store.response(persona)
+    try:
+        from app.retrieval import knowledge_graph  # noqa: PLC0415
+
+        durable = await knowledge_graph()
+    except Exception:  # noqa: BLE001 - the viz must never 500 on a store blip
+        logger.warning("Neo4j knowledge-graph read failed; using the local slice.", exc_info=True)
+        durable = None
+
+    local = graph_store.response(persona)
+    if durable is None:
+        return local
+
+    nodes, edges = durable
+    by_id = {n.id: n for n in nodes}
+    for node in local.nodes:  # the live delta fills in what Neo4j has not ingested yet
+        by_id.setdefault(node.id, node)
+    by_key = {(e.source, e.target, e.relation): e for e in edges}
+    for edge in local.edges:
+        by_key.setdefault((edge.source, edge.target, edge.relation), edge)
+    return GraphResponse(nodes=list(by_id.values()), edges=list(by_key.values()))
 
 
 @router.post("/ml/explain", response_model=MLExplainResponse, tags=["ml"])
@@ -1186,7 +1223,12 @@ async def admin_create_user(
     await _safe_audit(
         "admin.user.create",
         auth.username,
-        payload={"user_id": row.id, "username": row.username, "role": req.role.value, "tenant_id": tenant_id},
+        payload={
+            "user_id": row.id,
+            "username": row.username,
+            "role": req.role.value,
+            "tenant_id": tenant_id,
+        },
     )
     return row
 

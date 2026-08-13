@@ -29,6 +29,53 @@ separately. The only remote call is the model gateway.
 
 **No `pgvector` extension is required.** Vector search runs on Qdrant.
 
+### Installing the graph + vector stores natively (no Docker)
+
+Both ship as ordinary native packages or single static binaries — **Docker is never
+required, on any platform.**
+
+**Neo4j** — native package on macOS, tarball on Linux (no root needed):
+
+```bash
+# macOS
+brew install neo4j
+neo4j-admin dbms set-initial-password aegisdev1   # must run BEFORE the first start
+brew services start neo4j                          # bolt :7687 · http :7474
+
+# Linux
+curl -LO https://dist.neo4j.org/neo4j-community-5.26.0-unix.tar.gz
+tar xzf neo4j-community-5.26.0-unix.tar.gz && cd neo4j-community-5.26.0
+bin/neo4j-admin dbms set-initial-password aegisdev1
+bin/neo4j start
+```
+
+Neo4j needs a JVM (Java 17+) — check with `java -version`.
+
+**Qdrant** — a single static binary, published for macOS, Linux and Windows:
+
+```bash
+# macOS (Apple silicon; use x86_64-apple-darwin on Intel)
+mkdir -p ~/.local/qdrant && cd ~/.local/qdrant
+curl -sL -o q.tar.gz https://github.com/qdrant/qdrant/releases/download/v1.19.0/qdrant-aarch64-apple-darwin.tar.gz
+tar xzf q.tar.gz && ./qdrant                        # REST :6333 · gRPC :6334
+
+# Linux:   qdrant-x86_64-unknown-linux-musl.tar.gz
+# Windows: qdrant-x86_64-pc-windows-msvc.zip
+```
+
+Qdrant also has a **serverless embedded mode** (`QdrantVectorStore.local(path=…)` —
+on-disk, no process at all) used by tests and the lite path. The server binary is needed
+only because LightRAG's Qdrant storage connects over HTTP.
+
+Then set the matching values in `backend/.env`:
+
+```
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=aegisdev1
+QDRANT_URL=http://localhost:6333
+```
+
 ---
 
 ## 2. Three run modes

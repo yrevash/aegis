@@ -97,7 +97,7 @@ id** (documented so code and screen line up):
 | `llmops` | LLMOps | `trace → eval → release` | `ops/LLMOpsView.tsx` | ai_team |
 | `evals` | Evals | `RAGAS · DeepEval` | `evals/EvalsView.tsx` | ai_team |
 | `tokenopt` | Token opt | `routing · savings` | `gateway/TokenOptView.tsx` | ai_team |
-| `memory` | Memory | `pgvector` ⚠︎ | `memory/MemoryView.tsx` | ai_team |
+| `memory` | Memory | `Qdrant` | `memory/MemoryView.tsx` | ai_team |
 | `rag` | RAG | `hybrid · rerank` | `retrieval/RagView.tsx` | ai_team |
 | `graph` | Graph | `entities · relations` | `graph/GraphView.tsx` | ai_team |
 | `cache` | Cache | `semantic · TTL` | `cache/CacheView.tsx` | ai_team |
@@ -114,11 +114,6 @@ id** (documented so code and screen line up):
 | `latency` | Latency | `p50 · p95` | `latency/LatencyView.tsx` | devops |
 | `savings` | Savings | `baseline vs actual` | `client/SavingsView.tsx` | client |
 | `risk` | Risk Map | `OWASP-Agentic` | `client/RiskMap.tsx` | client |
-
-⚠︎ **Known stale label:** the `memory` section's `hint` and `tooltip` still read
-"Postgres + pgvector". The vector store is **Qdrant** (see
-[`10-architecture.md`](10-architecture.md) §5). The label is wrong; the code behind it is
-not.
 
 There is also an `admin` section defined in `SECTIONS` (label "Settings") that no role's
 `ROLE_SECTIONS` list currently includes, so it is unreachable — a defined-but-unwired
@@ -320,14 +315,13 @@ layouts with no horizontal overflow.
 ## 8. Honest caveats
 
 - **No tests.** `web/` has no test runner, no component tests, no end-to-end tests.
-- **`/graph` is empty until runs happen in this backend process** — it is an in-process
-  per-persona accumulator, not a Neo4j query (see [`20-backend.md`](20-backend.md) §2).
-  With Neo4j down, no graph-derived nodes ever arrive, and the view says so rather than
-  inventing nodes.
+- **`/graph` is empty until documents are ingested.** It unions the durable Neo4j knowledge
+  graph with this process's live retrieval deltas (see [`20-backend.md`](20-backend.md)) —
+  but a fresh install has ingested nothing, and ingestion needs a working model gateway to
+  extract entities. The view renders that emptiness honestly rather than inventing nodes.
 - **Most surfaces are empty on a fresh database.** Cost, savings, approvals, usage,
   evals and latency populate only after real agent runs. Empty states are rendered as
   empty, never as zeros dressed up as data.
-- **The `memory` section's tech hint is stale** (says pgvector; it is Qdrant).
 - **The `admin` / "Settings" section is defined but unreachable** — no role lists it.
 
 Next: [`40-pipelines.md`](40-pipelines.md) — the flows this UI is a window onto.

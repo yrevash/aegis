@@ -12,6 +12,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
+from aegis.retrieval.protocols import GraphBackend
+from aegis.retrieval.types import GraphEdge, GraphNode
 
 from app.config import Settings, get_settings
 
@@ -25,6 +27,7 @@ __all__ = [
     "Retriever",
     "build_default_retriever",
     "ingest",
+    "knowledge_graph",
     "retrieve",
 ]
 
@@ -95,3 +98,29 @@ async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult
 async def ingest(docs: Sequence[object]) -> IngestReport:
     """Public entry point: ingest `docs` into the knowledge store (see `Retriever.ingest`)."""
     return await _get_retriever().ingest(docs)
+
+
+async def knowledge_graph(
+    *, max_nodes: int = 500
+) -> tuple[list[GraphNode], list[GraphEdge]] | None:
+    """Return the durable Neo4j knowledge graph for ``GET /graph``, or ``None``.
+
+    Reads the whole accumulated graph from the backend's store rather than the slice a
+    single query touched, so the visualisation shows what the platform actually knows
+    and survives a restart.
+
+    ``None`` means "the graph store could not be read" — either the active backend has
+    no graph (the databaseless ``STORES=off`` lite retriever) or Neo4j is unreachable.
+    Callers must surface that as unknown, never as an empty graph: "we know nothing"
+    and "we cannot see what we know" are different claims.
+
+    Args:
+        max_nodes: Upper bound on nodes read from the store.
+
+    Returns:
+        ``(nodes, edges)`` from Neo4j, or ``None`` when the graph is unreadable.
+    """
+    backend = getattr(_get_retriever(), "backend", None)
+    if not isinstance(backend, GraphBackend):
+        return None
+    return await backend.knowledge_graph(max_nodes=max_nodes)

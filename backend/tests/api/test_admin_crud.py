@@ -78,7 +78,12 @@ async def test_created_user_can_log_in(client, db, admin_headers):
     """The end-to-end proof: a created user authenticates with its real password."""
     await client.post(
         "/admin/users",
-        json={"username": "real.person", "role": "client", "tenant_id": None, "password": "hunter2-strong"},
+        json={
+            "username": "real.person",
+            "role": "client",
+            "tenant_id": None,
+            "password": "hunter2-strong",
+        },
         headers=admin_headers,
     )
     login = await client.post(
