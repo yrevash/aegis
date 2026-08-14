@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 
 import pytest
 
+import aegis.gateway.llm as llm_mod
 from aegis.core import stream_names
 from aegis.core.models import ModelRole
 from aegis.core.stream import AegisEmitter
+from aegis.gateway.llm import call_saving_usd
 from aegis.gateway.stream import stream_complete
+from aegis.gateway.types import Usage
 
 from .test_llm import FakeLiteLLM, _make_response
 
@@ -127,3 +131,89 @@ async def test_stream_complete_large_model_reports_no_saving(monkeypatch):
 
     event = _payloads(sink.frames)[1]
     assert event["value"]["small_model"] is False
+
+
+# ── Per-call savings are exact under concurrency ────────────────────────────
+#
+# ``cost_saved_usd`` used to be a before/after delta over the process-global
+# ``usage_tally()`` taken across the ``await`` of ``complete``. Two concurrent
+# ``stream_complete`` calls therefore attributed each other's savings: whichever
+# finished second saw the first one's spend inside its own "after" snapshot.
+
+
+async def test_per_call_saving_matches_the_calls_own_usage(fake_litellm, monkeypatch):
+    # The custom deployment is unmapped, so the cheap call is priced from its own
+    # tokens — the case where routing to a small model really did save money.
+    monkeypatch.setattr(fake_litellm, "completion_cost", lambda *, completion_response: 0.0)
+    sink = CaptureSink()
+    emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
+
+    result = await stream_complete(
+        ModelRole.CHEAP, [{"role": "user", "content": "hi"}], emitter
+    )
+
+    value = _payloads(sink.frames)[1]["value"]
+    assert value["cost_saved_usd"] == pytest.approx(call_saving_usd(result.usage))
+    assert value["cost_saved_usd"] > 0.0
+
+
+async def test_concurrent_calls_do_not_attribute_each_others_savings(monkeypatch):
+    """Two interleaved small-model calls each report their OWN saving.
+
+    The fake yields control mid-call so the two ``complete`` calls genuinely
+    interleave; with the old global-delta approach the second call to finish
+    absorbed the first's saving and the first reported ~zero.
+    """
+    fake = FakeLiteLLM(
+        response=_make_response(content="hi", model="genailab-maas-gpt-4o-mini"), cost=0.0
+    )
+
+    async def _interleaving(**kwargs):
+        fake.calls.append(kwargs)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return fake._response
+
+    monkeypatch.setattr(fake, "acompletion", _interleaving)
+    monkeypatch.setitem(sys.modules, "litellm", fake)
+
+    sinks = [CaptureSink(), CaptureSink()]
+    results = await asyncio.gather(
+        *(
+            stream_complete(
+                ModelRole.CHEAP,
+                [{"role": "user", "content": "hi"}],
+                AegisEmitter(thread_id=f"t{i}", run_id=f"r{i}", sink=sink),
+            )
+            for i, sink in enumerate(sinks)
+        )
+    )
+
+    savings = [_payloads(s.frames)[1]["value"]["cost_saved_usd"] for s in sinks]
+    expected = call_saving_usd(results[0].usage)
+    assert expected > 0.0
+    # Identical calls → identical savings, and neither is zero or doubled.
+    assert savings[0] == pytest.approx(expected)
+    assert savings[1] == pytest.approx(expected)
+
+
+def test_call_saving_is_zero_when_the_call_is_the_baseline():
+    """A frontier-priced call has nothing to save against itself."""
+    usage = Usage(prompt_tokens=1000, completion_tokens=1000, cost_usd=0.0125)
+    assert call_saving_usd(usage) == pytest.approx(0.0)
+
+
+def test_call_saving_never_goes_negative():
+    """A call dearer than the baseline reports zero, never a negative saving."""
+    usage = Usage(prompt_tokens=10, completion_tokens=10, cost_usd=99.0)
+    assert call_saving_usd(usage) == 0.0
+
+
+def test_call_saving_reads_no_shared_state():
+    """The figure is derived from ``Usage`` alone — the tally cannot perturb it."""
+    usage = Usage(prompt_tokens=1000, completion_tokens=1000, cost_usd=0.0002)
+    before = call_saving_usd(usage)
+    llm_mod.record_call(
+        "genailab-maas-gpt-4o", 5.0, prompt_tokens=999_999, role=ModelRole.GENERATION
+    )
+    assert call_saving_usd(usage) == pytest.approx(before)

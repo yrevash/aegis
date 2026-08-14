@@ -41,15 +41,43 @@ def _make_response(*, content, tool_calls=None, model="genailab-maas-gpt-4o"):
     return SimpleNamespace(choices=[choice], usage=usage, model=model)
 
 
+def _make_transcription(
+    *,
+    text="hello there",
+    duration=None,
+    language=None,
+    segments=None,
+    model="genailab-maas-whisper",
+):
+    """Build a fake ``atranscription`` response (verbose_json-ish shape)."""
+    return SimpleNamespace(
+        text=text,
+        duration=duration,
+        language=language,
+        segments=segments,
+        model=model,
+        usage=None,
+    )
+
+
 class FakeLiteLLM:
     """Minimal stand-in for the ``litellm`` module."""
 
-    def __init__(self, *, response=None, embedding_response=None, cost=0.0042):
+    def __init__(
+        self,
+        *,
+        response=None,
+        embedding_response=None,
+        transcription_response=None,
+        cost=0.0042,
+    ):
         self.ssl_verify = None
         self.calls = []
         self.embedding_calls = []
+        self.transcription_calls = []
         self._response = response
         self._embedding_response = embedding_response
+        self._transcription_response = transcription_response
         self._cost = cost
 
     async def acompletion(self, **kwargs):
@@ -60,7 +88,21 @@ class FakeLiteLLM:
         self.embedding_calls.append(kwargs)
         return self._embedding_response
 
+    async def atranscription(self, **kwargs):
+        # LiteLLM's transcription API takes a FILE HANDLE, not ``messages`` —
+        # read it here so a test can prove the handle was actually usable.
+        file_handle = kwargs.get("file")
+        self.transcription_calls.append(
+            {**kwargs, "_file_bytes": file_handle.read() if file_handle else None}
+        )
+        return self._transcription_response
+
     def completion_cost(self, *, completion_response):
+        # Mirrors the real cost map: it prices chat completions, and returns 0
+        # for the embedding/audio deployments it has no entry for (which is the
+        # whole reason the gateway needs a measured-unit fallback).
+        if getattr(completion_response, "choices", None) is None:
+            return 0.0
         return self._cost
 
 

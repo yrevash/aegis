@@ -42,3 +42,19 @@ define flow guardrail output grounding
 #    The action rewrites the bot message with any PII masked.
 define flow guardrail output pii
   $bot_message = execute redact_pii_output
+
+# ── Media on the outbound path ───────────────────────────────────────────────
+# A model that RETURNS an image is a channel too: a generated image carrying
+# rendered text is the same exfiltration surface pointed the other way. Same two
+# controls as the inbound path, same fail-closed posture, no-op on text turns.
+define flow guardrail output media hygiene
+  $clean = execute check_media_hygiene
+  if not $clean
+    bot refuse output
+    stop
+
+define flow guardrail output media injection
+  $safe = execute self_check_media_injection
+  if not $safe
+    bot refuse output
+    stop

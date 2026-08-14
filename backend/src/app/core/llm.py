@@ -22,7 +22,7 @@ wires ``aegis.gateway.configure(...)`` with three adapters —
   implementation of the gateway's ``ObservabilitySink`` Protocol, wired
   directly with no bespoke adapter of this app's own.
 
-then re-exports the public surface (``complete``, ``embed``, ``record_call``,
+then re-exports the public surface (``complete``, ``embed``, ``transcribe``, ``record_call``,
 ``usage_tally``, ``last_trace_id``, ``BudgetExceededError``, ``LLMResult``,
 ``ToolCallResult``, ``Usage``) so every existing call site (agent/deps,
 retrieval/gateway, guardrails, memory, ops/eval, platform ``usage_tally``) keeps
@@ -39,6 +39,7 @@ from aegis.gateway import (
     BudgetExceededError,
     LLMResult,
     ToolCallResult,
+    TranscriptionResult,
     Usage,
     complete,
     embed,
@@ -46,6 +47,7 @@ from aegis.gateway import (
     optimization_config,
     optimization_summary,
     record_call,
+    transcribe,
     usage_tally,
 )
 from aegis.observability import OtelObservabilitySink
@@ -59,6 +61,7 @@ __all__ = [
     "BudgetExceededError",
     "LLMResult",
     "ToolCallResult",
+    "TranscriptionResult",
     "Usage",
     "complete",
     "embed",
@@ -66,6 +69,7 @@ __all__ = [
     "optimization_config",
     "optimization_summary",
     "record_call",
+    "transcribe",
     "usage_tally",
 ]
 
@@ -177,8 +181,15 @@ class _GovernanceHook:
         completion_tokens: int,
         cost_usd: float,
         trace_id: str | None,
+        audio_seconds: float = 0.0,
+        images: int = 0,
     ) -> None:
         """Write one durable usage-ledger row for a governed call.
+
+        ``audio_seconds``/``images`` carry the non-token billable units of a
+        transcription or vision call (Whisper bills per audio-minute), so those
+        calls land in the ledger — and therefore under a USD cap — instead of
+        being invisible behind ``prompt_tokens=0``.
 
         The gateway calls this best-effort (a failure is swallowed and logged
         by the caller, never raised) — see ``aegis.gateway.llm._record_usage``.
@@ -193,6 +204,8 @@ class _GovernanceHook:
             completion_tokens=completion_tokens,
             cost_usd=cost_usd,
             trace_id=trace_id,
+            audio_seconds=audio_seconds,
+            images=images,
         )
 
 

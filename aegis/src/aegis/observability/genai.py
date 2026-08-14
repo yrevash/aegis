@@ -26,6 +26,9 @@ _OPERATION_SPAN_KIND: dict[semconv.GenAIOperation, semconv.SpanKind] = {
     semconv.GenAIOperation.CHAT: semconv.SpanKind.LLM,
     semconv.GenAIOperation.TEXT_COMPLETION: semconv.SpanKind.LLM,
     semconv.GenAIOperation.EMBEDDINGS: semconv.SpanKind.EMBEDDING,
+    # Phoenix has no audio kind; a transcription is a model call, so it renders as
+    # an LLM node alongside the chat spans in the same trace tree.
+    semconv.GenAIOperation.TRANSCRIPTION: semconv.SpanKind.LLM,
 }
 
 

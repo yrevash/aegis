@@ -44,6 +44,19 @@ _LAYOUT = ("profile", "facts", "skills", "summary", "episodic", "raw")
 #: Eviction order (first dropped → last): shed the cheap/recoverable bottom first.
 _EVICT_ORDER = ("raw", "episodic", "summary", "skills", "facts", "profile")
 
+#: Hard cap on how many raw turns are exposed structurally as
+#: :attr:`AssembledMemory.conversation`. The raw tier is already bounded twice — by
+#: ``MemoryConfig.raw_window_turns`` (how many rows are loaded) and by the token budget
+#: (which evicts the oldest turns first) — but a 40-turn window is still far more than a
+#: query rewriter needs to resolve a pronoun, and it would be re-sent on every turn. So
+#: only the most recent ``_CONVERSATION_TURN_CAP`` conversational turns are exposed: the
+#: nearest context is where back-references actually point.
+_CONVERSATION_TURN_CAP = 12
+
+#: The only roles exposed in ``conversation`` — it is an OpenAI-shaped *chat* transcript,
+#: so tool/system rows (which a rewriter cannot use to resolve a pronoun) are dropped.
+_CONVERSATION_ROLES = ("user", "assistant")
+
 
 @dataclass
 class AssembledMemory:
@@ -54,12 +67,21 @@ class AssembledMemory:
         recalled_fact_ids: Ids of facts injected (for access-count bump + audit).
         recalled_message_ids: Ids of episodic + raw messages injected.
         tokens_used: Token count of ``text`` (always ``<= budget``).
+        conversation: The recent turns that survived budgeting, in OpenAI chat shape
+            (``[{"role": "user"|"assistant", "content": str}, ...]``, oldest-first),
+            capped at the last :data:`_CONVERSATION_TURN_CAP` turns. This is the SAME
+            material the ``## Recent conversation`` tier of ``text`` renders — exposed
+            structurally so callers that need turns rather than prose (the pre-retrieval
+            query rewriter, which resolves pronouns/ellipsis) can consume it without
+            re-parsing the block. Never wider than what ``text`` already carries: turns
+            evicted by the token budget are absent here too.
     """
 
     text: str = ""
     recalled_fact_ids: list[int] = field(default_factory=list)
     recalled_message_ids: list[int] = field(default_factory=list)
     tokens_used: int = 0
+    conversation: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -247,7 +269,27 @@ def build_working_text(
         recalled_fact_ids=fact_ids,
         recalled_message_ids=message_ids,
         tokens_used=tokens_used,
+        conversation=_conversation(sections["raw"], raw_turns),
     )
+
+
+def _conversation(raw_section: _Section, raw_turns: list[MemoryMessage]) -> list[dict[str, str]]:
+    """Render the SURVIVING raw turns as an OpenAI-shaped, oldest-first transcript.
+
+    Derived from the assembled raw section rather than from ``raw_turns`` directly, so it
+    inherits the token budget for free: a turn the greedy fill skipped or the eviction
+    loop dropped is not exposed here either. Then hard-capped to the last
+    :data:`_CONVERSATION_TURN_CAP` conversational turns (see that constant).
+    """
+    by_id = {m.id: m for m in raw_turns}
+    kept = [
+        {"role": m.role, "content": m.content}
+        for _, _, source_id in raw_section.items
+        if (m := by_id.get(source_id)) is not None
+        and m.role in _CONVERSATION_ROLES
+        and m.content
+    ]
+    return kept[-_CONVERSATION_TURN_CAP:]
 
 
 def _evict_one(sections: dict[str, _Section]) -> bool:

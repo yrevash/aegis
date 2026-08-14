@@ -156,6 +156,18 @@ class UsageLedger(AegisBase):
 
     One row per model call at the gateway; the source of truth for per-tenant/user
     cost attribution and the token dashboard.
+
+    Not every model bills per token, so tokens alone cannot describe a call: a
+    Whisper transcription is billed per minute of audio and a vision call may be
+    billed per image. ``audio_seconds`` / ``images`` record those units, so a
+    non-chat call is a real, attributable ledger row instead of
+    ``prompt_tokens=0`` → ``$0.00``. Both are additive and defaulted, so existing
+    rows, existing construction and the SQLite test schema are unaffected. A LIVE
+    Postgres created before these columns existed needs a one-off migration
+    (``create_all`` is CREATE TABLE IF NOT EXISTS and never alters a table):
+
+        ALTER TABLE usage_ledger ADD COLUMN audio_seconds DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE usage_ledger ADD COLUMN images INTEGER NOT NULL DEFAULT 0;
     """
 
     __tablename__ = "usage_ledger"
@@ -171,6 +183,10 @@ class UsageLedger(AegisBase):
     model: Mapped[str | None] = mapped_column(String(255), default=None)
     prompt_tokens: Mapped[int] = mapped_column(default=0)
     completion_tokens: Mapped[int] = mapped_column(default=0)
+    #: Seconds of audio billed on this call (per-minute-billed voice models).
+    audio_seconds: Mapped[float] = mapped_column(default=0.0, server_default="0")
+    #: Images billed or sent as input on this call (vision/multimodal models).
+    images: Mapped[int] = mapped_column(default=0, server_default="0")
     cost_usd: Mapped[float] = mapped_column(default=0.0)
     trace_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
 

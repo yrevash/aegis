@@ -34,7 +34,11 @@ from aegis.guardrails.classifier import (
 )
 from aegis.guardrails.content_safety import screen_content
 from aegis.guardrails.grounding import check_grounding
+from aegis.guardrails.media import MediaScreen, call_rail
+from aegis.guardrails.media.audio import Transcriber
+from aegis.guardrails.media.types import MediaGuardResult
 from aegis.guardrails.topical import screen_topic
+from aegis.media import MediaKind, MediaLimits, MediaPayload, TextPayload, as_payload
 
 if TYPE_CHECKING:
     from aegis.core.stream import AegisEmitter
@@ -70,12 +74,35 @@ def _default_injection_cache() -> InjectionCache:
     mode = AegisMode.lite if settings.mode is AegisMode.full else settings.mode
     return make_injection_cache(mode)
 
-#: A custom rail: given the (already PII-redacted) text, return a GuardResult to
+#: A custom rail: given the (already PII-redacted) payload, return a GuardResult to
 #: block/redact/flag, or ``None`` to abstain. Sync or async. Give it a distinct
 #: ``layer`` and it streams to the console like any built-in rail — this is the
 #: extension seam for domain-specific policies ("block competitor names",
 #: "enforce a JSON contract", "no medical advice") without forking the pipeline.
-Rail = Callable[[str], "GuardResult | None | Awaitable[GuardResult | None]"]
+#:
+#: **Widened from ``Callable[[str], ...]``** so a rail can screen an image or an
+#: audio clip, not only a string — a rail that cannot receive an image can never
+#: guard one, which is how a multimodal request used to reach the model having
+#: passed through no rail at all.
+#:
+#: Existing ``str``-taking rails keep working untouched:
+#: :func:`aegis.guardrails.media.call_rail` inspects what each rail was written to
+#: accept and hands it exactly that (a legacy rail still receives
+#: ``payload.text``). New rails should annotate their parameter with
+#: ``MediaPayload`` — or wear :func:`aegis.guardrails.media.media_rail` when the
+#: annotation is not introspectable — and will then be handed the payload itself.
+#: Legacy string rails are *skipped* for image/audio payloads (they cannot judge
+#: them) and every skip is recorded in the verdict, never silently swallowed.
+Rail = Callable[[MediaPayload], "GuardResult | None | Awaitable[GuardResult | None]"]
+
+#: The pre-media rail signature. **Deprecated but supported**: it keeps working for
+#: text payloads and is not scheduled for removal, but it can only ever see text.
+#: Port a rail by annotating its parameter ``MediaPayload`` when you want it to
+#: screen images or audio too.
+LegacyTextRail = Callable[[str], "GuardResult | None | Awaitable[GuardResult | None]"]
+
+#: What the pipeline actually accepts: either shape.
+AnyRail = Rail | LegacyTextRail
 
 
 @register("guardrail", "default")
@@ -92,13 +119,19 @@ class Guardrails:
         self,
         *,
         completer: ChatCompleter | None = None,
-        input_rails: list[Rail] | None = None,
-        output_rails: list[Rail] | None = None,
+        input_rails: list[AnyRail] | None = None,
+        output_rails: list[AnyRail] | None = None,
         allowed_topics: str | list[str] | None = None,
         topical_block: bool = False,
         ground_answers: bool = False,
         grounding_block: bool = False,
         injection_cache: InjectionCache | None = None,
+        vision_completer: ChatCompleter | None = None,
+        media_limits: MediaLimits | None = None,
+        image_pii: bool = False,
+        image_analyzer: object = None,
+        image_redactor: object = None,
+        transcriber: Transcriber | None = None,
     ) -> None:
         """Create the pipeline.
 
@@ -122,6 +155,26 @@ class Guardrails:
                 when ``check_output`` is given retrieval ``contexts``; an
                 ungrounded answer is an advisory FLAG unless ``grounding_block``.
             grounding_block: Make the grounding rail a hard BLOCK instead of advisory.
+            vision_completer: A vision-capable completer for the image-injection
+                screen (:mod:`aegis.guardrails.media.injection`). Kept separate
+                from ``completer`` because screening pixels needs a multimodal
+                model and the text rails deliberately do not. **With none wired,
+                images fail closed** — there is no offline backstop for pixels,
+                so an unscreened image is blocked rather than passed.
+            media_limits: Payload-hygiene thresholds (size cap, decompression-bomb
+                guard, accepted MIME sets). Defaults to
+                :class:`~aegis.media.MediaLimits`.
+            image_pii: Enable the ``presidio-image-redactor`` rail, which returns an
+                actually-redacted image rather than a meaningless "redact" verdict.
+                Requires the ``aegis[media]`` extra; declared-but-missing raises
+                :class:`ImportError` naming the install command.
+            image_analyzer: Advanced/test seam — a Presidio ``ImageAnalyzerEngine``
+                instance to use instead of building one (implies ``image_pii``).
+            image_redactor: Advanced/test seam — a Presidio ``ImageRedactorEngine``.
+            transcriber: Injected speech-to-text used to guard audio by
+                transcribing it and running the **full** text rail stack over the
+                transcript. Transcription itself belongs to the ASR module, not
+                here. With none wired, audio is blocked (fail-closed).
         """
         self._completer = completer
         self._input_rails = list(input_rails or [])
@@ -133,12 +186,30 @@ class Guardrails:
         self._injection_cache = (
             injection_cache if injection_cache is not None else _default_injection_cache()
         )
+        self._media = MediaScreen(
+            vision_completer=vision_completer,
+            limits=media_limits,
+            image_pii=image_pii,
+            image_analyzer=image_analyzer,
+            image_redactor=image_redactor,
+            transcriber=transcriber,
+        )
 
     @staticmethod
-    async def _run_custom(text: str, rails: list[Rail]) -> GuardResult | None:
-        """Run custom rails in order; return the first non-PASS verdict, else None."""
+    async def _run_custom(
+        payload: MediaPayload, rails: list[AnyRail], *, skipped: list[str] | None = None
+    ) -> GuardResult | None:
+        """Run custom rails in order; return the first non-PASS verdict, else None.
+
+        Each rail is invoked through :func:`aegis.guardrails.media.call_rail`, which
+        hands a legacy ``str``-taking rail the text (identical to the pre-media
+        behaviour) and a payload-taking rail the payload. A legacy rail faced with
+        an image or audio payload is skipped and its reason appended to ``skipped``
+        so the verdict can report it — a rail that did not run is never counted.
+        """
         for rail in rails:
-            result = rail(text)
+            on_skip = skipped.append if skipped is not None else None
+            result = call_rail(rail, payload, on_skip=on_skip)
             if inspect.isawaitable(result):
                 result = await result
             if result is not None and result.verdict is not GuardVerdict.PASS:
@@ -314,7 +385,7 @@ class Guardrails:
             if topical.verdict is GuardVerdict.BLOCK:
                 return topical, []
             advisories.append(topical)
-        custom = await self._run_custom(redacted, self._input_rails)
+        custom = await self._run_custom(TextPayload.of(redacted), self._input_rails)
         if custom is not None:
             return custom, advisories
         if kinds:
@@ -337,22 +408,88 @@ class Guardrails:
             advisories,
         )
 
+    async def _screen_media(
+        self,
+        payload: MediaPayload,
+        rails: list[AnyRail],
+        *,
+        emitter: AegisEmitter | None = None,
+    ) -> MediaGuardResult:
+        """Run the media rail chain over a non-text payload and emit its verdict."""
+        skipped: list[str] = []
+
+        async def _custom(current: MediaPayload) -> GuardResult | None:
+            return await self._run_custom(current, rails, skipped=skipped)
+
+        result = await self._media.check(
+            payload,
+            text_check=self.check_input,
+            custom=_custom if rails else None,
+            skipped_custom=skipped,
+        )
+        await self._emit_media(emitter, payload, result)
+        return result
+
+    @staticmethod
+    async def _emit_media(
+        emitter: AegisEmitter | None, payload: MediaPayload, result: MediaGuardResult
+    ) -> None:
+        """Emit the ``guardrail_media`` CustomEvent (no-op without an emitter).
+
+        Carries only metadata and the itemised rail coverage — never the bytes and
+        never the decoded text, so the event stays safe to log and render.
+        """
+        if emitter is None:
+            return
+        from aegis.core import stream_names
+
+        await emitter.custom(
+            stream_names.GUARDRAIL_MEDIA,
+            {
+                "kind": payload.kind.value,
+                "mime_type": payload.mime_type,
+                "byte_size": payload.byte_size,
+                "provenance": payload.provenance.source.value,
+                "verdict": result.verdict.value,
+                "layer": result.layer,
+                "rails_run": result.rails_run,
+                "rails_skipped": result.rails_skipped,
+                "redactions": result.redactions,
+            },
+        )
+
     async def check_input(
-        self, text: str, *, emitter: AegisEmitter | None = None
+        self, text: str | MediaPayload, *, emitter: AegisEmitter | None = None
     ) -> GuardResult:
         """Run the full input rail (schema → PII → injection → content → topical).
 
+        Accepts a plain ``str`` (wrapped as a :class:`~aegis.media.TextPayload`,
+        behaviour identical to before the media seam) or any
+        :class:`~aegis.media.MediaPayload`. An image or audio payload is routed to
+        the media chain (:class:`aegis.guardrails.media.MediaScreen`) instead — the
+        one path that used to reach the model with no rail in front of it.
+
         Args:
-            text: The inbound user input text to screen.
-            emitter: Optional AG-UI emitter for the injection ``guardrail_cache`` event.
+            text: The inbound user input — text, or a media payload.
+            emitter: Optional AG-UI emitter for the injection ``guardrail_cache``
+                and ``guardrail_media`` events.
 
         Returns:
             A :class:`GuardResult` with verdict and potentially redacted text. When
             the core rails pass but an advisory (e.g. off-topic) fired, the
             non-blocking FLAG is surfaced as the result so the single-result path
-            (the agent graph) still shows it; a BLOCK always takes precedence.
+            (the agent graph) still shows it; a BLOCK always takes precedence. For
+            media payloads the result is a
+            :class:`~aegis.guardrails.media.MediaGuardResult`, which additionally
+            itemises which rails ran and carries any rewritten payload.
         """
-        primary, advisories = await self._screen_input(text, emitter=emitter)
+        payload = as_payload(text)
+        if payload.kind is not MediaKind.TEXT:
+            return await self._screen_media(payload, self._input_rails, emitter=emitter)
+        # A ``str`` caller is handed straight to the unchanged text path — no
+        # encode/decode round-trip, so the rails screen the exact string given.
+        raw = text if isinstance(text, str) else payload.text  # type: ignore[union-attr]
+        primary, advisories = await self._screen_input(raw, emitter=emitter)
         if primary.verdict is GuardVerdict.PASS and advisories:
             return advisories[0]
         return primary
@@ -384,12 +521,17 @@ class Guardrails:
         )
 
     async def check_output(
-        self, text: str, contexts: list[str] | None = None
+        self, text: str | MediaPayload, contexts: list[str] | None = None
     ) -> GuardResult:
         """Run the full output rail (schema → content filter → grounding → PII).
 
+        Accepts a ``str`` (unchanged behaviour) or a :class:`~aegis.media.MediaPayload`.
+        A non-text payload is routed to the media chain: a model that *returns* an
+        image is a channel too, and a generated image carrying rendered text is the
+        same exfiltration surface pointed the other way.
+
         Args:
-            text: The outbound model response text to screen.
+            text: The outbound model response — text, or a media payload.
             contexts: Optional retrieved passages the answer should be grounded in.
                 When provided and grounding is enabled, the answer is checked
                 against them (advisory FLAG by default). Omit to skip grounding.
@@ -399,6 +541,10 @@ class Guardrails:
             the core rails pass but the grounding advisory fired, the non-blocking
             FLAG is surfaced as the result; a BLOCK/REDACT takes precedence.
         """
+        payload = as_payload(text)
+        if payload.kind is not MediaKind.TEXT:
+            return await self._screen_media(payload, self._output_rails)
+        text = text if isinstance(text, str) else payload.text  # type: ignore[union-attr]
         fmt = schema.validate_output_format(text)
         if not fmt.ok:
             return GuardResult(
@@ -417,7 +563,7 @@ class Guardrails:
                 text=text,
                 layer="content_safety",
             )
-        custom = await self._run_custom(text, self._output_rails)
+        custom = await self._run_custom(TextPayload.of(text), self._output_rails)
         if custom is not None:
             return custom
         grounding = await self._screen_grounding(text, contexts)
@@ -440,11 +586,14 @@ class Guardrails:
             text=text,
         )
 
-    async def stream_check_input(self, text: str) -> AsyncIterator[AegisEvent]:
+    async def stream_check_input(
+        self, text: str | MediaPayload
+    ) -> AsyncIterator[AegisEvent]:
         """Run the input rail, yielding start → verdict → finish events.
 
         Args:
-            text: The inbound user input text to screen.
+            text: The inbound user input — text, or a media payload (which is
+                screened by the media chain and streams the same event shape).
 
         Yields:
             :class:`AegisEvent` objects in order: :class:`StepStarted`, the
@@ -457,7 +606,13 @@ class Guardrails:
         yield StepStarted(
             module_id=_MODULE_ID, step_id=step_id, name="guard_input", span_kind=SpanKind.GUARDRAIL
         )
-        result, advisories = await self._screen_input(text)
+        payload = as_payload(text)
+        if payload.kind is MediaKind.TEXT:
+            raw = text if isinstance(text, str) else payload.text  # type: ignore[union-attr]
+            result, advisories = await self._screen_input(raw)
+        else:
+            result = await self._screen_media(payload, self._input_rails)
+            advisories = []
         yield GuardrailEvent(
             module_id=_MODULE_ID,
             step_id=step_id,
@@ -483,7 +638,9 @@ class Guardrails:
             ok=result.verdict is not GuardVerdict.BLOCK,
         )
 
-    async def stream_check_input_agui(self, text: str, emitter: AegisEmitter) -> GuardResult:
+    async def stream_check_input_agui(
+        self, text: str | MediaPayload, emitter: AegisEmitter
+    ) -> GuardResult:
         """Run the input rail, streaming a rich AG-UI guardrail verdict.
 
         Emits STEP_STARTED -> CustomEvent(guardrail_verdict, ...) -> STEP_FINISHED via the
@@ -504,9 +661,13 @@ class Guardrails:
             t0 = time.monotonic()
             result = await self.check_input(text, emitter=emitter)
             timing["total"] = round((time.monotonic() - t0) * 1000, 3)
-            spans = [
-                {"kind": m.kind, "start": m.start, "end": m.end} for m in pii.scan(text)
-            ]
+            # PII spans are character offsets into text; a binary payload has none
+            # (its PII, if any, is reported by the media chain's own redaction rail).
+            spans = (
+                [{"kind": m.kind, "start": m.start, "end": m.end} for m in pii.scan(text)]
+                if isinstance(text, str)
+                else []
+            )
             await emitter.custom(
                 stream_names.GUARDRAIL_VERDICT,
                 {

@@ -302,8 +302,18 @@ async def record_usage(
     completion_tokens: int,
     cost_usd: float,
     trace_id: str | None,
+    audio_seconds: float = 0.0,
+    images: int = 0,
 ) -> None:
-    """Write one durable usage-ledger row for a governed model call."""
+    """Write one durable usage-ledger row for a governed model call.
+
+    ``audio_seconds`` / ``images`` are the non-token billable units of a
+    transcription or vision call (see :class:`~aegis.governance.models.UsageLedger`).
+    Both default to zero, so every existing token-only call site is unchanged.
+    Note that ``cost_usd`` already prices them, which is what makes a USD cap
+    bite on a per-minute-billed call — the token caps deliberately do not, since
+    an audio minute is not a token.
+    """
     async with _session() as session:
         # Engage Postgres RLS for this connection (no-op on SQLite; H1).
         await _set_tenant_scope(session, tenant_id)
@@ -314,6 +324,8 @@ async def record_usage(
                 model=model,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                audio_seconds=audio_seconds,
+                images=images,
                 cost_usd=cost_usd,
                 trace_id=trace_id,
             )

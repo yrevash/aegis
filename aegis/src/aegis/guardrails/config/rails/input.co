@@ -50,3 +50,40 @@ define flow guardrail input topical
   $on_topic = execute self_check_topic
   if not $on_topic
     bot inform off topic
+
+# ── Media rails (images + audio) ─────────────────────────────────────────────
+# A payload that is not text arrives on the `media` context variable (Colang can
+# only be handed structured data through the context; see
+# aegis.guardrails.nemo.nemo_check_media_input). Every flow below is a no-op on a
+# text-only turn, so their presence changes nothing for the text path.
+
+# 6. Payload hygiene: byte-size cap, MIME truth (magic bytes vs the declared
+#    type), and the decompression-bomb guard. Pure, offline, and first — a
+#    hostile payload is refused before it costs a model call.
+define flow guardrail input media hygiene
+  $clean = execute check_media_hygiene
+  if not $clean
+    bot refuse input
+    stop
+
+# 7. Image-injection screen — the control that closes the vision hole. Text
+#    rendered INTO an image reaches a vision model exactly as if the user had
+#    typed it, having passed through every text rail without touching one. A
+#    cheap vision call screens for instructions directed at an AI system.
+#    Fails CLOSED: with no vision completer wired there is no offline backstop
+#    for pixels, so the image is blocked rather than passed.
+define flow guardrail input media injection
+  $safe = execute self_check_media_injection
+  if not $safe
+    bot refuse input
+    stop
+
+# 8. Audio: transcribe first, then run the FULL text rail stack over the
+#    transcript. Everything that blocks in text blocks when spoken. Transcription
+#    itself belongs to the ASR module and is injected, never implemented here;
+#    with no transcriber wired the audio is blocked (fail closed).
+define flow guardrail input media transcript
+  $safe = execute self_check_media_transcript
+  if not $safe
+    bot refuse input
+    stop

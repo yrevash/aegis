@@ -10,6 +10,10 @@ REASONING = "reasoning"
 GUARDRAIL_VERDICT = "guardrail_verdict"
 #: An injection-classifier cache event (hit / miss) — the guardrail cost/observability feed.
 GUARDRAIL_CACHE = "guardrail_cache"
+#: A media guardrail verdict (image/audio): payload metadata plus the itemised list of
+#: which media rails ran and which did not, so the console can never imply coverage
+#: a control did not actually provide.
+GUARDRAIL_MEDIA = "guardrail_media"
 SHAP_EXPLANATION = "shap_explanation"
 CONFORMAL_INTERVAL = "conformal_interval"
 #: An ML model-card event — the honest, measured metadata of the model that is
@@ -36,7 +40,8 @@ OPS_GATE_DECISION = "ops_gate_decision"
 OPS_RELEASE = "ops_release"
 
 ALL: frozenset[str] = frozenset(
-    {REASONING, GUARDRAIL_VERDICT, GUARDRAIL_CACHE, SHAP_EXPLANATION, CONFORMAL_INTERVAL,
+    {REASONING, GUARDRAIL_VERDICT, GUARDRAIL_CACHE, GUARDRAIL_MEDIA, SHAP_EXPLANATION,
+     CONFORMAL_INTERVAL,
      ML_MODEL, RETRIEVAL_CITATIONS, RETRIEVAL_CACHE, ROUTING, MEMORY_RECALL, MEMORY_WRITE,
      MEMORY_CACHE, MODEL_CALL, EVAL_RESULT, OPS_DIAGNOSE, OPS_GATE_DECISION, OPS_RELEASE}
 )

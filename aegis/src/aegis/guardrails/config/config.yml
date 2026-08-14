@@ -41,9 +41,16 @@ rails:
       - guardrail input injection       # 3. API injection / jailbreak classifier
       - guardrail input content safety  # 4. MLCommons hazard screen (S1–S13)
       - guardrail input topical         # 5. topical / off-topic dialog rail (advisory, LLM01-adj)
+      # Media rails. No-ops on a text-only turn; see rails/input.co.
+      - guardrail input media hygiene   # 6. size cap / MIME truth / decompression bomb
+      - guardrail input media injection # 7. image-injection screen (fail-closed)
+      - guardrail input media transcript # 8. audio: transcribe-then-guard, full text stack
   output:
     flows:
       - guardrail output schema         # 1. output schema + content filter (LLM02)
       - guardrail output content safety # 2. MLCommons hazard screen (LLM09)
       - guardrail output grounding      # 3. output grounding self-check (advisory, LLM09)
       - guardrail output pii            # 4. PII redaction on the outbound path (LLM06)
+      # Media rails on the way out (a generated image is a channel too).
+      - guardrail output media hygiene   # 5. size cap / MIME truth / decompression bomb
+      - guardrail output media injection # 6. image-injection screen (fail-closed)

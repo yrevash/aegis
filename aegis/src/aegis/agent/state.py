@@ -18,11 +18,17 @@ LangGraph raises ``InvalidUpdateError`` ("can receive only one value per step").
 The accumulators are reduced so nodes may return a **delta** and remain correct
 under a fan-out.
 
-Two keys deliberately stay last-write-wins, and both would be wrong as reducers:
+Three keys deliberately stay last-write-wins, and all three would be wrong as
+reducers:
 
 * ``messages`` is a per-planning-round scratch buffer, rebuilt from scratch each
   time ``plan`` runs — not a transcript accumulated across nodes. Accumulating it
   would duplicate the whole prompt on every self-repair round.
+* ``conversation`` is the recalled prior-turn transcript, written once by
+  ``recall_memory`` from the memory layer's raw window. It is a *snapshot of what
+  the store already holds*, not something nodes contribute to, so a re-run of the
+  node must replace it wholesale. Accumulating it would duplicate every prior turn
+  on each write and silently defeat the memory layer's turn cap.
 * ``tool_results`` is replaced wholesale by ``act``. The previous round's results
   are read *before* that overwrite to build the self-repair prompt, so the data is
   used, not lost. Accumulating it would make ``reflect`` re-see an already-repaired
@@ -49,6 +55,13 @@ class AgentState(TypedDict, total=False):
         role: The caller's coarse RBAC role.
         messages: OpenAI-style chat buffer for ONE planning round. Rebuilt from
             scratch each time ``plan`` runs -- it is not accumulated across nodes.
+            It is NOT the conversation history (``plan`` runs after ``retrieve``, so
+            this key is empty for everything upstream of it) -- see ``conversation``.
+        conversation: The prior turns of THIS session, oldest-first, in OpenAI chat
+            shape, as recalled from long-term memory by ``recall_memory`` (already
+            budget- and turn-capped by the memory layer). Absent/empty on the
+            single-shot path. Consumed by ``retrieve`` as the query rewriter's
+            history so pronouns/ellipsis resolve against what was actually said.
         model: The deployment id that produced the plan (for audit correlation).
         agent_role: The specialist role the supervisor routed this turn to (``qa`` →
             the full pipeline, ``memory`` → the memory specialist). Absent → ``qa``.
@@ -101,6 +114,7 @@ class AgentState(TypedDict, total=False):
     persona: str
     role: str
     messages: list[dict[str, Any]]
+    conversation: list[dict[str, Any]]
     model: str
     agent_role: str
     route_reason: str

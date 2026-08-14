@@ -141,3 +141,8 @@ class GenAIOperation(StrEnum):
     CHAT = "chat"
     EMBEDDINGS = "embeddings"
     TEXT_COMPLETION = "text_completion"
+    #: Speech-to-text. The GenAI conventions have no audio operation yet, so this
+    #: is our own stable value — matched byte-for-byte by
+    #: ``aegis.gateway.llm.GenAIOperation.TRANSCRIPTION`` so the sink maps the two
+    #: enums by value with no cross-package import.
+    TRANSCRIPTION = "transcription"

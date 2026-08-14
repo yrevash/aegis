@@ -208,3 +208,121 @@ async def redact_pii_output(context: dict | None = None) -> str:
     text = (context or {}).get("bot_message", "")
     redacted, _ = pii.redact(text)
     return redacted
+
+
+# ── Media actions (images + audio) ───────────────────────────────────────────
+#
+# The Colang policy could not previously see a non-text payload at all, so an
+# image reached the model with no rail in front of it. These three actions give
+# the declarative policy the same media coverage the programmatic pipeline has.
+# The payload arrives as a JSON dict on the NeMo ``media`` context variable (see
+# ``aegis.guardrails.nemo.nemo_check_media_input``), because a Colang flow can
+# only be handed structured data through the conversation context.
+#
+# All three are no-ops (``True``) on a turn that carries no media, so the bundled
+# text flows are unaffected by their presence in the rail list.
+
+
+def _media_payload(context: dict | None):  # noqa: ANN202 - aegis.media.MediaPayload | None
+    """Rebuild the media payload from the NeMo context, or ``None`` when absent.
+
+    Raises:
+        ValueError: If the context carries something that does not validate as a
+            payload. The callers turn that into a *block*: a malformed payload is
+            an unscreened payload.
+    """
+    from aegis.media import payload_from_context
+
+    return payload_from_context((context or {}).get("media"))
+
+
+@action(is_system_action=True)
+async def check_media_hygiene(context: dict | None = None) -> bool:
+    """Return ``True`` if the turn's media payload passes payload hygiene.
+
+    Size cap, MIME truth (magic bytes vs the declared type) and the
+    decompression-bomb guard — all pure, offline, and run before any model call.
+
+    Args:
+        context: The NeMo conversation context (``media`` is read).
+
+    Returns:
+        ``True`` when clean or there is no media; ``False`` to block. Fails closed
+        on a malformed payload.
+    """
+    from aegis.media import inspect_payload
+
+    try:
+        payload = _media_payload(context)
+    except Exception:  # noqa: BLE001 - an unparseable payload is an unscreened one
+        return False
+    if payload is None:
+        return True
+    return inspect_payload(payload).ok
+
+
+@action(is_system_action=True)
+async def self_check_media_injection(context: dict | None = None) -> bool:
+    """Return ``True`` if the turn's image carries no instructions aimed at the model.
+
+    Delegates to :func:`aegis.guardrails.media.screen_image` — the same cheap
+    vision screen the programmatic pipeline runs — using the vision completer the
+    host wired via :func:`aegis.guardrails.nemo.set_vision_completer`. With no
+    vision completer the screen cannot run and this returns ``False`` (**fail
+    closed**): there is no offline backstop for pixels, so an unscreened image is
+    blocked rather than passed.
+
+    Args:
+        context: The NeMo conversation context (``media`` is read).
+
+    Returns:
+        ``True`` when safe to proceed or the turn has no image; ``False`` to block.
+    """
+    from aegis.guardrails import nemo
+    from aegis.guardrails.media import screen_image
+    from aegis.media import ImagePayload
+
+    try:
+        payload = _media_payload(context)
+    except Exception:  # noqa: BLE001 - fail closed
+        return False
+    if not isinstance(payload, ImagePayload):
+        return True
+    verdict = await screen_image(payload, completer=nemo.get_vision_completer())
+    return not verdict.injection
+
+
+@action(is_system_action=True)
+async def self_check_media_transcript(context: dict | None = None) -> bool:
+    """Return ``True`` if the turn's audio transcribes to text the rails accept.
+
+    Transcribe-then-guard: the injected transcriber (wired via
+    :func:`aegis.guardrails.nemo.set_transcriber`) produces the transcript, and the
+    **full** programmatic text stack screens it, so every rail the operator
+    configured applies to speech unchanged. No transcriber means no transcript
+    means no screening — which blocks (fail closed).
+
+    Args:
+        context: The NeMo conversation context (``media`` is read).
+
+    Returns:
+        ``True`` when the transcript clears the text rails or the turn has no
+        audio; ``False`` to block.
+    """
+    from aegis.core.types import GuardVerdict
+    from aegis.guardrails import nemo
+    from aegis.guardrails.media import guard_audio
+    from aegis.guardrails.pipeline import Guardrails
+    from aegis.media import AudioPayload
+
+    try:
+        payload = _media_payload(context)
+    except Exception:  # noqa: BLE001 - fail closed
+        return False
+    if not isinstance(payload, AudioPayload):
+        return True
+    guards = Guardrails(completer=nemo.get_completer())
+    result = await guard_audio(
+        payload, transcriber=nemo.get_transcriber(), text_check=guards.check_input
+    )
+    return result.verdict is not GuardVerdict.BLOCK

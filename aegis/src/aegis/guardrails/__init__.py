@@ -20,36 +20,57 @@ from aegis.guardrails.content_safety import (
     screen_content,
 )
 from aegis.guardrails.grounding import GroundingVerdict, check_grounding
-from aegis.guardrails.pipeline import Guardrails, Rail
+from aegis.guardrails.media import MediaGuardResult, MediaScreen, media_rail, screen_image
+from aegis.guardrails.pipeline import AnyRail, Guardrails, LegacyTextRail, Rail
 from aegis.guardrails.topical import TopicVerdict, screen_topic
+from aegis.media import MediaPayload
 
 
-async def check_input(text: str, *, completer: ChatCompleter | None = None) -> GuardResult:
+async def check_input(
+    text: str | MediaPayload,
+    *,
+    completer: ChatCompleter | None = None,
+    vision_completer: ChatCompleter | None = None,
+) -> GuardResult:
     """Screen inbound ``text`` with a fresh :class:`Guardrails` pipeline.
 
     Args:
-        text: The inbound user input text to screen.
+        text: The inbound user input — text, or a :class:`~aegis.media.MediaPayload`.
         completer: Optional chat completer for model-based injection detection.
             If None, only deterministic injection signatures are checked.
+        vision_completer: Optional vision-capable completer for the image-injection
+            screen. Without it, image payloads fail **closed** (blocked): unlike
+            text, pixels have no offline signature backstop to degrade to.
 
     Returns:
         A GuardResult with the verdict and potentially redacted text.
     """
-    return await Guardrails(completer=completer).check_input(text)
+    return await Guardrails(
+        completer=completer, vision_completer=vision_completer
+    ).check_input(text)
 
 
-async def check_output(text: str, *, completer: ChatCompleter | None = None) -> GuardResult:
+async def check_output(
+    text: str | MediaPayload,
+    *,
+    completer: ChatCompleter | None = None,
+    vision_completer: ChatCompleter | None = None,
+) -> GuardResult:
     """Screen outbound ``text`` with a fresh :class:`Guardrails` pipeline.
 
     Args:
-        text: The outbound model response text to screen.
+        text: The outbound model response — text, or a media payload.
         completer: Optional chat completer for model-based injection detection.
             If None, only deterministic injection signatures are checked.
+        vision_completer: Optional vision-capable completer for the image-injection
+            screen (image payloads fail closed without one).
 
     Returns:
         A GuardResult with the verdict and potentially redacted text.
     """
-    return await Guardrails(completer=completer).check_output(text)
+    return await Guardrails(
+        completer=completer, vision_completer=vision_completer
+    ).check_output(text)
 
 
 async def run_guards(
@@ -71,10 +92,14 @@ async def run_guards(
 
 
 __all__ = [
+    "AnyRail",
     "ContentSafetyVerdict",
     "GroundingVerdict",
     "Guardrails",
     "HAZARD_CATEGORIES",
+    "LegacyTextRail",
+    "MediaGuardResult",
+    "MediaScreen",
     "Rail",
     "TopicVerdict",
     "check_grounding",
@@ -82,10 +107,12 @@ __all__ = [
     "check_output",
     "content_safety",
     "grounding",
+    "media_rail",
     "pii",
     "run_guards",
     "schema",
     "screen_content",
+    "screen_image",
     "screen_topic",
     "topical",
 ]

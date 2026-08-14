@@ -441,7 +441,13 @@ def build_agent(
         """
         writer = get_stream_writer()
         writer(events.retrieval("started"))
-        history = state.get("messages") or None
+        # Rewriter history: prefer the REAL conversation transcript recalled by
+        # ``recall_memory`` (the node immediately upstream). ``messages`` is only a
+        # per-planning-round scratch buffer written by ``plan`` — which runs after this
+        # node — so on the memory path it is always empty here and pronoun/ellipsis
+        # resolution would never fire. It stays as the fallback so the single-shot /
+        # no-memory path is byte-identical to before (both empty → ``None``).
+        history = state.get("conversation") or state.get("messages") or None
         if config.agentic_retrieval_enabled:
             # Bounded agentic loop; the rewriter (if enabled) resolves the entry query
             # against conversation history before round 1.
@@ -589,6 +595,13 @@ def build_agent(
             "working_memory": assembled.text,
             "recalled_fact_ids": assembled.recalled_fact_ids,
             "recalled_message_ids": assembled.recalled_message_ids,
+            # The real multi-turn transcript for the pre-retrieval query rewriter, which
+            # runs in ``retrieve`` immediately after this node. ``state["messages"]`` can
+            # never serve it: that key is a per-planning-round scratch buffer written by
+            # ``plan``, i.e. strictly AFTER retrieve, so it is empty at rewrite time.
+            # ``getattr`` because ``MemoryDeps`` is structural — a host facade that
+            # predates this field simply yields no history (today's behaviour).
+            "conversation": list(getattr(assembled, "conversation", None) or []),
         }
 
     async def persist_memory(state: AgentState) -> dict[str, Any]:

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from aegis.core import stream_names
 from aegis.core.events import SpanKind
 from aegis.core.models import ModelRole
-from aegis.gateway.llm import complete, usage_tally
+from aegis.gateway.llm import call_saving_usd, complete
 from aegis.gateway.routing import is_small_model, model_for
 from aegis.gateway.types import LLMResult
 
@@ -46,11 +46,16 @@ async def stream_complete(
         The full `LLMResult` from `complete`.
     """
     async with emitter.step(_STEP_NAME, SpanKind.LLM):
-        # Snapshot the cumulative tally so the payload carries THIS call's
-        # measured saving, not the process-wide running total.
-        saved_before = usage_tally()["cost_saved_usd"]
         result = await complete(role, messages, **kwargs)  # type: ignore[arg-type]
-        saved_after = usage_tally()["cost_saved_usd"]
+        # THIS call's saving, computed from THIS call's own measured usage.
+        #
+        # It used to be a before/after delta over the process-global tally taken
+        # across the ``await``: with two concurrent ``stream_complete`` calls, each
+        # one's "after" snapshot included the other's spend, so they attributed
+        # each other's savings (and a call that finished second could even report a
+        # negative-clamped zero). Deriving it from ``result.usage`` alone makes the
+        # figure exact and concurrency-safe — no shared mutable state is read.
+        saved = call_saving_usd(result.usage)
 
         # The role's intended primary vs. the deployment that actually responded:
         # if they differ, a per-role fallback fired inside the gateway. Measured
@@ -66,7 +71,7 @@ async def stream_complete(
                 "prompt_tokens": result.usage.prompt_tokens,
                 "completion_tokens": result.usage.completion_tokens,
                 "cost_usd": result.usage.cost_usd,
-                "cost_saved_usd": max(0.0, saved_after - saved_before),
+                "cost_saved_usd": saved,
                 "small_model": is_small_model(result.model),
             },
         )

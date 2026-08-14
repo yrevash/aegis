@@ -17,6 +17,7 @@ from aegis.memory.scoring import RecallCandidate
 from aegis.memory.stores import MemoryMessage, MemorySession
 from aegis.memory.tokens import count_tokens
 from aegis.memory.working import (
+    _CONVERSATION_TURN_CAP,
     _PROFILE_HEADER,
     _RAW_HEADER,
     assemble_working_memory,
@@ -40,6 +41,12 @@ def _episodic_candidate(msg_id: int, text: str) -> RecallCandidate:
         relevance=1.0,
         payload=SimpleNamespace(id=msg_id),
     )
+
+
+def _assistant_msg(msg_id: int, content: str) -> MemoryMessage:
+    m = _raw_msg(msg_id, content)
+    m.role = "assistant"
+    return m
 
 
 def _raw_msg(msg_id: int, content: str) -> MemoryMessage:
@@ -175,3 +182,63 @@ async def test_assemble_end_to_end(db):
     assert assembled.tokens_used <= budget
     assert "Prior billing dispute." in assembled.text  # running summary injected
     assert assembled.recalled_message_ids  # the raw turn was recorded as injected
+    # The same raw turn is ALSO exposed structurally, for callers that need turns and
+    # not prose (the pre-retrieval query rewriter).
+    assert assembled.conversation == [
+        {"role": "user", "content": "I was charged twice for my subscription."}
+    ]
+
+
+def test_conversation_exposes_surviving_raw_turns_oldest_first():
+    """The raw window is exposed in OpenAI chat shape, oldest-first, alongside ``text``."""
+    cfg = MemoryConfig(ctx_token_cap=8000, answer_reserve=200)
+    raw_turns = [
+        _raw_msg(1, "Tell me about Neo4j"),
+        _assistant_msg(2, "It is a graph database"),
+    ]
+    assembled = build_working_text(RecallBundle(), raw_turns, query="q", config=cfg)
+
+    assert assembled.conversation == [
+        {"role": "user", "content": "Tell me about Neo4j"},
+        {"role": "assistant", "content": "It is a graph database"},
+    ]
+    # It mirrors ``text`` — it does not widen it.
+    assert "Tell me about Neo4j" in assembled.text
+
+
+def test_conversation_is_empty_when_nothing_was_recalled():
+    """No raw window → no transcript (the single-shot path stays history-free)."""
+    assembled = build_working_text(RecallBundle(), [], query="q", config=MemoryConfig())
+    assert assembled.conversation == []
+
+
+def test_conversation_drops_non_chat_roles():
+    """Only user/assistant turns are exposed — a tool row cannot resolve a pronoun."""
+    cfg = MemoryConfig(ctx_token_cap=8000, answer_reserve=200)
+    tool_turn = _raw_msg(2, '{"rows": 3}')
+    tool_turn.role = "tool"
+    raw_turns = [_raw_msg(1, "Tell me about Neo4j"), tool_turn]
+
+    assembled = build_working_text(RecallBundle(), raw_turns, query="q", config=cfg)
+    assert [t["role"] for t in assembled.conversation] == ["user"]
+
+
+def test_conversation_is_capped_and_keeps_the_most_recent_turns():
+    """Cap: at most ``_CONVERSATION_TURN_CAP`` turns, and it is the NEWEST ones."""
+    cfg = MemoryConfig(ctx_token_cap=8000, answer_reserve=200)
+    raw_turns = [_raw_msg(i, f"turn number {i}") for i in range(_CONVERSATION_TURN_CAP + 8)]
+
+    assembled = build_working_text(RecallBundle(), raw_turns, query="q", config=cfg)
+    assert len(assembled.conversation) == _CONVERSATION_TURN_CAP
+    assert assembled.conversation[-1]["content"] == f"turn number {len(raw_turns) - 1}"
+
+
+def test_conversation_never_exceeds_what_the_budget_kept():
+    """Turns evicted by the token budget are absent from the transcript too."""
+    cfg = MemoryConfig(ctx_token_cap=260, answer_reserve=100)
+    raw_turns = [_raw_msg(i, f"raw turn {i} " * 20) for i in range(10)]
+
+    assembled = build_working_text(RecallBundle(), raw_turns, query="hello", config=cfg)
+    assert len(assembled.conversation) <= len(assembled.recalled_message_ids)
+    for turn in assembled.conversation:
+        assert turn["content"] in assembled.text
