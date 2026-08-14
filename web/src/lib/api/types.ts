@@ -394,3 +394,35 @@ export interface PublicMetricsResponse {
   actions_approved: number
   p95_latency_ms: number | null
 }
+
+/** One executable node of the agent graph, as served by `GET /agent/topology`. */
+export interface AgentTopologyNode {
+  /** Stable node id — exactly the name carried on `node_started`/`node_finished`. */
+  id: string
+  /** Human label the node's stream events carry. */
+  label: string
+  /** The graph's entrypoint routes straight here. */
+  entry: boolean
+  /** A run can finish at this node. */
+  terminal: boolean
+}
+
+/** One directed edge between two executable nodes of the agent graph. */
+export interface AgentTopologyEdge {
+  source: string
+  target: string
+  /** True when the edge is a branch of a conditional router, not a fixed edge. */
+  conditional: boolean
+}
+
+/**
+ * Response from `GET /agent/topology` — the agent graph's real node/edge shape,
+ * read off the compiled LangGraph by `aegis.agent.graph_topology`.
+ *
+ * The console's orchestration map renders from this instead of a hand-written DAG,
+ * so the published picture cannot drift from the graph that actually runs.
+ */
+export interface AgentTopologyResponse {
+  nodes: AgentTopologyNode[]
+  edges: AgentTopologyEdge[]
+}

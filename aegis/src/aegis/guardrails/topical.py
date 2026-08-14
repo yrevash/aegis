@@ -28,6 +28,7 @@ import logging
 from dataclasses import dataclass
 
 from aegis.core.interfaces import ChatCompleter
+from aegis.guardrails.verdict_parsing import parse_bool_field
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +88,14 @@ def _parse_verdict(raw: str, *, fail_closed: bool) -> TopicVerdict:
     except (json.JSONDecodeError, ValueError, TypeError):
         logger.debug("Topical classifier returned non-JSON; using keyword fallback.")
 
-    lowered = text.lower()
-    if '"on_topic": true' in lowered or lowered.startswith("yes"):
+    verdict = parse_bool_field(text, "on_topic")
+    if verdict is True:
         return TopicVerdict(on_topic=True, reason="Classifier judged the query on-topic.")
-    if '"on_topic": false' in lowered or lowered.startswith("no"):
+    if verdict is False:
         return TopicVerdict(on_topic=False, reason="Classifier judged the query off-topic.")
 
+    # Ambiguous (e.g. a reply that merely *begins* with "yes"/"no") is no verdict at
+    # all; the rail's own fail direction decides.
     if fail_closed:
         return TopicVerdict(
             on_topic=False, reason="Topical classifier response unparseable; flagged off-topic."

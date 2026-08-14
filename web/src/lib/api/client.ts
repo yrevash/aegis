@@ -8,6 +8,7 @@
  */
 
 import {
+  mockAgentTopology,
   mockApprovals,
   mockAssignRole,
   mockAudit,
@@ -28,6 +29,7 @@ import {
 } from '@/mock/fixtures'
 import type {
   AdminUser,
+  AgentTopologyResponse,
   ApprovalDecisionResponse,
   ApprovalRequest,
   ApprovalResponse,
@@ -163,6 +165,19 @@ export async function login(body: LoginRequest): Promise<LoginResponse> {
 export async function getGraph(token: string | null): Promise<GraphResponse> {
   if (isMock()) return mockGraph()
   return request<GraphResponse>('/graph', { method: 'GET' }, token)
+}
+
+/**
+ * Fetch the agent graph's real node/edge topology.
+ *
+ * The console's orchestration map renders from this rather than from a hardcoded
+ * DAG, so the picture cannot drift from the graph that actually runs. Mock mode
+ * serves the generated snapshot of the same topology, which is why the map still
+ * renders correctly with no backend.
+ */
+export async function getAgentTopology(token: string | null): Promise<AgentTopologyResponse> {
+  if (isMock()) return mockAgentTopology()
+  return request<AgentTopologyResponse>('/agent/topology', { method: 'GET' }, token)
 }
 
 /** Fetch live efficiency figures for the dashboard. */

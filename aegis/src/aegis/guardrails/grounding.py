@@ -27,6 +27,7 @@ import logging
 from dataclasses import dataclass
 
 from aegis.core.interfaces import ChatCompleter
+from aegis.guardrails.verdict_parsing import parse_bool_field
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +81,14 @@ def _parse_verdict(raw: str, *, fail_closed: bool) -> GroundingVerdict:
     except (json.JSONDecodeError, ValueError, TypeError):
         logger.debug("Grounding checker returned non-JSON; using keyword fallback.")
 
-    lowered = text.lower()
-    if '"grounded": true' in lowered or lowered.startswith("yes"):
+    verdict = parse_bool_field(text, "grounded")
+    if verdict is True:
         return GroundingVerdict(grounded=True, reason="Checker judged the answer grounded.")
-    if '"grounded": false' in lowered or lowered.startswith("no"):
+    if verdict is False:
         return GroundingVerdict(grounded=False, reason="Checker judged the answer ungrounded.")
 
+    # Ambiguous (e.g. a reply that merely *begins* with "yes"/"no") is no verdict at
+    # all; the rail's own fail direction decides.
     if fail_closed:
         return GroundingVerdict(
             grounded=False, reason="Grounding checker response unparseable; flagged ungrounded."

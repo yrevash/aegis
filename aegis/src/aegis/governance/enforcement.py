@@ -483,16 +483,46 @@ async def list_budgets(
     return [_budget_row(b) for b in rows]
 
 
-async def user_tenant_id(user_id: int) -> int | None:
+async def user_tenant_id(user_id: int, *, tenant_scope: int | None = None) -> int | None:
     """Return the tenant a user belongs to, or ``None`` if the user is unknown.
 
-    Used to authorise a user-scoped budget write: the caller's tenant must own the
-    target user. A ``None`` return means no such user, which the API surface treats
-    as a 404 rather than silently allowing a cross-tenant cap.
+    Used to authorise a user-scoped budget write or a role change: the caller's tenant
+    must own the target user. A ``None`` return means "no such user *in scope*", which
+    the API surface treats as a 404 rather than silently allowing a cross-tenant write.
+
+    This ran with no tenant scope applied at all — the only governed read in this
+    module that did not call :func:`~aegis.governance.rls.set_tenant_scope`, so on
+    Postgres the RLS policy never engaged for it. It now binds the scope like every
+    sibling read, and a caller that passes ``tenant_scope`` additionally gets the
+    app-level check: a user outside that tenant reads back as unknown.
+
+    Args:
+        user_id: The target user's id.
+        tenant_scope: When set (a tenant-admin caller), a user outside that tenant is
+            reported as unknown (``None``). ``None`` (a platform-admin caller, and the
+            back-compatible default) may resolve any user.
+
+    Returns:
+        The user's ``tenant_id``, or ``None`` when there is no such user in scope.
     """
     async with _session() as session:
+        await _set_tenant_scope(session, tenant_scope)
         user = await session.get(User, user_id)
-        return user.tenant_id if user is not None else None
+        if user is None:
+            return None
+        if tenant_scope is not None and user.tenant_id != tenant_scope:
+            return None
+        return user.tenant_id
+
+
+class CrossTenantBudgetError(RuntimeError):
+    """Raised when a budget write would overwrite a cap owned by another tenant.
+
+    The ``(scope_type, scope_id, window)`` natural key is global, so two tenants can
+    name the same triple. Rather than let the later writer take the row over, the
+    data layer refuses — a caller may only write a cap its own tenant owns (or one
+    that is unowned). Platform-admin callers are exempt.
+    """
 
 
 class LastPlatformAdminError(RuntimeError):
@@ -592,15 +622,38 @@ async def upsert_budget(
 
     Idempotent on the natural key so the admin UI can re-post the same scope+window
     to adjust caps rather than accumulate duplicate rows. ``tenant_id`` stamps the
-    owning tenant for tenant-scoped listing/isolation; the API resolves and authorises
-    it before the write.
+    owning tenant for tenant-scoped listing/isolation.
+
+    **Cross-tenant writes are refused here, not only upstream.** The lookup matched on
+    ``(scope_type, scope_id, window)`` with no tenant predicate and then assigned
+    ``existing.tenant_id = tenant_id`` unconditionally, so a caller scoped to tenant B
+    could land on tenant A's row, overwrite A's caps and re-stamp the row as B's — a
+    silent takeover of another tenant's spend limit. The API layer authorises the
+    write, but the data layer must not depend on that: the natural-key lookup is now
+    tenant-checked and a mismatch raises :class:`CrossTenantBudgetError` instead of
+    writing.
+
+    The lookup stays on the *full* natural key rather than being narrowed to the
+    tenant: narrowing it would silently insert a second row for the same
+    scope+window when a conflict exists, and the enforcement reader
+    (:func:`_budgets_for`) would then pick between duplicates arbitrarily. Detecting
+    the conflict and refusing is the safe behaviour.
+
+    A platform-admin caller (``tenant_id=None``) may write any row, and an existing
+    row with no owner may be claimed — only two *different, non-null* tenants
+    collide.
 
     Returns:
         The persisted :class:`BudgetRow`.
+
+    Raises:
+        CrossTenantBudgetError: When the ``(scope_type, scope_id, window)`` row is
+            already owned by a different tenant.
     """
     scope = BudgetScope(scope_type)
     win = BudgetWindow(window)
     async with _session() as session:
+        await _set_tenant_scope(session, tenant_id)
         existing = (
             await session.execute(
                 select(Budget).where(
@@ -610,10 +663,23 @@ async def upsert_budget(
                 )
             )
         ).scalars().first()
+        if (
+            existing is not None
+            and tenant_id is not None
+            and existing.tenant_id is not None
+            and existing.tenant_id != tenant_id
+        ):
+            raise CrossTenantBudgetError(
+                f"budget {scope_type}:{scope_id}/{window} is owned by tenant "
+                f"{existing.tenant_id}; tenant {tenant_id} may not overwrite it"
+            )
         if existing is None:
             existing = Budget(scope_type=scope, scope_id=scope_id, window=win)
             session.add(existing)
-        existing.tenant_id = tenant_id
+        # A platform-admin write (``tenant_id is None``) must not erase an existing
+        # owner stamp — that would orphan the row out of its tenant's listing.
+        if tenant_id is not None or existing.tenant_id is None:
+            existing.tenant_id = tenant_id
         existing.token_cap = token_cap
         existing.usd_cap = usd_cap
         existing.rpm = rpm

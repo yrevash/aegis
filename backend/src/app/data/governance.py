@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from aegis.governance import configure_governance
 from aegis.governance.enforcement import (
+    CrossTenantBudgetError,
     DuplicateTenantError,
     DuplicateUserError,
     LastPlatformAdminError,
@@ -40,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.data.session import get_sessionmaker, set_tenant_scope
 
 __all__ = [
+    "CrossTenantBudgetError",
     "DuplicateTenantError",
     "DuplicateUserError",
     "LastPlatformAdminError",

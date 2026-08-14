@@ -5,11 +5,37 @@
 return only the keys they change. Wire-facing structures (graph nodes/edges, tool
 calls, the ML explanation) are held as plain dicts so the state stays trivially
 checkpointable by the ``InMemorySaver``.
+
+**Reducers, and why they matter.** Most keys are last-write-wins: the node that
+returns the key replaces its value. The accumulator keys are different — they carry
+``Annotated[..., operator.add]`` so LangGraph *adds* each node's contribution
+instead of overwriting it.
+
+This is not decoration. Every key without a reducer is only safe while no
+LangGraph superstep runs two nodes at once: if two parallel nodes each returned a
+last-write-wins key, one update is silently dropped, and for the totals below
+LangGraph raises ``InvalidUpdateError`` ("can receive only one value per step").
+The accumulators are reduced so nodes may return a **delta** and remain correct
+under a fan-out.
+
+Two keys deliberately stay last-write-wins, and both would be wrong as reducers:
+
+* ``messages`` is a per-planning-round scratch buffer, rebuilt from scratch each
+  time ``plan`` runs — not a transcript accumulated across nodes. Accumulating it
+  would duplicate the whole prompt on every self-repair round.
+* ``tool_results`` is replaced wholesale by ``act``. The previous round's results
+  are read *before* that overwrite to build the self-repair prompt, so the data is
+  used, not lost. Accumulating it would make ``reflect`` re-see an already-repaired
+  failure and burn the iteration budget.
+
+Adding a parallel branch that writes either of those keys requires giving it a
+reducer first.
 """
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import operator
+from typing import Annotated, Any, TypedDict
 
 
 class AgentState(TypedDict, total=False):
@@ -21,7 +47,8 @@ class AgentState(TypedDict, total=False):
         query: The (possibly guardrail-redacted) user query.
         persona: The adapter persona id scoping data and tools.
         role: The caller's coarse RBAC role.
-        messages: OpenAI-style chat transcript built up across nodes.
+        messages: OpenAI-style chat buffer for ONE planning round. Rebuilt from
+            scratch each time ``plan`` runs -- it is not accumulated across nodes.
         model: The deployment id that produced the plan (for audit correlation).
         agent_role: The specialist role the supervisor routed this turn to (``qa`` →
             the full pipeline, ``memory`` → the memory specialist). Absent → ``qa``.
@@ -31,9 +58,11 @@ class AgentState(TypedDict, total=False):
         graph_nodes: Serialised graph nodes touched by retrieval (for the viz).
         graph_edges: Serialised graph edges touched by retrieval (for the viz).
         tool_calls: Proposed action tool calls from the planner.
-        tool_results: Executed tool outcomes.
+        tool_results: Executed tool outcomes for the CURRENT round (replaced wholesale
+            by ``act``; the prior round is read before the overwrite to build the
+            self-repair prompt).
         plan_iterations: How many planning rounds have run (the self-repair counter,
-            incremented once per ``plan`` node execution; hard-capped by
+            reducer-summed: ``plan`` returns 1 per execution; hard-capped by
             ``AgentConfig.max_plan_iterations``).
         reflect_retry: Whether the last ``reflect`` decided to loop back to ``plan``.
         ml: The ML spine explanation event dict for the proposed action, if any.
@@ -58,9 +87,10 @@ class AgentState(TypedDict, total=False):
         recalled_fact_ids: Ids of the semantic facts recalled into working memory.
         recalled_message_ids: Ids of the episodic turns recalled into working memory.
         turn_index: This turn's ordinal within the session.
-        prompt_tokens: Accumulated prompt tokens across model calls.
-        completion_tokens: Accumulated completion tokens across model calls.
-        cost_usd: Accumulated USD cost across model calls.
+        prompt_tokens: Accumulated prompt tokens across model calls (reducer-summed;
+            nodes return the per-call delta, not a running total).
+        completion_tokens: Accumulated completion tokens (reducer-summed delta).
+        cost_usd: Accumulated USD cost across model calls (reducer-summed delta).
         status: Terminal run status value (see ``RunStatus``).
         blocked: Whether an input rail blocked the run.
     """
@@ -81,7 +111,7 @@ class AgentState(TypedDict, total=False):
     graph_edges: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
-    plan_iterations: int
+    plan_iterations: Annotated[int, operator.add]
     reflect_retry: bool
     ml: dict[str, Any] | None
     ml_response: Any
@@ -99,8 +129,8 @@ class AgentState(TypedDict, total=False):
     recalled_fact_ids: list[int]
     recalled_message_ids: list[int]
     turn_index: int
-    prompt_tokens: int
-    completion_tokens: int
-    cost_usd: float
+    prompt_tokens: Annotated[int, operator.add]
+    completion_tokens: Annotated[int, operator.add]
+    cost_usd: Annotated[float, operator.add]
     status: str
     blocked: bool

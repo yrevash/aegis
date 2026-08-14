@@ -39,6 +39,7 @@ from app.api.schemas import (
     AdminUserRow,
     AdminUsersResponse,
     AegisModuleRow,
+    AgentTopologyResponse,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalInboxResponse,
@@ -131,6 +132,7 @@ from app.core.security import (
     verify_password,
 )
 from app.data import (
+    CrossTenantBudgetError,
     DuplicateTenantError,
     DuplicateUserError,
     LastPlatformAdminError,
@@ -1390,16 +1392,29 @@ async def admin_budgets_upsert(
     tenant is resolved and checked. Platform-admins may set any.
     """
     owning_tenant = await _resolve_budget_tenant(req, auth)
-    row = await upsert_budget(
-        scope_type=req.scope_type,
-        scope_id=req.scope_id,
-        window=req.window,
-        token_cap=req.token_cap,
-        usd_cap=req.usd_cap,
-        rpm=req.rpm,
-        tpm=req.tpm,
-        tenant_id=owning_tenant,
-    )
+    try:
+        row = await upsert_budget(
+            scope_type=req.scope_type,
+            scope_id=req.scope_id,
+            window=req.window,
+            token_cap=req.token_cap,
+            usd_cap=req.usd_cap,
+            rpm=req.rpm,
+            tpm=req.tpm,
+            tenant_id=owning_tenant,
+        )
+    except CrossTenantBudgetError as exc:
+        # The data layer refuses to re-stamp a budget row owned by another tenant
+        # (previously this silently took the row over). Surface it as an
+        # authorization failure rather than letting it escape as a 500.
+        await _safe_audit(
+            "admin.budget.upsert.denied",
+            auth.username,
+            payload={"scope_type": req.scope_type, "scope_id": req.scope_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
     await _safe_audit(
         "admin.budget.upsert",
         auth.username,
@@ -2460,6 +2475,29 @@ async def harness_config_route(
     from aegis.agent import harness_config
 
     return HarnessConfigResponse(**harness_config())
+
+
+@router.get("/agent/topology", response_model=AgentTopologyResponse, tags=["agent"])
+async def agent_topology_route(
+    auth: AuthContext = Depends(require_auth),
+) -> AgentTopologyResponse:
+    """Return the agent graph's real node/edge topology (any authenticated caller).
+
+    Exists so nothing has to *restate* the agent's flow to draw it. The console's
+    orchestration map used to carry its own hardcoded DAG, which drifted: it showed
+    nine nodes instead of the real fifteen and hung the human-approval branch off the
+    ML step — while :mod:`aegis.agent.graph` gates on **tool risk** in ``gate`` and
+    documents that ML never gates. :func:`aegis.agent.graph_topology` reads the shape
+    off the compiled LangGraph instead, so this endpoint cannot disagree with what
+    runs.
+
+    Read-only and tenant-independent: the topology is a property of the wiring, not
+    of any run, principal or tenant — hence plain ``require_auth`` rather than a
+    role-scoped guard.
+    """
+    from aegis.agent import graph_topology
+
+    return AgentTopologyResponse(**graph_topology())
 
 
 @router.get(

@@ -18,6 +18,8 @@ Public surface:
 - :func:`harness_config` — the tweakable-config schema (every knob + type/default/allowed)
   as data for the harness UI; :func:`run_summary` — the structured per-run trace record
   folded from the SAME emitted events.
+- :func:`graph_topology` — the compiled graph's node/edge shape as plain data, so any
+  UI or doc that draws the flow derives it instead of re-typing it.
 - :class:`AgentDeps` / :class:`AgentConfig` / :class:`MemoryDeps` — the DI contract +
   bounded-autonomy thresholds.
 - :class:`ApprovalRegistry` / :func:`get_approval_registry` /
@@ -52,6 +54,7 @@ from .harness import harness_config, run_summary
 from .orchestrator import resume_parked_run, run_agent
 from .router import RouterDecision, classify_deterministic, load_roster, route_query
 from .state import AgentState
+from .topology import GraphTopology, TopologyEdge, TopologyNode, graph_topology
 
 __all__ = [
     "AgentConfig",
@@ -59,17 +62,21 @@ __all__ = [
     "AgentState",
     "ApprovalOutcome",
     "ApprovalRegistry",
+    "GraphTopology",
     "MemoryDeps",
     "ParkedRun",
     "ParkedRunRegistry",
     "RouterDecision",
     "ToolOutcome",
+    "TopologyEdge",
+    "TopologyNode",
     "UnknownApprovalError",
     "build_agent",
     "classify_deterministic",
     "events",
     "get_approval_registry",
     "get_parked_runs",
+    "graph_topology",
     "harness_config",
     "load_roster",
     "resume_parked_run",

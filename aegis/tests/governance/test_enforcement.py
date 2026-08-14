@@ -15,6 +15,7 @@ from aegis.governance import (
     Budget,
     BudgetScope,
     BudgetWindow,
+    CrossTenantBudgetError,
     LastPlatformAdminError,
     Role,
     Tenant,
@@ -22,6 +23,7 @@ from aegis.governance import (
     User,
     effective_limits,
     enforce_governance,
+    enforcement,
     list_budgets,
     list_tenants,
     list_users,
@@ -205,3 +207,82 @@ async def test_update_user_role_scoped_to_tenant_rejects_outsider(db):
     # …but the owning tenant can.
     row = await update_user_role(1, Role.DEVOPS, tenant_scope=5)
     assert row is not None and row.role is Role.DEVOPS
+
+
+# ── tenant isolation of the governed writes/reads (regression) ───────────────
+#
+# Both of these ran with no tenant predicate at all: ``upsert_budget`` matched only
+# ``(scope_type, scope_id, window)`` and then reassigned ``existing.tenant_id``, so a
+# second tenant posting the same triple silently took over the first tenant's cap;
+# ``user_tenant_id`` was the one governed read that never bound the RLS scope.
+
+
+@pytest.fixture
+def scope_spy(monkeypatch):
+    """Record every tenant scope bound by the enforcement data layer."""
+    seen: list[int | None] = []
+
+    async def _spy(session, tenant_id):  # noqa: ANN001
+        seen.append(tenant_id)
+
+    monkeypatch.setattr(enforcement, "_set_tenant_scope", _spy)
+    return seen
+
+
+async def test_upsert_budget_refuses_a_cross_tenant_overwrite(db):
+    owned = await upsert_budget(
+        scope_type="user", scope_id=42, token_cap=100, tenant_id=1
+    )
+    with pytest.raises(CrossTenantBudgetError):
+        await upsert_budget(scope_type="user", scope_id=42, token_cap=999_999, tenant_id=2)
+
+    # Tenant 1's cap is untouched and still owned by tenant 1 — no partial write.
+    rows = await list_budgets(tenant_id=1)
+    assert [(r.id, r.token_cap) for r in rows] == [(owned.id, 100)]
+    assert await list_budgets(tenant_id=2) == []
+
+
+async def test_upsert_budget_still_updates_in_place_for_the_owning_tenant(db):
+    first = await upsert_budget(scope_type="user", scope_id=42, token_cap=100, tenant_id=1)
+    second = await upsert_budget(scope_type="user", scope_id=42, token_cap=250, tenant_id=1)
+    assert first.id == second.id and second.token_cap == 250
+    assert len(await list_budgets(tenant_id=1)) == 1
+
+
+async def test_upsert_budget_may_claim_an_unowned_row(db):
+    await _seed(
+        db,
+        Budget(scope_type=BudgetScope.USER, scope_id=7, window=BudgetWindow.DAY, token_cap=5),
+    )
+    row = await upsert_budget(scope_type="user", scope_id=7, token_cap=50, tenant_id=3)
+    assert row.token_cap == 50
+    assert [r.id for r in await list_budgets(tenant_id=3)] == [row.id]
+
+
+async def test_platform_admin_may_overwrite_and_does_not_erase_the_owner_stamp(db):
+    owned = await upsert_budget(scope_type="user", scope_id=42, token_cap=100, tenant_id=1)
+    updated = await upsert_budget(scope_type="user", scope_id=42, token_cap=300, tenant_id=None)
+    assert updated.id == owned.id and updated.token_cap == 300
+    # Still listed under tenant 1 — an unscoped write must not orphan the row.
+    assert [r.id for r in await list_budgets(tenant_id=1)] == [owned.id]
+
+
+async def test_upsert_budget_binds_the_tenant_scope(db, scope_spy):
+    await upsert_budget(scope_type="tenant", scope_id=1, token_cap=10, tenant_id=1)
+    assert scope_spy == [1]
+
+
+async def test_user_tenant_id_binds_the_tenant_scope(db, scope_spy):
+    await _seed(db, User(username="alice", role=Role.CLIENT, tenant_id=1))
+    assert await user_tenant_id(1, tenant_scope=1) == 1
+    assert scope_spy == [1]
+
+
+async def test_user_tenant_id_hides_a_user_outside_the_caller_tenant(db):
+    await _seed(db, User(username="alice", role=Role.CLIENT, tenant_id=1))
+    # A tenant-2 admin must not be able to resolve (and then cap) a tenant-1 user.
+    assert await user_tenant_id(1, tenant_scope=2) is None
+    # A platform-admin caller (the back-compatible default) still resolves any user.
+    assert await user_tenant_id(1) == 1
+    assert await user_tenant_id(1, tenant_scope=1) == 1
+    assert await user_tenant_id(999, tenant_scope=1) is None

@@ -7,8 +7,10 @@
  * node ids, so touched nodes light up in place.
  */
 
+import graphTopologySnapshot from '@/config/graphTopology.json'
 import type {
   AdminUser,
+  AgentTopologyResponse,
   ApprovalRow,
   ApprovalsResponse,
   AuditLogResponse,
@@ -66,6 +68,19 @@ export const BASE_EDGES: GraphEdge[] = [
 /** Mock `GET /graph`. */
 export function mockGraph(): GraphResponse {
   return { nodes: BASE_NODES, edges: BASE_EDGES }
+}
+
+/**
+ * Mock `GET /agent/topology` — the agent graph's real node/edge shape.
+ *
+ * Not hand-written: `src/config/graphTopology.json` is generated from
+ * `aegis.agent.graph_topology()` (the compiled LangGraph), and a backend test
+ * (`tests/api/test_agent_topology.py`) fails if the snapshot ever stops matching
+ * the real graph. So mock mode draws the same fifteen nodes and the same
+ * risk-driven gate branch as a live backend.
+ */
+export function mockAgentTopology(): AgentTopologyResponse {
+  return graphTopologySnapshot as AgentTopologyResponse
 }
 
 let baselineTick = 0

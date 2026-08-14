@@ -26,6 +26,7 @@ from .approvals import (
 )
 from .audit import list_recent_audit, record_audit
 from .governance import (
+    CrossTenantBudgetError,
     DuplicateTenantError,
     DuplicateUserError,
     LastPlatformAdminError,
@@ -104,6 +105,7 @@ __all__ = [
     "list_budgets",
     "list_pending",
     "list_recent_audit",
+    "CrossTenantBudgetError",
     "DuplicateTenantError",
     "DuplicateUserError",
     "create_tenant",

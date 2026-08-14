@@ -45,7 +45,10 @@ phoenix = ["arize-phoenix>=5.0", "arize-phoenix-otel>=0.6"]
 # the composition root; ``aegis.agent`` needs only the in-memory saver + the
 # observability span helpers (a real, cheap dependency it imports directly).
 agent = [
-    "langgraph>=0.2",
+    # Bounded deliberately: this project runs 1.2.x. LangGraph went 0.2 -> 1.x
+    # while the pin said ">=0.2", so an unbounded resolve could silently pull a
+    # major with different interrupt/state semantics on a fresh machine.
+    "langgraph>=1.2,<2",
     "langchain-core>=0.3",
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",

@@ -177,3 +177,42 @@ def test_topic_verdict_is_frozen():
     v = TopicVerdict(on_topic=False, reason="x")
     with pytest.raises(Exception):  # noqa: B017, PT011 - frozen dataclass
         v.on_topic = True  # type: ignore[misc]
+
+
+# ── fail-closed fallback parsing (regression) ──
+
+@pytest.mark.asyncio
+async def test_prefix_shaped_reply_is_not_an_off_topic_verdict():
+    """A reply beginning with "no" is ambiguous, so the rail's own direction wins."""
+    raw = "No doubt this belongs to a completely different domain."
+    blocking = await screen_topic(
+        "x", allowed_topics=DOMAIN, completer=completer_returning(raw), block=True
+    )
+    assert blocking.on_topic is False  # blocking rail: fail closed
+    advisory = await screen_topic(
+        "x", allowed_topics=DOMAIN, completer=completer_returning(raw), block=False
+    )
+    assert advisory.on_topic is True  # advisory rail: fail open, never a spurious flag
+
+
+@pytest.mark.asyncio
+async def test_prefix_shaped_yes_is_not_an_on_topic_verdict():
+    """The mirror defect: "Yes..." must not read as a clean on-topic pass."""
+    v = await screen_topic(
+        "x",
+        allowed_topics=DOMAIN,
+        completer=completer_returning("Yes, if you squint, but really it is unrelated."),
+        block=True,
+    )
+    assert v.on_topic is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "on_topic"), [('"on_topic": true', True), ('"on_topic": false', False), ("no", False)]
+)
+async def test_unambiguous_topical_fallback_still_parses(raw, on_topic):
+    v = await screen_topic(
+        "x", allowed_topics=DOMAIN, completer=completer_returning(raw), block=True
+    )
+    assert v.on_topic is on_topic

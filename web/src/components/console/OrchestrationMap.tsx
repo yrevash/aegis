@@ -1,36 +1,29 @@
 'use client'
 
 import { Route } from 'lucide-react'
-import { useMemo, type ReactElement } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { SIGNALS } from '@/config/signals'
+import { getAgentTopology } from '@/lib/api/client'
+import type { AgentTopologyResponse } from '@/lib/api/types'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 import type { NodeFinished } from '@/lib/stream'
 
 import type { Beat } from './motion'
 import {
-  FLOW_EDGES,
-  FLOW_NODES,
+  FALLBACK_TOPOLOGY,
+  buildFlowMap,
+  edgeKey,
+  flowIdForNode,
   isEdgeActive,
+  isEdgeNotTaken,
   resolveFlow,
   type FlowEdge,
+  type FlowMap,
   type FlowNodeId,
   type FlowResolution,
 } from './orchestration'
-
-/** Fixed layout for the flow-map in an 0..960 × 0..140 SVG viewBox. */
-const NODE_POS: Record<FlowNodeId, { x: number; y: number }> = {
-  guard_input: { x: 50, y: 95 },
-  retrieve: { x: 173, y: 95 },
-  plan: { x: 296, y: 95 },
-  ml: { x: 419, y: 95 },
-  approval: { x: 480, y: 42 }, // the conditional detour, raised above the spine
-  act: { x: 541, y: 95 },
-  generate: { x: 664, y: 95 },
-  guard_output: { x: 787, y: 95 },
-  stream: { x: 910, y: 95 },
-}
 
 /** Neutral (idle) mark colours for the light canvas. */
 const IDLE_FILL = '#F2F4F7'
@@ -50,12 +43,19 @@ interface OrchestrationMapProps {
  * conditional branch the run actually took (through the human gate, or the
  * autonomous path), sharing the active-beat pulse with the trace, graph and
  * trust bar. Fused above the knowledge graph as the "agent trajectory" layer.
+ *
+ * The topology is **served**, not assumed: it comes from `GET /agent/topology`,
+ * which reads it off the compiled LangGraph. Until that lands — and for as long
+ * as it fails, which includes mock mode with no backend — the map renders the
+ * generated snapshot of the same graph, so it is never blank and never wrong.
  */
 export function OrchestrationMap({ state, beat }: OrchestrationMapProps): ReactElement {
-  const flow = useMemo(() => resolveFlow(state), [state])
+  const topology = useAgentTopology()
+  const map = useMemo(() => buildFlowMap(topology), [topology])
+  const flow = useMemo(() => resolveFlow(state, map), [state, map])
 
   // Per-node glass-box ledger (model / tokens / ms / cost), keyed by flow node.
-  const ledger = useMemo(() => ledgerByFlowId(state.nodeLedger), [state.nodeLedger])
+  const ledger = useMemo(() => ledgerByFlowId(state.nodeLedger, map), [state.nodeLedger, map])
 
   return (
     <div className="border-b border-border px-4 pt-3 pb-2">
@@ -66,21 +66,22 @@ export function OrchestrationMap({ state, beat }: OrchestrationMapProps): ReactE
       </div>
 
       <svg
-        viewBox="0 0 960 140"
-        className="h-[92px] w-full"
+        viewBox={`0 0 ${map.viewBox.width} ${map.viewBox.height}`}
+        className="h-[112px] w-full"
         role="img"
         aria-label="Agent orchestration flow map"
         preserveAspectRatio="xMidYMid meet"
       >
         {/* Edges first, so nodes sit on top. */}
-        {FLOW_EDGES.map((edge) => (
-          <FlowEdgeLine key={`${edge.from}-${edge.to}`} edge={edge} flow={flow} />
+        {map.edges.map((edge) => (
+          <FlowEdgeLine key={edgeKey(edge)} edge={edge} flow={flow} map={map} />
         ))}
         {/* Nodes. */}
-        {FLOW_NODES.map((node) => (
+        {map.nodes.map((node) => (
           <FlowNodeMark
             key={node.id}
             id={node.id}
+            map={map}
             flow={flow}
             beat={flow.activeId === node.id ? beat : null}
           />
@@ -89,37 +90,66 @@ export function OrchestrationMap({ state, beat }: OrchestrationMapProps): ReactE
 
       {/* Glass-box cost/latency chips for the nodes that have reported. */}
       <div className="mt-1 flex flex-wrap gap-1">
-        {FLOW_NODES.filter((n) => ledger.has(n.id)).map((n) => {
-          const fin = ledger.get(n.id)!
-          return <LedgerChip key={n.id} label={n.short} fin={fin} />
-        })}
+        {map.nodes
+          .filter((n) => ledger.has(n.id))
+          .map((n) => (
+            <LedgerChip key={n.id} label={n.short} fin={ledger.get(n.id)!} />
+          ))}
       </div>
     </div>
   )
 }
 
+/**
+ * Fetch the real graph topology once, falling back to the generated snapshot.
+ *
+ * The fallback is the initial value, so the map paints immediately and a failed
+ * or unauthenticated fetch simply leaves the correct offline picture in place.
+ */
+function useAgentTopology(): AgentTopologyResponse {
+  const [topology, setTopology] = useState<AgentTopologyResponse>(FALLBACK_TOPOLOGY)
+  useEffect(() => {
+    let live = true
+    getAgentTopology(null)
+      .then((served) => {
+        if (live && served.nodes.length > 0) setTopology(served)
+      })
+      .catch(() => {
+        /* backend unreachable — the snapshot fallback already renders. */
+      })
+    return () => {
+      live = false
+    }
+  }, [])
+  return topology
+}
+
 /** A single flow node: circle mark + short label, coloured by lifecycle. */
 function FlowNodeMark({
   id,
+  map,
   flow,
   beat,
 }: {
   id: FlowNodeId
+  map: FlowMap
   flow: FlowResolution
   beat: Beat | null
-}): ReactElement {
-  const node = FLOW_NODES.find((n) => n.id === id)!
-  const pos = NODE_POS[id]
+}): ReactElement | null {
+  const node = map.nodes.find((n) => n.id === id)
+  const pos = map.position[id]
+  if (node === undefined || pos === undefined) return null
   const status = flow.status[id]
   const hue = SIGNALS[node.signal].hex
 
   const filled = status === 'active' || status === 'done'
   const fill = filled ? hue : IDLE_FILL
   const stroke = filled ? hue : IDLE_STROKE
-  const labelY = id === 'approval' ? pos.y - 16 : pos.y + 22
+  const labelY = pos.labelAbove ? pos.y - 15 : pos.y + 25
 
   return (
     <g>
+      <title>{node.label}</title>
       {/* Active halo, re-keyed on the beat seq so it re-fires each event. */}
       {status === 'active' && beat !== null && (
         <circle
@@ -140,13 +170,16 @@ function FlowNodeMark({
         fill={fill}
         stroke={stroke}
         strokeWidth={1.75}
+        // Silent stages report no events, so an unlit mark means "never reported",
+        // not "skipped" — drawn dashed rather than faked as done.
+        strokeDasharray={node.silent && !filled ? '2 3' : undefined}
         opacity={status === 'idle' ? 0.9 : 1}
       />
       <text
         x={pos.x}
         y={labelY}
         textAnchor="middle"
-        fontSize={12}
+        fontSize={13}
         fontWeight={status === 'active' ? 600 : 500}
         fill={filled ? DONE_TEXT : IDLE_TEXT}
         className="font-sans"
@@ -158,20 +191,27 @@ function FlowNodeMark({
 }
 
 /** A directed edge; lit when traversed, faint-dashed when it is the road not taken. */
-function FlowEdgeLine({ edge, flow }: { edge: FlowEdge; flow: FlowResolution }): ReactElement {
-  const a = NODE_POS[edge.from]
-  const b = NODE_POS[edge.to]
+function FlowEdgeLine({
+  edge,
+  flow,
+  map,
+}: {
+  edge: FlowEdge
+  flow: FlowResolution
+  map: FlowMap
+}): ReactElement | null {
+  const a = map.position[edge.source]
+  const b = map.position[edge.target]
+  if (a === undefined || b === undefined) return null
   const active = isEdgeActive(edge, flow)
-  // A conditional edge whose branch was not taken reads as a faint dashed ghost.
-  const notTaken = edge.branch !== undefined && flow.branch !== null && edge.branch !== flow.branch
-  const hue = SIGNALS[FLOW_NODES.find((n) => n.id === edge.from)!.signal].hex
+  const notTaken = isEdgeNotTaken(edge, flow)
+  const source = map.nodes.find((n) => n.id === edge.source)
+  const hue = SIGNALS[source?.signal ?? 'neutral'].hex
 
   return (
-    <line
-      x1={a.x}
-      y1={a.y}
-      x2={b.x}
-      y2={b.y}
+    <path
+      d={edgePath(a, b, map.backEdges.has(edgeKey(edge)))}
+      fill="none"
       stroke={active ? hue : IDLE_STROKE}
       strokeWidth={active ? 2.5 : 1.5}
       strokeDasharray={notTaken ? '3 4' : undefined}
@@ -179,6 +219,27 @@ function FlowEdgeLine({ edge, flow }: { edge: FlowEdge; flow: FlowResolution }):
       strokeLinecap="round"
     />
   )
+}
+
+/**
+ * Path for one edge. Adjacent-layer edges are straight; anything that spans more
+ * than one layer (a router arm that skips a stage, or the self-repair loop back
+ * to `plan`) is bowed clear of the spine so it cannot hide behind the nodes it
+ * flies over. Loops bow upward, skips downward — unless the source already sits
+ * off-spine, in which case the arc stays on its own side.
+ */
+function edgePath(
+  a: { x: number; y: number; layer: number },
+  b: { x: number; y: number; layer: number },
+  isBack: boolean,
+): string {
+  const span = Math.abs(b.layer - a.layer)
+  if (span <= 1 && !isBack) return `M ${a.x} ${a.y} L ${b.x} ${b.y}`
+  const lift = Math.min(46, 14 + span * 4)
+  const direction = isBack || a.y < b.y ? -1 : 1
+  const midX = (a.x + b.x) / 2
+  const midY = (a.y + b.y) / 2 + direction * lift
+  return `M ${a.x} ${a.y} Q ${midX} ${midY} ${b.x} ${b.y}`
 }
 
 /** Branch readout pill: via human gate, action denied (policy block), or autonomous. */
@@ -227,33 +288,16 @@ function LedgerChip({ label, fin }: { label: string; fin: NodeFinished }): React
   )
 }
 
-/** Index the latest `node_finished` per flow node (last write wins). */
-function ledgerByFlowId(nodeLedger: NodeFinished[]): Map<FlowNodeId, NodeFinished> {
-  const map = new Map<FlowNodeId, NodeFinished>()
+/**
+ * Index the latest `node_finished` per flow node (last write wins). Uses the same
+ * served node ids as the map, so a chip can never appear for a stage the map does
+ * not draw.
+ */
+function ledgerByFlowId(nodeLedger: NodeFinished[], map: FlowMap): Map<FlowNodeId, NodeFinished> {
+  const index = new Map<FlowNodeId, NodeFinished>()
   for (const fin of nodeLedger) {
-    const id = flowIdForLedger(fin.node)
-    if (id !== null) map.set(id, fin)
+    const id = flowIdForNode(fin.node, map.ids)
+    if (id !== null) index.set(id, fin)
   }
-  return map
-}
-
-/** Mirror of the reducer's node→flow mapping for ledger chips (backend node is `ml`). */
-function flowIdForLedger(node: string): FlowNodeId | null {
-  switch (node) {
-    case 'guard_input':
-      return 'guard_input'
-    case 'retrieve':
-      return 'retrieve'
-    case 'plan':
-      return 'plan'
-    case 'ml':
-    case 'score': // legacy alias
-      return 'ml'
-    case 'act':
-      return 'act'
-    case 'generate':
-      return 'generate'
-    default:
-      return null
-  }
+  return index
 }

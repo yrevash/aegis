@@ -46,6 +46,7 @@ from aegis.governance.dashboard import (
     usage_summary,
 )
 from aegis.governance.enforcement import (
+    CrossTenantBudgetError,
     DuplicateTenantError,
     DuplicateUserError,
     LastPlatformAdminError,
@@ -125,6 +126,7 @@ __all__ = [
     "GovernanceDashboard",
     "GovernanceLimits",
     "JwtConfig",
+    "CrossTenantBudgetError",
     "LastPlatformAdminError",
     "RlsConfig",
     "Role",

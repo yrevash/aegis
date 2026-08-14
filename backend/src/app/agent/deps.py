@@ -353,6 +353,7 @@ class AgentDeps(_AegisAgentDeps):
             answer_cache=_default_answer_cache(settings),
             current_tenant_id=_current_tenant_id,
             record_audit=_default_record_audit,
+            embed_query=_default_embed_query,
         )
 
 
@@ -461,6 +462,25 @@ def _default_agent_roster() -> Any:  # noqa: ANN401 - adapter AgentRoster duck-t
     from app.agent.router import load_roster
 
     return load_roster()
+
+
+async def _default_embed_query(query: str) -> list[float] | None:
+    """Embed one query for memory recall; ``None`` (→ recency fallback) on failure.
+
+    Satisfies ``AgentDeps.embed_query`` so the graph supplies a recall vector at the
+    seam instead of relying on the host's ``MemoryDeps`` to notice the gap and
+    compensate. ``MemoryDeps.assemble`` still has its own fallback, so this is
+    defence in depth, not a behaviour change: exactly one embedding is computed
+    either way, because ``assemble`` skips its own call when a vector arrives.
+    """
+    from app.retrieval.gateway import default_embed
+
+    try:
+        vecs = await default_embed()([query])
+    except Exception:  # noqa: BLE001 - recall must degrade, never crash a run
+        logger.warning("agent: query embed for recall failed; recall→recency", exc_info=True)
+        return None
+    return vecs[0] if vecs else None
 
 
 async def _default_record_audit(**kwargs: Any) -> None:  # noqa: ANN401 - audit payload

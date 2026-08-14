@@ -1,0 +1,191 @@
+{
+  "nodes": [
+    {
+      "id": "guard_input",
+      "label": "Input guardrail",
+      "entry": true,
+      "terminal": true
+    },
+    {
+      "id": "route",
+      "label": "Route intent",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "answer_memory",
+      "label": "Answer from memory",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "recall_memory",
+      "label": "Recall memory",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "persist_memory",
+      "label": "Persist memory",
+      "entry": false,
+      "terminal": true
+    },
+    {
+      "id": "retrieve",
+      "label": "Agentic retrieval",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "ml_predict",
+      "label": "ML predict (solver)",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "plan",
+      "label": "Reason & plan",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "gate",
+      "label": "Risk gate & ML evidence",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "approval",
+      "label": "Human approval",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "act",
+      "label": "Execute actions",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "reflect",
+      "label": "Reflect & self-repair",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "generate",
+      "label": "Generate answer",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "guard_output",
+      "label": "Output guardrail",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "stream",
+      "label": "Stream answer",
+      "entry": false,
+      "terminal": false
+    }
+  ],
+  "edges": [
+    {
+      "source": "act",
+      "target": "reflect",
+      "conditional": false
+    },
+    {
+      "source": "answer_memory",
+      "target": "guard_output",
+      "conditional": false
+    },
+    {
+      "source": "approval",
+      "target": "act",
+      "conditional": true
+    },
+    {
+      "source": "approval",
+      "target": "generate",
+      "conditional": true
+    },
+    {
+      "source": "gate",
+      "target": "act",
+      "conditional": true
+    },
+    {
+      "source": "gate",
+      "target": "approval",
+      "conditional": true
+    },
+    {
+      "source": "generate",
+      "target": "guard_output",
+      "conditional": false
+    },
+    {
+      "source": "guard_input",
+      "target": "route",
+      "conditional": true
+    },
+    {
+      "source": "guard_output",
+      "target": "stream",
+      "conditional": false
+    },
+    {
+      "source": "ml_predict",
+      "target": "plan",
+      "conditional": false
+    },
+    {
+      "source": "plan",
+      "target": "gate",
+      "conditional": true
+    },
+    {
+      "source": "plan",
+      "target": "generate",
+      "conditional": true
+    },
+    {
+      "source": "recall_memory",
+      "target": "retrieve",
+      "conditional": false
+    },
+    {
+      "source": "reflect",
+      "target": "generate",
+      "conditional": true
+    },
+    {
+      "source": "reflect",
+      "target": "plan",
+      "conditional": true
+    },
+    {
+      "source": "retrieve",
+      "target": "ml_predict",
+      "conditional": false
+    },
+    {
+      "source": "route",
+      "target": "answer_memory",
+      "conditional": true
+    },
+    {
+      "source": "route",
+      "target": "recall_memory",
+      "conditional": true
+    },
+    {
+      "source": "stream",
+      "target": "persist_memory",
+      "conditional": false
+    }
+  ]
+}

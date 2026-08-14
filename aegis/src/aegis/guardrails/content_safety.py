@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 
 from aegis.core.interfaces import ChatCompleter
+from aegis.guardrails.verdict_parsing import parse_bool_field
 
 logger = logging.getLogger(__name__)
 
@@ -123,12 +124,13 @@ def _parse_verdict(raw: str) -> ContentSafetyVerdict:
     except (json.JSONDecodeError, ValueError, TypeError):
         logger.debug("Content-safety classifier returned non-JSON; using keyword fallback.")
 
-    lowered = text.lower()
-    if '"unsafe": true' in lowered or lowered.startswith("yes"):
+    verdict = parse_bool_field(text, "unsafe")
+    if verdict is True:
         return ContentSafetyVerdict(unsafe=True, reason="Classifier flagged the text as unsafe.")
-    if '"unsafe": false' in lowered or lowered.startswith("no"):
+    if verdict is False:
         return ContentSafetyVerdict(unsafe=False, reason="Classifier judged the text safe.")
 
+    # Ambiguous (e.g. a reply that merely *begins* with "no") is not a safe verdict.
     return ContentSafetyVerdict(
         unsafe=True, reason="Classifier response was unparseable; blocked as a precaution."
     )

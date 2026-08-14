@@ -107,11 +107,19 @@ async def test_offline_benign_controls_pass():
     assert report.controls_total >= 5
 
 
-async def test_offline_leaked_set_is_exactly_the_semantic_only_attacks():
+async def test_offline_leaked_set_is_within_the_semantic_only_attacks():
+    """Nothing leaks offline that the battery does not mark semantic-only.
+
+    Subset, not equality: ``needs_llm`` means "the deterministic backstops are not
+    *required* to catch this", never "must not catch it". Since the injection rail
+    learned to decode base64 runs before matching, ``inj-04`` (a base64-wrapped
+    "ignore all prior instructions") is caught with no LLM — a strictly better
+    outcome that an equality assertion would have to call a failure.
+    """
     report = await run_redteam()
     leaked_ids = {r.attack.id for r in report.leaked}
     needs_llm_ids = {a.id for a in ATTACK_BATTERY if a.needs_llm}
-    assert leaked_ids == needs_llm_ids
+    assert leaked_ids <= needs_llm_ids
 
 
 async def test_pii_attack_neutralized_via_redact():
@@ -192,10 +200,13 @@ async def test_benign_completer_exercises_model_layer_without_new_catches():
     report = await run_redteam(completer=completer)
     # The model layer actually ran (completer was invoked on the passing prompts).
     assert completer.calls > 0
-    # A compliant/fooled model adds no catches: semantic-only attacks still leak,
-    # and it does not over-block the benign controls.
+    # A compliant/fooled model adds no catches of its own: whatever still leaks is a
+    # subset of the semantic-only set (see
+    # ``test_offline_leaked_set_is_within_the_semantic_only_attacks``), and it does
+    # not over-block the benign controls.
     leaked_ids = {r.attack.id for r in report.leaked}
-    assert leaked_ids == {a.id for a in ATTACK_BATTERY if a.needs_llm}
+    assert leaked_ids <= {a.id for a in ATTACK_BATTERY if a.needs_llm}
+    assert leaked_ids, "a fooled model must not magically neutralise every attack"
     assert report.false_positive_rate == 0.0
 
 

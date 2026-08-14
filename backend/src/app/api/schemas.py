@@ -1293,6 +1293,44 @@ class HarnessConfigResponse(BaseModel):
     effective: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentTopologyNode(BaseModel):
+    """One executable node of the agent graph (see `GET /agent/topology`)."""
+
+    id: str = Field(
+        description="Stable node id — exactly the name carried on node_started/node_finished."
+    )
+    label: str = Field(description="Human label the node's stream events carry.")
+    entry: bool = Field(default=False, description="The graph's entrypoint routes here.")
+    terminal: bool = Field(default=False, description="A run can finish at this node.")
+
+
+class AgentTopologyEdge(BaseModel):
+    """One directed edge between two executable nodes (see `GET /agent/topology`)."""
+
+    source: str
+    target: str
+    conditional: bool = Field(
+        default=False,
+        description="True when the edge is a branch of a conditional router, not a fixed edge.",
+    )
+
+
+class AgentTopologyResponse(BaseModel):
+    """Body for `GET /agent/topology` — the agent graph's real node/edge shape.
+
+    Mirrors :func:`aegis.agent.graph_topology`, which reads the topology off the
+    **compiled** LangGraph rather than restating it. It exists so that anything
+    drawing the agent's flow — today the console's orchestration map — derives the
+    picture from the graph that actually runs instead of keeping a hand-maintained
+    copy that silently drifts (the previous copy showed the human gate branching out
+    of the ML step, while the graph gates on tool risk in ``gate`` and never on ML).
+    Read-only, and a pure function of the wiring: no run state, no tenant data.
+    """
+
+    nodes: list[AgentTopologyNode] = Field(default_factory=list)
+    edges: list[AgentTopologyEdge] = Field(default_factory=list)
+
+
 class SecurityPostureResponse(BaseModel):
     """Body for `GET /security/posture` — the live threat → control posture table.
 

@@ -49,7 +49,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import interrupt
+from langgraph.types import RetryPolicy, interrupt
 
 from aegis.core.models import ModelRole
 from aegis.core.types import GuardStage, GuardVerdict, RiskLevel, RunStatus
@@ -70,14 +70,106 @@ from .state import AgentState
 logger = logging.getLogger(__name__)
 
 
-# Splits plan text into sentences for chunked ``reasoning`` events (no true
-# token-streaming needed — just a few demoable chunks).
+#: The human label for every executable node, keyed by its stable node id.
+#:
+#: This is the ONE place a node's display name is written. The wiring below feeds
+#: it to :func:`_timed` (so ``node_started``/``node_finished`` carry it) and
+#: :func:`aegis.agent.topology.graph_topology` reads it to label the served
+#: topology — which is why anything that draws the graph (the console's
+#: orchestration map) can no longer drift from what actually runs. The three nodes
+#: wired *plain* (``recall_memory``, ``persist_memory``, ``approval``) emit no node
+#: events of their own but still appear in the topology, so they are labelled here
+#: too.
+NODE_LABELS: dict[str, str] = {
+    "guard_input": "Input guardrail",
+    "route": "Route intent",
+    "answer_memory": "Answer from memory",
+    "recall_memory": "Recall memory",
+    "persist_memory": "Persist memory",
+    "retrieve": "Agentic retrieval",
+    "ml_predict": "ML predict (solver)",
+    "plan": "Reason & plan",
+    "gate": "Risk gate & ML evidence",
+    "approval": "Human approval",
+    "act": "Execute actions",
+    "reflect": "Reflect & self-repair",
+    "generate": "Generate answer",
+    "guard_output": "Output guardrail",
+    "stream": "Stream answer",
+}
+
+
+# Splits plan text into sentences for chunked ``reasoning`` events. Like the answer
+# chunking in ``stream_answer``, this paces out already-produced text rather than
+# streaming from the model -- see that node's docstring for why the gateway call is
+# deliberately non-streaming.
 _SENTENCE = re.compile(r"[^.!?]+[.!?]*")
 
 
 def _sentences(text: str) -> list[str]:
     """Split ``text`` into trimmed, non-empty sentence chunks."""
     return [s.strip() for s in _SENTENCE.findall(text) if s.strip()]
+
+
+#: Roster specialist role -> the graph node that handles it.
+#:
+#: The supervisor router (``aegis.agent.router``) already classifies into an
+#: arbitrary number of roster specialists, but the *graph* can only dispatch to a
+#: node that exists. This table is that seam, and it is deliberately explicit:
+#: adding a specialist to an adapter roster is not enough to make it routable —
+#: it needs a handler node and an entry here.
+#:
+#: Before this existed the edge was a hardcoded ``"memory" -> answer_memory, else
+#: recall_memory`` binary, so a third specialist an adapter declared was silently
+#: swallowed into the qa pipeline with no signal anywhere.
+SPECIALIST_NODES: dict[str, str] = {
+    "qa": "recall_memory",  # the full retrieve -> plan -> gate -> act pipeline
+    "memory": "answer_memory",  # answers from long-term memory, skipping RAG/tools
+}
+
+#: The role used when the roster names one the graph cannot dispatch.
+_FALLBACK_ROLE = "qa"
+
+
+def _route_specialist(state: AgentState) -> str:
+    """Dispatch the turn to its specialist's handler node.
+
+    Falls back to the qa pipeline for an unmapped role — but **loudly**. A roster
+    that declares a specialist the graph has no node for is a wiring mistake, and
+    silently answering as qa is exactly how such a mistake stays invisible.
+    """
+    role = state.get("agent_role") or _FALLBACK_ROLE
+    node = SPECIALIST_NODES.get(role)
+    if node is None:
+        logger.warning(
+            "Roster specialist %r has no handler node; falling back to %r. Add a node "
+            "and a SPECIALIST_NODES entry to make it routable.",
+            role,
+            _FALLBACK_ROLE,
+        )
+        return SPECIALIST_NODES[_FALLBACK_ROLE]
+    return node
+
+
+def _warn_unroutable_specialists(deps: AgentDeps) -> None:
+    """Log once at build time for any roster role the graph cannot dispatch.
+
+    Surfaces the wiring gap at startup rather than once per run, and never raises:
+    a roster is host data, and a bad entry must not stop the agent from serving.
+    """
+    try:
+        roster = _resolve_roster(deps)
+        roles = {str(r) for r in getattr(roster, "roles", ()) or ()}
+    except Exception:  # noqa: BLE001 - roster read is defensive by design
+        return
+    unroutable = sorted(roles - SPECIALIST_NODES.keys())
+    if unroutable:
+        logger.warning(
+            "Roster declares specialist(s) %s with no handler node; they will be "
+            "answered by the %r pipeline.",
+            unroutable,
+            _FALLBACK_ROLE,
+        )
 
 
 def _route_gate(state: AgentState) -> str:
@@ -284,7 +376,7 @@ def build_agent(
                     session_id=state["session_id"],
                     persona=state.get("persona"),
                     query=state["query"],
-                    query_vec=state.get("query_vec"),
+                    query_vec=await _recall_vector(deps, state),
                 )
                 assembled_text = assembled.text
                 fact_ids = assembled.recalled_fact_ids
@@ -334,7 +426,7 @@ def build_agent(
             "recalled_fact_ids": fact_ids,
             "recalled_message_ids": message_ids,
             "_telemetry": _telemetry(result),
-            **_accrue(state, result.usage),
+            **_accrue(result.usage),
         }
 
     async def retrieve(state: AgentState) -> dict[str, Any]:
@@ -455,7 +547,7 @@ def build_agent(
             # Accrue the loop's internal rewrite+judge spend into the run's per-run
             # telemetry so cost_usd/tokens reflect reality (the span attrs + reasoning
             # events above carry the rewrite/rounds provenance — no write-only state).
-            **_accrue(state, retrieval_usage),
+            **_accrue(retrieval_usage),
         }
 
     async def recall_memory(state: AgentState) -> dict[str, Any]:
@@ -477,7 +569,7 @@ def build_agent(
                 session_id=state["session_id"],
                 persona=state.get("persona"),
                 query=state["query"],
-                query_vec=state.get("query_vec"),
+                query_vec=await _recall_vector(deps, state),
             )
         except Exception:  # noqa: BLE001 - recall is best-effort; never fail the run
             logger.warning("Memory recall unavailable; continuing without it",
@@ -585,7 +677,7 @@ def build_agent(
                     "tool_calls": [],
                     "answer": hit.answer,
                     "answer_cached": True,
-                    "plan_iterations": state.get("plan_iterations", 0) + 1,
+                    "plan_iterations": 1,  # reducer-summed (operator.add)
                 }
         user_content = (
             f"Context:\n{state.get('context', '')}\n\n"
@@ -632,9 +724,9 @@ def build_agent(
             "tool_calls": tool_calls,
             # Self-repair counter: one increment per planning round (hard-capped by
             # config.max_plan_iterations in the reflect node's re-plan decision).
-            "plan_iterations": state.get("plan_iterations", 0) + 1,
+            "plan_iterations": 1,  # reducer-summed (operator.add)
             "_telemetry": _telemetry(result),
-            **_accrue(state, result.usage),
+            **_accrue(result.usage),
         }
         if not tool_calls:
             update["answer"] = result.content
@@ -821,7 +913,7 @@ def build_agent(
         return {
             "answer": result.content,
             "_telemetry": _telemetry(result),
-            **_accrue(state, result.usage),
+            **_accrue(result.usage),
         }
 
     async def guard_output(state: AgentState) -> dict[str, Any]:
@@ -885,7 +977,25 @@ def build_agent(
         return update
 
     async def stream_answer(state: AgentState) -> dict[str, Any]:
-        """Stream the guarded answer as ``token`` events, chunked by words."""
+        """Emit the already-guarded answer to the client in word chunks.
+
+        **This is not token streaming from the model, and deliberately so.** The
+        answer is generated in full by ``generate``, cleared by ``guard_output``,
+        and only then chunked onto the SSE socket here. The chunks are real
+        transport-level streaming — the client renders progressively — but they are
+        paced out of a finished string, not produced token-by-token by the gateway.
+
+        The ordering is the reason. ``generate -> guard_output -> stream`` means no
+        model output reaches the user until the output rail has passed it. Streaming
+        raw tokens as the model produced them would put unguarded text on screen and
+        make a block unenforceable after the fact — you cannot unsay a leaked
+        secret. That trade (a cosmetic typing effect for a real safety property) is
+        not one this platform makes.
+
+        If true token streaming is ever wanted, it needs a streaming-aware output
+        rail — incremental scanning with the ability to withhold — not just a
+        streaming gateway call.
+        """
         writer = get_stream_writer()
         answer = state.get("answer", "")
         words = answer.split()
@@ -896,6 +1006,19 @@ def build_agent(
             writer(events.token(chunk + suffix))
         return {"status": RunStatus.COMPLETED.value}
 
+    # Transient-failure policy for the nodes whose bodies are a network call to the
+    # model gateway. LangGraph's ``default_retry_on`` already limits this to transient
+    # classes (connection/timeout/5xx), so a deterministic failure still surfaces
+    # immediately instead of being retried three times.
+    #
+    # Deliberately NOT applied to:
+    #   ``act``      - executes real, externally-visible tool actions. Exactly-once is
+    #                  guaranteed by the approvals DB lock, not by the graph; retrying
+    #                  here could issue a refund twice.
+    #   ``approval`` - re-executes on resume by design; a retry would re-interrupt.
+    #   memory nodes - already best-effort with their own degrade-to-nothing path.
+    _MODEL_RETRY = RetryPolicy(max_attempts=3)
+
     # ── Wiring ───────────────────────────────────────────────────────────────
     # Every node body is wrapped to time it and emit node_started/node_finished.
     # ``approval`` is the exception: it re-executes on interrupt/resume, so the
@@ -903,16 +1026,20 @@ def build_agent(
     builder: StateGraph = StateGraph(AgentState)
     builder.add_node(
         "guard_input",
-        _timed("guard_input", "Input guardrail", SpanKind.GUARDRAIL)(guard_input),
+        _timed("guard_input", NODE_LABELS["guard_input"], SpanKind.GUARDRAIL)(guard_input),
     )
     # Supervisor router: classify intent → dispatch to a specialist. Wrapped in
     # ``_timed`` so it stamps a CHAIN/ROUTER span and reports its own node timing; its
     # single ``routing`` event is the visible hand-off.
-    builder.add_node("route", _timed("route", "Route intent")(route))
+    builder.add_node(
+        "route", _timed("route", NODE_LABELS["route"])(route), retry_policy=_MODEL_RETRY
+    )
     # Memory specialist: answers self-referential turns straight from long-term memory,
     # skipping RAG/ml/plan/gate/act. A genuinely distinct handler, not a qa copy.
     builder.add_node(
-        "answer_memory", _timed("answer_memory", "Answer from memory")(answer_memory)
+        "answer_memory",
+        _timed("answer_memory", NODE_LABELS["answer_memory"])(answer_memory),
+        retry_policy=_MODEL_RETRY,
     )
     # Memory nodes are wired PLAIN (not via ``_timed``): a ``_timed`` wrapper emits
     # node_started/node_finished even on a no-op, which would break the golden trace.
@@ -922,20 +1049,29 @@ def build_agent(
     builder.add_node("persist_memory", persist_memory)
     builder.add_node(
         "retrieve",
-        _timed("retrieve", "Agentic retrieval", SpanKind.RETRIEVER)(retrieve),
+        _timed("retrieve", NODE_LABELS["retrieve"], SpanKind.RETRIEVER)(retrieve),
+        retry_policy=_MODEL_RETRY,
     )
-    builder.add_node("ml_predict", _timed("ml_predict", "ML predict (solver)")(ml_predict))
-    builder.add_node("plan", _timed("plan", "Reason & plan")(plan))
-    builder.add_node("gate", _timed("gate", "Risk gate & ML evidence")(gate))
+    builder.add_node(
+        "ml_predict", _timed("ml_predict", NODE_LABELS["ml_predict"])(ml_predict)
+    )
+    builder.add_node(
+        "plan", _timed("plan", NODE_LABELS["plan"])(plan), retry_policy=_MODEL_RETRY
+    )
+    builder.add_node("gate", _timed("gate", NODE_LABELS["gate"])(gate))
     builder.add_node("approval", approval)
-    builder.add_node("act", _timed("act", "Execute actions")(act))
-    builder.add_node("reflect", _timed("reflect", "Reflect & self-repair")(reflect))
-    builder.add_node("generate", _timed("generate", "Generate answer")(generate))
+    builder.add_node("act", _timed("act", NODE_LABELS["act"])(act))
+    builder.add_node("reflect", _timed("reflect", NODE_LABELS["reflect"])(reflect))
+    builder.add_node(
+        "generate",
+        _timed("generate", NODE_LABELS["generate"])(generate),
+        retry_policy=_MODEL_RETRY,
+    )
     builder.add_node(
         "guard_output",
-        _timed("guard_output", "Output guardrail", SpanKind.GUARDRAIL)(guard_output),
+        _timed("guard_output", NODE_LABELS["guard_output"], SpanKind.GUARDRAIL)(guard_output),
     )
-    builder.add_node("stream", _timed("stream", "Stream answer")(stream_answer))
+    builder.add_node("stream", _timed("stream", NODE_LABELS["stream"])(stream_answer))
 
     builder.add_edge(START, "guard_input")
     # guard_input → route (a blocked input short-circuits straight to END, so the router
@@ -948,10 +1084,13 @@ def build_agent(
     # Supervisor dispatch: the memory intent goes to the memory specialist; everything
     # else (the qa default, and any unknown role) falls through to the existing pipeline
     # via recall_memory — so the qa path is byte-identical to before.
+    # Roster-driven dispatch: the path map is derived from SPECIALIST_NODES rather
+    # than hardcoding the memory/qa binary, so adding a specialist is a table entry
+    # plus a node, and an unmapped role is warned about instead of swallowed.
     builder.add_conditional_edges(
         "route",
-        lambda s: "answer_memory" if s.get("agent_role") == "memory" else "recall_memory",
-        {"answer_memory": "answer_memory", "recall_memory": "recall_memory"},
+        _route_specialist,
+        {node: node for node in sorted(set(SPECIALIST_NODES.values()))},
     )
     # Memory specialist finalises through the SAME output rail + stream + persist tail as
     # qa, so the answer is guarded and the turn is still written to long-term memory.
@@ -991,6 +1130,7 @@ def build_agent(
     builder.add_edge("stream", "persist_memory")
     builder.add_edge("persist_memory", END)
 
+    _warn_unroutable_specialists(deps)
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
 
 
@@ -1040,13 +1180,45 @@ async def _record_route_audit(
         logger.warning("Router audit write failed", exc_info=True)
 
 
-def _accrue(state: AgentState, usage: Any) -> dict[str, Any]:  # noqa: ANN401
-    """Return token/cost totals after adding one model call's ``usage``."""
+async def _recall_vector(deps: AgentDeps, state: AgentState) -> list[float] | None:
+    """Return the query embedding memory recall should rank semantic facts against.
+
+    Prefers a vector already in state, then falls back to the injected
+    ``embed_query`` hook. Both memory branches need this: ``recall_memory`` runs
+    **upstream** of ``retrieve`` (the only node that sets ``query_vec``), and
+    ``answer_memory`` sits on a branch that never reaches ``retrieve`` at all — so
+    before this helper existed both always passed ``query_vec=None`` and
+    ``assemble`` silently degraded to recency-only facts.
+
+    Best-effort by design: no hook, or a failing hook, returns ``None`` and recall
+    degrades exactly as it did before rather than failing the run.
+    """
+    existing = state.get("query_vec")
+    if existing:
+        return existing
+    if deps.embed_query is None:
+        return None
+    try:
+        return await deps.embed_query(state["query"])
+    except Exception:  # noqa: BLE001 - recall is best-effort; never fail the run
+        logger.warning("Query embedding for memory recall failed", exc_info=True)
+        return None
+
+
+def _accrue(usage: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Return ONE model call's token/cost contribution as a state delta.
+
+    The three keys carry ``operator.add`` reducers (see :mod:`aegis.agent.state`), so
+    a node returns only what its own call spent and LangGraph sums it into the run
+    total. This deliberately replaces an earlier read-modify-write over ``state``:
+    reading the running total and returning ``total + delta`` is correct only while
+    no two nodes ever run in the same superstep, and silently loses one branch's
+    spend the moment anything runs in parallel.
+    """
     return {
-        "prompt_tokens": state.get("prompt_tokens", 0) + int(usage.prompt_tokens),
-        "completion_tokens": state.get("completion_tokens", 0)
-        + int(usage.completion_tokens),
-        "cost_usd": state.get("cost_usd", 0.0) + float(usage.cost_usd),
+        "prompt_tokens": int(usage.prompt_tokens),
+        "completion_tokens": int(usage.completion_tokens),
+        "cost_usd": float(usage.cost_usd),
     }
 
 

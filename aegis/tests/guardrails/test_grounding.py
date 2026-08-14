@@ -156,3 +156,40 @@ def test_grounding_verdict_is_frozen():
     v = GroundingVerdict(grounded=False, reason="x")
     with pytest.raises(Exception):  # noqa: B017, PT011 - frozen dataclass
         v.grounded = True  # type: ignore[misc]
+
+
+# ── fail-closed fallback parsing (regression) ──
+
+@pytest.mark.asyncio
+async def test_prefix_shaped_reply_is_not_an_ungrounded_verdict():
+    """A reply beginning with "no" is ambiguous, so the rail's own direction wins."""
+    raw = "No part of this answer appears in the context."
+    blocking = await check_grounding(
+        "a", CONTEXTS, completer=completer_returning(raw), block=True
+    )
+    assert blocking.grounded is False  # blocking rail: fail closed
+    advisory = await check_grounding(
+        "a", CONTEXTS, completer=completer_returning(raw), block=False
+    )
+    assert advisory.grounded is True  # advisory rail: fail open
+
+
+@pytest.mark.asyncio
+async def test_prefix_shaped_yes_is_not_a_grounded_verdict():
+    """The mirror defect: "Yes..." must not read as a clean grounded pass."""
+    v = await check_grounding(
+        "a",
+        CONTEXTS,
+        completer=completer_returning("Yes, partially, but claim two is unsupported."),
+        block=True,
+    )
+    assert v.grounded is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "grounded"), [('"grounded": true', True), ('"grounded": false', False), ("no", False)]
+)
+async def test_unambiguous_grounding_fallback_still_parses(raw, grounded):
+    v = await check_grounding("a", CONTEXTS, completer=completer_returning(raw), block=True)
+    assert v.grounded is grounded

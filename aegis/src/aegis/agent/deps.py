@@ -52,6 +52,8 @@ DescribeFn = Callable[[MLExplainResponse], str]
 RosterFn = Callable[[], Any]
 TenantFn = Callable[[], int | None]
 AuditFn = Callable[..., Awaitable[Any]]
+#: Embed one query string for memory recall; returns ``None`` when unavailable.
+EmbedQueryFn = Callable[[str], Awaitable[list[float] | None]]
 
 # Relative order used to compare risk levels.
 _RISK_RANK: dict[RiskLevel, int] = {
@@ -252,3 +254,11 @@ class AgentDeps:
     #: makes the route audit a silent no-op; the host wires ``record_audit`` here,
     #: already gated on whether a durable store is configured.
     record_audit: AuditFn | None = None
+    #: Query-embedding provider for **memory recall**. Both memory branches need a
+    #: query vector to rank semantic facts, but neither can get one from ``retrieve``:
+    #: ``recall_memory`` runs upstream of it, and ``answer_memory`` is on a branch that
+    #: never reaches it. Without this hook ``assemble(query_vec=None)`` silently falls
+    #: back to recency-only facts, i.e. semantic recall that is not semantic.
+    #: ``None`` keeps that degraded behaviour for test fakes; the host wires the
+    #: gateway embedder. Best-effort: a failure degrades to recency, never fails a run.
+    embed_query: EmbedQueryFn | None = None

@@ -117,3 +117,41 @@ async def test_pipeline_passes_safe_content():
 def test_verdict_label_formats_codes():
     v = ContentSafetyVerdict(unsafe=True, categories=["S1", "S10"], reason="x")
     assert v.label() == "S1 Violent Crimes, S10 Hate"
+
+
+# ── fail-closed fallback parsing (regression) ──
+
+#: A refusal-shaped reply that merely *begins* with "no". The old fallback tested
+#: ``lowered.startswith("no")`` and read this as a clean SAFE verdict.
+_REFUSAL_SHAPED = "No question about it, this text describes building a bomb."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        _REFUSAL_SHAPED,
+        "Nothing safe here at all.",
+        "Not safe.",
+        "Yes and no.",
+    ],
+)
+async def test_prefix_shaped_reply_is_not_a_safe_verdict(raw):
+    v = await classify_content("…", completer=completer_returning(raw))
+    assert v.unsafe is True
+    assert "unparseable" in v.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "unsafe"),
+    [
+        ('"unsafe": false', False),
+        ('"unsafe": true', True),
+        ("no", False),
+        ("YES", True),
+    ],
+)
+async def test_unambiguous_fallback_still_parses(raw, unsafe):
+    v = await classify_content("…", completer=completer_returning(raw))
+    assert v.unsafe is unsafe

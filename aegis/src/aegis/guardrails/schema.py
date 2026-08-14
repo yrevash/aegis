@@ -9,11 +9,33 @@ parsers, so we reject them early and cheaply.
 
 All checks are pure functions returning a :class:`FormatCheck`; there is no I/O
 and nothing here is domain-specific.
+
+Invisible characters
+--------------------
+The character rail rejects far more than the C0 controls it started with. A plain
+``ord(char) < 0x20`` test passes U+200B ZERO WIDTH SPACE, U+200E LEFT-TO-RIGHT MARK,
+U+202E RIGHT-TO-LEFT OVERRIDE and — most seriously — the Unicode **Tag block**
+(U+E0000–U+E007F), whose codepoints render as nothing in every font yet mirror
+printable ASCII one-for-one, so a frontier model reads them as the instruction they
+encode. An attacker can therefore paste a sentence that *looks* like "what is the
+refund policy?" and carries a complete jailbreak the reviewer cannot see. The rail
+now rejects every ``Cf`` / ``Co`` / ``Cs`` codepoint, the C0/C1 control blocks (bar
+tab/newline/carriage-return) and the whole Tag block, checking the text both as
+written and after NFKC normalisation.
+
+The deliberate cost: ``Cf`` also covers U+200D ZERO WIDTH JOINER (multi-person emoji
+such as 👨‍👩‍👧 are built from it) and the Arabic formatting marks U+0600–U+0605 /
+U+061C. Those inputs are rejected too. That is the intended trade for closing an
+invisible-instruction channel; the rejection reason names the exact codepoint so an
+operator can see why.
 """
 
 from __future__ import annotations
 
+import unicodedata
+
 from aegis.core.types import FormatCheck
+from aegis.guardrails.normalize import disallowed_invisible_chars
 
 #: Maximum accepted length of a user query, in characters. Anything larger is a
 #: probable abuse / context-stuffing attempt rather than a genuine question.
@@ -21,9 +43,6 @@ MAX_INPUT_CHARS = 8_000
 
 #: Maximum accepted length of a model answer we will hand back downstream.
 MAX_OUTPUT_CHARS = 20_000
-
-#: Control characters permitted in free text (tab, newline, carriage return).
-_ALLOWED_CONTROL = {"\t", "\n", "\r"}
 
 #: Case-insensitive markers that indicate a leaked system prompt or a smuggled
 #: instruction block in *output*. Explicit and specific (chosen to avoid false
@@ -53,19 +72,28 @@ _OUTPUT_DENYLIST: tuple[str, ...] = (
 )
 
 
-def _has_disallowed_control_chars(text: str) -> bool:
-    """Return ``True`` if ``text`` contains control chars other than tab/newline.
+def _disallowed_chars(text: str) -> list[str]:
+    """Return the distinct disallowed invisible codepoints in ``text``.
+
+    Delegates to :func:`aegis.guardrails.normalize.disallowed_invisible_chars`, which
+    rejects C0 controls other than tab/newline/carriage-return, DEL, the C1 block,
+    every ``Cf`` / ``Co`` / ``Cs`` codepoint, and the whole Unicode Tag block. The
+    text is checked **both** as written and after NFKC normalisation, so a codepoint
+    that only decomposes into a disallowed one cannot slip past.
 
     Args:
         text: The text to inspect.
 
     Returns:
-        Whether a disallowed C0/C1 control character is present.
+        Distinct ``U+XXXX`` labels for the offending codepoints (empty when clean).
     """
-    return any(
-        ord(char) < 0x20 and char not in _ALLOWED_CONTROL or ord(char) == 0x7F
-        for char in text
-    )
+    found = disallowed_invisible_chars(text)
+    normalized = unicodedata.normalize("NFKC", text)
+    if normalized != text:
+        for label in disallowed_invisible_chars(normalized):
+            if label not in found:
+                found.append(label)
+    return found
 
 
 def validate_input_format(text: str) -> FormatCheck:
@@ -86,9 +114,14 @@ def validate_input_format(text: str) -> FormatCheck:
             ok=False,
             reason=f"Input exceeds the {MAX_INPUT_CHARS}-character limit.",
         )
-    if _has_disallowed_control_chars(text):
+    hidden = _disallowed_chars(text)
+    if hidden:
         return FormatCheck(
-            ok=False, reason="Input contains disallowed control characters."
+            ok=False,
+            reason=(
+                "Input contains disallowed control or invisible characters: "
+                f"{', '.join(hidden)}."
+            ),
         )
     return FormatCheck(ok=True, reason="Input format is valid.")
 
@@ -109,9 +142,14 @@ def validate_output_format(text: str) -> FormatCheck:
             ok=False,
             reason=f"Output exceeds the {MAX_OUTPUT_CHARS}-character limit.",
         )
-    if _has_disallowed_control_chars(text):
+    hidden = _disallowed_chars(text)
+    if hidden:
         return FormatCheck(
-            ok=False, reason="Output contains disallowed control characters."
+            ok=False,
+            reason=(
+                "Output contains disallowed control or invisible characters: "
+                f"{', '.join(hidden)}."
+            ),
         )
     return FormatCheck(ok=True, reason="Output format is valid.")
 
