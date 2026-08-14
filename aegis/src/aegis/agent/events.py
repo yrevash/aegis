@@ -126,6 +126,13 @@ def ml_explanation(resp: MLExplainResponse) -> dict[str, Any]:
 
     Purely informational supporting evidence (prediction + interval + SHAP drivers)
     for the answer to cite — it carries no gating semantics (ML never gates).
+
+    ``data_source``, ``imputed_features`` and ``unknown_features`` are forwarded
+    deliberately. A prediction from a model fitted on synthetic data, or one where
+    the caller's features were silently replaced by training medians, is not the
+    same claim as a prediction from a real model on real inputs — and this payload
+    is what the answer cites as evidence. Dropping those fields here would leave
+    the honesty signal stranded on the response object, visible to nobody.
     """
     return {
         "type": "ml_explanation",
@@ -133,6 +140,9 @@ def ml_explanation(resp: MLExplainResponse) -> dict[str, Any]:
         "conformal_interval": resp.conformal_interval,
         "conformal_confidence": resp.conformal_confidence,
         "shap_attribution": [f.model_dump() for f in resp.shap_attribution],
+        "data_source": getattr(resp, "data_source", None),
+        "imputed_features": list(getattr(resp, "imputed_features", ()) or ()),
+        "unknown_features": list(getattr(resp, "unknown_features", ()) or ()),
     }
 
 

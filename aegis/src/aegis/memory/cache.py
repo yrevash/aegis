@@ -28,6 +28,7 @@ write to a subject's facts (consolidation, forget/delete, prune) MUST call
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -52,6 +53,9 @@ def _normalise(query: str) -> str:
 #: Backend labels — surfaced on every hit so a caller never confuses the two paths.
 BACKEND_REDIS = "redisvl"
 BACKEND_MEMORY = "in-memory"
+
+#: Upper bound on the entries one :meth:`_RedisVLBackend.invalidate` call enumerates.
+_INVALIDATE_SCAN_LIMIT = 10_000
 
 
 @dataclass(frozen=True)
@@ -308,16 +312,34 @@ class _RedisVLBackend:
         )
 
     async def invalidate(self, *, subject_id: str, tenant_id: int | None) -> int:
-        # No native drop-by-filter: enumerate the subject's entries (distance_threshold=1.0
-        # matches all), then drop their keys. Bounded by a large num_results.
-        hits = await self._cache.acheck(
-            vector=[0.0],
-            num_results=10_000,
-            return_fields=["key"],
+        """Drop every cached entry for a scope, enumerated by tag filter (no vector probe).
+
+        RedisVL has no drop-by-filter, so the scope must first be enumerated — but NOT
+        with a vector search. ``acheck`` is a KNN range query: it validates the probe
+        against the index dimensionality (a placeholder ``[0.0]`` raises ``ValueError`` on
+        any real 1536/3072-dim cache) and, even sized correctly, only returns entries
+        inside a cosine radius. Either way a subject's entries survive the invalidation and
+        keep serving pre-write memory for the whole TTL — which is exactly the consistency
+        contract this module's docstring calls a MUST.
+
+        A :class:`~redisvl.query.FilterQuery` over the ``subject_id`` / ``tenant_id`` tag
+        fields carries no vector at all, so it returns the scope exactly. Any Redis error
+        propagates: a failed invalidation must be visible, never a silent ``0``.
+
+        Returns:
+            The number of entries dropped.
+        """
+        # Lazy import, like the constructor's — keeps redisvl off the offline path.
+        from redisvl.query import FilterQuery
+
+        query = FilterQuery(
             filter_expression=self._filter(subject_id, tenant_id),
-            distance_threshold=1.0,
+            return_fields=["prompt"],
+            num_results=_INVALIDATE_SCAN_LIMIT,
         )
-        keys = [h["key"] for h in hits if h.get("key")]
+        # ``SearchIndex.query`` is a synchronous Redis round-trip; keep it off the loop.
+        rows = await asyncio.to_thread(self._cache.index.query, query)
+        keys = [row["id"] for row in rows if row.get("id")]
         if keys:
             await self._cache.adrop(keys=keys)
         return len(keys)

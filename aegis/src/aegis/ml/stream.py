@@ -92,9 +92,15 @@ async def stream_predict_explain(
                 "prediction": resp.prediction,
                 "lower": lower,
                 "upper": upper,
+                # `confidence` is the level that was REQUESTED, not one measured on
+                # this row; the achieved rate lives on the model card.
                 "confidence": resp.conformal_confidence,
                 "interval_width": resp.interval_width,
                 "prediction_set_size": resp.prediction_set_size,
+                # Honesty signals travel with the number so the UI can discount it.
+                "data_source": resp.data_source,
+                "imputed_features": list(resp.imputed_features),
+                "unknown_features": list(resp.unknown_features),
             },
         )
         await emitter.custom(
@@ -102,7 +108,12 @@ async def stream_predict_explain(
             {
                 "prediction": resp.prediction,
                 "features": [
-                    {"feature": f.feature, "value": f.value, "contribution": f.contribution}
+                    {
+                        "feature": f.feature,
+                        "value": f.value,
+                        "value_label": f.value_label,
+                        "contribution": f.contribution,
+                    }
                     for f in resp.shap_attribution
                 ],
             },

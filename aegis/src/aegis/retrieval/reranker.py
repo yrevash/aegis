@@ -17,6 +17,7 @@ consumes untrusted retrieved content, so it is itself a prompt-injection surface
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from aegis.core.models import ModelRole
 from aegis.retrieval.models import Candidate
@@ -42,11 +43,36 @@ def _build_user_prompt(query: str, candidates: list[Candidate]) -> str:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class RerankOutcome:
+    """What reranking actually achieved — the survivors *and* whether they were graded.
+
+    A rerank call can succeed at the transport level and still return nothing usable
+    (unparseable JSON, no in-range ids), or grade only some of the candidates. The
+    survivors alone cannot express that: an ungraded fallback list is byte-shaped
+    exactly like a graded one. This carries the difference out to the pipeline so it can
+    be reported instead of silently passing off recall order as relevance order.
+
+    Attributes:
+        candidates: The survivors, best first (up to ``top_k``).
+        graded: Whether the model produced usable grades that ordered the survivors.
+        ungraded: How many survivors carry no model grade. These always sort last and
+            keep the score they arrived with (the fused RRF score) — never a fabricated
+            ``0.0``.
+        reason: Why a call that ran could not grade, else ``None``.
+    """
+
+    candidates: list[Candidate]
+    graded: bool
+    ungraded: int
+    reason: str | None = None
+
+
 def _parse_scores(content: str, count: int) -> dict[int, float]:
     """Parse the model's JSON scores into an ``{index: score}`` map.
 
     Malformed or out-of-range entries are ignored; a fully unparseable response yields an
-    empty map (the caller then falls back to recall order).
+    empty map (the caller then falls back to recall order, and says so).
     """
     try:
         data = json.loads(content)
@@ -65,15 +91,22 @@ def _parse_scores(content: str, count: int) -> dict[int, float]:
     return scores
 
 
-async def rerank(
+async def rerank_scored(
     query: str,
     candidates: list[Candidate],
     *,
     complete: CompleteFn,
     top_k: int,
     role: ModelRole = ModelRole.CHEAP,
-) -> list[Candidate]:
-    """Rerank `candidates` against `query` and return the top `top_k`.
+) -> RerankOutcome:
+    """Rerank `candidates` against `query`, reporting whether grading actually happened.
+
+    Graded candidates are ordered by descending grade and stamped with it. Candidates
+    the model did **not** grade are not invented into a ``0.0`` grade: they sort after
+    every graded one, keep their incoming fused score, and are counted in
+    :attr:`RerankOutcome.ungraded`. When nothing parses at all the fused recall order is
+    kept — the honest fallback — but ``graded=False`` and a ``reason`` say so, so the
+    caller can never mistake RRF scores for relevance grades.
 
     Args:
         query: The user query.
@@ -83,13 +116,10 @@ async def rerank(
         role: Which model role to score with (`CHEAP` by default).
 
     Returns:
-        Up to `top_k` candidates ordered by descending relevance. On a model/parse
-        failure, falls back to the original recall order (still truncated to `top_k`).
+        A :class:`RerankOutcome` with up to `top_k` survivors and the grading verdict.
     """
-    if not candidates:
-        return []
-    if top_k <= 0:
-        return []
+    if not candidates or top_k <= 0:
+        return RerankOutcome(candidates=[], graded=False, ungraded=0)
 
     messages: list[dict[str, object]] = [
         {"role": "system", "content": _RERANK_SYSTEM},
@@ -104,14 +134,64 @@ async def rerank(
     scores = _parse_scores(result.content, len(candidates))
 
     if not scores:
-        return candidates[:top_k]
+        kept = candidates[:top_k]
+        return RerankOutcome(
+            candidates=kept,
+            graded=False,
+            ungraded=len(kept),
+            reason="rerank response carried no usable scores; kept the fused recall order",
+        )
 
+    # Graded first (by grade, ties by recall order), then the ungraded remainder in
+    # recall order — each keeping the score it arrived with rather than a made-up grade.
     ranked = sorted(
         enumerate(candidates),
-        key=lambda pair: scores.get(pair[0], float("-inf")),
+        key=lambda pair: (pair[0] in scores, scores.get(pair[0], 0.0), -pair[0]),
         reverse=True,
     )
     out: list[Candidate] = []
+    ungraded = 0
     for idx, cand in ranked[:top_k]:
-        out.append(cand.model_copy(update={"score": scores.get(idx, 0.0)}))
-    return out
+        if idx in scores:
+            out.append(cand.model_copy(update={"score": scores[idx]}))
+        else:
+            out.append(cand)
+            ungraded += 1
+    reason = (
+        f"model graded only {len(scores)} of {len(candidates)} candidates"
+        if len(scores) < len(candidates)
+        else None
+    )
+    return RerankOutcome(candidates=out, graded=True, ungraded=ungraded, reason=reason)
+
+
+async def rerank(
+    query: str,
+    candidates: list[Candidate],
+    *,
+    complete: CompleteFn,
+    top_k: int,
+    role: ModelRole = ModelRole.CHEAP,
+) -> list[Candidate]:
+    """Rerank `candidates` against `query` and return the top `top_k`.
+
+    The list-only convenience wrapper over :func:`rerank_scored`, kept for callers that
+    genuinely only want the survivors. Anything that *reports* on retrieval should call
+    :func:`rerank_scored` instead — a bare list cannot say whether the order came from
+    the model or from a failed call.
+
+    Args:
+        query: The user query.
+        candidates: Wide-recall candidates to reorder.
+        complete: The injected chat-completion function (a :class:`CompleteFn`).
+        top_k: Number of candidates to keep after reranking.
+        role: Which model role to score with (`CHEAP` by default).
+
+    Returns:
+        Up to `top_k` candidates ordered by descending relevance. On a model/parse
+        failure, falls back to the original recall order (still truncated to `top_k`).
+    """
+    outcome = await rerank_scored(
+        query, candidates, complete=complete, top_k=top_k, role=role
+    )
+    return outcome.candidates

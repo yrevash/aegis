@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 from sklearn.model_selection import train_test_split
 
 from aegis.ml import EnsembleMember, ModelCard, ResolvedSpec, TrustworthyModel
@@ -47,15 +46,17 @@ def test_model_card_regression_is_measured(regression_spec, regression_frame):
     assert kinds == {"XGBRegressor", "HistGradientBoostingRegressor"}
     assert np.isclose(sum(m.weight for m in card.ensemble_members), 1.0)
 
-    # Conformal metadata reflects the real MAPIE predictor + target coverage.
+    # Conformal metadata reflects the real MAPIE predictor + requested coverage.
     assert card.conformal_method == "split_conformal"
     assert card.conformal_predictor == "SplitConformalRegressor"
     assert card.conformal_coverage == 0.9
 
-    # Split sizes were recorded from the actual train/calibration partition.
-    assert card.training_size == 300
-    assert card.calibration_size == 100
-    assert card.training_size + card.calibration_size == len(regression_frame)
+    # Split sizes were recorded from the actual test/train/calibration partition.
+    assert card.test_size == 80  # 20% held out for measurement
+    assert card.training_size == 240  # 75% of the remaining 320
+    assert card.calibration_size == 80
+    total = card.training_size + card.calibration_size + card.test_size
+    assert total == len(regression_frame)
     assert card.data_source == "provided"
 
 
@@ -138,31 +139,33 @@ def test_calibration_split_is_disjoint_from_training(regression_spec, regression
     never trained on. We reproduce the exact split the model uses and prove the two
     index sets are disjoint, then tie that back to the sizes the card reports.
     """
-    calibration_size, random_state = 0.25, 0
+    calibration_size, test_size, random_state = 0.25, 0.2, 0
     model = TrustworthyModel.train(
         regression_spec,
         regression_frame,
         calibration_size=calibration_size,
+        test_size=test_size,
         random_state=random_state,
         path=None,
     )
 
-    encoded = pd.DataFrame(index=regression_frame.index)  # indices are all that matter
     y = regression_frame[regression_spec.target]
+    x_fit, x_test, y_fit, _ = train_test_split(
+        regression_frame.index.to_frame(), y, test_size=test_size, random_state=random_state
+    )
     x_train, x_cal, _, _ = train_test_split(
-        regression_frame.index.to_frame(),
-        y,
-        test_size=calibration_size,
-        random_state=random_state,
+        x_fit, y_fit, test_size=calibration_size, random_state=random_state
     )
     train_idx, cal_idx = set(x_train.index), set(x_cal.index)
+    test_idx = set(x_test.index)
     assert train_idx.isdisjoint(cal_idx)  # THE invariant
-    assert len(train_idx) + len(cal_idx) == len(regression_frame)
+    assert test_idx.isdisjoint(train_idx | cal_idx)  # measurement is held out too
+    assert len(train_idx) + len(cal_idx) + len(test_idx) == len(regression_frame)
 
     card = model.model_card()
     assert card.training_size == len(train_idx)
     assert card.calibration_size == len(cal_idx)
-    _ = encoded  # (kept explicit that only indices drive the partition)
+    assert card.test_size == len(test_idx)
 
 
 # ── SOTA confirm: SHAP is additive to the ensemble output ─────────────────────

@@ -71,6 +71,10 @@ async def test_stream_predict_explain_emits_step_then_interval_then_shap(
     assert interval_value["confidence"] == 0.9
     assert interval_value["interval_width"] is not None
     assert interval_value["prediction_set_size"] is None
+    # The honesty signals ride with the number the UI renders.
+    assert interval_value["data_source"] == "provided"
+    assert interval_value["imputed_features"] == []
+    assert interval_value["unknown_features"] == []
 
     shap_event = payloads[2]
     assert shap_event["name"] == stream_names.SHAP_EXPLANATION
@@ -78,7 +82,7 @@ async def test_stream_predict_explain_emits_step_then_interval_then_shap(
     assert shap_value["prediction"] == resp.prediction
     assert {f["feature"] for f in shap_value["features"]} == set(regression_spec.features)
     for f in shap_value["features"]:
-        assert set(f) == {"feature", "value", "contribution"}
+        assert set(f) == {"feature", "value", "value_label", "contribution"}
 
     assert resp.conformal_interval is not None
 
@@ -123,6 +127,9 @@ async def test_stream_model_card_emits_ml_model_event(regression_spec, regressio
     assert value["conformal_coverage"] == 0.9
     assert {m["name"] for m in value["ensemble_members"]} == {"xgboost", "hist_gbr"}
     assert value["data_source"] == "provided"
+    # The measured half of the coverage story is streamed alongside the request.
+    assert value["conformal_coverage_empirical"] is not None
+    assert value["metric_name"] == "r2"
 
 
 @pytest.mark.asyncio

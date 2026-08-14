@@ -19,27 +19,40 @@ Design constraints (this file is **pure logic**):
 
 Merging mirrors how :class:`aegis.retrieval.pipeline.Retriever` assembles a result:
 sources are unioned and deduped by :attr:`~aegis.retrieval.models.Source.id` (keeping
-the higher score), capped at the first round's natural size, and the
-``answer_context`` is rebuilt with the same spotlighted assembler the pipeline uses.
+the higher score), capped at the larger of the two rounds' natural sizes so a later
+round can actually win places, and the ``answer_context`` is rebuilt with whichever
+assembler the producing pipeline used (spotlighted or not — the loop reads that from
+the result rather than assuming). Everything the extra round *measured* — origins,
+recall arms, fused counts, the rerank verdict, the graph delta — is merged too, so a
+two-round result reports two rounds' worth of evidence instead of round 1's with a
+bigger source list.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
 from aegis.core.models import ModelRole
+from aegis.retrieval.fusion import order_origins
 from aegis.retrieval.models import (
     AgenticReport,
+    ArmReport,
+    GraphDelta,
+    KeywordReport,
+    Provenance,
+    RerankReport,
+    RetrievalObservability,
     RetrievalResult,
     RewriteReport,
     Source,
 )
 from aegis.retrieval.protocols import CompleteFn
 from aegis.retrieval.query_rewrite import CallUsage, RewriteResult, usage_of
-from aegis.retrieval.spotlight import build_spotlighted_context
+from aegis.retrieval.spotlight import build_plain_context, build_spotlighted_context
+from aegis.retrieval.types import GraphEdge, GraphNode
 
 #: Injected retrieval callable: ``retrieve_fn(query, *, persona) -> RetrievalResult``.
 RetrieveFn = Callable[..., Awaitable[RetrievalResult]]
@@ -147,16 +160,117 @@ def _fallback_followup(query: str) -> str:
     return f"more detail and specific facts about: {query.strip()}"
 
 
+def _merge_cap(base: RetrievalResult, incoming: RetrievalResult) -> int:
+    """Return how many sources a merged result may keep.
+
+    Deliberately ``max`` of the two rounds' natural sizes, never round 1's alone: with
+    round 1's size as the cap a second round is *structurally* unable to contribute
+    whenever it returns lower-graded sources than round 1 (round 1 returning two
+    sources at 9 and 8 truncates away six round-2 sources at 7), so the loop pays for a
+    retrieval and a judge call that cannot change the answer. Taking the larger size
+    leaves room for later rounds to earn their place on score while still bounding the
+    context to what one round would naturally have produced.
+    """
+    return max(len(base.sources), len(incoming.sources))
+
+
+def _spotlight_on(base: RetrievalResult) -> bool:
+    """Infer whether the pipeline that produced ``base`` had spotlighting enabled.
+
+    The loop rebuilds ``answer_context`` and must rebuild it the *same way* the pipeline
+    did — rebuilding a spotlighted context for a caller who turned spotlighting off (or,
+    worse, an un-spotlighted one for a caller relying on the injection defence) silently
+    overrides their configuration. ``spotlight_applied`` is the pipeline's own measured
+    answer, and for a result that has sources it is exactly the knob. With no sources it
+    is ``False`` for lack of anything to spotlight rather than by choice, so we fall back
+    to the package default: the defence is ON.
+    """
+    if not base.sources:
+        return True
+    return base.observability.spotlight_applied
+
+
+def _merge_arms(base: list[ArmReport], incoming: list[ArmReport]) -> list[ArmReport]:
+    """Union per-arm reports across rounds, summing each arm's measured candidates."""
+    merged: dict[tuple[str, ...], ArmReport] = {}
+    for arm in list(base) + list(incoming):
+        key = tuple(o.value for o in arm.origins)
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = arm.model_copy()
+            continue
+        existing.candidates += arm.candidates
+        existing.fired = existing.fired or arm.fired
+    return list(merged.values())
+
+
+def _merge_graph_delta(base: GraphDelta, incoming: GraphDelta) -> GraphDelta:
+    """Union both rounds' graph slices, deduped by node id and by edge triple."""
+    nodes: dict[str, GraphNode] = {n.id: n for n in base.nodes}
+    for node in incoming.nodes:
+        nodes.setdefault(node.id, node)
+    edges: dict[tuple[str, str, str], GraphEdge] = {
+        (e.source, e.target, e.relation): e for e in base.edges
+    }
+    for edge in incoming.edges:
+        edges.setdefault((edge.source, edge.target, edge.relation), edge)
+    return GraphDelta(nodes=list(nodes.values()), edges=list(edges.values()))
+
+
+def _merge_observability(
+    base: RetrievalObservability,
+    incoming: RetrievalObservability,
+    *,
+    merged: list[Source],
+    spotlight: bool,
+) -> RetrievalObservability:
+    """Fold round 2's measured observability into round 1's, never discarding it.
+
+    Both rounds ran the full arsenal, so the merged record is the honest union: arms sum
+    their candidate counts, the fused pool sizes add, and the rerank verdict only stays
+    positive if *both* rounds' orders came from real grades (a merged list is only as
+    graded as its weakest contributor). ``rewrite``/``agentic`` are left to the loop's
+    own stamping.
+    """
+    return base.model_copy(
+        update={
+            "arms": _merge_arms(base.arms, incoming.arms),
+            "fused_candidates": base.fused_candidates + incoming.fused_candidates,
+            "rerank": RerankReport(
+                ran=base.rerank.ran and incoming.rerank.ran,
+                graded=base.rerank.graded and incoming.rerank.graded,
+                input_candidates=base.rerank.input_candidates
+                + incoming.rerank.input_candidates,
+                kept=len(merged),
+                ungraded=base.rerank.ungraded + incoming.rerank.ungraded,
+                degraded_reason=base.rerank.degraded_reason
+                or incoming.rerank.degraded_reason,
+                top_scores=[s.score for s in merged],
+            ),
+            "keyword": KeywordReport(
+                ran=base.keyword.ran or incoming.keyword.ran,
+                scope=base.keyword.scope if base.keyword.ran else incoming.keyword.scope,
+                matched=base.keyword.matched + incoming.keyword.matched,
+                adds_recall=base.keyword.adds_recall or incoming.keyword.adds_recall,
+            ),
+            "spotlight_applied": spotlight and bool(merged),
+        }
+    )
+
+
 def _merge_results(
     base: RetrievalResult, incoming: RetrievalResult, *, cap: int
 ) -> RetrievalResult:
     """Union ``base`` and ``incoming`` sources, dedupe by id (keep higher score), rebuild.
 
     Sources sharing an :attr:`~aegis.retrieval.models.Source.id` collapse to the higher-
-    scored copy; the survivors are ordered by descending score and capped at ``cap``
-    (the first round's natural size). ``answer_context`` is rebuilt with the pipeline's
-    spotlighted assembler and ``num_candidates`` is the honest sum across rounds. All
-    other fields are carried through from ``base``.
+    scored copy; the survivors are ordered by descending score and capped at ``cap``.
+    ``answer_context`` is rebuilt with the same assembler the producing pipeline used
+    (spotlighted or not — see :func:`_spotlight_on`), and **everything round 2 measured
+    is merged, not dropped**: origins, recall arms, fused counts, the rerank verdict and
+    the graph delta all fold together, so the live graph viz shows the second hop and
+    provenance names every signal that contributed. Round 1's fields are only carried
+    through where the merge has nothing to add.
     """
     by_id: dict[str, Source] = {}
     for src in list(base.sources) + list(incoming.sources):
@@ -164,11 +278,33 @@ def _merge_results(
         if existing is None or src.score > existing.score:
             by_id[src.id] = src
     merged = sorted(by_id.values(), key=lambda s: s.score, reverse=True)[:cap]
+
+    spotlight = _spotlight_on(base)
+    texts = [s.text for s in merged]
+    # A merged result is only "served from cache" if every round was.
+    cache_hit = base.cache_hit and incoming.cache_hit
     return base.model_copy(
         update={
             "sources": merged,
-            "answer_context": build_spotlighted_context([s.text for s in merged]),
+            "answer_context": (
+                build_spotlighted_context(texts) if spotlight else build_plain_context(texts)
+            ),
             "num_candidates": base.num_candidates + incoming.num_candidates,
+            "cache_hit": cache_hit,
+            "graph_delta": _merge_graph_delta(base.graph_delta, incoming.graph_delta),
+            "provenance": Provenance(
+                origins=order_origins(
+                    [*base.provenance.origins, *incoming.provenance.origins]
+                ),
+                fusion=base.provenance.fusion,
+                cache=base.provenance.cache if cache_hit else None,
+            ),
+            "observability": _merge_observability(
+                base.observability,
+                incoming.observability,
+                merged=merged,
+                spotlight=spotlight,
+            ),
         }
     )
 
@@ -181,11 +317,15 @@ class RetrievalRound:
         query: The query actually retrieved with this round.
         num_candidates: The wide-recall pool size this round drew from.
         sufficient: The judge's verdict on this round's (merged) context.
+        new_sources: How many sources this round added to the merged result. ``0`` for a
+            round that retrieved and was judged but whose sources all lost on score —
+            the honest record that the round cost two model calls and changed nothing.
     """
 
     query: str
     num_candidates: int
     sufficient: bool
+    new_sources: int = 0
 
 
 @dataclass(frozen=True)
@@ -214,6 +354,7 @@ async def agentic_retrieve(
     retrieve_fn: RetrieveFn,
     complete: CompleteFn | None,
     rewrite_fn: RewriteFn | None = None,
+    history: Sequence[dict] | None = None,
     max_rounds: int = 2,
     persona: str | None = None,
 ) -> AgenticRetrievalResult:
@@ -232,6 +373,11 @@ async def agentic_retrieve(
             fallback verdict).
         rewrite_fn: Optional ``rewrite_fn(query, *, history) -> RewriteResult`` applied
             to the entry query before round 1.
+        history: Prior conversation turns as ``{"role", "content"}`` dicts, oldest
+            first, forwarded to ``rewrite_fn``. This is the *whole point* of the
+            rewriter — with no history it cannot resolve the pronouns, ellipsis and
+            back-references it exists to resolve — so it is an explicit parameter of the
+            loop rather than something a caller is left to bind into its closure.
         max_rounds: Upper bound on retrieval passes (floored at 1).
         persona: Persona forwarded to ``retrieve_fn``.
 
@@ -247,13 +393,12 @@ async def agentic_retrieve(
     active_query = query
     rewrite: RewriteResult | None = None
     if rewrite_fn is not None:
-        rewrite = await rewrite_fn(query, history=None)
+        rewrite = await rewrite_fn(query, history=history)
         total_usage += rewrite.usage
         if rewrite.changed and rewrite.rewritten.strip():
             active_query = rewrite.rewritten
 
     result = await retrieve_fn(active_query, persona=persona)
-    cap = len(result.sources) or 6
 
     verdict = await assess_sufficiency(active_query, result.answer_context, complete=complete)
     total_usage += verdict.usage
@@ -262,6 +407,7 @@ async def agentic_retrieve(
             query=active_query,
             num_candidates=result.num_candidates,
             sufficient=verdict.sufficient,
+            new_sources=len(result.sources),
         )
     ]
     used_rounds = 1
@@ -269,7 +415,10 @@ async def agentic_retrieve(
     while not verdict.sufficient and used_rounds < rounds_cap:
         followup = verdict.followup_query or _fallback_followup(active_query)
         followup_result = await retrieve_fn(followup, persona=persona)
-        result = _merge_results(result, followup_result, cap=cap)
+        before = {s.id for s in result.sources}
+        result = _merge_results(
+            result, followup_result, cap=_merge_cap(result, followup_result)
+        )
         used_rounds += 1
         active_query = followup
         verdict = await assess_sufficiency(followup, result.answer_context, complete=complete)
@@ -279,6 +428,7 @@ async def agentic_retrieve(
                 query=followup,
                 num_candidates=followup_result.num_candidates,
                 sufficient=verdict.sufficient,
+                new_sources=sum(1 for s in result.sources if s.id not in before),
             )
         )
 
@@ -316,4 +466,5 @@ def _stamp_loop_observability(
         used_rounds=used_rounds,
         max_rounds=max_rounds,
         round_queries=[r.query for r in rounds],
+        round_new_sources=[r.new_sources for r in rounds],
     )

@@ -353,3 +353,180 @@ async def test_enqueue_then_sweep_marks_done(db):
         done = await s.get(MemoryConsolidationJob, job.id)
         assert done.status is ConsolidationStatus.DONE
         assert done.attempts == 1
+
+
+# ------------------------------------------------- decide-op target resolution (safety)
+
+
+async def test_hallucinated_target_id_never_retargets_another_fact(db):
+    """REGRESSION: an invented ``target_id`` must not invalidate the nearest neighbour.
+
+    The reconcile used to fall back to ``neighbors[0]`` on a lookup miss, so a cheap model
+    returning ``{"op":"invalidate","target_id":<invented>}`` for a *tier* candidate closed
+    out whatever happened to be cosine-nearest — e.g. the customer's channel preference —
+    and inserted the tier fact as its successor. That corrupts the bitemporal history
+    permanently and audits it as a genuine contradiction.
+    """
+    cfg = MemoryConfig()
+    async with db() as s:
+        await _seed_session(s)
+        victim = MemoryFact(
+            subject_id="user:1",
+            fact_type="preference",
+            predicate="prefers_channel",
+            object="email",
+            text="User prefers email.",
+            embedding=_vec("email"),
+            confidence=0.9,
+            importance=6,
+        )
+        s.add(victim)
+        await s.flush()
+        victim_id = victim.id
+
+        fake = FakeComplete(
+            extractions=[
+                {"facts": [_fact(predicate="tier", object="gold",
+                                 text="Customer tier is gold.")]}
+            ],
+            decisions=[{"op": "invalidate", "target_id": 999}],  # an id it invented
+        )
+        result = await consolidate(
+            s, subject_id="user:1", session_id="sess-1", config=cfg,
+            complete=fake, embed=FakeEmbed(),
+        )
+
+        # The decision is refused outright — visible to the caller, not just logged.
+        assert result.rejected == 1
+        assert result == ConsolidationResult(rejected=1)
+
+        # The unrelated fact is untouched: still valid, never superseded.
+        victim_row = await s.get(MemoryFact, victim_id)
+        assert victim_row.invalid_at is None
+        assert victim_row.expired_at is None
+        facts = (await s.execute(select(MemoryFact))).scalars().all()
+        assert [f.id for f in facts] == [victim_id]  # no successor row was inserted
+
+        # The refusal is audited with its reason, attached to no fact.
+        log = (
+            await s.execute(select(MemoryWriteLog).where(MemoryWriteLog.op == WriteOp.NOOP))
+        ).scalars().all()
+        assert len(log) == 1
+        assert log[0].fact_id is None
+        assert "999" in log[0].reason and "refused" in log[0].reason
+
+
+async def test_omitted_target_id_is_refused_when_ambiguous(db):
+    """An omitted ``target_id`` with several neighbours is just as unresolvable."""
+    cfg = MemoryConfig()
+    async with db() as s:
+        await _seed_session(s)
+        for pred, obj, text in (
+            ("prefers_channel", "email", "User prefers email."),
+            ("backup_channel", "email", "User's backup is email."),
+        ):
+            s.add(
+                MemoryFact(
+                    subject_id="user:1",
+                    fact_type="preference",
+                    predicate=pred,
+                    object=obj,
+                    text=text,
+                    embedding=_vec("email"),
+                    confidence=0.9,
+                    importance=6,
+                )
+            )
+        await s.flush()
+
+        fake = FakeComplete(
+            extractions=[
+                {"facts": [_fact(predicate="prefers_channel", object="phone",
+                                 text="User now prefers phone by email escalation.")]}
+            ],
+            decisions=[{"op": "invalidate"}],  # no id, two plausible referents
+        )
+        result = await consolidate(
+            s, subject_id="user:1", session_id="sess-1", config=cfg,
+            complete=fake, embed=FakeEmbed(),
+        )
+        assert result.rejected == 1 and result.invalidated == 0
+        live = (
+            await s.execute(
+                select(MemoryFact).where(MemoryFact.invalid_at.is_(None))
+            )
+        ).scalars().all()
+        assert len(live) == 2  # both originals still valid; nothing was closed out
+
+
+# ------------------------------------------------------------------ profile derivation
+
+
+async def test_profile_follows_applied_ops_not_raw_candidates(db):
+    """REGRESSION: a candidate the reconcile noop'd must not move the structured profile.
+
+    ``_update_profile`` used to receive the raw extractor output, so a duplicate/low-value
+    candidate ruled NOOP still rewrote the prompt's human block — putting it out of sync
+    with the bitemporal facts it is supposed to summarise.
+    """
+    cfg = MemoryConfig()
+    async with db() as s:
+        await _seed_session(s)
+        s.add(
+            MemoryProfile(subject_id="user:1", tenant_id=None, data={"tier": "enterprise"})
+        )
+        await s.flush()
+
+        fake = FakeComplete(
+            extractions=[
+                {"facts": [_fact(fact_type="entity_attr", predicate="tier",
+                                 object="free", text="Customer mentioned the free tier.")]}
+            ],
+            decisions=[{"op": "noop", "reason": "adds nothing"}],
+        )
+        result = await consolidate(
+            s, subject_id="user:1", session_id="sess-1", config=cfg,
+            complete=fake, embed=FakeEmbed(),
+        )
+        assert result.noop == 1 and result.added == 0
+
+        prof = (
+            await s.execute(
+                select(MemoryProfile).where(MemoryProfile.subject_id == "user:1")
+            )
+        ).scalar_one()
+        assert prof.data["tier"] == "enterprise"  # the noop'd candidate never landed
+
+
+async def test_profile_batch_merge_is_confidence_ordered(db):
+    """Within one batch the most CONFIDENT applied fact wins a field, not the last one."""
+    cfg = MemoryConfig()
+    async with db() as s:
+        await _seed_session(s)
+        fake = FakeComplete(
+            extractions=[
+                {
+                    "facts": [
+                        _fact(fact_type="entity_attr", predicate="tier", object="gold",
+                              text="Customer is gold tier.", confidence=0.95),
+                        # Distinct embedding (see ``_vec``) so this is not a dedup.
+                        _fact(fact_type="entity_attr", predicate="tier", object="free",
+                              text="Customer is on the free plan.", confidence=0.60),
+                    ]
+                }
+            ],
+            decisions=[{"op": "add"}, {"op": "add"}],
+        )
+        result = await consolidate(
+            s, subject_id="user:1", session_id="sess-1", config=cfg,
+            complete=fake, embed=FakeEmbed(),
+        )
+        assert result.added == 2
+
+        prof = (
+            await s.execute(
+                select(MemoryProfile).where(MemoryProfile.subject_id == "user:1")
+            )
+        ).scalar_one()
+        # List position would have left "free" (0.60); confidence ordering keeps "gold".
+        assert prof.data["tier"] == "gold"

@@ -23,9 +23,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from aegis.ml import DEFAULT_ARTIFACT_PATH, FALLBACK_SPEC, TaskType
+from aegis.ml import FALLBACK_SPEC, TaskType
 from aegis.ml.model import TrustworthyModel
 from aegis.ml.spec import MLSpec, ResolvedSpec, resolve_spec
+
+#: Where the HOST persists its domain-trained spine.
+#:
+#: Deliberately **not** ``aegis.ml.DEFAULT_ARTIFACT_PATH``. That path resolves
+#: inside the installed ``aegis`` package directory, so re-exporting it here meant
+#: the backend trained on the domain spec and wrote the result *into the library* —
+#: the same file the library's own loader reads. Two consequences, both real:
+#: a model fitted on one side would be picked up as the other's, and any
+#: read-only or shared install (a wheel in site-packages) fails the write outright.
+#:
+#: A host artifact belongs to the host. This lives under the backend project root,
+#: which is gitignored — the trained model is environment state, never source.
+DEFAULT_ARTIFACT_PATH = (
+    Path(__file__).resolve().parents[3] / ".artifacts" / "ml_spine.joblib"
+)
 
 if TYPE_CHECKING:
     import pandas as pd

@@ -1,9 +1,10 @@
 """Hybrid retrieval — public interface.
 
 Structure-aware chunking → dedup → poisoning validation → hybrid recall (vector +
-graph + hand-rolled BM25) → Reciprocal Rank Fusion → LLM-as-reranker → spotlighted
-assembly, with a two-tier semantic cache, an agentic Self-RAG loop, and honest
-provenance/citations. LLM-agnostic (inject a completer + embedder); heavy deps
+graph, plus a hand-rolled BM25 arm when the backend can search its corpus by keyword —
+otherwise BM25 is a labelled re-ranking pass, never a claimed recall arm) → Reciprocal
+Rank Fusion → LLM-as-reranker → spotlighted assembly, with a two-tier semantic cache,
+an agentic Self-RAG loop, and honest provenance/citations. LLM-agnostic (inject a completer + embedder); heavy deps
 (lightrag/neo4j/redis/qdrant_client/asyncpg) are lazy-imported, so `import aegis.retrieval`
 never requires them — see `aegis[retrieval]` and `tests/retrieval/test_isolation.py`.
 
@@ -33,6 +34,7 @@ from aegis.retrieval.models import (
     Chunk,
     GraphDelta,
     IngestReport,
+    KeywordReport,
     Provenance,
     Recall,
     RerankReport,
@@ -61,6 +63,7 @@ __all__ = [
     "GraphEdge",
     "GraphNode",
     "IngestReport",
+    "KeywordReport",
     "Provenance",
     "Recall",
     "RerankReport",

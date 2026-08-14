@@ -16,6 +16,11 @@ Two phases per session (mem0):
      predicate → NOOP with **no** second LLM call (just bump access stats).
    * otherwise a cheap ``decide_op`` call picks ADD | UPDATE | INVALIDATE | NOOP.
 
+A mutating decision whose ``target_id`` cannot be resolved to a fact the model was
+actually shown is **refused**, never retargeted onto the nearest neighbor — see
+:func:`_resolve_target`. The refusal is audited and counted as
+``ConsolidationResult.rejected``.
+
 Applied under Zep bitemporal rules (see ``docs/architecture/memory-spec.md`` HARDENING CORRECTIONS):
 
 * **ADD** — insert a new valid fact.
@@ -105,12 +110,24 @@ _PROFILE_ALIASES: dict[str, str] = {
 
 @dataclass
 class ConsolidationResult:
-    """Counts of the bitemporal operations a single ``consolidate`` run applied."""
+    """Counts of the bitemporal operations a single ``consolidate`` run applied.
+
+    Attributes:
+        added: New valid facts inserted.
+        updated: Refinements applied (old row expired + superseding row inserted).
+        invalidated: Contradictions applied (old row invalidated + contradicting row).
+        noop: Decisions that legitimately changed nothing (dedup or an explicit noop).
+        rejected: Decisions **refused** because the model's ``target_id`` could not be
+            resolved to a fact it was actually shown. Surfaced as its own count rather
+            than folded into ``noop`` so a caller can see model failures, not just infer
+            them from the write log.
+    """
 
     added: int = 0
     updated: int = 0
     invalidated: int = 0
     noop: int = 0
+    rejected: int = 0
 
 
 class _DecideOp(BaseModel):
@@ -126,6 +143,58 @@ class _DecideOp(BaseModel):
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _tenant_clause(model, tenant_id: int | None):  # noqa: ANN001, ANN202 - mapped class
+    """The NULL-symmetric tenant predicate for ``model`` (``IS NULL`` for the null tenant).
+
+    Mirrors :func:`aegis.memory.recall._tenant_clause` so the read and write paths agree on
+    what "no tenant" scopes to; ``if tenant_id is not None`` silently means "any tenant".
+    """
+    if tenant_id is None:
+        return model.tenant_id.is_(None)
+    return model.tenant_id == tenant_id
+
+
+def _resolve_target(
+    decided: _DecideOp, neighbors: list[tuple[MemoryFact, float]]
+) -> tuple[MemoryFact | None, str | None]:
+    """Resolve a decide-op's ``target_id`` to a real neighbor, or explain why it cannot be.
+
+    A ``target_id`` naming a fact the model was never shown is a **model failure**, not a
+    hint. Retargeting it onto the cosine-nearest neighbor (the previous behaviour) writes
+    ``invalid_at``/``expired_at`` onto an unrelated memory and inserts the candidate as its
+    successor — permanently wrong bitemporal history, audited as a legitimate
+    contradiction. Such a decision is refused here and the caller records it instead.
+
+    An omitted ``target_id`` is defaulted only when the neighbor set has exactly one
+    member, where the referent is unambiguous; with several plausible neighbors an omitted
+    id is just as unresolvable as an invented one and is refused the same way.
+
+    Args:
+        decided: The parsed decide-op response.
+        neighbors: The ``(fact, similarity)`` neighbors the model was shown, best first.
+
+    Returns:
+        ``(target, None)`` when the referent is resolved, else ``(None, reason)`` where
+        ``reason`` names the failure for the write log.
+    """
+    if decided.target_id is not None:
+        for fact, _ in neighbors:
+            if fact.id == decided.target_id:
+                return fact, None
+        return None, (
+            f"decide-op refused: target_id={decided.target_id} is not one of the "
+            f"{len(neighbors)} existing fact(s) shown to the model"
+        )
+    if len(neighbors) == 1:
+        return neighbors[0][0], None
+    if not neighbors:
+        return None, "decide-op refused: no target_id and no existing facts to target"
+    return None, (
+        f"decide-op refused: no target_id and {len(neighbors)} candidate neighbors — "
+        "the referent is ambiguous"
+    )
 
 
 def _fact_snapshot(fact: MemoryFact) -> dict[str, Any]:
@@ -174,9 +243,16 @@ async def _load_session_and_turns(
     session_id: str,
     tenant_id: int | None,
 ) -> tuple[MemorySession | None, list[MemoryMessage]]:
-    """Fetch the session row (subject-scoped) and its last ~10 turns, chronological."""
+    """Fetch the session row (subject/tenant-scoped) and its last ~10 turns, chronological.
+
+    The tenant predicate is NULL-symmetric — ``tenant_id=None`` is the null-tenant scope,
+    not "any tenant" — so a null-tenant consolidation can never distil another tenant's
+    turns into this subject's facts.
+    """
     sess_stmt = select(MemorySession).where(
-        MemorySession.id == session_id, MemorySession.subject_id == subject_id
+        MemorySession.id == session_id,
+        MemorySession.subject_id == subject_id,
+        _tenant_clause(MemorySession, tenant_id),
     )
     sess = (await session.execute(sess_stmt)).scalar_one_or_none()
 
@@ -185,12 +261,11 @@ async def _load_session_and_turns(
         .where(
             MemoryMessage.subject_id == subject_id,
             MemoryMessage.session_id == session_id,
+            _tenant_clause(MemoryMessage, tenant_id),
         )
         .order_by(MemoryMessage.turn_index.desc(), MemoryMessage.id.desc())
         .limit(_LAST_M_TURNS)
     )
-    if tenant_id is not None:
-        msg_stmt = msg_stmt.where(MemoryMessage.tenant_id == tenant_id)
     rows = list((await session.execute(msg_stmt)).scalars().all())
     rows.reverse()  # chronological order for the extractor
     return sess, rows
@@ -352,8 +427,14 @@ async def _apply_update(
     trace_id: str | None,
     reason: str | None,
     result: ConsolidationResult,
-) -> None:
-    """Refinement of the same value: expire the old row (guarded) + insert superseding."""
+) -> bool:
+    """Refinement of the same value: expire the old row (guarded) + insert superseding.
+
+    Returns:
+        Whether the refinement was actually applied — ``False`` when the concurrency guard
+        found the row already moved, so the caller does not credit the candidate with a
+        write that never happened (e.g. when refreshing the structured profile).
+    """
     now = _now()
     guard = (
         update(MemoryFact)
@@ -367,7 +448,7 @@ async def _apply_update(
     res = await session.execute(guard)
     if (res.rowcount or 0) == 0:  # a concurrent writer already moved it → no-op
         result.noop += 1
-        return
+        return False
     before = _fact_snapshot(target)
     fact = _new_fact(
         candidate,
@@ -391,6 +472,7 @@ async def _apply_update(
         trace_id=trace_id,
     )
     result.updated += 1
+    return True
 
 
 async def _apply_invalidate(
@@ -405,8 +487,13 @@ async def _apply_invalidate(
     trace_id: str | None,
     reason: str | None,
     result: ConsolidationResult,
-) -> None:
-    """Contradiction: invalidate the old row (guarded) + insert the contradicting fact."""
+) -> bool:
+    """Contradiction: invalidate the old row (guarded) + insert the contradicting fact.
+
+    Returns:
+        Whether the contradiction was actually applied — ``False`` when the concurrency
+        guard found the row already moved (same rationale as :func:`_apply_update`).
+    """
     now = _now()
     invalid_at = candidate.valid_at or now
     guard = (
@@ -421,7 +508,7 @@ async def _apply_invalidate(
     res = await session.execute(guard)
     if (res.rowcount or 0) == 0:
         result.noop += 1
-        return
+        return False
     before = _fact_snapshot(target)
     fact = _new_fact(
         candidate,
@@ -445,6 +532,7 @@ async def _apply_invalidate(
         trace_id=trace_id,
     )
     result.invalidated += 1
+    return True
 
 
 async def _apply_add(
@@ -494,8 +582,17 @@ async def _reconcile(
     complete: CompleteFn,
     trace_id: str | None,
     result: ConsolidationResult,
-) -> None:
-    """Phase 2: per-candidate dedup short-circuit → decide-op → bitemporal apply."""
+) -> list[FactSchemaLike]:
+    """Phase 2: per-candidate dedup short-circuit → decide-op → bitemporal apply.
+
+    Returns:
+        The candidates whose op genuinely reached the store (ADD / applied UPDATE /
+        applied INVALIDATE), in application order. Candidates that deduped, were an
+        explicit noop, lost the concurrency guard, or whose decide-op was refused are
+        **not** returned — so downstream derived state (the structured profile) is built
+        from what was actually written, not from the raw extractor output.
+    """
+    applied: list[FactSchemaLike] = []
     for candidate, embedding in zip(candidates, embeddings, strict=False):
         neighbors = await topk_by_cosine(
             session,
@@ -529,12 +626,31 @@ async def _reconcile(
         decided = await _decide_op(
             candidate=candidate, neighbors=neighbors, complete=complete
         )
-        neighbor_by_id = {fact.id: fact for fact, _ in neighbors}
-        target = neighbor_by_id.get(decided.target_id)
-        if target is None and neighbors and decided.op in {"update", "invalidate", "noop"}:
-            target = neighbors[0][0]  # sensible default when the model omits the id
+        target, target_error = _resolve_target(decided, neighbors)
+
+        if decided.op in {"update", "invalidate"} and target is None and neighbors:
+            # The model named a fact it was never shown (or named none while several were
+            # plausible). Falling back to the cosine-nearest neighbor would corrupt an
+            # unrelated memory's bitemporal history and audit it as a real contradiction,
+            # so the decision is REFUSED: nothing is written, the refusal is audited with
+            # its reason, and the caller sees it as ``ConsolidationResult.rejected``.
+            _write_log(
+                session,
+                subject_id=subject_id,
+                tenant_id=tenant_id,
+                op=WriteOp.NOOP,
+                fact_id=None,
+                before={},
+                after={},
+                reason=target_error,
+                trace_id=trace_id,
+            )
+            result.rejected += 1
+            continue
 
         if decided.op == "add" or (decided.op in {"update", "invalidate"} and target is None):
+            # ``target is None`` here means there were no neighbors at all — there is
+            # nothing to supersede, so the candidate is simply new.
             await _apply_add(
                 session,
                 candidate=candidate,
@@ -546,8 +662,9 @@ async def _reconcile(
                 reason=decided.reason,
                 result=result,
             )
+            applied.append(candidate)
         elif decided.op == "update":
-            await _apply_update(
+            if await _apply_update(
                 session,
                 candidate=candidate,
                 target=target,
@@ -558,9 +675,10 @@ async def _reconcile(
                 trace_id=trace_id,
                 reason=decided.reason,
                 result=result,
-            )
+            ):
+                applied.append(candidate)
         elif decided.op == "invalidate":
-            await _apply_invalidate(
+            if await _apply_invalidate(
                 session,
                 candidate=candidate,
                 target=target,
@@ -571,7 +689,8 @@ async def _reconcile(
                 trace_id=trace_id,
                 reason=decided.reason,
                 result=result,
-            )
+            ):
+                applied.append(candidate)
         else:  # noop (explicit)
             if target is not None:
                 await _bump_access(session, target)
@@ -583,10 +702,11 @@ async def _reconcile(
                 fact_id=target.id if target is not None else None,
                 before=_fact_snapshot(target) if target is not None else {},
                 after={},
-                reason=decided.reason or "decide-op: noop",
+                reason=decided.reason or target_error or "decide-op: noop",
                 trace_id=trace_id,
             )
             result.noop += 1
+    return applied
 
 
 async def _refresh_summary(
@@ -623,20 +743,30 @@ async def _update_profile(
     tenant_id: int | None,
     spec: MemorySpec,
 ) -> None:
-    """Merge mapped stable attributes from the candidates into the structured profile."""
+    """Merge mapped stable attributes from the APPLIED facts into the structured profile.
+
+    ``candidates`` must be the ops that actually reached the store (see
+    :func:`_reconcile`), never the raw extractor output: a candidate the reconcile ruled a
+    duplicate/low-value noop — or one whose invalidate lost the concurrency guard — wrote
+    no fact, so letting it rewrite the profile would put the prompt's human block out of
+    sync with the bitemporal truth it is supposed to summarise.
+
+    Within a batch, several applied facts can map onto the same profile field. They are
+    merged in ascending confidence so the **most confident** value wins rather than
+    whichever happened to sit last in the extractor's list; equal confidences fall back to
+    application order (``sorted`` is stable), i.e. the later write wins.
+    """
     updates: dict[str, Any] = {}
-    for candidate in candidates:
+    for candidate in sorted(candidates, key=lambda c: c.confidence):
         field = _profile_field_for(candidate.predicate, spec.PROFILE_FIELDS)
         if field is not None and candidate.object:
             updates[field] = candidate.object
     if not updates:
         return
 
-    prof_stmt = select(MemoryProfile).where(MemoryProfile.subject_id == subject_id)
-    prof_stmt = prof_stmt.where(
-        MemoryProfile.tenant_id == tenant_id
-        if tenant_id is not None
-        else MemoryProfile.tenant_id.is_(None)
+    prof_stmt = select(MemoryProfile).where(
+        MemoryProfile.subject_id == subject_id,
+        _tenant_clause(MemoryProfile, tenant_id),
     )
     prof = (await session.execute(prof_stmt)).scalar_one_or_none()
     if prof is None:
@@ -739,7 +869,7 @@ async def consolidate(
         embeddings: list[list[float] | None] = list(raw_embeddings) + [None] * (
             len(candidates) - len(raw_embeddings)
         )
-        await _reconcile(
+        applied = await _reconcile(
             session,
             candidates=candidates,
             embeddings=embeddings,
@@ -751,9 +881,11 @@ async def consolidate(
             trace_id=trace_id,
             result=result,
         )
+        # Derived state follows the applied ops, not the raw candidates: a noop'd or
+        # refused candidate must never move the structured profile.
         await _update_profile(
             session,
-            candidates=candidates,
+            candidates=applied,
             subject_id=subject_id,
             tenant_id=tenant_id,
             spec=spec,

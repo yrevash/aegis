@@ -79,6 +79,27 @@ def spotlight_system_instruction(*, token: str = DATAMARK_TOKEN) -> str:
     )
 
 
+def build_plain_context(chunks: list[str]) -> str:
+    """Assemble reranked chunks into an *un-spotlighted* `answer_context` block.
+
+    The counterpart of :func:`build_spotlighted_context`, used only when a caller has
+    deliberately turned spotlighting off (``RetrievalConfig.spotlight_enabled``):
+    sources are still numbered and fenced for readability, but the datamarking /
+    instruction layer is omitted. It lives here, beside the assembler it mirrors, so
+    every layer that rebuilds a context (the pipeline, the agentic merge) picks the same
+    two branches from one place instead of re-deriving them.
+
+    Args:
+        chunks: Rerank-ordered raw chunk texts (most relevant first).
+
+    Returns:
+        The numbered, fenced chunks; an empty string when there are no chunks.
+    """
+    if not chunks:
+        return ""
+    return "\n\n".join(f"[source {i}]\n{chunk}" for i, chunk in enumerate(chunks, 1))
+
+
 def build_spotlighted_context(chunks: list[str], *, token: str = DATAMARK_TOKEN) -> str:
     """Assemble reranked chunks into one spotlighted `answer_context` block.
 

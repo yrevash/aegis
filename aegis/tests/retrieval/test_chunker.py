@@ -138,6 +138,69 @@ def test_dedup_pieces_keeps_distinct_content():
     assert result.near_duplicates == 0
 
 
+def test_word_start_locates_the_chunk_inside_the_document():
+    # REGRESSION: the running offset advanced by the FULL window size, counting every
+    # overlap twice — a 1000-word doc reported spans 0, 400, 860, … which run past the
+    # end of the document and cannot locate the text they are shipped as lineage for.
+    words = [f"w{i}" for i in range(1000)]
+    body = " ".join(words)
+
+    pieces = chunk_structured(body, chunk_size=400, overlap=60)
+
+    assert len(pieces) > 1  # the document really was split
+    for piece in pieces:
+        span = words[piece.word_start : piece.word_start + piece.word_count]
+        # The reported span is inside the document AND is exactly this chunk's words.
+        assert piece.word_start + piece.word_count <= len(words)
+        assert span == piece.text.split()
+    assert [p.word_start for p in pieces] == sorted(p.word_start for p in pieces)
+
+
+def test_word_start_stays_within_the_document_across_sections():
+    body = "\n".join(
+        f"# Section {s}\n\n" + " ".join(f"s{s}w{i}" for i in range(300)) for s in range(3)
+    )
+    total_words = sum(
+        len(line.split()) for line in body.splitlines() if not line.startswith("#")
+    )
+
+    pieces = chunk_structured(body, chunk_size=120, overlap=20)
+
+    for piece in pieces:
+        assert piece.word_start >= 0
+        assert piece.word_start + piece.word_count <= total_words
+
+
+def test_dedup_pieces_keeps_identical_bodies_under_different_sections():
+    # REGRESSION: in-batch dedup hashed the bare body while the ingestion ledger hashes
+    # body+section, so "Contact support." under two different headings collided and the
+    # second section was silently left with no indexed content.
+    refunds = ChunkPiece(text="Contact support.", ordinal=0, section="Refunds", word_count=2)
+    returns = ChunkPiece(text="Contact support.", ordinal=1, section="Returns", word_count=2)
+
+    result = dedup_pieces([refunds, returns])
+
+    assert [p.section for p in result.kept] == ["Refunds", "Returns"]
+    assert result.exact_duplicates == 0
+    assert result.near_duplicates == 0
+
+
+def test_dedup_pieces_keeps_long_shared_boilerplate_under_different_sections():
+    # The same trap via the near-duplicate arm: two sections repeating a long passage
+    # are distinct answers to distinct questions, not one passage seen twice.
+    body = "escalate the request to a senior agent before the stated deadline lapses"
+    a = ChunkPiece(text=body, ordinal=0, section="Refunds", word_count=len(body.split()))
+    b = ChunkPiece(text=body, ordinal=1, section="Returns", word_count=len(body.split()))
+
+    result = dedup_pieces([a, b])
+
+    assert len(result.kept) == 2
+    # …while a genuine repeat WITHIN one section is still dropped.
+    same_section = dedup_pieces([a, a.__class__(**{**a.__dict__, "ordinal": 2})])
+    assert len(same_section.kept) == 1
+    assert same_section.exact_duplicates == 1
+
+
 def test_dedup_pieces_content_id_is_stable_and_section_aware():
     same = _piece("identical body text here", 0)
     other = ChunkPiece(text="identical body text here", ordinal=1, section="A")

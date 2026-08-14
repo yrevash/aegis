@@ -11,6 +11,8 @@ straight from a retrieval result.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from aegis.retrieval.types import FusionMethod, GraphEdge, GraphNode, RetrievalOrigin
@@ -144,7 +146,9 @@ class ArmReport(BaseModel):
 
     A "fired" arm is one that produced at least one candidate for this query — so a
     consumer can see, honestly, that (say) the graph arm ran but returned nothing
-    while the vector and bm25 arms did produce candidates.
+    while the vector and bm25 arms did produce candidates. Only genuine *recall* is an
+    arm: a signal that merely re-orders candidates another arm already recalled is
+    reported separately (see :class:`KeywordReport`), never as an arm here.
 
     Attributes:
         origins: The retrieval origin(s) this arm represents (usually one; a
@@ -161,19 +165,69 @@ class ArmReport(BaseModel):
 class RerankReport(BaseModel):
     """Whether the LLM reranker ran, and the top rerank scores it produced.
 
+    ``ran`` and ``graded`` are deliberately **separate**: a rerank call can execute and
+    still return nothing usable (unparseable JSON, no in-range ids). In that case the
+    survivors keep the fused RRF order and RRF scores — which look nothing like
+    relevance grades but are numbers all the same — so the failure is labelled here
+    rather than laundered into ``top_scores``.
+
     Attributes:
-        ran: Whether the second-stage LLM rerank executed (``False`` when the
+        ran: Whether the second-stage LLM rerank call executed (``False`` when the
             ``rerank_enabled`` knob is off — the fused RRF order is kept instead).
+        graded: Whether the survivors' order actually came from model grades. ``False``
+            both when no call ran and when the call ran but produced no usable score.
         input_candidates: How many fused candidates were offered to rerank (measured).
         kept: How many candidates survived into the final sources (``final_top_k`` cap).
-        top_scores: The survivors' scores in final order — real rerank grades when
-            ``ran`` is true, else the fused RRF scores that were kept.
+        ungraded: How many of the survivors carry **no** model grade — their ``score``
+            is the fused RRF score they arrived with, never a fabricated ``0.0``. They
+            always sort last, so they are the final ``ungraded`` entries of
+            ``top_scores``. (In a merged multi-round result this is the sum across
+            rounds, measured before the merge.)
+        degraded_reason: Why a rerank call that *ran* could not grade, or ``None`` when
+            nothing degraded (fully graded, or the knob was simply off).
+        top_scores: The survivors' scores in final order — real rerank grades where the
+            model graded them, else the fused RRF scores that were kept.
     """
 
     ran: bool = False
+    graded: bool = False
     input_candidates: int = 0
     kept: int = 0
+    ungraded: int = 0
+    degraded_reason: str | None = None
     top_scores: list[float] = Field(default_factory=list)
+
+
+class KeywordReport(BaseModel):
+    """What the BM25/keyword signal actually was for this retrieval.
+
+    The keyword signal has two genuinely different shapes and the difference matters,
+    so it is reported rather than blurred:
+
+    * ``scope="corpus"`` — the backend exposes
+      :class:`~aegis.retrieval.protocols.KeywordBackend`, so BM25 ran over the **whole
+      corpus** with corpus-wide IDF. It is an independent recall arm: it can surface a
+      keyword-only document no dense/graph arm returned, and it appears both in
+      :attr:`RetrievalObservability.arms` and in ``provenance.origins``.
+    * ``scope="pool"`` — the backend cannot search by keyword, so BM25 could only score
+      the candidates the dense/graph arms already recalled. That **cannot add recall**
+      (its "corpus" is ~20 docs, so its IDF weights are meaningless as corpus
+      statistics); it is a re-ranking pass, and it is deliberately *not* reported as a
+      recall arm or as a provenance origin — only here.
+
+    Attributes:
+        ran: Whether any keyword scoring happened at all.
+        scope: ``"corpus"`` (independent recall arm), ``"pool"`` (re-ranking pass over
+            already-recalled candidates), or ``"none"`` (no keyword signal).
+        matched: How many candidates got a positive BM25 score (measured).
+        adds_recall: Whether this signal could contribute documents no other arm found
+            — true only for ``scope="corpus"``.
+    """
+
+    ran: bool = False
+    scope: Literal["none", "corpus", "pool"] = "none"
+    matched: int = 0
+    adds_recall: bool = False
 
 
 class RewriteReport(BaseModel):
@@ -206,12 +260,17 @@ class AgenticReport(BaseModel):
         used_rounds: How many retrieval passes actually ran (``>= 1``, ``<= max``).
         max_rounds: The configured upper bound on retrieval passes.
         round_queries: The query actually retrieved with, per round, in order.
+        round_new_sources: How many sources each round contributed to the FINAL merged
+            result, in order. A later round that paid for a retrieval + a judge call and
+            contributed ``0`` sources says so here, so a structurally useless extra
+            round is visible instead of hiding behind ``used_rounds``.
     """
 
     ran: bool = False
     used_rounds: int = 1
     max_rounds: int = 1
     round_queries: list[str] = Field(default_factory=list)
+    round_new_sources: list[int] = Field(default_factory=list)
 
 
 class RetrievalObservability(BaseModel):
@@ -224,10 +283,14 @@ class RetrievalObservability(BaseModel):
     call — whether a query rewrite and the Self-RAG loop iterated.
 
     Attributes:
-        arms: Per-recall-arm candidate counts (vector / graph / bm25), pre-fusion.
+        arms: Per-recall-arm candidate counts, pre-fusion. Only arms that genuinely
+            *recall* appear here — the keyword signal is one of them only when it
+            searched the whole corpus (see :attr:`keyword`).
         fusion: The fusion method applied to the arms (RRF on the hybrid path).
         fused_candidates: The fused wide-recall pool size (the honest ``N``).
-        rerank: Whether rerank ran and the top scores it produced.
+        rerank: Whether rerank ran, whether it actually graded, and the top scores.
+        keyword: What the BM25/keyword signal was — an independent corpus-wide recall
+            arm, or a re-ranking pass over the already-recalled pool.
         spotlight_applied: Whether the answer context was Microsoft-spotlighted.
         rewrite: Query-rewrite observability, or ``None`` if no rewrite layer ran.
         agentic: Self-RAG-loop observability, or ``None`` if single-shot.
@@ -237,6 +300,7 @@ class RetrievalObservability(BaseModel):
     fusion: FusionMethod = FusionMethod.NONE
     fused_candidates: int = 0
     rerank: RerankReport = Field(default_factory=RerankReport)
+    keyword: KeywordReport = Field(default_factory=KeywordReport)
     spotlight_applied: bool = False
     rewrite: RewriteReport | None = None
     agentic: AgenticReport | None = None

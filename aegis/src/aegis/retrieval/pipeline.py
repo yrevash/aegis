@@ -32,15 +32,22 @@ from aegis.retrieval.models import (
     Chunk,
     GraphDelta,
     IngestReport,
+    KeywordReport,
     Provenance,
     RerankReport,
     RetrievalObservability,
     RetrievalResult,
     Source,
 )
-from aegis.retrieval.protocols import CompleteFn, EmbedFn, KnowledgeBackend, MultiListBackend
-from aegis.retrieval.reranker import rerank
-from aegis.retrieval.spotlight import build_spotlighted_context
+from aegis.retrieval.protocols import (
+    CompleteFn,
+    EmbedFn,
+    KeywordBackend,
+    KnowledgeBackend,
+    MultiListBackend,
+)
+from aegis.retrieval.reranker import rerank_scored
+from aegis.retrieval.spotlight import build_plain_context, build_spotlighted_context
 from aegis.retrieval.types import FusionMethod, GraphEdge, GraphNode, RetrievalOrigin
 from aegis.retrieval.validation import validate_content
 
@@ -134,8 +141,9 @@ class Retriever:
     async def retrieve(self, query: str, *, persona: str | None = None) -> RetrievalResult:
         """Answer a retrieval request end-to-end.
 
-        Flow: near-exact cache → **hybrid wide recall** (vector + graph + BM25, fused
-        by Reciprocal Rank Fusion) → LLM rerank → spotlight → assemble → write back to
+        Flow: near-exact cache → **hybrid wide recall** (vector + graph, plus a BM25
+        keyword arm when the backend can search its corpus by keyword, fused by
+        Reciprocal Rank Fusion) → LLM rerank → spotlight → assemble → write back to
         cache. An exact or near-exact (cosine ≥ ``semantic_threshold``) cache hit
         returns immediately with `cache_hit=True` and honest cache provenance; anything
         below that runs the full fused pipeline (the sub-threshold match is only a
@@ -158,27 +166,39 @@ class Retriever:
         if semantic is not None:
             return semantic
 
-        fused, origins, nodes, edges, arms = await self._recall_and_fuse(query, persona)
+        fused, origins, nodes, edges, arms, keyword = await self._recall_and_fuse(
+            query, persona
+        )
         if self.config.rerank_enabled:
-            top = await rerank(
+            outcome = await rerank_scored(
                 query,
                 fused,
                 complete=self.complete,
                 top_k=self.config.final_top_k,
                 role=self.config.rerank_role,
             )
-            rerank_ran = True
+            top = outcome.candidates
+            rerank_report = RerankReport(
+                ran=True,
+                graded=outcome.graded,
+                input_candidates=len(fused),
+                kept=len(top),
+                ungraded=outcome.ungraded,
+                degraded_reason=outcome.reason,
+                top_scores=[c.score for c in top],
+            )
         else:
-            # Knob off: keep the fused RRF order, no rerank model call.
+            # Knob off: keep the fused RRF order, no rerank model call. Nothing is
+            # graded and nothing degraded — the scores are honestly RRF scores.
             top = fused[: self.config.final_top_k]
-            rerank_ran = False
-
-        rerank_report = RerankReport(
-            ran=rerank_ran,
-            input_candidates=len(fused),
-            kept=len(top),
-            top_scores=[c.score for c in top],
-        )
+            rerank_report = RerankReport(
+                ran=False,
+                graded=False,
+                input_candidates=len(fused),
+                kept=len(top),
+                ungraded=len(top),
+                top_scores=[c.score for c in top],
+            )
         result = self._assemble(
             top,
             num_candidates=len(fused),
@@ -187,6 +207,7 @@ class Retriever:
             origins=origins,
             arms=arms,
             rerank=rerank_report,
+            keyword=keyword,
         )
         await self.cache.set(query, persona, query_vec, result)
         # Surface the query embedding for the "free" episodic-write reuse — but only on
@@ -208,37 +229,87 @@ class Retriever:
         list[GraphNode],
         list[GraphEdge],
         list[ArmReport],
+        KeywordReport,
     ]:
         """Run hybrid wide recall and fuse the ranked lists with RRF.
 
-        Produces the dense/graph list(s) from the backend, adds a BM25/keyword list
-        computed over the recalled pool, and fuses everything with Reciprocal Rank
-        Fusion. The fused pool is the honest wide-recall count (N) fed to rerank.
+        Produces the dense/graph list(s) from the backend, adds the BM25/keyword list
+        (see :meth:`_keyword_signal` for what that list *is* in each case), and fuses
+        everything with Reciprocal Rank Fusion. The fused pool is the honest wide-recall
+        count (N) fed to rerank.
 
         Args:
             query: The user query.
             persona: Active persona (scopes store access where supported).
 
         Returns:
-            A tuple ``(fused_candidates, origins, nodes, edges, arms)`` where
+            A tuple ``(fused_candidates, origins, nodes, edges, arms, keyword)`` where
             ``origins`` are the distinct retrieval origins that produced a surviving
-            candidate and ``arms`` are the per-arm measured candidate counts
-            (vector / graph / bm25) *before* fusion.
+            candidate, ``arms`` are the per-*recall-arm* measured candidate counts
+            *before* fusion, and ``keyword`` records what the keyword signal was. A
+            pool-scoped keyword pass is fused but is neither an arm nor an origin.
         """
         lists, nodes, edges = await self._recall_lists(query, persona)
-        pool = _unique_candidates(lists)
-        keyword = _bm25_ranked_list(query, pool)
-        all_lists = [*lists, keyword]
-        fused = reciprocal_rank_fusion(all_lists, k=self.config.rrf_k)
+        keyword_list, keyword = await self._keyword_signal(query, lists, persona)
+        recall_arms = [*lists, keyword_list] if keyword.adds_recall else list(lists)
+        fused = reciprocal_rank_fusion([*lists, keyword_list], k=self.config.rrf_k)
         arms = [
             ArmReport(
                 origins=list(ranked.origins),
                 candidates=len(ranked.candidates),
                 fired=bool(ranked.candidates),
             )
-            for ranked in all_lists
+            for ranked in recall_arms
         ]
-        return fused, collect_origins(fused), nodes, edges, arms
+        return fused, collect_origins(fused), nodes, edges, arms, keyword
+
+    async def _keyword_signal(
+        self, query: str, lists: Sequence[RankedList], persona: str | None
+    ) -> tuple[RankedList, KeywordReport]:
+        """Produce the BM25/keyword ranked list — and say honestly what it is.
+
+        There are two genuinely different things a keyword pass can be here, and the
+        pipeline refuses to blur them (this is the honest-provenance rule applied to our
+        own arsenal claims):
+
+        * The backend implements :class:`~aegis.retrieval.protocols.KeywordBackend`, so
+          BM25 runs over the **whole corpus** with corpus-wide IDF. It can surface a
+          document no dense/graph arm returned, so it is a real recall arm: tagged
+          ``BM25``, counted in ``arms``, and present in ``provenance.origins``.
+        * The backend cannot search by keyword. Then all we can score is the pool the
+          dense/graph arms already recalled — perhaps 20 documents. That reorders the
+          pool (which is worth doing, and RRF still fuses it) but it **cannot add
+          recall**, and its IDF over 20 documents is not a corpus statistic. Reporting
+          it as a firing retrieval arm would claim recall that never happened, so the
+          list carries **no origin** and the pass is reported only as what it is: a
+          re-ranking step, via ``KeywordReport(scope="pool")``.
+
+        Args:
+            query: The user query.
+            lists: The dense/graph ranked lists already recalled this turn.
+            persona: Active persona (scopes store access where supported).
+
+        Returns:
+            ``(ranked_list, report)`` — the list to fuse and the honest label for it.
+        """
+        if isinstance(self.backend, KeywordBackend):
+            hits = list(
+                await self.backend.keyword_recall(
+                    query, top_k=self.config.recall_top_k, persona=persona
+                )
+            )
+            return (
+                RankedList(origins=(RetrievalOrigin.BM25,), candidates=hits),
+                KeywordReport(
+                    ran=True, scope="corpus", matched=len(hits), adds_recall=True
+                ),
+            )
+
+        scored = bm25_ranked(query, _unique_candidates(lists))
+        return (
+            RankedList(origins=(), candidates=scored),
+            KeywordReport(ran=True, scope="pool", matched=len(scored), adds_recall=False),
+        )
 
     async def _recall_lists(
         self, query: str, persona: str | None
@@ -272,6 +343,7 @@ class Retriever:
         origins: list[RetrievalOrigin],
         arms: list[ArmReport],
         rerank: RerankReport,
+        keyword: KeywordReport,
     ) -> RetrievalResult:
         """Build a `RetrievalResult` from reranked candidates and the graph slice.
 
@@ -283,14 +355,15 @@ class Retriever:
             recall_nodes: Graph nodes touched during recall.
             recall_edges: Graph edges touched during recall.
             origins: Distinct retrieval origins that contributed to the fused pool.
-            arms: Per-arm measured candidate counts (vector / graph / bm25).
-            rerank: Whether rerank ran and the top scores it produced.
+            arms: Per-recall-arm measured candidate counts.
+            rerank: Whether rerank ran, whether it graded, and the top scores.
+            keyword: What the BM25/keyword signal was (corpus arm vs pool re-ranking).
         """
         spotlight_on = self.config.spotlight_enabled
         answer_context = (
             build_spotlighted_context([c.text for c in top])
             if spotlight_on
-            else _plain_context([c.text for c in top])
+            else build_plain_context([c.text for c in top])
         )
         sources = [
             Source(id=c.id, text=c.text, score=c.score, metadata=c.metadata) for c in top
@@ -307,6 +380,7 @@ class Retriever:
                 fusion=FusionMethod.RRF,
                 fused_candidates=num_candidates,
                 rerank=rerank,
+                keyword=keyword,
                 spotlight_applied=spotlight_on and bool(top),
             ),
         )
@@ -382,19 +456,6 @@ class Retriever:
         return report
 
 
-def _plain_context(chunks: list[str]) -> str:
-    """Assemble reranked chunks into an *un-spotlighted* context block.
-
-    Used only when the ``spotlight_enabled`` knob is off: sources are still numbered
-    and fenced for readability, but the Microsoft-Spotlighting datamarking/instruction
-    layer is deliberately omitted (so ``observability.spotlight_applied`` is ``False``).
-    Off by choice, never silently — the injection defence is ON by default.
-    """
-    if not chunks:
-        return ""
-    return "\n\n".join(f"[source {i}]\n{chunk}" for i, chunk in enumerate(chunks, 1))
-
-
 def _coerce_doc(doc: object, index: int) -> tuple[str, str]:
     """Normalise a document into `(doc_id, text)`.
 
@@ -428,11 +489,7 @@ def _keyword_tokens(text: str) -> list[str]:
 
 
 def _unique_candidates(lists: Sequence[RankedList]) -> list[Candidate]:
-    """Return the de-duplicated candidate pool across ranked lists (first wins).
-
-    The BM25 list is scored over this union so keyword relevance is measured against
-    the same pool the dense/graph retrievers surfaced.
-    """
+    """Return the de-duplicated candidate pool across ranked lists (first wins)."""
     seen: dict[str, Candidate] = {}
     for ranked in lists:
         for cand in ranked.candidates:
@@ -440,24 +497,31 @@ def _unique_candidates(lists: Sequence[RankedList]) -> list[Candidate]:
     return list(seen.values())
 
 
-def _bm25_ranked_list(query: str, pool: Sequence[Candidate]) -> RankedList:
-    """Rank ``pool`` by Okapi BM25 relevance to ``query`` (a keyword signal).
+def bm25_ranked(query: str, corpus: Sequence[Candidate]) -> list[Candidate]:
+    """Rank ``corpus`` by Okapi BM25 relevance to ``query`` (dependency-free).
 
-    A dependency-free BM25 over the recalled pool as its own mini-corpus. Only
-    candidates with a positive score are returned (a genuine keyword match), so the
-    ``bm25`` origin appears in provenance only when it actually contributed.
+    The shared keyword-scoring core, used for *both* shapes of the keyword signal: a
+    backend's corpus-wide keyword recall (where ``corpus`` really is the corpus and the
+    IDF weights are real corpus statistics) and the pipeline's fallback pass over an
+    already-recalled pool (where they are not — see
+    :meth:`Retriever._keyword_signal`). What differs is what a caller may claim from the
+    result, not the arithmetic, so the arithmetic lives in one place.
+
+    Only candidates with a positive score are returned, so an empty list honestly means
+    "no keyword match" rather than "everything, weakly".
 
     Args:
         query: The user query.
-        pool: The de-duplicated candidate pool to score.
+        corpus: The candidates to score (deduplicated by the caller).
 
     Returns:
-        A :class:`RankedList` tagged ``(BM25,)`` in descending score order.
+        The matching candidates in descending BM25 order (ties by input order).
     """
     q_terms = _keyword_tokens(query)
-    if not pool or not q_terms:
-        return RankedList(origins=(RetrievalOrigin.BM25,), candidates=[])
+    if not corpus or not q_terms:
+        return []
 
+    pool = list(corpus)
     docs = [_keyword_tokens(c.text) for c in pool]
     n_docs = len(docs)
     avgdl = (sum(len(d) for d in docs) / n_docs) or 1.0
@@ -481,9 +545,7 @@ def _bm25_ranked_list(query: str, pool: Sequence[Candidate]) -> RankedList:
             scored.append((score, index, cand))
 
     scored.sort(key=lambda row: (-row[0], row[1]))
-    return RankedList(
-        origins=(RetrievalOrigin.BM25,), candidates=[cand for _, _, cand in scored]
-    )
+    return [cand for _, _, cand in scored]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

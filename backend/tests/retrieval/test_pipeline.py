@@ -81,7 +81,12 @@ async def test_num_candidates_is_wide_recall_pool_and_survives_cache():
 
 
 async def test_miss_populates_hybrid_provenance():
-    # c0 matches the query ("sky"/"blue") → BM25 contributes; dense list is vector+graph.
+    # `FakeBackend` cannot search its corpus by keyword (it implements no
+    # `KeywordBackend`), so BM25 can only re-score the candidates the dense list already
+    # returned. That reorders the pool but recalls nothing new, so `aegis.retrieval` no
+    # longer claims a `bm25` origin for it — the pass is reported as the re-ranking step
+    # it is, via `observability.keyword` (scope="pool"). See
+    # `aegis/tests/retrieval/test_pipeline.py` for both halves of that behaviour.
     complete = RecordingComplete('{"scores": [{"id": 0, "score": 3}, {"id": 1, "score": 8}]}')
     embed = SequenceEmbed([1.0, 0.0])
     backend = FakeBackend(make_recall())
@@ -92,12 +97,11 @@ async def test_miss_populates_hybrid_provenance():
     assert result.cache_hit is False
     assert result.provenance.fusion is FusionMethod.RRF
     assert result.provenance.cache is None
-    # Dense (vector+graph) list + a real BM25 keyword match → all three origins.
-    assert result.provenance.origins == [
-        RetrievalOrigin.VECTOR,
-        RetrievalOrigin.GRAPH,
-        RetrievalOrigin.BM25,
-    ]
+    # The dense (vector+graph) list is the only source of recall here.
+    assert result.provenance.origins == [RetrievalOrigin.VECTOR, RetrievalOrigin.GRAPH]
+    assert RetrievalOrigin.BM25 not in result.provenance.origins
+    assert result.observability.keyword.scope == "pool"
+    assert result.observability.keyword.adds_recall is False
 
 
 async def test_near_miss_below_985_runs_full_retrieval_not_cache():

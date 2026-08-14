@@ -181,3 +181,105 @@ async def test_cache_enabled_false_returns_none():
         MemoryConfig(cache_enabled=False), embedder=_embedder, redis_url="redis://x", dims=2
     )
     assert cache is None
+
+
+# ------------------------------------------------------- production backend: invalidate
+
+
+class _FakeSearchIndex:
+    """Stands in for ``SemanticCache.index`` — records the queries it is handed."""
+
+    def __init__(self, rows: list[dict[str, str]]) -> None:
+        self.rows = rows
+        self.queries: list[object] = []
+
+    def query(self, query: object) -> list[dict[str, str]]:
+        self.queries.append(query)
+        return self.rows
+
+
+class _FakeSemanticCache:
+    """Stands in for RedisVL's ``SemanticCache`` (which needs a live RediSearch)."""
+
+    def __init__(self, rows: list[dict[str, str]]) -> None:
+        self.index = _FakeSearchIndex(rows)
+        self.dropped: list[list[str]] = []
+
+    async def acheck(self, **kwargs: object) -> list[dict[str, str]]:
+        raise AssertionError(
+            "invalidate must not vector-probe the cache index: acheck validates the "
+            f"probe against the index dims and only matches a cosine radius ({kwargs})"
+        )
+
+    async def adrop(self, *, keys: list[str]) -> None:
+        self.dropped.append(list(keys))
+
+
+class _FakeTag:
+    """Minimal stand-in for ``redisvl.query.filter.Tag`` (supports ``==`` and ``&``)."""
+
+    def __init__(self, field: str) -> None:
+        self.field = field
+
+    def __eq__(self, other: object) -> _FakeTag:  # type: ignore[override]
+        return _FakeTag(f"{self.field}=={other}")
+
+    def __and__(self, other: _FakeTag) -> _FakeTag:
+        return _FakeTag(f"({self.field} & {other.field})")
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+class _FakeFilterQuery:
+    """Records what the backend asked for; a real FilterQuery carries no vector."""
+
+    def __init__(self, *, filter_expression, return_fields, num_results) -> None:  # noqa: ANN001
+        self.filter_expression = filter_expression
+        self.return_fields = return_fields
+        self.num_results = num_results
+
+
+def _redis_backend(rows, monkeypatch):
+    """A ``_RedisVLBackend`` wired to fakes (its __init__ needs a live Redis-Stack)."""
+    import sys
+    import types
+
+    from aegis.memory import cache as cache_mod
+
+    fake_query_mod = types.ModuleType("redisvl.query")
+    fake_query_mod.FilterQuery = _FakeFilterQuery
+    monkeypatch.setitem(sys.modules, "redisvl", types.ModuleType("redisvl"))
+    monkeypatch.setitem(sys.modules, "redisvl.query", fake_query_mod)
+
+    backend = object.__new__(cache_mod._RedisVLBackend)
+    backend._Tag = _FakeTag
+    backend._cache = _FakeSemanticCache(rows)
+    return backend
+
+
+async def test_redis_invalidate_enumerates_by_tag_not_by_vector_probe(monkeypatch):
+    """REGRESSION: invalidate must drop a subject's entries on the real backend.
+
+    It used to enumerate with ``acheck(vector=[0.0], ...)`` — a 1-dim KNN probe against a
+    1536/3072-dim index, which RedisVL rejects outright — so it dropped nothing and the
+    next semantically-equivalent question served pre-write memory for the whole TTL.
+    """
+    rows = [{"id": "aegis_memory_cache:a"}, {"id": "aegis_memory_cache:b"}]
+    backend = _redis_backend(rows, monkeypatch)
+
+    dropped = await backend.invalidate(subject_id="user:1", tenant_id=7)
+
+    assert dropped == 2
+    assert backend._cache.dropped == [["aegis_memory_cache:a", "aegis_memory_cache:b"]]
+    # Enumeration is a pure tag filter — no vector of any dimensionality is involved.
+    (query,) = backend._cache.index.queries
+    assert isinstance(query, _FakeFilterQuery)
+    assert not hasattr(query, "vector")
+    assert query.filter_expression.field == "(subject_id==user:1 & tenant_id==7)"
+
+
+async def test_redis_invalidate_on_empty_scope_drops_nothing(monkeypatch):
+    """An empty scope returns 0 without calling ``adrop`` (which rejects empty input)."""
+    backend = _redis_backend([], monkeypatch)
+    assert await backend.invalidate(subject_id="user:1", tenant_id=None) == 0
+    assert backend._cache.dropped == []

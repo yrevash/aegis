@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 
 from aegis.core.interfaces import ChatCompleter
+from aegis.guardrails.normalize import deconfuse, fold_for_matching
 from aegis.guardrails.verdict_parsing import parse_bool_field
 
 logger = logging.getLogger(__name__)
@@ -141,8 +142,24 @@ def deterministic_hazard(text: str) -> ContentSafetyVerdict | None:
 
     Pure and offline. Returns ``None`` when no signature matches (defer to the
     model layer).
+
+    Matching runs over **normalised comparison views** of ``text``, never the raw
+    string, for the same reason the injection rail does: signatures matched against
+    raw text are defeated by a zero-width character or a Cyrillic homoglyph, both
+    invisible to a reader and both leaving the payload perfectly legible to a model.
+    ``text`` itself is never mutated — only the view used for comparison.
+
+    Coverage inherits :func:`~aegis.guardrails.normalize.deconfuse`'s limits:
+    Cyrillic and Greek homoglyphs are folded, leetspeak and the full Unicode
+    confusables table are not. Paraphrase is out of scope for a signature rail by
+    construction and is what the model layer exists for.
     """
-    hits = [code for pattern, code in _HAZARD_SIGNATURES if pattern.search(text)]
+    views = (fold_for_matching(text), deconfuse(text))
+    hits = [
+        code
+        for pattern, code in _HAZARD_SIGNATURES
+        if any(pattern.search(view) for view in views)
+    ]
     if hits:
         seen = list(dict.fromkeys(hits))
         return ContentSafetyVerdict(

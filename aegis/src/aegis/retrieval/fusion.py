@@ -45,7 +45,11 @@ class RankedList:
     Attributes:
         origins: The retrieval origin(s) this list represents. A single-signal list
             carries one origin (e.g. ``(BM25,)``); a pre-blended list (e.g. LightRAG
-            ``mix``) may carry several (e.g. ``(VECTOR, GRAPH)``).
+            ``mix``) may carry several (e.g. ``(VECTOR, GRAPH)``). An **empty** tuple is
+            meaningful and deliberate: the list re-orders candidates other arms already
+            recalled and therefore claims no origin of its own (it fuses, but it never
+            appears in provenance as a source of recall — see the pool-scoped keyword
+            pass in :meth:`aegis.retrieval.pipeline.Retriever._keyword_signal`).
         candidates: Candidates in descending relevance order (best first).
     """
 
@@ -123,6 +127,25 @@ def reciprocal_rank_fusion(
     return fused
 
 
+def order_origins(origins: Iterable[RetrievalOrigin]) -> list[RetrievalOrigin]:
+    """Return the distinct ``origins`` in canonical (vector → graph → bm25 → cache) order.
+
+    The single ordering used everywhere provenance is built or merged (the pipeline's
+    per-result origins, the agentic loop's union across rounds), so two results that
+    contributed the same signals always report them identically.
+
+    Args:
+        origins: Any iterable of origins, possibly with duplicates.
+
+    Returns:
+        The distinct origins in canonical display order.
+    """
+    seen: dict[RetrievalOrigin, None] = {}
+    for origin in origins:
+        seen.setdefault(origin, None)
+    return sorted(seen, key=lambda o: _ORIGIN_ORDER.get(o, 99))
+
+
 def collect_origins(candidates: Iterable[Candidate]) -> list[RetrievalOrigin]:
     """Aggregate the distinct contributing origins across fused candidates.
 
@@ -137,12 +160,11 @@ def collect_origins(candidates: Iterable[Candidate]) -> list[RetrievalOrigin]:
     Returns:
         The distinct origins, ordered vector → graph → bm25 → cache.
     """
-    seen: dict[RetrievalOrigin, None] = {}
+    found: list[RetrievalOrigin] = []
     for cand in candidates:
         for raw in cand.metadata.get(ORIGIN_METADATA_KEY, []):
             try:
-                origin = RetrievalOrigin(raw)
+                found.append(RetrievalOrigin(raw))
             except ValueError:
                 continue
-            seen.setdefault(origin, None)
-    return sorted(seen, key=lambda o: _ORIGIN_ORDER.get(o, 99))
+    return order_origins(found)

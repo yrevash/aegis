@@ -10,6 +10,7 @@ backend's ``tests/ml`` and run through the strangler shim.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import aegis.ml as ml
 from aegis.ml import predict_explain
@@ -123,13 +124,36 @@ def test_save_and_load_roundtrip(regression_spec, regression_frame, tmp_path):
     assert np.allclose(a.conformal_interval, b.conformal_interval)
 
 
-# ── module-level contract (default synthetic spec) ───────────────────────────
-def test_module_level_predict_explain_trains_fallback():
-    ml._MODEL = None  # force cold start with no artifact injected
-    resp = predict_explain({"feature_0": 0.5})
+# ── module-level contract: NO silent synthetic fallback ──────────────────────
+def test_module_level_predict_explain_refuses_silent_synthetic_fallback(
+    monkeypatch, tmp_path
+):
+    """A cold start with no artifact must raise, not serve a noise model.
+
+    The old behaviour trained on the built-in Gaussian synthesiser, imputed every
+    real feature with a training median, and returned a point prediction, a
+    90%-"coverage" interval and ``feature_0…3`` drivers that the agent then injected
+    as evidence — indistinguishable, to the caller, from a real domain model.
+    """
+    ml._MODEL = None  # force cold start
+    monkeypatch.setattr(ml, "DEFAULT_ARTIFACT_PATH", tmp_path / "absent.joblib")
+    with pytest.raises(ml.MLModelUnavailableError):
+        predict_explain({"feature_0": 0.5})
+
+
+def test_module_level_predict_explain_serves_a_trained_model(
+    monkeypatch, tmp_path, regression_spec, regression_frame
+):
+    """Once a real model is trained/cached the module-level contract still serves."""
+    ml._MODEL = None
+    monkeypatch.setattr(ml, "DEFAULT_ARTIFACT_PATH", tmp_path / "absent.joblib")
+    ml.train(regression_spec, regression_frame, path=None)
+    resp = predict_explain({"f0": 0.5, "f1": 0.0, "f2": 0.0})
     assert isinstance(resp, MLExplainResponse)
     assert resp.conformal_confidence == 0.9
     assert resp.conformal_interval is not None
+    assert resp.data_source == "provided"
+    ml._MODEL = None
 
 
 # ── synthesiser sanity ───────────────────────────────────────────────────────

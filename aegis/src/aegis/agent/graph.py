@@ -457,6 +457,7 @@ def build_agent(
                 retrieve_fn=deps.retrieve,
                 complete=deps.complete,
                 rewrite_fn=rewrite_fn,
+                history=history,
                 max_rounds=config.agentic_retrieval_max_rounds,
                 persona=state.get("persona"),
             )
@@ -473,7 +474,9 @@ def build_agent(
             # Internal rewrite+judge spend from the loop (accrued into telemetry below).
             retrieval_usage = agentic.usage
         elif config.query_rewrite_enabled:
-            rw = await rewrite_query(state["query"], complete=deps.complete)
+            rw = await rewrite_query(
+                state["query"], history=history, complete=deps.complete
+            )
             rewritten_query = rw.rewritten if rw.changed else state["query"]
             result = await deps.retrieve(rewritten_query, persona=state.get("persona"))
             rounds = []

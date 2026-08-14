@@ -17,6 +17,23 @@ from .conftest import (
 )
 
 
+class KeywordFakeBackend(FakeBackend):
+    """A `FakeBackend` that also satisfies `KeywordBackend` (corpus-wide keyword search).
+
+    Stands in for a backend whose store can genuinely match keywords over everything it
+    holds — so the pipeline may report BM25 as its own recall arm.
+    """
+
+    def __init__(self, recall, *, keyword_hits):
+        super().__init__(recall)
+        self._keyword_hits = keyword_hits
+        self.keyword_calls: int = 0
+
+    async def keyword_recall(self, query, *, top_k, persona=None):
+        self.keyword_calls += 1
+        return self._keyword_hits[:top_k]
+
+
 def _retriever(complete, embed, backend, *, threshold=0.95):
     cache = SemanticCache(FakeRedis(), ttl_seconds=60, similarity_threshold=threshold)
     return Retriever(
@@ -81,7 +98,9 @@ async def test_num_candidates_is_wide_recall_pool_and_survives_cache():
 
 
 async def test_miss_populates_hybrid_provenance():
-    # c0 matches the query ("sky"/"blue") → BM25 contributes; dense list is vector+graph.
+    # A plain backend cannot search by keyword, so BM25 can only re-score the pool the
+    # dense list already returned. That reorders, but it recalls nothing — so it is NOT
+    # claimed as an origin; the dense (vector+graph) list is the only source of recall.
     complete = RecordingComplete('{"scores": [{"id": 0, "score": 3}, {"id": 1, "score": 8}]}')
     embed = SequenceEmbed([1.0, 0.0])
     backend = FakeBackend(make_recall())
@@ -92,12 +111,49 @@ async def test_miss_populates_hybrid_provenance():
     assert result.cache_hit is False
     assert result.provenance.fusion is FusionMethod.RRF
     assert result.provenance.cache is None
-    # Dense (vector+graph) list + a real BM25 keyword match → all three origins.
-    assert result.provenance.origins == [
-        RetrievalOrigin.VECTOR,
-        RetrievalOrigin.GRAPH,
-        RetrievalOrigin.BM25,
-    ]
+    assert result.provenance.origins == [RetrievalOrigin.VECTOR, RetrievalOrigin.GRAPH]
+    assert RetrievalOrigin.BM25 not in result.provenance.origins
+
+
+async def test_pool_scoped_keyword_pass_is_labelled_not_reported_as_an_arm():
+    # REGRESSION (honest provenance): BM25 over the already-recalled pool was reported
+    # as a firing retrieval arm and a `bm25` origin, claiming recall it cannot add.
+    complete = RecordingComplete('{"scores": [{"id": 0, "score": 3}, {"id": 1, "score": 8}]}')
+    embed = SequenceEmbed([1.0, 0.0])
+    retriever = _retriever(complete, embed, FakeBackend(make_recall()))
+
+    result = await retriever.retrieve("why is the sky blue?", persona=None)
+
+    keyword = result.observability.keyword
+    assert keyword.ran is True
+    assert keyword.scope == "pool"  # it only re-scored what the dense arm recalled
+    assert keyword.adds_recall is False
+    assert keyword.matched >= 1  # "sky"/"blue" really did match, and is reported
+    # …but it is not one of the recall arms, and claims no origin.
+    arm_origins = [tuple(a.origins) for a in result.observability.arms]
+    assert (RetrievalOrigin.BM25,) not in arm_origins
+    assert RetrievalOrigin.BM25 not in result.provenance.origins
+
+
+async def test_corpus_keyword_backend_is_a_genuine_bm25_arm():
+    # A backend that CAN search its corpus by keyword surfaces a document the dense arm
+    # never returned — real added recall, so `bm25` is honestly an arm and an origin.
+    complete = RecordingComplete('{"scores": [{"id": 0, "score": 3}, {"id": 1, "score": 8}]}')
+    embed = SequenceEmbed([1.0, 0.0])
+    keyword_only = Candidate(id="kw", text="the sky is blue because of rayleigh scattering")
+    retriever = _retriever(
+        complete, embed, KeywordFakeBackend(make_recall(), keyword_hits=[keyword_only])
+    )
+
+    result = await retriever.retrieve("why is the sky blue?", persona=None)
+
+    assert result.observability.keyword.scope == "corpus"
+    assert result.observability.keyword.adds_recall is True
+    arm_origins = [tuple(a.origins) for a in result.observability.arms]
+    assert (RetrievalOrigin.BM25,) in arm_origins
+    assert RetrievalOrigin.BM25 in result.provenance.origins
+    # The keyword-only document genuinely entered the fused pool (recall grew from 2→3).
+    assert result.num_candidates == 3
 
 
 async def test_near_miss_below_985_runs_full_retrieval_not_cache():
@@ -186,6 +242,62 @@ async def test_ingest_validates_dedups_and_writes():
     assert any("evil" in r for r in report.rejections)
     # Only validated chunks reach the backend.
     assert len(backend.ingested) == report.chunks_written
+
+
+async def test_ingest_indexes_every_section_that_shares_a_sentence():
+    # REGRESSION: in-batch dedup keyed on the bare body while the ledger keys on
+    # body+section, so the second section's only chunk was dropped as a "duplicate" and
+    # that section ended up with no indexed content at all.
+    complete = RecordingComplete("{}")
+    embed = SequenceEmbed([1.0, 0.0])
+    backend = FakeBackend(make_recall())
+    retriever = _retriever(complete, embed, backend)
+
+    doc = {
+        "id": "policy",
+        "text": "## Refunds\n\nContact the support desk."
+        "\n\n## Returns\n\nContact the support desk.",
+    }
+    report = await retriever.ingest([doc])
+
+    sections = [c.metadata["section"] for c in backend.ingested]
+    assert sections == ["Refunds", "Returns"]
+    assert report.chunks_written == 2
+    assert report.chunks_skipped == 0
+    # Each indexed chunk carries its section context, so neither section is left blank.
+    assert all("Contact the support desk." in c.text for c in backend.ingested)
+
+
+async def test_rerank_failure_is_reported_not_disguised_as_grades():
+    # REGRESSION: an unparseable rerank response left the fused RRF order in place with
+    # `ran=True` and RRF scores in `top_scores` — unreadable as a degradation.
+    complete = RecordingComplete("definitely not json")
+    embed = SequenceEmbed([1.0, 0.0])
+    retriever = _retriever(complete, embed, FakeBackend(make_recall()))
+
+    result = await retriever.retrieve("why is the sky blue?", persona=None)
+
+    report = result.observability.rerank
+    assert report.ran is True  # a call really was made…
+    assert report.graded is False  # …but nothing it returned ordered these sources
+    assert report.degraded_reason is not None
+    assert report.ungraded == len(result.sources)
+    assert report.top_scores == [s.score for s in result.sources]
+
+
+async def test_rerank_success_is_reported_as_graded():
+    complete = RecordingComplete('{"scores": [{"id": 0, "score": 3}, {"id": 1, "score": 8}]}')
+    embed = SequenceEmbed([1.0, 0.0])
+    retriever = _retriever(complete, embed, FakeBackend(make_recall()))
+
+    result = await retriever.retrieve("why is the sky blue?", persona=None)
+
+    report = result.observability.rerank
+    assert report.ran is True
+    assert report.graded is True
+    assert report.ungraded == 0
+    assert report.degraded_reason is None
+    assert report.top_scores == [8.0, 3.0]
 
 
 async def test_ingest_is_idempotent_on_reingest():

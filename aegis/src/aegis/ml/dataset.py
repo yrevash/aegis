@@ -21,6 +21,20 @@ import pandas as pd
 if TYPE_CHECKING:
     from aegis.ml.spec import ResolvedSpec
 
+SYNTHETIC_LEVELS: tuple[str, ...] = ("alpha", "bravo", "charlie", "delta")
+"""String levels drawn for a synthesised **categorical** column.
+
+Categorical features must be synthesised as genuine strings: the spine one-hot
+encodes exactly ``spec.categorical_features``, so emitting floats there would fit
+the encoder on one degenerate level per row and make every real inference row an
+all-zero (``handle_unknown="ignore"``) block the model never saw in training.
+"""
+
+
+def _weight(index: int) -> float:
+    """Return the deterministic, alternating-sign weight for feature ``index``."""
+    return (-1.0) ** index * (1.0 + index * 0.5)
+
 
 def synthesise_frame(
     spec: ResolvedSpec,
@@ -30,30 +44,48 @@ def synthesise_frame(
 ) -> pd.DataFrame:
     """Generate a deterministic synthetic training frame matching ``spec``.
 
-    Features are standard-normal columns. The target is a fixed linear
-    combination of the features plus mild Gaussian noise; for classification
-    it is thresholded at its median into two balanced classes. The mapping is
-    learnable, so a fitted tree model produces meaningful SHAP attributions and
-    a non-degenerate conformal interval.
+    Numeric features are standard-normal columns; **categorical** features are
+    drawn as real string levels from :data:`SYNTHETIC_LEVELS` so the frame is
+    type-compatible with the one-hot preprocessor the spine fits on it. The target
+    is a fixed linear combination of the numeric columns and the (centred) level
+    codes plus mild Gaussian noise; for classification it is thresholded at its
+    median into two balanced classes. The mapping is learnable, so a fitted tree
+    model produces meaningful SHAP attributions and a non-degenerate conformal
+    interval.
 
     Args:
-        spec: Resolved spec providing feature names, target name and task.
+        spec: Resolved spec providing feature names, target name, task and the
+            categorical subset.
         n_rows: Number of rows to generate.
         random_state: Seed for reproducibility.
 
     Returns:
-        A ``DataFrame`` with one column per ``spec.features`` plus the target
-        column named ``spec.target``.
+        A ``DataFrame`` with one column per ``spec.features`` (in declared order,
+        categoricals typed as strings) plus the target column ``spec.target``.
     """
     rng = np.random.default_rng(random_state)
-    n_features = len(spec.features)
-    x = rng.normal(size=(n_rows, n_features))
+    numeric = spec.numeric_features
+    categorical = list(spec.categorical_features)
 
-    # Deterministic, alternating-sign weights so every feature contributes.
-    weights = np.array([(-1.0) ** i * (1.0 + i * 0.5) for i in range(n_features)])
-    signal = x @ weights + rng.normal(scale=0.1, size=n_rows)
+    columns: dict[str, object] = {}
+    signal = np.zeros(n_rows)
 
-    frame = pd.DataFrame(x, columns=spec.features)
+    x = rng.normal(size=(n_rows, len(numeric)))
+    for i, name in enumerate(numeric):
+        columns[name] = x[:, i]
+        signal = signal + _weight(i) * x[:, i]
+
+    n_levels = len(SYNTHETIC_LEVELS)
+    for j, name in enumerate(categorical):
+        codes = rng.integers(0, n_levels, size=n_rows)
+        columns[name] = np.asarray(SYNTHETIC_LEVELS, dtype=object)[codes]
+        # Centre the level codes so no level is a privileged "zero" baseline.
+        signal = signal + _weight(j) * (codes - (n_levels - 1) / 2.0)
+
+    signal = signal + rng.normal(scale=0.1, size=n_rows)
+
+    # Reindex to the spec's declared feature order (numerics were built first).
+    frame = pd.DataFrame(columns)[list(spec.features)]
     if spec.task == "classification":
         frame[spec.target] = (signal > np.median(signal)).astype(int)
     else:

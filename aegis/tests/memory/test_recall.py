@@ -220,3 +220,118 @@ async def test_facts_recency_only_when_no_query_vec(db):
             config=cfg,
         )
     assert [c.key for c in bundle.facts] == ["customer|prefers_channel"]
+
+
+async def test_null_tenant_recall_never_returns_a_tenants_profile(db):
+    """SECURITY REGRESSION: the tenant predicate is NULL-symmetric, not "when supplied".
+
+    The same ``subject_id`` may legally hold one profile per tenant. ``_recall_profile``
+    only added the predicate ``if tenant_id is not None``, so an unscoped recall could
+    ``.first()`` a *tenant's* profile and render it verbatim into the prompt's human block.
+    """
+    from aegis.memory.stores import MemoryProfile
+
+    cfg = MemoryConfig()
+    async with db() as s:
+        s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        s.add(
+            MemoryProfile(
+                subject_id="user:1", tenant_id=7, data={"display_name": "Tenant Seven"}
+            )
+        )
+        await s.commit()
+
+    async with db() as s:
+        bundle = await recall(
+            s,
+            subject_id="user:1",
+            session_id="sess-1",
+            persona="ops",
+            query="who am i",
+            query_vec=None,
+            config=cfg,
+            tenant_id=None,  # the null-tenant scope — NOT "any tenant"
+        )
+    assert "Tenant Seven" not in bundle.profile_text
+    assert bundle.profile_text == ""
+
+    # ...and the tenant's own recall still sees it (the fix scopes, it does not hide).
+    async with db() as s:
+        scoped = await recall(
+            s,
+            subject_id="user:1",
+            session_id="sess-1",
+            persona="ops",
+            query="who am i",
+            query_vec=None,
+            config=cfg,
+            tenant_id=7,
+        )
+    assert "Tenant Seven" in scoped.profile_text
+
+
+async def test_null_tenant_recall_never_returns_a_tenants_fact(db):
+    """The same NULL-symmetric scoping applies to the fact tier (also prompt-injected)."""
+    cfg = MemoryConfig()
+    async with db() as s:
+        s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        f = _fact("user:1", "secret", "tenant-seven-only", [1.0, 0.0, 0.0, 0.0])
+        f.tenant_id = 7
+        s.add(f)
+        await s.commit()
+
+    async with db() as s:
+        vec_bundle = await recall(
+            s, subject_id="user:1", session_id="sess-1", persona="ops",
+            query="secret", query_vec=[1.0, 0.0, 0.0, 0.0], config=cfg, tenant_id=None,
+        )
+        recency_bundle = await recall(
+            s, subject_id="user:1", session_id="sess-1", persona="ops",
+            query="secret", query_vec=None, config=cfg, tenant_id=None,
+        )
+    assert vec_bundle.facts == []  # ANN path: SQL source-of-truth join gates the tenant
+    assert recency_bundle.facts == []  # recency fallback gates it too
+
+
+async def test_episodic_recency_signal_reaches_the_output(db):
+    """REGRESSION: the RRF recency list must rank turns that can actually survive.
+
+    ``recency_list`` used to BE the raw window, every id of which the dedup filter drops —
+    so RRF only ever ranked discarded items and the surviving order collapsed to pure
+    vector rank. A recent, eligible turn with no comparable embedding could therefore
+    never be recalled episodically at all, however close to the window it sat.
+    """
+    cfg = MemoryConfig(raw_window_turns=1, n_epi=4)
+    async with db() as s:
+        s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        # turn 0 is just outside the 1-turn window and carries NO embedding, so the
+        # vector list can never surface it — only the recency list can.
+        s.add(
+            MemoryMessage(
+                subject_id="user:1",
+                session_id="sess-1",
+                turn_index=0,
+                role="user",
+                content="my order number is 4417",
+            )
+        )
+        s.add(_msg("user:1", "sess-1", 1, "recent chit chat", [0.0, 1.0, 0.0, 0.0]))
+        await s.commit()
+        ids = {
+            m.turn_index: m.id
+            for m in (await s.execute(select(MemoryMessage))).scalars().all()
+        }
+
+    async with db() as s:
+        bundle = await recall(
+            s,
+            subject_id="user:1",
+            session_id="sess-1",
+            persona="ops",
+            query="what was the order number",
+            query_vec=[1.0, 0.0, 0.0, 0.0],
+            config=cfg,
+        )
+    epi_ids = {c.payload.id for c in bundle.episodic}
+    assert ids[0] in epi_ids  # recency genuinely contributed a survivor
+    assert ids[1] not in epi_ids  # still deduped against the raw window

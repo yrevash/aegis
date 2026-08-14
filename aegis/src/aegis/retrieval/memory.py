@@ -47,7 +47,7 @@ from aegis.retrieval.graph_extract import (
     find_mentions,
 )
 from aegis.retrieval.models import Candidate, Chunk, Recall
-from aegis.retrieval.pipeline import RetrievalConfig, Retriever
+from aegis.retrieval.pipeline import RetrievalConfig, Retriever, bm25_ranked
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
 from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalOrigin
 from aegis.retrieval.vector_store import QdrantVectorStore
@@ -150,8 +150,11 @@ class InMemoryKnowledgeBackend:
     hands the pipeline a **vector** list (a real
     :class:`~aegis.retrieval.vector_store.QdrantVectorStore` ``search`` over chunk
     embeddings — embedded/local Qdrant, *not* a RAM dict) and a **graph** list
-    (co-occurrence expansion), which RRF fuses with the pipeline's BM25 list.
-    :meth:`recall` returns those two fused (for direct callers).
+    (co-occurrence expansion). It also implements
+    :class:`~aegis.retrieval.protocols.KeywordBackend` (:meth:`keyword_recall`), so the
+    BM25 arm RRF fuses in is a real corpus-wide keyword search rather than a re-scoring
+    of what the other two arms already found. :meth:`recall` returns the vector+graph
+    pair fused (for direct callers).
 
     The vector store is injectable; it defaults to an embedded ``:memory:`` Qdrant so a
     directly-constructed backend (tests, offline evals) still uses the genuine engine.
@@ -523,6 +526,32 @@ class InMemoryKnowledgeBackend:
         seed = list(vector_list.candidates) or list(graph_list.candidates)
         nodes, edges = self._graph_slice(seed)
         return RankedRecall(lists=[vector_list, graph_list], nodes=nodes, edges=edges)
+
+    async def keyword_recall(
+        self, query: str, *, top_k: int, persona: str | None = None
+    ) -> list[Candidate]:
+        """Return the best corpus-wide BM25 matches (the genuine keyword arm).
+
+        Implements :class:`~aegis.retrieval.protocols.KeywordBackend`: BM25 is scored
+        over **every** chunk this backend holds, not over what the vector/graph arms
+        happened to return, so the IDF weights are real corpus statistics and a
+        keyword-only chunk — one no dense or graph arm surfaced — can genuinely enter
+        the fused pool. That is what earns this arm its ``bm25`` provenance origin.
+
+        Args:
+            query: The user query.
+            top_k: Maximum number of matches to return.
+            persona: Accepted for protocol parity; this backend scopes by
+                tenant/subject at construction, not per call.
+
+        Returns:
+            Up to ``top_k`` matching candidates, best first (empty when nothing matches).
+        """
+        corpus = [
+            Candidate(id=ch.id, text=ch.text, metadata={"doc": ch.doc_id})
+            for ch in self._chunks
+        ]
+        return bm25_ranked(query, corpus)[:top_k]
 
     async def recall(self, query: str, *, top_k: int, persona: str | None = None) -> Recall:
         """Fuse the vector + graph lists via RRF for direct callers (protocol path)."""

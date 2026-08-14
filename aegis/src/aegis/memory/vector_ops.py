@@ -24,20 +24,32 @@ bitemporal bookkeeping and impossible to desync from the truth.
 
 The embedding of record still lives on the ORM row's ``embedding`` column (written by the
 injected embedder on the consolidation/ingest path — unchanged this slice). The column is
-no longer *searched*; it is lazily mirrored into the Qdrant collection for the subject on
-the recall/reconcile path, and the ANN search runs against Qdrant. One collection is used
-per ``(memory kind, embedding dim)`` so a lite 256-dim vector is never compared against a
-full-dim one — exactly the dim-skip the old cosine path did, now expressed as collection
-routing.
+no longer *searched*; it is **incrementally** mirrored into the Qdrant collection for the
+subject on the recall/reconcile path, and the ANN search runs against Qdrant. One
+collection is used per ``(memory kind, embedding dim)`` so a lite 256-dim vector is never
+compared against a full-dim one — exactly the dim-skip the old cosine path did, now
+expressed as collection routing.
+
+The mirror is *incremental*, not a full rescan: memory rows are append-only (a fact is
+never re-embedded in place — a refinement or contradiction inserts a superseding row), so
+a per-scope high-water mark on the primary key is a sound sync cursor. Only rows newer
+than the mark are read and upserted, which is what makes the ANN path cheaper than the
+cosine loop it replaced instead of strictly worse than it.
+
+Every qdrant-client call is synchronous (HTTP/gRPC in server mode), so each one is run in
+a worker thread — the recall path is ``async`` and must never block the event loop on a
+network round-trip.
 
 Modes follow the store's contract: ``server`` fails loud if the node is unreachable;
 ``local`` is the embedded, offline qdrant engine (``:memory:`` for tests, on-disk for dev)
 — a real HNSW index, **never** an in-RAM dict fallback. The process-wide default is an
-embedded index; a host wires a production node with :func:`set_default_index`.
+embedded index; a host wires a production node with :func:`set_default_index` (the backend
+does exactly that at startup for any non-dev deployment with the real stores).
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy import select
@@ -67,6 +79,9 @@ class MemoryVectorIndex:
         """Hold the vector store this index mirrors memory rows into and searches."""
         self._store = store
         self._prefix = collection_prefix
+        #: Sync high-water marks: ``(collection, subject_id, tenant tag) -> max row id
+        #: already mirrored``. Bounded by the number of live scopes, holds ints only.
+        self._synced_to: dict[tuple[str, str, str], int] = {}
 
     @classmethod
     def local(cls, *, path: str | None = None) -> MemoryVectorIndex:
@@ -108,19 +123,43 @@ class MemoryVectorIndex:
         tenant_id: int | None,
         dim: int,
     ) -> None:
-        """Mirror this subject's embedded rows into ``collection`` (idempotent upsert).
+        """Mirror this scope's **newly-added** embedded rows into ``collection``.
 
         Reads the embedding of record from the ORM rows (the durable column) and upserts
         the same-dim ones into Qdrant under the row's own tenant/subject scope. Re-upsert
-        is idempotent (deterministic point id per ``(collection, row id)``), so the ANN
-        index always reflects the current authoritative rows for the subject.
+        is idempotent (deterministic point id per ``(collection, row id)``).
+
+        The scan is bounded by a per-scope high-water mark on the primary key rather than
+        re-reading the whole subject on every query. That is sound because the memory
+        tables are **append-only in the embedding**: a fact is never re-embedded in place
+        (a refinement or contradiction inserts a superseding row, and invalidation only
+        writes the bitemporal columns), and messages are immutable once written. Ids are
+        monotonic, so rows a *different* process wrote after this one's last sync still sit
+        above the mark and are picked up on the next call.
+
+        Without the mark this ran a full ``SELECT`` + full re-upsert of the subject per
+        ANN query — for an 8-candidate consolidation, eight full scans and eight full
+        re-index passes — which made the "real index" strictly more expensive than the
+        in-Python cosine loop it replaced.
         """
+        key = (collection, subject_id, "-" if tenant_id is None else str(tenant_id))
+        watermark = self._synced_to.get(key, 0)
+
         stmt = select(model).where(
-            model.subject_id == subject_id, model.embedding.is_not(None)
+            model.subject_id == subject_id,
+            model.embedding.is_not(None),
+            model.id > watermark,
         )
-        if tenant_id is not None:
-            stmt = stmt.where(model.tenant_id == tenant_id)
+        # Null-safe tenant scoping, symmetric with the authoritative SQL join below: the
+        # null tenant is its own scope, never a wildcard over every tenant's rows.
+        stmt = stmt.where(
+            model.tenant_id == tenant_id
+            if tenant_id is not None
+            else model.tenant_id.is_(None)
+        )
         rows = (await session.execute(stmt)).scalars().all()
+        if not rows:
+            return
 
         ids: list[str] = []
         vectors: list[list[float]] = []
@@ -134,10 +173,13 @@ class MemoryVectorIndex:
             payloads.append(
                 {_SUBJECT_KEY: row.subject_id, _TENANT_KEY: row.tenant_id}
             )
-        if not ids:
-            return
-        self._store.ensure_collection(collection, dim)
-        self._store.upsert(collection, ids, vectors, payloads)
+        if ids:
+            # qdrant-client is synchronous; keep the round-trips off the event loop.
+            await asyncio.to_thread(self._store.ensure_collection, collection, dim)
+            await asyncio.to_thread(self._store.upsert, collection, ids, vectors, payloads)
+        # Advance past every row *considered*, including the dim-mismatched ones that
+        # belong to another collection — otherwise they would be re-read forever.
+        self._synced_to[key] = max(row.id for row in rows)
 
     async def search_rows(
         self,
@@ -155,7 +197,8 @@ class MemoryVectorIndex:
 
         Same contract as the old cosine helper, but the ranking is a real ANN search:
 
-        1. Mirror the subject's embedded rows into the ``(kind, dim)`` collection.
+        1. Mirror the scope's rows added since the last sync into the ``(kind, dim)``
+           collection (incremental — see :meth:`_sync_subject`).
         2. ANN-search Qdrant, scoped by ``subject_id`` (+ ``tenant_id``), over-fetching so
            the authoritative SQL filter below can still yield ``k`` eligible rows.
         3. Load the hit ids back from the authoritative table under the SAME scope plus
@@ -178,13 +221,21 @@ class MemoryVectorIndex:
             dim=dim,
         )
 
+        # Qdrant payload pre-filter. The tenant key is only added when a tenant is given:
+        # a null payload value is not reliably matchable across qdrant backends, so the
+        # null-tenant scope is enforced by the authoritative SQL gate below instead (which
+        # drops any cross-tenant point). The pre-filter narrows; SQL decides.
         scope: dict[str, Any] = {_SUBJECT_KEY: subject_id}
         if tenant_id is not None:
             scope[_TENANT_KEY] = tenant_id
         # Over-fetch: SQL may drop invalidated/expired/off-predicate hits, so ask Qdrant
         # for more than k and let the authoritative join trim back to the eligible top-k.
         fetch_k = k * 4 + 16 if (valid_only or predicate is not None) else k
-        hits = self._store.search(collection, query_vec, fetch_k, filter=scope)
+        # Synchronous qdrant-client call → off the event loop (a server-mode search is a
+        # network round-trip and this runs on the hot recall path).
+        hits = await asyncio.to_thread(
+            self._store.search, collection, query_vec, fetch_k, filter=scope
+        )
         if not hits:
             return []
 
@@ -204,8 +255,14 @@ class MemoryVectorIndex:
         auth = select(model).where(
             model.id.in_(list(score_by_id)), model.subject_id == subject_id
         )
-        if tenant_id is not None:
-            auth = auth.where(model.tenant_id == tenant_id)
+        # Null-safe tenant gate: ``tenant_id=None`` is the *null-tenant* scope, not "any
+        # tenant". A bare ``if tenant_id is not None`` would let an unscoped recall return
+        # a tenant's row for a colliding subject id and inject it verbatim into a prompt.
+        auth = auth.where(
+            model.tenant_id == tenant_id
+            if tenant_id is not None
+            else model.tenant_id.is_(None)
+        )
         if valid_only:
             auth = auth.where(model.invalid_at.is_(None), model.expired_at.is_(None))
         if predicate is not None:

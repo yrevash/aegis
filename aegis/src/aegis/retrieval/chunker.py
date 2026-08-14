@@ -93,7 +93,11 @@ class ChunkPiece:
         ordinal: 0-based position of this chunk within its document.
         section: The heading path this chunk sits under (``"A > B"``), or ``""`` for
             preamble text before the first heading.
-        word_start: Word offset of the chunk's first word within the document body.
+        word_start: Word offset of the chunk's first word within the document body
+            (headings excluded, sections concatenated in reading order). Consecutive
+            chunks overlap by design, so consecutive spans overlap by the overlap width;
+            every span stays inside the document — ``word_start + word_count`` never
+            exceeds the body's word count — because the shared words are counted once.
         word_count: Number of words in :attr:`text`.
     """
 
@@ -179,32 +183,42 @@ def _sentence_units(paragraph: str, chunk_size: int) -> list[str]:
     return units
 
 
-def _pack_units(units: list[str], chunk_size: int, overlap: int) -> list[str]:
+def _pack_units(units: list[str], chunk_size: int, overlap: int) -> list[tuple[str, int]]:
     """Greedily pack text units into windows ≤ ``chunk_size`` words, seeding overlap.
 
     Whole units (paragraphs/sentences) are kept intact so a chunk never straddles a
     sentence boundary mid-word. When a window fills, the next one is seeded with the
     trailing ``overlap`` words of the previous window to preserve cross-chunk context.
+
+    Returns:
+        One ``(window, carried)`` pair per window, where ``carried`` is how many of the
+        window's leading words were re-used from the previous window. Those words are
+        *not* new text, so the caller must not advance a document word offset by them —
+        counting them twice is what made the reported spans drift past the end of the
+        document.
     """
-    windows: list[str] = []
+    windows: list[tuple[str, int]] = []
     current: list[str] = []
     current_words = 0
+    carried = 0
     for unit in units:
         unit_words = len(unit.split())
         if current and current_words + unit_words > chunk_size:
             window = " ".join(current)
-            windows.append(window)
+            windows.append((window, carried))
             if overlap > 0:
                 tail = " ".join(window.split()[-overlap:])
                 current = [tail]
                 current_words = len(tail.split())
+                carried = current_words
             else:
                 current = []
                 current_words = 0
+                carried = 0
         current.append(unit)
         current_words += unit_words
     if current:
-        windows.append(" ".join(current))
+        windows.append((" ".join(current), carried))
     return windows
 
 
@@ -247,19 +261,25 @@ def chunk_structured(
                 units.append(paragraph)
             else:
                 units.extend(_sentence_units(paragraph, chunk_size))
-        for window in _pack_units(units, chunk_size, overlap):
+        for window, carried in _pack_units(units, chunk_size, overlap):
             word_count = len(window.split())
+            # ``carried`` leading words are a repeat of the previous window's tail, so
+            # this window actually starts that many words BEFORE the previous one ended.
+            # Advancing by the full word_count would count every overlap twice and push
+            # the reported spans past the end of the document — offsets that cannot
+            # locate the chunk they claim to cite.
+            word_start = max(0, running_words - carried)
             pieces.append(
                 ChunkPiece(
                     text=window,
                     ordinal=ordinal,
                     section=section,
-                    word_start=running_words,
+                    word_start=word_start,
                     word_count=word_count,
                 )
             )
             ordinal += 1
-            running_words += word_count
+            running_words = word_start + word_count
     return pieces
 
 
@@ -307,10 +327,20 @@ def dedup_pieces(
 ) -> DedupResult:
     """Drop exact and near-duplicate chunks, preserving reading order (first wins).
 
-    Exact duplicates are removed by a normalised content hash; near-duplicates by
-    word-shingle Jaccard overlap ``>= near_threshold`` against an already-kept chunk.
-    Near-duplicate detection guards against paraphrased or boilerplate-heavy passages
-    (a common synthetic-data artefact) reaching extraction twice.
+    Duplication is judged on a chunk's **contextualized** text — body *plus* section
+    path — exactly like :meth:`ChunkPiece.content_id` and the ingestion idempotency
+    ledger downstream. That agreement is the point: judging the bare body here while the
+    ledger hashes body+section makes two sections that happen to share a sentence
+    ("Contact support." under *Refunds* and under *Returns*) collide, and the second
+    section is silently left with no indexed content while the run reports a benign
+    duplicate. Near-duplicate detection is scoped to chunks under the same section path
+    for the same reason: two sections repeating boilerplate are distinct answers to
+    distinct questions, not one passage seen twice.
+
+    Within a section, exact duplicates are removed by a normalised content hash and
+    near-duplicates by word-shingle Jaccard overlap ``>= near_threshold`` against an
+    already-kept chunk — guarding against paraphrased or boilerplate-heavy passages (a
+    common synthetic-data artefact) reaching extraction twice.
 
     Args:
         pieces: Candidate chunks for one document (or batch), in order.
@@ -321,20 +351,20 @@ def dedup_pieces(
     """
     result = DedupResult()
     seen_hashes: set[str] = set()
-    kept_shingles: list[frozenset[str]] = []
+    kept_shingles: dict[str, list[frozenset[str]]] = {}
     for piece in pieces:
-        key = _normalise(piece.text)
-        if not key:
+        if not _normalise(piece.text):
             continue
-        content_hash = _content_id(key)
+        content_hash = piece.content_id()
         if content_hash in seen_hashes:
             result.exact_duplicates += 1
             continue
         shingles = _shingles(piece.text)
-        if any(_jaccard(shingles, prior) >= near_threshold for prior in kept_shingles):
+        section_shingles = kept_shingles.setdefault(piece.section, [])
+        if any(_jaccard(shingles, prior) >= near_threshold for prior in section_shingles):
             result.near_duplicates += 1
             continue
         seen_hashes.add(content_hash)
-        kept_shingles.append(shingles)
+        section_shingles.append(shingles)
         result.kept.append(piece)
     return result

@@ -9,19 +9,53 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-__all__ = ["EnsembleMember", "MLExplainResponse", "ModelCard", "ShapFeature"]
+__all__ = [
+    "EnsembleMember",
+    "MLExplainResponse",
+    "MLModelUnavailableError",
+    "ModelCard",
+    "ShapFeature",
+]
+
+
+class MLModelUnavailableError(RuntimeError):
+    """No trained model is available to serve a prediction.
+
+    Raised instead of silently training and serving a model fitted on synthetic
+    noise: a caller that gets no model must be able to tell that apart from a
+    caller that got a real one, so downstream code can omit the ML evidence
+    entirely rather than cite a meaningless prediction.
+    """
 
 
 class ShapFeature(BaseModel):
-    """One feature's signed SHAP contribution to a prediction."""
+    """One feature's signed SHAP contribution to a prediction.
+
+    ``value`` is the numeric value the model saw. For a **categorical** feature
+    that is the one-hot active indicator (``1.0``), which names no level on its
+    own — ``value_label`` carries the actual level (e.g. ``"emea"``) so a UI can
+    render ``region = emea`` rather than ``region = 1.0``.
+    """
 
     feature: str
     value: float
+    value_label: str | None = Field(
+        default=None,
+        description="Human-readable input value; the level name for categoricals.",
+    )
     contribution: float = Field(description="Signed SHAP attribution.")
 
 
 class MLExplainResponse(BaseModel):
-    """Prediction, calibrated conformal interval and SHAP attribution."""
+    """Prediction, calibrated conformal interval and SHAP attribution.
+
+    The provenance/imputation fields are the machine-readable honesty signal:
+    ``data_source == "synthetic"`` means the serving model was fitted on the
+    built-in noise synthesiser and carries **no domain signal**, and
+    ``imputed_features`` / ``unknown_features`` say how much of the answer came
+    from training medians rather than the caller's input. Downstream code (and
+    the UI) must be able to discount the evidence on those signals alone.
+    """
 
     prediction: float | str
     conformal_interval: tuple[float, float] | None = None
@@ -29,6 +63,18 @@ class MLExplainResponse(BaseModel):
     interval_width: float | None = None
     prediction_set_size: int | None = None
     shap_attribution: list[ShapFeature] = Field(default_factory=list)
+    data_source: str | None = Field(
+        default=None,
+        description="'provided' | 'spec_provider' | 'synthetic' — training-data origin.",
+    )
+    imputed_features: list[str] = Field(
+        default_factory=list,
+        description="Features the caller did not supply, filled from training medians/modes.",
+    )
+    unknown_features: list[str] = Field(
+        default_factory=list,
+        description="Keys the caller supplied that are not model features (ignored).",
+    )
 
 
 class EnsembleMember(BaseModel):
@@ -62,9 +108,33 @@ class ModelCard(BaseModel):
     )
     conformal_method: str = Field(description="Conformal scheme, e.g. 'split_conformal'.")
     conformal_predictor: str = Field(description="MAPIE class name backing the guarantee.")
-    conformal_coverage: float = Field(description="Guaranteed marginal coverage rate.")
+    conformal_coverage: float = Field(
+        description=(
+            "REQUESTED marginal coverage — the level asked for, not a measurement. "
+            "See conformal_coverage_empirical for the rate actually achieved."
+        ),
+    )
     calibration_size: int = Field(description="Rows in the disjoint calibration split.")
     training_size: int = Field(description="Rows the ensemble was fitted on.")
     data_source: str = Field(
         description="'provided' | 'spec_provider' | 'synthetic' — how data was sourced.",
+    )
+    test_size: int = Field(
+        default=0,
+        description="Rows in the held-out test split neither fitted nor calibrated on.",
+    )
+    conformal_coverage_empirical: float | None = Field(
+        default=None,
+        description=(
+            "MEASURED coverage of the conformal interval/set on the held-out test "
+            "split; None when no test split was held out."
+        ),
+    )
+    metric_name: str | None = Field(
+        default=None,
+        description="Held-out accuracy metric: 'r2' (regression) or 'accuracy'.",
+    )
+    metric_value: float | None = Field(
+        default=None,
+        description="Measured value of metric_name on the held-out test split.",
     )

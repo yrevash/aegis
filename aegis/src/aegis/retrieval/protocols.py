@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable
 
 from aegis.core.models import ModelRole
 from aegis.retrieval.fusion import RankedRecall
-from aegis.retrieval.models import Chunk, Recall
+from aegis.retrieval.models import Candidate, Chunk, Recall
 from aegis.retrieval.types import GraphEdge, GraphNode
 
 
@@ -84,6 +84,30 @@ class MultiListBackend(Protocol):
         self, query: str, *, top_k: int, persona: str | None = None
     ) -> RankedRecall:
         """Return per-signal ranked lists plus the touched graph slice."""
+        ...
+
+
+@runtime_checkable
+class KeywordBackend(Protocol):
+    """Optional capability: a backend that can search its **whole corpus** by keyword.
+
+    Without this, the pipeline's BM25 pass can only score the candidates the dense /
+    graph arms already returned — which reorders them but can never surface a
+    keyword-only document, and computes its IDF over a ~20-document "corpus". A backend
+    implementing ``keyword_recall`` runs the keyword match over everything it holds, so
+    BM25 becomes a genuinely independent recall arm (and is reported as one). Backends
+    that cannot do this are not faked into looking like they can: the pipeline demotes
+    the pass to a labelled re-ranking step instead.
+    """
+
+    async def keyword_recall(
+        self, query: str, *, top_k: int, persona: str | None = None
+    ) -> Sequence[Candidate]:
+        """Return up to ``top_k`` corpus-wide keyword matches, best first.
+
+        Implementations rank over the entire corpus (not a pre-filtered pool) and return
+        only genuine matches, so an empty list honestly means "no keyword hit".
+        """
         ...
 
 

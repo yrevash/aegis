@@ -4,9 +4,13 @@ This is the first half of context engineering (``docs/architecture/memory-spec.m
 raw material the working-memory assembler (:mod:`aegis.memory.working`) later budgets and
 orders. It does **selection**, not layout — no token budget, no spotlighting here.
 
-**Isolation is app-level first (BLOCKER 2).** Every query filters ``subject_id`` (and
-``tenant_id`` when given) in its ``WHERE`` clause — the primary, NULL-safe, dialect-
-independent isolator. Postgres RLS is only an additive belt and is never relied upon.
+**Isolation is app-level first (BLOCKER 2).** Every query filters ``subject_id`` **and**
+``tenant_id`` in its ``WHERE`` clause — the primary, NULL-safe, dialect-independent
+isolator. Postgres RLS is only an additive belt and is never relied upon. The tenant
+predicate is NULL-*symmetric*: ``tenant_id=None`` means the **null-tenant scope**
+(``tenant_id IS NULL``), never "any tenant". Emitting the predicate only when a tenant is
+supplied would let an unscoped recall return a tenant's row whenever a ``subject_id``
+collides across scopes — and recall's output is injected verbatim into the prompt.
 
 **Semantic vectors via Qdrant.** All vector recall goes through
 :func:`aegis.memory.vector_ops.topk_by_cosine`, now a real Qdrant ANN search (subject/
@@ -36,6 +40,17 @@ from aegis.memory.vector_ops import topk_by_cosine
 from aegis.retrieval.fusion import RankedList, reciprocal_rank_fusion
 from aegis.retrieval.models import Candidate
 from aegis.retrieval.types import RetrievalOrigin
+
+
+def _tenant_clause(model, tenant_id: int | None):  # noqa: ANN001, ANN202 - mapped class
+    """The NULL-symmetric tenant predicate for ``model`` (``IS NULL`` for the null tenant).
+
+    Single-sourced so no recall query can drift back to the leaky
+    ``if tenant_id is not None`` form, which silently degrades to "any tenant".
+    """
+    if tenant_id is None:
+        return model.tenant_id.is_(None)
+    return model.tenant_id == tenant_id
 
 
 @dataclass
@@ -90,9 +105,10 @@ async def load_raw_window(
     """
     if config.raw_window_turns <= 0:
         return []
-    stmt = select(MemoryMessage).where(MemoryMessage.subject_id == subject_id)
-    if tenant_id is not None:
-        stmt = stmt.where(MemoryMessage.tenant_id == tenant_id)
+    stmt = select(MemoryMessage).where(
+        MemoryMessage.subject_id == subject_id,
+        _tenant_clause(MemoryMessage, tenant_id),
+    )
     stmt = (
         stmt.where(MemoryMessage.session_id == session_id)
         .order_by(MemoryMessage.turn_index.desc())
@@ -143,9 +159,9 @@ async def _recall_facts(
         )
 
     # Recency-only fallback: newest valid facts, no scoring.
-    stmt = select(MemoryFact).where(MemoryFact.subject_id == subject_id)
-    if tenant_id is not None:
-        stmt = stmt.where(MemoryFact.tenant_id == tenant_id)
+    stmt = select(MemoryFact).where(
+        MemoryFact.subject_id == subject_id, _tenant_clause(MemoryFact, tenant_id)
+    )
     stmt = (
         stmt.where(MemoryFact.invalid_at.is_(None), MemoryFact.expired_at.is_(None))
         .order_by(MemoryFact.valid_at.desc())
@@ -173,10 +189,18 @@ async def _recall_profile(
     tenant_id: int | None,
     spec: MemorySpec,
 ) -> str:
-    """Load the subject's profile row and render it as the human block (or "")."""
-    stmt = select(MemoryProfile).where(MemoryProfile.subject_id == subject_id)
-    if tenant_id is not None:
-        stmt = stmt.where(MemoryProfile.tenant_id == tenant_id)
+    """Load the subject's profile row and render it as the human block (or "").
+
+    The tenant predicate is NULL-symmetric (and matches the write side in
+    :func:`aegis.memory.consolidate._update_profile`): the same ``subject_id`` may legally
+    hold one profile per tenant *plus* a null-tenant one, so scoping only "when a tenant is
+    given" would let a null-tenant recall pick an arbitrary tenant's profile — which is
+    rendered straight into the prompt's human block.
+    """
+    stmt = select(MemoryProfile).where(
+        MemoryProfile.subject_id == subject_id,
+        _tenant_clause(MemoryProfile, tenant_id),
+    )
     profile = (await session.execute(stmt)).scalars().first()
     if profile is None:
         return ""
@@ -192,23 +216,42 @@ async def _recall_episodic(
     tenant_id: int | None,
     raw_window: list[MemoryMessage],
 ) -> list[RecallCandidate]:
-    """Hybrid episodic recall: RRF-fuse (recency window ∪ vector top-k), minus the window.
+    """Hybrid episodic recall: RRF-fuse (recency ∪ vector top-k) over eligible turns.
 
-    The recency list is the raw window tagged ``BM25`` (``RetrievalOrigin`` has no
-    "recency"); the vector list is the subject-wide semantic top-k tagged ``VECTOR``. The
-    fused survivors are then filtered to those NOT already in the raw window, so episodic
-    recall only ever contributes older, relevant turns the bottom tier would miss.
+    Episodic recall exists to surface turns the raw window would MISS, so both fused lists
+    are drawn from the turns outside that window:
+
+    * the **recency list** — the subject's newest turns that the raw window does not
+      already carry, tagged ``BM25`` because :class:`RetrievalOrigin` has no "recency"
+      member (a known label compromise, not a second signal);
+    * the **vector list** — the subject-wide semantic top-k, tagged ``VECTOR``.
+
+    Building the recency list from the raw window itself made the fusion inert: every one
+    of its ids is dropped by the dedup filter below, so RRF ranked only items guaranteed to
+    be discarded and the surviving order collapsed to pure vector rank — the recency signal
+    never reached the output, and a recent-but-unembedded turn could never be recalled at
+    all. Ranking the *eligible* turns instead is what makes this genuinely hybrid.
     """
     raw_ids = {m.id for m in raw_window}
     msg_by_id: dict[int, MemoryMessage] = {m.id: m for m in raw_window}
 
-    # Recency list (newest first) — the raw window as a ranked list.
+    # Recency list (newest first) — the subject's most recent turns BEYOND the raw window,
+    # i.e. exactly the population episodic recall is allowed to contribute from.
+    rec_stmt = select(MemoryMessage).where(
+        MemoryMessage.subject_id == subject_id,
+        _tenant_clause(MemoryMessage, tenant_id),
+    )
+    if raw_ids:
+        rec_stmt = rec_stmt.where(MemoryMessage.id.not_in(raw_ids))
+    rec_stmt = rec_stmt.order_by(
+        MemoryMessage.created_at.desc(), MemoryMessage.id.desc()
+    ).limit(config.k_epi)
+    recency_rows = list((await session.execute(rec_stmt)).scalars().all())
+    for msg in recency_rows:
+        msg_by_id[msg.id] = msg
     recency_list = RankedList(
         origins=(RetrievalOrigin.BM25,),
-        candidates=[
-            Candidate(id=str(m.id), text=m.content)
-            for m in sorted(raw_window, key=lambda m: m.turn_index, reverse=True)
-        ],
+        candidates=[Candidate(id=str(m.id), text=m.content) for m in recency_rows],
     )
 
     # Vector list (most similar first) across the whole subject.
@@ -342,7 +385,8 @@ async def recall(
     """Gather all recall tiers for one turn (facts, profile, episodic, skills, summary).
 
     Selection only — the assembler budgets and orders. Every DB query is scoped to
-    ``subject_id`` (+ ``tenant_id`` when given); RLS is never relied upon.
+    ``subject_id`` **and** ``tenant_id`` (NULL-symmetric — ``None`` is the null-tenant
+    scope, not a wildcard); RLS is never relied upon.
 
     Args:
         session: Async DB session.
@@ -387,10 +431,11 @@ async def recall(
     )
     skills = _recall_skills(query, persona, config, spec)
 
-    stmt = select(MemorySession).where(MemorySession.id == session_id)
-    stmt = stmt.where(MemorySession.subject_id == subject_id)
-    if tenant_id is not None:
-        stmt = stmt.where(MemorySession.tenant_id == tenant_id)
+    stmt = select(MemorySession).where(
+        MemorySession.id == session_id,
+        MemorySession.subject_id == subject_id,
+        _tenant_clause(MemorySession, tenant_id),
+    )
     sess = (await session.execute(stmt)).scalars().first()
     running_summary = (sess.summary if sess is not None else None) or ""
 

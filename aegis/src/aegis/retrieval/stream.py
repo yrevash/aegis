@@ -61,9 +61,21 @@ def _observability_payload(result: RetrievalResult) -> dict:
         "fused_candidates": obs.fused_candidates,
         "rerank": {
             "ran": obs.rerank.ran,
+            # `graded`/`degraded_reason` travel with the scores they qualify: a rerank
+            # call that ran but could not grade leaves fused RRF scores in `top_scores`,
+            # and the UI must be able to tell those from real relevance grades.
+            "graded": obs.rerank.graded,
             "input_candidates": obs.rerank.input_candidates,
             "kept": obs.rerank.kept,
+            "ungraded": obs.rerank.ungraded,
+            "degraded_reason": obs.rerank.degraded_reason,
             "top_scores": obs.rerank.top_scores,
+        },
+        "keyword": {
+            "ran": obs.keyword.ran,
+            "scope": obs.keyword.scope,
+            "matched": obs.keyword.matched,
+            "adds_recall": obs.keyword.adds_recall,
         },
         "spotlight_applied": obs.spotlight_applied,
         "rewrite": (
@@ -81,6 +93,7 @@ def _observability_payload(result: RetrievalResult) -> dict:
                 "used_rounds": obs.agentic.used_rounds,
                 "max_rounds": obs.agentic.max_rounds,
                 "round_queries": obs.agentic.round_queries,
+                "round_new_sources": obs.agentic.round_new_sources,
             }
             if obs.agentic is not None
             else None
