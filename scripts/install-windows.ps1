@@ -157,17 +157,43 @@ if (-not $SkipStores) {
     }
   }
 
-  # ── Redis — near-exact retrieval cache + answer cache ──────────────────────
-  # Redis ships no official Windows build. Memurai is the maintained
-  # Redis-compatible Windows service and is what this targets.
-  Head 'Redis'
+  # ── Redis / Memurai — near-exact retrieval cache + answer cache ────────────
+  # Redis ships no official Windows build, and enterprise Windows images have no
+  # Docker or WSL to fall back on. Memurai is the maintained Redis-compatible
+  # Windows service, speaks the same wire protocol on the same port, and needs
+  # NO application change: REDIS_URL=redis://localhost:6379/0 and redis-py drive
+  # it exactly as they drive Redis. Its CLI is `memurai-cli`, not `redis-cli`.
+  Head 'Redis / Memurai'
+  $redisCli = @('memurai-cli','redis-cli') | Where-Object { Have $_ } | Select-Object -First 1
+
+  if (-not (Test-Port 6379)) {
+    # Installed but not running is the common case after a reboot — starting the
+    # existing service beats reinstalling it.
+    $svc = Get-Service -Name 'Memurai*' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($svc -and $svc.Status -ne 'Running') {
+      Write-Host "  starting the $($svc.Name) service ..."
+      try { Start-Service $svc.Name; Start-Sleep -Seconds 3 } catch { Warn "could not start $($svc.Name): $($_.Exception.Message)" }
+    } elseif (-not $svc -and -not $redisCli) {
+      Install-WingetPackage 'Memurai.MemuraiDeveloper' 'memurai-cli' 'Memurai (Redis for Windows)' | Out-Null
+      Start-Sleep -Seconds 4
+      $redisCli = @('memurai-cli','redis-cli') | Where-Object { Have $_ } | Select-Object -First 1
+    }
+  }
+
   if (Test-Port 6379) {
-    Ok 'already listening on 6379'
+    # Port-open is necessary but not sufficient — PING proves it actually speaks
+    # the protocol, which is the thing the cache depends on.
+    if ($redisCli) {
+      $pong = & $redisCli ping 2>$null
+      if ($pong -match 'PONG') { Ok "6379 answering PONG (via $redisCli)" }
+      else { Warn "6379 open but $redisCli did not return PONG" }
+    } else {
+      Ok '6379 listening (no CLI found to PING with)'
+    }
   } else {
-    Install-WingetPackage 'Memurai.MemuraiDeveloper' $null 'Memurai (Redis for Windows)' | Out-Null
-    Start-Sleep -Seconds 4
-    if (Test-Port 6379) { Ok 'Redis up on 6379' }
-    else { Warn 'Redis not answering — retrieval falls back to no cache (non-fatal)' }
+    Warn 'Redis/Memurai not answering on 6379'
+    Warn '  non-fatal: the semantic cache degrades to no-cache, every other surface is fine'
+    Warn '  fix: install Memurai (https://www.memurai.com/get-memurai), then Start-Service Memurai'
   }
 
   # ── Qdrant — ANN vectors behind retrieval + memory recall ──────────────────

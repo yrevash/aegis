@@ -88,8 +88,23 @@ HNSW index, never a silent RAM fallback.
 **Neo4j** — install Neo4j Desktop or Community, start a local DB, and set a
 password. Default bolt URI is `bolt://localhost:7687`, user `neo4j`.
 
-**Redis** — install and start locally (`redis-server`). On Windows use **Memurai**
-or Redis on WSL2. Default URL `redis://localhost:6379/0`.
+**Redis** — install and start locally (`redis-server`). Default URL
+`redis://localhost:6379/0`.
+
+On **Windows** (including locked-down enterprise images with no Docker and no
+WSL) use **Memurai**, the maintained Redis-compatible Windows service. It speaks
+the same wire protocol on the same port, so **no application or config change is
+needed** — `REDIS_URL` stays exactly as above and `redis-py` drives it
+identically. The only difference is the CLI: `memurai-cli ping`, not
+`redis-cli ping`. Verify with:
+
+```powershell
+memurai-cli ping        # -> PONG
+Get-Service Memurai*    # should be Running
+```
+
+If it is installed but the port is closed, it is usually just stopped after a
+reboot: `Start-Service Memurai`.
 
 > No Docker is used anywhere. Each store is a native local install.
 

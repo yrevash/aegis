@@ -35,7 +35,18 @@ Row $gwOk 'Model gateway' $(if($key){"$base"}else{'no key in backend\.env'})
 # Local stores (only needed for full mode).
 Row (Port 'localhost' 5432) 'Postgres (5432)'  'full mode only'
 Row (Port 'localhost' 7687) 'Neo4j (7687)'     'full mode only'
-Row (Port 'localhost' 6379) 'Redis (6379)'     'full mode only'
+Row (Port 'localhost' 6333) 'Qdrant (6333)'    'full mode only'
+
+# Redis on Windows is Memurai: same wire protocol, same port, different CLI
+# (`memurai-cli`, not `redis-cli`) — the app needs no change either way. A PING
+# is worth more than an open port here, since the cache depends on the protocol.
+$redisNote = 'full mode only'
+$redisCli = @('memurai-cli','redis-cli') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+if ($redisCli) {
+  $pong = & $redisCli ping 2>$null
+  if ($pong -match 'PONG') { $redisNote = "PONG via $redisCli" }
+}
+Row (Port 'localhost' 6379) 'Redis/Memurai (6379)' $redisNote
 
 # Regression gate (DeepEval-pattern) — offline CI gate over the seed corpus + the
 # agentic router case. No network, no keys, no stores; a nonzero exit FAILS preflight.
