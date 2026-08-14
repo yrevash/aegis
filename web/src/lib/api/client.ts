@@ -12,11 +12,13 @@ import {
   mockAssignRole,
   mockAudit,
   mockBudgets,
+  mockCapabilities,
   mockCreateBudget,
   mockGraph,
   mockMetrics,
   mockMlExplain,
   mockPatchCheck,
+  mockPublicMetrics,
   mockRiskMap,
   mockSavings,
   mockStack,
@@ -34,6 +36,7 @@ import type {
   Budget,
   BudgetsResponse,
   BudgetScope,
+  CapabilitiesResponse,
   CreateBudgetRequest,
   GraphResponse,
   LoginRequest,
@@ -42,6 +45,7 @@ import type {
   MLExplainResponse,
   MetricsResponse,
   PatchCheckResponse,
+  PublicMetricsResponse,
   RiskMapResponse,
   SavingsResponse,
   StackResponse,
@@ -614,4 +618,26 @@ export async function getLatency(token: string | null): Promise<LatencyResponse>
 export async function runRedteam(token: string | null): Promise<RedteamReportResponse> {
   if (isMock()) return mockRedteamRun()
   return request<RedteamReportResponse>('/redteam/run', { method: 'POST' }, token)
+}
+
+/**
+ * Fetch the Aegis module manifest.
+ *
+ * Public — no bearer token. The landing page at `/` renders this before anyone
+ * signs in, which is why the backend route carries no auth dependency.
+ */
+export async function getCapabilities(): Promise<CapabilitiesResponse> {
+  if (isMock()) return mockCapabilities()
+  return request<CapabilitiesResponse>('/platform/capabilities', { method: 'GET' }, null)
+}
+
+/**
+ * Fetch the pre-login efficiency figures.
+ *
+ * Public, and deliberately narrow: ratios and counts only. The cost figures stay
+ * behind auth on `/metrics` — see the backend `PublicMetricsResponse` docstring.
+ */
+export async function getPublicMetrics(): Promise<PublicMetricsResponse> {
+  if (isMock()) return mockPublicMetrics()
+  return request<PublicMetricsResponse>('/platform/public-metrics', { method: 'GET' }, null)
 }

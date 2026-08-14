@@ -1,5 +1,10 @@
 # INSTALL.md — Setup & Run Guide
 
+> **Bare Windows machine?** `scripts\install-windows.ps1` (elevated) does the whole
+> setup — toolchain, the four native stores, then the app dependencies. Add
+> `-SkipStores` if you only intend to run `-Mode lite`. It has not yet been executed
+> on Windows; the manual steps below remain the fallback.
+>
 > **Fastest path (no agent needed):** `scripts\bootstrap.ps1` → `scripts\preflight.ps1`
 > → `scripts\start.ps1 -Mode lite` (Windows; `.sh` twins for mac/Linux). The
 > one-page day-of guide with the fallback ladder is **`docs/operations/runbook.md`**;

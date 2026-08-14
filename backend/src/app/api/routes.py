@@ -91,6 +91,7 @@ from app.api.schemas import (
     OpsRollbackResponse,
     PatchCheckRequest,
     PatchCheckResponse,
+    PublicMetricsResponse,
     QueryRequest,
     RecallDebugItem,
     RecallDebugResponse,
@@ -711,17 +712,21 @@ async def login(req: LoginRequest) -> LoginResponse:
     response_model=CapabilitiesResponse,
     tags=["platform"],
 )
-async def platform_capabilities(
-    auth: AuthContext = Depends(require_auth),
-) -> CapabilitiesResponse:
+async def platform_capabilities() -> CapabilitiesResponse:
     """Return the Aegis capabilities manifest — the honest "what Aegis is" surface.
 
     Every branded Aegis module is listed with the real tech underneath (branding,
     never hiding), its honest one-line summary, the actual implementing
     ``module_path`` and a live/optional status. Sourced verbatim from
     :data:`app.capabilities.AEGIS_MODULES` — the single source of truth also read by
-    the docs and the frontend Platform view. Read-scoped to any authenticated
-    principal, matching the lightest existing read-auth convention.
+    the docs and the frontend Platform view.
+
+    **Unauthenticated by design.** The public landing page at ``/`` renders this
+    manifest, so it must answer without a bearer token. The body is product
+    identity — module names, the tech underneath, one-line summaries and import
+    paths — the same material already published in ``README.md``. It carries no
+    tenant, user, usage or credential data, which is the same reasoning that makes
+    ``GET /about`` public.
     """
     return CapabilitiesResponse(
         product=PRODUCT_NAME,
@@ -1009,6 +1014,43 @@ async def metrics(
     except Exception:  # noqa: BLE001 - the store is optional; degrade to an honest 0
         logger.debug("actions_approved count failed — honest 0.", exc_info=True)
     return snapshot
+
+
+@router.get(
+    "/platform/public-metrics",
+    response_model=PublicMetricsResponse,
+    tags=["platform"],
+)
+async def platform_public_metrics(
+    metrics_store: MetricsStore = Depends(get_metrics_store),
+) -> PublicMetricsResponse:
+    """Return the pre-login efficiency figures for the public landing page.
+
+    **Unauthenticated by design**, and therefore a deliberately narrow projection of
+    :func:`metrics`: ratios and counts only. The absolute money figures, the
+    effective routing map and everything per-tenant stay behind ``require_auth`` —
+    see :class:`PublicMetricsResponse` for the reasoning and
+    ``tests/api/test_public_surfaces.py`` for the test that keeps this surface from
+    silently widening.
+
+    ``actions_approved`` needs an async store read and degrades to an honest ``0``
+    when the store is unavailable, exactly as the authenticated handler does. No
+    field is ever fabricated: the landing page renders "not yet measured" for a
+    null ``p95_latency_ms`` rather than inventing a number.
+    """
+    snapshot = metrics_store.snapshot()
+    try:
+        approved = await count_approved()
+    except Exception:  # noqa: BLE001 - the store is optional; degrade to an honest 0
+        logger.debug("public actions_approved count failed — honest 0.", exc_info=True)
+        approved = 0
+    return PublicMetricsResponse(
+        cache_hit_rate=snapshot.cache_hit_rate,
+        small_model_share=snapshot.small_model_share,
+        total_calls=snapshot.total_calls,
+        actions_approved=approved,
+        p95_latency_ms=snapshot.p95_latency_ms,
+    )
 
 
 # Upper bound on how many audit rows one /audit call may return.

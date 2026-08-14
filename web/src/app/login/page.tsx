@@ -1,7 +1,9 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { LogIn, ShieldHalf, ShieldCheck } from 'lucide-react'
+import { LogIn, ShieldCheck } from 'lucide-react'
+
+import { AegisLockup } from '@/components/brand/AegisLockup'
 import { useEffect, useState, type FormEvent } from 'react'
 
 import { Button } from '@/components/primitives/button'
@@ -77,12 +79,7 @@ export default function LoginPage() {
     <div className="grid min-h-dvh lg:grid-cols-2">
       {/* Left: identity / thesis */}
       <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-border bg-surface p-10 lg:flex">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <ShieldHalf className="size-5" />
-          </span>
-          <span className="text-[0.95rem] font-semibold tracking-tight text-foreground">Aegis</span>
-        </div>
+        <AegisLockup size="lg" />
         <div className="max-w-md">
           <p className="eyebrow mb-4">Bounded-autonomy AI, made watchable</p>
           <h2 className="text-3xl font-semibold leading-tight tracking-tight text-foreground">
@@ -105,12 +102,7 @@ export default function LoginPage() {
       {/* Right: form */}
       <main className="flex items-center justify-center p-6">
         <div className="w-full max-w-sm">
-          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-              <ShieldHalf className="size-5" />
-            </span>
-            <span className="text-[0.95rem] font-semibold tracking-tight text-foreground">Aegis</span>
-          </div>
+          <AegisLockup size="md" className="mb-8 lg:hidden" />
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Sign in</h1>
           <p className="mb-6 mt-1 text-sm text-muted-foreground">
             Access is role-scoped: Admin, AI team, DevOps and Client each land in

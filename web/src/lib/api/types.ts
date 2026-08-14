@@ -361,3 +361,36 @@ export interface UsageResponse {
   by_model: UsageModelRow[]
   series: UsageSeriesPoint[]
 }
+
+/** One branded Aegis module, paired with its honest underlying tech. */
+export interface AegisModuleRow {
+  name: string
+  tech: string
+  summary: string
+  module_path: string
+  category: 'runtime' | 'knowledge' | 'trust' | 'ops' | 'platform'
+  status: 'live' | 'optional'
+}
+
+/** Response from the public `GET /platform/capabilities` — the module manifest. */
+export interface CapabilitiesResponse {
+  product: string
+  tagline: string
+  module_count: number
+  modules: AegisModuleRow[]
+}
+
+/**
+ * Response from the public `GET /platform/public-metrics`.
+ *
+ * Ratios and counts only — the absolute cost figures and the routing map stay
+ * behind auth on `/metrics`. `p95_latency_ms` is null until runs are recorded,
+ * which the UI renders as an honest "not yet measured", never a fabricated 0.
+ */
+export interface PublicMetricsResponse {
+  cache_hit_rate: number
+  small_model_share: number
+  total_calls: number
+  actions_approved: number
+  p95_latency_ms: number | null
+}

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ShieldHalf } from 'lucide-react'
+import { AegisLockup } from '@/components/brand/AegisLockup'
 import { cn } from '@/lib/utils'
 import { portalLabelFor, sectionsFor, type Role, type Section } from '@/lib/portal'
 
@@ -33,11 +33,8 @@ export function Sidebar({ role }: { role: Role }) {
   return (
     <aside className="sticky top-0 hidden h-dvh w-[264px] shrink-0 self-start border-r border-border bg-surface lg:flex lg:flex-col">
       {/* Brand */}
-      <div className="flex items-center gap-2.5 px-5 pt-7 pb-6">
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-          <ShieldHalf className="size-5" />
-        </span>
-        <span className="text-[0.95rem] font-semibold tracking-tight text-foreground">Aegis</span>
+      <div className="px-5 pt-7 pb-6">
+        <AegisLockup size="md" />
       </div>
 
       {/* Grouped nav */}

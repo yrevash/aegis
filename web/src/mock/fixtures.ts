@@ -15,12 +15,14 @@ import type {
   Budget,
   BudgetScope,
   BudgetsResponse,
+  CapabilitiesResponse,
   CreateBudgetRequest,
   GraphResponse,
   MLExplainRequest,
   MLExplainResponse,
   MetricsResponse,
   PatchCheckResponse,
+  PublicMetricsResponse,
   RiskMapResponse,
   SavingsResponse,
   StackResponse,
@@ -538,3 +540,53 @@ export function mockAssignRole(userId: number, role: Role): AdminUser {
   }
 }
 
+
+/**
+ * The Aegis module manifest for offline mode.
+ *
+ * Mirrors `backend/src/app/capabilities.py`. Live mode reads the real endpoint —
+ * this exists so the public landing page still renders during an offline
+ * rehearsal, behind the same "offline demo" labelling as every other mock.
+ */
+export function mockCapabilities(): CapabilitiesResponse {
+  const modules: CapabilitiesResponse['modules'] = [
+    ['Aegis Gateway', 'LiteLLM', 'Single model chokepoint: role routing, budgets, timeout, retry, usage ledger', 'runtime', 'live'],
+    ['Aegis Router', 'LangGraph', 'Multi-agent supervisor — routes a turn to the right specialist', 'runtime', 'live'],
+    ['Aegis Memory', 'Postgres + Qdrant', 'Long-term memory: episodic · semantic · procedural, bitemporal, consolidated', 'knowledge', 'live'],
+    ['Aegis Cache', 'Redis', 'Semantic response cache', 'knowledge', 'live'],
+    ['Aegis Retrieval', 'Neo4j/LightRAG + Qdrant', 'Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank, spotlighting', 'knowledge', 'live'],
+    ['Aegis Signal', 'XGBoost + MAPIE + SHAP', 'Trustworthy ML: ensemble + calibrated conformal intervals + SHAP', 'trust', 'live'],
+    ['Aegis Guardrails', 'programmatic + NeMo Colang', 'Input/output rails: injection, PII, schema, content', 'trust', 'live'],
+    ['Aegis Evals', 'RAGAS-style proxies + LLM judge', 'Trace-level + answer evaluation', 'ops', 'live'],
+    ['Aegis Loop', 'native', 'LLM-Ops self-improvement: trace → eval → diagnose → tiered release', 'ops', 'live'],
+    ['Aegis Governance', 'Postgres RLS + JWT', 'Multi-tenant RBAC, budgets, RLS, audit log', 'platform', 'live'],
+    ['Aegis Trace', 'OpenTelemetry → Phoenix', 'End-to-end tracing (glass box)', 'ops', 'live'],
+    ['Aegis Tools / MCP', 'native + MCP SDK', 'Risk-tiered tool registry + human gate, exposed over MCP', 'platform', 'optional'],
+  ].map(([name, tech, summary, category, status]) => ({
+    name: name as string,
+    tech: tech as string,
+    summary: summary as string,
+    module_path: 'app.capabilities',
+    category: category as CapabilitiesResponse['modules'][number]['category'],
+    status: status as CapabilitiesResponse['modules'][number]['status'],
+  }))
+  return {
+    product: 'Aegis',
+    tagline:
+      'A domain-agnostic agentic platform — cheap-to-scale, trustworthy, secure and auditable.',
+    module_count: modules.length,
+    modules,
+  }
+}
+
+/** Public efficiency figures for offline mode (mirrors the live shape). */
+export function mockPublicMetrics(): PublicMetricsResponse {
+  const m = mockMetrics()
+  return {
+    cache_hit_rate: m.cache_hit_rate,
+    small_model_share: m.small_model_share,
+    total_calls: 1284,
+    actions_approved: 37,
+    p95_latency_ms: 2140,
+  }
+}

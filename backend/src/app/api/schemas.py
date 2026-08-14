@@ -501,6 +501,45 @@ class CapabilitiesResponse(BaseModel):
     )
 
 
+class PublicMetricsResponse(BaseModel):
+    """Body for `GET /platform/public-metrics` — the pre-login efficiency figures.
+
+    A deliberately **narrow** subset of :class:`MetricsResponse`, safe to serve
+    without a bearer token because it carries ratios and counts only. The absolute
+    money figures (``cost_saved_usd``, ``baseline_cost_usd``,
+    ``cost_per_1k_queries_usd``), the effective ``routing`` map and everything
+    per-tenant stay behind ``require_auth`` on ``GET /metrics``: publishing a cost
+    base invites "on what workload?", a question the landing page cannot answer.
+
+    Every field is nullable-or-zero by design and the console renders an honest
+    "not yet measured" rather than a fabricated figure — the same no-fakes rule the
+    authenticated dashboards follow. ``tests/api/test_public_surfaces.py`` asserts
+    the withheld field names never appear in this body.
+    """
+
+    cache_hit_rate: float = Field(
+        description="Measured share of retrievals served from the semantic cache."
+    )
+    small_model_share: float = Field(
+        description="Measured share of chat calls routed to a small model."
+    )
+    total_calls: int = Field(
+        default=0,
+        description=(
+            "Chat completions served since this process started. Process-wide, not "
+            "per-day; resets on restart."
+        ),
+    )
+    actions_approved: int = Field(
+        default=0,
+        description="Human-gate approvals cleared. 0 when none — never fabricated.",
+    )
+    p95_latency_ms: float | None = Field(
+        default=None,
+        description="95th-percentile run duration, or null when no runs recorded.",
+    )
+
+
 class AboutResponse(BaseModel):
     """Body for `GET /about` — a trivial product identity card."""
 

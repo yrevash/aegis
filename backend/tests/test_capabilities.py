@@ -73,10 +73,18 @@ async def test_capabilities_endpoint_returns_all_modules(client, user_headers) -
         assert row["module_path"].startswith("app.")
 
 
-async def test_capabilities_endpoint_requires_auth(client) -> None:
-    """The manifest matches the lightest read-auth convention — 401 without a token."""
+async def test_capabilities_endpoint_is_public(client) -> None:
+    """The manifest is public: the pre-login landing page at ``/`` renders it.
+
+    This deliberately reverses the endpoint's original read-auth guard. The body is
+    product identity — module names, honest tech, summaries, import paths — the same
+    material published in ``README.md``, carrying no tenant, user, usage or
+    credential data. See ``tests/api/test_public_surfaces.py`` for the wider
+    public-surface contract.
+    """
     resp = await client.get("/platform/capabilities")
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 200
+    assert resp.json()["module_count"] == len(AEGIS_MODULES)
 
 
 async def test_about_endpoint_is_public_identity_card(client) -> None:
