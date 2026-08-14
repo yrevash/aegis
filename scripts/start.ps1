@@ -1,9 +1,9 @@
-<#
+﻿<#
 .SYNOPSIS
   Start the TAIF S2 platform (Windows). Opens the backend and console, each in
   its own window, and prints the URLs.
 .PARAMETER Mode
-  safe : console only, mock transport — no backend, no infra. Can't-fail demo.
+  safe : console only, mock transport - no backend, no infra. Can't-fail demo.
   lite : backend with NO databases (STORES=off, SQLite audit) + live console.  [default]
   full : backend with all stores (Postgres + Qdrant + Neo4j + Redis) + live console.
 .EXAMPLE
@@ -15,10 +15,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Write-Host "`n== Starting in '$Mode' mode ==" -f Cyan
 
-# ── Console env (mock vs live) ───────────────────────────────────────────────
+# -- Console env (mock vs live) -----------------------------------------------
 if ($Mode -eq 'safe') { $useMock = 'true' } else { $useMock = 'false' }
 
-# ── Backend (skipped in safe mode) ───────────────────────────────────────────
+# -- Backend (skipped in safe mode) -------------------------------------------
 if ($Mode -ne 'safe') {
   $env:DB_BOOTSTRAP = 'true'
   if ($Mode -eq 'lite') {
@@ -36,7 +36,7 @@ if ($Mode -ne 'safe') {
   Write-Host "  backend  -> http://localhost:8000  (docs at /docs)" -f Green
 }
 
-# ── Console (web\) ───────────────────────────────────────────────────────────
+# -- Console (web\) -----------------------------------------------------------
 $consoleCmd = "Set-Location '$root\web'; " +
   "`$env:NEXT_PUBLIC_USE_MOCK='$useMock'; `$env:NEXT_PUBLIC_API_BASE='http://localhost:8000'; " +
   "`$env:NEXT_PUBLIC_HEALTH_PATH='/health'; " +

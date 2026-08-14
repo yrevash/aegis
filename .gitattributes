@@ -1,0 +1,19 @@
+# PowerShell scripts must reach Windows with CRLF endings. They are also stored
+# UTF-8 *with BOM* (see below) -- the BOM is file content, so git preserves it.
+#
+# Why the BOM matters: Windows PowerShell 5.1 decodes .ps1 as ANSI (CP1252)
+# unless a UTF-8 BOM is present. A UTF-8 em dash then arrives as three CP1252
+# characters, the last of which (0x94) is a smart double quote -- and PowerShell
+# honours smart quotes as string delimiters, so the file stops parsing with
+# misleading "Missing closing '}'" errors far from the real cause.
+#
+# Keep .ps1 sources ASCII-only as a second line of defence.
+*.ps1 text eol=crlf
+
+# Shell scripts must stay LF or they fail on macOS/Linux with bad interpreter.
+*.sh text eol=lf
+
+# Binary assets: never touch line endings.
+*.png binary
+*.jpg binary
+*.ico binary

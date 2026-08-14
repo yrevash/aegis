@@ -1,20 +1,20 @@
-<#
+﻿<#
 .SYNOPSIS
-  Full machine setup for Aegis on Windows — toolchain, native stores, app deps.
+  Full machine setup for Aegis on Windows - toolchain, native stores, app deps.
   No Docker, no GPU, no WSL.
 
 .DESCRIPTION
   bootstrap.ps1 installs the Python and Node dependencies but assumes the
-  toolchain already exists and installs none of the four data stores — yet
+  toolchain already exists and installs none of the four data stores - yet
   `start.ps1 -Mode full` needs all four. This script fills that gap:
 
-    1. toolchain  — Python 3.11, Node LTS, uv, Git (via winget)
-    2. stores     — PostgreSQL, Redis, Qdrant, Neo4j (native, never Docker)
-    3. app deps   — delegates to bootstrap.ps1 (single source of truth for extras)
-    4. verify     — reports what actually answers on its port
+    1. toolchain  - Python 3.11, Node LTS, uv, Git (via winget)
+    2. stores     - PostgreSQL, Redis, Qdrant, Neo4j (native, never Docker)
+    3. app deps   - delegates to bootstrap.ps1 (single source of truth for extras)
+    4. verify     - reports what actually answers on its port
 
   Idempotent: every step checks before it installs, so re-running is safe and
-  fast. Each store is independent — one failing does not stop the others, and
+  fast. Each store is independent - one failing does not stop the others, and
   the summary at the end tells you exactly what is missing and how to fix it.
 
 .PARAMETER SkipStores
@@ -33,7 +33,7 @@
   Enough to run: .\scripts\start.ps1 -Mode lite
 
 .NOTES
-  Run in an ELEVATED PowerShell — PostgreSQL, Redis and Neo4j register Windows
+  Run in an ELEVATED PowerShell - PostgreSQL, Redis and Neo4j register Windows
   services. Authored on macOS and NOT yet executed on a Windows box; treat the
   first run as a rehearsal and keep the manual fallbacks in the summary handy.
 #>
@@ -47,7 +47,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 # Downloaded (non-winget) tools live here so nothing lands in Program Files and
-# no uninstaller is needed — delete the folder and they are gone.
+# no uninstaller is needed - delete the folder and they are gone.
 $AegisHome = Join-Path $env:LOCALAPPDATA 'Aegis'
 $Failures = [System.Collections.Generic.List[string]]::new()
 
@@ -67,14 +67,14 @@ function Test-Port([int]$Port) {
 <# Install a winget package unless the command it provides already exists. #>
 function Install-WingetPackage([string]$Id, [string]$Probe, [string]$Label) {
   if ($Probe -and (Have $Probe)) { Ok "$Label (already installed)"; return $true }
-  if (-not (Have 'winget')) { Bad "$Label — winget unavailable; install manually"; return $false }
+  if (-not (Have 'winget')) { Bad "$Label - winget unavailable; install manually"; return $false }
   Write-Host "  installing $Label ..."
   winget install --id $Id --silent --accept-source-agreements --accept-package-agreements | Out-Null
   # winget puts new tools on PATH for *new* shells; refresh this one so later
   # steps can use what we just installed.
   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
               [Environment]::GetEnvironmentVariable('Path','User')
-  if ($Probe -and -not (Have $Probe)) { Warn "$Label installed but '$Probe' is not on PATH yet — reopen PowerShell"; return $true }
+  if ($Probe -and -not (Have $Probe)) { Warn "$Label installed but '$Probe' is not on PATH yet - reopen PowerShell"; return $true }
   Ok $Label
   return $true
 }
@@ -98,12 +98,12 @@ function Get-PortableTool([string]$Url, [string]$Name) {
   return $dest
 }
 
-Write-Host "`nAegis — Windows setup" -f White
-Write-Host "no Docker · no GPU · native services only" -f DarkGray
+Write-Host "`nAegis - Windows setup" -f White
+Write-Host "no Docker * no GPU * native services only" -f DarkGray
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1 · Toolchain
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# 1 * Toolchain
+# -----------------------------------------------------------------------------
 if (-not $StoresOnly) {
   Head 'Toolchain'
   Install-WingetPackage 'Python.Python.3.11'  'python' 'Python 3.11' | Out-Null
@@ -115,18 +115,18 @@ if (-not $StoresOnly) {
   } elseif (Have 'python') {
     Write-Host '  installing uv ...'
     python -m pip install --quiet --upgrade uv
-    if (Have 'uv') { Ok 'uv' } else { Warn 'uv installed but not on PATH — reopen PowerShell' }
+    if (Have 'uv') { Ok 'uv' } else { Warn 'uv installed but not on PATH - reopen PowerShell' }
   } else {
-    Bad 'uv — needs Python first'
+    Bad 'uv - needs Python first'
   }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2 · Native stores
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# 2 * Native stores
+# -----------------------------------------------------------------------------
 if (-not $SkipStores) {
 
-  # ── PostgreSQL — tenants, users, budgets, ledger, approvals, checkpoints ────
+  # -- PostgreSQL - tenants, users, budgets, ledger, approvals, checkpoints ----
   Head 'PostgreSQL'
   if (Test-Port 5432) {
     Ok 'already listening on 5432'
@@ -149,15 +149,15 @@ if (-not $SkipStores) {
       } else {
         & $psql.FullName -U postgres -h 127.0.0.1 -c 'CREATE DATABASE taif' 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) { Ok "created database 'taif'" }
-        else { Warn "could not create 'taif' — create it manually, then re-run" }
+        else { Warn "could not create 'taif' - create it manually, then re-run" }
       }
       Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
     } else {
-      Warn "psql.exe not found — create the 'taif' database manually"
+      Warn "psql.exe not found - create the 'taif' database manually"
     }
   }
 
-  # ── Redis / Memurai — near-exact retrieval cache + answer cache ────────────
+  # -- Redis / Memurai - near-exact retrieval cache + answer cache ------------
   # Redis ships no official Windows build, and enterprise Windows images have no
   # Docker or WSL to fall back on. Memurai is the maintained Redis-compatible
   # Windows service, speaks the same wire protocol on the same port, and needs
@@ -167,7 +167,7 @@ if (-not $SkipStores) {
   $redisCli = @('memurai-cli','redis-cli') | Where-Object { Have $_ } | Select-Object -First 1
 
   if (-not (Test-Port 6379)) {
-    # Installed but not running is the common case after a reboot — starting the
+    # Installed but not running is the common case after a reboot - starting the
     # existing service beats reinstalling it.
     $svc = Get-Service -Name 'Memurai*' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($svc -and $svc.Status -ne 'Running') {
@@ -181,7 +181,7 @@ if (-not $SkipStores) {
   }
 
   if (Test-Port 6379) {
-    # Port-open is necessary but not sufficient — PING proves it actually speaks
+    # Port-open is necessary but not sufficient - PING proves it actually speaks
     # the protocol, which is the thing the cache depends on.
     if ($redisCli) {
       $pong = & $redisCli ping 2>$null
@@ -196,7 +196,7 @@ if (-not $SkipStores) {
     Warn '  fix: install Memurai (https://www.memurai.com/get-memurai), then Start-Service Memurai'
   }
 
-  # ── Qdrant — ANN vectors behind retrieval + memory recall ──────────────────
+  # -- Qdrant - ANN vectors behind retrieval + memory recall ------------------
   Head 'Qdrant'
   if (Test-Port 6333) {
     Ok 'already listening on 6333'
@@ -213,7 +213,7 @@ if (-not $SkipStores) {
     } catch { Bad "Qdrant download failed: $($_.Exception.Message)" }
   }
 
-  # ── Neo4j — the knowledge graph behind GET /graph ──────────────────────────
+  # -- Neo4j - the knowledge graph behind GET /graph --------------------------
   # Neo4j Desktop cannot be fully automated: it ships its own JDK, but an
   # *instance* must be created interactively and the password is chosen in that
   # dialog. Installing Desktop is therefore only half the job, and a fresh
@@ -236,7 +236,7 @@ if (-not $SkipStores) {
 
     if (-not (Test-Port 7687)) {
       Warn 'Neo4j Desktop is installed but no instance is running on 7687.'
-      Warn '  Desktop needs an instance created by hand — it cannot be scripted:'
+      Warn '  Desktop needs an instance created by hand - it cannot be scripted:'
       Warn '    1. open Neo4j Desktop -> Local instances -> Create instance'
       Warn '    2. set the password, and use that SAME value for NEO4J_PASSWORD'
       Warn '       in backend\.env  (user stays neo4j, bolt stays 7687)'
@@ -246,9 +246,9 @@ if (-not $SkipStores) {
   }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3 · Application dependencies — delegated to bootstrap.ps1
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# 3 * Application dependencies - delegated to bootstrap.ps1
+# -----------------------------------------------------------------------------
 if (-not $StoresOnly) {
   Head 'Application dependencies'
   $bootstrap = Join-Path $PSScriptRoot 'bootstrap.ps1'
@@ -261,9 +261,9 @@ if (-not $StoresOnly) {
   }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4 · Verify
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# 4 * Verify
+# -----------------------------------------------------------------------------
 Head 'Verification'
 $ports = [ordered]@{
   'PostgreSQL 5432' = 5432
@@ -272,18 +272,18 @@ $ports = [ordered]@{
   'Neo4j      7687' = 7687
 }
 foreach ($k in $ports.Keys) {
-  if (Test-Port $ports[$k]) { Ok $k } else { Warn "$k — not answering" }
+  if (Test-Port $ports[$k]) { Ok $k } else { Warn "$k - not answering" }
 }
 
 $envFile = Join-Path $root 'backend\.env'
 if (Test-Path $envFile) {
   if ((Get-Content $envFile -Raw) -match 'GENAILAB_API_KEY\s*=\s*replace-me') {
-    Warn 'backend\.env still has GENAILAB_API_KEY=replace-me — no model calls will work'
+    Warn 'backend\.env still has GENAILAB_API_KEY=replace-me - no model calls will work'
   } else {
     Ok 'GENAILAB_API_KEY is set'
   }
 } else {
-  Warn 'backend\.env missing — copy backend\.env.example and fill in the key'
+  Warn 'backend\.env missing - copy backend\.env.example and fill in the key'
 }
 
 Head 'Next'
