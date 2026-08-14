@@ -214,21 +214,34 @@ if (-not $SkipStores) {
   }
 
   # ── Neo4j — the knowledge graph behind GET /graph ──────────────────────────
-  # Needs a JDK. Best-effort: a down Neo4j degrades graph retrieval but never
-  # blocks the API, so this is a warning rather than a failure.
+  # Neo4j Desktop cannot be fully automated: it ships its own JDK, but an
+  # *instance* must be created interactively and the password is chosen in that
+  # dialog. Installing Desktop is therefore only half the job, and a fresh
+  # Desktop shows "Create your first instance" with nothing on 7687.
+  #
+  # Best-effort by design: a down Neo4j degrades graph retrieval but never blocks
+  # the API, so this warns and prints the manual steps rather than failing.
   Head 'Neo4j'
   if (Test-Port 7687) {
     Ok 'already listening on 7687'
   } else {
-    if (-not (Have 'java')) {
-      Install-WingetPackage 'EclipseAdoptium.Temurin.21.JDK' 'java' 'Temurin JDK 21' | Out-Null
-    }
-    Install-WingetPackage 'Neo4j.Neo4jDesktop' $null 'Neo4j' | Out-Null
-    if (Test-Port 7687) {
-      Ok 'Neo4j up on 7687'
+    $desktop = Get-ChildItem "$env:LOCALAPPDATA\Programs","$env:ProgramFiles" -Filter 'Neo4j Desktop*' `
+                 -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $desktop) {
+      Install-WingetPackage 'Neo4j.Neo4jDesktop' $null 'Neo4j Desktop' | Out-Null
+      $desktop = $true
     } else {
-      Warn 'Neo4j not running — start it and set the password to match NEO4J_PASSWORD in backend\.env'
-      Warn '  (graph retrieval degrades; every other surface is unaffected)'
+      Ok "Neo4j Desktop installed ($($desktop.Name))"
+    }
+
+    if (-not (Test-Port 7687)) {
+      Warn 'Neo4j Desktop is installed but no instance is running on 7687.'
+      Warn '  Desktop needs an instance created by hand — it cannot be scripted:'
+      Warn '    1. open Neo4j Desktop -> Local instances -> Create instance'
+      Warn '    2. set the password, and use that SAME value for NEO4J_PASSWORD'
+      Warn '       in backend\.env  (user stays neo4j, bolt stays 7687)'
+      Warn '    3. Start the instance, then re-run preflight.ps1'
+      Warn '  Until then: graph retrieval degrades, every other surface is fine.'
     }
   }
 }

@@ -88,6 +88,21 @@ HNSW index, never a silent RAM fallback.
 **Neo4j** — install Neo4j Desktop or Community, start a local DB, and set a
 password. Default bolt URI is `bolt://localhost:7687`, user `neo4j`.
 
+On **Neo4j Desktop 2.x** (Windows), installing the app is only half the job — it
+ships its own JDK but starts with *no instance*, so nothing listens on 7687 until
+you create one. This step cannot be scripted; the password is chosen in the
+dialog:
+
+1. **Local instances → Create instance**
+2. Set a password, and put that **same value** in `backend\.env` as
+   `NEO4J_PASSWORD` (leave `NEO4J_USER=neo4j`, `NEO4J_URI=bolt://localhost:7687`)
+3. **Start** the instance — Desktop does not auto-start it, and it stops when
+   Desktop closes
+4. Re-run `scripts\preflight.ps1`; the Neo4j row should turn green
+
+A down Neo4j is **non-fatal**: graph retrieval degrades, and every other surface
+— including the whole console — is unaffected.
+
 **Redis** — install and start locally (`redis-server`). Default URL
 `redis://localhost:6379/0`.
 
