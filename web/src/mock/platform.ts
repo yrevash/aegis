@@ -389,7 +389,11 @@ export function mockSecurityPosture(): SecurityPostureResponse {
       nemo_available: true,
       mode: 'lite',
       pii_engine: 'presidio',
-      rls_fail_closed: true,
+      // Mirrors the REAL posture, not the aspiration: the installed RLS predicate
+      // admits every row when the tenant GUC is unbound, so this is fail-open on
+      // that branch. A mock that claimed `true` would make the offline demo look
+      // safer than the live system.
+      rls_fail_closed: false,
       rls_enforced_on: 'postgresql',
       jwt_dev_secret: true,
       jwt_algorithm: 'HS256',

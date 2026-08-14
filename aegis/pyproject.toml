@@ -72,7 +72,19 @@ forecast = [
     "pandas>=2.2,<2.4",
     "numpy>=1.26",
 ]
-all = ["aegis[redis,nemo,pii,postgres,retrieval,ml,forecast,gateway,data,governance,observability,phoenix,agent]"]
+# Image guardrails: OCR-driven PII detection and pixel-level redaction. Four
+# `require("aegis[media]", ...)` call sites in `aegis.guardrails.media` name this
+# extra in their fail-closed remedy message, and it did not exist — so a user who
+# hit the (correct) refusal was told to run an install that could not resolve.
+#
+# presidio-image-redactor pulls Tesseract bindings and OpenCV, and the `tesseract`
+# BINARY is a separate OS-level install it cannot bring with it; the rail reports
+# itself as `not_run` rather than pretending when that is absent.
+media = [
+    "presidio-image-redactor>=0.0.53",
+    "pillow>=10.0",
+]
+all = ["aegis[redis,nemo,pii,postgres,retrieval,ml,forecast,media,gateway,data,governance,observability,phoenix,agent]"]
 dev = ["ruff>=0.7", "pytest>=8.3", "pytest-asyncio>=0.24", "aiosqlite>=0.20"]
 
 [tool.ruff]

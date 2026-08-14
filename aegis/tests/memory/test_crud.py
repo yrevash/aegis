@@ -118,3 +118,39 @@ async def test_get_fact_isolation(db):
     async with db() as s:
         assert await get_fact(s, fact_id=fact_id, subject_id="user:1") is not None
         assert await get_fact(s, fact_id=fact_id, subject_id="user:2") is None
+
+
+# --- tenant scoping symmetry --------------------------------------------------
+# `recall.py` single-sourced `_tenant_clause` precisely so no query could drift
+# back to `if tenant_id is not None`, which silently degrades an unscoped call to
+# "any tenant". `crud.py` was missed in that sweep and kept the leaky form, so the
+# operator CRUD path could read across tenants while recall of the same rows could
+# not. These pin the symmetry.
+
+
+async def test_unscoped_list_facts_never_returns_a_tenants_rows(db):
+    """A null-tenant list returns null-tenant rows only, not every tenant's."""
+    async with db() as s:
+        s.add(_fact("user:1", "region", "emea", tenant_id=7))
+        s.add(_fact("user:1", "prefers_channel", "email", tenant_id=None))
+        await s.commit()
+
+    async with db() as s:
+        rows = await list_facts(s, subject_id="user:1", tenant_id=None)
+        assert {f.predicate for f in rows} == {"prefers_channel"}, (
+            "an unscoped read leaked another tenant's fact"
+        )
+        scoped = await list_facts(s, subject_id="user:1", tenant_id=7)
+        assert {f.predicate for f in scoped} == {"region"}
+
+
+async def test_unscoped_get_fact_never_returns_a_tenants_row(db):
+    """The by-id read is scoped symmetrically too."""
+    async with db() as s:
+        s.add(_fact("user:1", "region", "emea", tenant_id=7))
+        await s.commit()
+        fact_id = (await s.execute(select(MemoryFact.id))).scalar_one()
+
+    async with db() as s:
+        assert await get_fact(s, fact_id=fact_id, subject_id="user:1", tenant_id=None) is None
+        assert await get_fact(s, fact_id=fact_id, subject_id="user:1", tenant_id=7) is not None

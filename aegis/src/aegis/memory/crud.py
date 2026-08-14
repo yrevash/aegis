@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.memory.consolidate import _fact_snapshot, _write_log
+from aegis.memory.recall import _tenant_clause
 from aegis.memory.stores import MemoryFact, WriteOp
 
 
@@ -51,9 +52,13 @@ async def list_facts(
     Returns:
         The matching :class:`~aegis.memory.stores.MemoryFact` rows.
     """
-    stmt = select(MemoryFact).where(MemoryFact.subject_id == subject_id)
-    if tenant_id is not None:
-        stmt = stmt.where(MemoryFact.tenant_id == tenant_id)
+    # NULL-symmetric tenant predicate, shared with the recall path. The earlier
+    # ``if tenant_id is not None`` form silently degraded an unscoped call to "any
+    # tenant" — it reads as defensive coding and behaves as a cross-tenant read.
+    stmt = select(MemoryFact).where(
+        MemoryFact.subject_id == subject_id,
+        _tenant_clause(MemoryFact, tenant_id),
+    )
     if valid_only:
         stmt = stmt.where(MemoryFact.invalid_at.is_(None), MemoryFact.expired_at.is_(None))
     stmt = stmt.order_by(MemoryFact.valid_at.desc()).limit(limit)
@@ -69,10 +74,10 @@ async def get_fact(
 ) -> MemoryFact | None:
     """Return one fact by id, only if it belongs to ``subject_id`` (+ ``tenant_id``)."""
     stmt = select(MemoryFact).where(
-        MemoryFact.id == fact_id, MemoryFact.subject_id == subject_id
+        MemoryFact.id == fact_id,
+        MemoryFact.subject_id == subject_id,
+        _tenant_clause(MemoryFact, tenant_id),
     )
-    if tenant_id is not None:
-        stmt = stmt.where(MemoryFact.tenant_id == tenant_id)
     return (await session.execute(stmt)).scalar_one_or_none()
 
 

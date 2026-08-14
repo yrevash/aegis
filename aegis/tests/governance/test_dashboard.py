@@ -248,8 +248,18 @@ def test_effective_config_surfaces_the_knobs():
     assert cfg.budgets.day_window_seconds == 24 * 3600
     assert cfg.budgets.month_window_seconds == 30 * 24 * 3600
     assert cfg.budgets.rate_window_seconds == 60
-    # RLS posture: fail-closed, Postgres-only, the governed tables.
-    assert cfg.rls.fail_closed is True
+    # RLS posture: Postgres-only, the governed tables, and NOT fail-closed.
+    #
+    # This assertion was inverted deliberately. It previously pinned
+    # ``fail_closed is True`` while the installed predicate admits every row when
+    # the tenant GUC is unbound — so the test was holding a false assurance in
+    # place, and that value is rendered as a green "fail-closed" badge on the
+    # console's Security page. A bound numeric scope IS strictly enforced; an
+    # unbound one is not. Reporting the weaker truth is the point.
+    #
+    # Flip this back to True only when the auth path binds a scope before querying
+    # ``users`` and the predicate is tightened to match.
+    assert cfg.rls.fail_closed is False
     assert cfg.rls.enforced_on == "postgresql"
     assert "users" in cfg.rls.tables and "usage_ledger" in cfg.rls.tables
 

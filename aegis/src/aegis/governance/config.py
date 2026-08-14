@@ -116,7 +116,21 @@ def effective_config() -> GovernanceConfig:
         ),
         rls=RlsConfig(
             enforced_on="postgresql",
-            fail_closed=True,
+            # Reported as it BEHAVES, not as we would like it to behave. The
+            # installed policy is
+            #   substring(current_setting('app.tenant_id', true) from '^[0-9]+$')
+            #     IS NULL OR tenant_id = <that>::int
+            # (see ``rls.py::_TENANT_ISOLATION_PREDICATE``). A *bound* numeric scope
+            # is strictly enforced — that is the real cross-tenant surface — but an
+            # *unbound* one does not restrict, so this is not fail-closed.
+            #
+            # It reads False on purpose. This value feeds
+            # ``aegis.security.posture`` and the console's Security page, which
+            # renders a green "fail-closed" badge from it; claiming True there would
+            # put a false assurance on a security dashboard, which is worse than the
+            # gap it hides. It flips to True once the auth path binds a scope before
+            # querying ``users`` — until then a strict predicate would break login.
+            fail_closed=False,
             tables=list(_RLS_TABLES),
         ),
     )
