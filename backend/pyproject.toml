@@ -12,6 +12,11 @@ dependencies = [
     "sse-starlette>=2.1",
     "litellm>=1.52",
     "httpx>=0.27",
+    # Starlette parses multipart/form-data only when this is installed — without it
+    # any `UploadFile` route raises at request time. Required by POST /voice/transcribe
+    # (chosen over base64, which inflates a recording ~33% and defeats a streaming
+    # size check); a core dependency, not an extra, because the route is always mounted.
+    "python-multipart>=0.0.9",
     "python-dotenv>=1.0",
     # The sibling `aegis` package (aegis.core + aegis.guardrails): the legacy
     # guardrail stack delegates to it via a strangler shim (app/guardrails).
@@ -78,6 +83,15 @@ ml = [
     # an ancient release. The ML spine is verified on numpy 2.4.x.
     "numpy>=1.26,<2.5",
     "joblib>=1.4",
+]
+# Time-series forecasting (app.forecast → aegis.forecast). Nixtla statsforecast gives
+# AutoARIMA / AutoETS / SeasonalNaive plus ``ConformalIntervals``, the calibrated,
+# distribution-free band the /forecast surface reports measured coverage for. It resolves
+# against the pins already held above and by [tool.uv] (numba==0.67.0, numpy<2.5,
+# pandas<2.4) and runs on CPU — no GPU, no extra system libraries.
+forecast = [
+    "aegis[forecast]",
+    "statsforecast>=2.1,<3",
 ]
 # NeMo Guardrails is the declarative Colang policy engine (one policy, two front
 # doors — see app/guardrails/rails.py + config/). It is a real, executed enforcement

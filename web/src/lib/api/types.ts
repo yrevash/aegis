@@ -426,3 +426,321 @@ export interface AgentTopologyResponse {
   nodes: AgentTopologyNode[]
   edges: AgentTopologyEdge[]
 }
+
+// ── Aegis Voice — POST /voice/transcribe ────────────────────────────────────
+
+/**
+ * One time-aligned segment of a transcript.
+ *
+ * `confidence` is `null` whenever the provider reports none — which is the case
+ * for the fleet's hosted Whisper deployment today. The UI renders that as
+ * "not reported"; it must never be substituted with a derived number.
+ */
+export interface VoiceSegmentRow {
+  index: number
+  /** Seconds from the start of the WHOLE recording (chunk offsets added back). */
+  start: number | null
+  end: number | null
+  text: string
+  /** Provider-reported confidence in [0,1], or null when none was reported. */
+  confidence: number | null
+  /** Which chunk of a split recording produced it. */
+  chunk: number
+}
+
+/**
+ * Response from `POST /voice/transcribe`.
+ *
+ * `transcript` is evidence for the operator. `agent_input` is the only text that
+ * may be forwarded to the agent: it is `null` on a block, and on a redact it is
+ * the *redacted* string. Sending `transcript` instead would bypass the rails.
+ */
+export interface VoiceTranscribeResponse {
+  transcript: string
+  language: string | null
+  duration_seconds: number | null
+  segments: VoiceSegmentRow[]
+  /** Whether ANY segment carries a reported confidence (drives the honest label). */
+  has_confidence: boolean
+  model: string
+  chunk_count: number
+  /** One honest line on whether the recording was split, and why. */
+  chunking: string
+  cost_usd: number
+  audio_seconds_billed: number
+  /**
+   * The full text rail stack's verdict on the transcript. Spelled out here rather
+   * than reusing `@/lib/stream`'s `GuardVerdict`, which predates the additive
+   * `flag` member and would silently narrow this field.
+   */
+  verdict: 'pass' | 'block' | 'redact' | 'flag'
+  verdict_reason: string
+  verdict_layer: string | null
+  redactions: string[]
+  controls_run: string[]
+  controls_skipped: string[]
+  agent_input: string | null
+}
+
+// ── Aegis Vision — POST /vision/analyse ─────────────────────────────────────
+
+/** The ordered stages of one analysis. The order IS the security control. */
+export type VisionStage =
+  | 'hygiene'
+  | 'injection_screen'
+  | 'image_pii'
+  | 'vision_model'
+  | 'output_rails'
+
+/**
+ * What one control decided, or why it decided nothing.
+ *
+ * `not_run` and `failed_closed` are deliberately distinct: "the operator did not
+ * enable the image-PII rail" and "the injection screen had no completer, so the
+ * image was blocked rather than passed" are different statements about coverage.
+ * A UI that renders them the same way is lying about one of them.
+ */
+export type VisionControlOutcome =
+  | 'passed'
+  | 'blocked'
+  | 'redacted'
+  | 'not_run'
+  | 'failed_closed'
+
+/** One control's line in the audit record. */
+export interface VisionControlReport {
+  stage: VisionStage
+  outcome: VisionControlOutcome
+  detail: string
+}
+
+/** One rectangle of personal data found burned into the pixels (source-image space). */
+export interface VisionPIIRegion {
+  /** Presidio entity kind, e.g. 'EMAIL_ADDRESS'. Never the recognised value. */
+  entity_type: string
+  left: number
+  top: number
+  width: number
+  height: number
+  score: number | null
+}
+
+/** What payload hygiene measured about the image — facts, not claims. */
+export interface VisionImageFacts {
+  /** Attacker-controlled and kept only so a mismatch is visible. */
+  declared_mime: string
+  /** Derived from magic bytes — the only one anything downstream should believe. */
+  sniffed_mime: string | null
+  byte_size: number | null
+  width: number | null
+  height: number | null
+  provenance: string
+}
+
+/** Billable accounting for the analysis call. */
+export interface VisionUsage {
+  model: string
+  prompt_tokens: number
+  completion_tokens: number
+  images: number
+  cost_usd: number
+  /** 'provider' | 'estimated' | 'unpriced' — an unpriced $0 is not a real $0. */
+  cost_source: string
+}
+
+/**
+ * The image-injection screen's verdict — the differentiator.
+ *
+ * `screened: false` means no vision model actually looked at the image, so the
+ * block is a fail-closed one. Rendering that as "we looked and it was clean" is
+ * the single worst thing this surface could do.
+ */
+export interface VisionScreenVerdict {
+  injection: boolean
+  contains_text: boolean
+  reason: string
+  screened: boolean
+}
+
+/** What the existing text output rails decided about the model's answer. */
+export interface VisionOutputRailVerdict {
+  verdict: string
+  reason: string
+  layer: string | null
+  redactions: string[]
+}
+
+/** The full, itemised result of one image analysis (mirrors `aegis.vision.VisionAnalysis`). */
+export interface VisionAnalysis {
+  outcome: 'answered' | 'blocked'
+  question: string
+  /** Empty unless `outcome` is 'answered' — a blocked run carries no model text. */
+  answer: string
+  blocked_stage: VisionStage | null
+  blocked_reason: string
+  screen: VisionScreenVerdict | null
+  /** Entity kinds only — never the recognised values. */
+  pii_entities: string[]
+  pii_regions: VisionPIIRegion[]
+  image: VisionImageFacts | null
+  /** One line per control, in execution order, INCLUDING the ones that did not run. */
+  controls: VisionControlReport[]
+  usage: VisionUsage
+  output: VisionOutputRailVerdict | null
+}
+
+/** Body for `POST /vision/analyse`. */
+export interface VisionAnalyseRequest {
+  /** The image bytes, base64-encoded. A `data:` URL is accepted too. */
+  image_base64: string
+  /** Declared content type — verified against magic bytes by the backend. */
+  mime_type: string
+  question: string
+  filename?: string | null
+}
+
+/** Response from `POST /vision/analyse`. */
+export interface VisionAnalyseResponse {
+  analysis: VisionAnalysis
+  /** One line: which controls ran, and which did not. */
+  coverage: string
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Forecast (`GET /forecast/...`) — mirrors aegis.forecast.types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Which kind of band `lo`/`hi` are. `conformal` bounds are calibrated on
+ * out-of-sample errors from chronologically earlier windows; `parametric` bounds
+ * are the fitted model's own predictive distribution and hold only as far as its
+ * residual assumptions do. Never render one as the other.
+ */
+export type ForecastIntervalMethod = 'conformal' | 'parametric'
+
+/** One observed point of the input history. */
+export interface ForecastSeriesPoint {
+  ts: string
+  value: number
+}
+
+/** One forecast step: the point prediction and its interval bounds. */
+export interface ForecastHorizonPoint {
+  ts: string
+  point: number
+  lo: number
+  hi: number
+  step: number
+}
+
+/**
+ * Accuracy and interval coverage MEASURED on chronologically held-out windows.
+ *
+ * `requested_coverage` is an input echoed back; `empirical_coverage` is the only
+ * coverage number that is evidence. Rendering the first as though it were the
+ * second is the exact overclaim this surface exists to prevent.
+ */
+export interface ForecastBacktest {
+  windows: number
+  horizon: number
+  n_points: number
+  smape: number
+  mape: number | null
+  mae: number
+  requested_coverage: number
+  empirical_coverage: number
+  coverage_meets_request: boolean
+  interval_method: ForecastIntervalMethod
+}
+
+/** One candidate model's backtest score — losers included, so selection is auditable. */
+export interface ForecastCandidate {
+  model: string
+  smape: number
+  mape: number | null
+  mae: number
+  empirical_coverage: number
+  selected: boolean
+}
+
+/** A candidate that could not be scored, with the real reason it was dropped. */
+export interface ForecastExcludedModel {
+  model: string
+  reason: string
+}
+
+/** A horizon-indexed forecast plus everything needed to discount it. */
+export interface ForecastResult {
+  series_id: string
+  label: string
+  unit: string | null
+  /** Provenance: 'usage_ledger' | 'adapter' | … — never let a demo pass as live. */
+  data_source: string
+  freq: string
+  season_length: number
+  history_points: number
+  history: ForecastSeriesPoint[]
+  horizon: number
+  points: ForecastHorizonPoint[]
+  model: string
+  selection_metric: string
+  candidates: ForecastCandidate[]
+  excluded_models: ForecastExcludedModel[]
+  interval_method: ForecastIntervalMethod
+  interval_method_detail: string
+  requested_level: number
+  backtest: ForecastBacktest
+  model_selected_on_backtest_windows: boolean
+  generated_at: string
+}
+
+/** One step of a projected budget burn-down. */
+export interface ForecastBurndownPoint {
+  ts: string
+  step: number
+  increment: number
+  cumulative: number
+  cumulative_lo: number
+  cumulative_hi: number
+  over_budget: boolean
+}
+
+/**
+ * A cap, the spend against it so far, and where the forecast says it lands.
+ *
+ * `cumulative_bounds_are_calibrated` is always false: summed marginal conformal
+ * bounds are an envelope, not a calibrated interval on a cumulative total.
+ */
+export interface ForecastBurndown {
+  scope: 'tenant' | 'user'
+  scope_id: number | null
+  window: string
+  limit_usd: number | null
+  spent_usd: number
+  projected_total_usd: number
+  projected_total_lo: number
+  projected_total_hi: number
+  cumulative_bounds_are_calibrated: boolean
+  exhaustion_ts: string | null
+  exhaustion_step: number | null
+  exhausted_within_horizon: boolean
+  headroom_usd: number | null
+  interval_method: ForecastIntervalMethod
+  points: ForecastBurndownPoint[]
+}
+
+/** Why a forecast was NOT produced — a first-class outcome, not an error page. */
+export interface ForecastRefusal {
+  code: 'insufficient_history' | 'degenerate_series' | 'fit_failed' | 'extra_missing'
+  reason: string
+  have: number | null
+  need: number | null
+}
+
+/** Body for every `GET /forecast/...` route: a forecast **or** a stated refusal. */
+export interface ForecastResponse {
+  available: boolean
+  forecast: ForecastResult | null
+  burndown: ForecastBurndown | null
+  refusal: ForecastRefusal | null
+}

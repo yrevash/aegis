@@ -120,6 +120,24 @@ AEGIS_MODULES: list[AegisModule] = [
         module_path="app.ml.model",
     ),
     AegisModule(
+        key="voice",
+        name="Aegis Voice",
+        tech="hosted Whisper via LiteLLM",
+        summary="Speech to text, chunked on silence, guarded by the full text rails.",
+        category="runtime",
+        module_path="app.voice",
+    ),
+    AegisModule(
+        key="forecast",
+        name="Aegis Forecast",
+        tech="Nixtla statsforecast (AutoARIMA/AutoETS) + conformal intervals",
+        summary="Time-series forecasts whose accuracy and interval coverage are "
+        "measured on held-out windows, feeding a budget burn-down projection.",
+        category="trust",
+        module_path="app.forecast.service",
+        status="optional",
+    ),
+    AegisModule(
         key="guardrails",
         name="Aegis Guardrails",
         tech="programmatic + NeMo Colang",
@@ -158,6 +176,15 @@ AEGIS_MODULES: list[AegisModule] = [
         summary="End-to-end, glass-box tracing of every run.",
         category="ops",
         module_path="app.observability.otel",
+    ),
+    AegisModule(
+        key="vision",
+        name="Aegis Vision",
+        tech="hosted Llama-3.2-90B-Vision + Presidio image redactor",
+        summary="Image understanding with the injection screen ahead of the model — "
+        "hygiene, screen, image-PII redaction, then the vision call and the output rails.",
+        category="trust",
+        module_path="app.vision",
     ),
     AegisModule(
         key="mcp",

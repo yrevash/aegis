@@ -27,7 +27,9 @@ import {
   Layers,
   LayoutDashboard,
   Lock,
+  Mic,
   Network,
+  ScanEye,
   PiggyBank,
   ScrollText,
   ShieldAlert,
@@ -37,6 +39,7 @@ import {
   Sparkles,
   Swords,
   Timer,
+  TrendingUp,
   Waypoints,
   Workflow,
   type LucideIcon,
@@ -89,6 +92,13 @@ export const SECTIONS: Record<string, Section> = {
     hint: 'baseline vs actual',
     tooltip: 'What the workload would cost on the frontier model vs what it actually cost',
   },
+  forecast: {
+    id: 'forecast',
+    label: 'Forecast',
+    icon: TrendingUp,
+    hint: 'statsforecast · conformal',
+    tooltip: 'Aegis Forecast — spend and demand projected forward, with the interval coverage that was actually measured · statsforecast',
+  },
   mlops: {
     id: 'mlops',
     label: 'MLOps',
@@ -134,6 +144,22 @@ export const SECTIONS: Record<string, Section> = {
     hint: 'semantic · TTL',
     tooltip:
       'Aegis Caches — the three real caches (memory recall, retrieval + answers, guardrail verdicts) with their true method, backend, TTL & thresholds · RedisVL / Redis / in-memory',
+  },
+  voice: {
+    id: 'voice',
+    label: 'Voice',
+    icon: Mic,
+    hint: 'Whisper · rails',
+    tooltip:
+      'Aegis Voice — record or upload speech, transcribed on the fleet\'s hosted Whisper and split on silence for long audio; the transcript is then screened by the FULL text rail stack before a word of it can reach the agent',
+  },
+  vision: {
+    id: 'vision',
+    label: 'Vision',
+    icon: ScanEye,
+    hint: 'screen · then model',
+    tooltip:
+      'Aegis Vision — upload an image and watch the ordering that makes vision safe: payload hygiene, then a cheap vision call that screens the pixels for instructions aimed at an AI, then image-PII redaction, and only then the hosted Llama-3.2-90B-Vision analysis and the platform\'s own output rails; an image that fails the screen never reaches the answering model, and if the screen cannot run the image is blocked rather than passed',
   },
   guardrails: {
     id: 'guardrails',
@@ -269,10 +295,10 @@ export const SECTIONS: Record<string, Section> = {
 
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
-  admin: ['dashboard', 'governance', 'approvals', 'audit', 'roles'],
-  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'guardrails', 'simulation'],
+  admin: ['dashboard', 'forecast', 'governance', 'approvals', 'audit', 'roles'],
+  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'voice', 'vision', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit'],
-  client: ['dashboard', 'savings', 'risk', 'simulation'],
+  client: ['dashboard', 'savings', 'forecast', 'risk', 'simulation'],
 }
 
 /** Section definitions for a role's portal, in nav order. */

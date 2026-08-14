@@ -22,6 +22,15 @@ from aegis.core.types import (  # noqa: F401 - re-exported for identity, see doc
     RiskLevel,
     RunStatus,
 )
+from aegis.forecast.types import (  # noqa: F401 - re-exported: identity with aegis.forecast
+    BacktestReport,
+    BudgetBurndown,
+    BurndownPoint,
+    CandidateScore,
+    ExcludedModel,
+    ForecastResult,
+    HorizonPoint,
+)
 from aegis.governance.types import (  # noqa: F401 - re-exported: identity with aegis.governance
     AdminUserRow,
     AuditLogRow,
@@ -47,6 +56,14 @@ from aegis.retrieval.types import (  # noqa: F401 - re-exported: identity with a
 from aegis.security.posture import (  # noqa: F401 - re-exported: identity with aegis.security
     PostureEntry,
     PostureSignals,
+)
+from aegis.vision import (  # noqa: F401 - re-exported: identity with aegis.vision
+    ControlReport,
+    ImageFacts,
+    OutputRailVerdict,
+    PIIRegion,
+    ScreenVerdict,
+    VisionAnalysis,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -1385,3 +1402,168 @@ class RedteamReportResponse(BaseModel):
     attacks: list[dict[str, Any]] = Field(default_factory=list)
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Aegis Voice — POST /voice/transcribe
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class VoiceSegmentRow(BaseModel):
+    """One time-aligned segment of a transcript (mirrors ``aegis.voice.VoiceSegment``).
+
+    ``confidence`` is ``None`` whenever the provider reports none — which is the case
+    for the fleet's hosted Whisper deployment today, because the gateway's segment
+    parser carries only id/start/end/text. The console renders that as "not reported";
+    it is never backfilled with a derived number.
+    """
+
+    index: int = Field(description="Position in the whole transcript (0-based).")
+    start: float | None = Field(
+        default=None, description="Seconds from the start of the WHOLE recording."
+    )
+    end: float | None = Field(default=None, description="Seconds from the start of the recording.")
+    text: str = ""
+    confidence: float | None = Field(
+        default=None, description="Provider-reported confidence in [0,1], or null."
+    )
+    chunk: int = Field(default=0, description="Which chunk of a split recording produced it.")
+
+
+class VoiceTranscribeResponse(BaseModel):
+    """Body for `POST /voice/transcribe` — the transcript plus its rail verdict.
+
+    Two fields carry the security contract and must be read together:
+
+    * ``verdict`` is the **full text rail stack's** judgement of the transcript
+      (transcribe-then-guard: speech is screened by exactly the rails typed input is).
+    * ``agent_input`` is the only text a caller may forward to the agent. It is
+      ``null`` on a BLOCK, and on a REDACT it is the *redacted* string — never the
+      raw transcript. ``transcript`` stays populated as operator evidence, and a
+      client that forwards it instead of ``agent_input`` has defeated the rails.
+
+    ``controls_run`` / ``controls_skipped`` itemise the coverage: the verdict reason
+    is generated from them, so it cannot claim a control that did not execute.
+    """
+
+    transcript: str = Field(default="", description="The full transcript (evidence, not input).")
+    language: str | None = Field(default=None, description="Detected language, or null.")
+    duration_seconds: float | None = Field(
+        default=None, description="Audio duration in seconds, or null when unknown."
+    )
+    segments: list[VoiceSegmentRow] = Field(default_factory=list)
+    has_confidence: bool = Field(
+        default=False, description="Whether ANY segment carries a reported confidence."
+    )
+    model: str = Field(default="", description="Deployment id that answered.")
+    chunk_count: int = Field(default=1, description="Requests the recording was split into.")
+    chunking: str = Field(default="", description="One honest line on why it was/wasn't split.")
+    cost_usd: float = Field(default=0.0, description="Ledgered cost of the transcription.")
+    audio_seconds_billed: float = Field(default=0.0, description="Audio seconds billed.")
+    verdict: GuardVerdict = Field(description="The text rail stack's verdict on the transcript.")
+    verdict_reason: str = Field(default="", description="Why, including the coverage sentence.")
+    verdict_layer: str | None = Field(default=None, description="Rail that produced the verdict.")
+    redactions: list[str] = Field(
+        default_factory=list, description="Redacted detector kinds (kinds only, never values)."
+    )
+    controls_run: list[str] = Field(default_factory=list)
+    controls_skipped: list[str] = Field(default_factory=list)
+    agent_input: str | None = Field(
+        default=None,
+        description="The ONLY text safe to send to the agent; null when the rails refused.",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Forecast surface (`GET /forecast/...`) — Aegis Forecast
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ForecastRefusal(BaseModel):
+    """Why a forecast was NOT produced — a first-class response, not an error page.
+
+    A time-series surface has one characteristic failure that must never be papered
+    over: not enough history. Drawing a line through six points would look exactly
+    like a forecast and mean nothing, so the module refuses, and the refusal travels
+    to the console with its arithmetic intact — ``have`` observations, ``need``
+    observations — so the UI can say *why* instead of showing an empty chart.
+    """
+
+    code: Literal[
+        "insufficient_history", "degenerate_series", "fit_failed", "extra_missing"
+    ] = Field(description="Machine-readable refusal reason.")
+    reason: str = Field(description="Human-readable explanation, safe to render verbatim.")
+    have: int | None = Field(default=None, description="Observations available, when known.")
+    need: int | None = Field(default=None, description="Observations required, when known.")
+
+
+class ForecastResponse(BaseModel):
+    """Body for every `GET /forecast/...` route — a forecast **or** a stated refusal.
+
+    Exactly one of ``forecast`` / ``refusal`` is populated, and ``available`` says
+    which. The envelope exists so a refusal is a normal, typed, renderable outcome
+    rather than an HTTP error the console would have to guess the meaning of.
+
+    ``burndown`` is set only by the budget projection route.
+    """
+
+    available: bool = Field(description="True when `forecast` is populated.")
+    forecast: ForecastResult | None = Field(
+        default=None, description="The horizon-indexed forecast with its MEASURED backtest."
+    )
+    burndown: BudgetBurndown | None = Field(
+        default=None, description="Budget burn-down projection (budget route only)."
+    )
+    refusal: ForecastRefusal | None = Field(
+        default=None, description="Why no forecast was produced, when `available` is False."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Aegis Vision — POST /vision/analyse
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class VisionAnalyseRequest(BaseModel):
+    """Body for `POST /vision/analyse` — one image and one question about it.
+
+    JSON + base64 rather than multipart, deliberately: ``aegis.media``'s payloads
+    already serialise their bytes as base64, browsers produce exactly this from
+    ``FileReader.readAsDataURL``, and it keeps the endpoint free of a new
+    ``python-multipart`` dependency. Size is bounded by the media hygiene rail's
+    byte cap, which refuses an oversized payload before any model is called.
+
+    ``mime_type`` is the client's DECLARED type and is never trusted: the hygiene
+    rail sniffs the magic bytes and refuses a payload whose declaration disagrees
+    with its content — that single lie is a whole rail bypass.
+    """
+
+    image_base64: str = Field(
+        description="The image bytes, base64-encoded. A `data:` URL is also accepted."
+    )
+    mime_type: str = Field(default="image/png", description="Declared content type (verified).")
+    question: str = Field(default="", description="What to ask about the image.")
+    filename: str | None = Field(default=None, description="Original filename, for the audit log.")
+
+
+class VisionAnalyseResponse(BaseModel):
+    """Body for `POST /vision/analyse` — the analysis and its full audit record.
+
+    ``analysis`` is :class:`aegis.vision.VisionAnalysis` verbatim (re-exported for
+    identity above, so this contract cannot drift from the module's). Read three
+    of its fields together or not at all:
+
+    * ``screen`` — the image-injection screen's verdict. ``screened=False`` means
+      the control could not run and the block is a fail-closed one, which is a
+      different statement from "we looked and it was clean".
+    * ``controls`` — one line per control **including the ones that did not run**,
+      so a green result can never imply coverage nobody provided.
+    * ``answer`` — empty whenever ``outcome`` is ``blocked``, because on a blocked
+      run there is no model text.
+
+    ``coverage`` is :meth:`VisionAnalysis.coverage` precomputed, so every surface
+    renders the same honest one-liner instead of reassembling its own.
+    """
+
+    analysis: VisionAnalysis
+    coverage: str = Field(description="One line: which controls ran, and which did not.")

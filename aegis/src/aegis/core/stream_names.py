@@ -14,6 +14,20 @@ GUARDRAIL_CACHE = "guardrail_cache"
 #: which media rails ran and which did not, so the console can never imply coverage
 #: a control did not actually provide.
 GUARDRAIL_MEDIA = "guardrail_media"
+#: One chunk of a long recording came back from speech-to-text (aegis.voice) —
+#: index, its offset in the recording, and whether the cut landed in a real pause.
+VOICE_CHUNK = "voice_chunk"
+#: A finished transcription (aegis.voice): transcript, time-aligned segments,
+#: detected language, duration, chunking note and the honest confidence
+#: availability flag, so the console can never imply a confidence nobody reported.
+VOICE_TRANSCRIPT = "voice_transcript"
+#: The image-injection screen's verdict (aegis.vision), emitted the moment it
+#: decides and BEFORE the analysis call — carrying ``screened`` so a fail-closed
+#: block is never rendered as "we looked and it was clean".
+VISION_SCREEN = "vision_screen"
+#: A finished image analysis (aegis.vision): answer, per-control audit record,
+#: detected-PII regions and the call's cost.
+VISION_ANALYSIS = "vision_analysis"
 SHAP_EXPLANATION = "shap_explanation"
 CONFORMAL_INTERVAL = "conformal_interval"
 #: An ML model-card event — the honest, measured metadata of the model that is
@@ -41,6 +55,8 @@ OPS_RELEASE = "ops_release"
 
 ALL: frozenset[str] = frozenset(
     {REASONING, GUARDRAIL_VERDICT, GUARDRAIL_CACHE, GUARDRAIL_MEDIA, SHAP_EXPLANATION,
+     VOICE_CHUNK, VOICE_TRANSCRIPT,
+     VISION_SCREEN, VISION_ANALYSIS,
      CONFORMAL_INTERVAL,
      ML_MODEL, RETRIEVAL_CITATIONS, RETRIEVAL_CACHE, ROUTING, MEMORY_RECALL, MEMORY_WRITE,
      MEMORY_CACHE, MODEL_CALL, EVAL_RESULT, OPS_DIAGNOSE, OPS_GATE_DECISION, OPS_RELEASE}

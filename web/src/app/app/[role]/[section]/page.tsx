@@ -11,6 +11,7 @@ import { DashboardMount } from '@/components/dashboard/Dashboard'
 import { PatchMount } from '@/components/devops/PatchCheck'
 import { StackMount } from '@/components/devops/StackVersions'
 import { EvalsMount } from '@/components/evals/EvalsView'
+import { ForecastMount } from '@/components/forecast/ForecastView'
 import { TokenOptMount } from '@/components/gateway/TokenOptView'
 import { GovernanceMount } from '@/components/governance/GovernanceView'
 import { GraphMount } from '@/components/graph/GraphView'
@@ -24,6 +25,8 @@ import { RagMount } from '@/components/retrieval/RagView'
 import { RedteamMount } from '@/components/redteam/RedteamView'
 import { SecurityMount } from '@/components/security/SecurityView'
 import { SimulationMount } from '@/components/sim/SimulationView'
+import { VisionMount } from '@/components/vision/VisionView'
+import { VoiceMount } from '@/components/voice/VoiceView'
 import { SectionPlaceholder } from '@/components/portal/SectionPlaceholder'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
 
@@ -53,6 +56,7 @@ export default async function SectionPage({
   if (section === 'mlops') return <MLOpsMount />
   if (section === 'llmops') return <LLMOpsMount />
   if (section === 'evals') return <EvalsMount />
+  if (section === 'forecast') return <ForecastMount role={role} />
   if (section === 'memory') return <MemoryMount />
   if (section === 'rag') return <RagMount role={role} />
   if (section === 'graph') return <GraphMount role={role} />
@@ -71,6 +75,8 @@ export default async function SectionPage({
   if (section === 'savings') return <SavingsMount />
   if (section === 'risk') return <RiskMount />
   if (section === 'simulation') return <SimulationMount />
+  if (section === 'voice') return <VoiceMount />
+  if (section === 'vision') return <VisionMount />
   // Overview: the admin portal gets the comprehensive command center (all
   // business + governance + safety figures, composed from the live accessors);
   // devops + client get the money-shot metrics dashboard.

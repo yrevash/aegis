@@ -15,6 +15,9 @@ import {
   mockBudgets,
   mockCapabilities,
   mockCreateBudget,
+  mockForecastBudget,
+  mockForecastDomain,
+  mockForecastUsage,
   mockGraph,
   mockMetrics,
   mockMlExplain,
@@ -26,6 +29,8 @@ import {
   mockTenants,
   mockUsage,
   mockUsers,
+  mockVisionAnalyse,
+  mockVoiceTranscribe,
 } from '@/mock/fixtures'
 import type {
   AdminUser,
@@ -40,6 +45,7 @@ import type {
   BudgetScope,
   CapabilitiesResponse,
   CreateBudgetRequest,
+  ForecastResponse,
   GraphResponse,
   LoginRequest,
   LoginResponse,
@@ -54,6 +60,9 @@ import type {
   TenantsResponse,
   UsageResponse,
   UsersResponse,
+  VisionAnalyseRequest,
+  VisionAnalyseResponse,
+  VoiceTranscribeResponse,
 } from '@/lib/api/types'
 import type { ApprovalDecision } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
@@ -655,4 +664,120 @@ export async function getCapabilities(): Promise<CapabilitiesResponse> {
 export async function getPublicMetrics(): Promise<PublicMetricsResponse> {
   if (isMock()) return mockPublicMetrics()
   return request<PublicMetricsResponse>('/platform/public-metrics', { method: 'GET' }, null)
+}
+
+// ── Aegis Voice ─────────────────────────────────────────────────────────────
+
+/**
+ * Transcribe a recording and screen the transcript with the input rail stack.
+ *
+ * Sent as `multipart/form-data`, not JSON: the request body is a binary
+ * recording, and base64 would inflate it ~33% for no benefit. This is the one
+ * client call that must NOT go through {@link request}, which forces a JSON
+ * content type — the browser has to set the multipart boundary itself, so the
+ * header is deliberately left unset here.
+ *
+ * The response separates `transcript` (evidence) from `agent_input` (the only
+ * text the rails cleared). Callers must forward `agent_input`; forwarding
+ * `transcript` would defeat the rails.
+ */
+export async function transcribeVoice(
+  audio: Blob,
+  opts: { filename?: string; language?: string | null } = {},
+  token: string | null,
+): Promise<VoiceTranscribeResponse> {
+  if (isMock()) return mockVoiceTranscribe(audio, opts.language ?? null)
+  const form = new FormData()
+  form.append('file', audio, opts.filename ?? 'recording.wav')
+  if (opts.language) form.append('language', opts.language)
+  const headers = new Headers()
+  const bearer = token ?? getAuthToken()
+  if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
+  const res = await fetch(`${API_BASE}/voice/transcribe`, {
+    method: 'POST',
+    headers,
+    body: form,
+  })
+  if (!res.ok) {
+    throw new Error(`POST /voice/transcribe failed: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as VoiceTranscribeResponse
+}
+
+/**
+ * Analyse an image — hygiene, the injection screen, image-PII redaction, the
+ * hosted vision call, and the platform's own output rails, in that order.
+ *
+ * JSON + base64 rather than multipart: the browser already holds the file as a
+ * `data:` URL from `FileReader`, an image is small, and the backend's media
+ * payloads serialise their bytes as base64 natively — so the body round-trips
+ * the exact bytes the rails screen.
+ *
+ * A control refusing is a **200 with `outcome: 'blocked'`**, not an error. The
+ * refusal and its per-control audit record are the product; only a malformed
+ * request throws.
+ *
+ * @param mockImageSize Mock mode only — the uploaded image's natural pixel size,
+ *   used to place the fixture's scripted PII boxes over whatever was dropped in.
+ *   Ignored in live mode, where the coordinates are real.
+ */
+export async function analyseImage(
+  req: VisionAnalyseRequest,
+  token: string | null,
+  mockImageSize: { width: number; height: number } | null = null,
+): Promise<VisionAnalyseResponse> {
+  if (isMock()) return mockVisionAnalyse(req, mockImageSize)
+  return request<VisionAnalyseResponse>(
+    '/vision/analyse',
+    { method: 'POST', body: JSON.stringify(req) },
+    token,
+  )
+}
+
+/**
+ * Fetch a tenant's spend / call-volume forecast (`GET /forecast/usage`).
+ *
+ * A refusal is a **200 with `available: false`**, not an error: "this tenant has
+ * nine days of ledger and needs seventy-one" is the most useful thing this surface
+ * can say, and an HTTP error would be discarded as a connectivity blip. Only a
+ * genuinely broken request throws.
+ */
+export async function getForecastUsage(
+  token: string | null,
+  horizon = 14,
+  metric: 'spend' | 'calls' = 'spend',
+): Promise<ForecastResponse> {
+  if (isMock()) return mockForecastUsage(horizon)
+  return request<ForecastResponse>(
+    `/forecast/usage?horizon=${encodeURIComponent(horizon)}&metric=${encodeURIComponent(metric)}`,
+    { method: 'GET' },
+    token,
+  )
+}
+
+/** Fetch the spend forecast projected against the tenant's cap (`GET /forecast/budget`). */
+export async function getForecastBudget(
+  token: string | null,
+  horizon = 14,
+  window: 'day' | 'month' = 'month',
+): Promise<ForecastResponse> {
+  if (isMock()) return mockForecastBudget(horizon)
+  return request<ForecastResponse>(
+    `/forecast/budget?horizon=${encodeURIComponent(horizon)}&window=${encodeURIComponent(window)}`,
+    { method: 'GET' },
+    token,
+  )
+}
+
+/** Fetch the client's domain demand forecast, read through the adapter seam. */
+export async function getForecastDomain(
+  token: string | null,
+  horizon = 14,
+): Promise<ForecastResponse> {
+  if (isMock()) return mockForecastDomain(horizon)
+  return request<ForecastResponse>(
+    `/forecast/domain?horizon=${encodeURIComponent(horizon)}`,
+    { method: 'GET' },
+    token,
+  )
 }

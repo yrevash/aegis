@@ -14,6 +14,8 @@ snippet, its install extra, the AG-UI events it emits, and its honest-infra desi
 | [`aegis-ml.md`](./aegis-ml.md) | Predictions that know how much to trust themselves: an ensemble model wrapped in conformal intervals and a SHAP explanation. |
 | [`aegis-retrieval.md`](./aegis-retrieval.md) | Hybrid vector + graph RAG: chunk, recall, RRF-fuse, rerank, and assemble citations. |
 | [`aegis-gateway.md`](./aegis-gateway.md) | The one async door every model call in Aegis walks through: role-based routing, cost/budget accounting, fallback. |
+| [`aegis-voice.md`](./aegis-voice.md) | Speech to text on the fleet's hosted Whisper, chunked on silence for long audio — and the transcript screened by the *whole* text rail stack before an agent may see a word of it. |
+| [`aegis-vision.md`](./aegis-vision.md) | Image understanding whose point is an *ordering*: hygiene, then a cheap vision call that screens the pixels for instructions aimed at an AI, then image-PII redaction — and only then the model that answers. No screen, no image. |
 | [`aegis-memory.md`](./aegis-memory.md) | Three-tier long-term memory — working, episodic, consolidated — so an agent remembers without re-reading everything every turn. |
 | [`aegis-governance.md`](./aegis-governance.md) | Who's allowed to do what, how much they can spend, and whether you can prove it afterward: tenants, RBAC, RLS, budgets, audit. |
 | [`aegis-evals-ops.md`](./aegis-evals-ops.md) | Two halves of one loop: `aegis.evals` measures quality, `aegis.ops` gates releases on it. |
