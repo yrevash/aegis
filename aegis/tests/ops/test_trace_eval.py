@@ -181,3 +181,63 @@ async def test_no_matching_steps_still_grades_answer(db):
     assert set(result.metrics) == {"answer"}
     assert result.overall == pytest.approx(result.metrics["answer"])
     assert result.passed is (result.overall >= 0.6)
+
+
+async def test_repeated_facet_reports_its_mean_not_the_last_row(db):
+    """REGRESSION: ``dict(written)`` kept only the LAST row of a repeated facet.
+
+    A run with several retrieval steps persists one row per step, so a map that keeps
+    only the last one contradicts both the persisted rows and the ``overall`` computed
+    from all of them.
+    """
+    scores = iter([0.2, 0.8])
+
+    async def complete(role, messages, *, temperature=0.0, response_format=None):  # noqa: ANN001
+        if role is ModelRole.REASONING:
+            return _FakeResult('{"groundedness": 1.0, "relevance": 1.0}')
+        return _FakeResult(f'{{"score": {next(scores)}}}')
+
+    steps = [
+        {"node": "retrieve_a", "kind": "RETRIEVER", "detail": {"contexts": ["alpha"]}},
+        {"node": "retrieve_b", "kind": "RETRIEVER", "detail": {"contexts": ["beta"]}},
+    ]
+    async with db() as s:
+        result = await evaluate_run(
+            s, run_id="r-mean", query="q", answer="a", contexts=["ctx"],
+            steps=steps, complete=complete,
+        )
+        rows = (
+            await s.execute(
+                select(EvalResult).where(EvalResult.run_id == "r-mean")
+            )
+        ).scalars().all()
+
+    persisted = [r.score for r in rows if r.metric == "step:retrieval"]
+    assert sorted(persisted) == [0.2, 0.8]
+    # The reported number is the mean of the persisted rows, not the last one.
+    assert result.metrics["step:retrieval"] == pytest.approx(0.5)
+    assert result.overall == pytest.approx(sum(r.score for r in rows) / len(rows))
+
+
+async def test_an_unusable_judge_reply_skips_the_answer_row_rather_than_scoring_zero(db):
+    """A judge that cannot be parsed must not persist a fabricated ``answer`` score."""
+
+    async def complete(role, messages, *, temperature=0.0, response_format=None):  # noqa: ANN001
+        if role is ModelRole.REASONING:
+            return _FakeResult("I am afraid I cannot produce JSON today.")
+        return _FakeResult('{"score": 0.5}')
+
+    async with db() as s:
+        result = await evaluate_run(
+            s, run_id="r-nojudge", query="q", answer="a", contexts=["ctx"],
+            steps=[{"node": "act", "kind": "TOOL", "detail": {"tool": "search"}}],
+            complete=complete,
+        )
+        rows = (
+            await s.execute(
+                select(EvalResult).where(EvalResult.run_id == "r-nojudge")
+            )
+        ).scalars().all()
+
+    assert "answer" not in result.metrics
+    assert all(r.metric != "answer" for r in rows)

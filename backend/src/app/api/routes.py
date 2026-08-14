@@ -18,11 +18,13 @@ so the whole surface is drivable in tests with fakes and no live infrastructure.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from aegis.ml import MLModelUnavailableError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -783,7 +785,6 @@ async def guardrail_demo(q: str) -> StreamingResponse:
     Returns:
         A ``text/event-stream`` response of AG-UI SSE frames.
     """
-    import asyncio
     import uuid
 
     from aegis.core.stream import AegisEmitter
@@ -988,11 +989,32 @@ async def ml_explain(
     auth: AuthContext = Depends(require_auth),
     predict: Callable[[dict[str, Any]], MLExplainResponse] = Depends(get_ml_predict),
 ) -> MLExplainResponse:
-    """Return a conformalised, SHAP-explained prediction for the given features."""
+    """Return a conformalised, SHAP-explained prediction for the given features.
+
+    **Off the event loop.** ``predict`` is synchronous CPU work (an XGBoost forward
+    pass plus a SHAP explanation, and on the very first call the joblib load of the
+    artifact behind it), so it runs in a worker thread. Called inline it blocked the
+    single event loop for the whole of that work — every other in-flight request,
+    every SSE stream, and the health check with it.
+
+    **No model is a 503, never a fabricated one.** :func:`app.ml.get_model` refuses to
+    train a spine on the built-in noise synthesiser and serve its interval as domain
+    evidence, so an unavailable model surfaces as an explicit "not ready" with the
+    command that fixes it, rather than a plausible-looking prediction with no signal
+    in it.
+
+    Raises:
+        HTTPException: 503 when no trained ML artifact is available to serve.
+    """
     await _safe_audit(
         "ml.explain", auth.username, payload={"features": sorted(req.features)}
     )
-    return predict(req.features)
+    try:
+        return await asyncio.to_thread(predict, req.features)
+    except MLModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
 
 
 @router.get("/metrics", response_model=MetricsResponse, tags=["metrics"])
@@ -2400,10 +2422,24 @@ async def ml_model_card(
     width, the MAPIE class backing the coverage guarantee, the stored split sizes —
     never hardcoded. ``data_source`` labels how the training frame was obtained, so a
     synthetic-fallback model is never mistaken for a real domain-trained one.
+
+    When there is no trained artifact this answers **503**: a model card describes a
+    model, and the honest answer to "describe the live model" when none is fitted is
+    "there isn't one yet" — not a card for a spine trained on noise on the spot. The
+    load runs in a worker thread so the first request never stalls the event loop.
+
+    Raises:
+        HTTPException: 503 when no trained ML artifact is available to describe.
     """
     from app.ml import get_model
 
-    return get_model().model_card()
+    try:
+        model = await asyncio.to_thread(get_model)
+    except MLModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
+    return model.model_card()
 
 
 @router.get("/evals/report", response_model=EvalsReportResponse, tags=["evals"])
@@ -2777,6 +2813,16 @@ async def vision_analyse(
     the ones that did **not** run, and ``coverage`` states that in one line. A
     surface that shows a green verdict cannot silently omit an absent control.
 
+    **Why the governance context is bound here.** This handler issues **two** paid
+    ``ModelRole.VISION`` calls — the injection screen and the analyst — and
+    ``app.core.llm``'s governance hook gates both budget enforcement *and* the usage
+    ledger on a bound tenant (``_governed`` returns ``None`` when nothing is bound).
+    Without the binding an authenticated caller could loop images for spend that no
+    cap limited and no ledger row recorded — uncapped, unattributed and invisible on
+    the token dashboard. So the caps + tenant are resolved and bound exactly as
+    :func:`voice_transcribe` does, and reset in a ``finally`` so the context can never
+    leak onto the next request served by this worker.
+
     Args:
         req: The base64 image, its declared (and independently verified) MIME type,
             and the question to ask about it.
@@ -2792,6 +2838,8 @@ async def vision_analyse(
     """
     from app.vision import analyse
 
+    governance = await _resolve_governance(auth)
+    token = set_governance_context(governance)
     try:
         analysis = await analyse(
             req.image_base64,
@@ -2803,6 +2851,8 @@ async def vision_analyse(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
+    finally:
+        reset_governance_context(token)
 
     await _safe_audit(
         "vision.analyse",

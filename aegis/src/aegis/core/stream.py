@@ -35,7 +35,13 @@ Sink = Callable[[str], Awaitable[None]]
 
 
 class _StepScope:
-    """Async context manager that brackets a step with STEP_STARTED/STEP_FINISHED."""
+    """Async context manager that brackets a step with STEP_STARTED/STEP_FINISHED.
+
+    The step's OpenInference ``span_kind`` is carried on both frames via AG-UI's
+    ``raw_event`` passthrough. It used to be stored and never read — inert at every
+    call site, so the trace could not tell a RETRIEVER step from a GUARDRAIL one
+    despite every caller declaring it.
+    """
 
     def __init__(self, emitter: AegisEmitter, name: str, span_kind: SpanKind) -> None:
         """Initialize the step scope.
@@ -49,13 +55,28 @@ class _StepScope:
         self._name = name
         self._span_kind = span_kind
 
+    @property
+    def span_kind(self) -> SpanKind:
+        """The OpenInference span kind this step is acting as."""
+        return self._span_kind
+
+    def _raw(self) -> dict[str, str]:
+        """The passthrough payload carrying the span kind onto the wire."""
+        return {"spanKind": self._span_kind.value}
+
     async def __aenter__(self) -> _StepScope:
         """Enter the async context and emit STEP_STARTED.
 
         Returns:
             Self for use in 'as' clause.
         """
-        await self._em._emit(StepStartedEvent(type=EventType.STEP_STARTED, step_name=self._name))
+        await self._em._emit(
+            StepStartedEvent(
+                type=EventType.STEP_STARTED,
+                step_name=self._name,
+                raw_event=self._raw(),
+            )
+        )
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -64,7 +85,13 @@ class _StepScope:
         Args:
             exc: Exception info (unused).
         """
-        await self._em._emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=self._name))
+        await self._em._emit(
+            StepFinishedEvent(
+                type=EventType.STEP_FINISHED,
+                step_name=self._name,
+                raw_event=self._raw(),
+            )
+        )
 
 
 class AegisEmitter:

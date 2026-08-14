@@ -75,6 +75,11 @@ from aegis.governance.models import (
     User,
 )
 from aegis.governance.rls import bootstrap_rls, set_tenant_scope
+from aegis.governance.schema import (
+    SchemaDriftError,
+    plan_additive_columns,
+    reconcile_additive_columns,
+)
 from aegis.governance.security import (
     MEMBER,
     PLATFORM_ADMIN,
@@ -131,6 +136,7 @@ __all__ = [
     "RlsConfig",
     "Role",
     "RoleTier",
+    "SchemaDriftError",
     "SecurityConfig",
     "Tenant",
     "TenantRow",
@@ -164,7 +170,9 @@ __all__ = [
     "create_user",
     "list_tenants",
     "list_users",
+    "plan_additive_columns",
     "principal_role",
+    "reconcile_additive_columns",
     "record_audit",
     "record_usage",
     "reset_governance_context",

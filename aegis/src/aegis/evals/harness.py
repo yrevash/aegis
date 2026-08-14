@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from aegis.core.models import ModelRole
 from aegis.gateway import LLMResult, Usage
 from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.memory import InMemoryKnowledgeBackend, InMemoryRedis, _local_embed
@@ -31,6 +32,14 @@ from .metrics import AggregateScore, CaseScore, MetricConfig, aggregate, score_c
 #: LLM-as-judge is driven through. When ``evaluate`` is given one, the judge runs; when
 #: it is ``None`` (the default, offline path) the judge is skipped and no model is called.
 CompleteFn = Callable[..., Awaitable[LLMResult]]
+
+#: System message the model-graded pass generates its answer-under-test under. The judge
+#: then grades *that* answer's groundedness against the retrieved context — grading the
+#: context against itself measures nothing.
+_ANSWER_SYSTEM = (
+    "Answer the user's question using ONLY the provided context. Be concise. If the "
+    "context does not contain the answer, say so."
+)
 
 
 @dataclass(frozen=True)
@@ -85,7 +94,12 @@ class EvalReport:
     judge: JudgeSummary | None = None
 
     def failures(self) -> list[str]:
-        """Return a human-readable reason for each unmet threshold (empty if passed)."""
+        """Return a human-readable reason for each unmet threshold (empty if passed).
+
+        An **unmeasured** metric (``None`` — no case in the corpus carried that label)
+        is a failure, not a pass: the gate cannot report clearing a bar it never
+        measured against.
+        """
         agg, thr = self.aggregate, self.thresholds
         reasons: list[str] = []
         if agg.context_precision < thr.min_context_precision:
@@ -93,11 +107,19 @@ class EvalReport:
                 f"context_precision {agg.context_precision:.3f} < "
                 f"{thr.min_context_precision:.3f}"
             )
-        if agg.context_recall < thr.min_context_recall:
+        if agg.context_recall is None:
+            reasons.append(
+                "context_recall was not measured: no eval case carries gold_doc_ids"
+            )
+        elif agg.context_recall < thr.min_context_recall:
             reasons.append(
                 f"context_recall {agg.context_recall:.3f} < {thr.min_context_recall:.3f}"
             )
-        if agg.groundedness < thr.min_groundedness:
+        if agg.groundedness is None:
+            reasons.append(
+                "groundedness was not measured: no eval case carries expected claims"
+            )
+        elif agg.groundedness < thr.min_groundedness:
             reasons.append(
                 f"groundedness {agg.groundedness:.3f} < {thr.min_groundedness:.3f}"
             )
@@ -129,16 +151,24 @@ class EvalReport:
                 threshold=thr.min_context_recall,
                 higher_is_better=True,
                 value=agg.context_recall,
-                passed=agg.context_recall >= thr.min_context_recall,
-                cases=agg.cases,
+                passed=(
+                    agg.context_recall is not None
+                    and agg.context_recall >= thr.min_context_recall
+                ),
+                cases=agg.recall_cases or 0,
+                computed=agg.context_recall is not None,
             ),
             MetricConfig(
                 name="groundedness",
                 threshold=thr.min_groundedness,
                 higher_is_better=True,
                 value=agg.groundedness,
-                passed=agg.groundedness >= thr.min_groundedness,
-                cases=agg.cases,
+                passed=(
+                    agg.groundedness is not None
+                    and agg.groundedness >= thr.min_groundedness
+                ),
+                cases=agg.groundedness_cases or 0,
+                computed=agg.groundedness is not None,
             ),
             MetricConfig(
                 name="answer_relevancy",
@@ -260,8 +290,10 @@ async def evaluate(
 
     The deterministic proxies (:mod:`aegis.evals.metrics`) are always computed and are what
     ``passed`` gates on. When a ``complete`` callable is supplied, the optional
-    **LLM-as-judge** (:func:`aegis.evals.judge.judge_answer`) additionally grades each case's
-    retrieved context for model-graded groundedness + relevance, and the corpus-level
+    **LLM-as-judge** pass additionally *generates* an answer per case from the retrieved
+    context (``ModelRole.GENERATION``) and grades **that answer**
+    (:func:`aegis.evals.judge.judge_answer`) for model-graded groundedness + relevance —
+    two ``complete`` calls per case. The corpus-level
     :class:`~aegis.evals.judge.JudgeSummary` is surfaced on the report. With no ``complete``
     (the default offline path) the judge is skipped and ``report.judge`` is ``None`` — so
     the gate degrades gracefully and never touches the network.
@@ -284,14 +316,29 @@ async def evaluate(
         result = await retriever.retrieve(case.query)
         scores.append(score_case(case, result, precision_k=thresholds.precision_k))
         if complete is not None:
-            # Model-graded pass: grade the retrieved context as the answer-under-test
-            # (groundedness is then trivially high; relevance measures whether the
-            # surfaced context actually addresses the query).
+            # Model-graded pass. The judge must grade a *generated answer* against the
+            # retrieved context: passing the context in as its own answer made
+            # groundedness ~1.0 by construction — a number with no signal in it, yet
+            # surfaced on the report as a model-graded score. So generate first, then
+            # grade what was generated.
+            generation = await complete(
+                ModelRole.GENERATION,
+                [
+                    {"role": "system", "content": _ANSWER_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{case.query}\n\nContext:\n{result.answer_context}"
+                        ),
+                    },
+                ],
+                temperature=0.0,
+            )
             verdicts.append(
                 await judge_answer(
                     case.query,
                     result.answer_context,
-                    result.answer_context,
+                    getattr(generation, "content", "") or "",
                     complete=complete,
                 )
             )
@@ -299,7 +346,9 @@ async def evaluate(
     agg = aggregate(scores)
     passed = (
         agg.context_precision >= thresholds.min_context_precision
+        and agg.context_recall is not None
         and agg.context_recall >= thresholds.min_context_recall
+        and agg.groundedness is not None
         and agg.groundedness >= thresholds.min_groundedness
     )
     judge = summarize_verdicts(verdicts) if complete is not None else None

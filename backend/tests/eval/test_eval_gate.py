@@ -112,15 +112,20 @@ async def test_evaluate_wires_llm_judge_when_complete_is_injected():
     calls: list[list[dict]] = []
 
     async def fake_complete(role, messages, **kwargs):  # noqa: ANN001, ANN003
+        from aegis.core.models import ModelRole
+
         from app.core.llm import LLMResult
 
         calls.append(messages)
+        if role is ModelRole.GENERATION:
+            return LLMResult(content="A generated answer.")
         return LLMResult(content='{"groundedness": 0.8, "relevance": 0.7}')
 
     report = await evaluate(complete=fake_complete)
 
-    # The judge ran once per seed case (i.e. it was genuinely wired into the run) ...
-    assert len(calls) == len(SEED_CASES)
+    # One generation + one judge call per seed case: the judge grades a GENERATED
+    # answer against the retrieved context, never the context against itself.
+    assert len(calls) == 2 * len(SEED_CASES)
     # ... and its model-graded summary is surfaced on the report.
     assert report.judge is not None
     assert report.judge.cases == len(SEED_CASES)

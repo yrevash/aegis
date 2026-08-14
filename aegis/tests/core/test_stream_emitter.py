@@ -135,3 +135,35 @@ async def test_custom_rejects_unknown_name() -> None:
     assert _events(sink.frames)[0]["name"] == stream_names.GUARDRAIL_VERDICT
     with pytest.raises(ValueError):
         await em.custom("not-registered", {})
+
+
+@pytest.mark.asyncio
+async def test_step_carries_its_span_kind_onto_the_wire() -> None:
+    """REGRESSION: ``step(name, span_kind)`` stored ``span_kind`` and never read it.
+
+    Every call site declared the OpenInference kind it was acting as and none of it
+    reached the stream, so a consumer could not tell a RETRIEVER step from a GUARDRAIL
+    one.
+    """
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t1", run_id="r1", sink=sink)
+    async with em.step("retrieve", SpanKind.RETRIEVER) as scope:
+        assert scope.span_kind is SpanKind.RETRIEVER
+    evs = _events(sink.frames)
+    assert [e["type"] for e in evs] == ["STEP_STARTED", "STEP_FINISHED"]
+    assert evs[0]["rawEvent"] == {"spanKind": "RETRIEVER"}
+    assert evs[1]["rawEvent"] == {"spanKind": "RETRIEVER"}
+
+
+@pytest.mark.asyncio
+async def test_different_steps_carry_different_span_kinds() -> None:
+    sink = CaptureSink()
+    em = AegisEmitter(thread_id="t1", run_id="r1", sink=sink)
+    async with em.step("guard_input", SpanKind.GUARDRAIL):
+        pass
+    async with em.step("act", SpanKind.TOOL):
+        pass
+    evs = _events(sink.frames)
+    assert [e["rawEvent"]["spanKind"] for e in evs] == [
+        "GUARDRAIL", "GUARDRAIL", "TOOL", "TOOL"
+    ]

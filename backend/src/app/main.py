@@ -18,6 +18,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from aegis.governance.schema import SchemaDriftError
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -131,6 +132,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if Phoenix is absent, and — when ``DB_BOOTSTRAP`` is enabled — table creation
     is best-effort so an unreachable database never blocks startup (the audit
     sink is already best-effort at the edge).
+
+    **One bootstrap failure is not degradable and must not start the API.**
+    :class:`~aegis.governance.schema.SchemaDriftError` means the database is
+    perfectly reachable but a live table is missing a column that cannot be added
+    additively. For ``usage_ledger`` that is not a degraded feature: every ledger
+    INSERT raises, the gateway swallows it (usage recording is best-effort by
+    design), the rows vanish, and the USD budget caps computed by summing them stop
+    binding — the system serves paid model calls with no spend ceiling and no
+    record. Booting anyway would be the silent failure this exception exists to
+    prevent, so it propagates.
     """
     init_observability(app)
     settings = get_settings()
@@ -139,6 +150,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from app.data.session import bootstrap
 
             await bootstrap()
+        except SchemaDriftError:
+            logger.critical(
+                "DB bootstrap FAILED: irreconcilable schema drift. Refusing to serve "
+                "— the usage ledger may be unwritable, which disables every USD "
+                "budget cap.",
+                exc_info=True,
+            )
+            raise
         except Exception:  # noqa: BLE001 - the database is optional; degrade cleanly
             logger.warning("DB bootstrap skipped — database unreachable.", exc_info=True)
 

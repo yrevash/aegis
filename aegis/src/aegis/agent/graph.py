@@ -38,7 +38,9 @@ durable Postgres saver stays a host/backend concern wired at the composition roo
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -47,6 +49,7 @@ from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import RetryPolicy, interrupt
@@ -159,8 +162,17 @@ def _warn_unroutable_specialists(deps: AgentDeps) -> None:
     """
     try:
         roster = _resolve_roster(deps)
-        roles = {str(r) for r in getattr(roster, "roles", ()) or ()}
+        # ``roles`` is a METHOD on every roster implementation, not an attribute.
+        # Iterating the bound method raised TypeError, which the except below then
+        # swallowed — so this warning could never fire for any roster, which is
+        # exactly the silence it exists to break. Call it.
+        declared = roster.roles()
+        roles = {str(r) for r in declared or ()}
     except Exception:  # noqa: BLE001 - roster read is defensive by design
+        logger.warning(
+            "Could not read the roster to check for unroutable specialists.",
+            exc_info=True,
+        )
         return
     unroutable = sorted(roles - SPECIALIST_NODES.keys())
     if unroutable:
@@ -198,8 +210,65 @@ def _route_reflect(state: AgentState) -> str:
 _NodeBody = Callable[[AgentState], Awaitable[dict[str, Any]]]
 
 
+def _should_retry(policy: RetryPolicy, exc: Exception) -> bool:
+    """Return whether ``policy`` classifies ``exc`` as retryable.
+
+    Honours all three shapes LangGraph's :class:`~langgraph.types.RetryPolicy` accepts for
+    ``retry_on``: a callable predicate (the default ``default_retry_on``, which admits
+    only transient classes), a single exception type, or a sequence of them.
+    """
+    retry_on = policy.retry_on
+    if callable(retry_on) and not isinstance(retry_on, type):
+        return bool(retry_on(exc))
+    if isinstance(retry_on, type):
+        return isinstance(exc, retry_on)
+    return isinstance(exc, tuple(retry_on))
+
+
+async def _call_with_retry(
+    body: _NodeBody, state: AgentState, node: str, policy: RetryPolicy | None
+) -> dict[str, Any]:
+    """Invoke ``body`` under ``policy``, retrying transient failures in place.
+
+    The retry lives *inside* the timing/emit wrapper on purpose. Wiring the same policy
+    as LangGraph's node-level ``retry_policy=`` re-invokes the whole wrapper, which emits
+    ``node_started`` **before** the body — so a transient failure produced a second
+    ``node_started`` for one logical node execution, and ``run_summary`` folded that into
+    an extra, permanently unpaired node record with ``duration_ms: None``. Retrying only
+    the body keeps the start/finish pair exactly one-to-one with the node execution, and
+    the measured duration spans every attempt (which is the honest wall clock).
+    """
+    if policy is None:
+        return await body(state)
+    attempt = 1
+    interval = policy.initial_interval
+    while True:
+        try:
+            return await body(state)
+        except GraphBubbleUp:
+            # Interrupts/commands are control flow, never failures — never retry them.
+            raise
+        except Exception as exc:  # noqa: BLE001 - re-raised unless provably transient
+            if attempt >= policy.max_attempts or not _should_retry(policy, exc):
+                raise
+            delay = min(interval, policy.max_interval)
+            if policy.jitter:
+                delay += random.uniform(0, 1)
+            logger.warning(
+                "Node %s attempt %d/%d failed (%s); retrying in %.2fs",
+                node,
+                attempt,
+                policy.max_attempts,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            interval = min(interval * policy.backoff_factor, policy.max_interval)
+            attempt += 1
+
+
 def _timed(
-    node: str, label: str, kind: SpanKind = SpanKind.CHAIN
+    node: str, label: str, kind: SpanKind = SpanKind.CHAIN, *, retry: RetryPolicy | None = None
 ) -> Callable[[_NodeBody], _NodeBody]:
     """Wrap a node body to emit ``node_started`` / ``node_finished`` with timing.
 
@@ -215,6 +284,15 @@ def _timed(
     trace reads as a tree. The instrumentation is a no-op when no tracer is
     configured (tests / lite mode); ``node`` becomes a RETRIEVER/GUARDRAIL span
     for those steps and a CHAIN span otherwise.
+
+    Args:
+        node: The node id stamped on the events and the span.
+        label: The human-readable node label.
+        kind: The OpenInference span kind for this node.
+        retry: An optional :class:`~langgraph.types.RetryPolicy` applied to the **body**
+            (see :func:`_call_with_retry`). Passing it here rather than to
+            ``add_node(..., retry_policy=...)`` is what keeps one node execution to
+            exactly one ``node_started``/``node_finished`` pair across retries.
     """
 
     def decorator(body: _NodeBody) -> _NodeBody:
@@ -231,7 +309,7 @@ def _timed(
                     semconv.GRAPH_NODE_LABEL: label,
                 },
             ) as node_span:
-                update = await body(state)
+                update = await _call_with_retry(body, state, node, retry)
                 node_span.set_attribute(
                     semconv.GRAPH_NODE_DURATION_MS,
                     int(round((time.perf_counter() - start) * 1000)),
@@ -1048,14 +1126,15 @@ def build_agent(
     # ``_timed`` so it stamps a CHAIN/ROUTER span and reports its own node timing; its
     # single ``routing`` event is the visible hand-off.
     builder.add_node(
-        "route", _timed("route", NODE_LABELS["route"])(route), retry_policy=_MODEL_RETRY
+        "route", _timed("route", NODE_LABELS["route"], retry=_MODEL_RETRY)(route)
     )
     # Memory specialist: answers self-referential turns straight from long-term memory,
     # skipping RAG/ml/plan/gate/act. A genuinely distinct handler, not a qa copy.
     builder.add_node(
         "answer_memory",
-        _timed("answer_memory", NODE_LABELS["answer_memory"])(answer_memory),
-        retry_policy=_MODEL_RETRY,
+        _timed("answer_memory", NODE_LABELS["answer_memory"], retry=_MODEL_RETRY)(
+            answer_memory
+        ),
     )
     # Memory nodes are wired PLAIN (not via ``_timed``): a ``_timed`` wrapper emits
     # node_started/node_finished even on a no-op, which would break the golden trace.
@@ -1065,14 +1144,15 @@ def build_agent(
     builder.add_node("persist_memory", persist_memory)
     builder.add_node(
         "retrieve",
-        _timed("retrieve", NODE_LABELS["retrieve"], SpanKind.RETRIEVER)(retrieve),
-        retry_policy=_MODEL_RETRY,
+        _timed(
+            "retrieve", NODE_LABELS["retrieve"], SpanKind.RETRIEVER, retry=_MODEL_RETRY
+        )(retrieve),
     )
     builder.add_node(
         "ml_predict", _timed("ml_predict", NODE_LABELS["ml_predict"])(ml_predict)
     )
     builder.add_node(
-        "plan", _timed("plan", NODE_LABELS["plan"])(plan), retry_policy=_MODEL_RETRY
+        "plan", _timed("plan", NODE_LABELS["plan"], retry=_MODEL_RETRY)(plan)
     )
     builder.add_node("gate", _timed("gate", NODE_LABELS["gate"])(gate))
     builder.add_node("approval", approval)
@@ -1080,8 +1160,7 @@ def build_agent(
     builder.add_node("reflect", _timed("reflect", NODE_LABELS["reflect"])(reflect))
     builder.add_node(
         "generate",
-        _timed("generate", NODE_LABELS["generate"])(generate),
-        retry_policy=_MODEL_RETRY,
+        _timed("generate", NODE_LABELS["generate"], retry=_MODEL_RETRY)(generate),
     )
     builder.add_node(
         "guard_output",

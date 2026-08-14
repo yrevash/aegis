@@ -28,6 +28,28 @@ extras='data,auth,observability,agent,retrieval,ml,guardrails,mcp,dev'
 echo "  installing backend + all extras ($extras) ..."
 uv pip install -e ".[$extras]" >/dev/null
 [ -f .env ] || { cp .env.example .env; echo "  created backend/.env (fill in GENAILAB_API_KEY)"; }
+
+# Train the ML spine once, offline, on the real domain frame.
+#
+# This is NOT optional any more. `get_model()` used to train on demand inside
+# whatever request arrived first, and when the domain adapter was unimportable it
+# trained on the built-in NOISE synthesiser and served that as domain evidence —
+# a point prediction, a "90% coverage" interval and feature_0..3 drivers, with no
+# way for a caller to tell it apart from a real model. That fallback is gone, so
+# /ml/explain and /ml/model-card now answer 503 until the artifact exists.
+#
+# Needs no API key and no database: it fits locally from the adapter's frame.
+if [ -f ".artifacts/ml_spine.joblib" ]; then
+  ok "ML spine already trained (.artifacts/ml_spine.joblib)"
+else
+  echo "  training the ML spine (offline, ~10s) ..."
+  if PYTHONPATH="$ROOT/aegis/src:src" .venv/bin/python -m app.ml >/dev/null 2>&1; then
+    ok "ML spine trained"
+  else
+    echo "  [WARN] ML spine training failed - /ml/explain and /ml/model-card will 503."
+    echo "         Re-run by hand to see why:  cd backend && .venv/bin/python -m app.ml"
+  fi
+fi
 ok "backend ready"
 
 echo -e "\n== Console (web/) =="

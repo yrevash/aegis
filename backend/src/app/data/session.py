@@ -20,6 +20,10 @@ from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
 # ``set_tenant_scope`` now lives in ``aegis.governance.rls`` (the RLS seam); re-export it
 # under its historical name so ``app.data.governance`` / the orchestrator are unchanged.
 from aegis.governance.rls import set_tenant_scope  # noqa: F401 - re-exported for importers
+from aegis.governance.schema import (
+    SchemaDriftError,  # noqa: F401 - re-exported so a host can catch it by name
+    reconcile_additive_columns,
+)
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -229,13 +233,31 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     """Create every table (relational + JSON embeddings-of-record).
 
     Embeddings persist as JSON (``jsonb`` on PostgreSQL, ``JSON`` on SQLite) — vector
-    ANN search runs on Qdrant, so no pgvector extension is required. On PostgreSQL,
-    tenant Row-Level Security policies are installed after table creation (a no-op
-    elsewhere), and any timestamp column left naive by an earlier bootstrap is converted
-    to ``timestamptz`` (see :func:`_align_timestamp_columns`).
+    ANN search runs on Qdrant, so no pgvector extension is required.
+
+    ``create_all`` only ever *creates*; it never alters a table that already exists.
+    With no Alembic in this project, this function is the schema owner, so the two
+    reconciliation steps a long-lived database needs run here, on PostgreSQL only:
+
+    1. :func:`aegis.governance.schema.reconcile_additive_columns` — install any column
+       the models declare that the live table lacks. This is what keeps the usage
+       ledger writable after a column is added to
+       :class:`aegis.governance.models.UsageLedger`; without it the ledger INSERT
+       raises ``UndefinedColumn``, the gateway swallows it (usage recording is
+       best-effort by design), the row is lost, and the USD budget caps computed by
+       summing those rows quietly stop binding.
+    2. :func:`_align_timestamp_columns` — convert any timestamp column left naive by
+       an earlier bootstrap to ``timestamptz``.
+
+    Then the tenant Row-Level Security policies are installed (a no-op elsewhere).
 
     Args:
         engine: Engine to bootstrap; defaults to the process-wide engine.
+
+    Raises:
+        SchemaDriftError: If a live table is missing a column that cannot be added
+            additively. This is deliberately fatal — see
+            :func:`aegis.governance.schema.reconcile_additive_columns`.
     """
     engine = engine or get_engine()
     # Import the memory + governance models so their tables register on the aegis data
@@ -249,8 +271,10 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
 
     import app.memory.stores  # noqa: F401,PLC0415 - registration side-effect only
 
+    metadatas = (Base.metadata, AegisBase.metadata)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(AegisBase.metadata.create_all)
-        await _align_timestamp_columns(conn, (Base.metadata, AegisBase.metadata))
+        await reconcile_additive_columns(conn, metadatas)
+        await _align_timestamp_columns(conn, metadatas)
     await bootstrap_rls(engine)

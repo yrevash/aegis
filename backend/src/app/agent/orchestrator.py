@@ -23,9 +23,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from typing import Any
 
 from aegis.agent.approvals import ApprovalRegistry
+from aegis.agent.orchestrator import ResumeFailedError
 from aegis.agent.orchestrator import resume_parked_run as _core_resume
 from aegis.agent.orchestrator import run_agent as _core_run_agent
 
@@ -235,23 +237,31 @@ async def run_agent(
     from app.data.session import get_agent_checkpointer
 
     deps = deps or AgentDeps.default()
-    async for event in _core_run_agent(
-        query,
-        persona=persona,
-        role=role,
-        deps=deps,
-        registry=registry,
-        run_id=run_id,
-        session_id=session_id,
-        memory_subject=memory_subject,
-        checkpointer=get_agent_checkpointer(),
-        stamp=events.stamp,
-        enqueue_approval=_enqueue_gate,
-        on_terminal=_fire_trace_eval,
-        default_tier=_default_tier(),
-        parked_runs=get_parked_runs(),
-    ):
-        yield event
+    # ``aclosing`` is load-bearing, not tidiness: when the SSE client disconnects, this
+    # wrapper is closed at its ``yield`` and a bare ``async for`` would leave the inner
+    # generator to garbage collection — deferring the gate cleanup that discards the
+    # notify future. Closing it here propagates the disconnect immediately, so a decision
+    # arriving next can never mistake a dead run's registration for a live waiter.
+    async with aclosing(
+        _core_run_agent(
+            query,
+            persona=persona,
+            role=role,
+            deps=deps,
+            registry=registry,
+            run_id=run_id,
+            session_id=session_id,
+            memory_subject=memory_subject,
+            checkpointer=get_agent_checkpointer(),
+            stamp=events.stamp,
+            enqueue_approval=_enqueue_gate,
+            on_terminal=_fire_trace_eval,
+            default_tier=_default_tier(),
+            parked_runs=get_parked_runs(),
+        )
+    ) as stream:
+        async for event in stream:
+            yield event
 
 
 def _durable_graph(deps: AgentDeps) -> Any:  # noqa: ANN401 - CompiledStateGraph
@@ -339,12 +349,16 @@ async def decide_approval(
     1. **Durable transition.** :func:`app.data.resolve_approval` flips the row under an
        optimistic ``PENDING → RESUMING/REJECTED`` lock; only the winner proceeds, so a
        replayed decision is a no-op (idempotency).
-    2. **Notify the live socket.** :meth:`ApprovalRegistry.resolve` wakes a still-open
-       ``/query`` run instantly (the money-shot demo). When it does, that live run
-       executes the tool — so the async resumer must stand down.
-    3. **Async resume.** If no live waiter exists (the run parked), an approve resumes
-       the run headless from its checkpoint; the ``approval_id``-keyed ``RESUMING`` lock
-       guarantees the tool runs exactly once.
+    2. **Notify the live socket.** :meth:`ApprovalRegistry.notify_live` wakes a still-open
+       ``/query`` run — and reports ``True`` only once that run has actually **taken**
+       the outcome. A merely *registered* future is not enough: the streaming generator
+       registers before it emits and only awaits several ``yield``s later, so a client
+       that disconnects in that window would otherwise look "live", get the row finalised
+       APPROVED, and leave the tool unexecuted with no resumer able to claim it. An
+       unacknowledged decision is disowned back to step 3 instead.
+    3. **Async resume.** If no live waiter took it (the run parked, or its socket died),
+       an approve resumes the run headless from its checkpoint; the ``approval_id``-keyed
+       ``RESUMING`` lock guarantees the tool runs exactly once.
 
     Args:
         approval_id: The gate to resolve.
@@ -358,9 +372,11 @@ async def decide_approval(
         An :class:`ApprovalDecisionResponse` — ``accepted`` is ``True`` only when this
         call effected the decision (durably or by waking a live socket).
     """
-    registry = registry or get_approval_registry()
+    registry = registry if registry is not None else get_approval_registry()
     resolution = await _safe_resolve(approval_id, decision, approver)
-    live_woken = registry.resolve(approval_id, decision, approver=approver)
+    # Acknowledged hand-off, NOT a bare ``resolve``: ``live_woken`` must mean "a live run
+    # consumed this decision", never "a future for it existed".
+    live_woken = await registry.notify_live(approval_id, decision, approver=approver)
 
     won = bool(resolution and resolution.won)
     accepted = won or live_woken
@@ -376,10 +392,16 @@ async def decide_approval(
         if resumed:
             status = "approved"
     elif won and decision is ApprovalDecision.APPROVE and live_woken:
-        # A still-open /query socket is executing the approved action right now, under
-        # the SAME PENDING→RESUMING lock (so exactly-once execution holds). Finalize
-        # the durable row to APPROVED — previously the live path left it stuck in
-        # RESUMING forever, an audit defect for the inbox.
+        # A still-open /query socket TOOK this decision and is executing the approved
+        # action right now, under the SAME PENDING→RESUMING lock (so exactly-once
+        # execution holds). Finalize the durable row to APPROVED — previously the live
+        # path left it stuck in RESUMING forever, an audit defect for the inbox.
+        #
+        # Residual, deliberately not closed here: the ack proves the run consumed the
+        # outcome, not that the tool has finished. A socket that dies in the microseconds
+        # between the two still finalises APPROVED. Narrowing it further needs the graph
+        # to ack after ``act``, which no HTTP decision can wait for; the failure mode is
+        # at-most-once (never double execution), which is the direction that matters.
         await _safe_finalize(approval_id)
         status = "approved"
         if run_id:
@@ -418,14 +440,23 @@ async def resume_parked_run(
     already won the optimistic ``PENDING → RESUMING`` transition keyed by
     ``approval_id``). On completion the row is finalised to ``APPROVED``.
 
+    **A failed resume must not strand the run.** The handle is only *peeked* here and
+    popped after the drive returns, and a :class:`ResumeFailedError` (a tool raising
+    mid-resume, a worker losing its store) releases the row back to ``PENDING`` — the
+    handle stays parked and the checkpoint stays reachable, so a retry or the SLA sweeper
+    can still act on it. Popping first and swallowing the failure left the row wedged in
+    ``RESUMING``, which matches neither the decision path nor the sweeper: neither
+    approved nor rejected, and unreachable forever.
+
     Returns:
         ``True`` if the run was resumed to completion (via handle *or* rehydration);
-        ``False`` when there is nothing resumable.
+        ``False`` when there is nothing resumable, or when the resume failed and the row
+        was released for another attempt.
     """
     if run_id is None:
         return False
 
-    handle = get_parked_runs().pop(run_id)
+    handle = get_parked_runs().get(run_id)
     if handle is not None:
         graph, config = handle.graph, handle.config
     else:
@@ -434,9 +465,21 @@ async def resume_parked_run(
         graph = _durable_graph(deps or AgentDeps.default())
         config = {"configurable": {"thread_id": run_id}}
 
-    resumed = await _core_resume(
-        run_id, decision, graph=graph, config=config, approver=approver
-    )
+    try:
+        resumed = await _core_resume(
+            run_id, decision, graph=graph, config=config, approver=approver
+        )
+    except ResumeFailedError:
+        logger.warning(
+            "Resume of run %s failed; releasing approval %s back to pending",
+            run_id,
+            approval_id,
+            exc_info=True,
+        )
+        await _safe_release(approval_id)
+        return False
+
+    get_parked_runs().pop(run_id)
     if resumed:
         await _safe_finalize(approval_id)
     return resumed
@@ -463,3 +506,35 @@ async def _safe_finalize(approval_id: str) -> None:
         await finalize_resumed(approval_id)
     except Exception:  # noqa: BLE001 - best-effort status bookkeeping
         logger.warning("Approval finalize failed for %s", approval_id, exc_info=True)
+
+
+async def _safe_release(approval_id: str) -> None:
+    """Release a wedged ``RESUMING`` row back to ``PENDING`` (best-effort).
+
+    The compensating half of the optimistic ``PENDING → RESUMING`` lock. Only that exact
+    transition is reversed (the ``status == RESUMING`` predicate makes this idempotent and
+    safe against a concurrent finalise), and the decision stamps are cleared so the row is
+    genuinely pending again — visible to the inbox, matched by a later decision, and swept
+    by the SLA sweeper. Without it a failed resume is terminal: ``RESUMING`` is matched by
+    neither :func:`app.data.resolve_approval` nor :func:`app.data.sweep_expired`.
+    """
+    try:
+        from sqlalchemy import update
+
+        from app.data.models import Approval, ApprovalStatus
+        from app.data.session import get_sessionmaker
+
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                update(Approval)
+                .where(
+                    Approval.id == approval_id,
+                    Approval.status == ApprovalStatus.RESUMING,
+                )
+                .values(
+                    status=ApprovalStatus.PENDING, decided_at=None, decided_by=None
+                )
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 - best-effort status bookkeeping
+        logger.warning("Approval release failed for %s", approval_id, exc_info=True)

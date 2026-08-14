@@ -33,6 +33,21 @@ $extras = 'data,auth,observability,agent,retrieval,ml,guardrails,mcp,dev'
 Write-Host "  installing backend + all extras ($extras) ..."
 uv pip install -e ".[$extras]" | Out-Null
 if (-not (Test-Path '.env')) { Copy-Item '.env.example' '.env'; Write-Host "  created backend\.env (fill in GENAILAB_API_KEY)" -f Yellow }
+
+# Train the ML spine once, offline, on the real domain frame. NOT optional: the
+# train-on-demand fallback was removed because, when the domain adapter was
+# unimportable, it fitted the built-in NOISE synthesiser and served that as domain
+# evidence. /ml/explain and /ml/model-card now answer 503 until this artifact
+# exists. Needs no API key and no database.
+if (Test-Path '.artifacts\ml_spine.joblib') {
+  Line $true "ML spine already trained"
+} else {
+  Write-Host "  training the ML spine (offline, ~10s) ..."
+  $env:PYTHONPATH = "$root\aegis\src;src"
+  .venv\Scripts\python -m app.ml 2>&1 | Out-Null
+  if (Test-Path '.artifacts\ml_spine.joblib') { Line $true "ML spine trained" }
+  else { Write-Host "  [WARN] ML training failed - /ml/explain will 503. Run by hand: .venv\Scripts\python -m app.ml" -f Yellow }
+}
 Line $true "backend ready"
 
 # -- Console (web\) -----------------------------------------------------------

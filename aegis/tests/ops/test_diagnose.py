@@ -155,3 +155,43 @@ async def test_diagnose_bad_optimizer_response_writes_no_draft(db):
     async with db() as s:
         n = (await s.execute(select(func.count()).select_from(PromptVersion))).scalar()
     assert n == 0  # no draft written on a garbage response
+
+
+async def test_breakdown_carries_a_denominator_so_the_optimizer_sees_rates(db):
+    """REGRESSION: a bare failure tally has no denominator, so it ranks by VOLUME.
+
+    ``step:tool`` failing 6 of 6 is a worse problem than ``answer`` failing 8 of 200,
+    but the raw count points the optimizer at ``answer``.
+    """
+    prompts: list[str] = []
+
+    async def complete(role, messages, *, response_format=None):  # noqa: ANN001
+        prompts.append(messages[-1]["content"])
+        return _FakeResult('{"system_prompt": "IMPROVED", "rationale": "ok"}')
+
+    async with db() as s:
+        for i in range(8):
+            s.add(EvalResult(run_id=f"a{i}", prompt_key=PK, metric="answer",
+                             score=0.2, passed=False, detail={}))
+        for i in range(92):
+            s.add(EvalResult(run_id=f"ao{i}", prompt_key=PK, metric="answer",
+                             score=0.9, passed=True, detail={}))
+        for i in range(6):
+            s.add(EvalResult(run_id=f"t{i}", prompt_key=PK, metric="step:tool",
+                             score=0.1, passed=False, detail={}))
+        await s.flush()
+        result = await diagnose(s, prompt_key=PK, complete=complete)
+        await s.commit()
+
+    assert result.metric_breakdown == {"answer": 8, "step:tool": 6}
+    assert result.metric_totals == {"answer": 100, "step:tool": 6}
+    assert result.metric_rates["step:tool"] == pytest.approx(1.0)
+    assert result.metric_rates["answer"] == pytest.approx(0.08)
+
+    # The optimizer is shown rates, and the worst RATE leads — not the biggest count.
+    body = prompts[0]
+    breakdown = body.split("FAILURE BREAKDOWN", 1)[1]
+    assert "8/100" in breakdown and "6/6" in breakdown
+    assert breakdown.index("step:tool") < breakdown.index("answer")
+    # The known facets are always named, even at zero failures.
+    assert "step:guardrail" in breakdown and "step:retrieval" in breakdown

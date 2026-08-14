@@ -328,11 +328,26 @@ def run_summary(events: Iterable[Any]) -> dict[str, Any]:
     finished = [e for e in events if _etype(e) == "run_finished"]
     outcome_ev = finished[-1] if finished else None
     status = _get(outcome_ev, "status") if outcome_ev is not None else None
-    executed = any(_etype(e) == "tool_result" for e in events)
 
-    approval_ev = next((e for e in events if _etype(e) == "approval_required"), None)
-    if approval_ev is not None:
+    # The reported gate is the LAST ``approval_required``: a multi-round self-repair run
+    # can gate more than once, and ``resolved``/``approved`` describe where the run ended
+    # up, which is that gate.
+    gate_idx = next(
+        (i for i in range(len(events) - 1, -1, -1) if _etype(events[i]) == "approval_required"),
+        None,
+    )
+    if gate_idx is not None:
+        approval_ev = events[gate_idx]
         parked = status == RunStatus.AWAITING_APPROVAL.value
+        # Scan only AFTER the gate. Scanning the whole stream mis-reports a REJECTED gate
+        # as approved whenever any earlier round already executed a tool: round 1 runs a
+        # LOW-risk tool (no gate), round 2 proposes a HIGH-risk one, the human rejects,
+        # and the pre-gate ``tool_result`` would otherwise stand in as evidence of
+        # execution. A reject routes straight to ``generate``, so nothing executes after
+        # the gate it decided.
+        executed_after_gate = any(
+            _etype(e) == "tool_result" for e in events[gate_idx + 1 :]
+        )
         gate = {
             "gated": True,
             "risk": _get(approval_ev, "risk"),
@@ -342,8 +357,8 @@ def run_summary(events: Iterable[Any]) -> dict[str, Any]:
             "approval_id": _get(approval_ev, "approval_id"),
             "resolved": not parked,
             # The wire carries no explicit decision event; a resolved gate is 'approved'
-            # iff an action subsequently executed (reject routes straight to generate).
-            "approved": None if parked else executed,
+            # iff an action executed AFTER it (reject routes straight to generate).
+            "approved": None if parked else executed_after_gate,
         }
     else:
         gate = {"gated": False, "risk": None, "resolved": True, "approved": None}

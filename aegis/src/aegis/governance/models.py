@@ -162,12 +162,16 @@ class UsageLedger(AegisBase):
     billed per image. ``audio_seconds`` / ``images`` record those units, so a
     non-chat call is a real, attributable ledger row instead of
     ``prompt_tokens=0`` → ``$0.00``. Both are additive and defaulted, so existing
-    rows, existing construction and the SQLite test schema are unaffected. A LIVE
-    Postgres created before these columns existed needs a one-off migration
-    (``create_all`` is CREATE TABLE IF NOT EXISTS and never alters a table):
+    rows, existing construction and the SQLite test schema are unaffected.
 
-        ALTER TABLE usage_ledger ADD COLUMN audio_seconds DOUBLE PRECISION NOT NULL DEFAULT 0;
-        ALTER TABLE usage_ledger ADD COLUMN images INTEGER NOT NULL DEFAULT 0;
+    A LIVE Postgres created before these columns existed does **not** grow them from
+    ``create_all`` (which is CREATE TABLE IF NOT EXISTS and never alters a table), and
+    until it does, every ledger INSERT raises ``UndefinedColumn`` — swallowed, because
+    usage recording is best-effort at the gateway, so the row is simply lost and the
+    USD caps computed from these rows stop binding. That is why
+    :func:`aegis.governance.schema.reconcile_additive_columns` runs at host bootstrap
+    and installs any such missing column: additive, idempotent, logged, and fatal if
+    the drift cannot be reconciled. There is no manual ALTER TABLE to remember.
     """
 
     __tablename__ = "usage_ledger"

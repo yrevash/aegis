@@ -11,17 +11,25 @@ exists, the injected floor prompt is the baseline (see :mod:`aegis.ops.config`).
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.ops.models import PromptStatus, PromptVersion
 
+logger = logging.getLogger(__name__)
+
 # prompt_key → (system_prompt, config, version). Process-wide; read synchronously by the
 # harness. Empty until refreshed → callers fall back to the injected floor.
 _ACTIVE_CACHE: dict[str, tuple[str, dict[str, Any], int]] = {}
+
+#: How many times :func:`create_draft` re-reads ``max(version)`` and retries after a
+#: unique-index collision with a concurrent writer.
+_VERSION_COLLISION_RETRIES = 5
 
 
 def get_cached_active(prompt_key: str) -> tuple[str, dict[str, Any], int] | None:
@@ -40,6 +48,30 @@ def clear_cache() -> None:
 
 def _cache(pv: PromptVersion) -> None:
     _ACTIVE_CACHE[pv.prompt_key] = (pv.system_prompt, dict(pv.config or {}), pv.version)
+
+
+def _cache_on_commit(session: AsyncSession, pv: PromptVersion) -> None:
+    """Publish ``pv`` to the active cache **only if the caller's transaction commits**.
+
+    ``promote``/``rollback`` deliberately leave the transaction open for the caller, so
+    caching at flush time publishes a prompt that may never be committed: a caller
+    rollback (or a crash) would leave ``_ACTIVE_CACHE`` serving a phantom system prompt
+    to every run through the synchronous hot path :func:`get_cached_active`, and nothing
+    would correct it until the next :func:`refresh_cache` — which only runs at startup.
+
+    Binding to the session's ``after_commit`` makes the cache exactly as durable as the
+    row it mirrors. The listener is one-shot, and the payload is snapshotted now (the
+    ORM object is expired by the commit).
+    """
+    key = pv.prompt_key
+    payload = (pv.system_prompt, dict(pv.config or {}), pv.version)
+    # AsyncSession proxies a sync Session; events are registered on the sync one.
+    target = getattr(session, "sync_session", session)
+
+    def _publish(_session: Any) -> None:  # noqa: ANN401 - SQLAlchemy Session
+        _ACTIVE_CACHE[key] = payload
+
+    event.listen(target, "after_commit", _publish, once=True)
 
 
 async def refresh_cache(session: AsyncSession) -> int:
@@ -69,27 +101,56 @@ async def create_draft(
     created_by: str | None = None,
     notes: str | None = None,
 ) -> PromptVersion:
-    """Write a new ``draft`` version (auto-incrementing ``version`` per ``prompt_key``)."""
-    current_max = (
-        await session.execute(
-            select(func.max(PromptVersion.version)).where(
-                PromptVersion.prompt_key == prompt_key
+    """Write a new ``draft`` version (auto-incrementing ``version`` per ``prompt_key``).
+
+    ``max(version) + 1`` is check-then-act against the ``(prompt_key, version)`` unique
+    index, so two concurrent diagnose passes can pick the same number. The loser's
+    ``IntegrityError`` would otherwise surface *after* its optimizer LLM call has
+    already been paid for and throw the rewritten prompt away — so the insert is
+    retried inside a SAVEPOINT with a freshly-read ``max(version)``, and only a
+    persistently-contended key gives up (loudly).
+
+    Raises:
+        IntegrityError: If the version could not be allocated within
+            :data:`_VERSION_COLLISION_RETRIES` retries (re-raised, never swallowed).
+    """
+    last_error: IntegrityError | None = None
+    for attempt in range(_VERSION_COLLISION_RETRIES + 1):
+        current_max = (
+            await session.execute(
+                select(func.max(PromptVersion.version)).where(
+                    PromptVersion.prompt_key == prompt_key
+                )
             )
+        ).scalar() or 0
+        pv = PromptVersion(
+            prompt_key=prompt_key,
+            version=current_max + 1,
+            system_prompt=system_prompt,
+            config=config or {},
+            status=PromptStatus.DRAFT,
+            parent_version=parent_version,
+            created_by=created_by,
+            notes=notes,
         )
-    ).scalar() or 0
-    pv = PromptVersion(
-        prompt_key=prompt_key,
-        version=current_max + 1,
-        system_prompt=system_prompt,
-        config=config or {},
-        status=PromptStatus.DRAFT,
-        parent_version=parent_version,
-        created_by=created_by,
-        notes=notes,
-    )
-    session.add(pv)
-    await session.flush()
-    return pv
+        try:
+            # A SAVEPOINT so a collision rolls back only this INSERT — the caller's
+            # outer transaction (which it owns and may still commit) stays usable.
+            async with session.begin_nested():
+                session.add(pv)
+                await session.flush()
+        except IntegrityError as exc:
+            last_error = exc
+            logger.warning(
+                "create_draft: version %d for prompt_key=%s collided with a concurrent "
+                "writer (attempt %d); retrying",
+                current_max + 1,
+                prompt_key,
+                attempt + 1,
+            )
+            continue
+        return pv
+    raise last_error  # type: ignore[misc]  # unreachable unless a collision occurred
 
 
 async def get_active(
@@ -121,8 +182,10 @@ async def list_versions(session: AsyncSession, prompt_key: str) -> list[PromptVe
 async def promote(session: AsyncSession, version_id: int) -> PromptVersion:
     """Make ``version_id`` the active version for its key; archive the prior active.
 
-    Enforces one-active-per-key, stamps ``activated_at``, and refreshes the cache so the
-    next run picks it up. The transaction is left open for the caller to commit.
+    Enforces one-active-per-key and stamps ``activated_at``. The transaction is left
+    open for the caller to commit; the active cache is updated **on that commit** (see
+    :func:`_cache_on_commit`), never before, so a caller rollback can never leave a
+    never-committed prompt serving live traffic.
 
     Raises:
         ValueError: If ``version_id`` does not exist.
@@ -142,22 +205,29 @@ async def promote(session: AsyncSession, version_id: int) -> PromptVersion:
     pv.status = PromptStatus.ACTIVE
     pv.activated_at = datetime.now(UTC)
     await session.flush()
-    _cache(pv)
+    _cache_on_commit(session, pv)
     return pv
 
 
 async def rollback(session: AsyncSession, prompt_key: str) -> PromptVersion | None:
-    """Reactivate the most-recent archived version for ``prompt_key`` (one-call revert).
+    """Reactivate the most-recently-active prior version for ``prompt_key`` (one-call revert).
 
-    Archives the current active (if any), reactivates the highest-version archived one,
-    and refreshes the cache. Returns the newly-active version, or ``None`` if there is no
-    prior version to roll back to.
+    Archives the current active (if any) and reactivates the version that was live
+    before it. Returns the newly-active version, or ``None`` if there is no prior
+    version to roll back to.
+
+    ``activated_at`` doubles as the **rollback-eligibility marker**, and rolling back
+    *clears* it on the version being rolled back FROM. That is what makes repeated
+    rollbacks walk the history backwards instead of oscillating: the naive version
+    stamped the revert target with ``now()`` and left the archived (bad) version with an
+    older-but-present ``activated_at``, so the next rollback — ordering archived rows by
+    ``activated_at DESC`` — picked the very version just rolled back from and put the
+    broken prompt straight back into production. A cleared marker also keeps a *rejected
+    draft* (ARCHIVED but never live) off the revert path, as before. The audit trail is
+    preserved in ``notes``, which records each deactivation.
     """
-    # Only a version that was ACTUALLY LIVE (activated_at set) is a valid revert
-    # target. Rejected drafts are also ARCHIVED — without this guard rollback would
-    # happily reactivate an eval-failed draft that was never live (it usually has a
-    # higher version), i.e. the opposite of a safe revert. Pick the most-recently
-    # activated prior version.
+    # Only a version that was ACTUALLY LIVE and has not itself been rolled back
+    # (activated_at still set) is a valid revert target.
     prev = (
         await session.execute(
             select(PromptVersion)
@@ -171,11 +241,25 @@ async def rollback(session: AsyncSession, prompt_key: str) -> PromptVersion | No
     ).scalars().first()
     if prev is None:
         return None
+    now = datetime.now(UTC)
     current = await get_active(session, prompt_key)
     if current is not None:
         current.status = PromptStatus.ARCHIVED
+        # Retire it as a revert target: it is the version we are rolling back FROM.
+        current.notes = _note_rollback(current, now)
+        current.activated_at = None
     prev.status = PromptStatus.ACTIVE
-    prev.activated_at = datetime.now(UTC)
+    prev.activated_at = now
     await session.flush()
-    _cache(prev)
+    _cache_on_commit(session, prev)
     return prev
+
+
+def _note_rollback(pv: PromptVersion, when: datetime) -> str:
+    """Append an audit line recording that ``pv`` was rolled back at ``when``."""
+    line = (
+        f"rolled back from active (was activated_at="
+        f"{pv.activated_at.isoformat() if pv.activated_at else 'unknown'}) "
+        f"at {when.isoformat()}"
+    )
+    return f"{pv.notes}\n{line}" if pv.notes else line

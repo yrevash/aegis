@@ -11,6 +11,9 @@ live here; promotion is the sole responsibility of :mod:`aegis.ops.release` behi
 gate + tiered approval. Diagnose is deliberately conservative and total:
 
 * **No failures → no draft.** Nothing to fix ⇒ ``draft_version_id=None``.
+* **Rates, not volumes.** Every tally is reported against its denominator (how many rows
+  of that facet were graded at all), so the optimizer is steered by the facet that fails
+  most *often* rather than the one that simply runs most.
 * **Defensive parsing.** A malformed / empty optimizer response yields *no draft*
   (``draft_version_id=None``) rather than a crash or a garbage prompt.
 * **Injected prompt floor.** When no active version exists for the key, the base prompt
@@ -27,7 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from aegis.core.models import ModelRole
 from aegis.ops import config, registry
@@ -36,8 +39,9 @@ from aegis.ops.models import EvalResult
 logger = logging.getLogger(__name__)
 
 #: The eval metrics Diagnose tallies (mirrors the ``trace_eval`` namespaces). Any other
-#: metric a failing row carries is still counted, but these are the ones the optimizer is
-#: told about explicitly.
+#: metric a failing row carries is still counted, but these are always shown to the
+#: optimizer — including at a 0-failure rate, so "retrieval is fine, tools are not" is
+#: legible rather than inferred from an absence.
 _KNOWN_METRICS: tuple[str, ...] = (
     "answer",
     "step:retrieval",
@@ -70,12 +74,17 @@ class DiagnoseResult:
         failure_summary: A short human-readable summary (also stored as the draft's notes).
         failures_considered: How many failing ``EvalResult`` rows were read.
         metric_breakdown: ``metric name → failing-row count`` (the failure tally).
+        metric_totals: ``metric name → total graded rows`` over the same window — the
+            **denominator** the counts are only meaningful against.
+        metric_rates: ``metric name → failure rate`` in ``[0, 1]`` (count / total).
     """
 
     draft_version_id: int | None
     failure_summary: str
     failures_considered: int
     metric_breakdown: dict[str, int] = field(default_factory=dict)
+    metric_totals: dict[str, int] = field(default_factory=dict)
+    metric_rates: dict[str, float] = field(default_factory=dict)
 
 
 def _critique(row: EvalResult) -> str:
@@ -91,12 +100,28 @@ def _critique(row: EvalResult) -> str:
     return f"{row.metric} scored {row.score:.2f}{tail}"
 
 
-def _build_summary(breakdown: dict[str, int], considered: int) -> str:
-    """Render a one-line summary of the failure tally."""
+def _failure_rates(
+    breakdown: dict[str, int], totals: dict[str, int]
+) -> dict[str, float]:
+    """Return ``metric → failure rate`` in ``[0, 1]`` (``0.0`` when nothing was graded)."""
+    return {
+        metric: (breakdown.get(metric, 0) / totals[metric]) if totals.get(metric) else 0.0
+        for metric in set(breakdown) | set(totals)
+    }
+
+
+def _build_summary(
+    breakdown: dict[str, int], considered: int, totals: dict[str, int] | None = None
+) -> str:
+    """Render a one-line summary of the failure tally, as ``count/total`` per metric."""
     if not breakdown:
         return "No failing evals."
+    totals = totals or {}
     top = sorted(breakdown.items(), key=lambda kv: kv[1], reverse=True)
-    parts = ", ".join(f"{metric}={count}" for metric, count in top)
+    parts = ", ".join(
+        f"{metric}={count}/{totals[metric]}" if totals.get(metric) else f"{metric}={count}"
+        for metric, count in top
+    )
     return f"{considered} failing evals: {parts}"
 
 
@@ -169,7 +194,36 @@ async def diagnose(
     for row in rows:
         breakdown[row.metric] = breakdown.get(row.metric, 0) + 1
 
-    summary = _build_summary(breakdown, len(rows))
+    # DENOMINATOR. A raw failure *count* is not a signal: a facet graded 500 times
+    # with 20 failures is healthier than one graded 25 times with 15, yet the bare
+    # tally ranks the first as the worse offender and points the optimizer at it. So
+    # count every graded row over the same window the failures were drawn from and
+    # steer by RATE.
+    totals: dict[str, int] = {}
+    if rows:
+        # Windowed by ``id``, not ``ts``: ids are monotonic with insertion and compare
+        # identically on every dialect, whereas ``ts`` is a server-side CURRENT_TIMESTAMP
+        # whose stored form (naive string on SQLite) does not compare against a
+        # tz-aware Python bound parameter.
+        window_start = min((r.id for r in rows if r.id is not None), default=None)
+        totals_stmt = select(EvalResult.metric, func.count()).where(
+            EvalResult.prompt_key == prompt_key
+        )
+        if window_start is not None:
+            totals_stmt = totals_stmt.where(EvalResult.id >= window_start)
+        totals = {
+            str(metric): int(count)
+            for metric, count in (
+                await session.execute(totals_stmt.group_by(EvalResult.metric))
+            ).all()
+        }
+        # A failure we read must never exceed its own denominator (a row written after
+        # the window query would otherwise make a rate > 1).
+        for metric, count in breakdown.items():
+            totals[metric] = max(totals.get(metric, 0), count)
+
+    rates = _failure_rates(breakdown, totals)
+    summary = _build_summary(breakdown, len(rows), totals)
 
     # Nothing to fix — return without touching the registry.
     if not rows:
@@ -192,14 +246,23 @@ async def diagnose(
 
     # Worst-offending critiques first (rows already ordered most-recent-first).
     examples = [_critique(row) for row in rows[:_MAX_EXAMPLES]]
+    # Ordered by failure RATE (not raw volume), and always naming the known facets so a
+    # clean facet reads as "0% of N" rather than as a silent absence.
+    shown = sorted(
+        set(breakdown) | set(_KNOWN_METRICS),
+        key=lambda m: (rates.get(m, 0.0), breakdown.get(m, 0)),
+        reverse=True,
+    )
     breakdown_lines = "\n".join(
-        f"- {metric}: {breakdown[metric]} failures"
-        for metric in sorted(breakdown, key=lambda m: breakdown[m], reverse=True)
+        f"- {metric}: {breakdown.get(metric, 0)}/{totals.get(metric, 0)} graded rows "
+        f"failed ({rates.get(metric, 0.0):.0%})"
+        for metric in shown
     )
     example_lines = "\n".join(f"- {ex}" for ex in examples)
     user_prompt = (
         f"CURRENT SYSTEM PROMPT:\n{base_prompt}\n\n"
-        f"FAILURE BREAKDOWN (metric: count):\n{breakdown_lines}\n\n"
+        f"FAILURE BREAKDOWN (metric: failures/graded = rate; fix the highest RATE, "
+        f"not the highest count):\n{breakdown_lines}\n\n"
         f"FAILURE EXAMPLES (judge critiques):\n{example_lines}"
     )
 
@@ -225,6 +288,8 @@ async def diagnose(
             failure_summary=summary,
             failures_considered=len(rows),
             metric_breakdown=breakdown,
+            metric_totals=totals,
+            metric_rates=rates,
         )
 
     draft = await registry.create_draft(
@@ -242,4 +307,6 @@ async def diagnose(
         failure_summary=summary,
         failures_considered=len(rows),
         metric_breakdown=breakdown,
+        metric_totals=totals,
+        metric_rates=rates,
     )

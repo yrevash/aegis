@@ -14,6 +14,13 @@
 >
 > Cloning with `git clone` avoids the mark entirely and is the better path.
 >
+> **The ML spine must be trained once** before `/ml/explain` or `/ml/model-card`
+> answer: `cd backend && .venv/bin/python -m app.ml` (offline, ~10s, no API key and
+> no database needed). `scripts/bootstrap.sh` and `scripts\bootstrap.ps1` now do this
+> for you. Until the artifact exists those two endpoints return **503** — deliberately,
+> because the old train-on-demand fallback fitted the built-in *noise synthesiser*
+> whenever the domain adapter was unimportable and served it as domain evidence.
+>
 > **Fastest path (no agent needed):** `scripts\bootstrap.ps1` → `scripts\preflight.ps1`
 > → `scripts\start.ps1 -Mode lite` (Windows; `.sh` twins for mac/Linux). The
 > one-page day-of guide with the fallback ladder is **`docs/operations/runbook.md`**;

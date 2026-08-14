@@ -62,16 +62,24 @@ class CaseScore:
     Attributes:
         query: The evaluated query (for readable failure output).
         context_precision: Context-precision proxy @k of retrieved sources vs gold docs.
-        context_recall: Context-recall proxy of gold docs among retrieved sources.
+        context_recall: Context-recall proxy of gold docs among retrieved sources;
+            ``None`` when the case carries no gold docs (nothing to measure).
         groundedness: Groundedness/faithfulness proxy — fraction of expected claims
-            present (by normalized substring match) in the answer context.
+            present (by normalized substring match) in the answer context; ``None``
+            when the case carries no claims (nothing to measure).
         retrieved_docs: The distinct source doc ids retrieved (for diagnostics).
+
+    ``None`` is deliberate and load-bearing: an *unlabelled* facet used to score a
+    perfect ``1.0``, which :func:`aggregate` then averaged in over the full case
+    count — so adding unlabelled cases lifted the corpus mean and could hold the gate
+    above its threshold while a real regression ran underneath. Not-measured is now
+    not-counted.
     """
 
     query: str
     context_precision: float
-    context_recall: float
-    groundedness: float
+    context_recall: float | None
+    groundedness: float | None
     retrieved_docs: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
@@ -91,12 +99,26 @@ class CaseScore:
 
 @dataclass(frozen=True)
 class AggregateScore:
-    """Corpus-level means over every :class:`CaseScore`."""
+    """Corpus-level means over every :class:`CaseScore`.
+
+    Each mean is over the cases that actually *carried* that label, not over the whole
+    corpus — ``recall_cases`` / ``groundedness_cases`` say how many those were. A metric
+    no case was labelled for is ``None`` (honestly not measured), never ``1.0``.
+    """
 
     context_precision: float
-    context_recall: float
-    groundedness: float
+    context_recall: float | None
+    groundedness: float | None
     cases: int
+    recall_cases: int | None = None
+    groundedness_cases: int | None = None
+
+    def __post_init__(self) -> None:
+        """Default the per-metric contributor counts to the full case count."""
+        if self.recall_cases is None:
+            object.__setattr__(self, "recall_cases", self.cases)
+        if self.groundedness_cases is None:
+            object.__setattr__(self, "groundedness_cases", self.cases)
 
     def as_dict(self) -> dict[str, object]:
         """Return the corpus-level means as a plain dict (the authoritative aggregate)."""
@@ -105,6 +127,8 @@ class AggregateScore:
             "contextRecall": self.context_recall,
             "groundedness": self.groundedness,
             "cases": self.cases,
+            "recallCases": self.recall_cases,
+            "groundednessCases": self.groundedness_cases,
         }
 
 
@@ -197,11 +221,12 @@ def score_case(
         sum(doc in case.gold_doc_ids for doc in top_k) / len(top_k) if top_k else 0.0
     )
     retrieved_set = set(ranked_docs)
+    # An unlabelled facet is NOT a passing facet — it is an absent measurement, and
+    # scoring it 1.0 would let unlabelled cases pad the corpus mean.
     recall = (
-        sum(gold in retrieved_set for gold in case.gold_doc_ids)
-        / len(case.gold_doc_ids)
+        sum(gold in retrieved_set for gold in case.gold_doc_ids) / len(case.gold_doc_ids)
         if case.gold_doc_ids
-        else 1.0
+        else None
     )
 
     normalized_context = _normalize(result.answer_context)
@@ -209,7 +234,7 @@ def score_case(
         sum(_claim_present(claim, normalized_context) for claim in case.claims)
         / len(case.claims)
         if case.claims
-        else 1.0
+        else None
     )
 
     return CaseScore(
@@ -224,18 +249,31 @@ def score_case(
 def aggregate(scores: Sequence[CaseScore]) -> AggregateScore:
     """Average the per-case metrics into corpus-level means.
 
+    Recall and groundedness are averaged over the cases that carried that label only —
+    an unlabelled case contributes to neither the numerator nor the denominator, so it
+    can no longer inflate the corpus mean (and mask a regression) simply by existing.
+
     Args:
         scores: The per-case scores.
 
     Returns:
-        The :class:`AggregateScore` (zeros when ``scores`` is empty).
+        The :class:`AggregateScore`. ``context_recall``/``groundedness`` are ``None``
+        when no case was labelled for them; zeros when ``scores`` is empty.
     """
     n = len(scores)
     if n == 0:
-        return AggregateScore(0.0, 0.0, 0.0, 0)
+        return AggregateScore(0.0, 0.0, 0.0, 0, 0, 0)
+
+    def _mean(values: list[float]) -> float | None:
+        return sum(values) / len(values) if values else None
+
+    recalls = [s.context_recall for s in scores if s.context_recall is not None]
+    grounded = [s.groundedness for s in scores if s.groundedness is not None]
     return AggregateScore(
         context_precision=sum(s.context_precision for s in scores) / n,
-        context_recall=sum(s.context_recall for s in scores) / n,
-        groundedness=sum(s.groundedness for s in scores) / n,
+        context_recall=_mean(recalls),
+        groundedness=_mean(grounded),
         cases=n,
+        recall_cases=len(recalls),
+        groundedness_cases=len(grounded),
     )

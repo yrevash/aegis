@@ -274,3 +274,51 @@ async def test_answer_cache_disabled_runs_the_planner(make_deps):
     assert "reasoning" in types  # planner actually ran
     answer = "".join(e["text"] for e in events if e["type"] == "token")
     assert "Cached" not in answer
+
+
+# --- build-time unroutable-specialist warning ---------------------------------
+# Regression: the check read ``roster.roles`` as an ATTRIBUTE, but it is a method
+# on every roster implementation. Iterating the bound method raised TypeError,
+# which the defensive `except` swallowed — so the warning could never fire, and a
+# roster declaring a specialist with no handler node stayed silent, which is the
+# precise failure the check exists to surface.
+
+
+def test_unroutable_specialist_is_warned_about_at_build_time(caplog):
+    """A roster role with no handler node must produce a build-time warning."""
+    import logging
+
+    from aegis.agent.graph import _warn_unroutable_specialists
+
+    class _Roster:
+        def roles(self):
+            return ["qa", "memory", "billing"]  # billing has no node
+
+    class _Deps:
+        agent_roster = staticmethod(lambda: _Roster())
+
+    with caplog.at_level(logging.WARNING, logger="aegis.agent.graph"):
+        _warn_unroutable_specialists(_Deps())
+
+    assert any("billing" in r.getMessage() for r in caplog.records), (
+        "an unroutable specialist must be named in a build-time warning"
+    )
+
+
+def test_fully_routable_roster_warns_about_nothing(caplog):
+    """Every role having a node must stay silent — no false alarms."""
+    import logging
+
+    from aegis.agent.graph import _warn_unroutable_specialists
+
+    class _Roster:
+        def roles(self):
+            return ["qa", "memory"]
+
+    class _Deps:
+        agent_roster = staticmethod(lambda: _Roster())
+
+    with caplog.at_level(logging.WARNING, logger="aegis.agent.graph"):
+        _warn_unroutable_specialists(_Deps())
+
+    assert not [r for r in caplog.records if "no handler node" in r.getMessage()]

@@ -40,14 +40,88 @@ async def _login(client, username: str) -> dict[str, str]:
 # ── MLOps · model card ───────────────────────────────────────────────────────
 
 
-async def test_model_card_returns_measured_shape(client, db):
+@pytest.fixture
+def fitted_spine(monkeypatch):
+    """Install a genuinely domain-fitted spine as the process-wide model.
+
+    Explicit, because ``app.ml.get_model`` no longer trains one on demand: the
+    removed fallback fitted the built-in noise synthesiser whenever the domain
+    adapter was unavailable and served the result as this platform's model. The
+    endpoint's *presence* of a model is now a precondition the test states, not
+    something the handler manufactures behind the operator's back.
+    """
+    import app.ml as ml
+    from app.adapter import training_frame
+    from app.ml.model import TrustworthyModel
+    from app.ml.spec import resolve_spec
+
+    model = TrustworthyModel.train(
+        resolve_spec(), training_frame(num_requests=200), path=None
+    )
+    monkeypatch.setattr(ml, "_MODEL", model)
+    return model
+
+
+@pytest.fixture
+def no_ml_artifact(monkeypatch, tmp_path):
+    """A cold process with no persisted artifact — the pre-training state."""
+    import app.ml as ml
+
+    monkeypatch.setattr(ml, "_MODEL", None)
+    monkeypatch.setattr(ml, "DEFAULT_ARTIFACT_PATH", tmp_path / "absent.joblib")
+
+
+async def test_model_card_returns_measured_shape(client, db, fitted_spine):
     r = await client.get("/ml/model-card", headers=await _login(client, "ai"))
     assert r.status_code == 200
     body = r.json()
-    assert body["task"] in {"regression", "classification"}
+    assert body["task"] == "regression"
     assert body["ensemble_members"], "ensemble members are read off the fitted spine"
-    # data_source is the honesty label (synthetic fallback offline, never faked as real).
-    assert body["data_source"] in {"provided", "spec_provider", "synthetic"}
+    # data_source is the honesty label — a real domain frame, not the synthesiser.
+    assert body["data_source"] == "provided"
+
+
+async def test_model_card_is_503_when_no_model_has_been_trained(
+    client, db, no_ml_artifact
+):
+    """A model card describes a model; with none fitted the honest answer is "none".
+
+    It used to train one inside this request — on the domain spec if the adapter
+    imported, and on the built-in **noise synthesiser** if it did not — and return a
+    fully-populated card for it. The card looked identical either way.
+    """
+    r = await client.get("/ml/model-card", headers=await _login(client, "ai"))
+
+    assert r.status_code == 503
+    assert "python -m app.ml" in r.json()["detail"]
+
+
+async def test_ml_explain_is_503_when_no_model_has_been_trained(
+    client, db, admin_headers, no_ml_artifact
+):
+    """SAME for the prediction surface: refuse rather than serve a noise interval."""
+    r = await client.post(
+        "/ml/explain", json={"features": {"priority": "urgent"}}, headers=admin_headers
+    )
+
+    assert r.status_code == 503
+    assert "python -m app.ml" in r.json()["detail"]
+
+
+async def test_ml_explain_runs_the_fit_off_the_event_loop(client, db, admin_headers):
+    """The blocking spine call must not be awaited inline in the handler.
+
+    A first request with no cached model pays a joblib load (and previously a full
+    XGBoost + MAPIE fit) — seconds of pure CPU. Run in the handler's own coroutine
+    that froze the single event loop for every other in-flight request, every SSE
+    stream and the health check alongside it.
+    """
+    import inspect
+
+    from app.api import routes
+
+    assert "asyncio.to_thread(predict" in inspect.getsource(routes.ml_explain)
+    assert "asyncio.to_thread(get_model)" in inspect.getsource(routes.ml_model_card)
 
 
 async def test_model_card_rejects_client_role(client, db):

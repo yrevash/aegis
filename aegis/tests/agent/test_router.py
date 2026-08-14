@@ -244,3 +244,122 @@ async def test_memory_specialist_honest_when_nothing_stored(make_deps):
     assert mem_event["recalled_fact_count"] == 0
     assert "token" in types
     assert types[-1] == "run_finished"
+
+
+# ── 3. Keyword matching and the tiebreak must not be fooled by free text ──
+
+
+@dataclass(frozen=True)
+class _SubstringRoster:
+    """A roster whose hints are short words that occur INSIDE unrelated longer words."""
+
+    _specs: tuple[_Spec, ...] = field(
+        default=(
+            _Spec("qa", "default", is_default=True),
+            _Spec("memory", "recall", ("memory", "remember")),
+            _Spec("billing", "invoices", ("bill", "invoice")),
+        )
+    )
+
+    @property
+    def default_role(self) -> str:
+        return "qa"
+
+    @property
+    def specialists(self) -> tuple[_Spec, ...]:
+        return self._specs
+
+    def roles(self) -> list[str]:
+        return [s.role for s in self._specs]
+
+    def named(self) -> list[_Spec]:
+        return [s for s in self._specs if s.keywords]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "is this a memoryless markov process",
+        "the billboard campaign results",
+    ],
+    ids=["memory-in-memoryless", "bill-in-billboard"],
+)
+def test_keyword_hits_respect_word_boundaries(query: str):
+    """REGRESSION: a raw substring hit made 'memory' match 'memoryless' and 'bill'
+    match 'billboard', so a specialist could win on a word it has nothing to do with."""
+    role, reason = classify_deterministic(query, _SubstringRoster())
+    assert role == "qa"
+    assert "no specialist keywords matched" in reason
+
+
+def test_a_real_word_still_matches():
+    """Control: boundary matching must not break the genuine hit."""
+    role, _ = classify_deterministic("what do you remember about me", _SubstringRoster())
+    assert role == "memory"
+
+
+def test_a_duplicated_hint_does_not_inflate_a_specialists_score():
+    """A roster listing the same phrase twice must not out-score one listing it once."""
+
+    @dataclass(frozen=True)
+    class _DupRoster:
+        _specs: tuple[_Spec, ...] = field(
+            default=(
+                _Spec("qa", "default", is_default=True),
+                _Spec("alpha", "A", ("overlap", "overlap")),
+                _Spec("beta", "B", ("overlap",)),
+            )
+        )
+
+        @property
+        def default_role(self) -> str:
+            return "qa"
+
+        @property
+        def specialists(self) -> tuple[_Spec, ...]:
+            return self._specs
+
+        def roles(self) -> list[str]:
+            return [s.role for s in self._specs]
+
+        def named(self) -> list[_Spec]:
+            return [s for s in self._specs if s.keywords]
+
+    role, reason = classify_deterministic("this has overlap", _DupRoster())
+    assert role is None and "ambiguous" in reason
+
+
+@pytest.mark.asyncio
+async def test_tiebreak_does_not_pick_an_explicitly_rejected_role():
+    """REGRESSION: the tiebreak substring-scanned the roster IN ORDER, so a reply of
+    "not qa — use memory" returned ``qa`` (the rejected role, because it was first)."""
+
+    async def complete(role, messages, **kwargs):  # noqa: ANN001, ANN003
+        return SimpleNamespace(content="not alpha — use beta")
+
+    decision = await route_query("this has overlap", _AmbiguousRoster(), complete=complete)
+    assert decision.role != "alpha"
+    # Naming two roles is a non-answer, so the router falls back to the default.
+    assert decision.role == "qa"
+    assert decision.used_llm is True
+
+
+@pytest.mark.asyncio
+async def test_tiebreak_accepts_a_bare_role_id_however_it_is_punctuated():
+    for reply in ("beta", " beta ", '"beta"', "beta."):
+        async def complete(role, messages, _reply=reply, **kwargs):  # noqa: ANN001, ANN003
+            return SimpleNamespace(content=_reply)
+
+        decision = await route_query(
+            "this has overlap", _AmbiguousRoster(), complete=complete
+        )
+        assert decision.role == "beta", reply
+
+
+@pytest.mark.asyncio
+async def test_tiebreak_accepts_a_single_role_mentioned_in_a_sentence():
+    async def complete(role, messages, **kwargs):  # noqa: ANN001, ANN003
+        return SimpleNamespace(content="I would route this to beta.")
+
+    decision = await route_query("this has overlap", _AmbiguousRoster(), complete=complete)
+    assert decision.role == "beta"

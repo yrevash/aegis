@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -227,6 +228,32 @@ def classify_change(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _require_score(value: Any, which: str) -> float:  # noqa: ANN401 - eval_fn output
+    """Coerce an ``eval_fn`` result to a finite float, or refuse to gate on it.
+
+    ``NaN`` compares False against everything, so a ``NaN`` score would sail through
+    ``draft_score < baseline_score + margin`` and be *promoted*. The eval gate is the
+    only thing standing between the optimizer and production, so an unusable
+    measurement stops the release instead of silently passing it.
+
+    Raises:
+        ValueError: When the score is not a finite real number.
+    """
+    try:
+        score = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"eval gate cannot run: {which} eval_fn returned a non-numeric score "
+            f"({value!r}); refusing to release."
+        ) from exc
+    if not math.isfinite(score):
+        raise ValueError(
+            f"eval gate cannot run: {which} eval_fn returned a non-finite score "
+            f"({score!r}); refusing to release."
+        )
+    return score
+
+
 def _baseline(
     active: PromptVersion | None,
     prompt_key: str,
@@ -280,7 +307,12 @@ async def release(
         A :class:`ReleaseResult` describing the outcome, scores, risk and any approval id.
 
     Raises:
-        ValueError: If ``draft_version_id`` does not exist.
+        ValueError: If ``draft_version_id`` does not exist, if it is not a DRAFT, or if
+            ``eval_fn`` returned a score the gate cannot compare (non-numeric/non-finite).
+        Exception: Anything ``eval_fn`` raises — notably
+            :class:`~aegis.evals.judge.JudgeUnavailableError` when the judge could not
+            grade. The release is abandoned with the draft left DRAFT; a control that
+            could not run never promotes.
     """
     params = params or config.get_loop_params()
     effective_margin = params.eval_margin if margin is None else margin
@@ -299,8 +331,8 @@ async def release(
     active = await registry.get_active(session, draft.prompt_key)
     baseline_prompt, baseline_config = _baseline(active, draft.prompt_key, floor)
 
-    draft_score = float(await eval_fn(draft.system_prompt))
-    baseline_score = float(await eval_fn(baseline_prompt))
+    draft_score = _require_score(await eval_fn(draft.system_prompt), "draft")
+    baseline_score = _require_score(await eval_fn(baseline_prompt), "baseline")
 
     risk = classify_change(
         baseline_prompt,
@@ -379,6 +411,14 @@ async def apply_release_decision(
 ) -> PromptVersion | None:
     """Resolve a staged release once a human decides: promote on approve, archive on reject.
 
+    **Only a STAGED version may be decided** — the mirror of :func:`release`'s
+    DRAFT-only guard, and the reason a decision cannot be applied twice. Without it a
+    replayed/late decision re-runs against a version whose lifecycle has already moved
+    on: a second approve re-promotes (archiving whatever legitimately replaced it), and
+    a reject arriving after an approve archives the version that is now ACTIVE — leaving
+    the ``prompt_key`` with **no** active version, so every run silently drops to the
+    floor prompt.
+
     Args:
         session: An async SQLAlchemy session.
         draft_version_id: The staged draft the human acted on.
@@ -387,10 +427,19 @@ async def apply_release_decision(
     Returns:
         The affected :class:`PromptVersion` (now active or archived), or ``None`` if the
         draft id does not exist.
+
+    Raises:
+        ValueError: If the version is not STAGED (already decided, live, or never staged).
     """
     draft = await session.get(PromptVersion, draft_version_id)
     if draft is None:
         return None
+    if draft.status is not PromptStatus.STAGED:
+        raise ValueError(
+            f"PromptVersion {draft_version_id} is {draft.status.value}, not staged; "
+            "only a staged release can be decided (this decision was already applied "
+            "or never staged)."
+        )
     if approved:
         return await registry.promote(session, draft_version_id)
     draft.status = PromptStatus.ARCHIVED

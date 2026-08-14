@@ -69,9 +69,11 @@ class RunEval:
         overall: Mean of every persisted metric score in ``[0, 1]`` (``0.0`` when
             nothing could be graded).
         passed: Whether ``overall`` cleared the configured threshold.
-        metrics: ``metric name → score`` for every row written (last write wins
-            when a step kind repeats; all rows are still persisted and counted
-            toward ``overall``).
+        metrics: ``metric name → score``. A run usually has several steps of the
+            same kind (two retrievals, three tool calls), each of which persists
+            its own row; this map carries the **mean** of that facet's rows, so it
+            agrees with the persisted rows and with ``overall`` instead of
+            reporting whichever step happened to be graded last.
     """
 
     overall: float
@@ -313,8 +315,9 @@ async def evaluate_run(
             (default :data:`DEFAULT_THRESHOLD`).
 
     Returns:
-        A :class:`RunEval` (``overall`` = mean of written scores; ``passed`` =
-        ``overall >= threshold``; ``metrics`` = the written ``metric → score`` map).
+        A :class:`RunEval` (``overall`` = mean of every written score; ``passed`` =
+        ``overall >= threshold``; ``metrics`` = ``metric → mean score`` across that
+        facet's written rows).
     """
     written: list[tuple[str, float]] = []
 
@@ -380,8 +383,14 @@ async def evaluate_run(
         logger.warning("trace_eval: run %s eval aborted", run_id, exc_info=True)
 
     overall = sum(s for _, s in written) / len(written) if written else 0.0
+    # Mean per facet — ``dict(written)`` would keep only the LAST row of a repeated
+    # facet, so the returned map would contradict both the persisted rows and the
+    # ``overall`` computed from all of them.
+    by_metric: dict[str, list[float]] = {}
+    for metric, score in written:
+        by_metric.setdefault(metric, []).append(score)
     return RunEval(
         overall=overall,
         passed=overall >= threshold,
-        metrics=dict(written),
+        metrics={m: sum(v) / len(v) for m, v in by_metric.items()},
     )

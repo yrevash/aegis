@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from aegis.core.models import ModelRole
 from aegis.core.types import RiskLevel
@@ -88,8 +88,19 @@ def make_eval_fn(complete: Any, *, limit: int = DEFAULT_EVAL_SUBSET) -> Any:  # 
             a fake in tests). Both the generation and the judge run through it.
         limit: How many seed cases to score per candidate (bounded for cost).
 
+    **Fail-closed:** the scorer never invents a number. If the judge cannot return a
+    usable verdict (:class:`~aegis.evals.judge.JudgeUnavailableError`) the error
+    propagates out of ``eval_fn`` and aborts the release. It is deliberately *not*
+    caught-and-zeroed: zeroing scores the draft and its baseline identically, which
+    passes a ``margin=0.0`` gate and auto-promotes every candidate on a judge outage.
+
     Returns:
         An ``async (system_prompt: str) -> float`` in ``[0, 1]``.
+
+    Raises:
+        JudgeUnavailableError: (from the returned ``eval_fn``) when the judge reply is
+            unusable — the release must stop, not proceed on a fabricated score.
+        RuntimeError: (from the returned ``eval_fn``) when no case could be graded.
     """
     from aegis.evals.corpus import SEED_CASES
     from aegis.evals.harness import build_eval_retriever
@@ -114,10 +125,17 @@ def make_eval_fn(complete: Any, *, limit: int = DEFAULT_EVAL_SUBSET) -> Any:  # 
                 temperature=0.0,
             )
             answer = getattr(generation, "content", "") or ""
+            # An unparseable judge reply raises out of here on purpose — see the
+            # docstring. Do NOT wrap this in a try/except that yields 0.0.
             verdict = await judge_answer(case.query, context, answer, complete=complete)
             total += (verdict.groundedness + verdict.relevance) / 2.0
             graded += 1
-        return total / graded if graded else 0.0
+        if not graded:
+            raise RuntimeError(
+                "release eval scored no cases; the gate cannot pass on an empty "
+                "measurement (fail closed)."
+            )
+        return total / graded
 
     return eval_fn
 
@@ -240,7 +258,7 @@ class ReleaseDecision:
 
     approval_id: str
     approved: bool
-    outcome: str  # "promoted" | "archived" | "unknown"
+    outcome: str  # "promoted" | "archived" | "already_decided" | "unknown"
     prompt_key: str | None
     active_version: int | None
 
@@ -255,13 +273,24 @@ async def decide_release(
     reject), then marks the durable row terminal. Decoupled from the agent resume path —
     no checkpoint is ever touched.
 
+    **Exactly-once.** The durable row is claimed with a conditional
+    ``UPDATE … WHERE status = PENDING`` *before* the draft is touched, and the whole
+    thing is one transaction. A double-clicked approve, a retried request, or a reject
+    replayed after an approve therefore finds the row already terminal and returns
+    ``outcome="already_decided"`` **without** re-promoting or archiving anything — the
+    failure mode being closed off is a late reject archiving the now-ACTIVE version,
+    which would leave the prompt key with no active version at all and drop every run
+    to the floor prompt.
+
     Args:
         approval_id: The staged-release approval to resolve.
         approved: ``True`` to promote the draft live, ``False`` to archive it.
         decided_by: Who decided (recorded on the durable row).
 
     Returns:
-        A :class:`ReleaseDecision`, or ``None`` when the approval id is unknown.
+        A :class:`ReleaseDecision`, or ``None`` when the approval id is unknown. A
+        replayed decision returns ``outcome="already_decided"`` carrying the *recorded*
+        decision (not the requested one).
     """
     from aegis.ops import registry
     from aegis.ops.release import apply_release_decision
@@ -277,18 +306,52 @@ async def decide_release(
         draft_version_id = args.get("draft_version_id")
         prompt_key = args.get("prompt_key")
 
+        # Claim the row atomically. rowcount == 0 ⇒ someone already decided it.
+        claimed = await session.execute(
+            update(approval)
+            .where(
+                approval.id == approval_id,
+                approval.status == approval_status.PENDING,
+            )
+            .values(
+                status=approval_status.APPROVED if approved else approval_status.REJECTED,
+                decided_at=datetime.now(UTC),
+                decided_by=decided_by,
+            )
+        )
+        if claimed.rowcount == 0:
+            await session.rollback()
+            await session.refresh(row)
+            logger.warning(
+                "decide_release: approval %s is already %s; ignoring a replayed "
+                "decision (approved=%s)",
+                approval_id,
+                getattr(row.status, "value", row.status),
+                approved,
+            )
+            active_version: int | None = None
+            if prompt_key is not None:
+                active = await registry.get_active(session, str(prompt_key))
+                active_version = active.version if active is not None else None
+            return ReleaseDecision(
+                approval_id=approval_id,
+                approved=row.status == approval_status.APPROVED,
+                outcome="already_decided",
+                prompt_key=str(prompt_key) if prompt_key is not None else None,
+                active_version=active_version,
+            )
+
         pv: PromptVersion | None = None
         if draft_version_id is not None:
+            # Raises if the version is not STAGED — the transaction (including the
+            # claim above) then rolls back, so the row stays PENDING and decidable.
             pv = await apply_release_decision(
                 session, draft_version_id=int(draft_version_id), approved=approved
             )
 
-        row.status = approval_status.APPROVED if approved else approval_status.REJECTED
-        row.decided_at = datetime.now(UTC)
-        row.decided_by = decided_by
         await session.commit()
 
-        active_version: int | None = None
+        active_version = None
         if approved and pv is not None:
             active_version = pv.version
         elif approved and prompt_key is not None:

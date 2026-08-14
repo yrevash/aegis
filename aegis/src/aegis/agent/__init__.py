@@ -23,7 +23,9 @@ Public surface:
 - :class:`AgentDeps` / :class:`AgentConfig` / :class:`MemoryDeps` — the DI contract +
   bounded-autonomy thresholds.
 - :class:`ApprovalRegistry` / :func:`get_approval_registry` /
-  :class:`ApprovalOutcome` / :class:`ParkedRunRegistry` — the ``/approval`` rendezvous.
+  :class:`ApprovalOutcome` / :class:`ParkedRunRegistry` — the ``/approval`` rendezvous,
+  with :class:`GateHandedOffError` / :class:`ResumeFailedError` as its exactly-once
+  hand-off signals.
 - :class:`RouterDecision` / :func:`route_query` — the supervisor router.
 - :class:`AgentState` — the typed graph state.
 - :mod:`aegis.agent.events` — the wire-event dict builders.
@@ -35,6 +37,7 @@ from . import events
 from .approvals import (
     ApprovalOutcome,
     ApprovalRegistry,
+    GateHandedOffError,
     ParkedRun,
     ParkedRunRegistry,
     UnknownApprovalError,
@@ -51,7 +54,7 @@ from .deps import (
 )
 from .graph import build_agent
 from .harness import harness_config, run_summary
-from .orchestrator import resume_parked_run, run_agent
+from .orchestrator import ResumeFailedError, resume_parked_run, run_agent
 from .router import RouterDecision, classify_deterministic, load_roster, route_query
 from .state import AgentState
 from .topology import GraphTopology, TopologyEdge, TopologyNode, graph_topology
@@ -62,10 +65,12 @@ __all__ = [
     "AgentState",
     "ApprovalOutcome",
     "ApprovalRegistry",
+    "GateHandedOffError",
     "GraphTopology",
     "MemoryDeps",
     "ParkedRun",
     "ParkedRunRegistry",
+    "ResumeFailedError",
     "RouterDecision",
     "ToolOutcome",
     "TopologyEdge",

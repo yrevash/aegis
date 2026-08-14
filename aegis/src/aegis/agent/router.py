@@ -25,6 +25,7 @@ becomes a transparent pass-through to the existing pipeline. The adapter-backed
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -87,18 +88,48 @@ class _FallbackRoster:
         return []
 
 
+def _phrase_present(phrase: str, query_lc: str) -> bool:
+    r"""Whether ``phrase`` occurs in ``query_lc`` on **word boundaries**.
+
+    A bare substring test made "memory" match "memorandum" and "bill" match "billboard",
+    so a specialist could win on a word it has nothing to do with. Boundaries are
+    alphanumeric-aware rather than ``\\b``-only so a multi-word or punctuated hint
+    ("out of office", "p&l") still matches.
+    """
+    pattern = r"(?<![a-z0-9])" + re.escape(phrase.lower()) + r"(?![a-z0-9])"
+    return re.search(pattern, query_lc) is not None
+
+
 def _match_score(query_lc: str, spec: Any) -> tuple[int, list[str]]:  # noqa: ANN401
     """Return ``(hits, matched_phrases)`` for one specialist against a lower-cased query.
 
-    A hit is a keyword phrase that appears as a substring of the query. The count is
-    the deterministic signal; the phrases feed the human-readable hand-off reason.
+    A hit is a keyword phrase that occurs in the query on word boundaries. Duplicated
+    hints are counted once (a roster that lists the same phrase twice must not out-score
+    one that lists it once), and matches are ordered longest-first so the most specific
+    phrase leads the hand-off reason.
     """
-    matched = [kw for kw in getattr(spec, "keywords", ()) if kw and kw in query_lc]
+    seen: set[str] = set()
+    matched: list[str] = []
+    for kw in getattr(spec, "keywords", ()):
+        if not kw:
+            continue
+        lowered = kw.lower()
+        if lowered in seen:
+            continue
+        if _phrase_present(lowered, query_lc):
+            seen.add(lowered)
+            matched.append(kw)
+    matched.sort(key=len, reverse=True)
     return (len(matched), matched)
 
 
 def classify_deterministic(query: str, roster: Any) -> tuple[str | None, str]:  # noqa: ANN401
     """Classify ``query`` by keyword hints alone (no model call).
+
+    Scoring is ``(distinct hits, total matched characters)``: the hit count is the
+    primary signal, and the *specificity* of what matched breaks a tie, so a specialist
+    matching one long, precise phrase is not automatically beaten by one matching two
+    generic words. Only a dead heat on both is reported as ambiguous.
 
     Returns:
         ``(role, reason)`` when a single specialist wins outright or nothing matches
@@ -116,15 +147,21 @@ def classify_deterministic(query: str, roster: Any) -> tuple[str | None, str]:  
     if not positives:
         return default_role, "no specialist keywords matched; default pipeline"
 
-    top = max(hits for _, hits, _ in positives)
-    winners = [(spec, phrases) for spec, hits, phrases in positives if hits == top]
+    def _rank(entry: tuple[Any, int, list[str]]) -> tuple[int, int]:
+        _spec, hits, phrases = entry
+        return (hits, sum(len(p) for p in phrases))
+
+    top = max(_rank(entry) for entry in positives)
+    winners = [(spec, phrases) for entry in positives
+               if _rank(entry) == top
+               for spec, _hits, phrases in (entry,)]
     if len(winners) == 1:
         spec, phrases = winners[0]
         hint = ", ".join(f"'{p}'" for p in phrases[:2])
         return spec.role, f"matched {spec.role} hint(s) {hint}"
 
     tied = ", ".join(spec.role for spec, _ in winners)
-    return None, f"ambiguous: specialists {tied} tied on {top} hint(s)"
+    return None, f"ambiguous: specialists {tied} tied on {top[0]} hint(s)"
 
 
 # The injected chat-completion callable the tiebreak uses (kept loose to avoid coupling).
@@ -178,8 +215,15 @@ async def _llm_tiebreak(query: str, roster: Any, complete: CompleteFn) -> str | 
     """Ask a cheap model to pick a role from the roster; return a bare role id or ``None``.
 
     The prompt is a closed menu of role ids + descriptions and asks for one token back.
-    The reply is normalised to a known role id; anything unrecognised yields ``None`` so
-    the caller can fall back to the default (the router never trusts free text).
+    The reply is normalised to a known role id; anything unrecognised — **or ambiguous** —
+    yields ``None`` so the caller falls back to the default (the router never trusts free
+    text).
+
+    Matching is deliberately strict. Scanning the roster in order for a role id anywhere
+    in the reply made ``"not qa — use memory"`` return ``qa``: the *rejected* role won
+    because it was declared first. So an exact reply wins; otherwise the reply must
+    mention exactly one role on word boundaries, and a reply naming several is a
+    non-answer, not a vote for whichever the roster happens to list first.
     """
     menu = "\n".join(
         f"- {spec.role}: {getattr(spec, 'description', '')}" for spec in roster.specialists
@@ -197,7 +241,23 @@ async def _llm_tiebreak(query: str, roster: Any, complete: CompleteFn) -> str | 
     ]
     result = await complete(ModelRole.CHEAP, messages)
     reply = (getattr(result, "content", "") or "").strip().lower()
-    for role in roster.roles():
-        if role.lower() in reply:
+    if not reply:
+        return None
+
+    roles = list(roster.roles())
+    # 1. The asked-for shape: the bare role id (optionally quoted/punctuated).
+    bare = reply.strip("\"'`.,:;! \t\n")
+    for role in roles:
+        if bare == role.lower():
             return role
+    # 2. Otherwise: exactly one role mentioned on word boundaries, else no answer.
+    mentioned = [role for role in roles if _phrase_present(role.lower(), reply)]
+    if len(mentioned) == 1:
+        return mentioned[0]
+    if len(mentioned) > 1:
+        logger.warning(
+            "Router tiebreak reply named %d roles (%s); treating as inconclusive",
+            len(mentioned),
+            ", ".join(mentioned),
+        )
     return None

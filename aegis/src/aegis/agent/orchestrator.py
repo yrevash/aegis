@@ -83,6 +83,16 @@ def _noop_on_terminal(**_kwargs: Any) -> None:  # noqa: ANN401 - host hook kwarg
     return None
 
 
+class ResumeFailedError(RuntimeError):
+    """Raised when driving a parked run from its checkpoint failed mid-flight.
+
+    Distinct from "there is nothing to resume" (reported as ``False``): the caller holds
+    a durable row already flipped to ``RESUMING`` and MUST release it, otherwise the run
+    is stranded — ``RESUMING`` matches neither the decision path (``PENDING`` only) nor
+    the SLA sweeper (``PENDING`` only).
+    """
+
+
 async def run_agent(
     query: str,
     *,
@@ -135,7 +145,7 @@ async def run_agent(
             "run_agent requires injected deps; the composition root builds them "
             "(there is no default wiring inside aegis.agent)."
         )
-    registry = registry or get_approval_registry()
+    registry = registry if registry is not None else get_approval_registry()
     run_id = run_id or uuid4().hex
     stamp = stamp or _dict_stamp
     enqueue_approval = enqueue_approval or _noop_enqueue_approval
@@ -224,53 +234,68 @@ async def run_agent(
                 risk = RiskLevel(interrupt_value.get("risk", RiskLevel.LOW.value))
                 rationale = str(interrupt_value.get("rationale", ""))
 
-                # Persist the durable inbox row — the source of truth for the paused
-                # run — and retain a resumable handle so an out-of-band decision can
-                # continue this run from its checkpoint if the socket parks.
-                sla_deadline = await enqueue_approval(
-                    approval_id,
-                    run_id=run_id,
-                    trace_id=trace_id,
-                    persona=persona,
-                    action=action,
-                    args=args,
-                    risk=risk,
-                    rationale=rationale,
-                    ml_snapshot=_ml_snapshot(graph, config),
-                )
-                parked_runs.register(run_id, graph, config)
-
-                yield emit(events.node_started("approval", "Human approval gate"))
-                yield emit(
-                    events.approval_queued(
-                        approval_id,
-                        action=action,
-                        args=args,
-                        risk=risk,
-                        rationale=rationale,
-                        sla_deadline=sla_deadline,
-                        assignee_tier=default_tier,
-                    )
-                )
-                yield emit(
-                    events.approval_required(
-                        approval_id,
-                        action=action,
-                        args=args,
-                        risk=risk,
-                        rationale=rationale,
-                    )
-                )
+                # The registration above is live only for as long as THIS generator is:
+                # between it and the ``wait`` below sit an await plus three yields, and a
+                # disconnected SSE client closes the generator at any of them. The
+                # ``finally`` guarantees the future is discarded in that case, so a
+                # decision arriving afterwards cannot be mistaken for a live wake-up
+                # (which would audit the gate APPROVED while the tool never ran) and
+                # cannot leak a future nobody will ever await.
                 try:
-                    outcome = await registry.wait(
-                        approval_id, timeout=deps.config.approval_park_timeout
+                    # Persist the durable inbox row — the source of truth for the paused
+                    # run — and retain a resumable handle so an out-of-band decision can
+                    # continue this run from its checkpoint if the socket parks.
+                    sla_deadline = await enqueue_approval(
+                        approval_id,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        persona=persona,
+                        action=action,
+                        args=args,
+                        risk=risk,
+                        rationale=rationale,
+                        ml_snapshot=_ml_snapshot(graph, config),
                     )
-                except TimeoutError:
-                    # Park: the run is NOT lost — it survives as a durable PENDING row
-                    # plus a checkpoint, to be resumed out-of-band from the inbox.
-                    logger.info("Run %s parked awaiting approval %s", run_id, approval_id)
-                    yield emit(events.run_finished(RunStatus.AWAITING_APPROVAL))
-                    return
+                    parked_runs.register(run_id, graph, config)
+
+                    yield emit(events.node_started("approval", "Human approval gate"))
+                    yield emit(
+                        events.approval_queued(
+                            approval_id,
+                            action=action,
+                            args=args,
+                            risk=risk,
+                            rationale=rationale,
+                            sla_deadline=sla_deadline,
+                            assignee_tier=default_tier,
+                        )
+                    )
+                    yield emit(
+                        events.approval_required(
+                            approval_id,
+                            action=action,
+                            args=args,
+                            risk=risk,
+                            rationale=rationale,
+                        )
+                    )
+                    try:
+                        outcome = await registry.wait(
+                            approval_id, timeout=deps.config.approval_park_timeout
+                        )
+                    except TimeoutError:
+                        # Park: the run is NOT lost — it survives as a durable PENDING
+                        # row plus a checkpoint, resumed out-of-band from the inbox. This
+                        # also catches ``GateHandedOffError``: a decision that we failed
+                        # to take in time now belongs to the resumer, so parking here is
+                        # exactly right — the action still runs exactly once, over there.
+                        logger.info(
+                            "Run %s parked awaiting approval %s", run_id, approval_id
+                        )
+                        yield emit(events.run_finished(RunStatus.AWAITING_APPROVAL))
+                        return
+                finally:
+                    registry.discard(approval_id)
                 stream_input = Command(
                     resume={"approved": outcome.approved, "approver": outcome.approver}
                 )
@@ -318,6 +343,10 @@ async def run_agent(
             yield emit(events.run_finished(RunStatus.BLOCKED))
         except Exception as exc:  # noqa: BLE001 - report any failure as an event
             logger.exception("Agent run %s failed", run_id)
+            # Drop the resumable handle exactly as the budget path above does: an errored
+            # run is terminal, so a retained handle pins a compiled graph plus its
+            # checkpointer (the whole run state) with nothing left to resume.
+            parked_runs.pop(run_id)
             yield emit(events.error(str(exc)))
             yield emit(events.run_finished(RunStatus.ERROR))
 
@@ -354,11 +383,25 @@ async def resume_parked_run(
     Returns:
         ``True`` if the run was resumed to completion; ``False`` when there is nothing
         resumable (no ``run_id``, or the checkpoint holds no pending step).
+
+    Raises:
+        ResumeFailedError: If the headless drive failed mid-flight (a tool raised, the
+            worker lost its store, …). This is deliberately NOT flattened into ``False``:
+            the caller has already won the durable ``PENDING → RESUMING`` transition, and
+            a silent ``False`` leaves the row wedged in ``RESUMING`` forever — no sweeper
+            or later decision matches it, so the run is stranded neither approved nor
+            rejected. The caller must distinguish "nothing to resume" from "resume broke"
+            in order to release the row.
     """
     if run_id is None:
         return False
     config = config or {"configurable": {"thread_id": run_id}}
-    if not graph.get_state(config).next:
+    try:
+        resumable = bool(graph.get_state(config).next)
+    except Exception as exc:  # noqa: BLE001 - a broken store is a failure, not an absence
+        logger.exception("Cannot read the checkpoint for run %s", run_id)
+        raise ResumeFailedError(f"checkpoint read for run {run_id} failed: {exc}") from exc
+    if not resumable:
         logger.info("No resumable checkpoint for run %s; cannot rehydrate", run_id)
         return False
     resume_cmd = Command(
@@ -369,7 +412,7 @@ async def resume_parked_run(
             resume_cmd, config, stream_mode=["custom", "updates"]
         ):
             pass  # drive headless to completion; the tool runs exactly once
-    except Exception:  # noqa: BLE001 - a resume failure must not crash the decision
+    except Exception as exc:  # noqa: BLE001 - surfaced as ResumeFailedError, never lost
         logger.exception("Headless resume of run %s failed", run_id)
-        return False
+        raise ResumeFailedError(f"headless resume of run {run_id} failed: {exc}") from exc
     return True

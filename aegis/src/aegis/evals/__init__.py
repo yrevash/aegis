@@ -28,6 +28,7 @@ from .harness import (
 )
 from .judge import (
     JudgeSummary,
+    JudgeUnavailableError,
     JudgeVerdict,
     judge_answer,
     judge_enabled,
@@ -59,6 +60,7 @@ __all__ = [
     "EvalThresholds",
     "GateCaseResult",
     "JudgeSummary",
+    "JudgeUnavailableError",
     "JudgeVerdict",
     "Metric",
     "MetricConfig",

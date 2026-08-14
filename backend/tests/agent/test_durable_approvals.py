@@ -233,3 +233,109 @@ async def test_provenance_event_carries_default_shape(db, make_deps):
     assert prov.origins == []            # empty default until retrieval populates it
     assert prov.fusion.value == "none"
     assert prov.cache_hit is False
+
+
+# ── exactly-once regressions: the two ways a gate could lie ───────────────────
+
+
+async def test_disconnected_socket_still_executes_via_the_durable_resumer(db, make_deps):
+    """A client that drops AT the gate must not leave an APPROVED gate that never ran.
+
+    The window is real: ``run_agent`` registers the notify future and only reaches its
+    ``wait`` after an await plus three ``yield``s. Closing the generator at
+    ``approval_required`` — exactly what a dropped SSE connection does — used to leave an
+    orphan future behind. ``decide_approval`` then saw "a future exists", called that a
+    live wake-up, finalised the row to APPROVED and popped the parked handle: the gate was
+    audited approved, no resumer could claim a row that was no longer PENDING, and the
+    tool never ran.
+
+    Now the orphan is discarded, the decision is not reported live, and the durable
+    resumer executes the action exactly once.
+    """
+    deps = _park_deps(make_deps)
+    deps.config.approval_park_timeout = None  # a genuinely live wait, not a park
+    executed = _spy(deps)
+    reg = ApprovalRegistry()
+
+    agen = run_agent(
+        "resolve R1", persona="operations_lead", deps=deps, registry=reg, run_id="run-drop"
+    )
+    approval_id = None
+    async for ev in agen:
+        if ev.type == "approval_required":
+            approval_id = ev.approval_id
+            break
+    await agen.aclose()  # the SSE client went away mid-gate
+
+    assert approval_id is not None
+    assert executed == []  # nothing has run yet
+    assert reg.pending_ids() == []  # and no orphan future survived the closed stream
+
+    result = await decide_approval(
+        approval_id, ApprovalDecision.APPROVE, approver="alice", registry=reg
+    )
+
+    assert result.accepted is True
+    assert result.status == "approved"
+    assert executed == [1]  # the resumer ran it — exactly once
+    row = await get_approval(approval_id)
+    assert row is not None and row.status == "approved"
+
+    # And it stays exactly once: a replayed decision is still a no-op.
+    again = await decide_approval(
+        approval_id, ApprovalDecision.APPROVE, approver="bob", registry=reg
+    )
+    assert again.accepted is False
+    assert executed == [1]
+
+
+async def test_failed_resume_releases_the_row_instead_of_stranding_it(
+    db, make_deps, monkeypatch
+):
+    """A resume that blows up must leave the approval retryable, not wedged.
+
+    ``resume_parked_run`` popped the in-process handle FIRST and the core resume swallowed
+    every exception into ``False``, so the finalise was skipped and the row sat in
+    ``RESUMING`` forever — matched by neither :func:`app.data.resolve_approval` (``PENDING``
+    only) nor :func:`app.data.sweep_expired` (``PENDING`` only). Neither approved nor
+    rejected, handle discarded, checkpoint unreachable.
+
+    Now the failure is surfaced as ``ResumeFailedError``, the row is released back to
+    ``PENDING``, the handle stays parked, and a retry completes the run exactly once.
+    """
+    from aegis.agent.orchestrator import ResumeFailedError
+
+    import app.agent.orchestrator as orch
+
+    deps = _park_deps(make_deps)
+    executed = _spy(deps)
+    reg = ApprovalRegistry()
+    _types, approval_id = await _run_to_park(deps, reg, "run-crash")
+    assert executed == []
+
+    async def exploding_resume(*_args, **_kwargs):
+        raise ResumeFailedError("worker crashed mid-resume")
+
+    monkeypatch.setattr(orch, "_core_resume", exploding_resume)
+
+    result = await decide_approval(
+        approval_id, ApprovalDecision.APPROVE, approver="alice", registry=reg, deps=deps
+    )
+
+    assert result.status != "approved"  # nothing ran, so nothing may claim approval
+    assert executed == []
+    row = await get_approval(approval_id)
+    assert row is not None and row.status == "pending"  # released, NOT wedged in resuming
+    assert get_parked_runs().get("run-crash") is not None  # still resumable
+    assert [r.id for r in await list_pending()] == [approval_id]  # visible to the inbox
+
+    # The retry now works, and the gated tool still executes exactly once overall.
+    monkeypatch.undo()
+    retry = await decide_approval(
+        approval_id, ApprovalDecision.APPROVE, approver="alice", registry=reg, deps=deps
+    )
+    assert retry.accepted is True
+    assert retry.status == "approved"
+    assert executed == [1]
+    row = await get_approval(approval_id)
+    assert row is not None and row.status == "approved"
