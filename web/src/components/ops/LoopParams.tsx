@@ -3,11 +3,11 @@
 import { Gauge, Loader2, Ruler, ShieldAlert, SlidersHorizontal } from 'lucide-react'
 import type { ReactElement } from 'react'
 
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
-import { RISK_TONE } from './opsShared'
 import type { OpsParamsResponse } from '@/lib/api/platform'
 
 /** A labelled chip list of terms, or an em-dash when empty. */
@@ -54,14 +54,12 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
       <CardHeader
         eyebrow="GET /ops/params"
         title="Loop parameters"
-        description="The knobs the tiered release gate runs on — read-only config for the operator."
         actions={
-          !loading && !error && params ? (
-            <Badge tone={RISK_TONE[params.auto_promote_ceiling] ?? 'neutral'} className="gap-1.5">
-              <Gauge className="size-3" />
-              auto-promote ≤ {params.auto_promote_ceiling}
-            </Badge>
-          ) : null
+          <InfoTip label="About the loop parameters">
+            The read-only knobs the tiered release gate runs on: the eval margin a draft must clear,
+            the diff-size fractions that bucket a change low or high, the term lists that force a
+            human gate, and the autonomy ceiling above which nothing auto-promotes.
+          </InfoTip>
         }
       />
       <CardBody className="space-y-5">
@@ -104,29 +102,30 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
             {/* Term lists that force a human gate */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="rounded-xl border border-border bg-surface-2/40 p-4">
-                <div className="mb-2 flex items-center gap-1.5">
+                <div className="mb-2.5 flex items-center gap-1.5">
                   <ShieldAlert className="size-3.5 text-block-ink" />
                   <span className="eyebrow">safety terms</span>
+                  <InfoTip label="About safety terms">
+                    A draft touching any of these is treated as guardrail-adjacent and cannot
+                    auto-ship.
+                  </InfoTip>
                   <span className="ml-auto font-mono text-[0.62rem] text-muted-foreground">
                     {params.safety_terms.length}
                   </span>
                 </div>
-                <p className="mb-2.5 text-[0.72rem] leading-snug text-muted-foreground">
-                  A draft touching any of these is treated as guardrail-adjacent and cannot auto-ship.
-                </p>
                 <TermChips terms={params.safety_terms} tone="block" />
               </div>
               <div className="rounded-xl border border-border bg-surface-2/40 p-4">
-                <div className="mb-2 flex items-center gap-1.5">
+                <div className="mb-2.5 flex items-center gap-1.5">
                   <ShieldAlert className="size-3.5 text-risk-ink" />
                   <span className="eyebrow">critical config markers</span>
+                  <InfoTip label="About critical config markers">
+                    Config keys matching these (model, tools, permissions…) escalate the risk tier.
+                  </InfoTip>
                   <span className="ml-auto font-mono text-[0.62rem] text-muted-foreground">
                     {params.critical_config_markers.length}
                   </span>
                 </div>
-                <p className="mb-2.5 text-[0.72rem] leading-snug text-muted-foreground">
-                  Config keys matching these (model, tools, permissions…) escalate the risk tier.
-                </p>
                 <TermChips terms={params.critical_config_markers} tone="risk" />
               </div>
             </div>

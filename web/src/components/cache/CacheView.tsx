@@ -1,14 +1,6 @@
 'use client'
 
-import {
-  Brain,
-  DatabaseZap,
-  Hash,
-  ShieldCheck,
-  Timer,
-  WifiOff,
-  type LucideIcon,
-} from 'lucide-react'
+import { Brain, DatabaseZap, ShieldCheck, WifiOff, type LucideIcon } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
@@ -104,23 +96,12 @@ const SPECS: CacheSpec[] = [
   },
 ]
 
-/** One label/value row in a card's read-only config grid. */
-function ConfigRow({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: LucideIcon
-  label: string
-  value: string
-}): ReactElement {
+/** One label/value row in a card's read-only config list. */
+function ConfigRow({ label, value }: { label: string; value: string }): ReactElement {
   return (
-    <div className="flex items-start gap-2 py-1.5">
-      <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-      <div className="min-w-0">
-        <span className="eyebrow">{label}</span>
-        <p className="text-sm text-foreground">{value}</p>
-      </div>
+    <div className="flex items-baseline justify-between gap-4 py-1.5">
+      <dt className="eyebrow shrink-0 text-[0.58rem]">{label}</dt>
+      <dd className="min-w-0 text-right text-[0.8rem] leading-snug text-foreground">{value}</dd>
     </div>
   )
 }
@@ -128,11 +109,11 @@ function ConfigRow({
 /** A single hit/miss/evict counter tile. */
 function Counter({ label, value }: { label: string; value: number | null }): ReactElement {
   return (
-    <div className="rounded-lg border border-border bg-surface-2/50 px-3 py-2 text-center">
+    <div className="rounded-lg border border-border bg-surface-2/50 px-3 py-1.5 text-center">
       <p className="tabular-nums text-lg font-semibold text-foreground">
         {value === null ? '—' : value}
       </p>
-      <p className="eyebrow mt-0.5">{label}</p>
+      <p className="eyebrow text-[0.58rem]">{label}</p>
     </div>
   )
 }
@@ -167,19 +148,19 @@ function EventFeed({
     )
   }
   return (
-    <ul className="space-y-1.5">
+    <ul className="space-y-1">
       {events.map((e, i) => (
         <li
           key={i}
-          className="flex items-center justify-between gap-2 rounded-md bg-surface-2/40 px-2.5 py-1.5"
+          className="flex items-center justify-between gap-2 rounded-md bg-surface-2/40 px-2.5 py-1"
         >
           <span className="flex min-w-0 items-center gap-2">
-            <Badge tone={EVENT_TONE[e.event]} className="uppercase">
+            <Badge tone={EVENT_TONE[e.event]} className="px-2 text-[0.58rem] uppercase">
               {e.event}
             </Badge>
             <span className="truncate text-xs text-muted-foreground">{e.detail}</span>
           </span>
-          <span className="shrink-0 font-mono text-[0.68rem] text-muted-foreground">
+          <span className="tabular shrink-0 font-mono text-[0.65rem] text-muted-foreground">
             {ago(e.agoMs)}
           </span>
         </li>
@@ -188,7 +169,7 @@ function EventFeed({
   )
 }
 
-/** One cache's card — method + real config, sample meter + counters, event feed. */
+/** One cache's card — the real config list, then the activity block. */
 function CacheCard({ spec, mock }: { spec: CacheSpec; mock: boolean }): ReactElement {
   const Icon = spec.icon
   const stats = mock ? SAMPLE_CACHE_STATS[spec.kind] : null
@@ -199,7 +180,7 @@ function CacheCard({ spec, mock }: { spec: CacheSpec; mock: boolean }): ReactEle
     <Card>
       <CardBody>
         <div className="grid gap-6 lg:grid-cols-2">
-          {/* Left — method + honest, module-real config. */}
+          {/* Left — the honest, module-real config, as one uniform list. */}
           <div>
             <div className="flex items-center gap-3">
               <span className={cn('flex size-9 items-center justify-center rounded-xl', spec.tint)}>
@@ -210,56 +191,43 @@ function CacheCard({ spec, mock }: { spec: CacheSpec; mock: boolean }): ReactEle
                 <code className="font-mono text-[0.7rem] text-muted-foreground">{spec.event}</code>
               </div>
             </div>
-            <p className="mt-3 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">Caches:</span> {spec.caches}
-            </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">Method:</span> {spec.method}
-            </p>
-            <div className="mt-3 divide-y divide-border/60 border-t border-border/60">
-              <ConfigRow icon={DatabaseZap} label="backend" value={spec.backend} />
-              <ConfigRow icon={Timer} label="ttl" value={spec.ttl} />
-              <ConfigRow icon={Hash} label="similarity / distance threshold" value={spec.threshold} />
-              <ConfigRow icon={DatabaseZap} label="max entries / eviction" value={spec.eviction} />
-            </div>
+            <dl className="mt-3 divide-y divide-border/60 border-t border-border/60">
+              <ConfigRow label="caches" value={spec.caches} />
+              <ConfigRow label="method" value={spec.method} />
+              <ConfigRow label="backend" value={spec.backend} />
+              <ConfigRow label="ttl" value={spec.ttl} />
+              <ConfigRow label="threshold" value={spec.threshold} />
+              <ConfigRow label="max entries / eviction" value={spec.eviction} />
+            </dl>
           </div>
 
-          {/* Right — sample hit-rate meter + counters, then the event feed. */}
-          <div className="flex flex-col gap-4">
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="eyebrow">hit rate</span>
-                {mock ? (
-                  <Badge tone="neutral" className="uppercase">
-                    sample
-                  </Badge>
-                ) : (
-                  <span className="text-xs text-muted-foreground">no live aggregate</span>
-                )}
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="tabular-nums text-2xl font-semibold text-foreground">
-                  {stats ? `${Math.round(rate * 100)}%` : '—'}
-                </span>
-                <MiniMeter value={rate} hex={spec.meterHex} height={8} className="flex-1" />
-              </div>
+          {/* Right — measured activity. One honest provenance label covers the
+              hit-rate meter, the counters and the feed: `sample` offline, the
+              "no live aggregate" empty state live. */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2 border-b border-border/60 pb-1.5">
+              <span className="eyebrow">activity</span>
+              {mock ? (
+                <Badge tone="neutral" className="uppercase">
+                  sample
+                </Badge>
+              ) : (
+                <span className="text-xs text-muted-foreground">no live aggregate</span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="eyebrow shrink-0">hit rate</span>
+              <span className="tabular-nums text-2xl font-semibold text-foreground">
+                {stats ? `${Math.round(rate * 100)}%` : '—'}
+              </span>
+              <MiniMeter value={rate} hex={spec.meterHex} height={8} className="flex-1" />
             </div>
             <div className="grid grid-cols-3 gap-2">
               <Counter label="hits" value={stats?.hits ?? null} />
               <Counter label="misses" value={stats?.misses ?? null} />
               <Counter label="evicts" value={stats?.evicts ?? null} />
             </div>
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="eyebrow">live event feed</span>
-                {mock && (
-                  <Badge tone="neutral" className="uppercase">
-                    sample
-                  </Badge>
-                )}
-              </div>
-              <EventFeed events={feed} empty={!mock} />
-            </div>
+            <EventFeed events={feed} empty={!mock} />
           </div>
         </div>
       </CardBody>
@@ -269,12 +237,13 @@ function CacheCard({ spec, mock }: { spec: CacheSpec; mock: boolean }): ReactEle
 
 /**
  * Cache (§ caches) — the three real caches made visible with their true method +
- * config. Each card shows honest, module-real configuration (backend / TTL /
- * threshold / eviction) alongside a `sample`-badged hit-rate meter, hit/miss/
- * evict counters, and a per-cache event feed. Offline (`?mock=1`) the meters and
- * feed render from an illustrative sample fixture, clearly labelled; live, they
- * fall back to an honest "no live aggregate yet" empty state (the caches emit
- * per-run `*_cache` events, not a durable aggregate counter).
+ * config. Each card pairs the honest, module-real configuration list (caches /
+ * method / backend / TTL / threshold / eviction) with an activity block: the
+ * hit-rate meter, hit/miss/evict counters and the per-cache event feed, all
+ * under one provenance label. Offline (`?mock=1`) that block reads from an
+ * illustrative sample fixture, badged `sample`; live it falls back to the honest
+ * "no live aggregate yet" empty state (the caches emit per-run `*_cache` events,
+ * not a durable aggregate counter).
  */
 function CacheView({ mock }: { mock: boolean }): ReactElement {
   return (

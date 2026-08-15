@@ -4,6 +4,7 @@ import { Check, Loader2, RotateCcw, ShieldAlert, ShieldCheck, X } from 'lucide-r
 import { useMemo, useState, type ReactElement } from 'react'
 
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { postOpsReleaseDecision, postOpsRollback } from '@/lib/api/client'
@@ -58,9 +59,11 @@ function ReleaseRow({
         {row.draft_version_id != null && (
           <span className="font-mono text-[0.62rem] text-muted-foreground">draft #{row.draft_version_id}</span>
         )}
+        {row.reason && (
+          <InfoTip label={`Why this ${row.risk}-risk draft needs sign-off`}>{row.reason}</InfoTip>
+        )}
         <span className="eyebrow ml-auto text-[0.56rem]">{formatAgo(row.created_at)}</span>
       </div>
-      {row.reason && <p className="mt-2 text-xs leading-snug text-muted-foreground">{row.reason}</p>}
 
       {decided ? (
         <div
@@ -152,8 +155,16 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
       <CardHeader
         eyebrow="GET /ops/releases/pending"
         title="Release gate"
-        description="Low-risk auto-ships; policy- or guardrail-touching edits stage here for explicit human sign-off."
-        actions={!loading && !error ? <Badge tone="risk">{rows.length} awaiting</Badge> : null}
+        actions={
+          <div className="flex items-center gap-2">
+            {!loading && !error ? <Badge tone="risk">{rows.length} awaiting</Badge> : null}
+            <InfoTip label="About the release gate">
+              Low-risk improvements that clear the eval margin and touch nothing sensitive auto-ship
+              and never land here. What remains are the policy- or guardrail-touching edits that need
+              explicit human sign-off.
+            </InfoTip>
+          </div>
+        }
       />
       <CardBody className="space-y-4">
         {error ? (
@@ -188,10 +199,7 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
 
         {/* One-click rollback. */}
         <div className="flex flex-wrap items-center gap-3 border-t border-border/60 pt-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-foreground">Emergency rollback</p>
-            <p className="font-mono text-[0.62rem] text-muted-foreground">{PROMPT_KEY}</p>
-          </div>
+          <p className="min-w-0 font-mono text-[0.68rem] text-muted-foreground">{PROMPT_KEY}</p>
           {rollback ? (
             <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-ok-ink">
               <RotateCcw className="size-3.5" />

@@ -1,80 +1,57 @@
 'use client'
 
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge } from '@/components/ui/Badge'
 import type { ForecastResult } from '@/lib/api/types'
 
 const pct = (v: number): string => `${(v * 100).toFixed(1)}%`
 
 /**
- * The backtest, reported the only way it is worth reporting: requested coverage
- * and achieved coverage side by side, never merged.
+ * What the rolling-origin backtest measured, and which candidates lost.
  *
- * The two numbers almost always differ, and the gap is the finding. A surface that
- * printed "90% coverage" from `requested_coverage` would be stating an input as
- * though it were a measurement — the exact overclaim the ML module was corrected
- * for. Here the achieved rate gets the big type and a pass/miss badge, and the
- * requested level is demoted to context.
+ * Coverage is deliberately *not* repeated here: requested vs achieved is drawn
+ * once, on the `CoverageMeter` directly under the band it describes. This panel
+ * carries the rest of the evidence — the error metrics on held-out points, and
+ * the candidate table including the seasonal-naive baseline, so a reader can see
+ * the winner actually beat something rather than being declared the winner.
  *
- * The candidate table publishes the losers, including the seasonal-naive baseline,
- * so a reader can see the winner actually beat something.
+ * Per-candidate coverage stays in the table: there it is a comparison between
+ * models, not a second claim about the shipped band.
  */
 export function BacktestPanel({ result }: { result: ForecastResult }): ReactElement {
   const bt = result.backtest
-  const met = bt.coverage_meets_request
 
   return (
-    <div className="space-y-5">
-      {/* Coverage: asked for vs achieved */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-border bg-surface-2/40 p-4">
-          <span className="eyebrow">coverage requested</span>
-          <p className="tabular mt-1.5 font-mono text-[1.5rem] leading-none font-bold text-muted-foreground">
-            {pct(bt.requested_coverage)}
-          </p>
-          <p className="mt-2 text-[0.7rem] leading-snug text-muted-foreground">
-            An input. This is what the interval was asked to contain, not what it did.
-          </p>
-        </div>
-        <div
-          className="rounded-xl border p-4"
-          style={{
-            borderColor: met ? 'var(--ok)' : 'var(--risk)',
-            background: met ? 'color-mix(in srgb, var(--ok) 8%, transparent)' : 'color-mix(in srgb, var(--risk) 8%, transparent)',
-          }}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="eyebrow">coverage achieved</span>
-            <Badge tone={met ? 'ok' : 'risk'}>{met ? 'meets request' : 'below request'}</Badge>
-          </div>
-          <p className="tabular mt-1.5 font-mono text-[1.5rem] leading-none font-bold text-foreground">
-            {pct(bt.empirical_coverage)}
-          </p>
-          <p className="mt-2 text-[0.7rem] leading-snug text-muted-foreground">
-            Measured: {Math.round(bt.empirical_coverage * bt.n_points)} of {bt.n_points} held-out
-            actuals fell inside the band, across {bt.windows} rolling-origin windows.
-          </p>
-        </div>
-      </div>
-
-      {/* Error metrics on held-out points */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div className="space-y-4">
+      {/* One hairline-divided strip, not five separate boxes. */}
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-5">
         <Metric label="sMAPE" value={`${bt.smape.toFixed(2)}%`} />
-        <Metric label="MAPE" value={bt.mape == null ? 'undefined' : `${bt.mape.toFixed(2)}%`} />
+        <Metric label="MAPE" value={bt.mape == null ? '—' : `${bt.mape.toFixed(2)}%`}>
+          {bt.mape == null ? (
+            <InfoTip label="Why MAPE is undefined">
+              At least one held-out actual is zero, so the percentage error is undefined. Reported
+              as undefined rather than as a very large number.
+            </InfoTip>
+          ) : null}
+        </Metric>
         <Metric label="MAE" value={bt.mae.toFixed(3)} />
         <Metric label="held-out points" value={String(bt.n_points)} />
+        <Metric label="windows" value={String(bt.windows)} />
       </div>
-      {bt.mape == null ? (
-        <p className="text-[0.7rem] leading-snug text-muted-foreground">
-          MAPE is undefined here because at least one held-out actual is zero — reported as
-          undefined rather than as a very large number.
-        </p>
-      ) : null}
 
       {/* Candidates, losers included */}
       <div>
-        <p className="eyebrow mb-2">candidates · selected on {result.selection_metric}</p>
+        <div className="mb-2 flex items-center gap-1.5">
+          <p className="eyebrow">candidates · selected on {result.selection_metric}</p>
+          {result.model_selected_on_backtest_windows ? (
+            <InfoTip label="How the winner was chosen">
+              The winner was chosen using the same rolling-origin windows these figures come from,
+              which makes them a mildly optimistic in-selection estimate. Stated rather than hidden.
+            </InfoTip>
+          ) : null}
+        </div>
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="w-full text-sm">
             <thead>
@@ -90,7 +67,13 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
                 <tr
                   key={c.model}
                   className="border-b border-border last:border-0"
-                  style={c.selected ? { background: 'color-mix(in srgb, var(--ml) 10%, transparent)' } : undefined}
+                  style={
+                    c.selected
+                      ? {
+                          background: 'color-mix(in srgb, var(--ml) 10%, transparent)',
+                        }
+                      : undefined
+                  }
                 >
                   <td className="px-4 py-2 font-mono text-foreground">
                     {c.model}
@@ -117,32 +100,33 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
       </div>
 
       {result.excluded_models.length > 0 ? (
-        <div>
-          <p className="eyebrow mb-2">excluded candidates</p>
-          <ul className="space-y-1">
-            {result.excluded_models.map((e) => (
-              <li key={e.model} className="text-[0.74rem] text-muted-foreground">
-                <span className="font-mono text-foreground">{e.model}</span> — {e.reason}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {result.model_selected_on_backtest_windows ? (
-        <p className="text-[0.7rem] leading-snug text-muted-foreground">
-          The winner was chosen using the same rolling-origin windows these figures come from,
-          which makes them a mildly optimistic in-selection estimate. Stated rather than hidden.
-        </p>
+        <ul className="space-y-1">
+          {result.excluded_models.map((e) => (
+            <li key={e.model} className="text-[0.72rem] text-muted-foreground">
+              <span className="font-mono text-foreground">{e.model}</span> — excluded: {e.reason}
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }): ReactElement {
+function Metric({
+  label,
+  value,
+  children,
+}: {
+  label: string
+  value: string
+  children?: ReactNode
+}): ReactElement {
   return (
-    <div className="rounded-xl border border-border bg-surface-2/40 p-3.5">
-      <span className="eyebrow">{label}</span>
+    <div className="bg-card p-3.5">
+      <span className="eyebrow inline-flex items-center gap-1">
+        {label}
+        {children}
+      </span>
       <p className="t-title tabular mt-1 font-mono text-[0.95rem] font-semibold text-foreground">
         {value}
       </p>

@@ -7,23 +7,22 @@ import {
   Cpu,
   Hand,
   Loader2,
-  Repeat,
   RefreshCcw,
-  ShieldAlert,
   Sparkles,
   Timer,
-  Waypoints,
   WifiOff,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
-import { StatCard } from '@/components/ui/StatCard'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { TooltipProvider } from '@/components/primitives/tooltip'
 import { QueryBar } from '@/components/console/QueryBar'
+import { cn } from '@/lib/utils'
 import { getHarnessConfig } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
@@ -60,14 +59,6 @@ const TYPE_TONE: Record<string, BadgeTone> = {
   enum: 'ml',
   str: 'neutral',
 }
-
-/** The four knobs surfaced as headline StatCards, with their icon + tone. */
-const KEY_KNOBS: Array<{ key: string; icon: LucideIcon; tone: 'risk' | 'agent' | 'graph' | 'ml' }> = [
-  { key: 'gate_min_risk', icon: ShieldAlert, tone: 'risk' },
-  { key: 'max_plan_iterations', icon: Repeat, tone: 'agent' },
-  { key: 'self_repair_enabled', icon: RefreshCcw, tone: 'ml' },
-  { key: 'agentic_retrieval_max_rounds', icon: Waypoints, tone: 'graph' },
-]
 
 // ── Run-trace shape (derived from the run stream, or the offline sample) ───────
 
@@ -222,90 +213,69 @@ function statusTone(status: string | null): BadgeTone {
 
 // ── Config panel ──────────────────────────────────────────────────────────────
 
-/** One headline StatCard for a key knob (falls back gracefully if absent). */
-function KnobStat({
-  knob,
-  icon,
-  tone,
-}: {
-  knob: HarnessKnob | undefined
-  icon: LucideIcon
-  tone: 'risk' | 'agent' | 'graph' | 'ml'
-}): ReactElement | null {
-  if (!knob) return null
-  return (
-    <StatCard label={knob.key} value={fmtValue(knob.value)} icon={icon} tone={tone} />
-  )
-}
-
-/** The config (view + tweak) area: key StatCards + the full 11-knob table. */
+/**
+ * The config area: every `AgentConfig` knob the graph reads, with its effective
+ * value, default and bounds. Each knob's `doc` — the only prose here — lives
+ * behind the row's ⓘ rather than in a column of its own.
+ */
 function ConfigPanel({ config }: { config: HarnessConfigResponse }): ReactElement {
-  const byKey = useMemo(
-    () => new Map(config.knobs.map((k) => [k.key, k])),
-    [config.knobs],
-  )
-
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {KEY_KNOBS.map(({ key, icon, tone }) => (
-          <KnobStat key={key} knob={byKey.get(key)} icon={icon} tone={tone} />
-        ))}
-      </div>
-
-      <Card>
-        <CardHeader
-          eyebrow="aegis.agent · harness_config()"
-          title="Tweakable configuration"
-          description={`Every knob the graph actually reads — ${config.knobs.length} in all, each with its effective value, default and bounds.`}
-          actions={
-            <Badge tone="neutral" className="gap-1.5">
-              <Cpu className="size-3" />
-              read-only
-            </Badge>
-          }
-        />
-        <CardBody className="pt-0">
-          <Table>
-            <THead>
-              <TH>knob</TH>
-              <TH>type</TH>
-              <TH>value</TH>
-              <TH>default</TH>
-              <TH>allowed / bounds</TH>
-              <TH>what it does</TH>
-            </THead>
-            <TBody>
-              {config.knobs.map((knob) => {
-                const changed = fmtValue(knob.value) !== fmtValue(knob.default)
-                return (
-                  <TR key={knob.key}>
-                    <TD className="font-mono text-[0.8rem] text-foreground">{knob.key}</TD>
-                    <TD>
-                      <Badge tone={TYPE_TONE[knob.type] ?? 'neutral'}>{knob.type}</Badge>
-                    </TD>
-                    <TD className="tabular font-mono text-foreground">
-                      <span className="inline-flex items-center gap-1.5">
-                        {fmtValue(knob.value)}
-                        {changed ? <Badge tone="risk">tuned</Badge> : null}
-                      </span>
-                    </TD>
-                    <TD className="tabular font-mono text-muted-foreground">{fmtValue(knob.default)}</TD>
-                    <TD className="font-mono text-[0.72rem] text-muted-foreground">{fmtConstraint(knob)}</TD>
-                    <TD className="max-w-md text-[0.8rem] leading-snug text-muted-foreground">{knob.doc}</TD>
-                  </TR>
-                )
-              })}
-            </TBody>
-          </Table>
-          <p className="mt-4 text-[0.78rem] leading-snug text-muted-foreground">
-            Read-only by design: these are the effective values the running graph reads. Real tuning
-            is host-side (the <code className="font-mono">AgentConfig</code> passed to a run), so a
-            change here would be cosmetic — this panel keeps the harness honest, not editable.
-          </p>
-        </CardBody>
-      </Card>
-    </div>
+    <Card>
+      <CardHeader
+        eyebrow="aegis.agent · harness_config()"
+        title={`Tweakable configuration · ${config.knobs.length} knobs`}
+        actions={
+          <Badge tone="neutral" className="gap-1.5">
+            <Cpu className="size-3" />
+            read-only
+            <InfoTip label="Why this panel is read-only">
+              These are the effective values the running graph reads. Real tuning is host-side (the{' '}
+              <code className="font-mono">AgentConfig</code> passed to a run), so editing here would
+              be cosmetic — the panel keeps the harness honest, not editable.
+            </InfoTip>
+          </Badge>
+        }
+      />
+      <CardBody className="pt-0">
+        <Table>
+          <THead>
+            <TH>knob</TH>
+            <TH>type</TH>
+            <TH>value</TH>
+            <TH>default</TH>
+            <TH>allowed / bounds</TH>
+          </THead>
+          <TBody>
+            {config.knobs.map((knob) => {
+              const changed = fmtValue(knob.value) !== fmtValue(knob.default)
+              return (
+                <TR key={knob.key}>
+                  <TD className="font-mono text-[0.8rem] text-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      {knob.key}
+                      {knob.doc ? (
+                        <InfoTip label={`What ${knob.key} does`}>{knob.doc}</InfoTip>
+                      ) : null}
+                    </span>
+                  </TD>
+                  <TD>
+                    <Badge tone={TYPE_TONE[knob.type] ?? 'neutral'}>{knob.type}</Badge>
+                  </TD>
+                  <TD className="tabular font-mono text-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      {fmtValue(knob.value)}
+                      {changed ? <Badge tone="risk">tuned</Badge> : null}
+                    </span>
+                  </TD>
+                  <TD className="tabular font-mono text-muted-foreground">{fmtValue(knob.default)}</TD>
+                  <TD className="font-mono text-[0.72rem] text-muted-foreground">{fmtConstraint(knob)}</TD>
+                </TR>
+              )
+            })}
+          </TBody>
+        </Table>
+      </CardBody>
+    </Card>
   )
 }
 
@@ -342,7 +312,6 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
       <CardHeader
         eyebrow="aegis.agent · run_summary()"
         title="Run trace"
-        description="The ordered node timeline, gate decision, tool calls and outcome — folded from the same event stream that drove the run."
         actions={
           trace.sample ? (
             <Badge tone="risk" className="gap-1.5">
@@ -389,9 +358,14 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
         {/* Gate + iterations */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-border bg-surface-2/40 p-4">
-            <div className="mb-2 flex items-center justify-between">
+            <div className={cn('flex items-center justify-between', trace.gate.gated && 'mb-2')}>
               <span className="eyebrow inline-flex items-center gap-1.5">
                 <Hand className="size-3.5" /> approval gate
+                <InfoTip label="About the approval gate">
+                  A run is gated when a tool call reaches the risk floor set by{' '}
+                  <code className="font-mono">gate_min_risk</code>. &ldquo;No gate&rdquo; means
+                  nothing in this run reached that floor, so it completed without a human.
+                </InfoTip>
               </span>
               {trace.gate.gated ? (
                 <Badge tone="block">gated</Badge>
@@ -426,27 +400,22 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
                   <p className="text-[0.82rem] leading-snug text-muted-foreground">{trace.gate.rationale}</p>
                 ) : null}
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No action reached the risk floor — the run completed without a human gate.
-              </p>
-            )}
+            ) : null}
           </div>
 
           <div className="rounded-xl border border-border bg-surface-2/40 p-4">
-            <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center justify-between">
               <span className="eyebrow inline-flex items-center gap-1.5">
                 <RefreshCcw className="size-3.5" /> self-repair
+                <InfoTip label="About self-repair">
+                  The bounded Reflexion loop reflects and re-plans after a failed or insufficient
+                  action. Zero iterations means the run was a single linear pass.
+                </InfoTip>
               </span>
               <Badge tone={trace.iterations > 0 ? 'ml' : 'neutral'}>
                 {trace.iterations} iteration{trace.iterations === 1 ? '' : 's'}
               </Badge>
             </div>
-            <p className="text-sm text-muted-foreground">
-              {trace.iterations > 0
-                ? 'The bounded Reflexion loop reflected and re-planned after an insufficient action.'
-                : 'A single linear pass — no reflect → re-plan cycle was needed.'}
-            </p>
           </div>
         </div>
 
@@ -580,11 +549,7 @@ function HarnessView({ role, mock }: { role: Role; mock: boolean }): ReactElemen
 
       {/* Run trace */}
       <Card>
-        <CardHeader
-          eyebrow="drive a run"
-          title="Trace a query"
-          description="Run a query to fold its live event stream into the record below."
-        />
+        <CardHeader eyebrow="drive a run" title="Trace a query" />
         <CardBody className="pt-0">
           <QueryBar
             role={role}
@@ -630,7 +595,7 @@ export function HarnessMount({ role }: { role: Role }): ReactElement {
   }
 
   return (
-    <div>
+    <TooltipProvider>
       {mode.mode === 'mock' && (
         <div
           role="status"
@@ -641,6 +606,6 @@ export function HarnessMount({ role }: { role: Role }): ReactElement {
         </div>
       )}
       <HarnessView role={role} mock={isMock()} />
-    </div>
+    </TooltipProvider>
   )
 }

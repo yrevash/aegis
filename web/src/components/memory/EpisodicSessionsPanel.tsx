@@ -57,7 +57,7 @@ function SessionRow({ token, session }: { token: string | null; session: MemoryS
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-start gap-2.5 rounded-lg px-3.5 py-3 text-left transition-colors hover:bg-surface-2/50"
+        className="flex w-full items-start gap-2.5 rounded-lg px-3.5 py-2.5 text-left transition-colors hover:bg-surface-2/50"
       >
         <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-agent/12">
           <MessagesSquare className="size-3.5 text-agent-ink" />
@@ -70,18 +70,18 @@ function SessionRow({ token, session }: { token: string | null; session: MemoryS
                 {session.persona}
               </Badge>
             )}
+            <span className="tabular font-mono text-[0.6rem] text-muted-foreground">
+              {session.turn_count} turns
+            </span>
             <span className="eyebrow ml-auto text-[0.56rem]">{formatAgo(session.last_active_at)}</span>
           </span>
           <span className="mt-1 block text-xs leading-snug text-muted-foreground">
             {session.summary ?? 'No running summary yet.'}
           </span>
-          <span className="mt-1.5 block font-mono text-[0.6rem] text-muted-foreground/80">
-            {session.turn_count} turns
-          </span>
         </span>
         <ChevronDown className={cn('mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
-      {open && <div className="px-3.5 pb-3.5"><SessionMessages token={token} sessionId={session.id} /></div>}
+      {open && <div className="px-3.5 pb-3"><SessionMessages token={token} sessionId={session.id} /></div>}
     </li>
   )
 }
@@ -105,7 +105,7 @@ export function EpisodicSessionsPanel({ token, sessions }: Props): ReactElement 
     )
   }
   return (
-    <ul className="flex flex-col gap-2.5">
+    <ul className="flex flex-col gap-2">
       {sessions.map((s) => (
         <SessionRow key={s.id} token={token} session={s} />
       ))}

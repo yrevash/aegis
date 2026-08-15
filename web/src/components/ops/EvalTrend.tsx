@@ -77,7 +77,6 @@ export function EvalTrend({ rows, loading, error }: Props): ReactElement {
       <CardHeader
         eyebrow="GET /ops/evals"
         title="Quality trend"
-        description="Answer · retrieval · tool · guardrail scores over recent runs — the signal the loop watches."
         actions={
           <span className="eyebrow flex items-center gap-1.5">
             <span

@@ -9,7 +9,6 @@ import { cn } from '@/lib/utils'
 import type { MemoryFactRow, MemoryFactsResponse } from '@/lib/api/memory'
 
 import { EmptyRow, ErrorRow, LoadingRow } from './StateRow'
-import { MiniMeter } from './MiniMeter'
 import { PanelHeader } from './PanelHeader'
 import { formatDate } from './datetime'
 import type { AsyncState } from './useAsync'
@@ -18,12 +17,12 @@ import { factStatus, validFactCount } from './memoryText'
 /**
  * The belief-history detail for one fact — the honest bitemporal machinery
  * (subject·predicate·object triple + valid → superseded window), kept one layer
- * down behind the row's "detail" toggle so the primary surface stays plain.
+ * down behind the row's toggle so the primary surface stays plain.
  */
 function FactDetail({ fact }: { fact: MemoryFactRow }): ReactElement {
   const invalid = !fact.is_valid
   return (
-    <div className="animate-reveal mt-2.5 rounded-md border border-border/70 bg-surface-2/40 p-2.5">
+    <div className="animate-reveal border-t border-border/60 px-3 py-2.5">
       <p className="font-mono text-[0.64rem] leading-relaxed text-muted-foreground">
         <span className="text-graph-ink">{fact.subject}</span>
         {' · '}
@@ -31,68 +30,60 @@ function FactDetail({ fact }: { fact: MemoryFactRow }): ReactElement {
         {' · '}
         <span className="text-ml-ink">{fact.object}</span>
       </p>
-      <div className="mt-2 flex items-center gap-2">
-        <span className="eyebrow text-[0.54rem]">Belief history</span>
-        <span className="tabular font-mono text-[0.6rem] text-muted-foreground">{formatDate(fact.valid_at)}</span>
-        <div className="relative h-1 flex-1 overflow-hidden rounded-full bg-surface-2">
-          <div
-            className={cn('absolute inset-y-0 left-0 rounded-full', invalid ? 'bg-block/60' : 'bg-graph/70')}
-            style={{ width: invalid ? '100%' : '78%' }}
-          />
-        </div>
-        <span className={cn('tabular font-mono text-[0.6rem]', invalid ? 'text-block-ink' : 'text-ok-ink')}>
+      <p className="tabular mt-1.5 font-mono text-[0.6rem] text-muted-foreground">
+        <span className="eyebrow mr-1.5 text-[0.54rem]">Valid</span>
+        {formatDate(fact.valid_at)}
+        {' → '}
+        <span className={invalid ? 'text-block-ink' : 'text-ok-ink'}>
           {invalid ? formatDate(fact.invalid_at) : 'current'}
         </span>
-      </div>
-      {fact.supersedes_id != null && (
-        <p className="mt-1.5 font-mono text-[0.58rem] text-muted-foreground">replaced fact #{fact.supersedes_id}</p>
-      )}
+        {fact.supersedes_id != null && <> · replaced fact #{fact.supersedes_id}</>}
+      </p>
     </div>
   )
 }
 
-/** One compact fact row: statement · confidence meter · recalled count · detail. */
+/** One compact fact row: statement · confidence · recalled count, detail on click. */
 function FactRow({ fact }: { fact: MemoryFactRow }): ReactElement {
   const [open, setOpen] = useState(false)
   const status = factStatus(fact)
   const invalid = !fact.is_valid
   return (
-    <li className={cn('rounded-lg border p-3', invalid ? 'border-border/60 bg-surface-2/30' : 'border-border bg-card')}>
-      <div className="flex items-start gap-2">
-        <p
-          className={cn(
-            'flex-1 text-sm leading-snug',
-            invalid ? 'text-muted-foreground line-through decoration-block/40' : 'font-medium text-foreground',
-          )}
-        >
-          {fact.text}
-        </p>
-        <Badge tone={status.tone === 'ok' ? 'ok' : 'neutral'} className="shrink-0 text-[0.56rem]">
-          {status.label}
-        </Badge>
-      </div>
-
-      <div className="mt-2.5 flex items-center gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="eyebrow shrink-0 text-[0.54rem]">Confidence</span>
-          <MiniMeter value={fact.confidence} hex="var(--ml)" height={5} />
-          <span className="tabular shrink-0 font-mono text-[0.62rem] text-foreground">
-            {Math.round(fact.confidence * 100)}%
-          </span>
-        </div>
-        <span className="tabular shrink-0 font-mono text-[0.6rem] text-muted-foreground">
-          recalled {fact.access_count}×
-        </span>
-      </div>
-
+    <li
+      className={cn(
+        'overflow-hidden rounded-lg border',
+        invalid ? 'border-border/60 bg-surface-2/30' : 'border-border bg-card',
+      )}
+    >
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="mt-2 inline-flex items-center gap-1 rounded text-[0.62rem] text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <ChevronDown className={cn('size-3 transition-transform', open && 'rotate-180')} />
-        detail
+        <span
+          className={cn(
+            'min-w-0 flex-1 text-sm leading-snug',
+            invalid ? 'text-muted-foreground line-through decoration-block/40' : 'font-medium text-foreground',
+          )}
+        >
+          {fact.text}
+        </span>
+        <span
+          className="tabular shrink-0 font-mono text-[0.68rem] text-foreground"
+          title={`Confidence ${Math.round(fact.confidence * 100)}%`}
+        >
+          {Math.round(fact.confidence * 100)}%
+        </span>
+        <span className="tabular hidden shrink-0 font-mono text-[0.6rem] text-muted-foreground sm:inline">
+          {fact.access_count}× recalled
+        </span>
+        <Badge tone={status.tone === 'ok' ? 'ok' : 'neutral'} className="shrink-0 text-[0.56rem]">
+          {status.label}
+        </Badge>
+        <ChevronDown
+          className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')}
+        />
       </button>
       {open && <FactDetail fact={fact} />}
     </li>
@@ -105,9 +96,9 @@ interface Props {
 
 /**
  * "What we know" (§4.3) — the semantic facts the agent believes about the
- * subject, as compact rows (statement + confidence meter + recall count). The
- * subject·predicate·object triple and the bitemporal validity window move behind
- * a per-row detail toggle; a header toggle reveals superseded beliefs.
+ * subject, as single-line rows (statement + confidence % + recall count). The
+ * subject·predicate·object triple and the bitemporal validity window open on
+ * click; a header toggle reveals superseded beliefs.
  */
 export function SemanticFactsPanel({ state }: Props): ReactElement {
   const [showSuperseded, setShowSuperseded] = useState(true)
@@ -149,7 +140,7 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
         <EmptyRow>No facts recorded for this subject yet.</EmptyRow>
       )}
       {state.status === 'ready' && rows.length > 0 && (
-        <ul className="flex flex-1 flex-col gap-2">
+        <ul className="flex flex-1 flex-col gap-1.5">
           {rows.map((f, i) => (
             <RevealOnScroll key={f.id} delayMs={i * 40}>
               <FactRow fact={f} />

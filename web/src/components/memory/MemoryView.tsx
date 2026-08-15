@@ -120,23 +120,24 @@ function MemoryView({ token }: { token: string | null }): ReactElement {
         </CardBody>
       </Card>
 
-      {/* Row 2 — what we know (wide) + profile. */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+      {/* Rows 2 and 3 share one 3 + 2 column rhythm so the vertical seam lines
+          up, and `items-start` keeps every card at its own content height
+          instead of padding the shorter one out with dead space. */}
+      <div className="grid items-start gap-6 lg:grid-cols-5">
+        <Card className="lg:col-span-3">
           <CardBody>
             <SemanticFactsPanel state={facts.state} />
           </CardBody>
         </Card>
-        <Card>
+        <Card className="lg:col-span-2">
           <CardBody>
             <StructuredProfilePanel state={profile.state} />
           </CardBody>
         </Card>
       </div>
 
-      {/* Row 3 — sessions + recent updates. */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
+      <div className="grid items-start gap-6 lg:grid-cols-5">
+        <Card className="lg:col-span-3">
           <CardBody>
             <div className="flex h-full flex-col gap-3">
               <PanelHeader
@@ -158,7 +159,7 @@ function MemoryView({ token }: { token: string | null }): ReactElement {
             </div>
           </CardBody>
         </Card>
-        <Card>
+        <Card className="lg:col-span-2">
           <CardBody>
             <WriteLogPanel state={writes.state} />
           </CardBody>

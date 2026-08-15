@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import {
   Area,
   CartesianGrid,
@@ -15,6 +15,7 @@ import {
 
 import { ChartTooltip } from '@/components/charts/ChartTooltip'
 import { chartHex } from '@/components/charts/palette'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import type { ForecastResult } from '@/lib/api/types'
 
 interface HorizonChartProps {
@@ -55,7 +56,7 @@ function axisLabel(iso: string): string {
 export function HorizonChart({
   result,
   historyTail = 45,
-  height = 260,
+  height = 280,
   valueFormatter,
 }: HorizonChartProps): ReactElement {
   const ml = chartHex('ml')
@@ -97,13 +98,21 @@ export function HorizonChart({
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis
           dataKey="label"
-          tick={{ fill: 'var(--muted-foreground)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
+          tick={{
+            fill: 'var(--muted-foreground)',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+          }}
           axisLine={false}
           tickLine={false}
           minTickGap={28}
         />
         <YAxis
-          tick={{ fill: 'var(--muted-foreground)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
+          tick={{
+            fill: 'var(--muted-foreground)',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+          }}
           axisLine={false}
           tickLine={false}
           width={46}
@@ -116,9 +125,11 @@ export function HorizonChart({
             one number per row. Its bounds are shown beside the selected step. */}
         <Area
           dataKey="band"
-          stroke="none"
+          stroke={ml}
+          strokeOpacity={0.4}
+          strokeWidth={1}
           fill={ml}
-          fillOpacity={0.18}
+          fillOpacity={0.16}
           isAnimationActive={false}
           tooltipType="none"
           connectNulls
@@ -158,5 +169,90 @@ export function HorizonChart({
         ) : null}
       </ComposedChart>
     </ResponsiveContainer>
+  )
+}
+
+/** One legend entry: a mark drawn the way the chart draws it, then its meaning. */
+function Key({ mark, children }: { mark: ReactElement; children: ReactNode }): ReactElement {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {mark}
+      {children}
+    </span>
+  )
+}
+
+/**
+ * The chart's key, plus the two facts a reader needs to size the band.
+ *
+ * This replaces a standalone panel that re-drew the terminal interval as a
+ * horizontal bar — a second rendering of something the chart already shows.
+ * The one fact that panel added, how wide the band gets at its widest, is folded
+ * in here as text; the interval *method* stays stated because a parametric band
+ * and a conformal band are not interchangeable, and the paragraph of provenance
+ * prose that used to sit beside it now lives behind the ⓘ.
+ */
+export function HorizonLegend({
+  result,
+  valueFormatter,
+}: {
+  result: ForecastResult
+  valueFormatter?: (value: number) => string
+}): ReactElement {
+  const ml = chartHex('ml')
+  const agent = chartHex('agent')
+  const fmt = valueFormatter ?? ((v: number) => v.toFixed(2))
+  const conformal = result.interval_method === 'conformal'
+
+  // The widest step is the honest answer to "how far can this drift by the end".
+  const widest = result.points.reduce<(typeof result.points)[number] | null>(
+    (worst, p) => (worst == null || p.hi - p.lo > worst.hi - worst.lo ? p : worst),
+    null,
+  )
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[0.7rem] text-muted-foreground">
+      <Key mark={<span className="h-0.5 w-4 rounded-full" style={{ background: agent }} />}>
+        observed
+      </Key>
+      <Key
+        mark={
+          <span
+            className="h-0.5 w-4 rounded-full"
+            style={{
+              backgroundImage: `repeating-linear-gradient(90deg, ${ml} 0 5px, transparent 5px 8px)`,
+            }}
+          />
+        }
+      >
+        <span className="font-mono text-foreground">{result.model}</span> forecast
+      </Key>
+      <Key
+        mark={
+          <span
+            className="h-2.5 w-4 rounded-[3px]"
+            style={{ background: `${ml}2b`, border: `1px solid ${ml}66` }}
+          />
+        }
+      >
+        <span className={conformal ? undefined : 'font-medium text-risk-ink'}>
+          {result.requested_level * 100}% {result.interval_method} band
+        </span>
+        <InfoTip label="How this interval was built">
+          {result.interval_method_detail}
+          {conformal
+            ? ' Calibration is chronological throughout: every band is fitted on data strictly earlier than the points it is scored on, so no future value ever reaches the calibration set.'
+            : ' These bounds are the fitted model’s own predictive distribution. They hold only as far as its residual assumptions do — read the achieved coverage below, not this level.'}
+        </InfoTip>
+      </Key>
+      {widest ? (
+        <span className="tabular font-mono">
+          widest {fmt(widest.hi - widest.lo)} at step {widest.step}
+        </span>
+      ) : null}
+      <span className="tabular ml-auto font-mono">
+        {result.history_points} × {result.freq} history · horizon {result.horizon}
+      </span>
+    </div>
   )
 }

@@ -17,35 +17,56 @@ import { MiniMeter } from './MiniMeter'
 import { useAsync } from './useAsync'
 import { RECALL_DIMENSIONS, TOKEN_BUDGET, budgetPct, recallScores } from './memoryText'
 
-/** One ranked recall row with its three plain sub-scores as calm meters. */
+/**
+ * One ranked recall row. The headline is used / not used plus the match score
+ * that drove the rank; the three plain sub-scores (Match · Fresh · Weight) open
+ * on click so the panel is not a wall of meters.
+ */
 function RecallRow({ item }: { item: RecallDebugItem }): ReactElement {
+  const [open, setOpen] = useState(false)
   const scores = recallScores(item)
   return (
     <li
       className={cn(
-        'rounded-lg border p-3',
+        'overflow-hidden rounded-lg border',
         item.injected ? 'border-border bg-card' : 'border-dashed border-border/70 bg-surface-2/30 opacity-80',
       )}
     >
-      <div className="flex items-start gap-2">
-        <p className="flex-1 text-xs leading-snug text-foreground">{item.text}</p>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="min-w-0 flex-1 text-xs leading-snug text-foreground">{item.text}</span>
+        <span
+          className="tabular shrink-0 font-mono text-[0.66rem] text-foreground"
+          title={`Match ${item.score.toFixed(2)}`}
+        >
+          {item.score.toFixed(2)}
+        </span>
         <Badge tone={item.injected ? 'ok' : 'neutral'} className="shrink-0 text-[0.54rem]">
           {item.injected ? 'used' : 'not used'}
         </Badge>
-      </div>
-      <div className="mt-2.5 grid grid-cols-3 gap-2.5">
-        {RECALL_DIMENSIONS.map((dim) => (
-          <div key={dim.key}>
-            <div className="mb-1 flex items-center gap-1">
-              <span className="eyebrow text-[0.5rem]">{dim.label}</span>
-              <InfoTip label={dim.label} className="size-3">
-                {dim.hint}
-              </InfoTip>
+        <ChevronDown
+          className={cn('size-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')}
+        />
+      </button>
+      {open && (
+        <div className="animate-reveal grid grid-cols-3 gap-2.5 border-t border-border/60 px-3 py-2.5">
+          {RECALL_DIMENSIONS.map((dim) => (
+            <div key={dim.key}>
+              <div className="mb-1 flex items-center gap-1">
+                <span className="eyebrow text-[0.5rem]">{dim.label}</span>
+                <InfoTip label={dim.label} className="size-3">
+                  {dim.hint}
+                </InfoTip>
+              </div>
+              <MiniMeter value={scores[dim.key]} hex={dim.hex} height={4} />
             </div>
-            <MiniMeter value={scores[dim.key]} hex={dim.hex} height={4} />
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </li>
   )
 }
@@ -72,7 +93,7 @@ function RecallGroup({
         <span className={cn('size-2 rounded-full', dotClass)} />
         <span className="ml-auto font-mono text-[0.6rem] text-muted-foreground">{count} used</span>
       </div>
-      <ul className="mt-1.5 space-y-2">
+      <ul className="mt-1.5 space-y-1.5">
         {items.map((item, i) => (
           <RevealOnScroll key={item.key} delayMs={i * 40}>
             <RecallRow item={item} />
@@ -90,9 +111,10 @@ interface Props {
 
 /**
  * "Why did it recall this?" (§4.3) — the flagship recall trace, kept as an
- * expander. Given a query it shows the ranked memories, each with
- * Match / Fresh / Weight meters (the honest relevance × recency × importance, in
- * plain words), which cleared the cut, the assembled context the model sees, and
+ * expander. Given a query it shows which memories cleared the cut (used /
+ * not used) with the match score that ranked them; the Match / Fresh / Weight
+ * breakdown (the honest relevance × recency × importance, in plain words) opens
+ * per row. Beside it sits the assembled context the model sees, captioned with
  * how much of the context budget it used.
  */
 export function RecallDebugPanel({ token, subject }: Props): ReactElement {
@@ -173,32 +195,31 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                 />
               </div>
 
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <Terminal className="size-3.5 text-ml-ink" />
+              {/* The glass-box payoff, framed as a deliberate artefact: a
+                  captioned block with the context budget on its own header rule. */}
+              <figure className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface-2/40">
+                <figcaption className="flex items-center gap-2 border-b border-border/70 bg-surface-2/70 px-3 py-1.5">
+                  <Terminal className="size-3.5 shrink-0 text-ml-ink" />
                   <span className="t-label text-foreground">What the agent sees</span>
                   <InfoTip label="About context">
                     The block of memory text assembled and handed to the model for this question.
                   </InfoTip>
-                </div>
-                <pre className="flex-1 overflow-auto rounded-lg border border-border bg-surface-2/50 p-3 font-mono text-[0.68rem] leading-relaxed whitespace-pre-wrap text-foreground">
-                  {data.working_memory}
-                </pre>
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="eyebrow text-[0.58rem]">Context used</span>
+                  <span className="ml-auto flex shrink-0 items-center gap-2">
+                    <MiniMeter
+                      value={usedPct / 100}
+                      hex={usedPct > 90 ? 'var(--risk)' : 'var(--ml)'}
+                      height={4}
+                      className="w-12"
+                    />
                     <span className="tabular font-mono text-[0.62rem] text-foreground">
                       {data.tokens_used} / {TOKEN_BUDGET} tokens
                     </span>
-                  </div>
-                  <MiniMeter
-                    value={usedPct / 100}
-                    hex={usedPct > 90 ? 'var(--risk)' : 'var(--ml)'}
-                    height={8}
-                    className="mt-1"
-                  />
-                </div>
-              </div>
+                  </span>
+                </figcaption>
+                <pre className="flex-1 overflow-auto p-3 font-mono text-[0.68rem] leading-relaxed whitespace-pre-wrap text-foreground">
+                  {data.working_memory}
+                </pre>
+              </figure>
             </div>
           )}
         </div>

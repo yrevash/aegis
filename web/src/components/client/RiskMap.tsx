@@ -1,7 +1,7 @@
 'use client'
 
-import { Loader2, ShieldAlert, ShieldCheck, WifiOff } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { Loader2, ShieldAlert, WifiOff } from 'lucide-react'
+import { useEffect, useState, type ReactElement } from 'react'
 
 import { getRiskMap } from '@/lib/api/client'
 import { Badge } from '@/components/primitives/badge'
@@ -12,40 +12,39 @@ import { SIGNALS } from '@/config/signals'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
-import type { RiskEntry, RiskMapResponse } from '@/lib/api/types'
+import type { RiskMapResponse } from '@/lib/api/types'
 
-import { RiskMatrixGrid } from './RiskMatrixGrid'
+import { RiskLadder } from './RiskLadder'
 import {
-  buildMatrix,
+  maxExposure,
+  rankRisks,
   RESIDUAL_META,
+  RESIDUAL_ORDER,
   residualCounts,
   residualSignal,
-  worstFirst,
   type Residual,
-} from './riskMatrix'
+} from './riskRanking'
 
 /**
  * Client — Risk Map.
  *
- * The business-facing **risk matrix**: every way an autonomous agent can go
- * wrong, plotted on a likelihood × impact grid and coloured by what is left
- * after the mitigating control. The exposure is legible at a glance — the hot
- * top-right corner is high-likelihood + high-impact — and each risk carries the
- * concrete Aegis control that holds it down. Pure placement/scoring lives in the
- * recharts-free `riskMatrix.ts` (unit-tested); this file fetches and renders.
+ * The business-facing assurance view: every way an autonomous agent can go
+ * wrong, **ranked worst residual first**, each with the concrete Aegis control
+ * that holds it down. Ordering and bar length carry inherent exposure
+ * (likelihood × impact) — the *before*; colour carries the residual band left
+ * after the control — the *after*. Pure ranking/scoring lives in the
+ * render-free `riskRanking.ts`; this file fetches and composes.
+ *
+ * This deliberately replaced a 5×5 heat-map grid: with a handful of risks the
+ * matrix was mostly empty cells and needed a second pass over cards below to
+ * decode each marker. The ladder is one reading order — no cross-referencing,
+ * no duplicated likelihood/impact readout, one colour with one meaning.
  */
 
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; data: RiskMapResponse }
-
-/** Residual band → Badge variant (green / amber / red). */
-const RESIDUAL_BADGE: Record<Residual, 'ok' | 'risk' | 'block'> = {
-  low: 'ok',
-  medium: 'risk',
-  high: 'block',
-}
 
 /** A note is a demo sample when it says so — kept honest, never hidden. */
 function isSample(note: string): boolean {
@@ -62,13 +61,10 @@ function formatWhen(iso: string): string {
 
 export function RiskMap({ token }: { token: string | null }): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const cardRefs = useRef(new Map<string, HTMLDivElement>())
 
   useEffect(() => {
     let alive = true
     setLoad({ status: 'loading' })
-    setSelectedId(null)
     getRiskMap(token)
       .then((data) => alive && setLoad({ status: 'ready', data }))
       .catch(
@@ -83,12 +79,6 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
       alive = false
     }
   }, [token])
-
-  // Bring the selected risk's card into view when picked from the grid.
-  useEffect(() => {
-    if (selectedId == null) return
-    cardRefs.current.get(selectedId)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [selectedId])
 
   if (load.status === 'loading') {
     return (
@@ -110,9 +100,9 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
   }
 
   const { note, generated_at, scale, risks } = load.data
-  const matrix = buildMatrix(scale, risks)
   const counts = residualCounts(risks)
-  const ranked = worstFirst(risks)
+  const ceiling = maxExposure(scale, risks)
+  const ranked = rankRisks(scale, risks)
   const sample = isSample(note)
 
   return (
@@ -122,14 +112,15 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <ShieldAlert className="size-4 shrink-0 text-risk" />
           <p className="t-body max-w-2xl text-muted-foreground">
-            Every way an autonomous agent can go wrong, placed by likelihood and impact — and the
-            control that holds each one down.
+            Every way an autonomous agent can go wrong, ranked by what is still left after the
+            control that holds it down.
           </p>
-          <InfoTip label="Why this matters">
-            Why this matters: the matrix shows where your biggest exposures sit (top-right = most
-            likely and most damaging) and how each is mitigated, so residual risk is visible rather
-            than assumed. This map is populated for this deployment&apos;s posture and is repopulated
-            per problem.
+          <InfoTip label="How to read this">
+            How to read this: risks are ordered worst residual first. A bar&apos;s length is the
+            inherent exposure before mitigation (likelihood × impact, out of {ceiling}); its colour
+            is the residual band after the Aegis control. A long green bar is the point — a serious
+            risk the guardrail brought down. This map is populated for this deployment&apos;s posture
+            and is repopulated per problem.
           </InfoTip>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -142,52 +133,28 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
         </div>
       </div>
 
-      {/* Residual band tally. */}
+      {/* Residual band tally — the headline number the ladder then explains. */}
       <div className="flex flex-wrap gap-2">
-        {(['high', 'medium', 'low'] as const).map((band) => (
+        {RESIDUAL_ORDER.map((band) => (
           <ResidualCount key={band} band={band} count={counts[band]} />
         ))}
       </div>
 
-      {/* The matrix + legend. */}
+      {/* The ranked ladder: risks, their exposure, and their controls in one pass. */}
       <Card>
-        <CardContent className="grid grid-cols-1 gap-6 pt-5 lg:grid-cols-[minmax(0,1fr)_15rem]">
-          <RiskMatrixGrid matrix={matrix} selectedId={selectedId} onSelect={setSelectedId} />
-          <div className="flex flex-col gap-4">
-            <Legend />
-            {matrix.unplaced.length > 0 && (
-              <p className="t-body text-muted-foreground">
-                {matrix.unplaced.length} risk{matrix.unplaced.length === 1 ? '' : 's'} fell outside
-                the {scale.likelihood.length}×{scale.impact.length} scale and are listed below only.
-              </p>
-            )}
-            <p className="t-body mt-auto text-muted-foreground">
-              Generated {formatWhen(generated_at)}.
-            </p>
-          </div>
-        </CardContent>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-5 pt-4 pb-3">
+          <p className="eyebrow">Risks &amp; controls · worst residual first</p>
+          <p className="t-body text-muted-foreground">
+            Bar = inherent exposure (likelihood × impact, of {ceiling}) · colour = residual after
+            control
+          </p>
+        </div>
+        <RiskLadder ranked={ranked} ceiling={ceiling} />
       </Card>
 
-      {/* The risks themselves, worst exposure first. */}
-      <div>
-        <p className="eyebrow mb-2">Risks &amp; controls · worst exposure first</p>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {ranked.map((risk) => (
-            <RiskCard
-              key={risk.id}
-              risk={risk}
-              selected={selectedId === risk.id}
-              onSelect={setSelectedId}
-              registerRef={(el) => {
-                if (el) cardRefs.current.set(risk.id, el)
-                else cardRefs.current.delete(risk.id)
-              }}
-            />
-          ))}
-        </div>
-      </div>
-
-      <p className="font-mono text-[0.68rem] leading-relaxed text-muted-foreground">{note}</p>
+      <p className="font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
+        {note} Generated {formatWhen(generated_at)}.
+      </p>
     </div>
   )
 }
@@ -211,81 +178,9 @@ function ResidualCount({ band, count }: { band: Residual; count: number }): Reac
   )
 }
 
-/** The colour key for the matrix. */
-function Legend(): ReactElement {
-  return (
-    <div className="flex flex-col gap-2">
-      <p className="eyebrow">Residual after control</p>
-      <ul className="flex flex-col gap-1.5">
-        {(['low', 'medium', 'high'] as const).map((band) => {
-          const token = SIGNALS[residualSignal(band)]
-          return (
-            <li key={band} className="flex items-center gap-2 text-sm">
-              <span
-                className="size-2.5 rounded-full"
-                style={{ background: token.hex }}
-                aria-hidden
-              />
-              <span className="text-muted-foreground">{RESIDUAL_META[band].label}</span>
-            </li>
-          )
-        })}
-      </ul>
-      <p className="t-body mt-1 text-muted-foreground">
-        Cell shading shows inherent exposure; a marker&apos;s colour is what remains after its
-        control. Select a marker to highlight its control below.
-      </p>
-    </div>
-  )
-}
-
-/** One risk with its category, mitigation, control and residual band. */
-function RiskCard({
-  risk,
-  selected,
-  onSelect,
-  registerRef,
-}: {
-  risk: RiskEntry
-  selected: boolean
-  onSelect: (id: string | null) => void
-  registerRef: (el: HTMLDivElement | null) => void
-}): ReactElement {
-  return (
-    <Card
-      ref={registerRef}
-      onClick={() => onSelect(selected ? null : risk.id)}
-      className={cn(
-        'cursor-pointer p-4 transition-[box-shadow,border-color] duration-150 hover:shadow-hover',
-        selected && 'border-ring ring-2 ring-ring',
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[0.68rem] tabular text-muted-foreground">{risk.id}</span>
-        <span className="t-title text-foreground">{risk.title}</span>
-        <Badge variant={RESIDUAL_BADGE[risk.residual]} className="ml-auto">
-          {RESIDUAL_META[risk.residual].label} residual
-        </Badge>
-      </div>
-      <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[0.72rem] text-muted-foreground">
-        <span className="eyebrow">{risk.category}</span>
-        <span aria-hidden>·</span>
-        <span className="tabular">
-          likelihood {risk.likelihood} × impact {risk.impact}
-        </span>
-      </p>
-      <p className="t-body mt-2 text-foreground/90">{risk.mitigation}</p>
-      <p className="mt-2 flex items-center gap-1.5 text-[0.78rem] text-agent-ink">
-        <ShieldCheck className="size-3.5 shrink-0" aria-hidden />
-        {risk.control_ref}
-      </p>
-    </Card>
-  )
-}
-
 /**
  * Client entry for the Risk Map section. Runs the boot probe once (live-first,
- * mock fallback), shows the honest offline banner, then renders the matrix wired
+ * mock fallback), shows the honest offline banner, then renders the ladder wired
  * to `GET /risk-map`.
  */
 export function RiskMount(): ReactElement {

@@ -3,6 +3,7 @@
 import { FileDiff, GitBranch, Loader2 } from 'lucide-react'
 import { useMemo, useState, type ReactElement } from 'react'
 
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
@@ -72,55 +73,78 @@ function VersionRow({
   )
 }
 
-/** A single diff column with per-line add/remove highlighting. */
-function DiffColumn({
-  side,
-  otherLines,
-  mode,
-}: {
-  side: DiffSide
-  otherLines: Set<string>
-  mode: 'removed' | 'added'
-}): ReactElement {
-  const lines = (side.text ?? '').split('\n')
+/** One line of the unified diff: unchanged, removed from base, or added. */
+interface DiffLine {
+  kind: ' ' | '-' | '+'
+  text: string
+}
+
+/**
+ * A unified line diff (LCS-backed). Side-by-side columns repeated every shared
+ * line twice; the unified form shows each shared line once, so the panel carries
+ * the same content with none of the duplication.
+ */
+function unifiedDiff(base: string[], target: string[]): DiffLine[] {
+  const n = base.length
+  const m = target.length
+  // dp[i][j] = length of the LCS of base[i:] and target[j:].
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i][j] =
+        base[i].trim() === target[j].trim()
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const out: DiffLine[] = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (base[i].trim() === target[j].trim()) {
+      out.push({ kind: ' ', text: base[i] })
+      i += 1
+      j += 1
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ kind: '-', text: base[i] })
+      i += 1
+    } else {
+      out.push({ kind: '+', text: target[j] })
+      j += 1
+    }
+  }
+  for (; i < n; i += 1) out.push({ kind: '-', text: base[i] })
+  for (; j < m; j += 1) out.push({ kind: '+', text: target[j] })
+  return out
+}
+
+/** The unified diff body — one column, each shared line rendered once. */
+function DiffBody({ base, target }: { base: DiffSide; target: DiffSide }): ReactElement {
+  if (base.text == null || target.text == null) {
+    return (
+      <p className="rounded-xl border border-dashed border-border/70 p-3 text-xs text-muted-foreground">
+        The API does not expose the prompt body for v{base.text == null ? base.version : target.version}.
+      </p>
+    )
+  }
+  const lines = unifiedDiff(base.text.split('\n'), target.text.split('\n'))
   return (
-    <div className="min-w-0">
-      <div className="mb-1.5 flex items-center gap-2">
-        <span className="tabular font-display text-sm font-semibold text-foreground">v{side.version}</span>
-        <span className="eyebrow text-[0.56rem]">{mode === 'removed' ? 'base' : 'proposed'}</span>
-        {side.sample && (
-          <Badge tone="neutral" className="ml-auto text-[0.54rem]">
-            sample
-          </Badge>
-        )}
-      </div>
-      {side.text == null ? (
-        <p className="rounded-xl border border-dashed border-border/70 p-3 text-xs text-muted-foreground">
-          The API does not expose the prompt body for this version.
-        </p>
-      ) : (
-        <pre className="overflow-auto rounded-xl border border-border bg-surface-2/40 p-3 font-mono text-[0.68rem] leading-relaxed">
-          {lines.map((line, i) => {
-            const differs = line.trim() !== '' && !otherLines.has(line.trim())
-            return (
-              <div
-                key={i}
-                className={cn(
-                  'whitespace-pre-wrap px-1',
-                  differs && (mode === 'removed' ? 'bg-block/10 text-block-ink' : 'bg-ok/10 text-ok-ink'),
-                  !differs && 'text-muted-foreground',
-                )}
-              >
-                <span className="mr-1 select-none opacity-60">
-                  {differs ? (mode === 'removed' ? '-' : '+') : ' '}
-                </span>
-                {line || ' '}
-              </div>
-            )
-          })}
-        </pre>
-      )}
-    </div>
+    <pre className="overflow-auto rounded-xl border border-border bg-surface-2/40 p-3 font-mono text-[0.68rem] leading-relaxed">
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          className={cn(
+            'whitespace-pre-wrap px-1',
+            line.kind === '-' && 'bg-block/10 text-block-ink',
+            line.kind === '+' && 'bg-ok/10 text-ok-ink',
+            line.kind === ' ' && 'text-muted-foreground',
+          )}
+        >
+          <span className="mr-1 select-none opacity-60">{line.kind}</span>
+          {line.text || ' '}
+        </div>
+      ))}
+    </pre>
   )
 }
 
@@ -177,15 +201,20 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
 
   const baseSide = bodyFor(effBase)
   const targetSide = bodyFor(effTarget)
-  const baseSet = new Set((baseSide?.text ?? '').split('\n').map((l) => l.trim()).filter(Boolean))
-  const targetSet = new Set((targetSide?.text ?? '').split('\n').map((l) => l.trim()).filter(Boolean))
 
   return (
     <Card>
       <CardHeader
         eyebrow="GET /ops/prompts"
         title="Prompt history"
-        description="Every version with its lifecycle status, and a diff of what the loop changed. Tap two versions to compare."
+        actions={
+          <InfoTip label="About the prompt history">
+            Every version of the tracked prompt with its lifecycle status. Tap two versions on the
+            timeline to diff them — red is removed from the base, green is added in the proposal.
+            Only the active version&rsquo;s body is the real one; the rest are illustrative samples,
+            badged as such.
+          </InfoTip>
+        }
       />
       <CardBody>
         {error ? (
@@ -229,9 +258,16 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
                 </span>
                 <h4 className="t-label text-foreground">Diff</h4>
                 {baseSide && targetSide && (
-                  <span className="eyebrow ml-auto text-[0.58rem]">
-                    v{baseSide.version} → v{targetSide.version}
-                  </span>
+                  <>
+                    <span className="eyebrow ml-auto text-[0.58rem]">
+                      v{baseSide.version} → v{targetSide.version}
+                    </span>
+                    {(baseSide.sample || targetSide.sample) && (
+                      <Badge tone="neutral" className="text-[0.54rem]">
+                        sample
+                      </Badge>
+                    )}
+                  </>
                 )}
               </div>
               {!baseSide || !targetSide ? (
@@ -239,10 +275,7 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
                   Select two versions on the timeline to compare them.
                 </div>
               ) : (
-                <div className="grid gap-4 md:grid-cols-2">
-                  <DiffColumn side={baseSide} otherLines={targetSet} mode="removed" />
-                  <DiffColumn side={targetSide} otherLines={baseSet} mode="added" />
-                </div>
+                <DiffBody base={baseSide} target={targetSide} />
               )}
             </div>
           </div>

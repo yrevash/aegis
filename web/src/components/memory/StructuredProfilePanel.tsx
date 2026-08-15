@@ -18,7 +18,7 @@ function renderValue(value: unknown): ReactElement {
     return (
       <span className="flex flex-wrap justify-end gap-1">
         {value.map((v) => (
-          <Badge key={String(v)} tone="neutral" className="text-[0.6rem]">
+          <Badge key={String(v)} tone="neutral" className="px-2 text-[0.6rem]">
             {String(v).replace(/_/g, ' ')}
           </Badge>
         ))}
@@ -26,9 +26,9 @@ function renderValue(value: unknown): ReactElement {
     )
   }
   if (typeof value === 'number') {
-    return <span className="tabular font-mono text-sm text-foreground">{value.toLocaleString('en-US')}</span>
+    return <span className="tabular font-mono text-[0.8rem] text-foreground">{value.toLocaleString('en-US')}</span>
   }
-  return <span className="text-sm text-foreground">{String(value)}</span>
+  return <span className="text-[0.8rem] text-foreground">{String(value)}</span>
 }
 
 interface Props {
@@ -37,8 +37,8 @@ interface Props {
 
 /**
  * "Profile" (§4.3) — the consolidated key/value record of what the agent knows
- * about the subject, distilled from the facts and sessions. Just a clean list;
- * the "consolidated / structured" jargon moves to the ⓘ.
+ * about the subject, distilled from the facts and sessions. A two-column record
+ * of label/value cells; the "consolidated / structured" jargon moves to the ⓘ.
  */
 export function StructuredProfilePanel({ state }: Props): ReactElement {
   const entries = state.status === 'ready' ? Object.entries(state.data.data) : ([] as [string, unknown][])
@@ -64,13 +64,27 @@ export function StructuredProfilePanel({ state }: Props): ReactElement {
         <EmptyRow>No profile has been consolidated for this subject yet.</EmptyRow>
       )}
       {state.status === 'ready' && entries.length > 0 && (
-        <dl className="flex-1 divide-y divide-border/60">
-          {entries.map(([k, v]) => (
-            <div key={k} className="flex items-center justify-between gap-4 py-2.5">
-              <dt className="eyebrow shrink-0 text-[0.6rem]">{humanizeKey(k)}</dt>
-              <dd className="min-w-0 text-right">{renderValue(v)}</dd>
-            </div>
-          ))}
+        // Two columns of stacked label/value cells: the same twelve-odd fields
+        // in roughly half the vertical run. List-valued fields (risk flags,
+        // entitlements) take the full width so their chips stay on one line.
+        <dl className="grid flex-1 grid-cols-2 gap-x-4 border-t border-border/60">
+          {entries.map(([k, v]) =>
+            Array.isArray(v) ? (
+              // List fields run full width with their chips on the label's line.
+              <div
+                key={k}
+                className="col-span-2 flex min-w-0 items-center justify-between gap-4 border-b border-border/60 py-1.5"
+              >
+                <dt className="eyebrow shrink-0 text-[0.56rem]">{humanizeKey(k)}</dt>
+                <dd className="min-w-0">{renderValue(v)}</dd>
+              </div>
+            ) : (
+              <div key={k} className="min-w-0 border-b border-border/60 py-1.5">
+                <dt className="eyebrow text-[0.56rem]">{humanizeKey(k)}</dt>
+                <dd className="mt-0.5 min-w-0">{renderValue(v)}</dd>
+              </div>
+            ),
+          )}
         </dl>
       )}
     </div>

@@ -45,7 +45,7 @@ export function SubjectSummary({
   sample = false,
 }: SubjectSummaryProps): ReactElement {
   return (
-    <div className="flex h-full flex-col gap-5">
+    <div className="flex h-full flex-col gap-4">
       <div className="flex items-start gap-2">
         <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-agent/12">
           <Brain className="size-4 text-agent-ink" />
@@ -107,7 +107,7 @@ export function SubjectSummary({
       )}
 
       {/* The three headline counts — figures lead (§1.1), count-up on mount. */}
-      <dl className="mt-auto grid grid-cols-3 gap-3 border-t border-border/70 pt-4">
+      <dl className="mt-auto grid grid-cols-3 gap-3 border-t border-border/70 pt-3">
         {stats.map((s) => (
           <div key={s.label} className="flex flex-col gap-0.5">
             <dt className="eyebrow text-[0.58rem]">{s.label}</dt>

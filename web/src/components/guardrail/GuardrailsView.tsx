@@ -33,6 +33,7 @@ import {
   type GuardrailEntry,
 } from '@/components/guardrail/GuardrailReveal'
 import { MiniMeter } from '@/components/memory/MiniMeter'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { cn } from '@/lib/utils'
 
@@ -50,8 +51,10 @@ interface RailSpec {
   layer: string
   name: string
   icon: LucideIcon
-  /** What the rail checks — the true method, from the Python module. */
-  method: string
+  /** The true callable the rail runs, from the Python module — stays on the card. */
+  fn: string
+  /** Why/how it checks — relocated behind the card's ⓘ (§ prose relocation). */
+  detail: string
   /** OWASP-Agentic / policy mapping. */
   owasp: string
   /** Verdict semantics the rail can emit. */
@@ -67,7 +70,8 @@ const INPUT_RAILS: RailSpec[] = [
     layer: 'schema',
     name: 'Schema / format',
     icon: FileCode2,
-    method: 'validate_input_format — the request parses & matches the expected shape',
+    fn: 'validate_input_format',
+    detail: 'The request parses and matches the expected shape.',
     owasp: 'LLM05 · improper input handling',
     semantics: 'block',
   },
@@ -76,7 +80,9 @@ const INPUT_RAILS: RailSpec[] = [
     layer: 'pii',
     name: 'PII redaction (Presidio)',
     icon: Fingerprint,
-    method: 'pii.redact — Presidio + anchored regex & Luhn mask PII before the model sees it',
+    fn: 'pii.redact',
+    detail:
+      'Presidio plus anchored regex and a Luhn check mask PII before the model ever sees the request.',
     owasp: 'LLM02 · sensitive-information disclosure',
     semantics: 'redact',
     postureThreatId: 'LLM02',
@@ -86,8 +92,9 @@ const INPUT_RAILS: RailSpec[] = [
     layer: 'injection',
     name: 'Prompt injection',
     icon: ShieldAlert,
-    method:
-      'deterministic_injection backstop + classify_injection (fail-closed — an unavailable classifier is treated as injection)',
+    fn: 'deterministic_injection → classify_injection',
+    detail:
+      'A deterministic signature backstop runs before the classifier, and the rail is fail-closed: an unavailable classifier is treated as injection.',
     owasp: 'LLM01 · prompt injection / jailbreak',
     semantics: 'block',
     postureThreatId: 'LLM01',
@@ -97,7 +104,8 @@ const INPUT_RAILS: RailSpec[] = [
     layer: 'content_safety',
     name: 'Content safety',
     icon: ScanSearch,
-    method: 'screen_content — MLCommons hazard taxonomy S1–S13',
+    fn: 'screen_content',
+    detail: 'Screens the request against the MLCommons hazard taxonomy.',
     owasp: 'Content policy · MLCommons S1–S13',
     semantics: 'block',
   },
@@ -106,7 +114,8 @@ const INPUT_RAILS: RailSpec[] = [
     layer: 'topical',
     name: 'Topical scope',
     icon: Target,
-    method: 'screen_topic — off-domain / off-policy topic screen',
+    fn: 'screen_topic',
+    detail: 'Off-domain and off-policy requests are screened out here.',
     owasp: 'LLM06 · excessive agency (scope)',
     semantics: 'block / flag',
   },
@@ -119,7 +128,8 @@ const OUTPUT_RAILS: RailSpec[] = [
     layer: 'schema',
     name: 'Schema / format',
     icon: FileCode2,
-    method: 'validate_output_format — the answer matches the expected output contract',
+    fn: 'validate_output_format',
+    detail: 'The answer matches the expected output contract.',
     owasp: 'LLM05 · improper output handling',
     semantics: 'block',
   },
@@ -128,7 +138,8 @@ const OUTPUT_RAILS: RailSpec[] = [
     layer: 'content',
     name: 'Content filter',
     icon: Filter,
-    method: 'schema.content_filter — deterministic banned-content filter on the draft answer',
+    fn: 'schema.content_filter',
+    detail: 'A deterministic banned-content filter over the draft answer.',
     owasp: 'Content policy',
     semantics: 'block',
   },
@@ -137,7 +148,8 @@ const OUTPUT_RAILS: RailSpec[] = [
     layer: 'content_safety',
     name: 'Content safety',
     icon: ScanSearch,
-    method: 'screen_content — MLCommons hazard taxonomy S1–S13 on the answer',
+    fn: 'screen_content',
+    detail: 'The same hazard taxonomy, re-run on the answer rather than the request.',
     owasp: 'Content policy · MLCommons S1–S13',
     semantics: 'block',
   },
@@ -146,7 +158,9 @@ const OUTPUT_RAILS: RailSpec[] = [
     layer: 'grounding',
     name: 'Grounding',
     icon: ShieldCheck,
-    method: 'check_grounding — the answer is supported by the retrieved context (anti-hallucination)',
+    fn: 'check_grounding',
+    detail:
+      'The answer must be supported by the retrieved context — this is the anti-hallucination rail.',
     owasp: 'LLM09 · misinformation',
     semantics: 'block / flag',
   },
@@ -155,7 +169,8 @@ const OUTPUT_RAILS: RailSpec[] = [
     layer: 'pii',
     name: 'PII redaction (Presidio)',
     icon: Fingerprint,
-    method: 'pii.redact — mask any PII in the answer before it reaches the user',
+    fn: 'pii.redact',
+    detail: 'Masks any PII left in the answer before it reaches the user.',
     owasp: 'LLM02 · sensitive-information disclosure',
     semantics: 'redact',
     postureThreatId: 'LLM02',
@@ -272,18 +287,16 @@ function RailCard({
               </Badge>
             )}
           </div>
-          <p className="mt-1.5 text-sm text-muted-foreground">{spec.method}</p>
-          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <span className="flex items-center gap-1.5 font-mono text-[0.72rem] text-muted-foreground">
+              {spec.fn}
+              <InfoTip label={`What the ${spec.name} rail checks`}>{spec.detail}</InfoTip>
+            </span>
             <Badge tone="graph">{spec.owasp}</Badge>
             <Badge tone={sem.tone} className="uppercase">
               <SemIcon className="size-3" />
               {spec.semantics}
             </Badge>
-            {posture ? (
-              <span className="font-mono text-[0.62rem] text-muted-foreground">
-                posture {posture.threat_id}
-              </span>
-            ) : null}
           </div>
         </div>
       </div>
@@ -337,12 +350,15 @@ function EngineIndicator({
           <span className="flex size-9 items-center justify-center rounded-xl bg-agent/12">
             <Cpu className="size-5 text-agent-ink" />
           </span>
-          <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5">
             <h3 className="t-title text-foreground">Guardrail engine</h3>
-            <p className="text-sm text-muted-foreground">
+            <InfoTip label="About the guardrail engine">
               One rail set, two front doors — the fast programmatic pipeline the agent graph calls,
-              and the declarative NeMo Colang policy the jury reads.
-            </p>
+              and the declarative NeMo Colang policy a reviewer reads. The tile below reads the
+              posture <code className="font-mono">nemo_available</code> signal; the active-engine
+              switch (<code className="font-mono">guardrails_engine</code>) is a server setting not
+              surfaced in posture, so the programmatic default is shown as active.
+            </InfoTip>
           </div>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -353,9 +369,11 @@ function EngineIndicator({
                 active
               </Badge>
             </div>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              <code className="font-mono text-[0.72rem]">guardrails.pipeline</code> — the default
-              engine; runs the rails in-process on every request.
+            <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[0.72rem] text-muted-foreground">
+              guardrails.pipeline
+              <InfoTip label="About the programmatic pipeline">
+                The default engine — it runs the rails in-process on every request.
+              </InfoTip>
             </p>
           </div>
           <div className="rounded-xl border border-border bg-surface-2/40 p-4">
@@ -365,18 +383,16 @@ function EngineIndicator({
                 {nemoAvailable ? 'available' : 'not installed'}
               </Badge>
             </div>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              Colang flows delegate to the same <code className="font-mono text-[0.72rem]">check_input</code>
-              /<code className="font-mono text-[0.72rem]">check_output</code>; selected via{' '}
-              <code className="font-mono text-[0.72rem]">guardrails_engine</code>.
+            <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[0.72rem] text-muted-foreground">
+              guardrails_engine
+              <InfoTip label="About the NeMo Colang engine">
+                Colang flows delegate to the same <code className="font-mono">check_input</code> /{' '}
+                <code className="font-mono">check_output</code>; the engine is selected with the{' '}
+                <code className="font-mono">guardrails_engine</code> setting.
+              </InfoTip>
             </p>
           </div>
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          The engine indicator reads the posture <code className="font-mono">nemo_available</code>{' '}
-          signal; the active-engine switch (<code className="font-mono">guardrails_engine</code>) is a
-          server setting not surfaced in posture, so the programmatic default is shown as active.
-        </p>
       </CardBody>
     </Card>
   )
@@ -403,11 +419,12 @@ function RedteamTeaser({
           <span className="flex size-9 items-center justify-center rounded-xl bg-block/12">
             <Crosshair className="size-5 text-block-ink" />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
             <h3 className="t-title text-foreground">Red-team block-rate</h3>
-            <p className="text-sm text-muted-foreground">
-              A teaser from the offline attack battery — the full report is the Red-team dashboard.
-            </p>
+            <InfoTip label="About the red-team block-rate">
+              A teaser from the deterministic offline attack battery — the full report is the
+              Red-team dashboard. Leaked attacks are model-layer cases that need the live classifier.
+            </InfoTip>
           </div>
         </div>
 
@@ -424,7 +441,7 @@ function RedteamTeaser({
                 <span className="tabular-nums text-3xl font-semibold text-foreground">
                   {Math.round(overall.blockRate * 100)}%
                 </span>
-                <p className="eyebrow mt-0.5">overall block rate</p>
+                <p className="eyebrow mt-0.5">overall</p>
               </div>
               <div className="pb-1 text-sm text-muted-foreground">
                 {overall.attacksBlocked}/{overall.attacksTotal} attacks blocked ·{' '}
@@ -454,11 +471,9 @@ function RedteamTeaser({
               ))}
             </div>
 
-            <p className="mt-4 text-xs text-muted-foreground">
-              Honest numbers from the deterministic offline battery (threshold ≥{' '}
-              {Math.round(report.thresholds.minBlockRate * 100)}% block, ≤{' '}
-              {Math.round(report.thresholds.maxFalsePositiveRate * 100)}% false-positive). Leaked
-              attacks are model-layer cases that need the live classifier.
+            <p className="mt-4 font-mono text-[0.68rem] text-muted-foreground">
+              gate ≥ {Math.round(report.thresholds.minBlockRate * 100)}% block · ≤{' '}
+              {Math.round(report.thresholds.maxFalsePositiveRate * 100)}% false-positive
             </p>
           </>
         )}

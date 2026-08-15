@@ -3,6 +3,7 @@
 import { GitPullRequestArrow, WifiOff } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { TooltipProvider } from '@/components/primitives/tooltip'
 import { CapabilityMap, type Capability } from '@/components/shared'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import {
@@ -119,10 +120,11 @@ function LLMOpsView(): ReactElement {
   // Live status of the four loop steps, derived from the loaded data.
   const draftCount = promptRows.filter((r) => r.status === 'draft' || r.status === 'staged').length
   const pendingCount = pendingRows.length
+  const activeVersion = active.data?.version ?? null
   const loopSteps: Capability[] = [
     {
       name: 'Watch',
-      tech: evals.data ? 'scoring runs' : 'quality scores',
+      tech: evals.data ? `${evalRows.length} scores` : 'quality scores',
       status: evals.data ? 'live' : 'idle',
     },
     {
@@ -135,7 +137,11 @@ function LLMOpsView(): ReactElement {
       tech: pendingCount > 0 ? `${pendingCount} awaiting sign-off` : 'human approval',
       status: pendingCount > 0 ? 'pending' : 'idle',
     },
-    { name: 'Rollback', tech: 'one click, last-good', status: 'idle' },
+    {
+      name: 'Rollback',
+      tech: activeVersion != null ? `live v${activeVersion}` : 'last-good',
+      status: 'idle',
+    },
   ]
 
   return (
@@ -151,9 +157,8 @@ function LLMOpsView(): ReactElement {
         <EvalTrend rows={evalRows} loading={evals.loading} error={evals.error} />
         <Card>
           <CardHeader
-            eyebrow="the loop"
+            eyebrow="closed · human-gated"
             title="Loop"
-            description="A closed, human-gated loop — its live state."
             actions={
               <span className="grid size-8 place-items-center rounded-lg bg-ml/12">
                 <GitPullRequestArrow className="size-4 text-ml-ink" />
@@ -219,7 +224,7 @@ export function LLMOpsMount(): ReactElement {
   }
 
   return (
-    <div>
+    <TooltipProvider>
       {mode.mode === 'mock' && (
         <div
           role="status"
@@ -230,6 +235,6 @@ export function LLMOpsMount(): ReactElement {
         </div>
       )}
       <LLMOpsView />
-    </div>
+    </TooltipProvider>
   )
 }

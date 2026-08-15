@@ -4,6 +4,7 @@ import { ArrowRight, FlaskConical, Loader2 } from 'lucide-react'
 import { useMemo, useState, type ReactElement } from 'react'
 
 import { BarChart } from '@/components/charts/BarChart'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { CountUp } from '@/components/shared'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -82,7 +83,12 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
       <CardHeader
         eyebrow="POST /ops/diagnose"
         title="Diagnosis"
-        description="Find the dominant failure mode in recent evals, then draft a fix — releasing sends it through the gate."
+        actions={
+          <InfoTip label="About diagnosis">
+            Finds the dominant failure mode in recent evals and drafts a fix; releasing that draft
+            sends it through the tiered gate.
+          </InfoTip>
+        }
       />
       <CardBody className="space-y-4">
         <button
