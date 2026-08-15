@@ -96,9 +96,9 @@ actually runs. `module_path` on each entry is import-checked by
 |---|---|---|---|
 | **Aegis Gateway** | LiteLLM | Single model chokepoint: role routing, budgets, timeout, retry, usage ledger | live |
 | **Aegis Router** | LangGraph | Multi-agent supervisor — routes a turn to the right specialist | live |
-| **Aegis Memory** | Postgres + Qdrant | Long-term memory: episodic, semantic and procedural, bitemporal, consolidated | live |
+| **Aegis Memory** | Postgres + embedded Chroma | Long-term memory: episodic, semantic and procedural, bitemporal, consolidated | live |
 | **Aegis Cache** | Redis | Semantic response cache keyed on query meaning, not exact bytes | live |
-| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | Hybrid RAG: vector + graph + BM25 fused via RRF, LLM rerank, spotlighting | live |
+| **Aegis Retrieval** | Neo4j/LightRAG + embedded NanoVectorDB | Hybrid RAG: vector + graph + BM25 fused via RRF, LLM rerank, spotlighting | live |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | Trustworthy ML: ensemble with calibrated conformal intervals and SHAP | live |
 | **Aegis Guardrails** | programmatic + NeMo Colang | Input/output rails: injection, PII, schema and content checks | live |
 | **Aegis Evals** | RAGAS-style proxies + LLM judge | Trace-level and answer evaluation of each run | live |
@@ -123,7 +123,7 @@ reachable in your particular deployment (see §5).
   re-rank the survivors.
 - **Embedding** — a piece of text turned into a list of numbers ("a vector") so that
   similar meanings sit close together. This is what makes semantic search possible.
-  Aegis stores and searches vectors in **Qdrant**.
+  Aegis stores and searches vectors in an **embedded, file-backed vector store** — no server to install.
 - **Spotlighting** — retrieved text is *untrusted input*: a poisoned document might say
   "ignore your instructions." Aegis wraps retrieved content in explicit delimiters and
   marks it reference-only, defending against **indirect prompt injection**.
@@ -173,7 +173,7 @@ flowchart TB
 
     subgraph STORE["Stores"]
         PG[("Postgres<br/>tenants · ledger · approvals<br/>checkpoints · audit · memory rows")]
-        QD[("Qdrant<br/>vectors")]
+        QD[("Embedded<br/>vectors")]
         NEO[("Neo4j / LightRAG<br/>knowledge graph")]
         RD[("Redis<br/>semantic caches")]
     end

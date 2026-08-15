@@ -233,7 +233,8 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     """Create every table (relational + JSON embeddings-of-record).
 
     Embeddings persist as JSON (``jsonb`` on PostgreSQL, ``JSON`` on SQLite) — vector
-    ANN search runs on Qdrant, so no pgvector extension is required.
+    ANN search runs in the embedded vector store, so no pgvector extension (and no
+    vector server) is required.
 
     ``create_all`` only ever *creates*; it never alters a table that already exists.
     With no Alembic in this project, this function is the schema owner, so the two

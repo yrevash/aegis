@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Start the Aegis backend against the REAL native stores (no Docker):
-#   Postgres (taif db) · Redis · Neo4j · Qdrant — all NATIVE, never Docker.
+#   Postgres (taif db) · Redis · Neo4j — all NATIVE, never Docker.
+# The vector store is EMBEDDED (in-process, file-backed): no server, nothing to start.
 # Runs the backend in the background, waits for /health, and prints status.
 # The web app is started separately (Node runs fine everywhere).
 set -uo pipefail
@@ -23,26 +24,17 @@ fi
 if (exec 3<>/dev/tcp/localhost/7687) 2>/dev/null; then exec 3>&- 3<&-; echo "  neo4j      : UP (7687)"; else
   echo "  neo4j      : down (non-blocking — graph retrieval degrades, dashboards fine)"; fi
 
-# ── Qdrant (native binary — the ANN engine behind retrieval + memory recall) ──
-# LightRAG's Qdrant storage connects over HTTP, so full-stores mode needs the server
-# on :6333. Started here if a native binary is present; never Docker.
-if ! curl -s -o /dev/null --max-time 2 http://127.0.0.1:6333/ 2>/dev/null; then
-  QBIN=""
-  for cand in "$HOME/.local/qdrant/qdrant" "$(command -v qdrant 2>/dev/null)"; do
-    [ -n "$cand" ] && [ -x "$cand" ] && QBIN="$cand" && break
-  done
-  if [ -n "$QBIN" ]; then
-    ( cd "$(dirname "$QBIN")" && nohup "$QBIN" >/tmp/aegis-qdrant.log 2>&1 </dev/null & )
-    for _ in $(seq 1 20); do
-      curl -s -o /dev/null --max-time 2 http://127.0.0.1:6333/ 2>/dev/null && break
-      sleep 1
-    done
-  fi
-fi
-if curl -s -o /dev/null --max-time 2 http://127.0.0.1:6333/ 2>/dev/null; then
-  echo "  qdrant     : UP (6333)"
+# ── Vector store (EMBEDDED — nothing to start) ────────────────────────────────
+# The ANN engine behind retrieval + memory recall runs in-process against a local
+# directory (Chroma PersistentClient; LightRAG's own vectors sit in NanoVectorDB under
+# its working_dir). There is no server binary and no port, so there is nothing to launch
+# here — only a directory to make sure exists and is writable.
+VECTOR_STORE_PATH="${VECTOR_STORE_PATH:-$ROOT/backend/vector_storage}"
+export VECTOR_STORE_PATH
+if mkdir -p "$VECTOR_STORE_PATH" 2>/dev/null && [ -w "$VECTOR_STORE_PATH" ]; then
+  echo "  vectors    : embedded, writable ($VECTOR_STORE_PATH)"
 else
-  echo "  qdrant     : down — install the native binary (docs/learn/50-run-and-extend.md)"
+  echo "  vectors    : NOT WRITABLE ($VECTOR_STORE_PATH) — the backend will refuse to boot"
 fi
 
 # ── Postgres check (started/prepared already) ────────────────────────────────

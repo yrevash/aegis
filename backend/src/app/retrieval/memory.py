@@ -1,6 +1,6 @@
 """Backend shim: the lite/no-database retrieval backend now lives in ``aegis.retrieval.memory``.
 
-``STORES=off`` swaps the LightRAG (Neo4j + Qdrant) backend and the Redis semantic
+``STORES=off`` swaps the LightRAG (Neo4j + NanoVectorDB) backend and the Redis semantic
 cache for the self-contained equivalents, so the full agentic slice runs with no
 databases. ``aegis.retrieval``'s ``InMemoryKnowledgeBackend.from_corpus`` takes an
 explicit ``path``/``docs`` argument (the package has no notion of this platform's

@@ -50,7 +50,7 @@ the *only* thing that stops the graph becoming a mesh.
 
 ```mermaid
 flowchart LR
-    MEM["aegis.memory"] -->|"cosine_similarity, RRF fusion,<br/>spotlight, QdrantVectorStore"| RET["aegis.retrieval"]
+    MEM["aegis.memory"] -->|"cosine_similarity, RRF fusion,<br/>spotlight, ChromaVectorStore"| RET["aegis.retrieval"]
     GOV["aegis.governance"] -->|"BudgetExceededError"| GWY["aegis.gateway"]
 
     MEM -.->|"and because __init__.py runs<br/>on ANY submodule import"| ALL["importing aegis.memory pulls<br/>ALL of aegis.retrieval"]
@@ -197,7 +197,7 @@ flowchart TB
 
     M -->|auto| A{"every URL set?"}
     A -->|no| W1["WARN which are unset"] --> L1(["resolve to LITE"])
-    A -->|yes| PROBE["actually probe<br/>redis + postgres + qdrant"]
+    A -->|yes| PROBE["actually probe<br/>redis + postgres + vector store"]
     PROBE -->|"any down"| W2["WARN which one and why"] --> L2(["resolve to LITE"])
     PROBE -->|"all up"| F2(["resolve to FULL"])
 
@@ -214,7 +214,7 @@ it means the resolved one takes the lite branch on a fully-provisioned box.
 
 ```mermaid
 flowchart TB
-    RQ["/readyz"] --> P["probe_redis / probe_postgres / probe_qdrant"]
+    RQ["/readyz"] --> P["probe_redis / probe_postgres / probe_vector_store"]
 
     P --> INJ{"a client was injected?"}
     INJ -->|yes| USE["use it · owned = None"]

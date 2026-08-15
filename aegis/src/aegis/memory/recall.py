@@ -12,8 +12,8 @@ predicate is NULL-*symmetric*: ``tenant_id=None`` means the **null-tenant scope*
 supplied would let an unscoped recall return a tenant's row whenever a ``subject_id``
 collides across scopes — and recall's output is injected verbatim into the prompt.
 
-**Semantic vectors via Qdrant.** All vector recall goes through
-:func:`aegis.memory.vector_ops.topk_by_cosine`, now a real Qdrant ANN search (subject/
+**Semantic vectors via the embedded vector store.** All vector recall goes through
+:func:`aegis.memory.vector_ops.topk_by_cosine`, now a real ANN search (subject/
 tenant payload-filtered, then joined back to the authoritative SQL row) rather than an
 in-Python cosine scan. When ``query_vec`` is ``None`` (e.g. an exact-cache hit never
 computed one, or a lite 256-dim vector is not recall-comparable) facts fall back to
@@ -127,7 +127,7 @@ async def _recall_facts(
     config: MemoryConfig,
     tenant_id: int | None,
 ) -> list[RecallCandidate]:
-    """Semantic facts: Qdrant ANN top-k over VALID facts → composite → top-n.
+    """Semantic facts: ANN top-k over VALID facts → composite → top-n.
 
     Falls back to recency-only (``ORDER BY valid_at DESC``) when there is no comparable
     query vector, so recall still serves under the degradation ladder.

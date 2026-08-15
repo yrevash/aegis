@@ -5,7 +5,7 @@
 ## What Aegis is
 
 - **Modular components** — each pillar of enterprise AI (input guard, retrieval, reasoning, output guard) is its own namespace, importable independently and built to a single contract.
-- **Honest infrastructure** — no silent fallbacks. A component either has the backing store it needs (Redis, Postgres, Qdrant) or refuses to boot with a clear error. Lite mode is opt-in and loudly marked.
+- **Honest infrastructure** — no silent fallbacks. A component either has the backing store it needs (Redis, Postgres, a writable vector-store directory) or refuses to boot with a clear error. Lite mode is opt-in and loudly marked.
 - **Show-your-work streaming** — every step emits typed OpenInference-compatible events so the UI and observability systems see the same ordered story.
 - **LLM-agnostic** — no hard-wired dependency on any model provider. Inject your LLM as a callable Protocol.
 - **SOTA guardrails** — the `aegis.guardrails` module ships production-ready PII detection, prompt injection classification, schema validation, and Nemo guardrails integration.
@@ -70,7 +70,7 @@ Every Aegis module adheres to a single design contract enforcing modularity, obs
 ### Pillar C: Honest infrastructure
 
 - Typed config with explicit `AEGIS_MODE`:
-  - `full` (default) probes Redis, Postgres, and Qdrant at boot; refuses to start if any required backend is missing.
+  - `full` (default) probes Redis, Postgres, and the embedded vector store at boot; refuses to start if any required backend is missing.
   - `lite` deliberately boots in-memory; loudly announced in logs and UI.
   - `auto` probes, drops to lite on failure, stays loud.
 - No silent fallbacks. In-memory backends are only returned when mode is explicitly `lite`/`auto`.

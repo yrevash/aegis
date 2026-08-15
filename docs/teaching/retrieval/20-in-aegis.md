@@ -22,7 +22,7 @@ from aegis.retrieval import (
 
 Full export list: `aegis/src/aegis/retrieval/__init__.py:54-78`.
 
-**Heavy dependencies are lazy.** `lightrag`, `neo4j`, `redis`, `qdrant_client` and `asyncpg`
+**Heavy dependencies are lazy.** `lightrag`, `neo4j`, `redis`, `chromadb` and `asyncpg`
 are imported inside the functions that need them, so `import aegis.retrieval` never requires
 them — there is a dedicated isolation test for exactly that
 (`__init__.py:7-9`, referencing `tests/retrieval/test_isolation.py`).
@@ -100,7 +100,7 @@ store connection settings, so the package needs no host settings object.
 | `query_rewrite_enabled` | `True` | Declarative default for the orchestration layer |
 | `embed_dim` | 3072 (`EMBED_DIM`, `pipeline.py:57`) | Gates `query_vec` reuse |
 
-Store settings: `postgres_dsn`, `neo4j_*`, `redis_url`, `qdrant_url`, `qdrant_api_key`,
+Store settings: `postgres_dsn`, `neo4j_*`, `redis_url`, `vector_store_path`,
 `stores_enabled` (`pipeline.py:111-124`).
 
 **`rrf_k` is the only fusion tunable, deliberately.** The comment at `pipeline.py:98-100`
@@ -507,7 +507,7 @@ at read time. No RediSearch module required, which keeps it portable to local Re
 
 **`aegis/src/aegis/retrieval/lightrag_backend.py`.** `LightRAGBackend` (`:96`) implements
 `KnowledgeBackend`, `MultiListBackend` (`recall_ranked`, `:246`) and `GraphBackend`
-(`knowledge_graph`, `:286`). Neo4j for the graph, Qdrant for vectors, Postgres for KV and
+(`knowledge_graph`, `:286`). Neo4j for the graph, embedded NanoVectorDB for vectors, Postgres for KV and
 doc-status.
 
 `ingest_chunks` (`:191`) returns `(entities, relations)` as **deltas** computed from graph
@@ -562,7 +562,7 @@ gateway's `complete`/`embed` from `app.retrieval.gateway`.
 
 `_get_retriever` (`:75`) is the lazily-built process-wide instance and honours the `STORES`
 run mode: `stores_enabled` → the real one, otherwise `build_lite_retriever`, *"so `/query`
-streams with no Neo4j/Redis/Qdrant"*.
+streams with no Neo4j/Redis/Postgres"*.
 
 Module-level entry points: `retrieve` (`:93`), `ingest` (`:98`), `knowledge_graph` (`:103`).
 

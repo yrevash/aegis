@@ -1,8 +1,8 @@
-"""Data-layer contract after the pgvector → Qdrant migration.
+"""Data-layer contract after the pgvector -> embedded-vector-store migration.
 
 Proves the embedding-of-record column is now a portable JSON ``list[float]`` (not a
 pgvector ``vector`` type), that ``VectorType`` is gone, and that nothing under
-``aegis/`` imports ``pgvector`` any more. Vector ANN search lives in Qdrant; these SQL
+``aegis/`` imports ``pgvector`` any more. Vector ANN search lives in the embedded vector store; these SQL
 columns are only the durable mirror source the memory index reads.
 """
 

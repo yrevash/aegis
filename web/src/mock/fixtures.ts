@@ -577,9 +577,9 @@ export function mockCapabilities(): CapabilitiesResponse {
   const modules: CapabilitiesResponse['modules'] = [
     ['Aegis Gateway', 'LiteLLM', 'Single model chokepoint: role routing, budgets, timeout, retry, usage ledger', 'runtime', 'live'],
     ['Aegis Router', 'LangGraph', 'Multi-agent supervisor — routes a turn to the right specialist', 'runtime', 'live'],
-    ['Aegis Memory', 'Postgres + Qdrant', 'Long-term memory: episodic · semantic · procedural, bitemporal, consolidated', 'knowledge', 'live'],
+    ['Aegis Memory', 'Postgres + embedded Chroma', 'Long-term memory: episodic · semantic · procedural, bitemporal, consolidated', 'knowledge', 'live'],
     ['Aegis Cache', 'Redis', 'Semantic response cache', 'knowledge', 'live'],
-    ['Aegis Retrieval', 'Neo4j/LightRAG + Qdrant', 'Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank, spotlighting', 'knowledge', 'live'],
+    ['Aegis Retrieval', 'Neo4j/LightRAG + embedded NanoVectorDB', 'Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank, spotlighting', 'knowledge', 'live'],
     ['Aegis Signal', 'XGBoost + MAPIE + SHAP', 'Trustworthy ML: ensemble + calibrated conformal intervals + SHAP', 'trust', 'live'],
     ['Aegis Voice', 'hosted Whisper via LiteLLM', 'Speech to text, chunked on silence, guarded by the full text rails', 'runtime', 'live'],
     ['Aegis Guardrails', 'programmatic + NeMo Colang', 'Input/output rails: injection, PII, schema, content', 'trust', 'live'],

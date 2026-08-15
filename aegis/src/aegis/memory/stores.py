@@ -4,7 +4,7 @@ These register on the shared :class:`aegis.data.AegisBase` metadata, so a host's
 ``AegisBase.metadata.create_all`` materialises them — on PostgreSQL with native
 ``jsonb`` columns, and on the SQLite test database via the cross-dialect
 ``VectorColumn``/``JsonB`` decorators (embeddings stored as JSON of record; ANN search
-runs on Qdrant, not pgvector).
+runs on the embedded vector store, not pgvector).
 
 **Isolation is app-level first.** Every recall/persist query MUST filter by
 ``subject_id`` (and ``tenant_id`` when present) in the ``WHERE`` clause — this is the

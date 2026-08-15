@@ -1,7 +1,7 @@
 """Typed, fail-fast configuration and the explicit infra mode.
 
 ``AEGIS_MODE`` selects backends deliberately: ``full`` (default) requires real
-Redis + Postgres + a reachable Qdrant vector DB and refuses to boot without them;
+Redis + Postgres + a usable on-disk vector store and refuses to boot without them;
 ``lite`` opts into in-memory/embedded implementations loudly; ``auto`` **actually
 probes** the configured backends (:meth:`CoreSettings.resolve_mode`) and drops to
 lite only on a real, logged failure. There is no silent fallback — degradation is
@@ -43,19 +43,24 @@ class CoreSettings(BaseSettings):
     mode: AegisMode = AegisMode.full
     redis_url: str | None = None
     database_url: str | None = None
-    #: Qdrant is the vector DB (ANN for retrieval + memory recall). In full mode it is a
-    #: hard dependency — vectors never fall back to an in-RAM index. Embedded Qdrant is an
-    #: explicit dev/test choice (AEGIS_MODE=lite), not a silent full-mode fallback.
-    qdrant_url: str | None = None
+    #: Filesystem directory for the embedded vector store (Chroma's ``PersistentClient``
+    #: — the ANN engine behind retrieval + memory recall). It is a *path*, not a URL,
+    #: because the vector tier runs in-process: there is no server binary to install,
+    #: which is what makes Aegis deployable on a locked-down enterprise machine.
+    #: In full mode it is a hard dependency and must be set explicitly — leaving it unset
+    #: would mean an ephemeral in-RAM index, i.e. exactly the silent, non-durable
+    #: degradation this module exists to prevent. An in-memory store is available only as
+    #: an explicit dev/test choice (``AEGIS_MODE=lite``).
+    vector_store_path: str | None = None
 
-    def _missing_urls(self) -> list[str]:
-        """Return the unset backend URL variables, named as the operator must set them."""
+    def _missing_backends(self) -> list[str]:
+        """Return the unset backend variables, named as the operator must set them."""
         return [
             f"{ENV_PREFIX}{name}"
             for name, value in (
                 ("REDIS_URL", self.redis_url),
                 ("DATABASE_URL", self.database_url),
-                ("QDRANT_URL", self.qdrant_url),
+                ("VECTOR_STORE_PATH", self.vector_store_path),
             )
             if not value
         ]
@@ -72,7 +77,7 @@ class CoreSettings(BaseSettings):
         """
         if self.mode is AegisMode.lite:
             return
-        missing = self._missing_urls()
+        missing = self._missing_backends()
         if not missing:
             return
         if self.mode is AegisMode.auto:
@@ -104,7 +109,7 @@ class CoreSettings(BaseSettings):
             self.require_full_infra()
             return self.mode
 
-        missing = self._missing_urls()
+        missing = self._missing_backends()
         if missing:
             logger.warning(
                 "AEGIS_MODE=auto resolved to LITE (in-memory, non-durable): %s unset.",
@@ -112,12 +117,12 @@ class CoreSettings(BaseSettings):
             )
             return AegisMode.lite
 
-        from aegis.core.health import probe_postgres, probe_qdrant, probe_redis
+        from aegis.core.health import probe_postgres, probe_redis, probe_vector_store
 
         results = [
             await probe_redis(str(self.redis_url)),
             await probe_postgres(str(self.database_url)),
-            await probe_qdrant(str(self.qdrant_url)),
+            await probe_vector_store(str(self.vector_store_path)),
         ]
         down = [r for r in results if r.status == "down"]
         if down:
@@ -126,5 +131,8 @@ class CoreSettings(BaseSettings):
                 "; ".join(f"{r.name} unreachable ({r.detail})" for r in down),
             )
             return AegisMode.lite
-        logger.info("AEGIS_MODE=auto resolved to FULL: redis, postgres and qdrant all answered.")
+        logger.info(
+            "AEGIS_MODE=auto resolved to FULL: redis, postgres and the vector store "
+            "all answered."
+        )
         return AegisMode.full

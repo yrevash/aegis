@@ -51,7 +51,7 @@ Project is **Aegis** — a domain-agnostic agentic platform (FastAPI `backend/` 
   the launch · `LITELLM_LOCAL_MODEL_COST_MAP=True HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`.
   All of this is baked into **`scripts/dev-native.sh`** — just run that.
 - Stores already up on the dev machine: **Redis** (6379), **Postgres** (`taif` db, `postgres`
-  role). **Neo4j** installed (best-effort). **Qdrant** embedded (dev). **No `GENAILAB_API_KEY`**
+  role). **Neo4j** installed (best-effort). **Vector store** embedded (no server, any mode). **No `GENAILAB_API_KEY`**
   (only the Console needs it; dashboards/CRUD don't).
 - **First backend boot is slow even in a normal terminal** (cold ML-stack import, ~1–2 min).
   A worthwhile optimization: lazy-load torch/transformers/NeMo/LangChain so the API boots fast.

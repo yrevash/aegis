@@ -85,7 +85,7 @@ If you internalise nothing else, internalise these. Almost every question you ge
 be answered by reaching for one of them.
 
 **1. Branding, never hiding.** Every capability has a product name *and* its honest
-underlying tech, stated together. "Aegis Retrieval (Neo4j/LightRAG + Qdrant)". The
+underlying tech, stated together. "Aegis Retrieval (Neo4j/LightRAG + embedded NanoVectorDB)". The
 moment you hide the tech, you are selling something you cannot defend in a technical
 interview.
 

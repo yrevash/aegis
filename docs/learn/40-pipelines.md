@@ -214,7 +214,7 @@ flowchart TB
 ```
 
 Inside each `deps.retrieve` call, the real hybrid pipeline runs: exact cache → semantic
-cache → wide recall on three arms (Qdrant vector search, Neo4j/LightRAG graph traversal,
+cache → wide recall on three arms (embedded vector search, Neo4j/LightRAG graph traversal,
 hand-rolled BM25) → **Reciprocal Rank Fusion** → LLM re-rank → **spotlighting** (the
 retrieved text is delimited and datamarked as untrusted reference material, not
 instructions) → assemble → cache write-back.
@@ -410,7 +410,7 @@ Retrieval answers "what is true about the world." Memory answers "what do we kno
 ```mermaid
 flowchart TB
     subgraph READ["READ — recall_memory, deterministic, ZERO model calls"]
-        R1["recall.py — per-tier selection"] --> R1a["semantic facts: Qdrant ANN over VALID facts,<br/>subject/tenant payload-filtered, joined back to SQL"]
+        R1["recall.py — per-tier selection"] --> R1a["semantic facts: embedded ANN over VALID facts,<br/>subject/tenant metadata-filtered, joined back to SQL"]
         R1 --> R1b["episodic: RRF of a recency window + a vector top-k"]
         R1 --> R1c["procedural: skills chosen by MemorySpec.select_skills"]
         R1 --> R1d["profile: the always-injected human block"]

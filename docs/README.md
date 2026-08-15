@@ -58,7 +58,7 @@ whole-platform extraction verification report.
 
 ### `adr/` — architecture decision records
 
-Eight numbered decisions, each with its context, options and consequences.
+Nine numbered decisions, each with its context, options and consequences.
 
 | ADR | Decision |
 |---|---|
@@ -70,6 +70,7 @@ Eight numbered decisions, each with its context, options and consequences.
 | [`0006`](adr/0006-rrf-hybrid-retrieval.md) | Reciprocal Rank Fusion for hybrid retrieval |
 | [`0007`](adr/0007-conformal-autonomy-bands.md) | Conformal autonomy bands |
 | [`0008`](adr/0008-multi-tenant-rls-governance.md) | Multi-tenant governance with Postgres RLS |
+| [`0009`](adr/0009-embedded-vector-store.md) | A server-free, embedded vector store (supersedes the vector half of `0003`) |
 
 ### `security/`
 

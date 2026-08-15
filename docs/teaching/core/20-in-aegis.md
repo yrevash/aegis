@@ -341,7 +341,7 @@ And `:3-5` records the client mirror: *"the console mirrors them in
 
 `AegisMode` (`:30-35`) — `full` / `lite` / `auto`. The docstring (`:1-8`):
 
-> `full` (default) requires real Redis + Postgres + a reachable Qdrant vector DB and
+> `full` (default) requires real Redis + Postgres + a usable on-disk vector store and
 > **refuses to boot without them**; `lite` opts into in-memory/embedded implementations
 > **loudly**; `auto` **actually probes** the configured backends and drops to lite only on
 > a real, logged failure. **There is no silent fallback** — degradation is always a named,
@@ -376,7 +376,7 @@ one and why before returning `lite`.
 
 `DependencyStatus` (`:43-48`) — `name`, `status: "up" | "down"`, `detail`.
 
-Three probes: `probe_redis` (`:51-75`), `probe_postgres` (`:78-100`), `probe_qdrant`
+Three probes: `probe_redis` (`:51-75`), `probe_postgres` (`:78-100`), `probe_vector_store`
 (`:103-130`). Each accepts an **injected** client (tests pass a fake) or builds a real one
 through `require`.
 
@@ -388,7 +388,7 @@ cannot answer."
 Two ownership details:
 
 **`_aclose`** (`:21-40`) handles the driver disagreement — `aclose` on modern redis-py,
-`close` on qdrant-client and older redis, sometimes awaitable — and never raises
+`close` on chromadb and older redis, sometimes awaitable — and never raises
 (`:38-39`): *"teardown must never mask the probe result."*
 
 **Only what the probe opened is closed** (`:72-75`, `:129-130`):

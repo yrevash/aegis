@@ -4,7 +4,8 @@ Public surface (per the shared contract in ``docs/module/MODULE_REFERENCE.md``):
 
 - :func:`get_session` — FastAPI-style async session dependency.
 - :func:`record_audit` — write one row to the first-class audit log.
-- :func:`bootstrap` — create all tables (vector ANN search lives in Qdrant, not pgvector).
+- :func:`bootstrap` — create all tables (ANN search lives in the embedded vector
+  store, not pgvector).
 
 Also exported: the ORM models (:class:`User`, :class:`AuditLog`, :class:`Chunk`,
 :class:`EvalResult`) and engine helpers for wiring/tests.

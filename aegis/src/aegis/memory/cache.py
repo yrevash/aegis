@@ -1,6 +1,6 @@
 """SOTA semantic cache for memory recall — RedisVL in production, explicit fallback offline.
 
-The expensive part of a turn's READ path is recall + assembly (Qdrant ANN over facts and
+The expensive part of a turn's READ path is recall + assembly (vector ANN over facts and
 episodic turns, RRF fusion, budgeted lost-in-the-middle layout). When the *same* subject
 asks a semantically-equivalent question, that whole result can be served from a cache
 instead of recomputed. This module is that cache.
@@ -11,7 +11,7 @@ Two backends behind one wrapper (:class:`MemorySemanticCache`):
   industry-standard semantic cache): a real RediSearch vector index over cached
   ``(subject, query)`` entries, vectorized by the injected embedder, with a genuine
   ``distance_threshold`` (cosine) and per-entry ``TTL``. In full mode a real Redis-Stack
-  is **required** — construction fails loud if it is unreachable, exactly like Qdrant /
+  is **required** — construction fails loud if it is unreachable, exactly like the vector store /
   Postgres. RedisVL needs the RediSearch module, so it cannot run in an offline unit test.
 
 * **Offline — explicit in-memory fallback** (:class:`_InMemoryBackend`): a *labeled*,
@@ -252,7 +252,7 @@ class _RedisVLBackend:
             dtype="float32",
         )
 
-        # Fail loud if Redis-Stack/RediSearch is unreachable — parity with Qdrant/Postgres.
+        # Fail loud if Redis-Stack/RediSearch is unreachable — parity with the vector store/Postgres.
         self._cache = SemanticCache(
             name=name,
             distance_threshold=distance_threshold,
@@ -433,7 +433,7 @@ class MemorySemanticCache:
           is real, not decorative.
         * ``require_redis=True`` (full mode): a real Redis is **required** — with no
           ``redis_url`` this raises; with one it builds the RedisVL backend and lets any
-          connection error propagate (fail loud, like Qdrant/Postgres).
+          connection error propagate (fail loud, like the vector store/Postgres).
         * otherwise: if a ``redis_url`` is given, use RedisVL; else the explicit in-memory
           fallback (a labeled, non-silent degrade).
         """
@@ -443,7 +443,7 @@ class MemorySemanticCache:
             if not redis_url:
                 msg = (
                     "MemorySemanticCache: full mode requires a Redis URL for the semantic "
-                    "cache (like Qdrant/Postgres); none was provided."
+                    "cache (like the vector store/Postgres); none was provided."
                 )
                 raise RuntimeError(msg)
             return cls.redis(

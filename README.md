@@ -64,7 +64,7 @@ Three run modes, so a demo never depends on infrastructure being healthy:
 |---|---|---|
 | `safe` | Console only, in-browser mock transport | nothing |
 | `lite` | Real agent, no databases (SQLite audit) | a model API key |
-| `full` | Everything, all four stores | key + Postgres, Qdrant, Neo4j, Redis |
+| `full` | Everything, all three server stores | key + Postgres, Neo4j, Redis (vectors are embedded) |
 
 No Docker, no GPU, no WSL anywhere. Every store is a native local install.
 On Windows, Redis is **Memurai** — same wire protocol, same port, no config change.
@@ -82,9 +82,9 @@ manifest in `backend/src/app/capabilities.py`, served publicly at
 |---|---|---|
 | **Aegis Gateway** | LiteLLM | Single model chokepoint: routing, budgets, timeout, retry, usage ledger |
 | **Aegis Router** | LangGraph | Multi-agent supervisor — routes a turn to the right specialist |
-| **Aegis Memory** | Postgres + Qdrant | Episodic · semantic · procedural, bitemporal, consolidated |
+| **Aegis Memory** | Postgres + embedded Chroma | Episodic · semantic · procedural, bitemporal, consolidated |
 | **Aegis Cache** | Redis / Memurai | Semantic response cache |
-| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank |
+| **Aegis Retrieval** | Neo4j/LightRAG + embedded NanoVectorDB | Hybrid RAG: vector + graph + BM25 → RRF → LLM rerank |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | Ensemble + calibrated conformal intervals + SHAP |
 | **Aegis Guardrails** | programmatic + NeMo Colang | Input/output rails: injection, PII, schema, content |
 | **Aegis Evals** | RAGAS-style proxies + LLM judge | Trace-level and answer evaluation |
@@ -103,7 +103,7 @@ flowchart TB
     L1["<b>1 · Console</b> — web/<br/>Next.js 15 · React 19 · TypeScript<br/>four role portals · REST + SSE client"]
     L2["<b>2 · Composition root</b> — backend/src/app<br/>FastAPI · app factory · background sweepers<br/>routes.py — endpoints · JWT · RBAC · tenant scoping"]
     L3["<b>3 · Importable core</b> — aegis/src/aegis<br/>agent · gateway · guardrails · retrieval · memory · ml<br/>governance · ops · evals · observability · redteam · data · core"]
-    L4["<b>4 · Stores and sinks</b><br/>Postgres · Qdrant · Neo4j · Redis · Arize Phoenix"]
+    L4["<b>4 · Stores and sinks</b><br/>Postgres · embedded vectors · Neo4j · Redis · Arize Phoenix"]
     AD["<b>Domain adapter</b> — app/adapter/<br/>schema · tools · prompts · ML target · corpus"]
 
     B -->|"HTTPS · JWT · SSE"| L1

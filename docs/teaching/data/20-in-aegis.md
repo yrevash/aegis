@@ -30,7 +30,7 @@ Available under the `aegis[data]` extra, which is one line
 data = ["sqlalchemy[asyncio]>=2.0"]
 ```
 
-`pgvector` was **removed** once vector search moved to Qdrant
+`pgvector` was **removed** once vector search moved to the embedded vector store
 (`aegis/src/aegis/data/base.py:17-19`).
 
 ---
@@ -92,9 +92,9 @@ The docstring (`:42-52`) is careful about what this column **is**:
 
 > The vector is persisted as a JSON array — native `jsonb` on PostgreSQL, portable `JSON`
 > on every other dialect. It is the durable *source-of-record* embedding that the memory
-> index lazily mirrors into Qdrant; it is **not** a search index and carries no pgvector
+> index lazily mirrors into the vector store; it is **not** a search index and carries no pgvector
 > distance operators. ANN search runs on
-> `aegis.retrieval.vector_store.QdrantVectorStore`.
+> `aegis.retrieval.vector_store.ChromaVectorStore`.
 
 And the honesty note about `dim` (`:50-52`):
 

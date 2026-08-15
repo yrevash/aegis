@@ -1,16 +1,37 @@
-"""LightRAG-backed knowledge store (Neo4j graph + Qdrant vectors).
+"""LightRAG-backed knowledge store (Neo4j graph + embedded file-backed vectors).
 
 LightRAG is the *pipeline* (chunk → extract entities/relationships → embed → write
-graph and vectors → retrieve over both); Neo4j (graph), **Qdrant** (vectors), and
-Postgres (KV + doc-status only) are the *stores*. The vector store is Qdrant — not
-pgvector — so dense recall runs on a purpose-built ANN engine; Postgres stays for the
-relational/KV bookkeeping LightRAG needs. Entity/relationship extraction and embeddings
-run via the injected `complete`/`embed` callables, so nothing heavy runs locally beyond
-LightRAG's own in-process bookkeeping.
+graph and vectors → retrieve over both); Neo4j (graph), **NanoVectorDB** (vectors), and
+Postgres (KV + doc-status only) are the *stores*. Entity/relationship extraction and
+embeddings run via the injected `complete`/`embed` callables, so nothing heavy runs
+locally beyond LightRAG's own in-process bookkeeping.
 
-Everything that touches the `lightrag`, `neo4j`, `qdrant_client`, or `redis` packages is
-imported lazily inside methods, so this module (and the whole `aegis.retrieval` package)
-imports cleanly with no LightRAG install and no live stores.
+**Why NanoVectorDB and not a vector server.** Aegis must install on a locked-down
+enterprise Windows machine where no extra server binary may be installed, so the vector
+tier cannot be a service. The server-free options LightRAG 1.5.6 actually offers were
+enumerated against the installed package rather than its docs:
+
+* ``NanoVectorDBStorage`` — imports cleanly; pure Python, file-backed under
+  ``working_dir``; LightRAG's own default. **Chosen.**
+* ``ChromaVectorDBStorage`` — declared in ``lightrag.kg.STORAGES`` but its module
+  (``lightrag.kg.chroma_impl``) **does not ship** in 1.5.6, so it cannot be selected.
+  (Chroma is still used directly by :mod:`aegis.retrieval.vector_store` for Aegis's own
+  store — that path does not go through LightRAG.)
+* ``FaissVectorDBStorage`` — needs the ``faiss`` wheel, an extra native dependency.
+* ``PGVectorStorage`` — server-free only in the sense that Postgres is already a
+  dependency, but it requires the ``pgvector`` **extension** to be installed into the
+  server, which is exactly the kind of privileged native install the target box forbids
+  (and this repo deliberately removed pgvector already).
+
+The honest cost of NanoVectorDB: it is a brute-force cosine scan held in memory and
+persisted to JSON, not an HNSW index, so query cost grows linearly with the corpus and
+it assumes a single writing process. At Aegis's corpus scale that is a good trade for
+"zero servers"; at very large scale the fix is to point ``vector_storage`` at a real
+service again, which is a one-line change here.
+
+Everything that touches the `lightrag`, `neo4j`, or `redis` packages is imported lazily
+inside methods, so this module (and the whole `aegis.retrieval` package) imports cleanly
+with no LightRAG install and no live stores.
 """
 
 from __future__ import annotations
@@ -56,30 +77,21 @@ _ENTITY_TYPES: tuple[str, ...] = (
 
 
 def _apply_store_env(config: object) -> None:
-    """Export Neo4j/Qdrant/Postgres connection settings as the env vars LightRAG reads.
+    """Export Neo4j/Postgres connection settings as the env vars LightRAG reads.
 
     LightRAG's storage impls read connection details from the environment (`NEO4J_*`,
-    `QDRANT_*`, `POSTGRES_*`) rather than constructor kwargs, so we translate the store
-    config into those variables before building the instance. Qdrant is the vector store;
-    Postgres remains only for the KV + doc-status stores.
+    `POSTGRES_*`) rather than constructor kwargs, so we translate the store config into
+    those variables before building the instance. The vector store needs nothing here:
+    ``NanoVectorDBStorage`` is file-backed under ``working_dir``, so there is no host,
+    port or credential to export. Postgres remains only for the KV + doc-status stores.
 
     Args:
         config: An object exposing ``neo4j_uri``/``neo4j_user``/``neo4j_password``/
-            ``qdrant_url``/``qdrant_api_key``/``postgres_dsn`` (duck-typed — a
-            `RetrievalConfig` in practice).
+            ``postgres_dsn`` (duck-typed — a `RetrievalConfig` in practice).
     """
     os.environ.setdefault("NEO4J_URI", config.neo4j_uri)
     os.environ.setdefault("NEO4J_USERNAME", config.neo4j_user)
     os.environ.setdefault("NEO4J_PASSWORD", config.neo4j_password)
-
-    # Qdrant is the vector store. LightRAG's QdrantVectorDBStorage reads QDRANT_URL /
-    # QDRANT_API_KEY from the environment.
-    qdrant_url = getattr(config, "qdrant_url", "") or ""
-    if qdrant_url:
-        os.environ.setdefault("QDRANT_URL", qdrant_url)
-    qdrant_api_key = getattr(config, "qdrant_api_key", "") or ""
-    if qdrant_api_key:
-        os.environ.setdefault("QDRANT_API_KEY", qdrant_api_key)
 
     pg = urlparse(config.postgres_dsn)
     if pg.hostname:
@@ -94,7 +106,7 @@ def _apply_store_env(config: object) -> None:
 
 
 class LightRAGBackend:
-    """A `KnowledgeBackend` implemented on LightRAG with Neo4j + Qdrant (+ Postgres KV).
+    """A `KnowledgeBackend` on LightRAG with Neo4j + NanoVectorDB (+ Postgres KV).
 
     The instance is built lazily on first use and reused thereafter. Construction is
     injected with `complete`/`embed` so extraction and embedding route through
@@ -173,9 +185,11 @@ class LightRAGBackend:
                 func=lambda texts: embed(texts),
             ),
             kv_storage="PGKVStorage",
-            # Vectors live in Qdrant (purpose-built ANN), not pgvector. Postgres remains
-            # only for the KV + doc-status stores below.
-            vector_storage="QdrantVectorDBStorage",
+            # Vectors live in NanoVectorDB — a file-backed, pure-Python store under
+            # ``working_dir``, so LightRAG's vector tier needs no server binary (see the
+            # module docstring for the options that were rejected and why). Postgres
+            # remains only for the KV + doc-status stores below.
+            vector_storage="NanoVectorDBStorage",
             graph_storage="Neo4JStorage",
             doc_status_storage="PGDocStatusStorage",
             # Steer extraction into typed, domain-relevant nodes and re-glean once so

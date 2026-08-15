@@ -25,7 +25,7 @@ def _default_spec():
 
 @pytest.fixture(autouse=True)
 def _fresh_vector_index():
-    """Give every test a pristine embedded Qdrant index (no cross-test point bleed)."""
+    """Give every test a pristine embedded Chroma index (no cross-test point bleed)."""
     reset_default_index()
     yield
     reset_default_index()

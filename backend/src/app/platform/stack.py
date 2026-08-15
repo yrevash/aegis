@@ -59,7 +59,12 @@ _BACKEND_STACK: list[tuple[str, str, str, str | None]] = [
     ("Redis", "infra", "redis", "cache"),
     ("Neo4j driver", "infra", "neo4j", "retrieval"),
     ("LightRAG", "infra", "lightrag-hku", "retrieval"),
-    ("Qdrant client", "infra", "qdrant-client", "memory"),
+    # The vector tier is embedded, not a service: Chroma runs in-process against a local
+    # directory for Aegis's own store, and LightRAG's internal vectors sit in NanoVectorDB
+    # (file-backed, shipped inside the `nano-vectordb` distribution). Neither needs a
+    # server binary — which is what makes the stack installable on a locked-down machine.
+    ("Chroma (embedded)", "infra", "chromadb", "memory"),
+    ("NanoVectorDB (embedded)", "infra", "nano-vectordb", "retrieval"),
 ]
 
 # The frontend set read from ``web/package.json``: (label, npm package, module).

@@ -67,7 +67,7 @@ Which is why serious systems run **both** → see hybrid retrieval below.
 ## 3. Vector databases and ANN
 
 Comparing your query against a million stored vectors one by one is too slow. A
-**vector database** (Aegis uses **Qdrant**) indexes them so you can ask "give me the
+**vector database** (Aegis uses **Chroma**, run embedded — in-process, no server) indexes them so you can ask "give me the
 20 nearest" in milliseconds.
 
 It does this with **ANN — approximate nearest neighbour**. The word *approximate* is

@@ -17,9 +17,10 @@ Public surface (the `app.retrieval` contract, unchanged since before the migrati
 
 * `retrieve(query, *, persona=None) -> RetrievalResult` — semantic cache in front of
   two-stage graph+vector retrieval with LLM-as-reranker and Spotlighting.
-* `ingest(docs) -> IngestReport` — validated ingestion into LightRAG (Neo4j + Qdrant).
+* `ingest(docs) -> IngestReport` — validated ingestion into LightRAG (Neo4j + vectors).
 
-The pipeline (LightRAG), stores (Neo4j graph + Qdrant vectors + Postgres KV), reranker (LLM-as-
+The pipeline (LightRAG), stores (Neo4j graph + embedded NanoVectorDB vectors + Postgres
+KV), reranker (LLM-as-
 reranker via the gateway), and semantic cache (Redis) are documented in `NOTES.md`.
 """
 

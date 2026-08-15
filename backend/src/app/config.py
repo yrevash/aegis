@@ -53,12 +53,14 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(default="neo4j")
     neo4j_password: str = Field(default="")
     redis_url: str = Field(default="redis://localhost:6379/0")
-    # Qdrant is the vector DB — the ANN engine behind retrieval + memory recall (pgvector
-    # was removed; the SQL ``embedding`` columns are now only the JSON source-of-record).
-    # In full stores mode a reachable Qdrant node is REQUIRED (fail loud at boot, exactly
-    # like Postgres/Redis); dev/tests use the explicit embedded engine, never a RAM fallback.
-    qdrant_url: str = Field(default="http://localhost:6333")
-    qdrant_api_key: str = Field(default="")
+    # The vector store is EMBEDDED and file-backed — the ANN engine behind retrieval +
+    # memory recall runs in this process, so there is no server binary to install and no
+    # port to open. That is what makes Aegis installable on a locked-down enterprise
+    # machine. (pgvector was removed earlier; the SQL ``embedding`` columns are now only
+    # the JSON source-of-record.) In full stores mode this directory must be usable —
+    # boot fails loud if it is not, exactly like Postgres/Redis — and tests use an
+    # explicit in-memory engine, never a silent RAM fallback.
+    vector_store_path: str = Field(default="vector_storage")
 
     # ── Agent checkpointer (durable-execution seam; §1.3) ────────────────────
     # "memory" (default, used by tests) compiles the graph with LangGraph's
@@ -127,7 +129,7 @@ class Settings(BaseSettings):
     answer_cache_ttl_seconds: int = Field(default=1800)
 
     # ── Run mode (see docs/operations/runbook.md) ───────────────────────────────────────
-    # "on" (default) uses the real stores — LightRAG over Neo4j + Qdrant with a
+    # "on" (default) uses the real stores — LightRAG over Neo4j + NanoVectorDB with a
     # Redis semantic cache. "off" runs a self-contained in-memory backend + cache
     # (no databases) — the "lite" demo mode that needs only the model gateway.
     stores: str = Field(default="on")
@@ -159,7 +161,7 @@ class Settings(BaseSettings):
 
     @property
     def stores_enabled(self) -> bool:
-        """Whether the real databases (Neo4j/Qdrant/Redis) are in use."""
+        """Whether the real databases (Neo4j/Redis/Postgres) are in use."""
         return self.stores.strip().lower() not in {"off", "false", "0", "none"}
 
     @property

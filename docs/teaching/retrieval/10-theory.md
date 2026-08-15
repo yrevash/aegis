@@ -367,7 +367,7 @@ untrusted signal continuous rather than positional.
 
 Covered in `memory/10-theory.md` §7. The retrieval-specific choices:
 
-**Qdrant for vectors, Neo4j for the graph, Postgres for KV/doc-status.** Three stores because
+**Embedded NanoVectorDB for vectors, Neo4j for the graph, Postgres for KV/doc-status.** Three stores because
 they answer three different questions, not because of fashion. A single Postgres with pgvector
 would work for the vector part and be worse at scale; Neo4j exists because multi-hop traversal
 in SQL is possible and miserable.

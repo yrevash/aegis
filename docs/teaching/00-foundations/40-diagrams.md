@@ -17,7 +17,7 @@ flowchart TB
     L1["<b>1 · Console</b> — web/<br/>Next.js · React · TypeScript<br/>REST + SSE client"]
     L2["<b>2 · Composition root</b> — backend/src/app<br/>FastAPI · auth · RBAC · tenant scoping<br/>wires the core to the world"]
     L3["<b>3 · Importable core</b> — aegis/src/aegis<br/>15 modules · no domain logic · no web framework"]
-    L4["<b>4 · Stores</b><br/>Postgres · Qdrant · Neo4j · Redis · Phoenix"]
+    L4["<b>4 · Stores</b><br/>Postgres · embedded vectors · Neo4j · Redis · Phoenix"]
     AD["<b>Domain adapter</b> — app/adapter/<br/>schema · tools · prompts · ML target · corpus<br/><i>the only thing that changes per domain</i>"]
 
     B -->|"HTTPS · JWT · SSE"| L1

@@ -101,8 +101,8 @@ If it is a search index, you need pgvector — a `vector(n)` type, distance oper
 ANN index. That is a Postgres extension, and it does not exist on SQLite at all, so the
 test schema simply cannot be created.
 
-But ANN search runs in Qdrant. So the SQL column is not an index; it is the **durable
-source of record** that the Qdrant index mirrors. And a source of record is a list of
+But ANN search runs in the embedded vector store. So the SQL column is not an index; it is the **durable
+source of record** that the vector index mirrors. And a source of record is a list of
 floats, which is portable JSON — `jsonb` on Postgres, `JSON` on SQLite, no extension, and
 an identical schema in both places.
 

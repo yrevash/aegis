@@ -5,7 +5,7 @@ across the candidate set.
 
 No I/O, no ORM, no infra — every function here is deterministic and unit-testable in
 isolation (that is deliberate: recall ranking is where correctness bugs hide, so the
-math is separated from the stores and the Qdrant-ANN-vs-SQL plumbing). See
+math is separated from the stores and the ANN-vs-SQL plumbing). See
 ``docs/architecture/memory-spec.md`` §B.1.
 """
 
@@ -23,7 +23,7 @@ class RecallCandidate:
     """One scorable memory item (a fact or a past turn), decoupled from the ORM.
 
     ``relevance`` is a precomputed similarity in [0, 1] (the cosine score returned by
-    the Qdrant ANN search) so the scoring math never touches embeddings or a database.
+    the vector ANN search) so the scoring math never touches embeddings or a database.
     ``payload`` carries the source row for the
     caller to render after selection.
 

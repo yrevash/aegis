@@ -19,7 +19,6 @@ orientation that ties them together.
 | **Node.js** | ≥ 18.18 (20+ preferred) | the console |
 | **npm** | ships with Node | the console |
 | **PostgreSQL** | ≥ 15 | full mode — relational, KV, audit, checkpoints |
-| **Qdrant** | ≥ 1.12 server | full mode — vector search (dev uses an embedded engine) |
 | **Neo4j** | 5.x | full mode — the knowledge graph |
 | **Redis** | ≥ 7 (Memurai on Windows) | full mode — semantic caches |
 
@@ -27,12 +26,16 @@ Target environment: a **16 GB laptop, no Docker, no GPU**. Every store is a nati
 install. Arize Phoenix runs in-process as a pip dependency — nothing to install
 separately. The only remote call is the model gateway.
 
-**No `pgvector` extension is required.** Vector search runs on Qdrant.
+**No vector server is required, and no `pgvector` extension either.** Vector search runs
+**embedded** — inside the backend process, against a local directory — so the vector tier
+adds nothing to this table. That is a deliberate deployment constraint, not a shortcut:
+the target enterprise Windows machine forbids installing extra server binaries.
 
-### Installing the graph + vector stores natively (no Docker)
+### Installing the graph store natively (no Docker)
 
-Both ship as ordinary native packages or single static binaries — **Docker is never
-required, on any platform.**
+Neo4j ships as an ordinary native package — **Docker is never required, on any
+platform.** (The vector store needs no install at all: it arrives as a pip dependency
+and runs in-process.)
 
 **Neo4j** — native package on macOS, tarball on Linux (no root needed):
 
@@ -51,21 +54,10 @@ bin/neo4j start
 
 Neo4j needs a JVM (Java 17+) — check with `java -version`.
 
-**Qdrant** — a single static binary, published for macOS, Linux and Windows:
-
-```bash
-# macOS (Apple silicon; use x86_64-apple-darwin on Intel)
-mkdir -p ~/.local/qdrant && cd ~/.local/qdrant
-curl -sL -o q.tar.gz https://github.com/qdrant/qdrant/releases/download/v1.19.0/qdrant-aarch64-apple-darwin.tar.gz
-tar xzf q.tar.gz && ./qdrant                        # REST :6333 · gRPC :6334
-
-# Linux:   qdrant-x86_64-unknown-linux-musl.tar.gz
-# Windows: qdrant-x86_64-pc-windows-msvc.zip
-```
-
-Qdrant also has a **serverless embedded mode** (`QdrantVectorStore.local(path=…)` —
-on-disk, no process at all) used by tests and the lite path. The server binary is needed
-only because LightRAG's Qdrant storage connects over HTTP.
+**Vector store** — nothing to download. It is embedded: Chroma's `PersistentClient` for
+Aegis's own store and LightRAG's file-backed NanoVectorDB for LightRAG's internal
+vectors, both installed by `uv sync` as ordinary Python packages. All you provide is a
+writable directory.
 
 Then set the matching values in `backend/.env`:
 
@@ -73,7 +65,7 @@ Then set the matching values in `backend/.env`:
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=aegisdev1
-QDRANT_URL=http://localhost:6333
+VECTOR_STORE_PATH=vector_storage
 ```
 
 ---
@@ -87,14 +79,14 @@ green.
 flowchart TB
     P["scripts/preflight.sh — what is UP?"] --> Q{"model gateway reachable?"}
     Q -->|no| SAFE["Demo-safe<br/>console on the in-browser mock<br/>no backend at all — cannot fail"]
-    Q -->|yes| R{"Postgres · Qdrant · Neo4j · Redis?"}
+    Q -->|yes| R{"Postgres · Neo4j · Redis?"}
     R -->|"all up"| FULL["Full — STORES=on<br/>real stores, persisted everything, live Phoenix traces"]
     R -->|"some missing"| LITE["Lite — STORES=off<br/>REAL agent, LLM, streaming, tools, gate, cost<br/>in-memory records/graph/cache, SQLite audit"]
 ```
 
 | Rung | Needs | You get |
 |---|---|---|
-| **Full** (`STORES=on`) | gateway + Postgres + Qdrant + Neo4j + Redis | Real RAG over stores, persisted audit / ledger / approvals / checkpoints, live traces |
+| **Full** (`STORES=on`) | gateway + Postgres + Neo4j + Redis (+ a writable vector dir) | Real RAG over stores, persisted audit / ledger / approvals / checkpoints, live traces |
 | **Lite** (`STORES=off`) | **gateway only** | A genuinely real agent — real LLM, streaming, tools, risk gate, token and cost accounting — with in-memory records, graph and cache, and a SQLite audit file |
 | **Demo-safe** | nothing | The whole console on the labelled in-browser mock transport |
 
@@ -172,7 +164,7 @@ What each extra buys you:
 | `auth` | pyjwt, argon2-cffi | no JWT login, no RBAC |
 | `observability` | OpenTelemetry SDK, Arize Phoenix (pinned `>=14.6,<15`) | no traces |
 | `agent` | langgraph, langchain-core, langgraph-checkpoint-postgres | no agent |
-| `retrieval` | lightrag-hku, neo4j, redis, qdrant-client | lite retrieval only |
+| `retrieval` | lightrag-hku, neo4j, redis, chromadb (embedded) | lite retrieval only |
 | `ml` | xgboost, scikit-learn, mapie, shap, pandas, numpy | no Aegis Signal |
 | `guardrails` | nemoguardrails, `aegis[pii]` (Presidio + spaCy) | programmatic rails with the regex PII engine |
 | `mcp` | the MCP SDK | no MCP tool server |
@@ -217,7 +209,6 @@ into a lockout.
 | Console (Next.js) | `npm run dev` from `web/` | 3000 | all modes |
 | Backend (FastAPI) | `uvicorn app.main:app` | 8000 | lite, full |
 | PostgreSQL | native install | 5432 | full |
-| Qdrant | native install / binary | 6333 | full |
 | Neo4j | native install | 7687 (bolt), 7474 (http) | full |
 | Redis / Memurai | native install | 6379 | full |
 | Arize Phoenix | in-process | 6006 (UI) | full, optional |
@@ -304,8 +295,8 @@ backend reads `os.environ` for configuration.
 | `GENAILAB_SSL_VERIFY` | `false` | Keep false — the gateway uses a self-signed cert (a documented, scoped exception) |
 | `STORES` | `on` | `on` = real stores; `off` = **lite**, no databases |
 | `DB_BOOTSTRAP` | `false` | Create tables on startup, best-effort (run scripts set `true`) |
-| `POSTGRES_DSN` / `QDRANT_URL` / `NEO4J_URI` / `REDIS_URL` | localhost defaults | Store connections. In non-dev full mode, an unreachable Qdrant **fails the boot** by design |
-| `QDRANT_API_KEY` | *(empty)* | For a secured Qdrant node |
+| `POSTGRES_DSN` / `NEO4J_URI` / `REDIS_URL` | localhost defaults | Store connections |
+| `VECTOR_STORE_PATH` | `vector_storage` | Directory for the embedded vector store. In non-dev full mode an unusable directory **fails the boot** by design |
 | `AGENT_CHECKPOINTER` | `memory` | `memory` (single-process `InMemorySaver`) or `postgres` (durable `PostgresSaver` → HITL resumable across restart/worker) |
 | `APPROVAL_SLA_SECONDS` | `3600` | SLA before the sweeper acts on a pending gate |
 | `APPROVAL_DEFAULT_TIER` | `tier-1` | Approver tier stamped on a fresh gate |
@@ -340,8 +331,8 @@ Console (`web/.env.local`): `NEXT_PUBLIC_API_BASE` (empty means same-origin),
 | Symptom | Fix |
 |---|---|
 | Gateway DOWN in preflight | Check `GENAILAB_API_KEY` and your network. Until then `start.sh safe` still demos the whole UI |
-| Postgres / Neo4j / Redis / Qdrant down | Don't fight it — `start.sh lite` needs none of them |
-| Backend won't boot in full mode with a Qdrant error | That is deliberate: full stores mode requires a reachable Qdrant. Start it on `:6333` or set `STORES=off` |
+| Postgres / Neo4j / Redis down | Don't fight it — `start.sh lite` needs none of them |
+| Backend won't boot in full mode with a vector-store error | That is deliberate: full stores mode requires a usable `VECTOR_STORE_PATH`. Point it at a writable directory or set `STORES=off`. There is no server to start |
 | Backend won't boot at all | Usually a missing venv — re-run `bootstrap` |
 | Startup fails on `InsecureConfigurationError` | `APP_ENV` is not `dev` and `JWT_SECRET` is the default or too short. Set a real one |
 | `/audit` empty in lite | Expected until an action runs; lite writes to `taif_lite.db` (SQLite) |

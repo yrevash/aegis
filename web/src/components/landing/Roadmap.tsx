@@ -11,7 +11,7 @@ import { Check } from 'lucide-react'
 const RUNNING = [
   'Multi-tenant RLS + budgets',
   'Durable resumable runs',
-  'Native Qdrant + Neo4j',
+  'Native Neo4j + embedded vectors',
   'OTel tracing + audit log',
   'Offline + CI eval gates',
 ]

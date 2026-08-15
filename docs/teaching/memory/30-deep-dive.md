@@ -10,10 +10,10 @@ this file. Learn one well enough to tell it.
 
 ### Consistency: two stores, one truth
 
-Memory writes to three places: SQL rows (authoritative), a Qdrant collection (derived
+Memory writes to three places: SQL rows (authoritative), a vector-store collection (derived
 index), and a semantic cache (derived answer store). Only the first is truth.
 
-**SQL ← → Qdrant.** The index holds ids and scope, never validity. Every ANN hit is joined
+**SQL ← → vector store.** The index holds ids and scope, never validity. Every ANN hit is joined
 back to SQL with the same subject/tenant predicates plus `valid_only`/`predicate`
 (`aegis/src/aegis/memory/vector_ops.py:255-269`). Consequences:
 
@@ -109,7 +109,7 @@ and if you are asked "is there anywhere this is not fixed", this is the honest a
 |---|---|
 | No `query_vec` | Facts fall back to `ORDER BY valid_at DESC` (`recall.py:161-182`). Recall still serves — but semantic recall is no longer semantic |
 | Embedder raises | `MemoryDeps._embed_query` logs and returns `None` (`backend/src/app/agent/deps.py:247-254`) → the recency ladder above |
-| Qdrant unreachable in server mode | Construction fails loud at startup (`main.py:185-193`). Not a silent RAM fallback |
+| Vector store directory unusable | Construction fails loud at startup (`main.py`'s lifespan). Not a silent RAM fallback |
 | Whole memory store unreachable | `recall_memory` catches, logs, returns `{}` (`graph.py:661-664`). The run continues with no memory |
 | Persist fails | Logged, never raised (`graph.py:709-710`). The stream still finishes cleanly |
 | Extractor returns unparseable JSON | `_extract_candidates` returns `[]` (`consolidate.py:305-308`) — no candidates, no writes |
@@ -118,7 +118,7 @@ and if you are asked "is there anywhere this is not fixed", this is the honest a
 | Prune raises | Rolled back in its own try (`consolidate.py:1046-1051`); consolidation is unaffected |
 | Redis cache down (full mode) | `from_config(require_redis=True)` raises rather than silently degrading (`cache.py:441-448`) |
 
-Note the deliberate split: **safety-relevant failures fail closed and loud** (Qdrant at
+Note the deliberate split: **safety-relevant failures fail closed and loud** (the vector store at
 boot, Redis in full mode), **quality-relevant failures degrade and say so** (no vector →
 recency).
 
@@ -284,7 +284,7 @@ known label compromise, not a second signal" rather than letting a reader assume
 ### Bug 6 — Every ANN search re-read and re-indexed the subject's entire memory
 
 **What it was.** Each call to `search_rows` ran a full `SELECT` of the subject's embedded
-rows and a full re-upsert into Qdrant, then searched.
+rows and a full re-upsert into the vector store, then searched.
 
 **Why it mattered.** Consolidation calls the ANN search **once per candidate**. For an
 8-candidate batch that is eight full scans and eight full re-index passes. The "real vector
@@ -294,7 +294,7 @@ replaced — a performance regression dressed as an upgrade.
 **The fix.** The per-scope high-water mark (`vector_ops.py:145-146`), with the append-only
 argument spelled out in the docstring (`vector_ops.py:135-143`) so a future reader knows
 exactly which invariant the optimisation depends on. In the same pass, every synchronous
-qdrant-client call moved under `asyncio.to_thread` (`vector_ops.py:178-179, 236`) — a
+vector-store call moved under `asyncio.to_thread` (`vector_ops.py:178-179, 236`) — a
 server-mode search is a network round-trip and it was blocking the event loop on the hot
 recall path.
 
@@ -360,7 +360,7 @@ pads:
 embeddings = list(raw_embeddings) + [None] * (len(candidates) - len(raw_embeddings))
 ```
 
-**Why it mattered.** A fact inserted with `embedding=None` is never mirrored into Qdrant
+**Why it mattered.** A fact inserted with `embedding=None` is never mirrored into the vector store
 (`_sync_subject` filters on `embedding.is_not(None)`, `vector_ops.py:150`), so **no
 similarity search will ever return it**. It is stored, it is not findable, and nothing
 errors. It will surface only via the recency fallback, and only until six newer facts exist.

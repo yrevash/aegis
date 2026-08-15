@@ -203,7 +203,7 @@ flowchart TB
     Q -->|"a source of RECORD"| REC["a list of floats,<br/>stored as JSON"]
     REC --> WIN["jsonb on Postgres · JSON on SQLite ·<br/>NO extension · the schema<br/>materialises identically"]
 
-    REC --> MIRROR["ANN search runs in Qdrant,<br/>which the SQL row is mirrored into"]
+    REC --> MIRROR["ANN search runs in the embedded<br/>vector store the SQL row mirrors into"]
 
     REC --> CAVEAT["<b>JSON enforces no dimensionality</b><br/>dim is DOCUMENTATION ·<br/>the mirror skips off-dim rows"]
 

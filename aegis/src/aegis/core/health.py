@@ -22,7 +22,7 @@ async def _aclose(client: Any) -> None:  # noqa: ANN401 - any driver client
     """Close a probe-owned client, sync or async, without ever raising.
 
     Drivers disagree on the spelling (``aclose`` on modern redis-py, ``close`` on
-    qdrant-client and older redis), and some return an awaitable. Closing is
+    chromadb and older redis), and some return an awaitable. Closing is
     best-effort: a probe must report reachability, never fail because teardown did.
     """
     if client is None:
@@ -100,31 +100,36 @@ async def probe_postgres(url: str, *, conn: Any | None = None) -> DependencyStat
         return DependencyStatus(name="postgres", status="down", detail=str(exc))
 
 
-async def probe_qdrant(url: str, *, client: Any | None = None) -> DependencyStatus:  # noqa: ANN401
-    """Reach the Qdrant vector DB and report whether it answered.
+async def probe_vector_store(path: str, *, client: Any | None = None) -> DependencyStatus:  # noqa: ANN401
+    """Open the embedded vector store on disk and report whether it answered.
 
-    Qdrant is the ANN engine behind retrieval + memory recall; in full mode it is a
-    hard dependency, exactly like Postgres/Redis. The probe lists the collections
-    (the cheapest authenticated round-trip) and reports ``up`` only on a real answer —
-    never a silent embedded fallback.
+    The vector store is the ANN engine behind retrieval + memory recall; in full mode it
+    is a hard dependency, exactly like Postgres/Redis. Unlike those, it is **embedded**
+    (Chroma's ``PersistentClient``), so there is no host to reach — the thing that can
+    fail is the storage directory: missing, unwritable, or holding a database this build
+    cannot open. The probe therefore opens the client at ``path`` and lists collections
+    (the cheapest round-trip that actually touches the store) and reports ``up`` only on
+    a real answer — never a silent in-RAM fallback.
 
     Args:
-        url: Qdrant server URL (e.g. 'http://localhost:6333').
-        client: Optional injected Qdrant client for testing. If None, uses lazy loading.
+        path: Filesystem directory holding the embedded vector store.
+        client: Optional injected client for testing. If None, uses lazy loading.
 
     Returns:
-        DependencyStatus with status "up" (node reachable) or "down" (unreachable/error).
+        DependencyStatus with status "up" (store usable) or "down" (unusable/error).
     """
     owned = None
     try:
-        qdrant_client = client
-        if qdrant_client is None:
-            qdrant = require("aegis[retrieval]", "qdrant_client")
-            qdrant_client = owned = qdrant.QdrantClient(url=url)
-        qdrant_client.get_collections()
-        return DependencyStatus(name="qdrant", status="up")
+        store_client = client
+        if store_client is None:
+            chromadb = require("aegis[retrieval]", "chromadb")
+            store_client = owned = chromadb.PersistentClient(path=path)
+        store_client.list_collections()
+        return DependencyStatus(name="vector_store", status="up")
     except Exception as exc:  # noqa: BLE001 - a probe reports failure, never raises
-        return DependencyStatus(name="qdrant", status="down", detail=str(exc))
+        return DependencyStatus(name="vector_store", status="down", detail=str(exc))
     finally:
         # Only close what this probe opened — an injected client belongs to the caller.
+        # /readyz is polled, so a probe that leaks a handle per call eventually exhausts
+        # the file descriptors of the store it is supposed to be reporting on.
         await _aclose(owned)

@@ -139,7 +139,7 @@ class Chunk(Base):
 
     The embedding column is the durable JSON source-of-record for chunk vectors; the
     retrieval pipeline writes here at ingest time. Nearest-neighbour (ANN) search runs
-    on Qdrant — this column is the mirror source, not a search index.
+    in the embedded vector store — this column is the mirror source, not a search index.
     """
 
     __tablename__ = "chunks"

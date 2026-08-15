@@ -35,7 +35,21 @@ Row $gwOk 'Model gateway' $(if($key){"$base"}else{'no key in backend\.env'})
 # Local stores (only needed for full mode).
 Row (Port 'localhost' 5432) 'Postgres (5432)'  'full mode only'
 Row (Port 'localhost' 7687) 'Neo4j (7687)'     'full mode only'
-Row (Port 'localhost' 6333) 'Qdrant (6333)'    'full mode only'
+
+# The vector store is EMBEDDED (in-process, file-backed) - no server, no port. What
+# can fail is the directory, so that is what we check: it must exist and be writable,
+# otherwise full mode refuses to boot rather than degrading to a RAM index.
+$vecPath = $env:VECTOR_STORE_PATH
+if (-not $vecPath) { $vecPath = "$root\backend\vector_storage" }
+$vecOk = $false
+try {
+  New-Item -ItemType Directory -Force -Path $vecPath -ErrorAction Stop | Out-Null
+  $probe = Join-Path $vecPath '.preflight'
+  Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+  Remove-Item $probe -ErrorAction SilentlyContinue
+  $vecOk = $true
+} catch { $vecOk = $false }
+Row $vecOk 'Vector store (local)' $vecPath
 
 # Redis on Windows is Memurai: same wire protocol, same port, different CLI
 # (`memurai-cli`, not `redis-cli`) - the app needs no change either way. A PING

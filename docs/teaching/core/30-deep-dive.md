@@ -77,7 +77,7 @@ aegis/src/aegis/memory/recall.py:40-42   from aegis.retrieval.fusion import ...
                                          from aegis.retrieval.models import Candidate
                                          from aegis.retrieval.types import RetrievalOrigin
 aegis/src/aegis/memory/working.py:32     from aegis.retrieval.spotlight import ...
-aegis/src/aegis/memory/vector_ops.py:58  from aegis.retrieval.vector_store import QdrantVectorStore
+aegis/src/aegis/memory/vector_ops.py:58  from aegis.retrieval.vector_store import ChromaVectorStore
 ```
 
 This is a **deliberate** repoint, not an accident: memory recall genuinely needs RRF
@@ -294,7 +294,7 @@ would find it dead after a health check. The `owned` variable (`:61`, `:118`) tr
 exactly which one this call constructed, and only that one is closed.
 
 And `_aclose` (`:21-40`) handles a genuine ecosystem mess: modern redis-py has `aclose`,
-qdrant-client and older redis have `close`, and some return awaitables. It tries both
+chromadb and older redis have `close`, and some return awaitables. It tries both
 names, awaits if needed, and swallows everything (`:38-39`) — *"teardown must never mask
 the probe result."*
 

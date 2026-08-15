@@ -1,10 +1,19 @@
 # ADR 0003 — LightRAG (not Microsoft GraphRAG) for graph+vector RAG
 
-- **Status:** Accepted
+- **Status:** Accepted — **vector-store choice superseded by ADR 0009**
 - **Date:** 2026-08-03
 - **Deciders:** Team
 - **Related:** `docs/architecture/backend.md` §4 (retrieval), `app/retrieval/NOTES.md`
-  (verified LightRAG API), ADR 0001 (LiteLLM gateway).
+  (verified LightRAG API), ADR 0001 (LiteLLM gateway), **ADR 0009** (server-free
+  embedded vector store).
+
+> **Superseded in part (2026-08-15).** The *engine* decision below — LightRAG over
+> Microsoft GraphRAG, with Neo4j as the graph store — still holds and is unchanged. The
+> **vector store** named here (`PGVectorStorage`/pgvector) does not: it was replaced by
+> Qdrant, and Qdrant in turn by a **server-free embedded** vector tier when the target
+> deployment turned out to forbid installing server binaries. See **ADR 0009** for the
+> current choice and the reasoning. Read every "pgvector" below as the historical record
+> of what was decided on 2026-08-03, not as a description of what runs today.
 
 ## Context
 

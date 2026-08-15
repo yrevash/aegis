@@ -115,7 +115,7 @@ Five private tier functions:
 | Function | Line | What it does |
 |---|---|---|
 | `load_raw_window` | `recall.py:91` | Last `raw_window_turns` (40) of this session, oldest-first |
-| `_recall_facts` | `recall.py:122` | Qdrant ANN over *valid* facts → composite → top-`n_fact` (6). Falls back to `ORDER BY valid_at DESC` when `query_vec is None` |
+| `_recall_facts` | `recall.py:122` | Embedded ANN over *valid* facts → composite → top-`n_fact` (6). Falls back to `ORDER BY valid_at DESC` when `query_vec is None` |
 | `_recall_profile` | `recall.py:185` | Direct lookup → `spec.render_profile(...)` |
 | `_recall_episodic` | `recall.py:210` | RRF-fuses a recency list and a vector list, both drawn from turns *outside* the raw window |
 | `_recall_skills` | `recall.py:300` | `os.listdir(spec.SKILLS_DIR)` → `spec.select_skills(...)` → read markdown |
@@ -192,12 +192,15 @@ you never ship an instruction about content that is not there.
 ## The vector layer
 
 **`aegis/src/aegis/memory/vector_ops.py`**. `MemoryVectorIndex` (`vector_ops.py:68`)
-wraps a `QdrantVectorStore`.
+wraps a `ChromaVectorStore`.
 
-- `MemoryVectorIndex.local(path=...)` (`vector_ops.py:87`) — embedded Qdrant, real HNSW,
-  `:memory:` for tests.
-- `MemoryVectorIndex.server(url=..., api_key=...)` (`vector_ops.py:92`) — a live node,
-  fails loud on construction if unreachable.
+- `MemoryVectorIndex.local(path=...)` (`vector_ops.py:87`) — embedded Chroma, real HNSW,
+  `:memory:` for tests. **This is the production constructor too**: the deployment target
+  forbids installing a vector server, so `main.py`'s lifespan binds this one with
+  `VECTOR_STORE_PATH`. It fails loud on construction if the directory is unusable.
+- `MemoryVectorIndex.server(url=..., api_key=...)` (`vector_ops.py:92`) — a live Chroma
+  node, fails loud on construction if unreachable. Kept as a seam for a deployment that
+  *can* run one; nothing in Aegis's own wiring uses it (see ADR 0009).
 
 `search_rows()` (`vector_ops.py:184`) is the three-step contract documented at
 `vector_ops.py:196-208`:
@@ -205,7 +208,7 @@ wraps a `QdrantVectorStore`.
 1. `_sync_subject()` (`vector_ops.py:116`) mirrors newly-added embedded rows into the
    `(table, dim)` collection, bounded by a per-scope **high-water mark** on the primary key
    (`vector_ops.py:145-146, 182`).
-2. ANN-search Qdrant, payload-filtered by subject (+ tenant), over-fetching
+2. ANN-search the vector store, metadata-filtered by subject (+ tenant), over-fetching
    `k*4 + 16` when a validity/predicate filter will run (`vector_ops.py:233`).
 3. Re-fetch the hit ids from SQL under the same scope plus `valid_only`/`predicate`
    (`vector_ops.py:255-269`). The SQL row is the source of truth.
@@ -214,7 +217,7 @@ Collections are named `aegis_mem_{table}_d{dim}` (`vector_ops.py:112-114`), so a
 256-dim vector is never compared against a 3072-dim one — the dimension check is expressed
 as collection routing.
 
-Every qdrant-client call is synchronous, so each runs under `asyncio.to_thread`
+Every vector-store call is synchronous, so each runs under `asyncio.to_thread`
 (`vector_ops.py:178-179, 236`) to keep the hot recall path off the event loop.
 
 `topk_by_cosine()` (`vector_ops.py:311`) is a thin function over the process-wide default

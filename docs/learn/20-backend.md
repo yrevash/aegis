@@ -34,7 +34,7 @@ flowchart TB
     DB -->|no| WARM
     CREATE --> PROMPT
     PROMPT["stores on? → registry.refresh_cache(session)<br/>warm every ACTIVE prompt into the in-process cache"] --> QD
-    QD{"stores on AND not dev?"} -->|yes| QDB["MemoryVectorIndex.server(qdrant_url)<br/>pings on construction — FAILS LOUD if down"]
+    QD{"stores on AND not dev?"} -->|yes| QDB["MemoryVectorIndex.local(VECTOR_STORE_PATH)<br/>opens the store on construction — FAILS LOUD if unusable"]
     QD -->|no| WARM
     QDB --> SW
     SW["stores on? → start two asyncio sweepers"] --> SW1["run_sla_sweeper — expires past-deadline approvals"]
@@ -51,7 +51,7 @@ Two design points worth copying:
   dead sweeper and no signal; this turns that into an explicit `ERROR` log. Normal
   cancellation at shutdown stays quiet.
 - **Everything optional degrades, everything required fails loud.** Phoenix, DB
-  bootstrap, the prompt-cache warm and the ML warm-up are all best-effort. Qdrant in a
+  bootstrap, the prompt-cache warm and the ML warm-up are all best-effort. The vector store in a
   non-dev full-stores deployment is not: it pings at boot and raises.
 
 ---
@@ -303,7 +303,7 @@ write-back. The shim adds the host pieces: building a `RetrievalConfig` from
 Supporting modules: `fusion.py` (pure RRF, k=60, origin-tagged, reused by memory),
 `spotlight.py` (delimiting + datamarking against indirect injection), `reranker.py`
 (LLM-as-reranker, API-only — no local cross-encoder, because the target machine has
-16 GB and no GPU), `lightrag_backend.py` (Neo4j graph + Qdrant vectors + Postgres KV),
+16 GB and no GPU), `lightrag_backend.py` (Neo4j graph + embedded NanoVectorDB vectors + Postgres KV),
 `chunker.py` (heading-aware), `validation.py` (write-time poisoning gate),
 `query_rewrite.py`, `agentic.py` (the bounded Self-RAG loop), `answer_cache.py`, and
 `memory.py` — the databaseless in-memory backend used when `STORES=off`.

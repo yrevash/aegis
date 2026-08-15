@@ -260,7 +260,7 @@ this system means "stops being recalled", never "ceases to exist".
 
 Comparing a query against every stored embedding is O(n·d) — for 3072 dimensions and
 100k memories that is 300M float operations per recall. **Approximate nearest neighbour**
-indexes (Aegis uses Qdrant, which implements **HNSW** — Malkov & Yashunin, 2016) get this
+indexes (Aegis uses Chroma, run embedded, which implements **HNSW** — Malkov & Yashunin, 2016) get this
 to roughly O(log n) by descending a layered proximity graph.
 
 The architectural decision that matters more than the index choice: **the relational row
@@ -269,7 +269,7 @@ to SQL, where the bitemporal predicate (`invalid_at IS NULL AND expired_at IS NU
 the tenant predicate are applied.
 
 Why not mirror validity into the index? Because then two systems hold the same truth and
-can desync — an invalidated fact that failed to update in Qdrant would keep surfacing. By
+can desync — an invalidated fact that failed to update in the vector store would keep surfacing. By
 keeping the index dumb ("which of this subject's rows are near?") and letting SQL decide
 eligibility, a stale index point can cost you a wasted fetch but can never surface a row
 that should not exist.

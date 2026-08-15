@@ -34,8 +34,9 @@ Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
   agent trace, animated knowledge graph, SHAP + conformal panel, human-approval
   gate, dashboards) with **zero backend or database**. Best for a quick look or a
   projector demo.
-- **Path B — Full stack:** FastAPI backend + local stores (Postgres, Qdrant,
-  Neo4j, Redis) + Arize Phoenix, streaming live over SSE.
+- **Path B — Full stack:** FastAPI backend + local stores (Postgres, Neo4j,
+  Redis) + Arize Phoenix, streaming live over SSE. The vector store is *embedded* —
+  it runs inside the backend process, so there is no fourth server to install.
 
 > **Environment target:** 16 GB laptop, **no Docker, no GPU**. Everything is a
 > local install or an API call. The only remote calls are the model gateway
@@ -53,7 +54,6 @@ Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
 | **Node.js** | ≥ 18.18 (20+ recommended) | console (`web/`) build/dev |
 | **npm** | ≥ 10 (ships with Node) | console package manager |
 | **PostgreSQL** | ≥ 15 | relational + KV/doc-status + audit log *(Path B)* |
-| **Qdrant** | ≥ 1.12 (server) | vector DB — ANN for retrieval + memory recall *(Path B; dev uses embedded)* |
 | **Neo4j** | 5.x (Desktop/Community) | knowledge graph *(Path B)* |
 | **Redis** | ≥ 7 (or Memurai on Windows) | semantic cache *(Path B)* |
 
@@ -92,14 +92,19 @@ CREATE DATABASE taif;
 ```
 
 Postgres holds the relational tables, LightRAG's KV + doc-status stores, and the audit
-log. No `pgvector` extension is needed — vector ANN search runs on **Qdrant**.
+log. No `pgvector` extension is needed — vector ANN search runs in the embedded vector
+store.
 
-**Qdrant** — the vector DB (ANN for retrieval + memory recall). Run a local server (e.g.
-the `qdrant/qdrant` binary/container) listening on `http://localhost:6333`, and set
-`QDRANT_URL` (+ optional `QDRANT_API_KEY`). In full stores mode a reachable Qdrant is
-**required** and the backend fails loud at boot if it is down (exactly like Postgres/
-Redis). Dev/tests use the explicit **embedded** Qdrant engine — a real on-disk/in-memory
-HNSW index, never a silent RAM fallback.
+**Vector store — nothing to install.** ANN for retrieval + memory recall runs
+**embedded**: Chroma's `PersistentClient` (a pip dependency) for Aegis's own store, and
+LightRAG's file-backed NanoVectorDB for its internal vectors. Both live inside the
+backend process and write to a local directory, so there is no server binary, no Windows
+service and no open port — which is precisely what lets Aegis install on a locked-down
+enterprise machine. Point `VECTOR_STORE_PATH` at a writable directory (default
+`vector_storage`, relative to the backend's working directory). In full stores mode that
+directory is **required** and the backend fails loud at boot if it is unusable (exactly
+like Postgres/Redis) — it never degrades to a silent in-RAM index. Tests use an explicit
+in-memory engine, which is a real index, not a fake.
 
 **Neo4j** — install Neo4j Desktop or Community, start a local DB, and set a
 password. Default bolt URI is `bolt://localhost:7687`, user `neo4j`.
@@ -193,7 +198,7 @@ LOG_LEVEL=INFO
 > **Postgres-primary posture.** In the full stack one local PostgreSQL is the primary
 > store for *everything durable* — tenants, users, budgets, the usage ledger, the
 > approvals inbox, the LangGraph checkpoints, and the audit log. Vector embeddings live
-> in **Qdrant** (Postgres keeps only the JSON embedding-of-record). Set
+> in the embedded vector store (Postgres keeps only the JSON embedding-of-record). Set
 > `AGENT_CHECKPOINTER=postgres` for durable, resumable HITL runs; the `memory` default
 > keeps single-process/offline runs zero-dependency.
 
@@ -295,8 +300,7 @@ npm run lint   # ESLint (next/core-web-vitals + next/typescript) — 0 errors
 | `GENAILAB_API_KEY` | *(empty)* | gateway API key — **required for live calls** |
 | `GENAILAB_SSL_VERIFY` | `false` | verify gateway TLS (self-signed cert → false) |
 | `POSTGRES_DSN` | `postgresql://postgres:postgres@localhost:5432/taif` | Postgres DSN (relational + KV + audit; the primary durable store) |
-| `QDRANT_URL` | `http://localhost:6333` | Qdrant vector DB — **required** in full stores mode (fails loud at boot if unreachable) |
-| `QDRANT_API_KEY` | *(empty)* | optional API key for a secured Qdrant node |
+| `VECTOR_STORE_PATH` | `vector_storage` | directory for the **embedded** vector store — **required** and must be writable in full stores mode (fails loud at boot otherwise). No server, no port. |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | `bolt://localhost:7687` / `neo4j` / *(empty)* | Neo4j |
 | `REDIS_URL` | `redis://localhost:6379/0` | near-exact semantic cache |
 | `JWT_SECRET` | *(dev-insecure default)* | HS256 signing secret — **set a real one in prod** (ADR 0008) |
@@ -329,9 +333,10 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
   compile, not a hang. Give the first run 60s; later runs are ~2s.
 - **`next build` appears stuck or reuses stale output** — remove the build cache
   and rebuild: `rm -rf web/.next && (cd web && npm run build)`.
-- **Qdrant unreachable at boot (full stores mode)** — the backend fails loud if
-  `QDRANT_URL` is down. Start the Qdrant server (`http://localhost:6333`) or set
-  `STORES=off` for the databaseless lite demo. Dev keeps an embedded Qdrant engine.
+- **Vector store unusable at boot (full stores mode)** — the backend fails loud if
+  `VECTOR_STORE_PATH` cannot be created or written. Point it at a writable directory
+  (`VECTOR_STORE_PATH=C:\Users\you\aegis-vectors`, say), or set `STORES=off` for the
+  databaseless lite demo. There is no server to start — the store is in-process.
 - **TLS errors calling the gateway** — the gateway uses a self-signed cert;
   keep `GENAILAB_SSL_VERIFY=false` (a documented, scoped exception).
 - **Windows Redis** — use Memurai or Redis under WSL2; the default `REDIS_URL`
@@ -346,7 +351,6 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 | Console (Next.js dev) | `npm run dev` (from `web/`) | 3000 |
 | Backend (FastAPI/uvicorn) | `uvicorn app.main:app` | 8000 |
 | PostgreSQL | native install | 5432 |
-| Qdrant (vector DB) | native install / binary | 6333 |
 | Neo4j | native install | 7687 (bolt) / 7474 (http) |
 | Redis / Memurai | native install | 6379 |
 | Arize Phoenix | in-process (with backend) | 6006 (UI, if enabled) |

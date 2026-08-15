@@ -1,6 +1,6 @@
-"""Embedded-Qdrant "lite" retrieval backend + cache for a databaseless run mode.
+"""Embedded-Chroma "lite" retrieval backend + cache for a databaseless run mode.
 
-Swaps the LightRAG (Neo4j + Qdrant) backend and the Redis semantic cache for the
+Swaps the LightRAG (Neo4j + Chroma) backend and the Redis semantic cache for the
 self-contained equivalents below, so the full agentic slice — recall, rerank,
 spotlight, cache-hit accounting and the graph delta — runs with **no external
 databases**. Only a completer/embedder is still required (lite mode = real LLM, zero
@@ -8,19 +8,20 @@ infra to stand up).
 
 The backend is a genuine **hybrid-lite** retriever, not keyword-only, and — critically —
 its **vector arm is a real vector engine, never a RAM dict**: chunk embeddings are
-upserted into an embedded :class:`~aegis.retrieval.vector_store.QdrantVectorStore`
-(the official qdrant-client local mode: on-disk or ``:memory:``), and the vector list
-is a real Qdrant ``search``, not a hand-rolled brute-force cosine over a Python ``dict``.
+upserted into an embedded :class:`~aegis.retrieval.vector_store.ChromaVectorStore`
+(the official chromadb embedded mode: on-disk or in-process, and **no server binary**),
+and the vector list is a real Chroma ``search``, not a hand-rolled brute-force cosine
+over a Python ``dict``.
 Alongside it, a co-occurrence **graph** yields a graph-expansion list; both are handed to
 the *same* Reciprocal Rank Fusion the production path uses (plus the pipeline's BM25
 list). Lite and full therefore share one fusion+rerank core and both put vectors in
-Qdrant; only the mode (embedded vs server) and graph store differ.
+Chroma; only the mode (embedded vs server) and graph store differ.
 
 Embeddings come from an **injected** embedder (:class:`~aegis.retrieval.protocols.EmbedFn`),
 exactly as the production path — only the *store* is local. When no embedder is injected
 (offline evals/tests/seed corpora), the backend falls back to :func:`_local_embed`, a
 deterministic offline embedder — but the vectors it produces are still stored in and
-searched by the real Qdrant engine, so there is no dict-scan path left anywhere.
+searched by the real Chroma engine, so there is no dict-scan path left anywhere.
 
 Unlike the backend this was extracted from, :meth:`InMemoryKnowledgeBackend.from_corpus`
 takes an explicit ``path`` or ``docs`` argument — this package has no notion of a host
@@ -50,13 +51,13 @@ from aegis.retrieval.models import Candidate, Chunk, Recall
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever, bm25_ranked
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
 from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalOrigin
-from aegis.retrieval.vector_store import QdrantVectorStore
+from aegis.retrieval.vector_store import ChromaVectorStore
 
 _WORD = re.compile(r"[a-z0-9]+")
 
 #: Dimensionality of the local hashing embedding (the offline default embedder).
 _EMBED_DIM = 256
-#: Default embedded-Qdrant collection name for the lite backend's chunk vectors.
+#: Default embedded-Chroma collection name for the lite backend's chunk vectors.
 _LITE_COLLECTION = "aegis_lite_chunks"
 #: Minimum shared-token count for a co-occurrence graph edge between two chunks.
 _GRAPH_MIN_OVERLAP = 2
@@ -79,7 +80,7 @@ def _local_embed(text: str, *, dim: int = _EMBED_DIM) -> list[float]:
 
     This is **an embedder, not a store**: the backend injects it (via
     :func:`_default_offline_embed`) only when no gateway embedder is supplied, and the
-    vectors it returns are upserted into and searched by the real Qdrant engine — there
+    vectors it returns are upserted into and searched by the real Chroma engine — there
     is no brute-force dict scan anywhere. Callers can also inject it directly as the
     ``embed`` for offline eval/test retrievers.
 
@@ -104,7 +105,7 @@ async def _default_offline_embed(texts: list[str]) -> list[list[float]]:
     """The backend's fallback embedder: deterministic, offline :func:`_local_embed`.
 
     Used only when no gateway :class:`~aegis.retrieval.protocols.EmbedFn` is injected
-    (offline evals/tests/seed corpora). Its vectors still go through the Qdrant store.
+    (offline evals/tests/seed corpora). Its vectors still go through the Chroma store.
     """
     return [_local_embed(text) for text in texts]
 
@@ -143,20 +144,20 @@ class InMemoryRedis:
 
 
 class InMemoryKnowledgeBackend:
-    """Hybrid-lite recall over an embedded-Qdrant KnowledgeBackend (no external DBs).
+    """Hybrid-lite recall over an embedded-Chroma KnowledgeBackend (no external DBs).
 
     Implements both :class:`~aegis.retrieval.protocols.KnowledgeBackend` and the
     optional :class:`~aegis.retrieval.protocols.MultiListBackend`: :meth:`recall_ranked`
     hands the pipeline a **vector** list (a real
-    :class:`~aegis.retrieval.vector_store.QdrantVectorStore` ``search`` over chunk
-    embeddings — embedded/local Qdrant, *not* a RAM dict) and a **graph** list
+    :class:`~aegis.retrieval.vector_store.ChromaVectorStore` ``search`` over chunk
+    embeddings — embedded/local Chroma, *not* a RAM dict) and a **graph** list
     (co-occurrence expansion). It also implements
     :class:`~aegis.retrieval.protocols.KeywordBackend` (:meth:`keyword_recall`), so the
     BM25 arm RRF fuses in is a real corpus-wide keyword search rather than a re-scoring
     of what the other two arms already found. :meth:`recall` returns the vector+graph
     pair fused (for direct callers).
 
-    The vector store is injectable; it defaults to an embedded ``:memory:`` Qdrant so a
+    The vector store is injectable; it defaults to an embedded ``:memory:`` Chroma so a
     directly-constructed backend (tests, offline evals) still uses the genuine engine.
     Optional ``tenant``/``subject`` scope every upsert payload and every search filter,
     so one process can hold isolated corpora.
@@ -182,15 +183,15 @@ class InMemoryKnowledgeBackend:
         *,
         embed: EmbedFn | None = None,
         extractor: Extractor | None = None,
-        vector_store: QdrantVectorStore | None = None,
+        vector_store: ChromaVectorStore | None = None,
         collection: str = _LITE_COLLECTION,
         tenant: str | None = None,
         subject: str | None = None,
     ) -> None:
-        """Hold the corpus + graph extractor; prepare the Qdrant store + co-occurrence graph.
+        """Hold the corpus + graph extractor; prepare the Chroma store + co-occurrence graph.
 
         Chunk embeddings are **not** computed here (embedding is async): they are lazily
-        embedded and upserted into Qdrant on the first ingest/recall via
+        embedded and upserted into Chroma on the first ingest/recall via
         :meth:`_ensure_indexed`, mirroring how the knowledge graph is lazily extracted.
 
         Args:
@@ -199,20 +200,20 @@ class InMemoryKnowledgeBackend:
                 deterministic :func:`_default_offline_embed` when none is supplied.
             extractor: Entity/relation extractor; defaults to the best available
                 deterministic one (spaCy, else a logged no-op) when none is injected.
-            vector_store: The Qdrant-backed vector store; defaults to an embedded
+            vector_store: The Chroma-backed vector store; defaults to an embedded
                 ``:memory:`` store (the real engine, offline).
-            collection: Qdrant collection name for this backend's chunk vectors.
+            collection: Chroma collection name for this backend's chunk vectors.
             tenant: Optional tenant id; scopes every payload and search filter.
             subject: Optional subject id; scopes every payload and search filter.
         """
         self._chunks = chunks
         self._embed = embed or _default_offline_embed
         self._extractor = extractor or build_extractor()
-        self._vector_store = vector_store or QdrantVectorStore.local()
+        self._vector_store = vector_store or ChromaVectorStore.local()
         self._collection = collection
         self._tenant = tenant
         self._subject = subject
-        self._indexed_ids: set[str] = set()  # chunk ids already upserted to Qdrant
+        self._indexed_ids: set[str] = set()  # chunk ids already upserted to Chroma
         self._tokens: list[set[str]] = []
         self._adjacency: list[list[tuple[int, float]]] = []
         # Genuine in-memory knowledge graph, merged across chunks by entity id.
@@ -250,7 +251,7 @@ class InMemoryKnowledgeBackend:
         return adjacency
 
     async def _ensure_indexed(self) -> None:
-        """Embed any not-yet-indexed chunks and upsert them into the Qdrant collection.
+        """Embed any not-yet-indexed chunks and upsert them into the Chroma collection.
 
         Idempotent and lazy (mirrors :meth:`_ensure_extracted`): each chunk is embedded
         and upserted at most once (guarded by ``_indexed_ids``), so calling this from
@@ -273,7 +274,7 @@ class InMemoryKnowledgeBackend:
         self._indexed_ids.update(c.id for c in pending)
 
     def _payload(self, chunk: Chunk) -> dict[str, object]:
-        """Build the Qdrant payload for ``chunk`` (doc + text + tenant/subject scope)."""
+        """Build the Chroma metadata for ``chunk`` (doc + text + tenant/subject scope)."""
         payload: dict[str, object] = {"doc": chunk.doc_id, "text": chunk.text}
         if self._tenant is not None:
             payload["tenant"] = self._tenant
@@ -300,7 +301,7 @@ class InMemoryKnowledgeBackend:
         overlap: int = 60,
         extractor: Extractor | None = None,
         embed: EmbedFn | None = None,
-        vector_store: QdrantVectorStore | None = None,
+        vector_store: ChromaVectorStore | None = None,
         collection: str = _LITE_COLLECTION,
         tenant: str | None = None,
         subject: str | None = None,
@@ -323,8 +324,8 @@ class InMemoryKnowledgeBackend:
                 available deterministic one (see
                 :func:`~aegis.retrieval.graph_extract.build_extractor`).
             embed: Optional injected embedder (defaults to the offline embedder).
-            vector_store: Optional Qdrant store (defaults to embedded ``:memory:``).
-            collection: Qdrant collection name for this backend's chunk vectors.
+            vector_store: Optional Chroma store (defaults to embedded ``:memory:``).
+            collection: Chroma collection name for this backend's chunk vectors.
             tenant: Optional tenant id scoping every payload + search filter.
             subject: Optional subject id scoping every payload + search filter.
 
@@ -381,7 +382,7 @@ class InMemoryKnowledgeBackend:
             return (0, 0)  # nothing new added → honest zero delta, not a fake count
         self._chunks.extend(fresh)
         self._reindex()
-        await self._ensure_indexed()  # embed + upsert the fresh chunks into Qdrant
+        await self._ensure_indexed()  # embed + upsert the fresh chunks into Chroma
         return await self._ensure_extracted()
 
     async def _ensure_extracted(self) -> tuple[int, int]:
@@ -438,10 +439,10 @@ class InMemoryKnowledgeBackend:
                     self.entity_chunks.setdefault(entity_id, set()).add(chunk.id)
 
     async def _vector_list(self, query: str, top_k: int) -> RankedList:
-        """Rank chunks by a real Qdrant vector ``search`` against the embedded query.
+        """Rank chunks by a real Chroma vector ``search`` against the embedded query.
 
         The query is embedded with the *same* injected embedder as the chunks, then the
-        embedded-Qdrant store returns the nearest chunks (payload-filtered to this
+        embedded-Chroma store returns the nearest chunks (metadata-filtered to this
         backend's tenant/subject scope). No brute-force dict scan is involved.
         """
         vectors = await self._embed([query])
@@ -519,7 +520,7 @@ class InMemoryKnowledgeBackend:
         self, query: str, *, top_k: int, persona: str | None = None
     ) -> RankedRecall:
         """Return split vector + graph ranked lists plus the entity graph slice."""
-        await self._ensure_indexed()  # lazily embed + upsert chunk vectors into Qdrant
+        await self._ensure_indexed()  # lazily embed + upsert chunk vectors into Chroma
         await self._ensure_extracted()  # lazily populate the KG (e.g. after from_corpus)
         vector_list = await self._vector_list(query, top_k)
         graph_list = self._graph_list(query, top_k)
@@ -600,9 +601,9 @@ def build_lite_retriever(
     """
     config = config or RetrievalConfig()
     extractor = build_extractor(complete=complete, working_dir=working_dir, prefer="llm")
-    # Real vectors in an embedded (:memory:) Qdrant — no external DB, no RAM dict — with
-    # embeddings from the injected gateway embedder (same as the full path; only the
-    # store is local).
+    # Real vectors in an embedded (:memory:) Chroma — no external DB, no server binary,
+    # no RAM dict — with embeddings from the injected gateway embedder (same as the full
+    # path; only the store is local).
     backend = InMemoryKnowledgeBackend([], embed=embed, extractor=extractor)
     cache = SemanticCache(
         InMemoryRedis(),

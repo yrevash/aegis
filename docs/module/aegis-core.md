@@ -38,7 +38,7 @@ graph TD
         registry["registry.py<br/>register / get / available /<br/>discover (entry points)"]
         lazy["lazy.py<br/>require(extra, module)"]
         config["config.py<br/>AegisMode, CoreSettings"]
-        health["health.py<br/>probe_redis / probe_postgres /<br/>probe_pgvector"]
+        health["health.py<br/>probe_redis / probe_postgres /<br/>probe_vector_store"]
         stream["stream.py<br/>AegisEmitter (AG-UI)"]
         stream_names["stream_names.py<br/>canonical CustomEvent names"]
     end
@@ -66,9 +66,9 @@ graph TD
 flowchart LR
     A[Process boot] --> B["CoreSettings() reads AEGIS_* env"]
     B --> C{mode}
-    C -->|full| D["require_full_infra()<br/>raises if REDIS_URL /<br/>DATABASE_URL unset"]
+    C -->|full| D["require_full_infra()<br/>raises if REDIS_URL / DATABASE_URL /<br/>VECTOR_STORE_PATH unset"]
     C -->|lite / auto| E["boot on in-memory,<br/>logged loudly"]
-    D --> F["probe_redis / probe_postgres /<br/>probe_pgvector"]
+    D --> F["probe_redis / probe_postgres /<br/>probe_vector_store"]
     F --> G["/readyz reports real status"]
     E --> G
 
@@ -122,7 +122,7 @@ Key symbols, by file:
   StepFinished | GuardrailEvent` (kept for back-compat; the streaming spine below is the
   forward-facing contract).
 - **`health.py`** — `DependencyStatus`, `probe_redis(url, *, client=None)`,
-  `probe_postgres(url, *, conn=None)`, `probe_pgvector(url, *, conn=None)`. Every probe accepts an
+  `probe_postgres(url, *, conn=None)`, `probe_vector_store(path, *, client=None)`. Every probe accepts an
   injected client (tests pass a fake) and never raises — it always returns a status, `up` or
   `down`, using `require()` internally to reach the real driver when no client is injected.
 - **`stream.py`** (import directly — not in `core.__init__`) — `AegisEmitter`, the one AG-UI
@@ -217,7 +217,7 @@ console AG-UI surface is the name registry + the decoder, not yet the rendered p
   non-durable stores; `auto` probes and may drop to lite but **stays loud** about it (never
   silent). This mode is a shared type every data-backed module (`memory`, `governance`, `guardrails`
   cache) reads to pick its store via a factory — never via a caught exception.
-- **Probes never lie.** `probe_redis`/`probe_postgres`/`probe_pgvector` always return a
+- **Probes never lie.** `probe_redis`/`probe_postgres`/`probe_vector_store` always return a
   `DependencyStatus`, never raise, and accept an injected client so they're deterministically
   testable offline. `/readyz` (built by a consuming service on top of these) is meant to report
   real, current status — never an inferred or hardcoded value.

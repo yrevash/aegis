@@ -124,7 +124,7 @@ show. `TranscribeCallable` is one because it takes a file handle, not messages.
 **No — there are two, and they are documented rather than smoothed over.**
 
 `aegis.memory` imports from `aegis.retrieval` in five places — cosine similarity, RRF
-fusion, spotlighting, the Qdrant vector store. That is a deliberate repoint: memory recall
+fusion, spotlighting, the embedded vector store. That is a deliberate repoint: memory recall
 genuinely needs those, and the alternative was a second implementation of each.
 
 There is a cost worth naming, though. Because Python runs a package's `__init__.py` on
@@ -213,7 +213,8 @@ passes while the field goes nowhere.
 
 Three explicit modes, and never a silent fallback.
 
-**full** — real Redis, Postgres and Qdrant required; refuse to start without them.
+**full** — real Redis and Postgres, and a usable vector-store directory, all required;
+refuse to start without them.
 **lite** — in-memory, deliberately chosen, loudly announced. **auto** — actually *probe*
 the backends and pick, logging which one failed and why.
 
@@ -256,7 +257,7 @@ returning `down` with the detail. A health endpoint that 500s because a dependen
 has confused "I am unhealthy" with "I cannot answer."
 
 And there is a small piece of ecosystem archaeology in the close helper: modern redis-py
-uses `aclose`, qdrant-client and older redis use `close`, and some return awaitables. It
+uses `aclose`, chromadb and older redis use `close`, and some return awaitables. It
 tries both, awaits if needed, and swallows everything — because *teardown must never mask
 the result you were computing*.
 

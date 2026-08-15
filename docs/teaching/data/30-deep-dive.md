@@ -244,7 +244,7 @@ creates.
 ## Story 3 — deleting a symbol as part of a migration
 
 `aegis.data` used to expose `VectorType`, compiling to pgvector's `vector(dim)` on
-Postgres. Vector search moved to Qdrant, so the SQL column stopped being an index and
+Postgres. Vector search moved to the embedded vector store, so the SQL column stopped being an index and
 became a source of record — and `pgvector` left the dependency list entirely
 (`base.py:17-19`).
 

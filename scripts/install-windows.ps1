@@ -5,13 +5,18 @@
 
 .DESCRIPTION
   bootstrap.ps1 installs the Python and Node dependencies but assumes the
-  toolchain already exists and installs none of the four data stores - yet
-  `start.ps1 -Mode full` needs all four. This script fills that gap:
+  toolchain already exists and installs none of the three data stores - yet
+  `start.ps1 -Mode full` needs all three. This script fills that gap:
 
     1. toolchain  - Python 3.11, Node LTS, uv, Git (via winget)
-    2. stores     - PostgreSQL, Redis, Qdrant, Neo4j (native, never Docker)
+    2. stores     - PostgreSQL, Redis, Neo4j (native, never Docker)
     3. app deps   - delegates to bootstrap.ps1 (single source of truth for extras)
     4. verify     - reports what actually answers on its port
+
+  There is deliberately NO vector-database step. The vector store is EMBEDDED:
+  it runs inside the Python process against a local directory, so it needs no
+  server binary, no service registration and no open port - which is what makes
+  Aegis installable on a locked-down machine.
 
   Idempotent: every step checks before it installs, so re-running is safe and
   fast. Each store is independent - one failing does not stop the others, and
@@ -22,7 +27,7 @@
   `start.ps1 -Mode lite`, which needs no databases at all.
 
 .PARAMETER StoresOnly
-  Install just the four data stores; skip toolchain and app dependencies.
+  Install just the three data stores; skip toolchain and app dependencies.
 
 .EXAMPLE
   .\scripts\install-windows.ps1
@@ -46,9 +51,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-# Downloaded (non-winget) tools live here so nothing lands in Program Files and
-# no uninstaller is needed - delete the folder and they are gone.
-$AegisHome = Join-Path $env:LOCALAPPDATA 'Aegis'
 $Failures = [System.Collections.Generic.List[string]]::new()
 
 function Have($cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
@@ -77,25 +79,6 @@ function Install-WingetPackage([string]$Id, [string]$Probe, [string]$Label) {
   if ($Probe -and -not (Have $Probe)) { Warn "$Label installed but '$Probe' is not on PATH yet - reopen PowerShell"; return $true }
   Ok $Label
   return $true
-}
-
-<# Download and unzip a portable tool into $AegisHome. Returns the target dir. #>
-function Get-PortableTool([string]$Url, [string]$Name) {
-  $dest = Join-Path $AegisHome $Name
-  if (Test-Path $dest) { return $dest }
-  New-Item -ItemType Directory -Force -Path $AegisHome | Out-Null
-  $zip = Join-Path $env:TEMP "$Name.zip"
-  Write-Host "  downloading $Name ..."
-  # Progress rendering makes Invoke-WebRequest dramatically slower on Windows.
-  $prev = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
-  try {
-    Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
-    Expand-Archive -Path $zip -DestinationPath $dest -Force
-  } finally {
-    $ProgressPreference = $prev
-    Remove-Item $zip -ErrorAction SilentlyContinue
-  }
-  return $dest
 }
 
 Write-Host "`nAegis - Windows setup" -f White
@@ -196,21 +179,22 @@ if (-not $SkipStores) {
     Warn '  fix: install Memurai (https://www.memurai.com/get-memurai), then Start-Service Memurai'
   }
 
-  # -- Qdrant - ANN vectors behind retrieval + memory recall ------------------
-  Head 'Qdrant'
-  if (Test-Port 6333) {
-    Ok 'already listening on 6333'
-  } else {
-    try {
-      $url = 'https://github.com/qdrant/qdrant/releases/latest/download/qdrant-x86_64-pc-windows-msvc.zip'
-      $dir = Get-PortableTool $url 'qdrant'
-      $exe = Get-ChildItem $dir -Recurse -Filter 'qdrant.exe' | Select-Object -First 1
-      if ($exe) {
-        Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName -WindowStyle Minimized
-        Start-Sleep -Seconds 5
-        if (Test-Port 6333) { Ok 'Qdrant up on 6333' } else { Warn 'Qdrant started but not answering yet' }
-      } else { Bad 'qdrant.exe not found in the downloaded archive' }
-    } catch { Bad "Qdrant download failed: $($_.Exception.Message)" }
+  # -- Vector store - EMBEDDED, so there is nothing to install ----------------
+  # The ANN engine behind retrieval + memory recall runs in-process against a
+  # local directory (installed as a Python package by bootstrap.ps1). No binary,
+  # no service, no port. All this step does is prove the directory is writable,
+  # because that is the only way the vector tier can fail on this machine.
+  Head 'Vector store (embedded)'
+  $vecPath = $env:VECTOR_STORE_PATH
+  if (-not $vecPath) { $vecPath = Join-Path $root 'backend\vector_storage' }
+  try {
+    New-Item -ItemType Directory -Force -Path $vecPath -ErrorAction Stop | Out-Null
+    $probe = Join-Path $vecPath '.install-check'
+    Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+    Remove-Item $probe -ErrorAction SilentlyContinue
+    Ok "writable: $vecPath (no server needed)"
+  } catch {
+    Bad "vector store directory not writable: $vecPath - $($_.Exception.Message)"
   }
 
   # -- Neo4j - the knowledge graph behind GET /graph --------------------------
@@ -268,7 +252,6 @@ Head 'Verification'
 $ports = [ordered]@{
   'PostgreSQL 5432' = 5432
   'Redis      6379' = 6379
-  'Qdrant     6333' = 6333
   'Neo4j      7687' = 7687
 }
 foreach ($k in $ports.Keys) {

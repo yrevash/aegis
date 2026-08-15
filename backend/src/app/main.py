@@ -35,9 +35,9 @@ branded name **plus its honest underlying tech** (branding, never hiding):
 
 - **Aegis Gateway** (LiteLLM) — single model chokepoint: routing, budgets, retry, usage ledger.
 - **Aegis Router** (LangGraph) — multi-agent supervisor routing each turn to a specialist.
-- **Aegis Memory** (Postgres + Qdrant) — bitemporal episodic/semantic/procedural memory.
+- **Aegis Memory** (Postgres + embedded vectors) — bitemporal episodic/semantic/procedural memory.
 - **Aegis Cache** (Redis) — semantic response cache.
-- **Aegis Retrieval** (Neo4j/LightRAG + Qdrant) — hybrid vector+graph+BM25 RAG, RRF, LLM rerank.
+- **Aegis Retrieval** (Neo4j/LightRAG + embedded vectors) — hybrid vector+graph+BM25, RRF, rerank.
 - **Aegis Signal** (XGBoost + MAPIE + SHAP) — calibrated conformal intervals + SHAP explanations.
 - **Aegis Guardrails** (programmatic + NeMo Colang) — input/output rails: injection, PII, schema.
 - **Aegis Evals** (RAGAS-style proxies + LLM judge) — trace-level and answer evaluation.
@@ -176,21 +176,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - the registry cache is best-effort at startup
             logger.warning("Prompt registry cache refresh skipped.", exc_info=True)
 
-    # Honest infra: a non-dev full-stores deployment REQUIRES a reachable Qdrant vector
-    # DB — the ANN engine behind retrieval + memory recall — exactly like Postgres/Redis.
-    # Wire the production Qdrant-backed memory index and fail loud at boot if the node is
-    # unreachable (``QdrantVectorStore.server`` pings on construction), never a silent
-    # embedded/RAM fallback. Dev/tests keep the explicit embedded engine (the sanctioned
-    # offline path), so this block is gated on ``not is_dev``.
+    # Honest infra: a non-dev full-stores deployment REQUIRES a usable vector store — the
+    # ANN engine behind retrieval + memory recall — exactly like Postgres/Redis. The store
+    # is *embedded* (in-process, file-backed under ``VECTOR_STORE_PATH``), so there is no
+    # server to install or reach; the failure it can still have is an unusable directory.
+    # Construction is therefore deliberately NOT wrapped in a try/except: an unwritable or
+    # corrupt store raises here and the process refuses to boot, rather than degrading to
+    # a silent, non-durable RAM index. Dev/tests keep the ephemeral in-memory engine (the
+    # sanctioned offline path), so this block is gated on ``not is_dev``.
     if settings.stores_enabled and not settings.is_dev:
         from aegis.memory import MemoryVectorIndex, set_default_index
 
-        set_default_index(
-            MemoryVectorIndex.server(
-                url=settings.qdrant_url, api_key=settings.qdrant_api_key or None
-            )
+        set_default_index(MemoryVectorIndex.local(path=settings.vector_store_path))
+        logger.info(
+            "Aegis Memory vector index bound to the embedded vector store at %s.",
+            settings.vector_store_path,
         )
-        logger.info("Aegis Memory vector index bound to Qdrant at %s.", settings.qdrant_url)
 
     # The SLA sweeper (§1.3): an in-process asyncio task — no cron, no Docker — that
     # expires past-deadline approvals and auto-rejects HIGH-risk ones. Only runs with

@@ -29,7 +29,7 @@ flowchart TB
     end
 
     subgraph L4["4 · Stores and sinks"]
-        L4a["Postgres · Qdrant · Neo4j · Redis · Arize Phoenix"]
+        L4a["Postgres · embedded vectors · Neo4j · Redis · Arize Phoenix"]
     end
 
     B -->|"HTTPS · JWT bearer · SSE"| L1
@@ -61,13 +61,13 @@ The refactor pulled each capability out into `aegis/`, with three hard rules:
    `aegis.ops.configure_ops()` takes the prompt-floor renderer, the session factory and
    the host's `Approval` ORM class.
 2. **Optional dependencies are per-module extras.** `aegis[gateway]` pulls LiteLLM,
-   `aegis[retrieval]` pulls LightRAG/Neo4j/Redis/Qdrant, `aegis[ml]` pulls
+   `aegis[retrieval]` pulls LightRAG/Neo4j/Redis/Chroma, `aegis[ml]` pulls
    XGBoost/MAPIE/SHAP, and so on. `aegis.core` needs only pydantic and the standard
    library, so anything depending on it alone stays cheap to install. Isolation tests
    (`aegis/tests/*/test_isolation.py`) assert that importing a module does not drag in
    the heavyweights.
 3. **Heavy imports stay lazy.** `import aegis.retrieval` does not require
-   `qdrant-client`; `import aegis.ml` does not import XGBoost until you call something.
+   `chromadb`; `import aegis.ml` does not import XGBoost until you call something.
 
 The payoff is concrete: another team can `pip install aegis[guardrails]` and use the
 rail stack in their own service, with none of this platform attached.
@@ -82,7 +82,7 @@ flowchart TB
     OBS["aegis.observability<br/>OTel spans, gen_ai.*, Phoenix"]
     GW["aegis.gateway<br/>LiteLLM chokepoint"]
     GR["aegis.guardrails<br/>rail pipeline"]
-    RET["aegis.retrieval<br/>hybrid RAG + Qdrant store"]
+    RET["aegis.retrieval<br/>hybrid RAG + embedded vector store"]
     MEM["aegis.memory<br/>3-tier long-term memory"]
     ML["aegis.ml<br/>ensemble + conformal + SHAP"]
     GOV["aegis.governance<br/>JWT · RBAC · budgets · RLS · audit"]
@@ -107,7 +107,7 @@ flowchart TB
     GOV -.->|"introspected"| SEC
 ```
 
-Notable edges: `aegis.memory` depends on `aegis.retrieval` for the Qdrant vector store;
+Notable edges: `aegis.memory` depends on `aegis.retrieval` for the embedded vector store;
 `aegis.ops` depends on `aegis.evals` (one-directional — evals never imports ops);
 `aegis.redteam` is leaf-clean and imports only the guardrails; `aegis.security`
 introspects other modules rather than depending on their runtime.
@@ -181,7 +181,7 @@ flowchart LR
         PG8["LightRAG KV + doc-status stores"]
     end
 
-    subgraph QD["Qdrant — the vector database"]
+    subgraph QD["Embedded vector store — in-process, file-backed"]
         QD1["retrieval chunk vectors"]
         QD2["memory recall index, scoped by subject_id + tenant_id"]
     end
@@ -199,18 +199,26 @@ flowchart LR
     PHX["Arize Phoenix — in-process OTel collector and UI"]
 ```
 
-**Qdrant, not pgvector.** Vector search moved off the pgvector Postgres extension onto
-Qdrant, a purpose-built approximate-nearest-neighbour engine. Postgres keeps the
-embedding as JSON *of record* — the durable source of truth — but it is no longer
-searched; `aegis/src/aegis/memory/vector_ops.py` mirrors rows into Qdrant lazily and
-searches there, scoping every query by a payload filter on `subject_id` and
-`tenant_id`. The `pgvector` dependency was removed from both `pyproject.toml` files.
-Any documentation you find claiming pgvector powers search is stale.
+**An embedded vector store — neither pgvector nor a vector server.** Vector search first
+moved off the `pgvector` Postgres extension (which needs a privileged server-side
+`CREATE EXTENSION`), and then off a standalone vector server too. Both were blocked by
+the same constraint: the target enterprise Windows machine allows no additional server
+software. What runs now is a real ANN engine that happens to live in this process —
+Chroma's `PersistentClient` (HNSW, cosine) over a local directory for Aegis's own store,
+and LightRAG's file-backed NanoVectorDB for LightRAG's internal vectors.
 
-In full-stores mode a reachable Qdrant is **required**: `main.py`'s lifespan calls
-`MemoryVectorIndex.server(...)`, which pings on construction and fails loud at boot
-rather than silently falling back to RAM. Development and tests use an explicit
-*embedded* Qdrant engine — a real on-disk HNSW index, sanctioned and labelled.
+Postgres keeps the embedding as JSON *of record* — the durable source of truth — but it
+is no longer searched; `aegis/src/aegis/memory/vector_ops.py` mirrors rows into the
+vector store lazily and searches there, scoping every query by a metadata filter on
+`subject_id` and `tenant_id`. The `pgvector` and `qdrant-client` dependencies are both
+gone from the two `pyproject.toml` files. Any documentation you find claiming pgvector or
+Qdrant powers search is stale.
+
+In full-stores mode a usable vector store is still **required** — embedded does not mean
+optional. `main.py`'s lifespan opens the store at `VECTOR_STORE_PATH` on construction and
+lets the exception propagate, so an unwritable or corrupt directory fails the boot rather
+than silently falling back to RAM. Tests use an explicit in-memory engine: a real index,
+sanctioned and labelled.
 
 ---
 

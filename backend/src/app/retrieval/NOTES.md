@@ -9,8 +9,17 @@ Source of truth: `HKUDS/LightRAG` `lightrag/lightrag.py`, `lightrag/base.py`,
 `lightrag/utils.py`, `lightrag/kg/{neo4j_impl,postgres_impl}.py`.
 
 - Construct: `LightRAG(working_dir=..., llm_model_func=..., embedding_func=EmbeddingFunc(...),
-  kv_storage=..., vector_storage="PGVectorStorage", graph_storage="Neo4JStorage",
+  kv_storage=..., vector_storage="NanoVectorDBStorage", graph_storage="Neo4JStorage",
   doc_status_storage=...)`.
+- **Storage-backend availability is narrower than `lightrag.kg.STORAGES` suggests.**
+  Re-verified against the installed `lightrag==1.5.6` on 2026-08-15 by importing each
+  impl module: `ChromaVectorDBStorage` is *declared* in the map but
+  `lightrag.kg.chroma_impl` **does not ship**, and `FaissVectorDBStorage` needs a
+  `faiss` wheel that is not installed. `NanoVectorDBStorage` (file-backed, pure Python,
+  LightRAG's own default) imports cleanly and is what we select — it needs no server
+  binary, which is the hard constraint on the target deployment. Note also that
+  importing an impl module can trigger `pipmaster` to attempt a `pip install` of its
+  driver, so probe them deliberately, not casually.
 - `EmbeddingFunc(embedding_dim: int, func: callable, max_token_size: int | None = None)`
   (`lightrag/utils.py`). `func` is an async `(list[str]) -> list[list[float]]`.
 - `llm_model_func` signature: `async (prompt: str, system_prompt: str | None = None,
@@ -31,11 +40,11 @@ Source of truth: `HKUDS/LightRAG` `lightrag/lightrag.py`, `lightrag/base.py`,
   versions return a plain `str`. Our backend handles both shapes defensively.
 - Backends are configured by **env vars** read inside LightRAG's storage impls:
   Neo4j → `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`;
-  Qdrant (vectors) → `QDRANT_URL` (+ optional `QDRANT_API_KEY`);
   Postgres (KV + doc-status only) → `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`,
   `POSTGRES_PASSWORD`, `POSTGRES_DATABASE`. `LightRAGBackend` derives these from
-  `settings.neo4j_uri`/`settings.qdrant_url`/`settings.postgres_dsn` and sets them on
-  `os.environ` before constructing LightRAG (LightRAG offers no direct kwargs for them).
+  `settings.neo4j_uri`/`settings.postgres_dsn` and sets them on `os.environ` before
+  constructing LightRAG (LightRAG offers no direct kwargs for them). The vector store
+  needs **no** env var: `NanoVectorDBStorage` persists to JSON under `working_dir`.
 
 ## Reranker — LLM-as-reranker (design decision)
 
