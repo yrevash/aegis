@@ -50,3 +50,10 @@ Thumbs.db
 # superpowers scratch (sdd reports, brainstorm mockups)
 .superpowers/
 .frontend-templates/
+
+# Generated teaching site (regenerate with scripts/build-teaching-html.mjs).
+# The Markdown is the source of truth; the HTML is a disposable view, and the
+# vendored mermaid bundle is 3.4 MB of third-party code that does not belong in
+# this repo's history.
+docs/teaching/**/*.html
+docs/teaching/_assets/
