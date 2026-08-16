@@ -41,9 +41,13 @@ async def set_tenant_scope(session: AsyncSession, tenant_id: int | None) -> None
     ``WHERE tenant_id = :ctx`` scoping remains the belt-and-suspenders layer over these
     DB-enforced policies (and the only layer on SQLite).
 
-    RLS is **Postgres-only**: this emits ``SET app.tenant_id = '<id>'`` on PostgreSQL
-    (a no-op ``RESET`` when the request is unscoped); on SQLite (the test database) it
-    does nothing, since RLS and session GUCs are Postgres-only.
+    RLS is **Postgres-only**: this calls ``set_config('app.tenant_id', <id>, true)`` on
+    PostgreSQL, writing the **empty string** when the request is unscoped; on SQLite (the
+    test database) it does nothing, since RLS and session GUCs are Postgres-only. See the
+    numbered comment in the body for why ``set_config`` rather than ``SET``/``RESET``, and
+    note that the empty string is not inert: it makes the policy predicate's ``substring``
+    yield NULL, which is the deliberate fail-open branch documented on
+    :data:`_TENANT_ISOLATION_PREDICATE`.
 
     Args:
         session: The async session whose connection to pin.

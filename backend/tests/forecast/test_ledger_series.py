@@ -16,6 +16,20 @@ def _naive_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _midday_days_ago(days: int) -> datetime:
+    """A naive-UTC timestamp at noon, ``days`` before today.
+
+    Tests that assert on **calendar-day buckets** must not anchor on "now": offsetting
+    a few hours either side of the current time silently crosses midnight whenever the
+    suite runs near a day boundary, and two rows meant for one day land in two buckets.
+    Noon leaves twelve hours of slack in both directions, and ``days >= 1`` keeps the
+    timestamp safely in the past regardless of the hour the suite runs at.
+    """
+    return (_naive_now() - timedelta(days=days)).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
+
+
 async def _seed(sessionmaker, rows: list[tuple[int, datetime, float]]) -> None:
     """Insert ``(tenant_id, ts, cost_usd)`` ledger rows."""
     async with sessionmaker() as session:
@@ -31,13 +45,12 @@ async def test_an_empty_ledger_yields_an_empty_series_not_a_flat_line(db):
 
 
 async def test_rows_are_bucketed_daily_with_empty_days_filled_as_real_zeros(db):
-    now = _naive_now()
     await _seed(
         db,
         [
-            (1, now - timedelta(days=3, hours=1), 2.0),
-            (1, now - timedelta(days=3, hours=5), 3.0),
-            (1, now - timedelta(days=1), 7.0),
+            (1, _midday_days_ago(3) + timedelta(hours=1), 2.0),
+            (1, _midday_days_ago(3) - timedelta(hours=5), 3.0),
+            (1, _midday_days_ago(1), 7.0),
         ],
     )
     series = await ledger_series(tenant_id=1)

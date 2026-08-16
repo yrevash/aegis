@@ -61,8 +61,14 @@ def decode_image(
     The declared ``mime_type`` is carried, never trusted — ``aegis.media``'s
     hygiene rail sniffs the magic bytes and refuses a payload whose declaration
     disagrees with its content. Provenance is ``USER_UPLOAD`` because that is what
-    this endpoint is; an image arriving from retrieval or a tool would be tagged
-    differently and treated as untrusted by the rails.
+    this endpoint is; an image arriving from retrieval or a tool is tagged
+    differently.
+
+    Note the limit honestly: provenance is **carried and reported, not yet acted on**.
+    :attr:`aegis.media.Provenance.untrusted` classifies RETRIEVAL/TOOL_OUTPUT/UNKNOWN as
+    attacker-controlled, but no rail currently branches on it — every payload gets the
+    same screening regardless of origin, and the value is only emitted on the
+    ``guardrail_media`` event. Differential treatment by provenance is unbuilt.
 
     Args:
         image_base64: The image bytes, base64-encoded (a bare payload or a

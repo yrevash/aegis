@@ -2,11 +2,20 @@
 //
 // AG-UI carries domain payloads via CustomEvent(name, value); these constants are the
 // agreed `name` strings shared between the backend and this frontend mirror. Every entry
-// in the Python `ALL` frozenset MUST appear here (parity is asserted by the count below).
+// in the Python `ALL` frozenset MUST appear here.
+//
+// Parity is enforced by `backend/tests/api/test_stream_name_mirror.py`, which parses THIS
+// file and diffs it against the Python frozenset. That test exists because the previous
+// guarantee was a comment claiming "parity is asserted by the count below" next to
+// `STREAM_NAME_COUNT = STREAM_NAME_SET.size` — a count derived from this list, compared
+// against itself. It could never fail, and while it sat here the mirror silently lost the
+// five media/voice/vision names added by later modules. A check that cannot fail is worse
+// than no check: it stops anyone from writing the real one.
 export const STREAM_NAMES = {
   REASONING: 'reasoning',
   GUARDRAIL_VERDICT: 'guardrail_verdict',
   GUARDRAIL_CACHE: 'guardrail_cache',
+  GUARDRAIL_MEDIA: 'guardrail_media',
   SHAP_EXPLANATION: 'shap_explanation',
   CONFORMAL_INTERVAL: 'conformal_interval',
   ML_MODEL: 'ml_model',
@@ -21,6 +30,10 @@ export const STREAM_NAMES = {
   OPS_DIAGNOSE: 'ops_diagnose',
   OPS_GATE_DECISION: 'ops_gate_decision',
   OPS_RELEASE: 'ops_release',
+  VOICE_CHUNK: 'voice_chunk',
+  VOICE_TRANSCRIPT: 'voice_transcript',
+  VISION_SCREEN: 'vision_screen',
+  VISION_ANALYSIS: 'vision_analysis',
 } as const
 
 /** The canonical set of every known stream name (mirrors the Python `ALL`). */

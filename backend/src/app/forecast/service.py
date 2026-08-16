@@ -13,7 +13,10 @@ Three responsibilities, all of them plumbing:
 No decision about honesty is made here: the refusals
 (:class:`~aegis.forecast.types.InsufficientHistoryError`,
 :class:`~aegis.forecast.types.ForecastFitError`) propagate untouched to the route,
-which turns them into an explicit HTTP failure with the reason attached.
+which turns them into a typed refusal — **HTTP 200 carrying ``available=False`` and a
+``ForecastRefusal`` code/reason**, not an HTTP error status. The console renders that
+as a stated reason rather than a failed request, which is the point: "we will not
+forecast this, and here is why" is an answer, not an outage.
 """
 
 from __future__ import annotations

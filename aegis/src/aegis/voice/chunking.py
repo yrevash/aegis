@@ -147,8 +147,9 @@ def _samples(frames: bytes, sampwidth: int) -> array.array:
         sampwidth: Bytes per sample (1, 2 or 4).
 
     Returns:
-        An :class:`array.array` of samples. 8-bit WAV is unsigned by definition,
-        so it is returned as-is and its DC offset is removed by the RMS routine.
+        An :class:`array.array` of samples. 8-bit WAV is unsigned by definition, so it
+        is returned as-is here — the 128 midpoint is subtracted by the caller in
+        :func:`plan_chunks`, not by :func:`_envelope`, which does no centring of its own.
     """
     buf = array.array(_TYPECODE[sampwidth])
     buf.frombytes(frames)

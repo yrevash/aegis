@@ -88,7 +88,7 @@ def _domain_spec() -> MLSpec:
     Raises:
         MLModelUnavailableError: If the domain adapter cannot be imported. It used
             to return ``None`` here, which :func:`aegis.ml.spec.resolve_spec` reads
-            as "no spec" and answers with :data:`FALLBACK_SPEC` — three random
+            as "no spec" and answers with :data:`FALLBACK_SPEC` — four random
             numeric features and a synthesised target. Training on that and serving
             it as this platform's model is exactly the substitution the ML honesty
             fix exists to refuse, so a missing adapter is now an error with a name,

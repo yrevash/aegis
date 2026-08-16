@@ -87,7 +87,14 @@ class Provenance(BaseModel):
 
     @property
     def untrusted(self) -> bool:
-        """Whether this payload must be treated as attacker-controlled content."""
+        """Whether this payload must be treated as attacker-controlled content.
+
+        **Currently classification only — nothing branches on it.** No rail reads this
+        property, so an untrusted payload is screened exactly like a user upload. It is
+        kept because the classification is the correct one and the screening is already
+        strict-by-default; wiring differential treatment to it is unbuilt work, not a
+        claim this codebase can make today.
+        """
         return self.source in {
             MediaSource.RETRIEVAL,
             MediaSource.TOOL_OUTPUT,
