@@ -1,6 +1,7 @@
 # Media — interview questions and answers
 
-Claim, then reason, then a concrete detail from this system.
+Claim, then reason, then a concrete detail from this system. The full argument behind every
+answer is in [`10-guide.md`](10-guide.md).
 
 ---
 
@@ -210,9 +211,16 @@ document or a tool result. The second is the *indirect* injection surface — co
 user never chose and an attacker may control.
 
 Five sources: `USER_UPLOAD`, `TOOL_OUTPUT`, `RETRIEVAL`, `MODEL_OUTPUT`, `UNKNOWN`. The
-`untrusted` property returns true for retrieval, tool output **and unknown** — a payload
-nobody tagged gets the strict path, never the lenient one. That default is the whole
-design decision.
+`untrusted` property returns true for retrieval, tool output **and unknown** — the default
+that matters, because a payload nobody tagged then gets the strict classification rather than
+the lenient one.
+
+I would be precise about what it does today, because it is easy to overclaim. Provenance is
+carried on every payload and emitted on the `guardrail_media` event, so it reaches the trace
+panel and the audit log — but **no rail currently branches on `untrusted`**. An image tagged
+`RETRIEVAL` goes through the same rails as one tagged `USER_UPLOAD`. The distinction is
+recorded and the strict default is already right; differential treatment is the part that is
+not written yet. That is the shape of the next change, not a claim about the current one.
 
 The free-text `origin` field — a filename, a URL, a tool name — is documented as never
 parsed for control flow. It exists so a human reading a blocked verdict knows what was
@@ -224,22 +232,29 @@ blocked.
 
 Three things, and I would rather name them than be caught on them.
 
-**`aegis[media]` is not a declared extra.** The lazy-import calls promise an
-`ImportError` "naming the install command", and they do fail loud and fail closed —
-which is the security-relevant half — but `pip install aegis[media]` would not resolve,
-because that extra is not in `pyproject.toml`. The error message points at a target
-that does not exist.
+**`Provenance.untrusted` has no consumer.** The property exists, provenance is emitted on
+every media event, and `UNKNOWN` correctly counts as untrusted — but nothing branches on it,
+so retrieved and user-uploaded images are screened identically. All the data a differential
+rule needs is already carried; the rule is not written.
 
-**There is no dedicated test module for `aegis.media`.** It is exercised indirectly —
-the voice security tests build an `AudioPayload` declaring `audio/wav` whose bytes are a
-PNG signature and assert the transcriber was never called, which is a good test of the
-seam. But the fiddly parsers are untested directly: the JPEG start-of-frame marker walk,
-the WEBP `+1` arithmetic, `is_media_rail` against a `functools.partial`. Those are
-exactly where an off-by-one is easiest to introduce and hardest to notice.
+**There is no dedicated test package for `aegis.media`.** The seams are covered, and covered
+well — the voice tests drive `MediaScreen` directly and assert on `rails_run`/`rails_skipped`,
+and build an `AudioPayload` declaring `audio/wav` whose bytes are a PNG signature to prove the
+transcriber is never called; the vision tests cover the bomb refusal and the URI-only refusal.
+What is untested is the fiddly parsing: the JPEG start-of-frame marker walk, the WEBP `+1`
+arithmetic, negative BMP height, a truncated header per format, and `is_media_rail` against a
+`functools.partial` or a C builtin. Those are exactly where an off-by-one is easiest to
+introduce and hardest to notice.
 
 **No content-safety screen over pixels.** Declared on every verdict rather than
 implied, but it is a real gap: we screen for instructions aimed at the model, not for
 unsafe imagery.
+
+One I would mention because the *shape* of it recurs: the `aegis[media]` extra used to be
+named in four fail-closed remedy messages without existing in `pyproject.toml`, so a user who
+hit the correct refusal was told to run an install that could not resolve. It is declared now.
+A fail-closed path whose error message is right about the cause and wrong about the remedy is
+still a bug — and it is the half nobody writes a test for.
 
 ---
 
@@ -263,6 +278,7 @@ lambda, a `functools.partial`, a callable class, and a C builtin with no signatu
 last two must be classified legacy, and legacy plus an image must produce a skip
 *record*, not a call and not a crash.
 
-**The seam, end to end.** The assertion style I would copy from the vision tests:
-`assert transcriber.calls == []`. A pipeline that spends money and *then* decides cannot
-satisfy that assertion. Testing "the verdict was BLOCK" would pass either way.
+**The seam, end to end.** The assertion style is the one already used in the voice and vision
+suites: `assert fake.calls == []`, or `assert screen.calls == [] and analyst.calls == []`. A
+pipeline that spends money and *then* decides cannot satisfy that assertion. Testing "the
+verdict was BLOCK" would pass either way.

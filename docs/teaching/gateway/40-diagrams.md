@@ -1,21 +1,27 @@
-# The Gateway — the diagrams
+# The gateway — the diagrams
 
-If you can draw diagram 2 (the `complete` path) and diagram 4 (cost resolution) from
-memory, you can talk about this module for half an hour.
+Five diagrams. The two worth reproducing from memory are **the `complete` path** and **cost
+resolution** — between them they carry most of a conversation about this module.
+
+The reasoning behind each is in [`10-guide.md`](10-guide.md); a picture is only here when it
+shows something prose cannot.
 
 ---
 
 ## 1. Why one chokepoint
 
+*Look for an arrow from a caller straight to the fleet. There is none — that is the entire
+design.*
+
 ```mermaid
 flowchart TB
     subgraph CALLERS["every caller in the system"]
-        A["agent: plan / answer / reflect"]
-        B["retrieval: rerank, rewrite"]
-        C["guardrails: injection classifier"]
-        D["memory: consolidation"]
-        E["evals: judge"]
-        F["voice / vision"]
+        A["agent<br/>plan · reflect · generate"]
+        B["retrieval<br/>rewrite · embed · rerank"]
+        C["guardrails<br/>injection classifier"]
+        D["memory<br/>consolidation"]
+        E["evals<br/>judge"]
+        F["voice · vision"]
     end
 
     A --> GW
@@ -25,246 +31,155 @@ flowchart TB
     E --> GW
     F --> GW
 
-    GW["<b>aegis.gateway</b><br/>complete / embed / transcribe"]
-
-    GW --> POL["budget enforced BEFORE spend"]
-    GW --> LED["one durable ledger row"]
-    GW --> SPAN["one gen_ai span"]
-    GW --> COST["cost priced, provenance tagged"]
-    GW --> ROUTE["role to deployment, with fallbacks"]
-
-    POL --> PROV[["the model fleet"]]
-    ROUTE --> PROV
+    GW["<b>aegis.gateway</b><br/>complete · embed · transcribe"]
+    GW --> PROV[["the model fleet"]]
 ```
 
-**The claim this diagram makes:** there is no arrow from a caller straight to the
-provider. That is the entire design.
+One user question is eleven model calls across six modules. Every one of them is a place
+somebody could forget a timeout, forget to ledger the cost, hard-code a model id, or skip the
+budget check.
+
+> A convention that must be followed in forty places is not a control. It is a hope.
+
+Because there is exactly one edge into the fleet, budget enforcement, the ledger row, the
+`gen_ai` span, cost provenance and role routing each exist in exactly one place — including for
+the call site written next year by someone who read none of this.
 
 ---
 
 ## 2. `complete` — the full path
 
+*Look at the two red-flag edges: `OVER -> RAISE`, and the middle clause of the JSON guard.*
+
 ```mermaid
 flowchart TB
     START["complete(role, messages, ...)"] --> CTX{"governance context bound?"}
-    CTX -->|"no — ungoverned"| SKIP["skip enforcement<br/>and ledgering"]
+    CTX -->|"no — ungoverned"| SKIP["skip enforcement and ledgering<br/><i>no database is touched</i>"]
     CTX -->|yes| ENF["<b>enforce(ctx)</b><br/><i>reads the ledger sum</i>"]
 
     ENF --> OVER{"over any cap?"}
-    OVER -->|yes| RAISE([raise BudgetExceededError<br/>no provider call])
+    OVER -->|yes| RAISE(["raise BudgetExceededError<br/><b>no provider contact</b>"])
     OVER -->|no| PREP
 
-    SKIP --> PREP["count images<br/>bound max_tokens<br/>build fallback chain"]
+    SKIP --> PREP["count images<br/>bound max_tokens<br/>build the fallback chain"]
 
-    PREP --> SPAN["open gen_ai span"]
-    SPAN --> CALL["_bounded_acompletion<br/><i>per-attempt timeout +<br/>outer wall-clock ceiling</i>"]
+    PREP --> SPAN["open the gen_ai span"]
+    SPAN --> CALL["_bounded_acompletion<br/><i>per-attempt timeout inside,<br/>outer wall-clock ceiling around</i>"]
 
     CALL --> ACC["<b>_account</b>"]
 
-    subgraph ACCOUNT["_account — runs per real attempt"]
-        A1["read prompt / completion tokens"] --> A2["_resolve_cost"]
-        A2 --> A3["record_call: process tally"]
+    subgraph ACCOUNT["_account — runs on every response, re-asks included"]
+        A1["read prompt / completion tokens"] --> A2["_resolve_cost -> cost + provenance"]
+        A2 --> A3["record_call: the process tally"]
         A3 --> A4["set_usage on the span"]
         A4 --> A5["_record_usage: durable ledger row<br/><i>best-effort, never raises</i>"]
     end
 
-    ACC --> JSON{"JSON asked for,<br/>no tool calls,<br/>and reply invalid?"}
+    ACC --> JSON{"JSON asked for,<br/><b>no tool calls</b>,<br/>and the reply does not parse?"}
     JSON -->|yes| REASK["ONE corrective re-ask<br/><i>never a loop</i>"]
     REASK --> ACC2["_account again"]
     ACC2 --> OUT
     JSON -->|no| OUT["LLMResult<br/>content + tool_calls + usage + model"]
 ```
 
-**The two edges to point at.** `OVER -->|yes| RAISE` is the whole budget story: the
-refusal happens before any provider contact. And the `JSON` guard requires *no tool
-calls* — a tool-call reply has empty content by design, and without that condition every
-tool call would pay for a second round trip.
+The refusal happens **before** any provider contact. That is the difference between a cap and a
+receipt: reconciliation tells you that you overspent.
+
+The JSON guard requires *no tool calls* because a tool-call reply has empty content by design.
+Drop that clause and every action the agent ever takes pays for a second round trip.
+
+Note where the fallback chain lives — inside `_bounded_acompletion`, not around it. A fired
+fallback is detected afterwards, by comparing `LLMResult.model` (the deployment that actually
+responded) against the role's primary.
 
 ---
 
-## 3. Role routing and fallback
+## 3. Cost resolution — never a silent zero
 
-```mermaid
-flowchart LR
-    R["caller asks for a ROLE"] --> M["model_for(role)<br/><i>env override wins</i>"]
-    M --> P["primary deployment"]
-
-    P --> TRY{"attempt succeeds?"}
-    TRY -->|yes| DONE([response])
-    TRY -->|no| FB["next in the role's<br/>fallback chain"]
-    FB --> TRY2{"succeeds?"}
-    TRY2 -->|yes| DONE
-    TRY2 -->|no| FAIL([error propagates])
-
-    DONE --> CHK{"response.model ==<br/>the role's primary?"}
-    CHK -->|no| FIRED["fallback_fired = true<br/><i>measured, not guessed</i>"]
-    CHK -->|yes| NORM["normal"]
-```
-
-Default chains: `GENERATION → [REASONING, CHEAP]`, `REASONING → [GENERATION, CHEAP]`,
-`CHEAP → [GENERATION]`. Each attempt carries its own timeout; the outer ceiling is
-`timeout × (len(chain) + 1)`.
-
----
-
-## 4. Cost resolution — never a silent zero
+*Look at the `UNPRICED` box. Without it, "we could not price this" and "this was free" are the
+same number.*
 
 ```mermaid
 flowchart TB
-    C["one completed call"] --> P{"provider cost map<br/>priced it > 0?"}
-    P -->|yes| PROV["cost, source = PROVIDER"]
-    P -->|no| E{"measured units x<br/>configured rate > 0?"}
+    C["one completed call"] --> P{"the provider's own cost map<br/>priced it above zero?"}
+    P -->|yes| PROV["cost · source = PROVIDER"]
+    P -->|no| E{"measured units x the<br/>configured rate is above zero?"}
 
-    E -->|yes| EST["cost, source = ESTIMATED"]
+    E -->|yes| EST["cost · source = ESTIMATED<br/><i>the normal path — custom deployment ids<br/>are in no public cost map</i>"]
     E -->|no| B{"did the call consume<br/>ANY billable work?"}
 
-    B -->|"yes — tokens, seconds,<br/>images, or billable_work"| UNP["<b>0.00, source = UNPRICED</b><br/>+ WARNING naming the role,<br/>model and every measured unit"]
-    B -->|no| ZERO["0.00, source = ESTIMATED<br/><i>a genuine, unambiguous zero</i>"]
+    B -->|"yes — tokens, audio seconds,<br/>images, or billable_work"| UNP["<b>0.00 · source = UNPRICED</b><br/>+ a WARNING naming the role, the model<br/>and every measured unit"]
+    B -->|no| ZERO["0.00 · source = ESTIMATED<br/><i>a genuine, unambiguous zero</i>"]
 ```
 
-**`UNPRICED` is the point of this diagram.** Without that branch, "we could not price
-this call" and "this call was free" are the same number, and a cost dashboard that
-cannot tell them apart is a cost dashboard that lies.
+A cost dashboard that cannot tell a hole in its accounting from a free call is a dashboard that
+lies. One enum field keeps them apart.
+
+The `billable_work` flag on the third branch exists for exactly one case: a transcription with
+no tokens, no reported duration and no caller-supplied duration. Without it, the call that most
+needs the warning is the one call that could not trigger it.
 
 ---
 
-## 5. Billing units — why tokens are not enough
+## 4. What the host injects, and what happens when enforcement fails
+
+*Look at the `FAIL CLOSED` branch — it is what stops a database blip from disabling every cap
+in the system.*
 
 ```mermaid
 flowchart TB
-    CALL["a completed call"] --> U{"billing_unit(role)"}
-
-    U -->|TOKENS| T["units = prompt_tokens / 1000"]
-    U -->|AUDIO_MINUTES| A["units = audio_seconds / 60"]
-    U -->|IMAGES| I["units = image count"]
-
-    T --> COST
-    A --> COST
-    I --> COST
-
-    COST["cost = units x input_rate<br/>+ completion_tokens/1000 x output_rate"]
-    COST --> LED["Usage carries tokens<br/>AND audio_seconds AND images"]
-    LED --> ROW["ledger row carries all three"]
-    ROW --> CAP["the USD cap sums cost_usd,<br/>so a per-minute charge BINDS"]
-
-    OLD["the old model:<br/>tokens only"] -.->|"Whisper reports 0 tokens"| BAD["$0.00 in the ledger<br/>uncapped transcription"]
-```
-
-The dotted branch is the bug. `VOICE` is priced `(0.006, 0.0)` — per **audio minute**,
-with no output-token rate, because Whisper produces no billable output tokens.
-
----
-
-## 6. The savings calculation, and the three ways it flatters you
-
-```mermaid
-flowchart TB
-    CALL["one call: measured usage"] --> BASE["_baseline_cost:<br/>price the same work at<br/>the frontier baseline role"]
-    CALL --> ACT["actual cost"]
-
-    BASE --> NT{"non-token work?<br/>(audio / images)"}
-    NT -->|yes| MAXC["baseline = max(token_baseline, actual)<br/><i>a frontier chat model cannot<br/>transcribe — book ZERO saving,<br/>never a fabricated negative</i>"]
-    NT -->|no| TOK["baseline = token price"]
-
-    MAXC --> SAVE
-    TOK --> SAVE
-    ACT --> SAVE
-    SAVE["saving = max(0, baseline - actual)"]
-
-    SAVE --> AGG["cumulative tally"]
-    SAVE --> PER["per-call, from THIS call's Usage only<br/><i>reads no shared state</i>"]
-
-    T1["trap 1: a 90B model<br/>classified as 'small'"] -.-> AGG
-    T2["trap 2: embeddings in the<br/>small-model-share denominator"] -.-> AGG
-    T3["trap 3: before/after delta<br/>across an await"] -.-> PER
-```
-
-All three dotted traps were real bugs here. Note that all three move the number in the
-**favourable** direction — which is why nobody notices them.
-
----
-
-## 7. `transcribe` — the non-token path
-
-```mermaid
-flowchart TB
-    T["transcribe(audio, ...)"] --> ENF["enforce BEFORE spend<br/><i>identical, modality-agnostic gate</i>"]
-    ENF --> H["_audio_handle<br/><i>path: open and close here<br/>handle: leave alone</i>"]
-    H --> CALL["atranscription(file=handle,<br/>response_format='verbose_json')"]
-
-    CALL --> D{"provider reported<br/>a duration?"}
-    D -->|yes| USE["billable_seconds = reported"]
-    D -->|no| CALLER{"caller supplied<br/>duration_seconds?"}
-    CALLER -->|yes| USE2["billable_seconds = supplied"]
-    CALLER -->|no| WARN["<b>WARNING</b>: per-minute charge<br/>cannot be determined"]
-
-    USE --> COST
-    USE2 --> COST
-    WARN --> COSTU["_resolve_cost(billable_work=True)<br/>-> UNPRICED, not free"]
-
-    COST["_resolve_cost with audio_seconds"] --> LED
-    COSTU --> LED
-    LED["record_call + ledger row<br/>carrying audio_seconds"]
-```
-
-`response_format="verbose_json"` is not a formatting preference. It is what carries
-`duration` — **the billing unit**.
-
----
-
-## 8. Composition: how the backend wires the hooks
-
-```mermaid
-flowchart TB
-    subgraph HOST["backend — app.core.llm (strangler shim, import time)"]
+    subgraph HOST["backend — app.core.llm, a strangler shim, runs once at import"]
         CFG["_SettingsGatewayConfig<br/><i>properties, read fresh per call</i>"]
         GOV["_GovernanceHook"]
         OBS["OtelObservabilitySink<br/><i>from aegis.observability</i>"]
     end
 
-    CFG --> CONF["gateway.configure(...)"]
+    CFG --> CONF["gateway.configure"]
     GOV --> CONF
     OBS --> CONF
-
     CONF --> GWM["aegis.gateway module state"]
 
-    GOV --> G1["get_context: contextvar,<br/>None unless a tenant is bound"]
+    GOV --> G1["get_context: the contextvar,<br/>None unless a tenant is bound"]
     GOV --> G2["enforce: app.data.governance"]
-    GOV --> G3["record: usage_ledger row"]
+    GOV --> G3["record: a usage_ledger row"]
 
-    G2 --> FAIL{"enforcement read raised?"}
-    FAIL -->|"BudgetExceededError"| PROP["propagate — a real breach"]
-    FAIL -->|"anything else"| CLOSED["<b>FAIL CLOSED</b>: deny<br/>limit_type='enforcement_error'"]
-    FAIL -.->|"budget_fail_open=true"| OPEN["allow, log a warning"]
+    G2 --> FAIL{"the enforcement read raised?"}
+    FAIL -->|BudgetExceededError| PROP["propagate — a real breach"]
+    FAIL -->|"anything else"| CLOSED["<b>FAIL CLOSED</b>: deny, with<br/>limit_type='enforcement_error'"]
+    FAIL -.->|"budget_fail_open=true"| OPEN["allow, and log a warning every time"]
 ```
 
-`_SettingsGatewayConfig` uses **properties, not a snapshot**, so mutating the settings
-singleton at runtime (or in a test) is honoured on the next call.
+Each of the three is injected behind a `Protocol`, so `import aegis.gateway` never drags in a
+settings module, a database driver or an OpenTelemetry SDK. The standalone defaults are honest
+no-ops — no enforcement, no ledger — and say so in their docstrings.
+
+`_SettingsGatewayConfig` is properties rather than a snapshot, so mutating the settings
+singleton at runtime or in a test is honoured on the very next call.
 
 ---
 
-## 9. Where the context is bound on a request
+## 5. Where the context is bound on a request
+
+*Look at where `set_governance_context` sits: inside the streaming task, not around it.*
 
 ```mermaid
 flowchart TB
     REQ["POST /query"] --> AUTH["require_auth: decode the JWT"]
     AUTH --> RG["_resolve_governance(auth)"]
     RG --> T{"tenant bound?"}
-    T -->|no| EMPTY["empty GovernanceContext<br/><i>chokepoint enforces nothing</i>"]
-    T -->|yes| LIM["effective_limits(tenant, user)<br/><i>user cap clamped inward<br/>to the tenant cap</i>"]
+    T -->|no| EMPTY["an empty GovernanceContext<br/><i>the chokepoint then enforces nothing</i>"]
+    T -->|yes| LIM["effective_limits: the user cap<br/>clamped inward to the tenant cap"]
 
     LIM --> CTXOBJ["GovernanceContext"]
     EMPTY --> CTXOBJ
 
     CTXOBJ --> GEN["<b>inside the SSE generator task</b><br/>set_governance_context(ctx)"]
-    GEN --> RUN["run_agent(...) — every model call<br/>inside now sees the context"]
+    GEN --> RUN["run_agent — every model call<br/>inside the run now sees it"]
     RUN --> FIN["finally: reset_governance_context(token)"]
 ```
 
-**The placement is load-bearing.** The context is bound *inside* the streaming task, not
-around it. An SSE generator runs in its own context; binding outside would not be
-visible at the chokepoint.
-
----
+The placement is load-bearing. An SSE generator runs in its own task context, so a context
+variable bound *around* the task would not be visible at the chokepoint — every model call in
+the run would come back ungoverned, silently, with no error anywhere.
 
 **Next:** [`50-interview.md`](50-interview.md) — the questions you will be asked.

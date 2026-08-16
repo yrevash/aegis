@@ -12,7 +12,9 @@ Three layers, because no single one is sufficient.
 gold documents a correct retrieval must surface and the claim keywords a grounded answer
 should be able to cite. We score context precision@1, context recall and groundedness with
 pure token and substring overlap. No model calls, so it is free, instant and exactly
-reproducible, and it runs in CI on every commit.
+reproducible, and it runs in CI on every commit. Six cases today, scoring 0.833 / 1.000 /
+1.000 against floors of 0.66 / 0.95 / 0.85 — one case ranks its gold document second, which
+is where the 0.833 comes from.
 
 **An LLM-as-judge pass.** A reasoning model grades a generated answer for groundedness and
 relevance against the retrieved context. It sees paraphrase and contradiction that lexical
@@ -117,9 +119,11 @@ Unlabelled eval cases scored a perfect 1.0 and inflated the corpus mean.
 A case carrying no gold documents has nothing to be right or wrong about, and the code
 returned 1.0. Then the aggregate averaged over **all** cases.
 
-The arithmetic is unforgiving: ten labelled cases averaging 0.80 gives a mean of 0.80. Add
-ten unlabelled cases and it becomes `(8.0 + 10.0) / 20 = 0.90`. Nothing about retrieval
-changed; the number went up by 0.10.
+The arithmetic is unforgiving. Take a corpus of one labelled case that scores groundedness
+**0.0** — a total retrieval failure — plus nine cases nobody has labelled yet. The old mean
+is `(0.0 + 9 × 1.0) / 10 = 0.90`, which **clears the 0.85 groundedness threshold**. Under the
+fix the mean is `0.0` over one contributor, and it fails. Same corpus, same retrieval; one
+number says the system is fine and the other says it is completely broken.
 
 **What makes it a trap is that the triggering action is a good one.** Someone broadens the
 corpus for a new document type before they have labelled it — normal, correct behaviour —

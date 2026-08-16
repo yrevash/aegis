@@ -1,17 +1,21 @@
 # Data — the diagrams
 
-Diagram 4 is the one to know. It is the clearest picture of how three defensible decisions
-compose into an invisible failure.
+Five diagrams. The one to know is **diagram 2** — it is the clearest picture of how three
+defensible decisions compose into an invisible failure.
+
+Everything else about this module is explained in [`10-guide.md`](10-guide.md); a picture is
+only here when it shows something prose cannot.
 
 ---
 
 ## 1. Where the data layer sits
 
+*Look at which modules have an arrow into `aegis.data`, and which stop at the core.*
+
 ```mermaid
 flowchart TB
-    CORE["aegis.core<br/>pydantic + stdlib<br/><b>free — imported by everything</b>"]
-
-    DATA["aegis.data<br/>sqlalchemy&#91;asyncio&#93;<br/><i>the aegis&#91;data&#93; extra</i>"]
+    CORE["<b>aegis.core</b><br/>pydantic + stdlib<br/><i>imported by everything</i>"]
+    DATA["<b>aegis.data</b><br/>sqlalchemy&#91;asyncio&#93;<br/><i>the aegis&#91;data&#93; extra</i>"]
 
     MEM["aegis.memory"]
     GOV["aegis.governance"]
@@ -26,235 +30,146 @@ flowchart TB
     MEM --> DATA
     GOV --> DATA
     OPS --> DATA
-    MEM --> CORE
-    GOV --> CORE
-    OPS --> CORE
 
     GR --> CORE
     VI --> CORE
     VO --> CORE
     FO --> CORE
-
-    GR -.->|"NO ORM"| X1(["never touches aegis.data"])
-    VI -.-> X1
-    VO -.-> X1
-    FO -.-> X1
-
-    CORE -.->|"sqlalchemy is BANNED here"| BAN["the core is imported by everything,<br/>so its dependencies are<br/>everyone's dependencies"]
 ```
 
-**Modules that persist things pay for the ORM. Modules that do not, do not.**
+The four modules on the right never open a database, so they never carry an ORM. The three on
+the left do, and they pay for it.
+
+That split only exists because SQLAlchemy is **banned from the core** by a guard test. The core
+is imported by everything, so a dependency there is everyone's dependency.
 
 ---
 
-## 2. One schema, two dialects
+## 2. How the ledger silently lost every row
+
+*Follow the right-hand branch. Every step on it is correct, and the end of it is a spend cap
+that no longer binds.*
 
 ```mermaid
 flowchart TB
-    DEF["one declarative definition"] --> D{"dialect at DDL time"}
+    ADD["add audio_seconds + images<br/>to the UsageLedger model<br/><i>the ALTER TABLE written<br/>only in a docstring</i>"]
 
-    D -->|postgresql| PG["jsonb · timestamptz"]
-    D -->|"sqlite (tests)"| SQ["JSON · naive-UTC DATETIME"]
-
-    subgraph MECH["two mechanisms"]
-        V["with_variant<br/><i>a different TYPE</i>"]
-        T["TypeDecorator<br/><i>a different type AND<br/>a value transformation</i>"]
-    end
-
-    V --> JB["JsonB = JSON().with_variant(JSONB, 'postgresql')"]
-    T --> UD["UtcDateTime — normalises on bind,<br/>returns aware UTC on result"]
-    T --> VC["VectorColumn — jsonb / JSON"]
-
-    DEF -.->|"the alternative"| BAD["if dialect == 'postgresql':<br/>scattered through calling code"]
-    BAD -.-> WHY["scattered branches are where<br/>behaviour actually DIVERGES<br/>between test and production"]
-```
-
-**Express the difference once, at the type.** A dialect branch at the type is a
-compile-time detail; a dialect branch at a call site is a behaviour difference.
-
----
-
-## 3. The naive/aware datetime trap
-
-```mermaid
-flowchart TB
-    APP["the application is uniformly aware<br/>datetime.now(UTC)"] --> COL{"the column type"}
-
-    COL -->|"TIMESTAMP WITHOUT TIME ZONE<br/><i>the ORM default</i>"| N
-
-    subgraph N["two failure modes"]
-        F1["<b>LOUD</b>: asyncpg refuses to encode<br/>an aware datetime for a naive column<br/>-> every write and every<br/>WHERE ts &lt; :now blows up<br/><i>this killed the SLA sweeper</i>"]
-        F2["<b>SILENT</b>: server_default=now()<br/>stores the SERVER'S LOCAL WALL CLOCK<br/>-> on TimeZone=Asia/Kolkata every<br/>created_at is +05:30 off,<br/>and the API relabels it +00:00"]
-    end
-
-    COL -->|"UtcDateTime"| OK
-
-    subgraph OK["the fix"]
-        A1["postgres -> timestamptz"]
-        A2["sqlite -> naive UTC<br/><i>an offset would corrupt<br/>LEXICAL ordering</i>"]
-        A3["bind: normalise either input form"]
-        A4["result: ALWAYS aware UTC"]
-    end
-
-    OK --> BASE["applied via type_annotation_map<br/>ON THE BASE"]
-    BASE --> CLASS["<b>every Mapped&#91;datetime&#93; on every table</b><br/>— including one written next year<br/>by someone who never heard of this"]
-```
-
-**Fixing each column is right today and wrong on the next one someone adds. Fixing the
-base is right forever.**
-
----
-
-## 4. How the ledger silently lost every row
-
-```mermaid
-flowchart TB
-    ADD["add audio_seconds + images<br/>to the UsageLedger model<br/><i>the ALTER TABLE written<br/>only in a docstring</i>"] --> TEST{"tests"}
-
-    TEST -->|"schema built from scratch<br/>every run"| PASS["all 8 columns · PASS"]
+    ADD --> TEST["tests: the schema is built<br/>from scratch every run"]
+    TEST --> PASS(["all 11 columns · PASS"])
 
     ADD --> PROD["deploy to a LIVE database"]
     PROD --> CA["create_all runs"]
-    CA --> NOOP["<b>CREATE TABLE IF NOT EXISTS</b><br/>the table exists -> does NOTHING"]
+    CA --> NOOP["<b>CREATE TABLE IF NOT EXISTS</b><br/>the table exists, so it does NOTHING"]
 
-    NOOP --> OLD["the live table still has 6 columns"]
+    NOOP --> OLD["the live table still has its<br/>original 9 columns"]
     OLD --> INS["every INSERT naming audio_seconds<br/>raises UndefinedColumn"]
-    INS --> SWALLOW["_record_usage swallows it<br/><i>usage recording is best-effort<br/>by design — and that design<br/>is CORRECT</i>"]
+    INS --> SWALLOW["_record_usage swallows it<br/><i>usage recording is best-effort<br/>by design — and that design is right</i>"]
 
     SWALLOW --> LOST["the row is lost"]
     LOST --> SUM["USD caps are computed by<br/>SUMMING those rows"]
     SUM --> ZERO["no rows -> no spend -><br/><b>the cap never binds</b>"]
 
-    ZERO --> SILENT["no exception · no failing test ·<br/>no failing request · dashboard green ·<br/>$0.00 looks exactly like<br/>a quiet tenant"]
+    ZERO --> SILENT["no exception · no failing test ·<br/>no failing request · dashboard green ·<br/>and $0.00 looks exactly like<br/>a quiet tenant"]
 ```
 
-**Three defensible decisions** — no migration framework, best-effort usage recording,
-additive defaulted columns — **compose into an invisible, security-relevant failure.**
+Three defensible decisions — no migration framework, best-effort usage recording, additive
+defaulted columns — compose into an invisible, security-relevant failure.
+
+The two branches out of `ADD` are the whole story: drift can only exist on a long-lived
+database, and the only long-lived database is production.
 
 ---
 
-## 5. The additive reconciler
+## 3. Bootstrap, in order
+
+*Look at the three imports at the top. Nothing below them can create a table they did not
+register.*
 
 ```mermaid
 flowchart TB
-    B["bootstrap()"] --> CA["create_all — both metadatas"]
-    CA --> REC["reconcile_additive_columns"]
+    IMP["import aegis.governance.models<br/>import aegis.ops.models<br/>import app.memory.stores<br/><i>for the side effect only</i>"]
+    IMP --> META["their mapped classes are now<br/>registered on AegisBase.metadata"]
 
-    REC --> D{"postgresql?"}
-    D -->|no| SKIP["return &#91;&#93; — SQLite rebuilds<br/>its schema every run"]
+    META --> CA["<b>create_all</b> — both metadatas<br/><i>CREATE TABLE IF NOT EXISTS</i>"]
+    CA --> REC["<b>reconcile_additive_columns</b><br/><i>columns the models declare<br/>and the database lacks</i>"]
+    REC --> AL["<b>_align_timestamp_columns</b><br/><i>naive -> timestamptz,<br/>USING c AT TIME ZONE 'UTC'</i>"]
+    AL --> COMMIT["one transaction commits"]
+    COMMIT --> RLS["<b>bootstrap_rls</b><br/><i>its own transaction</i>"]
 
-    D -->|yes| READ["read information_schema<br/>-> every (table, column) that EXISTS"]
-    READ --> PLAN["plan_additive_columns<br/><i>pure, database-free, testable</i>"]
-
-    PLAN --> SPLIT{"for each missing column"}
-    SPLIT -->|"nullable, or has a server_default"| SAFE["ADDABLE"]
-    SPLIT -->|"NOT NULL with no default,<br/>or a primary key"| UNSAFE["UNSAFE — no correct value<br/>exists for the rows already there"]
-
-    UNSAFE --> RAISE["log CRITICAL <b>and</b> raise SchemaDriftError"]
-    RAISE --> MAIN["main.py re-raises ahead of the<br/>blanket startup except<br/><b>-> refuses to serve</b>"]
-
-    SAFE --> DDL["render via SQLAlchemy's<br/>CreateColumn compiler"]
-    DDL --> ALTER["ALTER TABLE ... ADD COLUMN IF NOT EXISTS"]
-    ALTER --> LOG["log at INFO"]
-    ALTER --> IDX["create an index only if ALL<br/>its columns were added in this pass"]
-
-    REC --> ALIGN["_align_timestamp_columns<br/>naive -> timestamptz<br/>USING c AT TIME ZONE 'UTC'"]
-    ALIGN --> RLS["bootstrap_rls"]
+    IMP -.->|"forget one import"| MISS["that class is not in the metadata<br/>-> its table is simply never created<br/><b>no error, no warning</b>"]
+    MISS -.-> LATE["the first query against it fails<br/>much later, somewhere else"]
 ```
 
-**Why the ORM's own compiler renders the DDL:** so a reconciled database and a fresh one
-converge. Hand-written SQL would create a second schema that exists only in production —
-which is the original bug wearing a different hat.
+DDL is transactional in Postgres, so the four steps in the box either all land or none do —
+never a half-migrated schema.
+
+Every step is idempotent, because every worker runs all of it on startup.
+
+The dotted branch is the decorator-registry trap in its ORM form: **a registration in an
+unimported module is invisible.**
 
 ---
 
-## 6. Why refusing to boot is right, and how the refusal survives
+## 4. What the reconciler will and will not do
 
-```mermaid
-flowchart LR
-    DRIFT["unreconcilable drift"] --> C{"boot anyway?"}
-
-    C -->|yes| RUN["serve with a table whose<br/>writes are failing right now"]
-    RUN --> INV["ledger unwritable -><br/>no cost attribution -><br/>no binding caps -><br/><b>indefinitely, silently</b>"]
-
-    C -->|no| REF["refuse to serve"]
-    REF --> FIX["loud · immediate · fixed in an hour"]
-
-    REF --> P1["defence 1: logged at CRITICAL<br/><i>as well as</i> raised"]
-    REF --> P2["defence 2: re-raised ahead of<br/>main.py's blanket startup except"]
-
-    P1 -.->|without it| SWAL["a host wrapping bootstrap in<br/>'the database is optional'<br/>reduces it to a traceback<br/>nobody reads"]
-    P2 -.-> SWAL
-```
-
-**A loud failure caught by a broad handler is a quiet failure again.**
-
----
-
-## 7. Vector storage — index or record?
+*Look at the `yes` branch. When it fires, nothing is added at all — not even the safe columns.*
 
 ```mermaid
 flowchart TB
-    Q{"what is this column FOR?"}
+    START["reconcile_additive_columns"] --> DIA{"postgresql?"}
+    DIA -->|no| SKIP(["return an empty list<br/><i>SQLite rebuilds its schema every run</i>"])
 
-    Q -->|"a search INDEX"| IDX["pgvector: vector(n),<br/>distance operators, IVFFlat/HNSW"]
-    IDX --> COST1["a Postgres EXTENSION ·<br/>does not exist on SQLite ·<br/>the test schema cannot be created"]
+    DIA -->|yes| EX["read information_schema<br/><i>what the live database actually has</i>"]
+    EX --> PLAN["<b>plan_additive_columns</b><br/><i>pure and database-free,<br/>so it is testable with no Postgres</i>"]
 
-    Q -->|"a source of RECORD"| REC["a list of floats,<br/>stored as JSON"]
-    REC --> WIN["jsonb on Postgres · JSON on SQLite ·<br/>NO extension · the schema<br/>materialises identically"]
+    PLAN --> Q{"any missing column that is a<br/>primary key, or NOT NULL with<br/>no server default?"}
 
-    REC --> MIRROR["ANN search runs in the embedded<br/>vector store the SQL row mirrors into"]
+    Q -->|yes| CRIT["log CRITICAL <b>and</b> raise SchemaDriftError<br/><i>no correct value exists for the<br/>rows already in the table</i>"]
+    CRIT --> MAIN["main.py re-raises it ahead of the<br/>blanket startup except"]
+    MAIN --> REFUSE(["refuse to serve"])
 
-    REC --> CAVEAT["<b>JSON enforces no dimensionality</b><br/>dim is DOCUMENTATION ·<br/>the mirror skips off-dim rows"]
-
-    CAVEAT -.-> HON["keeping a parameter you cannot<br/>enforce is fine —<br/>letting a reader assume it is<br/>a constraint is not"]
+    Q -->|no| DDL["render each column with SQLAlchemy's<br/>own CreateColumn compiler"]
+    DDL --> ALTER["ALTER TABLE ... ADD COLUMN IF NOT EXISTS<br/><i>logged at INFO</i>"]
+    ALTER --> IDX["create a declared index only if<br/><b>all</b> its columns were added in this pass"]
 ```
+
+The compiler on the `DDL` edge is the detail worth stealing: a reconciled database and a fresh
+one converge, because both went through the same renderer. Hand-written SQL would leave you
+with a second schema that exists only in production.
+
+The refusal is right because booting means serving with a ledger whose writes are failing right
+now — uncapped, unattributed spend, indefinitely, with every dashboard green.
+
+And the refusal needs both defences on it. **A loud failure caught by a broad handler is a
+quiet failure again.**
 
 ---
 
-## 8. RLS — the statement that made the policy real
+## 5. Why the RLS policy was enforced against nobody
+
+*Follow the `table OWNER` branch — that is the role the application actually connects with.*
 
 ```mermaid
 flowchart TB
     T["a tenant-scoped table"] --> E["ENABLE ROW LEVEL SECURITY"]
-    E --> POL["CREATE POLICY tenant_isolation<br/>USING tenant_id = current GUC"]
+    E --> POL["CREATE POLICY tenant_isolation<br/><i>a numeric scope is bound<br/>-> tenant_id must equal it</i>"]
 
-    POL --> CHECK{"who is connecting?"}
-    CHECK -->|"a non-owner role"| ENF["the policy applies"]
-    CHECK -->|"the table OWNER"| BYPASS["<b>exempt</b> — every row returned"]
+    POL --> WHO{"which role is querying?"}
+    WHO -->|"a non-owner role"| ENF["the policy filters the query"]
+    WHO -->|"the table OWNER"| BYP["<b>exempt</b> — every tenant's rows returned"]
 
-    BYPASS --> REAL["and the app connects with the SAME<br/>role that ran create_all"]
-    REAL --> DEC["the policy was DECORATIVE:<br/>enabled, visible in pg_policies,<br/>and enforced against nobody"]
+    BYP --> SAME["and the app connects with the same<br/>role that ran create_all"]
+    SAME --> DEC["the policy was <b>decorative</b>:<br/>visible in pg_policies,<br/>enforced against nobody"]
 
-    T --> F["<b>FORCE ROW LEVEL SECURITY</b>"]
-    F --> FIXED["the owner is no longer exempt"]
-
-    POL --> NOCHECK["no explicit WITH CHECK<br/>-> Postgres reuses USING for WRITES<br/>-> a cross-tenant INSERT is<br/>REJECTED, not merely hidden"]
+    DEC --> F["<b>ALTER TABLE ... FORCE ROW LEVEL SECURITY</b>"]
+    F --> ENF
 ```
 
-**Every inspection said "isolation is on."** `pg_policies` showed the policy. The code
-bound the scope. And every query returned every tenant's rows.
+Every inspection said isolation was on. `pg_policies` showed the policy, the code bound the
+scope, and every query returned every tenant's rows.
 
----
-
-## 9. Registration side effects
-
-```mermaid
-flowchart TB
-    B["bootstrap()"] --> IMP["import aegis.governance.models<br/>import aegis.ops.models<br/>import app.memory.stores<br/><i>for the side effect ONLY</i>"]
-
-    IMP --> META["their mapped classes register<br/>on AegisBase.metadata"]
-    META --> CA["create_all walks the metadata"]
-    CA --> TBL["the tables exist"]
-
-    IMP -.->|"forget one import"| MISS["the class is not in the metadata"]
-    MISS --> NOTBL["<b>its table is simply never created</b><br/>— no error, no warning"]
-    NOTBL --> LATE["the first query against it fails<br/>much later, somewhere else"]
-```
-
-The ORM form of the decorator-registry trap: **a registration in an unimported module is
-invisible.**
-
----
+`FORCE` made the policy real for scoped requests. Requests that bind **no** numeric scope —
+login-by-username, platform-admin surfaces — are still unrestricted by design, so read this as
+a documented gap rather than a complete control.
 
 **Next:** [`50-interview.md`](50-interview.md).

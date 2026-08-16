@@ -66,10 +66,14 @@ A model's raw confidence is not a probability. Nothing in the training objective
 its output to be a frequency — it is a score that happens to live between 0 and 1. Models
 are routinely over-confident.
 
-Conformal prediction gives you a real guarantee instead. Split your data into train and
-calibration. Fit on train. On calibration, measure how wrong the model actually was — the
-residuals. Take the 90th percentile of those residuals, call it *q*. Now every prediction
-gets the interval `[ŷ − q, ŷ + q]`, and the true value falls inside about 90% of the time.
+Conformal prediction gives you a real guarantee instead, and the mechanism is almost
+embarrassingly simple. Fit the model on 600 rows and hold back 200 it never saw. Run it
+over those 200 and record how wrong it was each time. Sort those 200 absolute errors and
+walk up to the 90th percentile — say that lands at 9.6 hours. That is your ruler.
+
+Now the model predicts 58.6 hours for a new ticket, and the interval is
+`[58.6 − 9.6, 58.6 + 9.6]` = `[49.0, 68.2]`. The true value falls inside about 90% of the
+time, and you assumed nothing about the shape of the error distribution to get there.
 
 **Three properties are the pitch.** Distribution-free — no Gaussian assumption anywhere.
 Finite-sample — it holds for the data you have, not asymptotically. Model-agnostic — it
@@ -104,9 +108,11 @@ split cannot support a 90% interval, arithmetically, no matter how good the data
 compute that minimum and refuse with the arithmetic in the error message.
 
 **The guarantee is marginal, not conditional.** It is averaged over the whole distribution.
-A model systematically worse on one segment can hit 90% overall while covering that segment
-at 70%. Conditional coverage is provably impossible in full generality; Mondrian conformal
-recovers it per declared group at the cost of enough calibration rows per group.
+If the model is bad on APAC tickets and APAC is 15% of volume, the headline rate can sit at
+90% while APAC is covered at 70% — every individual APAC promise worse than advertised, and
+nothing on the dashboard showing it. Conditional coverage is provably impossible in full
+generality; Mondrian conformal recovers it per declared group at the cost of enough
+calibration rows per group.
 
 ---
 
@@ -194,9 +200,11 @@ nothing was held out). Plus stratification on the label, because a rare class la
 entirely outside calibration silently invalidates its conformal sets, and a calibration-size
 floor that refuses when the level is arithmetically unattainable.
 
-**A coverage number that can never disappoint you is not a measurement.** Our forecast
-module reports a requested 0.9 achieving 0.762 with `coverage_meets_request=False`. That
-is what an honest number looks like.
+**A coverage number that can never disappoint you is not a measurement.** The honest shape
+is a requested 0.9 sitting next to a measured rate that came out lower, and a flag saying
+so — which is exactly what the sibling forecast module reports, where
+`coverage_meets_request` is a strict `>=` against the measured value and is never rounded
+up in the model's favour.
 
 ---
 

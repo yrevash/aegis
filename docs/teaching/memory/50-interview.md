@@ -61,11 +61,16 @@ Similarity alone is not enough. Something said this morning usually matters more
 the same sentence in March, and "customer threatened to cancel" should outlive
 "customer said thanks."
 
+We add a fourth term, frequency — `log1p(access_count)`, logged so a memory recalled 400
+times can't dominate everything.
+
 **The trap worth mentioning:** if you min-max normalise those signals across the
 candidate set, you destroy absolute relevance. A candidate set whose best match is a
 cosine of 0.15 still yields a top-ranked memory scored 1.0 — nothing was relevant and
 the ranking says otherwise. You need an absolute similarity floor *before* normalising,
-and recalling nothing has to be an acceptable outcome.
+and recalling nothing has to be an acceptable outcome. Ours is structural rather than a
+threshold constant — the ANN index and the 20→6 fan-out bound what survives — which is
+worth saying honestly rather than claiming a floor we don't have.
 
 ---
 
@@ -123,8 +128,12 @@ them to keep a three-week-old fragment is usually the wrong trade.
 
 ### "How do you keep one tenant's memories away from another's?"
 
-Every read is scoped, at two layers: an application filter and Postgres row-level
-security so the database enforces it even if a query forgets.
+Every read is scoped by a NULL-symmetric application filter — a single shared helper used
+by every read and mirrored on the write side. That filter is the **primary** isolator, not
+a convenience: it's NULL-safe and behaves identically on SQLite and Postgres. Postgres
+row-level security is available as an additive belt a host wires itself, but it's opt-in
+and the standard per-tenant policy fails closed on a NULL tenant, so I wouldn't claim it
+as the thing that makes a forgotten `WHERE` clause safe.
 
 This matters more in memory than almost anywhere else, because a leaked memory doesn't
 just appear in an API response — it's **pasted into a prompt and paraphrased back to a

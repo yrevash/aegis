@@ -1,285 +1,197 @@
-# Core — the diagrams
+# The core — the diagrams
 
-Diagram 1 is the whole architecture. If you can draw the star and state the three rules,
-you can explain why any module in this system is installable on its own.
+Five diagrams. The one worth reproducing from memory is **the dependency graph** — if you can
+draw the layers and say which edges are allowed, you can explain why any module in this system
+installs on its own.
+
+Everything else about this module is in [`10-guide.md`](10-guide.md); a picture is only here when
+it shows something prose cannot.
 
 ---
 
-## 1. The Module Contract — a star, not a mesh
+## 1. The dependency graph, and the edges that shouldn't exist
+
+*Look at the dashed edges. Every one of them is a leaf importing a sibling.*
 
 ```mermaid
 flowchart TB
-    subgraph CORE["aegis.core — ZERO heavy dependencies"]
-        T["types.py<br/>GuardResult, RiskLevel, RunStatus"]
-        I["interfaces.py<br/>ChatCompleter, Guardrail"]
-        E["events.py<br/>SpanKind, step events"]
-        L["lazy.py<br/>require(extra, module)"]
-        R["registry.py"]
-        C["config.py + health.py"]
-        S["stream.py + stream_names.py"]
+    APP["<b>backend/src/app</b><br/>the composition root —<br/>domain logic, credentials, wiring"]
+
+    subgraph LEAVES["leaf modules — each installs on its own"]
+        GR["guardrails"]
+        RT["retrieval"]
+        GW["gateway"]
+        MEM["memory"]
+        ML["ml"]
+        GOV["governance"]
+        VIS["vision"]
+        VOI["voice"]
+        EV["evals"]
     end
 
-    G["aegis.guardrails"] --> CORE
-    RT["aegis.retrieval"] --> CORE
-    ML["aegis.ml"] --> CORE
-    GW["aegis.gateway"] --> CORE
-    V["aegis.vision"] --> CORE
-    VO["aegis.voice"] --> CORE
-    F["aegis.forecast"] --> CORE
-    M["aegis.memory"] --> CORE
+    subgraph BASE["shared bases — pydantic + stdlib only"]
+        CORE["<b>aegis.core</b><br/>types · interfaces · events<br/>lazy · registry · config · health · stream"]
+        DATA["aegis.data"]
+        MEDIA["aegis.media"]
+    end
 
-    CORE -.->|"imports nothing internal"| NONE(["no leaf, ever"])
+    APP --> LEAVES
+    GR --> CORE
+    RT --> CORE
+    GW --> CORE
+    MEM --> CORE
+    ML --> CORE
+    GOV --> CORE
+    VIS --> CORE
+    VOI --> CORE
+    EV --> CORE
 
-    APP["backend/src/app<br/><b>the composition root</b>"] --> G
-    APP --> RT
-    APP --> ML
-    APP --> GW
-    APP --> V
-    APP --> VO
-    APP --> F
-    APP --> M
+    MEM -.-> RT
+    GOV -.-> GW
+    VIS -.-> GR
+    VOI -.-> GR
+    VOI -.-> GW
+    EV -.-> RT
+    EV -.-> GW
+
+    CORE --> NONE(["imports nothing internal —<br/>no leaf, ever"])
 ```
 
-**Three rules.** The core imports nothing internal. A leaf imports only the core. No
-leaf-to-leaf imports. Anything two modules must agree on goes into the core — which is
-the *only* thing that stops the graph becoming a mesh.
+Solid edges are the contract: the app composes leaves, leaves depend only on a shared base, the
+base depends on nothing internal. Draw only those and it is a star.
+
+The dashed edges are real imports in the tree today, found by walking the AST. The architecture
+doc names two of them; there are at least seven among the leaves, plus `ops → evals`,
+`redteam → guardrails`, and the composition-layer modules `agent` and `security` which reach into
+several siblings by design.
+
+The lesson is not the count. The count was documented, correct when written, and went stale
+because the isolation tests check **heaviness** — does importing this pull torch — and never
+**topology**.
 
 ---
 
-## 2. Where the invariant is actually violated
+## 2. What happens when a control's library is missing
+
+*Follow the top path to its end state. That is the one this codebase bans.*
+
+```mermaid
+flowchart TB
+    START["an operator enables the image-PII rail;<br/>the presidio extra is not installed"] --> WHICH{"how does the<br/>code react?"}
+
+    WHICH -->|"try / except ImportError<br/>HAS_PII = False"| S1["the rail becomes a no-op"]
+    S1 --> S2["every image reaches the model<br/><b>unredacted</b>"]
+    S2 --> S3["the verdict says PASS"]
+    S3 --> S4(["nothing logs · the dashboard is green ·<br/>discovered at audit, months later"])
+
+    WHICH -->|"require('aegis&#91;media&#93;', …)"| R1["ImportError:<br/>'This feature needs …<br/>Run: pip install aegis&#91;media&#93;'"]
+    R1 --> R2(["loud · local · fixed in fifteen seconds"])
+
+    WHICH -->|"a weaker engine exists<br/>(text PII: regex)"| D1["fall back to regex"]
+    D1 --> D2["log WARNING on every selection ·<br/>active_engine() reports which is live ·<br/>AEGIS_PII_ENGINE=presidio makes it raise"]
+    D2 --> R2
+```
+
+Degradation is not the banned thing. **Silent** degradation is. The bottom path is legitimate
+because it announces itself and can be pinned closed; the top path is not, because a deployment
+error has become a security downgrade with no evidence anywhere.
+
+---
+
+## 3. One step, two consumers
+
+*Look at where the span kind is attached, and where it is read.*
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as a module
+    participant S as _StepScope
+    participant E as AegisEmitter
+    participant SK as sink (SSE)
+    participant UI as the console
+    participant OT as the tracer
+
+    M->>S: async with emitter.step("retrieve", RETRIEVER)
+    S->>E: STEP_STARTED + rawEvent={spanKind: RETRIEVER}
+    E->>SK: one encoded SSE frame
+    SK-->>UI: a step row opens
+    SK-->>OT: a RETRIEVER span opens
+
+    M->>M: the step's work (may raise)
+
+    M->>S: leave the block
+    S->>E: STEP_FINISHED + rawEvent={spanKind: RETRIEVER}
+    E->>SK: one encoded SSE frame
+    SK-->>UI: the row closes
+    SK-->>OT: the span closes
+```
+
+**Step 8 happens whether or not the body raised**, because it is emitted from `__aexit__`. With
+manual start/finish calls an exception skips it and the console spins forever.
+
+**The `rawEvent` on steps 2 and 7 is the bug that was fixed.** The span kind used to be stored on
+the scope object and never put on the wire — every call site declared it correctly, nothing
+errored, and every span still rendered as a generic chain. The regression test asserts on the
+*decoded frame*, not the scope object, because that is the only boundary the consumer actually
+reads.
+
+---
+
+## 4. Where an event name can vanish
+
+*Compare the two checks. One side raises; the other side has nothing.*
 
 ```mermaid
 flowchart LR
-    MEM["aegis.memory"] -->|"cosine_similarity, RRF fusion,<br/>spotlight, ChromaVectorStore"| RET["aegis.retrieval"]
-    GOV["aegis.governance"] -->|"BudgetExceededError"| GWY["aegis.gateway"]
+    PY["aegis.core.stream_names<br/><b>ALL — 22 names</b>"] --> C{"custom(name, value)<br/>is_known(name)?"}
+    C -->|no| ERR["<b>ValueError</b><br/>'add it to aegis.core.stream_names'"]
+    C -->|yes| FRAME["one SSE frame on the wire"]
 
-    MEM -.->|"and because __init__.py runs<br/>on ANY submodule import"| ALL["importing aegis.memory pulls<br/>ALL of aegis.retrieval"]
-
-    GOV -.->|"the fix"| MOVE["move the exception into<br/>aegis.core.types —<br/>exactly as RiskLevel and RunStatus<br/>were moved out of app.api.schemas"]
-
-    ALL -.->|mitigated by| LAZY["the heavy backends inside retrieval<br/>(lightrag, neo4j, redis)<br/>are themselves lazy"]
+    FRAME --> TS["web/src/lib/streamNames.ts<br/><b>17 names</b>"]
+    TS --> C2{"is the name<br/>in the mirror?"}
+    C2 -->|yes| RENDER["rendered"]
+    C2 -->|"no — guardrail_media,<br/>voice_chunk, voice_transcript,<br/>vision_screen, vision_analysis"| DROP["<b>silently dropped</b><br/>nothing happens ·<br/>nothing complains"]
 ```
 
-**Both are documented rather than smoothed over**, because *"the whole point of honest
-infra is not claiming an invariant holds when the code says otherwise."*
+The server side cannot emit a name it does not know. The client side has no equivalent guard, and
+the mirror is five names behind — all five of them live emissions from the media, voice and
+vision rails.
 
-What would make it structural: a test that walks the AST of every leaf, collects
-`import aegis.<other>`, and asserts the set matches a small explicit allowlist.
+The file's own header says *"parity is asserted by the count below"*. The count is
+`STREAM_NAME_SET.size`, derived from the TypeScript list itself, so it can only count what is
+already there. A comment claiming a check is not a check.
 
 ---
 
-## 3. `require` — the only sanctioned optional import
+## 5. Declared mode is not resolved mode
 
-```mermaid
-flowchart TB
-    CALL["require('aegis&#91;forecast&#93;', 'statsforecast')<br/><i>inside a function body</i>"] --> TRY{"importlib.import_module"}
-
-    TRY -->|ok| MOD["the module"]
-    TRY -->|ImportError| RAISE["ImportError:<br/>'This feature needs statsforecast.<br/>Run: pip install aegis&#91;forecast&#93;'<br/><b>raise ... from exc</b>"]
-
-    RAISE --> CHAIN["the chain shows the REAL missing<br/>transitive module underneath"]
-    RAISE --> FIX["the message carries the COMMAND,<br/>not a category"]
-
-    BAD["try: import x<br/>except ImportError: HAS_X = False"] -.->|"the banned pattern"| HARM
-    HARM["1 · a DEPLOYMENT error becomes<br/>a runtime behaviour change<br/>2 · two paths, no signal which ran<br/>3 · unobservable — nothing logs<br/>4 · if x is a CONTROL, a silent downgrade<br/>5 · fails late, in production"]
-```
-
-**Placement matters as much as the mechanism.** At module top level the import would be
-mandatory and the extra would be an extra in name only.
-
----
-
-## 4. Structural seams — depend on shapes, not packages
-
-```mermaid
-flowchart TB
-    subgraph CORE2["aegis.core.interfaces"]
-        P["ChatCompleter (Protocol)<br/>async (messages, *, response_format) -> str"]
-    end
-
-    G2["aegis.guardrails<br/><i>needs a model</i>"] -->|"type annotation only"| P
-
-    LITE["a litellm wrapper"] -.->|"satisfies structurally"| P
-    OAI["an OpenAI wrapper"] -.-> P
-    FAKE["a 3-line async test fake"] -.-> P
-
-    P -.->|"the alternative"| ABC["an ABC the implementer<br/>must SUBCLASS —<br/>a dependency edge<br/>in the wrong direction"]
-
-    G2 --> NOTE["no inheritance,<br/>no runtime coupling,<br/>a fake costs 3 lines"]
-```
-
-**Not every seam is a Protocol.** A rail is `Callable[[MediaPayload], GuardResult | None]`
-because there is nothing keyword-only to express. `VisionAnalyst` *is* a Protocol because
-it must return usage as well as text; `TranscribeCallable` is one because it takes a file
-handle, not messages.
-
----
-
-## 5. The streaming spine — one way to emit
-
-```mermaid
-flowchart TB
-    subgraph MODS["every module"]
-        M1["guardrails"]
-        M2["retrieval"]
-        M3["voice"]
-        M4["vision"]
-    end
-
-    M1 --> EM
-    M2 --> EM
-    M3 --> EM
-    M4 --> EM
-
-    EM["AegisEmitter<br/><b>owns the wire rules</b>"]
-
-    EM --> W1["camelCase via the encoder"]
-    EM --> W2["data: ...\\n\\n framing"]
-    EM --> W3["START -> CONTENT -> END"]
-    EM --> W4["RUN_STARTED first"]
-
-    EM --> VAL{"custom(name, value)<br/>name in stream_names.ALL?"}
-    VAL -->|no| ERR["ValueError:<br/>'add it to aegis.core.stream_names'"]
-    VAL -->|yes| SSE["one SSE frame"]
-
-    ALT["fourteen ad-hoc builders"] -.->|"what you get instead"| PROB["one gets the framing wrong ·<br/>ordering rules live in fourteen heads ·<br/>guardrail_verdict vs guardrailVerdict ·<br/>the frontend has no source of truth"]
-```
-
-**Why raising on an unknown name matters:** an unregistered name reaching the frontend is
-a **silent no-op**. Nothing happens and nothing complains — the hardest class of bug.
-
----
-
-## 6. Bracketing that cannot be forgotten
-
-```mermaid
-flowchart TB
-    A["async with emitter.step('retrieve', RETRIEVER)"] --> AE["__aenter__<br/>emit STEP_STARTED<br/>rawEvent = spanKind: RETRIEVER"]
-    AE --> BODY["the step's work"]
-    BODY --> OK{"raised?"}
-    OK -->|no| AX["__aexit__<br/>emit STEP_FINISHED"]
-    OK -->|yes| AX
-    AX --> DONE(["the finish is emitted either way"])
-
-    BODY -.->|"manual start/finish instead"| FORGET["an exception skips the finish —<br/>the client shows a spinner forever"]
-```
-
----
-
-## 7. The span kind that was inert
-
-```mermaid
-flowchart TB
-    CS["every call site declares its kind<br/>step('retrieve', SpanKind.RETRIEVER)"] --> ST["_StepScope stores it"]
-    ST --> WIRE1["...and nothing put it on the wire"]
-
-    WIRE1 --> SYM["every span looks like a generic CHAIN<br/><i>no error, no warning,<br/>the trace is COMPLETE</i>"]
-    SYM --> WORSE["<b>inert instrumentation is worse than none</b><br/>— none is obvious,<br/>inert looks finished"]
-
-    FIX["_raw() -> spanKind, passed as rawEvent<br/>on BOTH frames"] --> TEST["a REGRESSION test asserting on the<br/>DECODED FRAME, not the scope object"]
-
-    TEST --> RULE["for anything with an external consumer —<br/>a wire format, a log line, a metric —<br/><b>assert on the serialised output</b>"]
-```
-
----
-
-## 8. Infra mode — three postures, none silent
+*Look at the two boxes on the right. They are different values, and only one of them is true.*
 
 ```mermaid
 flowchart TB
     ENV["AEGIS_MODE"] --> M{"declared mode"}
 
-    M -->|full| F{"every URL set?"}
-    F -->|no| RAISE["RuntimeError naming the<br/>missing AEGIS_* variables<br/>+ the lite escape hatch"]
-    F -->|yes| FULL(["run on real infra"])
+    M -->|lite| L0(["resolved = LITE<br/>in-memory, deliberately, announced"])
 
-    M -->|lite| LITE(["in-memory, deliberately,<br/>LOUDLY announced"])
+    M -->|full| F{"every AEGIS_*_URL set?"}
+    F -->|no| RAISE["<b>RuntimeError</b><br/>names the missing variables<br/>+ the lite escape hatch"]
+    F -->|yes| F0(["resolved = FULL"])
 
-    M -->|auto| A{"every URL set?"}
-    A -->|no| W1["WARN which are unset"] --> L1(["resolve to LITE"])
-    A -->|yes| PROBE["actually probe<br/>redis + postgres + vector store"]
-    PROBE -->|"any down"| W2["WARN which one and why"] --> L2(["resolve to LITE"])
-    PROBE -->|"all up"| F2(["resolve to FULL"])
+    M -->|auto| A{"every AEGIS_*_URL set?"}
+    A -->|no| W1["WARN which are unset"] --> L1(["resolved = LITE"])
+    A -->|yes| PROBE["<b>actually probe</b><br/>redis · postgres · vector store"]
+    PROBE -->|"any down"| W2["WARN which one, and why"] --> L2(["resolved = LITE"])
+    PROBE -->|"all answered"| F2(["resolved = FULL"])
 
-    NEVER["silently use RAM<br/>and call it durable"] -.->|"the posture this bans"| WHY["works in every test environment ·<br/>loses data on the first<br/>production restart"]
+    F2 -.-> TRAP["<b>settings.mode is still 'auto'</b><br/>on this fully-provisioned box.<br/>`if settings.mode is AegisMode.full`<br/>is False — forever."]
 ```
 
-**The footgun:** in `auto`, `settings.mode` is the string `"auto"` **forever**. The
-resolved mode is the *return value* of an async probe. Code reading the declared one when
-it means the resolved one takes the lite branch on a fully-provisioned box.
+`resolve_mode()` is `async` because probing is I/O, so the resolved mode is a **return value**,
+not a field. It exists only where a caller kept it.
 
----
+Both values are deliberately preserved: *"the operator asked for auto and we resolved to lite"* is
+a more useful statement than *"the mode is lite"*. The cost is that callers must know which of
+the two they are holding.
 
-## 9. Health probes — measured, never guessed
-
-```mermaid
-flowchart TB
-    RQ["/readyz"] --> P["probe_redis / probe_postgres / probe_vector_store"]
-
-    P --> INJ{"a client was injected?"}
-    INJ -->|yes| USE["use it · owned = None"]
-    INJ -->|no| BUILD["build one via require() · owned = it"]
-
-    USE --> PING["ping / SELECT 1 / get_collections"]
-    BUILD --> PING
-
-    PING --> RES{"answered?"}
-    RES -->|yes| UP["status = up"]
-    RES -->|"any exception"| DOWN["status = down + the detail<br/><i>a probe REPORTS failure,<br/>never raises</i>"]
-
-    UP --> FIN["finally: close ONLY 'owned'"]
-    DOWN --> FIN
-
-    FIN -.->|"close the injected one instead"| BAD1["the caller's shared client is dead"]
-    FIN -.->|"close nothing"| BAD2["/readyz is POLLED —<br/>one leaked connection per call<br/>exhausts the pool it reports on"]
-```
-
----
-
-## 10. Imported, not forked
-
-```mermaid
-flowchart LR
-    subgraph FORK["fork it"]
-        F1["copy the repo"] --> F2["delete, edit, diverge"]
-        F2 --> F3["upstream fixes never arrive ·<br/>your changes never go back ·<br/>two systems in six months"]
-    end
-
-    subgraph IMPORT["import it"]
-        I1["pip install pkg&#91;guardrails&#93;"] --> I2["call it from your app"]
-        I2 --> I3["upgrades are a version bump ·<br/>your code stays yours"]
-    end
-
-    IMPORT --> REQ["requires all three:"]
-    REQ --> R1["no domain logic in the package"]
-    REQ --> R2["each module installs independently"]
-    REQ --> R3["dependencies INJECTED, not imported"]
-
-    R1 --> PAY["retargeting the platform at a<br/>NEW problem = writing one adapter"]
-    R2 --> PAY
-    R3 --> PAY
-```
-
-**The payoff is a capability, not a tidiness benefit:** the difference between "we could
-rebuild this for another domain in a few weeks" and "we can retarget it by implementing
-one interface."
-
----
-
-## 11. Isolation, tested per module
-
-```mermaid
-flowchart TB
-    T1["tests/core/test_core_is_dep_free.py"] --> A1["import aegis.core AND aegis.core.stream<br/>in a SUBPROCESS<br/>assert 10 banned modules absent"]
-    T2["tests/voice/test_isolation.py"] --> A2["no litellm/torch/numpy/pandas<br/>no app.*<br/>+ the whole guarded path RUNS<br/>on the base install"]
-    T3["tests/vision/test_isolation.py"] --> A3["+ no torch/transformers/timm<br/>+ no PIL<br/><i>'a policy that is not tested<br/>is folklore'</i>"]
-    T4["tests/forecast/test_isolation.py"] --> A4["types + series import with<br/>no statsforecast/pandas/numpy"]
-
-    A1 --> WHY["<b>subprocess is required</b>:<br/>another test in the same process<br/>may already have imported the banned<br/>module, and the guard would pass<br/>by accident"]
-
-    A1 --> GAP["these check HEAVINESS,<br/>not TOPOLOGY —<br/>which is why the two leaf-to-leaf<br/>imports were found by reading,<br/>not by CI"]
-```
-
----
-
-**Next:** [`50-interview.md`](50-interview.md).
+**Next:** [`50-interview.md`](50-interview.md) — the questions you'll be asked.

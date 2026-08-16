@@ -1,135 +1,157 @@
 # Observability — the diagrams
 
-Diagram 2 (the trace tree of one run) is the one to be able to draw on a whiteboard.
-Diagram 6 (the three joins) is the one that impresses.
+Five diagrams. The one to be able to draw on a whiteboard is **the trace tree of one run**;
+the one that impresses is **the three joins on one trace id**.
+
+Everything else is explained in [`10-guide.md`](10-guide.md); a picture is only here when
+it shows something prose cannot.
 
 ---
 
-## 1. Why a tree, not a stream
+## 1. One agent run, as a trace tree
 
-```mermaid
-flowchart LR
-    subgraph LOGS["logs — a flat stream"]
-        L1["14:02:01 retrieving..."]
-        L2["14:02:01 [other request] guard ok"]
-        L3["14:02:02 rerank done"]
-        L4["14:02:02 [other request] tool call"]
-        L1 --- L2 --- L3 --- L4
-    end
-
-    subgraph TRACE["a trace — a tree"]
-        R["run"] --> A["guard_input"]
-        R --> B["retrieve"]
-        B --> B1["embeddings"]
-        B --> B2["vector search"]
-        B --> B3["rerank"]
-        R --> C["generate"]
-    end
-
-    LOGS -.->|"no structure<br/>no correlation<br/>no duration<br/>only what someone wrote"| TRACE
-```
-
----
-
-## 2. One agent run, as a trace tree
+*Look at what is nested under what. Nothing here was handed a parent.*
 
 ```mermaid
 flowchart TB
-    RUN["<b>run</b> — AGENT<br/>2.4s"]
+    RUN["<b>agent.run</b> — AGENT<br/>2.4s<br/>opened by the orchestrator"]
 
-    RUN --> GI["node.guard_input — GUARDRAIL<br/>120ms<br/><i>app.guardrail.verdict</i>"]
-    RUN --> RT["node.retrieve — RETRIEVER<br/>890ms<br/><i>input.value, result_count,<br/>candidate_count, cache_hit</i>"]
+    RUN --> GI["node.guard_input — GUARDRAIL<br/>120ms"]
+    RUN --> RO["node.route — CHAIN<br/>8ms"]
+    RUN --> RT["node.retrieve — RETRIEVER<br/>890ms"]
     RUN --> ML["node.ml_predict — CHAIN<br/>35ms"]
     RUN --> PL["node.plan — CHAIN<br/>610ms"]
-    RUN --> GA["node.gate — CHAIN<br/>5ms<br/><i>app.tool.risk</i>"]
-    RUN --> AC["node.act — TOOL<br/>310ms<br/><i>tool.name, app.tool.ok</i>"]
+    RUN --> GA["node.gate — CHAIN<br/>5ms"]
+    RUN --> AC["node.act — CHAIN<br/>310ms"]
     RUN --> GN["node.generate — CHAIN<br/>740ms"]
     RUN --> GO["node.guard_output — GUARDRAIL<br/>90ms"]
     RUN --> ST["node.stream — CHAIN"]
 
+    RO --> HO["handoff to qa — AGENT"]
     RT --> E1["embeddings text-embedding-3-large<br/>EMBEDDING — 95ms"]
-    RT --> RR["chat gpt-4o-mini<br/>LLM — 240ms<br/><i>the reranker</i>"]
-    PL --> P1["chat gpt-4o<br/>LLM — 600ms"]
-    GN --> G1["chat gpt-4o<br/>LLM — 730ms"]
+    RT --> RR["chat gpt-4o-mini — LLM — 240ms<br/>the reranker's model call"]
+    PL --> P1["chat gpt-4o — LLM — 600ms"]
+    AC --> TL["tool.lookup_order — TOOL — 300ms<br/><b>tool.name, app.tool.risk, app.tool.ok</b>"]
+    GN --> G1["chat gpt-4o — LLM — 730ms"]
 ```
+
+Durations are illustrative; the structure is not.
 
 **Every node span is opened by `_timed`**, and it is the *current* span while the body
-runs — which is why the model and retrieval spans nest beneath it with no plumbing.
+runs — which is why the model, tool and handoff spans nest beneath it with no plumbing.
 
-Node kinds are assigned at wiring time: guardrail nodes are `GUARDRAIL`, `retrieve` is
-`RETRIEVER`, tool execution is `TOOL`, the run root is `AGENT`, everything else `CHAIN`.
+Node kinds are fixed at wiring time: the two guardrail nodes are `GUARDRAIL`, `retrieve` is
+`RETRIEVER`, and **every other node defaults to `CHAIN`**. `TOOL` is not a node kind —
+`act` opens one `TOOL` span per call inside its body, and **that child span is the only
+place the risk tier appears**. `node.gate` carries the graph-node attributes every node
+carries and nothing about risk.
+
+Three nodes appear in no tree at all: `recall_memory`, `persist_memory` and `approval` are
+wired plain, without `_timed`, so they emit neither node events nor a span.
 
 ---
 
-## 3. `_timed` — one node, one pair, one span
+## 2. `_timed` — one node, one pair, one span
+
+*Look at where the retry sits. That position is the whole diagram.*
 
 ```mermaid
 flowchart TB
-    N["node body"] --> W["<b>_timed(node, label, kind, retry)</b>"]
-
-    W --> E1["emit node_started"]
-    E1 --> T0["start = perf_counter()"]
-    T0 --> SP["open span(kind, 'node.NAME')<br/>+ app.graph.node, .node.label"]
-    SP --> RETRY["<b>_call_with_retry(body, ...)</b><br/><i>the retry is INSIDE the wrapper</i>"]
-    RETRY --> DUR["stamp app.graph.node.duration_ms"]
+    W["<b>_timed on a node</b>"] --> E1["emit node_started"]
+    E1 --> T0["start = perf_counter, a monotonic clock"]
+    T0 --> SP["open the span, kind and name node.NAME"]
+    SP --> RETRY["<b>_call_with_retry around the BODY</b>"]
+    RETRY --> DUR["stamp the duration on the span"]
     DUR --> CLOSE["close the span"]
-    CLOSE --> E2["emit node_finished(duration_ms)"]
+    CLOSE --> E2["emit node_finished with the duration"]
 
-    BAD["<b>the bug</b>: retry via<br/>add_node(retry_policy=...)"] -.->|"re-runs the WRAPPER"| PAIR["node_started<br/>node_started<br/>node_finished<br/><i>an unpaired record with<br/>duration_ms: None, forever</i>"]
+    BAD["<b>the bug</b>: the retry applied via<br/>add_node retry_policy, which re-runs<br/>the registered callable — the WRAPPER"] -.-> PAIR["node_started<br/>node_started<br/>node_finished<br/><br/>an unpaired record with a null duration:<br/>a node that spins forever in the UI, and<br/>a p95 computed over a sample that excludes<br/>exactly the runs that had trouble"]
 
-    NOTE["<b>act has NO retry</b><br/>retrying tool execution<br/>could issue a refund twice"] -.-> RETRY
+    NOTE["<b>act gets no retry at all</b><br/>retrying a model call is safe because<br/>it is idempotent; retrying a refund is not"] -.-> RETRY
 ```
+
+Composition order is a correctness property for telemetry, not a style choice. Wrap
+instrumentation in a retry and you instrument the retries.
+
+One node execution is now exactly one `node_started` / `node_finished` pair, and the
+measured duration spans every attempt — the honest wall clock the user waited through.
 
 ---
 
-## 4. What a model-call span carries
+## 3. What happens when there is no tracer
+
+*Look at the bottom path: it is the one that has to be a no-op rather than an error.*
 
 ```mermaid
 flowchart TB
-    C["gateway complete()"] --> S["<b>span named '{operation} {model}'</b>"]
-
-    S --> REQ["<b>stamped at open</b><br/>openinference.span.kind = LLM<br/>gen_ai.operation.name<br/>gen_ai.provider.name<br/>gen_ai.system <i>(deprecated alias)</i><br/>gen_ai.request.model<br/>gen_ai.request.temperature<br/>gen_ai.request.max_tokens"]
-
-    S --> USE["<b>stamped on return</b><br/>gen_ai.usage.input_tokens<br/>gen_ai.usage.output_tokens<br/>gen_ai.usage.cost <i>(non-standard)</i><br/>gen_ai.response.model"]
-
-    S --> ERR["<b>on exception</b><br/>record_exception + status ERROR<br/>then RE-RAISE"]
-
-    GAP["<b>NOT emitted</b><br/>gen_ai.conversation.id<br/>gen_ai.agent.name / .id<br/>gen_ai.tool.name / .call.id<br/>message-content events<br/>error.type<br/>per-attempt fallback spans"] -.-> S
-
-    FB["request.model != response.model<br/>-> a fallback fired"] --> USE
-```
-
-The gaps are worth memorising: the request/response/usage core is there; conversation and
-agent identity exist only as `app.*` attributes.
-
----
-
-## 5. Degradation — why instrumenting aggressively is safe
-
-```mermaid
-flowchart TB
-    I["init_observability(phoenix_enabled=...)"] --> P{"phoenix enabled?"}
-    P -->|no| CON["console SDK provider<br/><b>SimpleSpanProcessor</b><br/><i>synchronous — a batch flush thread<br/>races stdout at teardown</i>"]
-    P -->|yes| TRY{"phoenix.otel importable<br/>and registers?"}
-    TRY -->|yes| PHX["Phoenix provider, batch=True"]
+    I["init_observability"] --> P{"phoenix enabled?"}
+    P -->|no| CON["console SDK provider<br/><b>SimpleSpanProcessor</b>, synchronous —<br/>a batch flush thread races stdout<br/>at interpreter teardown"]
+    P -->|yes| TRY{"phoenix imports<br/>and registers?"}
+    TRY -->|yes| PHX["Phoenix provider, batched"]
     TRY -->|"any exception"| CON
 
-    NEVER["<b>init never ran at all</b><br/>(tests, lite mode, import order)"] --> GLOBAL["get_tracer() resolves against<br/>OTel's global <b>no-op</b> provider"]
-    GLOBAL --> NR["span() -> a NON-RECORDING span<br/>set_attribute -> a safe no-op<br/>no network, no error"]
+    NEVER["<b>init never ran at all</b><br/>tests, lite mode, import order"] --> GLOBAL["get_tracer resolves against<br/>OTel's global <b>no-op</b> provider"]
+    GLOBAL --> NR["a span is NON-RECORDING<br/>set_attribute is a safe no-op<br/>no network, no error"]
 
-    NR --> WHY["<i>this is what makes it acceptable<br/>to instrument everywhere —<br/>instrumentation guarded by<br/>'if tracing_enabled' gets deleted</i>"]
+    NR --> WHY["<b>this is what makes it acceptable<br/>to instrument everywhere</b> —<br/>instrumentation guarded by<br/>an if-tracing-enabled check gets deleted"]
 ```
+
+Batching is right in production and wrong for a dev exporter, and saying which one you are
+configuring is most of the answer.
+
+The fallback catches everything — a missing package, a port conflict, a version mismatch.
+You lose the UI, not the spans.
 
 ---
 
-## 6. The three joins on one trace id
+## 4. Three orderings a trace can prove structurally
+
+*Look at each chain as an ordering, not a pipeline. The order is the claim.*
 
 ```mermaid
 flowchart TB
-    RUN["one agent run<br/><b>trace_id = 4f2a...</b>"] --> SP["<b>spans</b><br/>what the system DID<br/>-> Phoenix"]
-    RUN --> LED["<b>usage_ledger rows</b><br/>what it COST<br/>tenant, user, model, tokens,<br/>audio_seconds, images, cost_usd<br/><i>trace_id, indexed</i>"]
-    RUN --> AUD["<b>audit_log row</b><br/>who AUTHORISED it<br/>action, actor, model, approved_by<br/><i>trace_id, indexed</i>"]
-    RUN --> EV["<b>AG-UI event stream</b><br/>what the user SAW<br/><i>trace_id on every event</i>"]
+    subgraph P1["the image was screened BEFORE the model saw it"]
+        A1["hygiene<br/>pipeline stage, no span"] --> A2["injection screen<br/><b>chat span</b>"]
+        A2 --> A3["image PII<br/>pipeline stage, no span"]
+        A3 --> A4["vision analyst<br/><b>chat span</b>"]
+    end
+
+    subgraph P2["no model output reached the user unguarded"]
+        B1["node.generate<br/>non-streaming ON PURPOSE"] --> B2["node.guard_output"]
+        B2 --> B3["node.stream<br/>paces an already-guarded string"]
+    end
+
+    subgraph P3["the gate fired on TOOL RISK, not confidence"]
+        C1["node.ml_predict<br/>evidence only"] -.->|"<b>no edge</b>"| C2["node.gate<br/>carries the graph-node attributes<br/>and nothing about risk"]
+        C2 --> C5["node.act<br/>approval pauses in between and<br/>emits no span of its own"]
+        C5 --> C4["tool.NAME — TOOL span<br/><b>app.tool.risk = high</b><br/>the only place the tier appears"]
+    end
+```
+
+In the first panel the screen and the analysis are both model calls, so both surface as
+`chat {model}` spans and their order is visible. The load-bearing proof is still a test —
+`analyst.calls == []` — with the trace as corroboration.
+
+The third claim was once contradicted by the product. The console **hardcoded** a 9-node
+DAG that drew the human gate branching off ML, and could not light 7 of the real nodes. The
+topology is now served from the real compiled graph, with a test that fails if the offline
+snapshot drifts.
+
+> A diagram that disagrees with the system is worse than no diagram, because people
+> believe it.
+
+---
+
+## 5. The three joins on one trace id
+
+*Look at the key, not the boxes. One id is what turns four accounts into one story.*
+
+```mermaid
+flowchart TB
+    RUN["one agent run<br/><b>trace_id = 4f2a...</b>"] --> SP["<b>spans</b><br/>what the system DID"]
+    RUN --> LED["<b>usage_ledger rows</b><br/>what it COST<br/>trace_id, indexed"]
+    RUN --> AUD["<b>audit_log row</b><br/>who AUTHORISED it<br/>trace_id, indexed"]
+    RUN --> EV["<b>AG-UI event stream</b><br/>what the user SAW<br/>trace_id on every event"]
 
     SP --- J
     LED --- J
@@ -137,85 +159,10 @@ flowchart TB
     EV --- J
     J{{"joinable on trace_id"}}
 
-    Q["<i>'who approved this refund,<br/>what did it cost,<br/>and what did the system<br/>actually do to get there?'</i>"] --> J
+    Q["who approved this refund,<br/>what did it cost,<br/>and what did the system<br/>actually do to get there?"] --> J
 ```
 
-Without a shared id these are four accounts of the same event that can never be
-reconciled.
-
----
-
-## 7. The latency window — and exactly what it is not
-
-```mermaid
-flowchart TB
-    RUN["a completed run"] --> SUM["run_summary(events)['nodes']"]
-    SUM --> REC["record_run_latency(nodes)"]
-
-    REC --> CO["_coerce_run"]
-    CO --> SKIP["skip missing / None / non-numeric /<br/>NaN / inf durations<br/><i>e.g. a paused approval node</i>"]
-    CO --> PAIRS["(node, duration_ms) pairs"]
-
-    PAIRS --> WIN["<b>deque(maxlen=512)</b><br/>under a threading.Lock"]
-
-    WIN --> SNAP["_snapshot_window<br/><i>copy under the lock</i>"]
-    SNAP --> CALC["per-node p50 / p95 / max / count<br/>+ run percentiles"]
-
-    CALC --> E{"window empty?"}
-    E -->|yes| HON["<b>empty: true</b>, None percentiles<br/><i>never zeros — 0.0 reads as<br/>'very fast', not 'no data'</i>"]
-    E -->|no| OUT["LatencySummary<br/>+ source + window_capacity"]
-
-    NOT1["per-PROCESS — 4 workers,<br/>4 windows, 4 different p95s"] -.-> WIN
-    NOT2["VOLATILE — resets on restart"] -.-> WIN
-    NOT3["run duration = SUM of node durations<br/><b>over-counts on fan-out</b><br/><i>chosen so it matches<br/>run_summary exactly</i>"] -.-> CALC
-```
-
----
-
-## 8. Where the tree comes from — context propagation
-
-```mermaid
-flowchart TB
-    CV["a contextvar holding<br/>the CURRENT span"] --> NEW["start_as_current_span:<br/>1. create with current as parent<br/>2. set as current<br/>3. restore on exit"]
-
-    NEW --> OK1["<b>await inside the block</b><br/>same task, same context -> correct"]
-    NEW --> OK2["<b>create_task inside the block</b><br/>the task COPIES the context<br/>at creation -> correct parent"]
-    NEW --> BAD["<b>a task created BEFORE the span</b><br/>snapshotted an older context<br/>-> its spans attach elsewhere"]
-
-    BAD --> FLAT["<i>this is why background work<br/>shows up as a separate trace</i>"]
-
-    NEW --> DIST["across a process boundary:<br/>W3C traceparent header"]
-```
-
----
-
-## 9. The claims a trace can actually prove
-
-```mermaid
-flowchart TB
-    subgraph P1["'the image was screened BEFORE the model saw it'"]
-        A1["hygiene"] --> A2["injection screen"] --> A3["image PII"] --> A4["vision model"]
-        A5["a pipeline that called the model<br/>and then decided cannot<br/>produce this ordering"] -.-> A2
-    end
-
-    subgraph P2["'no model output reached the user unguarded'"]
-        B1["generate<br/><i>non-streaming ON PURPOSE</i>"] --> B2["guard_output"] --> B3["stream<br/><i>paces an already-guarded string</i>"]
-    end
-
-    subgraph P3["'the gate fired on TOOL RISK, not confidence'"]
-        C1["node.gate span<br/>app.tool.risk = high"] --> C2["approval"]
-        C3["node.ml_predict"] -.->|"<b>no edge</b>"| C1
-    end
-```
-
-The third one was a live defect in the **console**, not the code: it hardcoded a 9-node DAG
-drawing the human gate branching off ML, and could not light 7 of the real nodes. The
-topology is now served from the real compiled graph, with a test that fails if the offline
-snapshot drifts.
-
-**A diagram that disagrees with the system is worse than no diagram, because people
-believe it.**
-
----
+Without a shared id these are four accounts of the same event that can never be reconciled
+— which, in an incident, is very close to having none of them.
 
 **Next:** [`50-interview.md`](50-interview.md).

@@ -4,6 +4,8 @@ This is the module that carries the hardest questions. It is also the one where 
 answers are most convincing, because every control here failed at least once and was
 fixed.
 
+The reasoning behind every answer below is in [`10-guide.md`](10-guide.md).
+
 ---
 
 ### "How do you keep one tenant's data away from another's?"
@@ -15,9 +17,10 @@ read. It is the only layer that works on SQLite, which is what the test suite ru
 
 **Layer two** is PostgreSQL row-level security. Each transaction binds the tenant into a
 custom setting, and a policy on `users`, `usage_ledger` and `approvals` restricts every
-row read against it. The inversion is the point: without RLS, a forgotten `WHERE` is a
-leak; with RLS, it is an empty result — a bug you notice in five minutes instead of one
-you notice in a breach report.
+row read against it — for any request that actually binds a numeric scope; see the last
+question for the branch that does not. The inversion is the point: without RLS, a
+forgotten `WHERE` is a leak; with RLS, it is an empty result — a bug you notice in five
+minutes instead of one you notice in a breach report.
 
 One free property worth mentioning: the policy has no explicit `WITH CHECK`, so Postgres
 reuses the `USING` predicate for writes. Under a bound scope, an INSERT that would stamp a
@@ -95,12 +98,15 @@ than unbounded, and for spend caps that is the right trade.
 ### "One tenant could take over another's budget. How?"
 
 The budget natural key is `(scope_type, scope_id, window)` — for example
-`("user", 42, "day")`. That triple is **global**; it contains no tenant.
+`("tenant", 7, "day")`. That triple is **global**: it contains no tenant, and all three
+parts arrive as fields on the admin request, so any admin can *name* any other tenant's
+row.
 
 The upsert looked up on that key with no tenant predicate and then assigned
-`existing.tenant_id = caller` unconditionally. So tenant B posting a cap for their user 42
-found **tenant A's row**, overwrote A's caps, and re-stamped the row as B's. A's spending
-limit was gone and the row vanished from A's listing.
+`existing.tenant_id = caller` unconditionally. So tenant 12's admin posting for
+`("tenant", 7, "day")` found **tenant 7's row**, overwrote 7's caps, and re-stamped the
+row as 12's. Tenant 7's spending limit was gone and the row vanished from tenant 7's
+listing.
 
 **The interesting part is that the obvious fix is worse.** Adding a tenant predicate to
 the lookup means that when a conflicting row exists the lookup finds nothing, so the
@@ -314,10 +320,13 @@ Closing it properly means the authentication path binds a scope before it reads,
 host work outside the RLS module. It is documented in place, with the follow-up named.
 
 **The accurate description is:** any request that binds a numeric scope is strictly
-enforced; a request that binds none is not restricted; and this is strictly more
-enforcement than before FORCE, when the policy was inert for the owning role in every
-case.
+enforced; a request that binds none is not restricted — it fails **open**, deliberately;
+and this is strictly more enforcement than before FORCE, when the policy was inert for the
+owning role in every case.
 
-There is one place the codebase overstates this — the effective-config endpoint reports
-`fail_closed=True` for the RLS posture, which the installed predicate does not support.
-The module docstring is the accurate source.
+The codebase reports it that way too, which is the part I would want to point at. The
+effective-config surface returns `fail_closed=False` for the RLS posture
+(`aegis/src/aegis/governance/config.py:133`), and the comment there explains why: that
+value renders a "fail-closed" badge on the console's Security page, and reporting `True`
+would put a false assurance on a security dashboard — worse than the gap it would hide. It
+flips to `True` once the auth path binds a scope before querying `users`.

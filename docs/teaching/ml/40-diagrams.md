@@ -1,73 +1,84 @@
 # ML — the diagrams
 
-Diagram 3 (the three splits) and diagram 7 (ML informs, risk gates) are the two worth
-being able to draw cold.
+Five diagrams. The two worth reproducing from memory are **the three splits** and
+**`get_model`'s missing third step** — between them they carry the whole argument about
+what this module is allowed to say.
+
+Everything else is explained in [`10-guide.md`](10-guide.md); a picture is only here when
+it shows something prose cannot.
 
 ---
 
 ## 1. Where ML sits in a run
 
+*Look at the dotted arrow into `gate`. It is a **non**-edge, and it is the design.*
+
 ```mermaid
 flowchart TB
-    Q["user turn"] --> G["guard_input"]
-    G --> RT["retrieve"]
-    RT --> ML["<b>ml_predict</b><br/>one graph node"]
+    RT["retrieve"] --> ML["<b>ml_predict</b><br/>one graph node"]
     ML --> PLAN["plan"]
-    PLAN --> GATE{"<b>gate</b><br/>tool RISK TIER"}
-    GATE -->|"low risk"| ACT["act"]
-    GATE -->|"high risk"| HUMAN["pause for a human"]
-    ACT --> GEN["generate"]
+    PLAN --> GATE{"<b>gate</b><br/>decides on TOOL RISK"}
+    GATE -->|"below the ceiling"| ACT["act"]
+    GATE -->|"at or above it"| HUMAN["pause for a human"]
     HUMAN --> ACT
+    ACT --> GEN["generate"]
 
-    ML -.->|"evidence injected<br/>into the answer context"| GEN
-    ML -.->|"NEVER an edge into gate"| GATE
-
-    style GATE fill:#fff,stroke:#333,stroke-width:3px
+    ML -.->|"prediction, interval and drivers<br/>injected as EVIDENCE"| GEN
+    ML -.->|"<b>no edge — ever</b>"| GATE
 ```
 
-**The dotted non-edge is the design.** There is no path from the ML node to the gate. The
-human stop is decided by the risk tier of the tool being called, never by how confident
-the model felt.
+The prediction reaches the answer. It never reaches the decision to stop.
 
-Consequence: a failed or absent prediction is **not** a failure. The evidence is omitted
-and the run continues.
+That is what makes a failed prediction harmless: `ml_predict` swallows the exception,
+returns `{}`, and the run answers with zero ML rather than failing.
 
 ---
 
-## 2. Training
+## 2. Training, end to end
+
+*Look at the two places it refuses: too few calibration rows, and a synthetic model asking
+to be saved.*
 
 ```mermaid
 flowchart TB
-    SPEC["resolve_spec(spec)<br/><i>lenient: FEATURE_NAMES or features,<br/>TARGET.name or target, ...</i>"] --> SRC{"where does the<br/>frame come from?"}
-
-    SRC -->|"explicit frame"| P1["data_source = 'provided'"]
-    SRC -->|"spec.frame_provider"| P2["data_source = 'spec_provider'"]
-    SRC -->|"neither"| P3["data_source = <b>'synthetic'</b><br/><i>the noise synthesiser</i>"]
+    SPEC["resolve_spec"] --> SRC{"where does the frame<br/>come from?"}
+    SRC -->|"passed in"| P1["data_source = provided"]
+    SRC -->|"the spec's provider"| P2["data_source = spec_provider"]
+    SRC -->|neither| P3["data_source = <b>synthetic</b><br/>the noise synthesiser"]
 
     P1 --> ENC
     P2 --> ENC
     P3 --> ENC
 
-    ENC["fit the preprocessor on the FULL vocabulary<br/>one-hot categoricals, pass numerics through<br/><i>no label leakage: categories are<br/>not target-dependent</i>"]
-    ENC --> PAR["_encoded_parents<br/><i>derived STRUCTURALLY from the fitted<br/>column layout, then asserted</i>"]
+    ENC["fit the preprocessor on the<br/>FULL feature vocabulary"] --> PAR["derive encoded to parent map<br/>from the fitted layout, then assert it"]
+    PAR --> SPLIT["split three ways<br/>stratified for classification"]
 
-    PAR --> SPLIT["three-way split<br/><i>stratified for classification</i>"]
-    SPLIT --> MIN{"calibration rows >=<br/>_min_calibration_rows(level)?"}
-    MIN -->|no| ERR(["ValueError naming the arithmetic —<br/>5 rows but 90 percent needs at least 9"])
-    MIN -->|yes| FIT["fit the soft-voting ensemble<br/>on TRAIN only"]
+    SPLIT --> MIN{"calibration rows enough<br/>for the requested level?"}
+    MIN -->|no| ERR(["<b>ValueError</b> naming the arithmetic —<br/>4 rows, 90 percent needs 9"])
+    MIN -->|yes| FIT["fit the ensemble on TRAIN"]
 
-    FIT --> CONF["MAPIE SplitConformal(prefit=True)<br/>.conformalize(x_cal, y_cal)"]
-    CONF --> EVAL["_evaluate on TEST:<br/>r2 / accuracy + <b>empirical coverage</b>"]
+    FIT --> CONF["conformalise on CALIBRATION"]
+    CONF --> EVAL["evaluate on TEST:<br/>metric + <b>empirical coverage</b>"]
 
-    EVAL --> SAVE{"path given?"}
-    SAVE -->|"yes, and data_source<br/>!= 'synthetic'"| W["save the artifact"]
-    SAVE -->|"yes, but SYNTHETIC"| REF["<b>refuse</b> + log a warning<br/><i>a persisted noise model is<br/>reloaded forever after</i>"]
-    SAVE -->|no| SKIP["return unpersisted"]
+    EVAL --> SAVE{"a path was given?"}
+    SAVE -->|"yes, and not synthetic"| W(["save the artifact"])
+    SAVE -->|"yes, but SYNTHETIC"| REF(["<b>refuse</b>, warn, return unsaved"])
+    SAVE -->|no| SKIP(["return unpersisted"])
 ```
+
+The preprocessor is fitted on the whole frame on purpose: one-hot categories are not
+target-dependent, so there is no label leakage, and every level the data contains gets a
+column.
+
+The refusal on the right is the entire §10 bug closed at its source — a persisted noise
+model is reloaded by every process, forever.
 
 ---
 
-## 3. The three splits, and which number each one earns
+## 3. The three splits, and the number each one earns
+
+*Look at what TEST is touched by: nothing. That is why its coverage number can disappoint
+you.*
 
 ```mermaid
 flowchart LR
@@ -77,178 +88,84 @@ flowchart LR
     REST --> CAL["<b>CALIBRATION</b><br/>fits the conformal quantile"]
 
     TR --> M["the model"]
-    CAL --> QQ["the interval half-width q"]
+    CAL --> QQ["the half-width q"]
 
     M --> T
     QQ --> T
 
-    T --> R1["accuracy / R-squared<br/><i>a measurement</i>"]
-    T --> R2["<b>empirical coverage</b><br/><i>the only coverage number<br/>that can disappoint you</i>"]
+    T --> R1["accuracy or R-squared"]
+    T --> R2["<b>empirical coverage</b>"]
 
     BAD["calibrating on TRAIN rows"] -.->|"the model has seen them —<br/>residuals are optimistic,<br/>the guarantee is void"| CAL
-    BAD2["reporting the REQUESTED level<br/>as if measured"] -.->|"prints your configuration<br/>and calls it a result"| R2
 ```
+
+Two splits give you a model and an interval. The third is the only one that can tell you
+the interval did not do what you asked for.
+
+> Requested 0.9 and achieved 0.76 are different facts. Report one as the other and you
+> have printed your configuration and called it a result.
 
 ---
 
 ## 4. Conformal prediction, mechanically
 
+*Look at the rank check — that is where an unattainable level gets caught before it can
+serve anything.*
+
 ```mermaid
 flowchart TB
     subgraph CALIB["calibration, once"]
-        C1["for each calibration row:<br/>residual = absolute error of y vs yhat"] --> C2["sort the residuals"]
-        C2 --> C3["q = the ceil((n+1)(1-alpha))-th smallest"]
-        C3 --> C4{"is that rank &lt;= n?"}
-        C4 -->|no| IMP["<b>the level is unattainable</b><br/>no finite quantile exists"]
+        C1["absolute error on each<br/>calibration row"] --> C2["sort the errors"]
+        C2 --> C3["q = the k-th smallest,<br/>k = ceil of n+1 times c"]
+        C3 --> C4{"is k within n?"}
+        C4 -->|no| IMP(["<b>the level is unattainable</b><br/>no such rank exists"])
         C4 -->|yes| OK["q is the half-width"]
     end
 
     subgraph SERVE["per prediction"]
-        S1["yhat from the ensemble"] --> S2["interval spans yhat - q to yhat + q"]
-        S2 --> S3["guarantee: coverage >= 1 - alpha<br/><i>MARGINAL, not conditional</i>"]
+        S1["yhat from the ensemble"] --> S2["interval spans yhat minus q<br/>to yhat plus q"]
+        S2 --> S3["coverage at least c —<br/><b>MARGINAL, not conditional</b>"]
     end
 
     OK --> S2
 
-    EX["holds because of EXCHANGEABILITY —<br/>no distributional assumption at all"] -.-> S3
-    BRK1["shuffling a time series<br/>leaks the future into calibration"] -.->|"voids it, invisibly"| EX
-    BRK2["distribution shift"] -.->|"degrades it, silently"| EX
+    EX["holds by EXCHANGEABILITY alone —<br/>no distributional assumption"] -.-> S3
+    BRK["shuffling a time series,<br/>or distribution shift"] -.->|"voids it, invisibly"| EX
 ```
 
-For classification the analogue is a **prediction set**: a singleton is a confident call,
+Every prediction gets the **same** half-width, because the score is a plain absolute
+residual. Split conformal cannot say "this row is harder than that one"; CQR is the
+upgrade if it ever needs to.
+
+For classification the analogue is a prediction **set**: a singleton is a confident call,
 a two-label set is genuine ambiguity, an empty set is degenerate.
 
 ---
 
-## 5. SHAP attribution — and the two bugs on this path
+## 5. `get_model`, and the third step that was deleted
+
+*Look at the dashed chain on the right — that is what the deleted step did, in order.*
 
 ```mermaid
 flowchart TB
-    X["one ENCODED row"] --> CLS{"classification?"}
-    CLS -->|no| REG["values = shap_values(x)<br/>2-D, regression"]
-    CLS -->|yes| IDX["_explained_class:<br/>index of the label ACTUALLY RETURNED<br/><i>not re-derived from predict_proba</i>"]
-
-    IDX --> ND{"shap_values ndim?"}
-    ND -->|"3-D, multiclass"| SEL["values = values[:, :, class_index]"]
-    ND -->|"2-D, binary"| FLIP{"predicted class 0?"}
-    FLIP -->|yes| NEG["<b>values = -values</b><br/><i>the binary margin is always<br/>toward class 1</i>"]
-    FLIP -->|no| ASIS["use as-is"]
-
-    REG --> W
-    SEL --> W
-    NEG --> W
-    ASIS --> W
-
-    W["weight by each member's<br/>voting weight and sum"] --> AGG["aggregate encoded columns<br/>to their PARENT feature"]
-    AGG --> OUT["one ShapFeature per original feature,<br/>sorted by absolute contribution"]
-
-    B1["<b>bug</b>: no flip -> every driver's<br/>sign reads backwards beside<br/>the prediction"] -.-> NEG
-    B2["<b>bug</b>: parents matched by NAME PREFIX<br/>-> plan_age folded into plan,<br/>and plan_age reported 0.0"] -.-> AGG
-```
-
-`_encoded_parents` is derived structurally from the fitted preprocessor's layout and then
-**asserted** against the emitted column names, so a shape change fails loudly instead of
-silently mis-aggregating.
-
----
-
-## 6. `get_model` — the deliberate absence of a third step
-
-```mermaid
-flowchart TB
-    G["get_model()"] --> S1{"in-process singleton?"}
-    S1 -->|yes| R1([return it])
-    S1 -->|no| S2{"persisted artifact<br/>at the HOST path?"}
-    S2 -->|yes| R2([load and cache])
+    G["get_model"] --> S1{"in-process singleton?"}
+    S1 -->|yes| R1(["return it"])
+    S1 -->|no| S2{"artifact at the HOST path?"}
+    S2 -->|yes| R2(["load and cache"])
     S2 -->|no| STOP["<b>MLModelUnavailableError</b>"]
 
-    STOP --> EP["/ml/explain -> 503<br/>with the command that fixes it"]
-    STOP --> AG["the agent's ML node<br/>simply omits the evidence"]
+    STOP --> EP["/ml/explain returns 503<br/>with the command that fixes it"]
+    STOP --> AG["the agent's ML node<br/>omits the evidence"]
 
-    OLD["<b>the removed third step</b><br/>train on demand"] -.-> NOISE["no spec -> FALLBACK_SPEC<br/>-> the NOISE synthesiser"]
-    NOISE -.-> SERVED["a prediction, a '90% coverage'<br/>interval, and feature_0..3 drivers,<br/>served as domain evidence"]
-    SERVED -.-> PERSIST["<b>and it was PERSISTED</b><br/>-> every later process loads it<br/>at step 2, forever"]
+    OLD["<b>the removed third step</b><br/>train one on demand"] -.-> NOISE["no spec means FALLBACK_SPEC,<br/>which is the noise synthesiser"]
+    NOISE -.-> SERVED["a prediction, a 90 percent interval,<br/>and drivers named feature_0 to feature_3 —<br/>served as domain evidence"]
+    SERVED -.-> PERSIST["<b>and it was written to disk</b><br/>so every later process loads it<br/>at step 2, forever"]
 ```
 
-Safe to refuse **because** ML never gates. Omitting evidence degrades an answer; serving
-fake evidence corrupts a decision.
+Nothing on that dashed chain is broken. The conformal machinery worked perfectly — on
+noise.
 
----
-
-## 7. Why the gate is on tool risk, not model confidence
-
-```mermaid
-flowchart TB
-    subgraph WRONG["confidence gating — the intuitive design"]
-        W1["model confidence"] --> W2{"below threshold?"}
-        W2 -->|yes| W3["stop for a human"]
-        W2 -->|no| W4["proceed autonomously"]
-        W5["<b>fails exactly when it matters</b>:<br/>out-of-distribution, adversarial and<br/>novel inputs all produce HIGH confidence<br/>with no grounding"] -.-> W4
-    end
-
-    subgraph RIGHT["risk gating — what Aegis does"]
-        R1["the TOOL being called"] --> R2{"risk tier?"}
-        R2 -->|"low, e.g. read a record"| R4["proceed autonomously"]
-        R2 -->|"high, e.g. issue a refund"| R3["stop for a human"]
-        R6["a property of the ACTION —<br/>a fact, not an artefact of a model"] -.-> R2
-    end
-
-    ML["the ML prediction,<br/>interval and drivers"] --> EV["injected as EVIDENCE<br/>into the answer context"]
-    ML -.->|no edge| R2
-```
-
-The one-liner: *a model that is 99% confident about issuing a $4,200 refund still stops
-for a human, because refunds are high-risk — not because the model was unsure.*
-
----
-
-## 8. The honesty signals on a response
-
-```mermaid
-flowchart TB
-    REQ["predict_explain(features)"] --> ROW["_raw_row"]
-
-    ROW --> K{"for each model feature"}
-    K -->|"caller supplied it"| USE["use the value"]
-    K -->|"missing or uncoercible"| IMP["impute: median (numeric)<br/>or mode (categorical)<br/><b>and record it</b>"]
-
-    ROW --> UNK["caller keys that are NOT<br/>model features -> <b>unknown_features</b>"]
-
-    USE --> RESP
-    IMP --> RESP
-    UNK --> RESP
-
-    RESP["MLExplainResponse"] --> H1["<b>data_source</b><br/>provided / spec_provider / synthetic"]
-    RESP --> H2["<b>imputed_features</b>"]
-    RESP --> H3["<b>unknown_features</b>"]
-
-    H1 --> UI["the UI and downstream code<br/>discount the evidence<br/>on these signals alone"]
-    H2 --> UI
-    H3 --> UI
-
-    TRAP["a caller who mistypes EVERY feature name<br/>gets a fully confident answer about<br/>the MEDIAN TRAINING ROW"] -.->|"visible only<br/>because of H2/H3"| IMP
-```
-
----
-
-## 9. The artifact-path split
-
-```mermaid
-flowchart TB
-    LIB["aegis.ml.DEFAULT_ARTIFACT_PATH<br/><i>inside the installed package</i>"] --> LIBUSE["the library's own default"]
-
-    HOST["app.ml.DEFAULT_ARTIFACT_PATH<br/><i>backend/.artifacts/ — gitignored</i>"] --> HOSTUSE["what app.ml.get_model() READS"]
-
-    OLD["<b>bug 1</b>: the host re-exported<br/>the LIBRARY constant"] -.->|"the backend wrote its<br/>domain model INTO the library;<br/>a read-only wheel fails outright"| LIB
-
-    OLD2["<b>bug 2</b>, introduced by the fix:<br/>python -m app.ml imported<br/>app.ml.model's constant"] -.->|"training reported SUCCESS<br/>while writing to a directory<br/>the loader never reads —<br/>and /ml/explain stayed 503"| LIB
-
-    FIX["import DEFAULT_ARTIFACT_PATH from app.ml,<br/>never from app.ml.model"] --> HOST
-    TEST["<b>a test pins that the training<br/>entrypoint targets exactly what<br/>get_model() reads</b>"] --> HOST
-```
-
-The test is the real fix. The path can drift again; the invariant cannot.
-
----
+Refusing is only safe **because** ML never gates. Omitting evidence degrades an answer;
+serving fake evidence corrupts a decision.
 
 **Next:** [`50-interview.md`](50-interview.md).

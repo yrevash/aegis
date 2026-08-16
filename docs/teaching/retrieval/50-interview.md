@@ -18,9 +18,10 @@ ingest rather than retrieved later. Then write with provenance: section, word sp
 hash, source.
 
 **Retrieve**: a near-exact semantic cache in front; then hybrid wide recall — dense vector,
-graph traversal, and a BM25 keyword arm — fused with Reciprocal Rank Fusion; then an LLM
-reranker over the top ~20; then spotlighted assembly into the answer context; then a cache
-write.
+graph traversal, and a BM25 keyword arm (corpus-wide when the backend can search by keyword;
+there's a story below about what happens when it can't) — fused with Reciprocal Rank Fusion;
+then an LLM reranker over the ~20 fused candidates down to 6; then spotlighted assembly into
+the answer context; then a cache write.
 
 Optionally wrapped in a bounded Self-RAG loop: retrieve, judge whether the context is
 actually enough, and if not retrieve again with a focused follow-up and merge.
@@ -43,6 +44,33 @@ graph retrieves via entities and relations, so it can answer a question whose an
 any single passage — it's assembled across several. That's the multi-hop case.
 
 Three retrievers that fail in *different directions*. That's the argument.
+
+---
+
+### "What vector database are you using?"
+
+None, in the sense you probably mean — there's no vector *server* anywhere in the deployment,
+and that's a deliberate constraint rather than a shortcut.
+
+The target is a locked-down enterprise Windows machine where no extra server binary may be
+installed. So both vector tiers run in-process:
+
+- The production path goes through LightRAG, whose vector storage is **NanoVectorDB** — pure
+  Python, file-backed under the working directory. I'd be honest about the cost: it's a
+  brute-force cosine scan held in memory and persisted to JSON, not an HNSW index, so query
+  time grows linearly with the corpus and it assumes a single writing process.
+- Aegis's own store — the one the lite/offline backend uses — is **embedded ChromaDB**. That
+  one *is* a real on-disk HNSW index, the same engine as the Chroma server, just in-process.
+
+Neo4j holds the knowledge graph and Postgres holds LightRAG's KV and doc-status tiers. Three
+stores because they answer three different questions, not because of fashion — multi-hop
+traversal in SQL is possible and miserable.
+
+The thing I'd flag as the real architectural point isn't the product names. It's that a backend
+which can expose its recall as **separate origin-tagged lists** lets RRF genuinely fuse them,
+while a backend returning one pre-blended list has already fused internally by some method it
+won't tell you, and you can't re-split it. We model that as an optional capability a backend
+either implements or doesn't, and the pipeline reports which happened.
 
 ---
 

@@ -1,26 +1,34 @@
 # Foundations — interview questions and answers
 
-The general questions. Module-specific ones live in each module's `50-interview.md`.
+The general questions — the ones that come before anyone asks about a specific module.
+Module-specific questions live in each module's own `50-interview.md`.
 
-Answers are written the way you should *say* them: claim first, then the reason, then
-a concrete detail from this system. The concrete detail is what makes it convincing —
-anyone can recite a definition, few can say "and here's what broke when we got it
-wrong."
+Answers are written the way you should *say* them: claim first, then the reason, then a concrete
+detail from this system. The concrete detail is what makes it convincing — anyone can recite a
+definition, few can say "and here's what broke when we got it wrong."
+
+If a term in an answer is unfamiliar, it is defined in [`10-guide.md`](10-guide.md).
 
 ---
 
 ### "Walk me through what happens when a user asks your system a question."
 
-Input rails first — injection, PII, schema, content — and a block ends the run there.
-Then a supervisor routes the turn to a specialist. The default path recalls long-term
-memory, retrieves evidence with three retrievers fused by reciprocal rank fusion and
-reranked, runs an ML prediction as *evidence*, then plans. If the plan proposes tools,
-a gate checks the **risk tier of each tool**; anything at or above the threshold
-interrupts the graph, checkpoints to Postgres, and waits for a human. After acting, a
-reflect step decides whether to re-plan — bounded, so it terminates. Then generation,
-the output rail, and the answer streams. The turn is written back to memory.
+Input rails first — injection, PII, schema, content. A block ends the run right there; nothing
+downstream runs at all.
 
-*Have the mermaid diagram in your head while you say this.*
+Then a supervisor routes the turn to a specialist. The default path recalls long-term memory,
+retrieves evidence with three retrievers fused by reciprocal rank fusion and then reranked, runs
+an ML prediction as *evidence only*, and plans.
+
+If the plan proposes tools, a gate checks the **risk tier of each tool**. Anything at or above
+the threshold interrupts the graph, checkpoints the whole state to Postgres, and waits for a
+human — which means the process can die there and the run still finishes.
+
+After acting, a reflect step decides whether to re-plan. It is bounded, so it terminates. Then
+generation, the output rail, and only then does the answer reach the user. The turn is written
+back to memory.
+
+*Have diagram 2 from [`40-diagrams.md`](40-diagrams.md) in your head while you say this.*
 
 ---
 
@@ -195,3 +203,8 @@ Asking good questions is part of the interview.
   at?" — tells you whether they actually have tracing or just logs.
 - "How do you decide a prompt change is safe to ship?" — tells you whether they have an
   eval gate or a vibe check.
+
+---
+
+**Next:** [`../guardrails/10-guide.md`](../guardrails/10-guide.md) — the first thing a request
+meets.

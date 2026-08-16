@@ -98,6 +98,22 @@ deliberately does not contain the word "conformal", and there is a test assertin
 methods produce **different numbers** — because a relabelled identical band would be
 exactly the overclaim.
 
+**And I would volunteer the awkward result**, because it is the best evidence for why we
+measure at all. On our own fixture the parametric band covered *better*: 0.9048 against
+conformal's 0.7619, and it held up across three seeds. It did that by being wider almost
+everywhere — roughly flat at 7.1–7.25 across the horizon, against a conformal band ranging
+1.8 to 8.8.
+
+Two readings, and I would give both. Our conformal quantile is estimated from only three
+calibration windows, which is a small sample for a 90th percentile and can easily land low.
+And a band that barely widens across a 14-step horizon is suspicious in its own right —
+it covered well here by being generously wide, not by being calibrated, and on a series
+whose variance grows it would fail in the other direction just as confidently.
+
+The claim that survives is the module's actual position: calling *either* band "90%
+coverage" without measuring is an overclaim. Conformal is the more principled
+construction; that did not stop it undercovering, and only the count told us so.
+
 ---
 
 ### "You report a 90% interval. How do you know it's 90%?"
@@ -108,17 +124,19 @@ There are two fields, always. `requested_coverage` is what was asked for — an 
 echoed back, *not a measurement*. `empirical_coverage` is a **count**: of the held-out
 actuals across all backtest windows, what fraction fell inside the band? Divide.
 
-On real data the second is routinely below the first. On a seasonal fixture, a requested
-0.9 gives an achieved **0.762** on AutoARIMA, **0.786** on the selected AutoETS, and
-**0.714** on seasonal naive. `coverage_meets_request` is **False** — computed with a
-strict `>=`, never rounded up.
+On real data the second is routinely below the first. Running the module on its own
+140-point daily fixture at `h=14` and a requested `level=0.9`, the three backtest windows
+produce 42 held-out points and the selected model lands **32** of them inside its band —
+an achieved **0.7619**. `coverage_meets_request` is **False**, computed with a strict
+`>=` and never rounded up.
 
 **That gap is the finding, not a bug.** It tells the reader exactly how much to discount
 the band, which is the single most useful thing a forecast can communicate. Reporting only
 the requested level tells them nothing except which button was pressed.
 
-The console follows the same rule: the achieved rate gets the big type, the requested
-level is demoted to context.
+The console follows the same rule. `CoverageMeter` draws the requested and the achieved
+rate on one shared 0–100% track directly under the chart, so the shortfall is visible as a
+gap before you read a digit.
 
 ---
 
@@ -130,7 +148,8 @@ Picture a quiet tenant. Nobody has called a model in months, so their ledger —
 daily and gap-filled with **real** zeros, which is the correct reading, because a day
 with no rows is a day with no spend — is 140 observations of `0.0`.
 
-Now forecast it:
+Now forecast it. I have run this with the guard removed, so these are measured, not
+asserted — and all three candidates produce identical numbers:
 
 - **Every model fits perfectly.** Residuals are exactly zero.
 - **sMAPE is 0.0%**, because when both actual and forecast are ~0 the pair contributes
@@ -220,14 +239,22 @@ Because a selection is only auditable if the reader can see what the winner beat
 
 Seasonal naive — "next Tuesday equals last Tuesday" — is always in the roster and always
 reported. It is genuinely hard to beat on real business data, and without that row
-"AutoETS was selected" is an unfalsifiable statement.
+"AutoARIMA was selected" is an unfalsifiable statement.
 
-On the run I quoted earlier, seasonal naive scored 14.2 sMAPE against AutoETS at 7.9, so
-the model earned its place. If it had not, the table would show that too.
+Here is the measured candidate table from the run I quoted earlier:
 
-The same table also lets you see something a single number hides: **all three candidates
-were below the requested coverage.** That is not one model underperforming, it is a
-property of the series — and you only learn it because the losers are published.
+| Model | sMAPE | Achieved coverage | |
+|---|---|---|---|
+| AutoARIMA | 1.8319 | 0.7619 | **selected** |
+| AutoETS | 1.8501 | 0.8095 | |
+| SeasonalNaive | 4.5432 | 0.7619 | |
+
+Three things a single number would have hidden. The baseline was beaten by a factor of
+about 2.5, so the winner earned its place. The winner **barely** beat the runner-up — 1.83
+against 1.85, and on a different seed the order flips — so "AutoARIMA was selected" is a
+much weaker statement than it sounds. And the selected model is **not** the best-covered
+one: AutoETS achieved 0.8095. Selection is on accuracy, and accuracy and coverage can
+disagree.
 
 We also publish **excluded** models with the real exception text. If AutoARIMA's stepwise
 search dies on a pathological series, you get `LinAlgError: Singular matrix`, not "model

@@ -256,8 +256,8 @@ creates.
 Row-level security, and there is a bug in that area worth telling because it has the same
 shape as the others.
 
-A policy filters every query by a per-connection tenant variable, so even a query that
-forgets its `WHERE` clause returns nothing.
+A policy filters every query by a per-connection tenant variable. Bind tenant 7's scope and
+a query that forgets its `WHERE` clause still cannot see tenant 8's rows.
 
 **But Postgres exempts a table's owner from its own policies** unless you also issue
 `ALTER TABLE ... FORCE ROW LEVEL SECURITY`. Our application connects with the same role
@@ -268,13 +268,24 @@ Notice how you would have "verified" it. Query `pg_policies` — the policy is t
 the bootstrap — RLS is enabled. Read the request path — the scope is bound. Every
 inspection says isolation is on. And every query returns every tenant's rows.
 
-A second detail: the policy is created **without an explicit `WITH CHECK`**, so Postgres
-reuses the `USING` predicate for writes. Under a bound scope, an INSERT that would stamp a
-different tenant is **rejected by the database**, not merely hidden. A read-only policy
-would let cross-tenant writes through.
+Two more details I would volunteer.
+
+The policy is created **without an explicit `WITH CHECK`**, so Postgres reuses the `USING`
+predicate for writes. Under a bound scope, an INSERT that would stamp a different tenant is
+**rejected by the database**, not merely hidden. A read-only policy would let cross-tenant
+writes through.
+
+And the policy **does not fail closed on an unset scope** — that is deliberate and
+documented, not an oversight. Login reads `users` by username *before* any tenant is known,
+and the platform-admin surfaces list across every tenant; fail-closed would return zero rows
+for both, login included. Closing it properly needs the host to bind a scope on those paths.
+I would name it as a known gap rather than claim complete isolation — though it is still
+strictly more enforcement than before, since without FORCE the policy was inert for the
+owning role in *every* case.
 
 And RLS is defence in depth, not a replacement: every query still filters `tenant_id`
-explicitly in the application as well.
+explicitly in the application as well — and on SQLite that application filter is the *only*
+layer.
 
 ---
 
@@ -320,8 +331,12 @@ minutes rather than at audit — and it generalises: distinguish a transient net
 from a schema failure, because the second is permanent and will affect every subsequent
 call.
 
-**The reference doc is stale.** `docs/module/aegis-data.md` still describes the removed
-`VectorType` compiling to `vector(dim)`. The code and the test say otherwise.
+**Three pieces of documentation are stale**, and I would fix them because each teaches
+something false to whoever reads it next. `docs/module/aegis-data.md` still describes the
+removed `VectorType` compiling to `vector(dim)`. The forecast ledger's helper says its `ts`
+is `TIMESTAMP WITHOUT TIME ZONE`, which the timestamp alignment already converted. And the
+host's RLS wrapper claims the policy fails closed on an unset scope, which the policy's own
+documentation says it deliberately does not.
 
 ---
 

@@ -63,11 +63,18 @@ alias, so tooling on either side of the rename works.
 The part that generalises: every key is a named constant in one module. A convention you
 spell inline at each call site cannot be migrated; a constant can be renamed once.
 
-We also stamp OpenInference's `openinference.span.kind` — `LLM`, `EMBEDDING`, `RETRIEVER`,
-`RERANKER`, `TOOL`, `GUARDRAIL`, `AGENT`, `CHAIN`, `EVALUATOR`. OTel's own `SpanKind` is
-about network topology and says nothing about what kind of *work* a span is. That one
-string is what makes a UI render an agent run as a recognisable pipeline instead of grey
-boxes.
+We also stamp OpenInference's `openinference.span.kind`, drawn from a nine-value enum —
+`LLM`, `EMBEDDING`, `RETRIEVER`, `RERANKER`, `TOOL`, `GUARDRAIL`, `AGENT`, `CHAIN`,
+`EVALUATOR`. OTel's own `SpanKind` is about network topology and says nothing about what
+kind of *work* a span is. That one string is what makes a UI render an agent run as a
+recognisable pipeline instead of grey boxes.
+
+The enum is imported from `aegis.core.events`, not redefined — the same enum stamps
+`span_kind` on every event in the live stream, so the trace and the UI cannot disagree about
+what kind of step something was. And I would be precise about coverage: seven of the nine
+kinds are actually stamped today — `AGENT`, `CHAIN`, `GUARDRAIL`, `RETRIEVER` and `TOOL` on
+graph spans, `LLM` and `EMBEDDING` from the gateway. `RERANKER` is defined and never used,
+along with its two `app.rerank.*` attribute constants.
 
 ---
 
@@ -231,16 +238,19 @@ string values a contract that must stay byte-identical.
 Three things that are structural arguments rather than assertions.
 
 **"The image was screened before the model saw it."** The vision pipeline is hygiene →
-injection screen → PII → model. In the trace, the screen span either precedes the
-model-call span or it does not. A pipeline that calls the model and then decides cannot
-produce that ordering.
+injection screen → PII → model. The screen and the analysis are both model calls, so both
+appear as `chat` spans, and the screen's either precedes the analyst's or it does not. A
+pipeline that calls the model and then decides cannot produce that ordering. I would add
+that the load-bearing proof is a test asserting `analyst.calls == []`, with the trace as
+corroboration rather than the guarantee.
 
 **"No model output reached the user unguarded."** Generation is non-streaming *on purpose*
 — `generate → guard_output → stream`, and the stream node paces an already-guarded string.
 The trace shows those three spans in that order.
 
-**"The human gate fired on tool risk, not model confidence."** The gate span carries the
-tool's risk tier, and there is no edge from the ML node into the gate.
+**"The human gate fired on tool risk, not model confidence."** The `gate` node decides on
+tool risk alone, and there is no edge from the ML node into the gate. The tier itself is in
+the trace on the `TOOL` span that `act` opens per call, as `app.tool.risk`.
 
 That last one is worth a caveat, because it was a live defect: the **console** hardcoded a
 9-node DAG drawing the human gate branching off ML — contradicting the code — and could not

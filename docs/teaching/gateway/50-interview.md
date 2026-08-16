@@ -1,4 +1,4 @@
-# The Gateway — interview questions and answers
+# The gateway — interview questions and answers
 
 Claim, reason, concrete detail. The detail is what separates "I read about LLM gateways"
 from "I built one."
@@ -188,10 +188,10 @@ chose between models, what fraction went small" — and embeddings have exactly 
 deployment in the fleet, so routing never chose. Including them dilutes a metric about a
 decision that was never made.
 
-So there is now an explicit `routable roles` set, and only routable roles count toward
-that denominator. Embeddings count toward cost and total calls, and are excluded from the
-routing metric. The lesson: when you fix a metric by adding data, check every other
-metric that shares its counters.
+So there is now an explicit set of **routable roles** — `CHEAP`, `GENERATION`,
+`REASONING`, `VISION` — and only those count toward that denominator. Embeddings count
+toward cost and total calls, and are excluded from the routing metric. The lesson: when
+you fix a metric by adding data, check every other metric that shares its counters.
 
 ---
 

@@ -29,17 +29,27 @@ mesh: folders were never a boundary.
 Because **the core is imported by everything, so every dependency it carries is a
 dependency everything carries.** The blast radius is total.
 
-Concretely: if the core imported SQLAlchemy — reasonable-looking, since several modules
-persist things — then the guardrails, which touch no database, would drag in an ORM. Every
-install gets bigger, every import gets slower, and a version conflict in SQLAlchemy
-becomes a conflict for every module in the system.
+I can give you the actual bill. These guardrail verdict types used to live in the host's
+API schema module, so a rail that wanted to return a verdict imported them from there.
+Diffing `sys.modules` before and after each import, on one laptop:
+
+| You import | Modules loaded | Third-party packages | Cumulative import time |
+|---|---|---|---|
+| `aegis.core` | 268 | 7 (the pydantic family) | ~0.11 s |
+| `app.api.schemas` | 576 | 20 — including sqlalchemy, jwt, argon2, bcrypt, cryptography | ~0.38 s |
+
+The guardrails match regexes and call a classifier. They never open a database
+connection, sign a token or hash a password. To return a four-value enum they were
+loading an ORM, a JWT library, a password hasher and OpenSSL bindings — and inheriting
+every version conflict those have.
 
 So the core is pydantic and the standard library. The package's three base dependencies
 are `pydantic`, `pydantic-settings` and the AG-UI protocol; everything else is an extra.
 
 And because "we intend to keep it light" degrades over eighteen months, **it is a test,
-not an intention**: a subprocess imports the core and asserts a list of ten banned heavy
-modules is absent from `sys.modules`.
+not an intention**: a subprocess imports the core and asserts a list of eleven banned
+heavy modules is absent from `sys.modules`. Add `import aegis.data` to that snippet and it
+fails with `AssertionError: {'sqlalchemy'}` — the guard names the offender.
 
 Two details in that test worth mentioning. It runs in a **subprocess**, because another
 test in the same process may already have imported SQLAlchemy and the guard would pass by
@@ -79,12 +89,20 @@ top-level package you already have installed. And the message carries the **comm
 a category: `pip install aegis[forecast]` is paste-able; "feature unavailable" is a support
 ticket.
 
-Placement matters too: every call site is **inside a function body**. At module top level
-the import would be mandatory and the extra would be an extra in name only.
+Placement matters too: almost every call site is **inside a function body**. At module top
+level the import would be mandatory and the extra would be an extra in name only. There is
+one exception — the NeMo Colang actions module calls `require` at module scope — and it is
+defensible because that whole module is only imported at live-integration time, never by
+the offline tests. The rule is "the dependency sits behind a lazy boundary", not "the
+import must be indented."
 
-I'd flag one gap: `aegis[media]` is named at four `require` sites and is not declared in
-the pyproject extras. The failure is still loud and still fails closed — which is the
-security-relevant half — but that install command would not resolve today.
+One nuance I'd volunteer, because it looks like a contradiction and isn't. The *text* PII
+engine does fall back: Presidio when it's available, a pure-regex engine when it isn't.
+That's legitimate for two specific reasons — it logs at WARNING on every fallback and
+exposes `active_engine()` so a caller can surface which one is live, and
+`AEGIS_PII_ENGINE=presidio` turns the fallback into a hard error. The image rail has no
+weaker detector to fall back to, so its only honest options are run or refuse. Degradation
+isn't the banned thing; **silent** degradation is.
 
 ---
 
@@ -121,30 +139,52 @@ show. `TranscribeCallable` is one because it takes a file handle, not messages.
 
 ### "You mentioned no leaf-to-leaf imports. Is that actually true?"
 
-**No — there are two, and they are documented rather than smoothed over.**
+**No, and the honest answer is more interesting than "no".** The architecture doc names two
+deviations. I walked the AST of every file under `aegis/src/aegis/` — treating `core`,
+`data` and `media` as shared bases — and there are at least seven among the leaves:
 
-`aegis.memory` imports from `aegis.retrieval` in five places — cosine similarity, RRF
-fusion, spotlighting, the embedded vector store. That is a deliberate repoint: memory recall
-genuinely needs those, and the alternative was a second implementation of each.
+| From | To |
+|---|---|
+| `memory` | `retrieval` — cosine similarity, RRF fusion, spotlighting, the vector store |
+| `governance` | `gateway` — one exception class |
+| `vision` | `guardrails` |
+| `voice` | `guardrails`, and `gateway` |
+| `evals` | `retrieval`, and `gateway` |
 
-There is a cost worth naming, though. Because Python runs a package's `__init__.py` on
-*any* submodule import, `from aegis.retrieval.fusion import ...` initialises the whole
-`aegis.retrieval` package. So a narrow import pulls the entire leaf. It is mitigated —
-retrieval's heavy backends are themselves lazy — but the edge is real.
+Plus `ops → evals`, `redteam → guardrails`, and the two composition-layer modules — `agent`
+and `security` — which reach into several siblings by design and are documented as sitting
+above the leaf boundary.
 
-The second is one line: `aegis.governance.enforcement` imports `BudgetExceededError` from
-`aegis.gateway.types`. That one has an obvious fix — move the exception into
-`aegis.core.types`, exactly as `RiskLevel` and `RunStatus` were moved out of the host's
-API layer for the same reason. It has not been done.
+Some of these are defensible. The memory edge is a deliberate repoint: memory recall
+genuinely needs fusion and spotlighting, and the alternative was a second implementation of
+each. `vision → guardrails` and `voice → guardrails` are the same story — those modules
+decide *ordering* over rails that guardrails owns.
 
-I'd say two more things. **An architectural claim you cannot verify is marketing** — this
-one is checkable in about ten lines of AST walking, and today it is documented rather than
-enforced. And what would make it structural: a test that walks each leaf's imports and
-asserts the set matches a small explicit allowlist, so a new violation fails CI and an
-intentional one is a one-line change with a code-review conversation attached.
+One is a two-minute fix. `aegis.governance.enforcement` imports exactly one exception,
+`BudgetExceededError`, from `aegis.gateway.types`. Hoist it into `aegis.core.types`,
+exactly as `RiskLevel` and `RunStatus` were hoisted out of the host's API layer for the
+same reason. It has not been done.
 
-The per-module isolation tests we do have check *heaviness*, not *topology* — which is
-exactly why both violations were found by reading the code while writing docs.
+There's a cost worth naming on all of them. Because Python runs a package's `__init__.py`
+on *any* submodule import, `from aegis.retrieval.fusion import ...` initialises the whole
+`aegis.retrieval` package. A narrow import pulls the entire leaf. It's mitigated —
+retrieval's heavy backends are themselves lazy — but "I only imported one function" is not
+a defence.
+
+**The real finding isn't the count. It's that the count was documented, correct when
+written, and went stale without anyone noticing.** The per-module isolation tests we have
+check *heaviness* — does importing this pull torch — not *topology*. Those are different
+properties, and only the first one is protected, which is exactly why the second drifted.
+
+So: **an architectural claim you cannot verify is marketing.** This one is checkable in
+about the ten lines of AST walking that produced that table. What would make it structural
+is a test that collects each leaf's `aegis.<other>` imports and asserts the set matches a
+small explicit allowlist — a new edge fails CI, an intentional one is a one-line allowlist
+change with a code-review conversation attached.
+
+One correction I'd offer too: `aegis.media` now behaves as a **third shared base** alongside
+`core` and `data` — pydantic-and-stdlib-only payload types that guardrails, voice and vision
+all sit on. That isn't a violation; it's a rule that grew and a document that didn't.
 
 ---
 
@@ -294,32 +334,71 @@ That is a capability, not a refactoring benefit.
 Three things, and none is a security hole.
 
 **Enforce the boundary invariant with a test.** Walk each leaf's AST, collect
-`import aegis.<other>` where `<other>` is not `core` or `data`, and assert against a small
-allowlist. Today the two known violations were found by reading code. That is the right
-way to *find* them and the wrong way to *keep* the invariant.
+`import aegis.<other>` where `<other>` is not a shared base, and assert against a small
+allowlist. Today the violations are found by reading code, which is the right way to *find*
+them and the wrong way to *keep* an invariant — and the documented count has already gone
+stale as a result.
 
-**Declare the `aegis[media]` extra**, so the four `require` sites naming it point at
-something that resolves.
+**Fix the client-side event-name mirror, and then generate it.** This one has already
+happened rather than being hypothetical, and I'd lead with it — see the next question.
 
-**Generate the client-side event-name list from the server-side one.** There are two
-hand-maintained copies — Python and TypeScript — and two hand-maintained lists will drift.
-The server side is protected, because emitting an unknown name raises. The **client** side
-is not: a name the server knows and the client does not is a silently dropped event.
+**Wire up the registry or say it's unused.** There is exactly one production
+`@register("guardrail", "default")`, and `get()`, `available()` and `discover()` are called
+nowhere outside the registry's own test. It's a designed extension seam that nothing
+currently exercises. That's a fine thing to be — as long as the docs say so rather than
+describing it as how components get resolved.
 
 If pushed for a fourth: `BudgetExceededError` should move from `aegis.gateway.types` into
-`aegis.core.types`, which removes one of the two leaf-to-leaf edges in about two minutes.
+`aegis.core.types`, which removes a leaf-to-leaf edge in about two minutes.
+
+---
+
+### "You said the event-name mirror already drifted. Show me."
+
+The Python source of truth holds **22** canonical event names. The TypeScript mirror in
+`web/src/lib/streamNames.ts` holds **17**.
+
+The five that are missing are `guardrail_media`, `voice_chunk`, `voice_transcript`,
+`vision_screen` and `vision_analysis` — the newest five, and all of them live server-side
+emissions. `guardrail_media` is the one that itemises which media rails ran and which did
+not; `vision_screen` carries a `screened` flag specifically so a fail-closed block is never
+rendered as "we looked and it was clean." Those are the events whose whole purpose is to
+keep the console honest, and they are the ones the console cannot recognise.
+
+What makes it a good story is the header comment on that file: *"parity is asserted by the
+count below."* The count is `STREAM_NAME_SET.size` — derived from the TypeScript list
+itself. It counts what is there. It has no reference to the Python side at all, so it cannot
+possibly detect a missing name. And nothing in `web/src` imports the module, so even a
+correct assertion would never run.
+
+Three things I'd take from it.
+
+**The asymmetry is the bug.** The server is protected — `custom()` raises `ValueError` on an
+unregistered name, so a typo can't escape. The client has no equivalent, so a name the
+server knows and the client doesn't is a silently dropped event. That is precisely the
+failure the server-side check exists to prevent, reappearing on the far side of the wire.
+
+**A comment claiming a check is not a check.** It was written in good faith and it is false,
+and a reader trusts it and stops looking.
+
+**Duplication across a language boundary drifts in the direction of new work.** Nobody
+forgot on purpose; the mirror simply isn't on the path anyone walks when adding a media
+event. The fix is generation from one source, or a test that reads both files and diffs
+them. Both are cheap. Neither exists.
 
 ---
 
 ### "How would you test a package like this?"
 
-Four kinds, and the first two are the ones people skip.
+Four kinds that exist, and one that should. The first two are the ones people skip.
 
 **Import guards, in subprocesses.** Assert the core pulls none of a banned list. Assert
 each leaf pulls no heavy dependency and no `app.*` module. Subprocess is mandatory — in
 the same process another test may already have imported the banned module and the guard
-passes by accident. The vision one goes further and bans `torch`, `transformers` and
-`timm` specifically, with the comment *"a policy that is not tested is folklore"*.
+passes by accident. There are thirteen of these today, one per leaf; with the core's own
+file they run 66 assertions. The vision one goes further and bans `torch`, `transformers`
+and `timm` specifically, with the comment *"a policy that is not tested is folklore"* —
+and adds a separate test that `PIL` is absent until the PII rail actually runs.
 
 **Usability on the base install.** The voice isolation test runs the **whole guarded path**
 in a subprocess with only pydantic installed, using fakes. That proves the module is not
@@ -332,3 +411,7 @@ only shape that would have caught the inert-instrumentation bug.
 **Message-content assertions on failure paths.** The `require` test asserts
 `"pip install aegis[nemo]" in str(exc)`. Testing that it raises is not enough: the whole
 value of the mechanism is the remedy string, so the remedy string is what the test pins.
+
+And the fifth, which doesn't exist yet and should: **a topology guard**. Everything above
+checks what a module *weighs*. Nothing checks what it *points at*. Those are different
+properties, and the one without a test is the one that drifted.

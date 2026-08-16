@@ -12,7 +12,8 @@ to enforce. You layer imperfect controls and you are honest about each one's lim
 
 Six rails on the way in: **schema** (format, length, invisible characters), **PII
 redaction**, **injection detection**, **content safety**, **topical**, then **custom
-domain rails**. Six on the way out, in a different order.
+domain rails**. Six on the way out — schema, a system-prompt-leak content filter, content
+safety, custom rails, grounding, and PII redaction *last*, for a reason I'll come to.
 
 The injection rail itself has two layers. A deterministic signature backstop that runs
 offline with no API call and cannot be talked out of its opinion, then a cheap-model
@@ -32,7 +33,7 @@ Because everything after it is a model call.
 Layers three, four and five are the injection classifier, the content-safety self-check and
 the topical screen — three requests to a third-party model. If you send the user's raw text
 to those, your *safety control* is itself a sensitive-information disclosure. That's OWASP
-LLM06, committed by the thing you built to prevent LLM06.
+LLM02 in the 2025 list, committed by the thing you built to prevent LLM01.
 
 So redaction happens first and every downstream layer sees the masked text.
 
@@ -52,8 +53,9 @@ degraded and disabled. And it means the entire rail stack is unit-testable with 
 and no API key.
 
 But you're right that it's evadable, and we verified exactly how. Against the real detector,
-**only plain ASCII was caught.** Filler words, zero-width characters, Cyrillic homoglyphs,
-fullwidth fonts, base64 and non-English all walked straight past.
+**only plain ASCII was caught.** Filler words between the anchors, zero-width characters,
+Cyrillic homoglyphs, fullwidth and mathematical-bold fonts, base64 and non-English all walked
+straight past. Every one of those strings is now a case in the regression suite.
 
 ---
 
@@ -75,6 +77,12 @@ arrive mangled.
 
 We also fixed the patterns themselves: composable gap fragments so "ignore **the above**
 directions" matches the same signature as "ignore all previous instructions".
+
+**I'd volunteer where that stops**, because it's the honest answer. The gap allowance is
+three filler words. `Ignore, if you would, the previous instructions` has four and is *not*
+caught deterministically today — widening it further would start matching ordinary sentences
+containing "ignore" and "instructions" fifteen words apart. So the deterministic layer is a
+backstop, not a filter, and a padded paraphrase is exactly what the model classifier is for.
 
 And the coverage limits are stated in the docstring **and pinned by a test** — seven
 languages, base64 only, Cyrillic and Greek homoglyphs only, no leetspeak. An honesty claim
@@ -183,6 +191,12 @@ Selection is a setting. `"nemo"` uses Colang **only if** the package is importab
 else keeps the programmatic pipeline, which is also the fallback — so the live path never
 loses its rails.
 
+**Where I'd stop short of the claim:** "one policy" is true of the six built-in rails. It is
+not yet true of the extension seam — the Colang policy has no custom-rails step, so an
+operator's own rails run on the programmatic path only, and the grounding action is a no-op
+on the NeMo path because that call passes no contexts. Those are gaps I'd close, not gaps
+I'd hide.
+
 ---
 
 ### "Did that dual-engine design cause any problems?"
@@ -271,8 +285,8 @@ hand it a stringified blob (meaningless) and crashing is hostile. So it's **skip
 the skip is **recorded in the verdict**. A rail that did not run is never counted among the
 rails that did.
 
-That honesty runs through the whole media chain. Every image verdict lists "image
-content-safety/topical screen — not implemented for pixels in this release" in its skipped
+That honesty runs through the whole media chain. Every image verdict lists *"image
+content-safety/topical screen (not implemented for pixels in this release)"* in its skipped
 rails, rather than letting a reader assume coverage.
 
 ---
@@ -295,7 +309,8 @@ to report on, never instructions to obey.
 **I'd be honest about what it is:** a strong hint, not a boundary. The model can still be
 persuaded — it's a next-token predictor, not a reference monitor. Its value is converting
 "the model has no idea this is untrusted" into "the model has been told clearly and
-repeatedly", which measurably reduces compliance. It's one layer.
+repeatedly". Microsoft's paper reports a substantial drop in attack success from that; we
+haven't reproduced that measurement here, so I wouldn't quote a number. It's one layer.
 
 The other half is the write-time defence: content validation before anything enters the
 knowledge store, so obvious injection payloads are rejected at ingestion rather than
@@ -370,12 +385,15 @@ when no completer is configured rather than silently proceeding.
 Three levels, and the third is the one people skip.
 
 **Unit-test each rail offline** with a fake completer. Every rail except grounding has a
-pure layer, so the whole stack runs with no network and no API key.
+pure layer, so the whole stack runs with no network and no API key — 220 tests, no API key.
 
-**Red-team battery**: a suite of attack cases, each with an id, a category, and — crucially —
-**the layer expected to catch it**. That last field matters: a case caught by the model
-classifier when it should have been caught deterministically is a regression, because the
-deterministic layer is the one that works offline.
+**Red-team battery**: 28 probes — 20 attacks and 8 **benign controls**, because a rail that
+blocks everything is not a fix, it's a rail operators switch off. Each probe carries a stable
+id, a category, its OWASP identifier, the expected outcome, and — crucially — a `needs_llm`
+flag marking the cases only the model layer can catch. That last field is the honesty
+mechanism: it lets an offline run explain a leak as an expected model-layer gap instead of
+silently counting it as a guardrail failure. And the runner feeds every probe through the
+**real** `check_input` and records the **actual** verdict, never a fabricated one.
 
 **Test the honesty claims.** The docstring says coverage is seven languages and base64 only —
 there's a test asserting exactly that. The action registration list must cover every
@@ -386,3 +404,27 @@ asserts the relationship.
 And explicitly test the **failure directions**: an unparseable classifier reply must block, a
 missing rail log must block, an image with no completer must block, and a broken cache must
 miss rather than block.
+
+---
+
+### "So how effective is it? Give me a number."
+
+I'll give you one and then tell you what it isn't.
+
+Running the battery offline — deterministic layers only, no model wired — the rails neutralise
+**17 of 20 attacks, with 0 false positives on the 8 benign controls.** All three leaks are
+cases flagged `needs_llm`, so they're expected to reach the model layer.
+
+Now the caveats, because that number is easy to over-claim from. It's measured against *our
+own* 28-case battery, not a published attack corpus. It's the deterministic-only reach, so
+wiring a completer raises it. And it says nothing about a determined adversary who reads our
+source and pads a payload past the three-word gap allowance.
+
+What it's genuinely good for is regression. The threshold is set at the offline
+deterministic reach — 75% block rate, 0% false positives — so a change that weakens a
+signature, or one that starts blocking ordinary traffic, fails the run.
+
+**And I'd say the honest thing out loud: prompt injection is not solved.** Published attack
+success rates against defended systems stay high. What layering buys you is that the cheap,
+high-volume attacks stop, the expensive ones cost more, and — the part I care about most — the
+system says loudly when a control could not run, instead of reporting a clean pass.

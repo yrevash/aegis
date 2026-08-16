@@ -1,6 +1,6 @@
 # Vision — interview questions and answers
 
-Claim, reason, concrete detail.
+Claim first, then the reason, then a concrete detail from this system.
 
 ---
 
@@ -100,7 +100,7 @@ outcome tests nothing, because both designs produce the same outcome.
 
 ### "What happens if the screening model is unavailable?"
 
-Every image is blocked, and the verdict says the control could not run.
+Every image is blocked.
 
 This is the one place the module deliberately breaks a pattern used everywhere else in
 the codebase. Our text guardrails **degrade** when there is no completer — the
@@ -114,9 +114,20 @@ The rule that generalises: **whether degrading is honest depends on whether a we
 control still exists.** Text can degrade because something remains. Images cannot,
 because zero controls is not a degraded mode.
 
-And the verdict distinguishes *why* it blocked. `screened=False` means "no model looked",
-not "we looked and found something." The test asserts it with the message *"a fail-closed
-block must not read as 'we looked'"*.
+And I would volunteer a wrinkle here, because it is the kind of thing a good interviewer
+digs for. "Unavailable" splits into two cases, and only one of them is reported honestly
+today.
+
+**No completer wired** sets `screened=False`, so the control reports `FAILED_CLOSED` and
+the console shows its own third state. The test asserts it with the message *"a
+fail-closed block must not read as 'we looked'"*.
+
+**The completer raises** — the deployment is up in config but unreachable in fact — leaves
+`screened` at its default of `True`, so it reports as an ordinary `BLOCKED`. The image is
+still refused and the analyst is still never called, so it is a *reporting* gap and not a
+safety one. But it is exactly the operational failure the design elsewhere warns about: a
+dashboard filling with normal-looking blocks while the real condition is an outage. I
+would fix it by threading `screened=False` through the exception path in `classify_image`.
 
 ---
 
@@ -161,15 +172,15 @@ The rule: **"cheap" must mean a cheaper model, never a cheaper representation.**
 
 ---
 
-### "Your guardrails chain redacts PII before screening; the vision pipeline screens
-first. Isn't one of them wrong?"
+### "Your guardrails chain redacts PII before screening but the vision pipeline screens first — isn't one of them wrong?"
 
 No — and this is the ordering question I would most want to be asked.
 
-The standard rule is redact-before-you-send-to-a-model, and it comes from OWASP `LLM06`:
-sending unredacted personal data to a *screening* model is itself a disclosure. That
-premise holds on the guardrails path, where the screening model is an **additional**
-party seeing the image.
+The standard rule is redact-before-you-send-to-a-model, and it comes from OWASP's
+Sensitive Information Disclosure entry (our docstrings cite it as `LLM06`, its number in
+the 2023 list): sending unredacted personal data to a *screening* model is itself a
+disclosure. That premise holds on the guardrails path, where the screening model is an
+**additional** party seeing the image.
 
 It does not hold on the vision path. There, the image is going to the fleet's vision
 deployment either way — that is the entire request. So redacting before the screen
@@ -207,6 +218,25 @@ sentence must not list it among the controls that did.
 And every blocked run lists **all five** stages, with a `NOT_RUN` entry for each one
 after the refusal reading *"Not reached — injection_screen refused first."* A reader
 never has to infer coverage from a missing entry.
+
+---
+
+### "What runs before the screen?"
+
+Payload hygiene, because it is free and offline and the screen is not.
+
+Concretely: a 33-byte PNG whose header declares 40,000 × 40,000 pixels. Two independent
+checks fire on it — the pixel cap (40 megapixels) and the compression-ratio cap, because
+1.6 billion pixels from 33 bytes is 48 million pixels per byte against a cap of 500. A
+real photo lands around 1–10. Nothing decoded a pixel, and no model call was spent.
+
+It also catches a lie about the format — declared `image/jpeg`, PNG magic bytes — and,
+importantly, refuses an image whose dimensions cannot be read at all, on the grounds that
+the decompression-bomb guard then has nothing to work with. "We could not check" is not a
+reason to allow.
+
+The 40 MP cap sits deliberately below Pillow's own 89 MP bomb-warning threshold, so we
+refuse before any downstream decoder even warns.
 
 ---
 
@@ -254,16 +284,24 @@ beats tidy for a deployment fault.
 budget enforcement and the ledger write on a bound tenant context. That binding was on
 the query and voice routes and not on this one. So both calls skipped budget enforcement
 and wrote no ledger row: **uncapped, unattributed, invisible spend**, on the most
-expensive call type on the platform.
+expensive call type per byte on the platform, reachable by any authenticated user in a
+loop.
 
 Nothing errored. The answer was correct. The verdict was green. The only symptom was a
 cost dashboard that did not add up.
 
 The generalisable lesson: **a control that is opt-in per call site is a control the next
-call site will forget.** If you cannot make it structural, you need a test that asserts
-the ledger row exists — because nothing else will notice. The fix binds and resets in a
-`finally` so the context cannot leak onto the next request the worker serves, and the
-tests drive the real route through the real governance hook to the real ledger.
+call site will forget.** The gating itself is right — there are legitimate unattributed
+callers, a startup probe or an offline eval — so it cannot be made structural here. That
+leaves a test as the only backstop, and it has to be unfakeable: the regression test
+drives the real route through the real pipeline, the real `complete`, the real governance
+hook, to real rows in the database, with only litellm faked. It asserts **two** ledger
+rows, not one, each with `images=1` — because the injection screen is a paid model call
+too, and ledgering only the "real" one under-reports what an image analysis costs by
+roughly half.
+
+The fix binds and resets in a `finally` so the context cannot leak onto the next request
+the worker serves, and there is a separate test for that leak.
 
 ---
 
@@ -306,6 +344,24 @@ placeholder, so every test runs against fakes. That is the right way to test *th
 module — the ordering, the fail directions and the verdict shapes are properties of code
 that lives here. But the claim is precise: **the pipeline is tested; the screen's
 false-negative rate on a genuinely subtle payload is unmeasured.**
+
+---
+
+### "Anything in the module you'd call unfinished?"
+
+Two, and I would rather name them.
+
+The `screened` flag does not cover the case where the screening deployment is reachable
+in config and unreachable in fact — that path blocks correctly but reports as an ordinary
+block rather than as "we could not look". One line to fix, and I described it above.
+
+The streaming events are built and tested but not wired. `aegis.vision.stream` defines
+`VISION_SCREEN` and `VISION_ANALYSIS`, with the screen verdict emitted *the moment the
+screen decides* rather than alongside the answer — which is what would make the ordering
+visible in the console instead of merely asserted in a test. Nothing in the backend or the
+web app emits or consumes them today; `/vision/analyse` is a plain request/response POST
+and the console renders the finished result. The seam exists; the platform has not taken
+it.
 
 ---
 

@@ -68,13 +68,18 @@ const ORDER = [
   ['core', 'Core', 'The Module Contract'],
 ]
 
+// Three files per module. The old six-file split (concepts / theory / in-aegis /
+// deep-dive) explained the same idea in three places and taught it in none, so those
+// four are merged into one guide — see docs/teaching/STYLE.md. The legacy stems stay
+// mapped so a folder mid-migration still renders with real labels.
 const FILE_LABEL = {
+  '10-guide': 'Guide',
+  '40-diagrams': 'Diagrams',
+  '50-interview': 'Interview',
   '00-concepts': 'Concepts',
   '10-theory': 'Theory',
   '20-in-aegis': 'In Aegis',
   '30-deep-dive': 'Deep dive',
-  '40-diagrams': 'Diagrams',
-  '50-interview': 'Interview',
 }
 
 /* ── walk ─────────────────────────────────────────────────────────────────── */

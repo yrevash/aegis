@@ -1,6 +1,7 @@
 # Voice — interview questions and answers
 
-Claim, reason, concrete detail.
+Claim, reason, concrete detail. The reasoning behind every answer here is in
+[`10-guide.md`](10-guide.md).
 
 ---
 
@@ -66,8 +67,8 @@ vary by two orders of magnitude between a headset and a laptop mic across a room
 absolute threshold calls one recording all-silence and the other all-speech.
 
 **It is squared.** The envelope is mean-square and the ratio is an amplitude ratio, so
-comparing them without squaring gives a threshold about five times too generous — and
-then the splitter "finds" pauses in the middle of words. That is a silent wrong answer,
+comparing them without squaring gives a threshold `0.18 / 0.18² = 5.6` times too generous —
+and then the splitter "finds" pauses in the middle of words. That is a silent wrong answer,
 not a crash.
 
 **8-bit WAV is unsigned with a 128 midpoint.** Silence is a run of 128s. Square that and
@@ -240,6 +241,17 @@ server will reject and calls that a transcription failure.
 The general shape: when a policy constrains the server, someone still has to do the
 conversion. Pushing it to the client, which already has a full audio stack, costs
 nothing and keeps the policy intact.
+
+One thing I would raise myself, because it is the kind of gap that only appears when two
+sensible limits multiply. The browser re-encodes at the decoded buffer's own sample rate —
+typically 44.1 or 48 kHz — and the upload cap is 8 MiB. At 48 kHz mono 16-bit that is 96,000
+bytes a second, so 8 MiB is about 87 seconds of audio, while the server's chunk ceiling is 120
+seconds. A recording long enough to *need* chunking is therefore rejected by the size cap
+before the splitter is ever reached, so from the record button the silence splitter is
+effectively unreachable; it engages on file uploads at lower sample rates. That is arithmetic
+from two real constants rather than a measured failure — nothing in the test suite exercises
+it. The cheap fix is downsampling to 16 kHz in the browser, which is also what the model
+wants.
 
 ---
 
