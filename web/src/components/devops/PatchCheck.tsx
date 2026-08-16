@@ -17,8 +17,8 @@ import { Button } from '@/components/primitives/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { PatchCheckResponse, PatchResult } from '@/lib/api/types'
 
@@ -257,29 +257,14 @@ function Chip({
   )
 }
 
-/**
- * Client entry for the Patch Check section. Runs the boot probe once (live-first,
- * mock fallback), shows the honest offline banner, then renders the freshness
- * check wired to `POST /stack/patch-check`.
- */
+/** Client entry for the Patch Check section — gated on a reachable backend. */
 export function PatchMount(): ReactElement {
   // Hand the child the real session bearer, and hold it back until the persisted
   // session has been restored — mounting with a constant `null` would fetch with
   // no `Authorization` header and never retry.
   const { session, hydrated } = useAuth()
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
 
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null || !hydrated) {
+  if (!hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -288,23 +273,16 @@ export function PatchMount(): ReactElement {
   }
 
   return (
-    <TooltipProvider>
-      <div className="space-y-4">
-        <div>
-          <p className="eyebrow mb-1">installed vs latest</p>
-          <h1 className="t-hero text-foreground">Patch Check</h1>
-        </div>
-        {mode.mode === 'mock' && (
-          <div
-            role="status"
-            className="flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-          >
-            <WifiOff className="size-3.5 shrink-0" />
-            <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+    <BackendGate>
+      <TooltipProvider>
+        <div className="space-y-4">
+          <div>
+            <p className="eyebrow mb-1">installed vs latest</p>
+            <h1 className="t-hero text-foreground">Patch Check</h1>
           </div>
-        )}
-        <PatchCheck token={session?.token ?? null} />
-      </div>
-    </TooltipProvider>
+          <PatchCheck token={session?.token ?? null} />
+        </div>
+      </TooltipProvider>
+    </BackendGate>
   )
 }

@@ -20,7 +20,7 @@ from .conftest import RecordingComplete, SequenceEmbed
 _SCOPE = RetrievalScope(tenant_id=None)
 
 _DOCS = [
-    ("refunds", "Refunds are issued to the original payment method within a week."),
+    ("closures", "A closure is confirmed by the original approver within a week."),
     ("escalation", "Escalate a request to a senior agent when its deadline is at risk."),
 ]
 
@@ -64,7 +64,7 @@ async def test_stream_retrieve_emits_step_then_citations_then_finished():
 
     result = await stream_retrieve(
         retriever,
-        "refunds payment method",
+        "closures original approver",
         emitter,
         scope=RetrievalScope(tenant_id=None, persona="ops"),
     )
@@ -103,7 +103,7 @@ async def test_stream_retrieve_citations_reflect_real_sources():
     emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
 
     result = await stream_retrieve(
-        retriever, "refund payment method original", emitter, scope=_SCOPE
+        retriever, "closure approver original", emitter, scope=_SCOPE
     )
 
     citations = _payloads(sink.frames)[2]["value"]
@@ -121,7 +121,7 @@ async def test_stream_retrieve_emits_cache_miss_then_hit_with_provenance():
     em1 = AegisEmitter(thread_id="t", run_id="r1", sink=sink1)
     await stream_retrieve(
         retriever,
-        "refunds payment method",
+        "closures original approver",
         em1,
         scope=RetrievalScope(tenant_id=None, persona="ops"),
     )
@@ -137,7 +137,7 @@ async def test_stream_retrieve_emits_cache_miss_then_hit_with_provenance():
     em2 = AegisEmitter(thread_id="t", run_id="r2", sink=sink2)
     result2 = await stream_retrieve(
         retriever,
-        "refunds payment method",
+        "closures original approver",
         em2,
         scope=RetrievalScope(tenant_id=None, persona="ops"),
     )
@@ -148,7 +148,7 @@ async def test_stream_retrieve_emits_cache_miss_then_hit_with_provenance():
     assert result2.cache_hit is True
     assert cache2["event"] == "hit"
     assert cache2["kind"] == "cache-exact"  # near-exact tier; semantic tier is "cache-near"
-    assert cache2["original_query"] == "refunds payment method"
+    assert cache2["original_query"] == "closures original approver"
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
 import type { RetrievalOrigin } from '@/lib/stream'
-import { ORIGIN_LABEL, type RetrievalObservability } from '@/mock/retrievalObs'
+import { ORIGIN_LABEL, type RetrievalObservability } from './observability'
 
 /** Whether a stage ran (on), demonstrably did not (off), or isn't measurable. */
 type Status = 'on' | 'off' | 'na'
@@ -127,8 +127,6 @@ function ArmChip({
 
 export interface ArsenalPanelProps {
   obs: RetrievalObservability
-  /** Whether every field is measured (mock sample) or a live-derived subset. */
-  source: 'mock' | 'live'
 }
 
 /**
@@ -136,17 +134,13 @@ export interface ArsenalPanelProps {
  * candidate counts), RRF fusion, rerank (kept/input + top scores), spotlighting,
  * query-rewrite, and the bounded Self-RAG loop — each as a clear on/off + count.
  *
- * Offline (`mock`) every number is read from {@link SAMPLE_OBSERVABILITY} and the
- * panel is badged `sample`. Live, the arsenal fields the web `/query` SSE contract
- * does NOT carry (per-arm counts, spotlight, rewrite, Self-RAG) are shown honestly
- * as `n/a` rather than a fabricated on/off — only the measured subset (arms fired,
- * fusion, fused count, rerank scores) reads as a real value.
+ * Every value here is measured from the run stream. The arsenal stages the web
+ * `/query` SSE contract does NOT carry (per-arm counts, spotlight, rewrite,
+ * Self-RAG) read as `n/a` rather than a fabricated on/off — they are reported only
+ * on a full `retrieval_citations` run.
  */
-export function ArsenalPanel({ obs, source }: ArsenalPanelProps): ReactElement {
-  const live = source === 'live'
+export function ArsenalPanel({ obs }: ArsenalPanelProps): ReactElement {
   const rr = obs.rerank
-  const rewrite = obs.rewrite
-  const agentic = obs.agentic
 
   const rrfOn = obs.fusion === 'rrf' || obs.fusion === 'mix'
 
@@ -157,8 +151,8 @@ export function ArsenalPanel({ obs, source }: ArsenalPanelProps): ReactElement {
         title="Retrieval arsenal"
         description="Every arm, fusion, and post-filter that fired this retrieval — with real, measured counts."
         actions={
-          <Badge tone={live ? 'graph' : 'neutral'} className="uppercase">
-            {live ? 'measured · this run' : 'sample'}
+          <Badge tone="graph" className="uppercase">
+            measured · this run
           </Badge>
         }
       />
@@ -180,7 +174,7 @@ export function ArsenalPanel({ obs, source }: ArsenalPanelProps): ReactElement {
                   origin={origin}
                   candidates={arm.candidates}
                   fired={arm.fired}
-                  showCount={!live || arm.candidates > 0}
+                  showCount={arm.candidates > 0}
                 />
               )
             })}
@@ -223,61 +217,22 @@ export function ArsenalPanel({ obs, source }: ArsenalPanelProps): ReactElement {
             )}
           </StageRow>
 
-          <StageRow
-            icon={Highlighter}
-            title="Spotlighting"
-            status={live ? 'na' : obs.spotlight_applied ? 'on' : 'off'}
-          >
+          <StageRow icon={Highlighter} title="Spotlighting" status="na">
             <p className="text-xs text-muted-foreground">
-              {live
-                ? 'Not carried on the /query stream — visible on a full retrieval_citations run.'
-                : 'Microsoft spotlighting delimits retrieved context so injected instructions cannot escape it.'}
+              Not carried on the /query stream — visible on a full retrieval_citations run.
             </p>
           </StageRow>
 
-          <StageRow
-            icon={PencilLine}
-            title="Query rewrite"
-            status={live ? 'na' : rewrite?.ran ? 'on' : 'off'}
-            metric={!live && rewrite?.ran ? (rewrite.changed ? 'changed' : 'unchanged') : undefined}
-          >
-            {!live && rewrite?.ran && rewrite.rewritten ? (
-              <p className="rounded-md bg-surface-2/60 px-2.5 py-1.5 font-mono text-[0.7rem] text-foreground">
-                {rewrite.rewritten}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                {live
-                  ? 'Not carried on the /query stream — set by the agentic layer on a full run.'
-                  : 'A context-aware rewrite turns the follow-up into a standalone retrieval query.'}
-              </p>
-            )}
+          <StageRow icon={PencilLine} title="Query rewrite" status="na">
+            <p className="text-xs text-muted-foreground">
+              Not carried on the /query stream — set by the agentic layer on a full run.
+            </p>
           </StageRow>
 
-          <StageRow
-            icon={Repeat2}
-            title="Self-RAG loop"
-            status={live ? 'na' : agentic?.ran ? 'on' : 'off'}
-            metric={!live && agentic?.ran ? `${agentic.used_rounds}/${agentic.max_rounds} rounds` : undefined}
-          >
-            {!live && agentic?.ran && agentic.round_queries.length > 0 ? (
-              <ol className="space-y-1">
-                {agentic.round_queries.map((q, i) => (
-                  <li key={i} className="flex gap-2 text-[0.7rem] text-muted-foreground">
-                    <span className="tabular-nums shrink-0 font-mono text-graph-ink">#{i + 1}</span>
-                    <span className="min-w-0 truncate" title={q}>
-                      {q}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                {live
-                  ? 'Not carried on the /query stream — the bounded loop reports rounds on a full run.'
-                  : 'A bounded loop re-queries when the first pass is thin, capped so it can never run away.'}
-              </p>
-            )}
+          <StageRow icon={Repeat2} title="Self-RAG loop" status="na">
+            <p className="text-xs text-muted-foreground">
+              Not carried on the /query stream — the bounded loop reports rounds on a full run.
+            </p>
           </StageRow>
         </div>
       </CardBody>

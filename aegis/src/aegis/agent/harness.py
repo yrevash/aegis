@@ -10,7 +10,7 @@ artefacts the agent ALREADY produces, so neither can drift from real behaviour:
 - :func:`run_summary` folds the SAME ordered event stream :func:`aegis.agent.run_agent`
   emits into one structured record: the nodes touched (with per-node duration / model /
   tokens / cost), the planner's reasoning, the gate decision + risk tier, the tool calls
-  and their results, the bounded self-repair iterations, the ML evidence, the final
+  and their results, the bounded self-repair iterations, the recalled memory, the final
   answer and the terminal outcome. Because it consumes the emitted events verbatim, the
   "how it worked" record can never diverge from what streamed to the client.
 
@@ -56,14 +56,8 @@ _KNOB_SPECS: tuple[_KnobSpec, ...] = (
         "gate_min_risk",
         "enum",
         "Minimum tool-risk tier that forces the human approval gate. This is the ONLY "
-        "gating signal (risk-driven, never ML).",
+        "gating signal.",
         allowed=tuple(r.value for r in RiskLevel),
-    ),
-    _KnobSpec(
-        "run_ml",
-        "bool",
-        "Run the best-effort ML solution signal before planning. Injected as supporting "
-        "evidence only — it never gates, defers or terminates a run.",
     ),
     _KnobSpec(
         "self_repair_enabled",
@@ -196,8 +190,8 @@ def run_summary(events: Iterable[Any]) -> dict[str, Any]:
         node that started but did not finish, e.g. the interrupt-paused ``approval``
         node); ``reasoning`` (the planner's plan chunks); ``guardrails``; ``routing``;
         ``gate`` (gated?/risk tier/action/approval resolution); ``tools`` (call joined to
-        its result); ``iterations`` (each bounded self-repair reflection); ``ml`` evidence;
-        ``memory``; the reassembled ``answer``; ``totals`` (usage + summed node duration);
+        its result); ``iterations`` (each bounded self-repair reflection); ``memory``;
+        the reassembled ``answer``; ``totals`` (usage + summed node duration);
         and ``outcome`` (the terminal ``run_finished`` usage/status).
     """
     events = list(events)
@@ -302,18 +296,6 @@ def run_summary(events: Iterable[Any]) -> dict[str, Any]:
         else None
     )
 
-    ml_ev = next((e for e in events if _etype(e) == "ml_explanation"), None)
-    ml = (
-        {
-            "prediction": _get(ml_ev, "prediction"),
-            "conformal_interval": _get(ml_ev, "conformal_interval"),
-            "conformal_confidence": _get(ml_ev, "conformal_confidence"),
-            "shap_attribution": _get(ml_ev, "shap_attribution", []),
-        }
-        if ml_ev is not None
-        else None
-    )
-
     mem_ev = next((e for e in events if _etype(e) == "memory"), None)
     memory = (
         {
@@ -385,7 +367,6 @@ def run_summary(events: Iterable[Any]) -> dict[str, Any]:
         "gate": gate,
         "tools": tools,
         "iterations": iterations,
-        "ml": ml,
         "memory": memory,
         "answer": answer,
         "totals": {

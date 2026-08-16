@@ -36,7 +36,7 @@ def test_deterministic_hazard_flags_weapons_synthesis():
 
 
 def test_deterministic_hazard_ignores_ordinary_query():
-    assert deterministic_hazard("How long do refunds take on a premium account?") is None
+    assert deterministic_hazard("How long do closures take on a premium account?") is None
 
 
 def test_all_hazard_codes_are_s1_through_s13():
@@ -113,7 +113,7 @@ async def test_pipeline_output_blocks_unsafe_content():
 @pytest.mark.asyncio
 async def test_pipeline_passes_safe_content():
     guard = Guardrails(completer=completer_returning('{"injection": false, "unsafe": false}'))
-    res = await guard.check_input("What is the refund policy for premium accounts?")
+    res = await guard.check_input("What is the escalation policy for premium accounts?")
     assert res.verdict is GuardVerdict.PASS
 
 
@@ -180,7 +180,7 @@ def test_hazard_normalisation_does_not_overblock_benign_text():
     """Folding must not turn ordinary questions into hazards."""
     for benign in (
         "how to make a birthday cake",
-        "what is the refund policy for premium accounts",
+        "what is the escalation policy for premium accounts",
         "how to build a good relationship with customers",
     ):
         assert deterministic_hazard(benign) is None

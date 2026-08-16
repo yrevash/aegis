@@ -7,24 +7,20 @@ import { chartHex } from '@/components/charts/palette'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import type { RetrievalOrigin } from '@/lib/stream'
-import { ORIGIN_COLOR, ORIGIN_LABEL, type RetrievalObservability } from '@/mock/retrievalObs'
+import { ORIGIN_COLOR, ORIGIN_LABEL, type RetrievalObservability } from './observability'
 
 export interface ProvenanceDonutProps {
   obs: RetrievalObservability
-  source: 'mock' | 'live'
 }
 
 /**
  * The provenance donut — the origins mix (vector / graph / bm25) that fed the
  * fused pool, with the fusion method (RRF) read out at the centre. Slices are
- * weighted by each arm's measured candidate count when available; live, where the
- * `/query` SSE contract does not carry per-arm counts, fired arms are weighted
- * equally and the panel says so.
+ * weighted by each arm's measured candidate count when the stream carries one;
+ * the `/query` SSE contract does not, so fired arms are weighted equally and the
+ * panel says so rather than implying a measured split.
  */
-export function ProvenanceDonut({ obs, source }: ProvenanceDonutProps): ReactElement {
-  const live = source === 'live'
-  // Live has no per-arm counts, so weight each fired arm equally; mock uses the
-  // real measured counts.
+export function ProvenanceDonut({ obs }: ProvenanceDonutProps): ReactElement {
   const hasCounts = obs.arms.some((a) => a.candidates > 0)
   const slices = obs.arms
     .map((arm) => {
@@ -84,9 +80,9 @@ export function ProvenanceDonut({ obs, source }: ProvenanceDonutProps): ReactEle
                 </li>
               ))}
             </ul>
-            {!hasCounts && live && (
+            {!hasCounts && (
               <p className="mt-2 text-[0.7rem] text-muted-foreground/80">
-                Live: per-arm counts are not carried on the /query stream — slices weight fired arms
+                Per-arm counts are not carried on the /query stream — slices weight fired arms
                 equally.
               </p>
             )}

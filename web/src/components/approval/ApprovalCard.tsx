@@ -1,32 +1,21 @@
 'use client'
 
 import { Check, ShieldAlert, X } from 'lucide-react'
-import { useMemo, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 
-import { ConformalInterval } from '@/components/ml/ConformalInterval'
 import { Badge } from '@/components/primitives/badge'
 import { Button } from '@/components/primitives/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
-import { InfoTip } from '@/components/primitives/InfoTip'
 import { signalForRisk } from '@/config/signals'
 import { cn } from '@/lib/utils'
 import type { ApprovalDecision } from '@/lib/api/types'
-import type { ApprovalRequired, MLExplanation } from '@/lib/stream'
+import type { ApprovalRequired } from '@/lib/stream'
 
 interface ApprovalCardProps {
   approval: ApprovalRequired
   onDecision: (decision: ApprovalDecision) => void
   /** Set true once a decision was submitted, to disable the controls. */
   resolved?: boolean
-  /**
-   * The ML explanation behind the pause, if any. When present with a numeric
-   * prediction and interval, the card embeds a mini conformal band and its
-   * strongest driver so the reviewer sees *why* the model was uncertain — the
-   * pause explains itself ("this wide band is why I stopped").
-   */
-  ml?: MLExplanation | null
-  /** Optional unit for the embedded ML prediction, e.g. `'h'`. */
-  unit?: string
 }
 
 /**
@@ -34,13 +23,15 @@ interface ApprovalCardProps {
  * pauses here; the reviewer sees the proposed action, its arguments, the risk
  * level and the rationale, then approves or rejects. Central to the bounded-
  * autonomy story — nothing high-risk executes without this decision.
+ *
+ * Every field rendered here arrives on the live `approval_required` stream event
+ * the backend emits from the graph interrupt, and the decision goes back out on
+ * `POST /approval`, which resumes the parked run.
  */
 export function ApprovalCard({
   approval,
   onDecision,
   resolved,
-  ml,
-  unit,
 }: ApprovalCardProps): ReactElement {
   const riskSignal = signalForRisk(approval.risk)
 
@@ -84,8 +75,6 @@ export function ApprovalCard({
           <p className="text-[0.8rem] leading-relaxed text-muted-foreground">{approval.rationale}</p>
         </div>
 
-        {ml != null && <ApprovalMlWhy ml={ml} unit={unit} />}
-
         <div className="flex gap-2 pt-1">
           <Button
             className="flex-1 bg-ok text-ok-foreground hover:bg-ok/90"
@@ -105,48 +94,5 @@ export function ApprovalCard({
         </div>
       </CardContent>
     </Card>
-  )
-}
-
-/**
- * The self-explaining ML footnote inside the pause: a mini conformal band plus
- * the strongest driver. Renders nothing unless the prediction is numeric and an
- * interval is present (the only case where a band is meaningful).
- */
-function ApprovalMlWhy({ ml, unit }: { ml: MLExplanation; unit?: string }): ReactElement | null {
-  const topDriver = useMemo(() => {
-    if (ml.shap_attribution.length === 0) return null
-    return [...ml.shap_attribution].sort(
-      (a, b) => Math.abs(b.contribution) - Math.abs(a.contribution),
-    )[0]
-  }, [ml])
-
-  if (typeof ml.prediction !== 'number' || ml.conformal_interval === null) return null
-
-  return (
-    <div className="rounded-md border border-ml/40 bg-ml/[0.05] p-2.5">
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <p className="eyebrow">Confidence</p>
-        <InfoTip label="About confidence">
-          A calibrated confidence interval (conformal). A wide band means the model is uncertain,
-          which is why the action was routed to a human.
-        </InfoTip>
-      </div>
-      <ConformalInterval
-        prediction={ml.prediction}
-        interval={ml.conformal_interval}
-        confidence={ml.conformal_confidence}
-        unit={unit}
-        width={ml.interval_width}
-        setSize={ml.prediction_set_size}
-        compact
-      />
-      {topDriver && (
-        <p className="mt-2 text-[0.72rem] leading-snug text-muted-foreground">
-          Biggest factor:{' '}
-          <span className="font-mono text-foreground">{topDriver.feature}</span>.
-        </p>
-      )}
-    </div>
   )
 }

@@ -92,9 +92,9 @@ class FakeMemorySpec:
         """Keyword-match procedural skills for a query (subset of ``available``), or None."""
         q = query.lower()
         hints = {
-            "refund": "handling_refunds",
-            "billing": "handling_refunds",
-            "charge": "handling_refunds",
+            "close": "closing_requests",
+            "resolve": "closing_requests",
+            "duplicate": "closing_requests",
             "angry": "de_escalation",
             "frustrated": "de_escalation",
             "escalate": "de_escalation",

@@ -2,8 +2,6 @@
 
 /**
  * Polls `GET /metrics` on an interval so the efficiency dashboard stays live.
- * In mock mode the fixture drifts slightly each call, giving the numbers a
- * heartbeat without a backend.
  *
  * The returned {@link MetricsResponse} passes through the full payload verbatim,
  * so the additive `cost_saved_usd` / `baseline_cost_usd` figures (the headline

@@ -10,9 +10,9 @@ points on the same 1..5 likelihood × impact grid:
 
 The distance between those two points is the only claim this module makes on Aegis's
 behalf, and it is made honestly. Controls almost always move **likelihood**, not
-impact: the human gate does not make a wrongly-issued refund cheaper, it makes it
-close to impossible for the agent to issue one on its own. Impact moves only where a
-control genuinely shrinks the blast radius (reversible, typed tools).
+impact: the human gate does not make a wrongly-closed customer request cheaper, it
+makes it close to impossible for the agent to close one on its own. Impact moves only
+where a control genuinely shrinks the blast radius (reversible, typed tools).
 
 The band (``low`` / ``medium`` / ``high``) is **derived** from the residual point by
 ``schemas.risk_band`` — it is not a second hand-authored field that could drift away
@@ -50,8 +50,8 @@ _NOTE = (
 # docs/security/owasp-agentic.md. Inherent and residual are honest 1..5 bands; the
 # comment above each entry states *why* the residual point sits where it does.
 _RISKS: tuple[RiskEntry, ...] = (
-    # The human gate is the decisive control: impact is untouched (a wrongly-issued
-    # refund costs exactly the same) but the agent cannot reach the action alone.
+    # The human gate is the decisive control: impact is untouched (a wrongly-closed
+    # request costs exactly the same) but the agent cannot reach the action alone.
     RiskEntry(
         id="AA-01",
         title="Excessive agency / autonomy",

@@ -18,7 +18,7 @@ U+202E RIGHT-TO-LEFT OVERRIDE and — most seriously — the Unicode **Tag block
 (U+E0000–U+E007F), whose codepoints render as nothing in every font yet mirror
 printable ASCII one-for-one, so a frontier model reads them as the instruction they
 encode. An attacker can therefore paste a sentence that *looks* like "what is the
-refund policy?" and carries a complete jailbreak the reviewer cannot see. The rail
+escalation policy?" and carries a complete jailbreak the reviewer cannot see. The rail
 now rejects every ``Cf`` / ``Co`` / ``Cs`` codepoint, the C0/C1 control blocks (bar
 tab/newline/carriage-return) and the whole Tag block, checking the text both as
 written and after NFKC normalisation.

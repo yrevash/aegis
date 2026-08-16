@@ -78,10 +78,10 @@ async def test_reasoning_is_custom_event() -> None:
     """Test reasoning() emits a CUSTOM event with stream_names.REASONING."""
     sink = CaptureSink()
     em = AegisEmitter(thread_id="t", run_id="r", sink=sink)
-    await em.reasoning("thinking about the refund policy")
+    await em.reasoning("thinking about the escalation policy")
     ev = _events(sink.frames)[0]
     assert ev["type"] == "CUSTOM" and ev["name"] == stream_names.REASONING
-    assert ev["value"]["delta"] == "thinking about the refund policy"
+    assert ev["value"]["delta"] == "thinking about the escalation policy"
 
 
 @pytest.mark.asyncio

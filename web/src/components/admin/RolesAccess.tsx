@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, KeyRound, Loader2, Lock, WifiOff } from 'lucide-react'
+import { Check, KeyRound, Loader2, Lock } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { assignUserRole, getUsers } from '@/lib/api/client'
@@ -8,8 +8,8 @@ import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { AdminUser } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
@@ -80,9 +80,7 @@ export function RolesAccess({ token }: { token: string | null }): ReactElement {
 
     const previous = load.rows
     // Optimistic write. We stamp the target portal role directly; the server
-    // response replaces it with its stored label (which the mock backend may
-    // collapse — e.g. ai_team → member → shown as Client — an honest artifact of
-    // the fixture, not the product).
+    // response replaces it with its stored label, which is the authority.
     setLoad({
       status: 'ready',
       rows: previous.map((u) => (u.id === user.id ? { ...u, role: target } : u)),
@@ -308,28 +306,13 @@ function chipDot(role: Role): string {
   }
 }
 
-/**
- * Client entry for the Roles & Access section. Runs the boot probe once
- * (live-first, mock fallback), shows the honest offline banner, then renders the
- * roster wired to the typed client.
- */
+/** Client entry for the Roles & Access section — gated on a reachable backend. */
 export function RolesAccessMount(): ReactElement {
   // `/admin/users` is admin-only: hand the child the real session bearer, and
   // hold it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
 
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null || !hydrated) {
+  if (!hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -338,23 +321,16 @@ export function RolesAccessMount(): ReactElement {
   }
 
   return (
-    <TooltipProvider>
-      <div className="space-y-4">
-        <div>
-          <p className="eyebrow mb-1">RBAC grants</p>
-          <h1 className="t-hero text-foreground">Roles &amp; Access</h1>
-        </div>
-        {mode.mode === 'mock' && (
-          <div
-            role="status"
-            className="flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-          >
-            <WifiOff className="size-3.5 shrink-0" />
-            <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+    <BackendGate>
+      <TooltipProvider>
+        <div className="space-y-4">
+          <div>
+            <p className="eyebrow mb-1">RBAC grants</p>
+            <h1 className="t-hero text-foreground">Roles &amp; Access</h1>
           </div>
-        )}
-        <RolesAccess token={session?.token ?? null} />
-      </div>
-    </TooltipProvider>
+          <RolesAccess token={session?.token ?? null} />
+        </div>
+      </TooltipProvider>
+    </BackendGate>
   )
 }

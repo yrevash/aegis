@@ -49,7 +49,7 @@ async def test_memory_inactive_stream_is_unchanged(make_deps):
     deps = make_deps(propose_tool=False)  # build_fake_deps leaves deps.memory = None
     assert deps.memory is None
 
-    events = [e async for e in run_agent("what is the refund policy?", deps=deps)]
+    events = [e async for e in run_agent("what is the escalation policy?", deps=deps)]
     types = [e.type for e in events]
 
     # The two new nodes are SILENT: no memory event, and no node events for them.

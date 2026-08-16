@@ -263,3 +263,37 @@ returning nearly the same documents look like corroboration and are not.
   spec compliance before it lands.
 - **Password policy, reset flow, and forced first-login change.** `create_user` accepts any
   string today.
+
+---
+
+## Budget natural key has no unique constraint (found 2026-08-17)
+
+`upsert_budget` documents that it deliberately keeps its natural-key lookup un-narrowed *so
+that a cross-tenant conflict is refused rather than duplicated*. Row-level security narrows
+that lookup behind its back: under a bound scope, tenant 2 cannot see tenant 1's row, so the
+"does this key already exist?" check comes back empty and the insert proceeds.
+
+Measured on a scratch database: tenant 1 writes `(user, 42, day)`, tenant 2 posts the same
+triple, and the result is **two rows** — `(id 1, tenant 1, cap 100)` and `(id 2, tenant 2,
+cap 999999)`.
+
+Isolation itself holds — each tenant reads only its own row. But `budgets` carries only
+`PRIMARY KEY (id)`; there is no unique constraint on `(scope_type, scope_id, window)`, so a
+platform-admin read sees both and `_budgets_for(...).first()` picks arbitrarily between them.
+
+**Why deferred:** the fix is a unique constraint, which means a migration, and migrations are
+deferred until after 30 August. It is pinned by a `KNOWN DEFECT` comment in
+`aegis/tests/governance/test_enforcement.py` so it cannot get quietly worse.
+
+**What it unblocks:** a defensible answer to "what stops two tenants claiming the same budget
+key?" — currently the honest answer is "nothing structural, and the app-level guard that was
+supposed to is blinded by RLS".
+
+---
+
+## Stale scratch databases after an aborted test run
+
+A test process killed with SIGKILL/SIGINT leaves its `aegis_tmpl_*` database and role behind.
+The role cannot be dropped until its databases are — drop the database first, then the role.
+No auto-sweeper was added deliberately, because it would clobber a concurrently running
+suite. Worth a `scripts/` helper that sweeps only objects older than a few hours.

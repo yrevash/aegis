@@ -6,9 +6,9 @@
  * attach `Authorization: Bearer <token>` on every live call — even where a view
  * component was written before auth existed and still passes `token={null}`.
  *
- * A per-call `token` argument always wins; this holder is only the fallback. In
- * mock mode no token is needed (mock calls never hit the network), so a null
- * holder is harmless.
+ * A per-call `token` argument always wins; this holder is only the fallback. A
+ * null holder simply sends no `Authorization` header, which the backend answers
+ * with a 401 the calling surface reports.
  */
 
 let authToken: string | null = null

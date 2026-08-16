@@ -39,7 +39,7 @@ async def test_self_check_injection_call_shape_blocks_known_injection():
 async def test_self_check_injection_call_shape_passes_benign_text():
     """The exact call ``self_check_injection`` makes does not raise and passes benign text."""
     verdict = await detect_injection(
-        "What is the refund policy for enterprise customers?", completer=None
+        "What is the escalation policy for enterprise customers?", completer=None
     )
     assert verdict.injection is False
 
@@ -63,6 +63,6 @@ async def test_self_check_injection_action_passes_benign_text():
     from aegis.guardrails.config import actions
 
     safe = await actions.self_check_injection(
-        {"user_message": "What is the refund policy for enterprise customers?"}
+        {"user_message": "What is the escalation policy for enterprise customers?"}
     )
     assert safe is True

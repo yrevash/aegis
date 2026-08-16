@@ -133,7 +133,11 @@ async def enqueue_approval(
         args: The action's arguments.
         risk: The action's declared risk (drives the SLA auto-reject policy).
         rationale: Why the gate fired (risk/uncertainty).
-        ml_snapshot: The ML explanation frozen at gate time.
+        ml_snapshot: Model evidence frozen at gate time. NOT populated by the agent
+            any more — no ML step runs in the graph, so the live gate omits it and
+            every new row stores ``{}``. Retained as a parameter (and as a column)
+            because dropping it needs a migration, which is deferred; an empty
+            snapshot is the expected state, not a missing write.
         thread_id: The checkpoint thread id; defaults to ``run_id``.
         tenant_id: Owning tenant, for inbox scoping.
         persona: The persona that raised the run.

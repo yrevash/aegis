@@ -3,7 +3,7 @@
 ``AgentState`` is the single mutable record every node reads and updates. It is a
 ``TypedDict`` (LangGraph's native state container) with ``total=False`` so nodes
 return only the keys they change. Wire-facing structures (graph nodes/edges, tool
-calls, the ML explanation) are held as plain dicts so the state stays trivially
+calls and their results) are held as plain dicts so the state stays trivially
 checkpointable by the ``InMemorySaver``.
 
 **Reducers, and why they matter.** Most keys are last-write-wins: the node that
@@ -78,11 +78,6 @@ class AgentState(TypedDict, total=False):
             reducer-summed: ``plan`` returns 1 per execution; hard-capped by
             ``AgentConfig.max_plan_iterations``).
         reflect_retry: Whether the last ``reflect`` decided to loop back to ``plan``.
-        ml: The ML spine explanation event dict for the proposed action, if any.
-        ml_response: The raw ML spine response (predict-then-plan), if a subject was
-            resolved — injected into the planner and re-read by the gate.
-        ml_summary: Decision-support text derived from ``ml_response`` and injected
-            into the planner/generate prompts (ML-as-solver).
         gated: Whether the run routed through the human-approval gate.
         gate_reason: Why the gate triggered (risk or uncertainty).
         gate_risk: The risk level of the gated action.
@@ -127,9 +122,6 @@ class AgentState(TypedDict, total=False):
     tool_results: list[dict[str, Any]]
     plan_iterations: Annotated[int, operator.add]
     reflect_retry: bool
-    ml: dict[str, Any] | None
-    ml_response: Any
-    ml_summary: str
     gated: bool
     gate_reason: str
     gate_risk: str

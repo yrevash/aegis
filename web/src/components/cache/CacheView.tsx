@@ -1,21 +1,15 @@
 'use client'
 
-import { Brain, DatabaseZap, ShieldCheck, WifiOff, type LucideIcon } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { Brain, DatabaseZap, ShieldCheck, type LucideIcon } from 'lucide-react'
+import type { ReactElement } from 'react'
 
-import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { Card, CardBody } from '@/components/ui/Card'
-import { Badge } from '@/components/ui/Badge'
-import { MiniMeter } from '@/components/memory/MiniMeter'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { cn } from '@/lib/utils'
-import {
-  hitRate,
-  SAMPLE_CACHE_FEED,
-  SAMPLE_CACHE_STATS,
-  type CacheFeedEvent,
-  type CacheKind,
-} from '@/mock/cacheStats'
+
+/** Which of the three real caches a spec describes. */
+type CacheKind = 'memory' | 'retrieval' | 'guardrail'
 
 /**
  * The honest, module-real configuration for one cache. Every field here mirrors
@@ -32,7 +26,6 @@ interface CacheSpec {
   /** Accent token base (agent / graph / block) for the card's tint. */
   tint: string
   ink: string
-  meterHex: string
   /** What the cache stores. */
   caches: string
   /** The key method — how a hit is decided. */
@@ -56,7 +49,6 @@ const SPECS: CacheSpec[] = [
     icon: Brain,
     tint: 'bg-agent/12',
     ink: 'text-agent-ink',
-    meterHex: 'var(--agent)',
     caches: 'Recall + assembly payload, keyed by (subject, query)',
     method: 'Semantic — cosine nearest-neighbour over the query embedding',
     backend: 'RedisVL (prod) · labeled in-memory fallback',
@@ -71,7 +63,6 @@ const SPECS: CacheSpec[] = [
     icon: DatabaseZap,
     tint: 'bg-graph/12',
     ink: 'text-graph-ink',
-    meterHex: 'var(--graph)',
     caches: 'Retrieval results + final generated answers',
     method: 'Near-exact sha256 hash, then semantic cosine fallback',
     backend: 'Redis (portable — no RediSearch module)',
@@ -86,7 +77,6 @@ const SPECS: CacheSpec[] = [
     icon: ShieldCheck,
     tint: 'bg-block/12',
     ink: 'text-block-ink',
-    meterHex: 'var(--block)',
     caches: 'Prompt-injection classifier verdicts',
     method: 'sha256 of the PII-redacted text → verdict (exact key)',
     backend: 'Redis (full mode) · in-memory (lite/auto)',
@@ -106,130 +96,29 @@ function ConfigRow({ label, value }: { label: string; value: string }): ReactEle
   )
 }
 
-/** A single hit/miss/evict counter tile. */
-function Counter({ label, value }: { label: string; value: number | null }): ReactElement {
-  return (
-    <div className="rounded-lg border border-border bg-surface-2/50 px-3 py-1.5 text-center">
-      <p className="tabular-nums text-lg font-semibold text-foreground">
-        {value === null ? '—' : value}
-      </p>
-      <p className="eyebrow text-[0.58rem]">{label}</p>
-    </div>
-  )
-}
-
-const EVENT_TONE = {
-  hit: 'ok',
-  miss: 'neutral',
-  evict: 'risk',
-} as const
-
-/** Relative "Xs ago" from a ms-before-now offset. */
-function ago(ms: number): string {
-  const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s ago`
-  const m = Math.round(s / 60)
-  return `${m}m ago`
-}
-
-/** A small stream log of `*_cache` events for one cache (sample offline). */
-function EventFeed({
-  events,
-  empty,
-}: {
-  events: CacheFeedEvent[]
-  empty: boolean
-}): ReactElement {
-  if (empty) {
-    return (
-      <div className="rounded-lg border border-dashed border-border bg-surface-2/30 px-3 py-4 text-center text-xs text-muted-foreground">
-        No live aggregate yet — caches emit per-run events; run a query to populate.
-      </div>
-    )
-  }
-  return (
-    <ul className="space-y-1">
-      {events.map((e, i) => (
-        <li
-          key={i}
-          className="flex items-center justify-between gap-2 rounded-md bg-surface-2/40 px-2.5 py-1"
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <Badge tone={EVENT_TONE[e.event]} className="px-2 text-[0.58rem] uppercase">
-              {e.event}
-            </Badge>
-            <span className="truncate text-xs text-muted-foreground">{e.detail}</span>
-          </span>
-          <span className="tabular shrink-0 font-mono text-[0.65rem] text-muted-foreground">
-            {ago(e.agoMs)}
-          </span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-/** One cache's card — the real config list, then the activity block. */
-function CacheCard({ spec, mock }: { spec: CacheSpec; mock: boolean }): ReactElement {
+/** One cache's card — its real method, backend, TTL, threshold and eviction. */
+function CacheCard({ spec }: { spec: CacheSpec }): ReactElement {
   const Icon = spec.icon
-  const stats = mock ? SAMPLE_CACHE_STATS[spec.kind] : null
-  const feed = mock ? SAMPLE_CACHE_FEED.filter((e) => e.kind === spec.kind) : []
-  const rate = stats ? hitRate(stats) : 0
-
   return (
     <Card>
       <CardBody>
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Left — the honest, module-real config, as one uniform list. */}
-          <div>
-            <div className="flex items-center gap-3">
-              <span className={cn('flex size-9 items-center justify-center rounded-xl', spec.tint)}>
-                <Icon className={cn('size-5', spec.ink)} />
-              </span>
-              <div className="min-w-0">
-                <h3 className="t-title truncate text-foreground">{spec.title}</h3>
-                <code className="font-mono text-[0.7rem] text-muted-foreground">{spec.event}</code>
-              </div>
-            </div>
-            <dl className="mt-3 divide-y divide-border/60 border-t border-border/60">
-              <ConfigRow label="caches" value={spec.caches} />
-              <ConfigRow label="method" value={spec.method} />
-              <ConfigRow label="backend" value={spec.backend} />
-              <ConfigRow label="ttl" value={spec.ttl} />
-              <ConfigRow label="threshold" value={spec.threshold} />
-              <ConfigRow label="max entries / eviction" value={spec.eviction} />
-            </dl>
-          </div>
-
-          {/* Right — measured activity. One honest provenance label covers the
-              hit-rate meter, the counters and the feed: `sample` offline, the
-              "no live aggregate" empty state live. */}
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-2 border-b border-border/60 pb-1.5">
-              <span className="eyebrow">activity</span>
-              {mock ? (
-                <Badge tone="neutral" className="uppercase">
-                  sample
-                </Badge>
-              ) : (
-                <span className="text-xs text-muted-foreground">no live aggregate</span>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="eyebrow shrink-0">hit rate</span>
-              <span className="tabular-nums text-2xl font-semibold text-foreground">
-                {stats ? `${Math.round(rate * 100)}%` : '—'}
-              </span>
-              <MiniMeter value={rate} hex={spec.meterHex} height={8} className="flex-1" />
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <Counter label="hits" value={stats?.hits ?? null} />
-              <Counter label="misses" value={stats?.misses ?? null} />
-              <Counter label="evicts" value={stats?.evicts ?? null} />
-            </div>
-            <EventFeed events={feed} empty={!mock} />
+        <div className="flex items-center gap-3">
+          <span className={cn('flex size-9 items-center justify-center rounded-xl', spec.tint)}>
+            <Icon className={cn('size-5', spec.ink)} />
+          </span>
+          <div className="min-w-0">
+            <h3 className="t-title truncate text-foreground">{spec.title}</h3>
+            <code className="font-mono text-[0.7rem] text-muted-foreground">{spec.event}</code>
           </div>
         </div>
+        <dl className="mt-3 divide-y divide-border/60 border-t border-border/60">
+          <ConfigRow label="caches" value={spec.caches} />
+          <ConfigRow label="method" value={spec.method} />
+          <ConfigRow label="backend" value={spec.backend} />
+          <ConfigRow label="ttl" value={spec.ttl} />
+          <ConfigRow label="threshold" value={spec.threshold} />
+          <ConfigRow label="max entries / eviction" value={spec.eviction} />
+        </dl>
       </CardBody>
     </Card>
   )
@@ -237,69 +126,37 @@ function CacheCard({ spec, mock }: { spec: CacheSpec; mock: boolean }): ReactEle
 
 /**
  * Cache (§ caches) — the three real caches made visible with their true method +
- * config. Each card pairs the honest, module-real configuration list (caches /
- * method / backend / TTL / threshold / eviction) with an activity block: the
- * hit-rate meter, hit/miss/evict counters and the per-cache event feed, all
- * under one provenance label. Offline (`?mock=1`) that block reads from an
- * illustrative sample fixture, badged `sample`; live it falls back to the honest
- * "no live aggregate yet" empty state (the caches emit per-run `*_cache` events,
- * not a durable aggregate counter).
+ * config: what each one stores, how a hit is decided, which backend holds it, the
+ * TTL, the similarity threshold and the eviction rule.
+ *
+ * There are deliberately no hit/miss counters here. The caches report per-run
+ * `*_cache` events on the aegis AG-UI stream and keep no durable aggregate, and
+ * the web `/query` contract does not carry those events at all — so any hit-rate
+ * shown on this page would be a number the platform never measured.
  */
-function CacheView({ mock }: { mock: boolean }): ReactElement {
+function CacheView(): ReactElement {
   return (
     <div className="space-y-6">
       <div>
         <p className="eyebrow mb-1">semantic · TTL · hash</p>
         <h1 className="t-hero text-foreground">Cache</h1>
       </div>
-      {SPECS.map((spec) => (
-        <CacheCard key={spec.kind} spec={spec} mock={mock} />
-      ))}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {SPECS.map((spec) => (
+          <CacheCard key={spec.kind} spec={spec} />
+        ))}
+      </div>
     </div>
   )
 }
 
-/**
- * Client entry for the Cache section. Runs the boot probe once (live-first, mock
- * fallback) before mounting the view, mirroring `MemoryMount` / `EvalsMount`.
- * Offline is labelled with the honest banner and the meters/feed read the sample
- * fixture; live shows the honest "no live aggregate yet" empty states.
- */
+/** Client entry for the Cache section — gated on a reachable backend. */
 export function CacheMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className={cn(
-            'mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white',
-          )}
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
-      <CacheView mock={isMock()} />
-    </TooltipProvider>
+    <BackendGate>
+      <TooltipProvider>
+        <CacheView />
+      </TooltipProvider>
+    </BackendGate>
   )
 }

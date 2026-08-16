@@ -9,10 +9,10 @@ import {
   ShieldAlert,
   ShieldCheck,
   TriangleAlert,
-  WifiOff,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
+import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -25,7 +25,6 @@ import type {
   PostureStatus,
   SecurityPostureResponse,
 } from '@/lib/api/platform'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 
 /**
  * Status → an honest tone + label + icon. `partial` is amber and NEVER dressed
@@ -284,45 +283,11 @@ function SignalGrid({ signals }: { signals: PostureSignals }): ReactElement {
   )
 }
 
-/**
- * Client entry for the Security section. Runs the boot probe once (live-first,
- * mock fallback) before mounting the view, so the posture fetch reads the
- * resolved mode — the offline demo seeds from the mock fixture and is labelled
- * with the honest banner.
- */
+/** Client entry for the Security section — gated on a reachable backend. */
 export function SecurityMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <div>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
+    <BackendGate>
       <SecurityView />
-    </div>
+    </BackendGate>
   )
 }

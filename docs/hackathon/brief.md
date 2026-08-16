@@ -52,7 +52,9 @@ sub-weight × performance level. **Every hour of work should move one of these l
 1. **Weapon, not solution.** Build a reusable scaffold; only a thin domain adapter changes on the day.
 2. **The scoring is the architecture.** Map every build decision to a scoring area.
 3. **SOTA at every layer, telling one coherent story.** The moat is not any single component (competitors can match a component) — it's coherence: *cheap-to-scale + trustworthy + secure + auditable* as one narrative.
-4. **The trust stack is the differentiator:** conformal prediction (guaranteed uncertainty) → human gate → SHAP (explanation) → guardrails (safety) → OpenTelemetry traces + audit log (auditability). The winning sentence: *"every autonomous action is uncertainty-bounded, explainable, guarded, and fully traced."*
+4. **The trust stack is the differentiator:** grounded retrieval with provenance → a **human gate driven by the tool's declared risk tier** → guardrails on both rails (safety) → OpenTelemetry traces + audit log (auditability). The winning sentence: *"every autonomous action is grounded, guarded, approved, and fully traced."*
+
+   Say the gate mechanism precisely, because a judge will ask. A tool declares a `RiskLevel` in the registry; an action at or above `gate_min_risk` routes to the human approval node, and an unregistered tool name resolves to HIGH. That is the whole rule — one input, no second signal. **The ML spine does not feed the gate and never did.** `aegis.ml` (conformal intervals + SHAP) is a *tenant-facing capability* served by `/ml/*` and the forecast dashboard; it was removed from the agent graph precisely because it decorated a decision it never made. Claiming conformal prediction gates the agent is a claim we cannot demonstrate, and it makes the part we *can* demonstrate sound weaker than it is.
 5. **Actions, not answers.** The agent must *do things* (execute tools/workflows), not just retrieve and chat. This is the separator from teams that build a "smart search box."
 
 ---
@@ -86,7 +88,9 @@ Keep these isolated in clearly-named config/adapter modules so that on the day, 
 
 ## 7. The money-shot demo (design toward this single screen)
 
-An item/query arrives → the agent **streams its reasoning live** while the **knowledge graph animates** → it calls an **action tool**, but the action is high-risk so it **pauses at a human-approval gate** → beside it a **SHAP panel** explains the ML score with its **conformal uncertainty interval** → the **token/eval dashboard** ticks up showing cache-hit rate, small-model share, cost per query, and a live quality score. Every element is a scoring area being judged in real time.
+An item/query arrives → the agent **streams its reasoning live** while the **knowledge graph animates** → it calls an **action tool**, but the tool is declared HIGH risk so the run **pauses at a human-approval gate** → beside it the **retrieval provenance** shows which origins were fused and reranked into the answer → the **token/eval dashboard** ticks up showing cache-hit rate, small-model share, cost per query, and a live quality score. Every element is a scoring area being judged in real time.
+
+Then, as a **separate** beat, open the forecast page: same models, honest home. "We took ML out of the agent because it was decorating a decision it never made — here is where it actually decides something.
 
 ---
 

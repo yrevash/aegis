@@ -42,7 +42,7 @@ async def test_redacts_pii_on_clean_input():
 async def test_stream_emits_ordered_events():
     """Stream input check emits start → verdict → finish events in order."""
     g = Guardrails(completer=_Benign())
-    events = [e async for e in g.stream_check_input("what is the refund policy?")]
+    events = [e async for e in g.stream_check_input("what is the escalation policy?")]
     assert isinstance(events[0], StepStarted) and events[0].span_kind == SpanKind.GUARDRAIL
     assert isinstance(events[1], GuardrailEvent)
     assert isinstance(events[-1], StepFinished)

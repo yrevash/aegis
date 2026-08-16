@@ -108,7 +108,7 @@ def test_every_knob_carries_a_doc_string():
 @pytest.mark.asyncio
 async def test_default_high_threshold_waves_medium_risk_through(make_deps):
     # Default gate_min_risk=HIGH; a MEDIUM-risk tool executes without a human gate.
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     assert deps.config.gate_min_risk is RiskLevel.HIGH
     types = [e["type"] for e in await _drive(deps)]
     assert "approval_required" not in types
@@ -118,7 +118,7 @@ async def test_default_high_threshold_waves_medium_risk_through(make_deps):
 @pytest.mark.asyncio
 async def test_lowering_gate_min_risk_pauses_the_same_action(make_deps):
     # Same MEDIUM-risk tool, but gate_min_risk lowered to MEDIUM → it now pauses.
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     deps = dataclasses.replace(
         deps, config=dataclasses.replace(deps.config, gate_min_risk=RiskLevel.MEDIUM)
     )
@@ -148,7 +148,7 @@ def _failing_run_tool(fail_first_n: int):
 
 @pytest.mark.asyncio
 async def test_self_repair_enabled_replans_on_failure(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     run_tool, calls = _failing_run_tool(fail_first_n=1)
     deps = dataclasses.replace(deps, run_tool=run_tool)
     assert deps.config.self_repair_enabled is True
@@ -160,7 +160,7 @@ async def test_self_repair_enabled_replans_on_failure(make_deps):
 
 @pytest.mark.asyncio
 async def test_self_repair_disabled_skips_replan(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     run_tool, calls = _failing_run_tool(fail_first_n=1)
     deps = dataclasses.replace(
         deps,
@@ -180,7 +180,7 @@ async def test_self_repair_disabled_skips_replan(make_deps):
 
 @pytest.mark.asyncio
 async def test_max_plan_iterations_one_forces_single_pass(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     run_tool, calls = _failing_run_tool(fail_first_n=99)
     deps = dataclasses.replace(
         deps,
@@ -228,7 +228,7 @@ def _cache_deps(make_deps, *, enabled: bool, hit_answer: str | None):
     async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return RetrievalResult(
             answer_context="ctx",
-            sources=[Source(id="kb-1", text="Refund policy", score=0.9)],
+            sources=[Source(id="kb-1", text="Escalation policy", score=0.9)],
             num_candidates=3,
             graph_delta=GraphDelta(
                 nodes=[GraphNode(id="R1", label="R1", kind="request")],
@@ -254,8 +254,8 @@ def _cache_deps(make_deps, *, enabled: bool, hit_answer: str | None):
 
 @pytest.mark.asyncio
 async def test_answer_cache_hit_skips_the_planner(make_deps):
-    deps = _cache_deps(make_deps, enabled=True, hit_answer="Cached: refunds in 30 days.")
-    events = await _drive(deps, query="what is the refund policy?")
+    deps = _cache_deps(make_deps, enabled=True, hit_answer="Cached: escalate within 30 minutes.")
+    events = await _drive(deps, query="what is the escalation policy?")
     types = [e["type"] for e in events]
 
     assert deps.answer_cache.reads  # the cache WAS consulted
@@ -267,7 +267,7 @@ async def test_answer_cache_hit_skips_the_planner(make_deps):
 @pytest.mark.asyncio
 async def test_answer_cache_disabled_runs_the_planner(make_deps):
     deps = _cache_deps(make_deps, enabled=False, hit_answer="Cached: never returned.")
-    events = await _drive(deps, query="what is the refund policy?")
+    events = await _drive(deps, query="what is the escalation policy?")
     types = [e["type"] for e in events]
 
     assert deps.answer_cache.reads == []  # disabled → never consulted

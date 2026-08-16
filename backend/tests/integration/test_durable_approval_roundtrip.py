@@ -25,7 +25,7 @@ async def test_durable_approval_inbox_roundtrip_executes_tool_once(
 ):
     executed: list[str] = []
     # Confident HIGH-risk action → defers to the gate (D5); park almost immediately.
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=True)
+    deps = make_deps(propose_tool=True, high_risk=True)
     deps.config.approval_park_timeout = 0.05
     original_run_tool = deps.run_tool
 

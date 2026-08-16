@@ -37,12 +37,6 @@
       "terminal": false
     },
     {
-      "id": "ml_predict",
-      "label": "ML predict (solver)",
-      "entry": false,
-      "terminal": false
-    },
-    {
       "id": "plan",
       "label": "Reason & plan",
       "entry": false,
@@ -50,7 +44,7 @@
     },
     {
       "id": "gate",
-      "label": "Risk gate & ML evidence",
+      "label": "Risk gate",
       "entry": false,
       "terminal": false
     },
@@ -138,11 +132,6 @@
       "conditional": false
     },
     {
-      "source": "ml_predict",
-      "target": "plan",
-      "conditional": false
-    },
-    {
       "source": "plan",
       "target": "gate",
       "conditional": true
@@ -169,7 +158,7 @@
     },
     {
       "source": "retrieve",
-      "target": "ml_predict",
+      "target": "plan",
       "conditional": false
     },
     {

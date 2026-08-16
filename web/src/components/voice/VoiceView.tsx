@@ -6,11 +6,9 @@ import {
   Mic,
   SendHorizontal,
   Upload,
-  WifiOff,
 } from 'lucide-react'
 import {
   useCallback,
-  useEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -21,18 +19,17 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/primitives/button'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { RailVerdict } from '@/components/voice/RailVerdict'
 import { TranscriptPanel } from '@/components/voice/TranscriptPanel'
 import { Waveform } from '@/components/voice/Waveform'
 import { useRecorder } from '@/components/voice/useRecorder'
 import { formatSeconds, toWav } from '@/components/voice/wav'
 import { transcribeVoice } from '@/lib/api/client'
-import { createTransport } from '@/lib/api/factory'
-import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
+import { startRun } from '@/lib/api/liveTransport'
 import type { VoiceTranscribeResponse } from '@/lib/api/types'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { RunStatus } from '@/lib/stream'
-import { cn } from '@/lib/utils'
 
 /** What the agent hand-off produced, once one has been run. */
 interface AgentRun {
@@ -52,7 +49,7 @@ interface AgentRun {
  * transcript would defeat the rails, so the field the UI sends is the one the
  * rails returned.
  */
-function VoiceView({ mock }: { mock: boolean }): ReactElement {
+function VoiceView(): ReactElement {
   const { session } = useAuth()
   const token = session?.token ?? null
   const recorder = useRecorder()
@@ -123,8 +120,7 @@ function VoiceView({ mock }: { mock: boolean }): ReactElement {
     // handler refuses to run without it too.
     if (!input) return
     setAgentRun({ answer: '', status: 'running', error: null })
-    const transport = createTransport()
-    transport.start(input, null, token, {
+    startRun(input, null, token, {
       onEvent: (event) => {
         if (event.type === 'token') {
           setAgentRun((prev) =>
@@ -243,11 +239,6 @@ function VoiceView({ mock }: { mock: boolean }): ReactElement {
             <CardBody>
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="t-title text-foreground">Transcript</h3>
-                {mock && (
-                  <Badge tone="neutral" className="uppercase">
-                    sample
-                  </Badge>
-                )}
               </div>
               <TranscriptPanel result={result} />
             </CardBody>
@@ -308,47 +299,13 @@ function VoiceView({ mock }: { mock: boolean }): ReactElement {
   )
 }
 
-/**
- * Client entry for the Voice section. Runs the boot probe once (live-first, mock
- * fallback) before mounting, so the first `transcribeVoice` call reads the
- * resolved mode; offline is labelled with the same honest banner as every other
- * surface.
- */
+/** Client entry for the Voice section — gated on a reachable backend. */
 export function VoiceMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className={cn(
-            'mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white',
-          )}
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
-      <VoiceView mock={isMock()} />
-    </TooltipProvider>
+    <BackendGate>
+      <TooltipProvider>
+        <VoiceView />
+      </TooltipProvider>
+    </BackendGate>
   )
 }

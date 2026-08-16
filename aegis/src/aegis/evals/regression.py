@@ -260,7 +260,7 @@ class RouterEvalCase:
 ROUTER_EVAL_CASES: tuple[RouterEvalCase, ...] = (
     RouterEvalCase("What do you know about me?", "memory"),
     RouterEvalCase("Do you remember what I told you last time?", "memory"),
-    RouterEvalCase("How long does a refund take and how is it returned to the customer?", "qa"),
+    RouterEvalCase("Who confirms a request closure before its status becomes resolved?", "qa"),
     RouterEvalCase("What is the SLA for an urgent request?", "qa"),
 )
 

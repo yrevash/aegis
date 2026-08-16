@@ -109,7 +109,7 @@ async def test_operational_roles_may_use_operator_persona(client, db, make_deps,
     )
     resp = await client.post(
         "/query",
-        json={"query": "what is the refund policy?", "persona": "operations_lead"},
+        json={"query": "what is the escalation policy?", "persona": "operations_lead"},
         headers=_headers(role, user_id=7, tenant_id=1),
     )
     assert resp.status_code == 200

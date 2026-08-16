@@ -4,8 +4,7 @@ These drive :func:`app.agent.run_agent` with the shared fakes and assert the new
 additive :data:`~app.api.schemas.StreamEvent` variants/fields the frontend needs
 to show the whole process: per-node ``node_finished`` timing/usage, the planner's
 ``reasoning`` chunks, retrieval ``candidates``/``reranked`` progress with scored
-sources, the gate detail on ``ml_explanation``, and masked-only guardrail
-redaction detail.
+sources, the tool-risk gate detail, and masked-only guardrail redaction detail.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import dataclasses
 import pytest
 
 from app.agent import ApprovalRegistry, run_agent
-from app.api.schemas import GuardVerdict
+from app.api.schemas import GuardVerdict, RiskLevel
 from app.guardrails.models import GuardResult
 
 
@@ -72,7 +71,7 @@ async def test_generate_node_finished_carries_model_usage(make_deps):
 
 @pytest.mark.asyncio
 async def test_plan_emits_reasoning_chunks(make_deps):
-    events = await _run(make_deps(propose_tool=True, uncertain=True))
+    events = await _run(make_deps(propose_tool=True))
     reasoning = [e for e in events if e.type == "reasoning"]
     # The planner's two-sentence plan is chunked into two reasoning events.
     assert len(reasoning) == 2
@@ -105,30 +104,30 @@ async def test_retrieve_emits_candidates_and_reranked(make_deps):
 
 
 @pytest.mark.asyncio
-async def test_ml_event_is_informational_evidence_no_gating(make_deps):
-    # ML is a solution SIGNAL, not a gate: the ml_explanation event carries the
-    # prediction/interval/SHAP as supporting evidence and NO gating semantics —
-    # even when the action itself is high-risk and the human gate fires on risk.
+async def test_high_risk_action_gates_on_tool_risk_alone(make_deps):
+    """The gate is the tool's declared risk tier and nothing else.
+
+    This replaces a pair of tests that asserted the ``ml_explanation`` event carried
+    no gating semantics. The ML step no longer runs in the graph, so the same claim
+    is restated in the only falsifiable form left: a HIGH-risk tool gates, a
+    within-ceiling one does not, and no ML event reaches the wire either way.
+    """
     events = await _run(make_deps(propose_tool=True, high_risk=True))
-    ml = next(e for e in events if e.type == "ml_explanation")
-    assert ml.gated is None  # no gating signal on the ML event
-    assert ml.gate_reason is None
-    # The evidence payload is present for the answer to cite.
-    assert ml.prediction is not None
-    assert ml.conformal_interval is not None
-    assert ml.shap_attribution  # signed drivers
+    types = [e.type for e in events]
+    assert "approval_required" in types
+    approval = next(e for e in events if e.type == "approval_required")
+    assert approval.risk is RiskLevel.HIGH
+    assert "ml_explanation" not in types
 
 
 @pytest.mark.asyncio
-async def test_ml_event_present_but_never_gates_a_low_risk_action(make_deps):
-    # A within-ceiling (MEDIUM) action executes autonomously; the ML event is still
-    # emitted as evidence but never routes the run to the human gate.
-    events = await _run(make_deps(propose_tool=True, uncertain=True, high_risk=False))
+async def test_within_ceiling_action_executes_without_a_gate(make_deps):
+    # A within-ceiling (MEDIUM) action executes autonomously — no gate, no ML event.
+    events = await _run(make_deps(propose_tool=True, high_risk=False))
     types = [e.type for e in events]
-    assert "approval_required" not in types  # ML uncertainty does NOT gate
-    ml = next(e for e in events if e.type == "ml_explanation")
-    assert ml.gated is None
-    assert ml.prediction is not None
+    assert "approval_required" not in types
+    assert "tool_result" in types
+    assert "ml_explanation" not in types
 
 
 @pytest.mark.asyncio

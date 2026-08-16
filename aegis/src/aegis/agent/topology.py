@@ -3,10 +3,10 @@
 Anything that *draws* the agent's flow — the console's orchestration map, a doc
 diagram, an architecture review — needs the node/edge list. Hand-maintaining a
 second copy of that list is how a published architecture picture ends up
-contradicting the implementation (e.g. showing the human gate hanging off the ML
-step when :mod:`aegis.agent.graph` gates on **tool risk** and states explicitly
-that ML never gates). So this module derives the picture from the ONE source of
-truth: it compiles the real graph and reads LangGraph's own
+contradicting the implementation (e.g. drawing a step the graph no longer wires, or
+hanging the human gate off something other than the **tool risk** that
+:mod:`aegis.agent.graph` actually gates on). So this module derives the picture from
+the ONE source of truth: it compiles the real graph and reads LangGraph's own
 :meth:`~langgraph.graph.state.CompiledStateGraph.get_graph` view of it.
 
 The compiled graph used here is a *shape-only* graph: it is built over inert
@@ -84,13 +84,10 @@ def _inert_deps() -> AgentDeps:
         retrieve=_unreachable,
         check_input=_unreachable,
         check_output=_unreachable,
-        predict_explain=_unreachable,
         tool_definitions_for=_unreachable,
         run_tool=_unreachable,
         tool_risk=_unreachable,
         render_system_prompt=_unreachable,
-        features_for=_unreachable,
-        describe_prediction=_unreachable,
     )
 
 

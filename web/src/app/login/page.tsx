@@ -8,19 +8,21 @@ import { useEffect, useState, type FormEvent } from 'react'
 
 import { Button } from '@/components/primitives/button'
 import { Input } from '@/components/primitives/input'
-import { probeBackend } from '@/lib/api/mode'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { homePathFor, type Role } from '@/lib/portal'
 
 /**
  * Real sign-in surface (port of `frontend/src/routes/LoginPage.tsx`). The role
- * returned by `signIn` decides which portal the user lands in (RBAC). In mock
- * mode the role is derived from the username, so the four demo quick-in buttons
- * each drop straight into their portal offline. Styled with the web tokens +
- * TailAdmin card, matching the console look.
+ * returned by `signIn` decides which portal the user lands in (RBAC) — the
+ * backend is the only authority on it. Styled with the web tokens + TailAdmin
+ * card, matching the console look.
  */
 
-/** Quick-in demo identities → the username the mock login maps to each role. */
+/**
+ * Quick-in identities. Each is a real account the backend seeds for its role
+ * (`_DEMO_USERS` in `backend/src/app/api/routes.py`, password `demo`), so these
+ * buttons issue an ordinary `POST /auth/login` like the form does.
+ */
 const QUICK_IN: { role: Role; label: string; username: string }[] = [
   { role: 'admin', label: 'Enter as Admin', username: 'admin' },
   { role: 'ai_team', label: 'Enter as AI team', username: 'ai' },
@@ -36,13 +38,6 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Resolve backend mode on mount (live-first, mock fallback) so a sign-in reads
-  // the correct transport — offline, the probe fails and the demo quick-in signs
-  // in against the in-browser mock instead of a real POST that would fail.
-  useEffect(() => {
-    void probeBackend()
-  }, [])
-
   // Already signed in → go to the role's home (mirrors the Vite <Navigate/>).
   useEffect(() => {
     if (hydrated && session) router.replace(homePathFor(session.role))
@@ -53,7 +48,6 @@ export default function LoginPage() {
     setBusy(true)
     setError(null)
     try {
-      await probeBackend()
       const s = await signIn(username || 'analyst', password)
       router.replace(homePathFor(s.role))
     } catch {
@@ -66,8 +60,7 @@ export default function LoginPage() {
     setUsername(name)
     setBusy(true)
     setError(null)
-    void probeBackend()
-      .then(() => signIn(name, 'demo'))
+    void signIn(name, 'demo')
       .then((s) => router.replace(homePathFor(s.role)))
       .catch(() => {
         setError('Sign-in failed. Check your credentials and try again.')
@@ -158,8 +151,8 @@ export default function LoginPage() {
               ))}
             </div>
             <p className="mt-2 text-[0.72rem] leading-snug text-muted-foreground">
-              Signs in with a demo identity for that role — the whole console runs
-              offline on mock data.
+              Signs in with the backend&apos;s seeded identity for that role. The console
+              needs a running backend — every figure it shows is measured, never simulated.
             </p>
           </div>
         </div>

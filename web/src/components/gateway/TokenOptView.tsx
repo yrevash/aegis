@@ -7,22 +7,17 @@ import {
   Loader2,
   PiggyBank,
   Route,
-  ShieldQuestion,
   Timer,
-  WifiOff,
 } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { getGatewayOptimization } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { GatewayOptimizationResponse } from '@/lib/api/platform'
-
-/** The response the mock adds an honest `sample`/`note` label to (live omits both). */
-type OptimizationData = GatewayOptimizationResponse & { sample?: boolean; note?: string }
 
 /** Format a USD figure, tolerating a null/undefined (offline, unmetered) reading. */
 function usd(value: number | null | undefined): string {
@@ -40,17 +35,15 @@ function pct(value: number | null | undefined): string {
  * then a per-role usage breakdown, then the read-only routing table the operator
  * runs on (role→model map, fallback chains, timeout, baseline model).
  *
- * HONESTY: offline there are no metered calls, so the real savings figure is
- * zero/null. The mock fixture flags itself with `sample: true` + a `note`; when
- * that flag is present the hero carries a "sample" badge and an explicit note so
- * the illustrative numbers are never passed off as a live measurement.
+ * Every figure is metered from real gateway calls. With no calls yet the savings
+ * read `$0` / `—`, which is the truthful answer — there is no illustrative mode.
  */
 function TokenOptView(): ReactElement {
   // Live session token — a constant `null` would 401 on a reload and, being
   // constant in the dependency array, never retry once the session was restored.
   const { session, hydrated } = useAuth()
   const token = session?.token ?? null
-  const [data, setData] = useState<OptimizationData | null>(null)
+  const [data, setData] = useState<GatewayOptimizationResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -74,7 +67,6 @@ function TokenOptView(): ReactElement {
 
   const summary = data?.summary
   const config = data?.config
-  const isSample = data?.sample === true
   const roleRows = summary ? Object.entries(summary.by_role) : []
 
   return (
@@ -109,17 +101,10 @@ function TokenOptView(): ReactElement {
               title="Savings"
               description={`Measured against the frontier baseline — ${config.baseline_model} (the “${config.baseline_role}” role).`}
               actions={
-                isSample ? (
-                  <Badge tone="risk" className="gap-1.5">
-                    <ShieldQuestion className="size-3" />
-                    sample
-                  </Badge>
-                ) : (
-                  <Badge tone="ok" className="gap-1.5">
-                    <Coins className="size-3" />
-                    metered
-                  </Badge>
-                )
+                <Badge tone="ok" className="gap-1.5">
+                  <Coins className="size-3" />
+                  metered
+                </Badge>
               }
             />
             <CardBody className="space-y-4">
@@ -150,23 +135,10 @@ function TokenOptView(): ReactElement {
                 />
               </div>
 
-              {isSample ? (
-                <p className="flex items-start gap-2 rounded-xl border border-risk/40 bg-risk/10 px-3.5 py-2.5 text-[0.78rem] leading-snug text-risk-ink">
-                  <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />
-                  <span>
-                    <span className="font-semibold">Sample savings.</span>{' '}
-                    {data.note ??
-                      'Real figures are metered from live gateway calls.'}{' '}
-                    Offline there are no metered calls, so the real saved figure is $0 — these numbers
-                    are illustrative only.
-                  </span>
-                </p>
-              ) : (
-                <p className="text-[0.78rem] leading-snug text-muted-foreground">
-                  Metered over {summary.total_calls.toLocaleString()} calls, of which{' '}
-                  {summary.small_calls.toLocaleString()} were routed to a small model.
-                </p>
-              )}
+              <p className="text-[0.78rem] leading-snug text-muted-foreground">
+                Metered over {summary.total_calls.toLocaleString()} calls, of which{' '}
+                {summary.small_calls.toLocaleString()} were routed to a small model.
+              </p>
             </CardBody>
           </Card>
 
@@ -322,45 +294,11 @@ function TokenOptView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the Token-optimization section. Runs the boot probe once
- * (live-first, mock fallback) before mounting the view, so the fetch reads the
- * resolved mode — the offline demo seeds from the mock fixture and is labelled
- * with the honest banner. Mirrors `MLOpsMount` / `LLMOpsMount`.
- */
+/** Client entry for the Token-optimization section — gated on a reachable backend. */
 export function TokenOptMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <div>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
+    <BackendGate>
       <TokenOptView />
-    </div>
+    </BackendGate>
   )
 }

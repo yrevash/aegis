@@ -1,14 +1,14 @@
 'use client'
 
-import { CheckCircle2, Gauge, HelpCircle, ShieldCheck, WifiOff, XCircle } from 'lucide-react'
+import { CheckCircle2, Gauge, HelpCircle, ShieldCheck, XCircle } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { getEvalsReport } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { EvalMetricConfig, EvalsReportResponse } from '@/lib/api/platform'
 import { cn } from '@/lib/utils'
 
@@ -20,7 +20,7 @@ interface Loaded<T> {
 }
 
 /**
- * Load with a live/mock-aware call, re-running whenever `key` changes.
+ * Load with an async call, re-running whenever `key` changes.
  *
  * `key` carries the bearer token, so the fetch re-fires once `AuthProvider` has
  * restored the persisted session (its effect runs *after* this one on a reload).
@@ -334,45 +334,11 @@ function EvalsView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the Evals section. Runs the boot probe once (live-first, mock
- * fallback) before mounting the view, so the `/evals/report` fetch reads the resolved
- * mode; the offline demo seeds from the mock fixture and is labelled with the honest
- * banner — mirrors `LLMOpsMount` / `MLOpsMount`.
- */
+/** Client entry for the Evals section — gated on a reachable backend. */
 export function EvalsMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <div>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
+    <BackendGate>
       <EvalsView />
-    </div>
+    </BackendGate>
   )
 }

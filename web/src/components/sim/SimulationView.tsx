@@ -1,8 +1,8 @@
 'use client'
 
-import { Check, Minus, Play, RotateCcw, Shield, ShieldCheck, UserCog, UserRound, WifiOff, X } from 'lucide-react'
+import { Check, Minus, Play, RotateCcw, Shield, ShieldCheck, UserCog, UserRound, X } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import { ApprovalCard } from '@/components/approval/ApprovalCard'
 import { AnswerPanel } from '@/components/console/AnswerPanel'
@@ -14,8 +14,8 @@ import { Button } from '@/components/primitives/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 import { useRunStream } from '@/state/useRunStream'
@@ -24,11 +24,13 @@ import type { ApprovalDecision } from '@/lib/api/types'
 import { gateStatus, isSettled, toolMark, type Mark } from './simLogic'
 
 /**
- * The single query both roles run at once. The mock branches on *role*, not on
- * the query text, so one prompt exercises both trajectories — the point is that
- * the same ask resolves differently by who is asking.
+ * The single query both roles run at once. It is phrased to require a status
+ * change — the one HIGH-risk tool — so the operations lead hits the human gate
+ * while the client is refused it. The divergence comes from *who is asking*, not
+ * from the text, and the query names no record id: the adapter generates those at
+ * seed time, so a literal id would name a request that does not exist.
  */
-const SIM_QUERY = 'Resolve case #4821 — customer reports a duplicate charge on a premium account'
+const SIM_QUERY = 'Close out my oldest open request and record why it was closed'
 
 /** A comparison cell: a small ✓ / ✗ / ● / — marker paired with a short label. */
 const MARK: Record<Mark, { tone: string; render: (key: string) => ReactNode }> = {
@@ -137,14 +139,14 @@ function Lane({
  * Access demo (Aegis Governance) — the same question, two roles, one system. Two
  * independent run streams play the *same* query as two roles at once: an
  * **operations lead** (full retrieval → human gate → can act) and a **client**
- * (own-account retrieval, refund not permitted). Each lane owns its own
+ * (own-account retrieval, status changes not permitted). Each lane owns its own
  * `useRunStream`, so the divergence is real — two live trajectories, not a
  * scripted split-screen. The comparison leads; the two lanes prove it.
  */
 export function SimulationView(): ReactElement {
-  // Live session token so the two live run streams carry `Authorization`; the
-  // mock transport ignores it. Both runs are user-triggered, so no hydration
-  // gate is needed — by click time the session has been restored.
+  // Live session token so the two run streams carry `Authorization`. Both runs
+  // are user-triggered, so no hydration gate is needed — by click time the
+  // session has been restored.
   const { session } = useAuth()
   const token = session?.token ?? null
 
@@ -217,7 +219,7 @@ export function SimulationView(): ReactElement {
       diff: settled,
     },
     {
-      label: 'Refund action',
+      label: 'Status change',
       a: <Cell mark={settled ? opsTool.mark : 'allow'}>{settled ? opsTool.label : 'Can execute'}</Cell>,
       b: <Cell mark={settled ? cliTool.mark : 'deny'}>{settled ? cliTool.label : 'Not permitted'}</Cell>,
       diff: settled,
@@ -266,8 +268,9 @@ export function SimulationView(): ReactElement {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="t-body text-muted-foreground">
-            Same question, two roles — see what each is allowed to do. The operations lead can refund
-            the customer; the client is scoped to their own account and can only propose.
+            Same question, two roles — see what each is allowed to do. The operations lead may call
+            update_request_status behind the human gate; the client is scoped to their own account
+            and may only add a case note.
           </p>
           <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 p-2.5">
             <span className="eyebrow mt-0.5 shrink-0">question</span>
@@ -330,50 +333,19 @@ export function SimulationView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the Access demo section (ai_team + client). Runs the boot
- * probe once (live-first, mock fallback), shows the honest offline banner, then
- * plays the same query as two roles through two live run streams.
- */
+/** Client entry for the Access demo section — gated on a reachable backend. */
 export function SimulationMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      <div className="space-y-4">
-        <div>
-          <p className="eyebrow mb-1">RBAC scope</p>
-          <h1 className="t-hero text-foreground">Access demo</h1>
-        </div>
-        {mode.mode === 'mock' && (
-          <div
-            role="status"
-            className="flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-          >
-            <WifiOff className="size-3.5 shrink-0" />
-            <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+    <BackendGate>
+      <TooltipProvider>
+        <div className="space-y-4">
+          <div>
+            <p className="eyebrow mb-1">RBAC scope</p>
+            <h1 className="t-hero text-foreground">Access demo</h1>
           </div>
-        )}
-        <SimulationView />
-      </div>
-    </TooltipProvider>
+          <SimulationView />
+        </div>
+      </TooltipProvider>
+    </BackendGate>
   )
 }

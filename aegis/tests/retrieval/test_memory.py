@@ -28,18 +28,18 @@ _SCOPE = RetrievalScope(tenant_id=None)
 # `InMemoryKnowledgeBackend.from_corpus`'s docstring).
 _SAMPLE_DOCS = [
     (
-        "kb_refund_process",
-        "Refunds are issued to the original payment method within five to seven "
-        "business days. Verify the customer's identity and confirm the charge on "
-        "the invoice before issuing a refund. Enterprise-tier customers may "
-        "request an expedited refund approved by a senior agent.",
+        "kb_request_closure",
+        "A closure is confirmed by the original approver within five to seven "
+        "business days. Verify the customer's identity and confirm the work on "
+        "the request before proposing a closure. Enterprise-tier customers may "
+        "ask for an expedited closure approved by a senior agent.",
     ),
     (
         "policy_escalation",
         "Every request carries a resolution deadline based on its priority. If a "
         "request is at risk of breaching its deadline, escalate it to a senior "
         "agent. Enterprise customers are escalated one tier earlier than standard, "
-        "and their refund requests are prioritised accordingly.",
+        "and their closure requests are prioritised accordingly.",
     ),
     (
         "runbook_login_failures",
@@ -155,18 +155,18 @@ async def test_tenant_scope_filters_vector_recall():
     """A tenant-scoped backend never recalls another tenant's vectors from Chroma."""
     shared = ChromaVectorStore.local()  # one embedded store, two tenants
     acme = InMemoryKnowledgeBackend.from_corpus(
-        docs=[("acme_doc", "Acme refunds are issued within five business days.")],
+        docs=[("acme_doc", "Acme closures are approved within five business days.")],
         vector_store=shared,
         tenant="acme",
     )
     globex = InMemoryKnowledgeBackend.from_corpus(
-        docs=[("globex_doc", "Globex refunds are issued within five business days.")],
+        docs=[("globex_doc", "Globex closures are approved within five business days.")],
         vector_store=shared,
         tenant="globex",
     )
-    await acme.recall_ranked("refunds issued within business days", top_k=5, scope=_SCOPE)
+    await acme.recall_ranked("closures approved within business days", top_k=5, scope=_SCOPE)
     globex_ranked = await globex.recall_ranked(
-        "refunds issued within business days", top_k=5, scope=_SCOPE
+        "closures approved within business days", top_k=5, scope=_SCOPE
     )
     vector_list = next(
         rl for rl in globex_ranked.lists if RetrievalOrigin.VECTOR in rl.origins

@@ -28,12 +28,16 @@ is known.
    scope + system prompts.
 6. **`corpus/`** — drop in the new seed `*.md` documents (same frontmatter keys).
 
-## ML reshape points (predict-then-answer, non-gating)
+## ML reshape points (a tenant capability, not an agent step)
 
-ML is a **solution signal, not a flow decider**: the agent injects the prediction,
-calibrated conformal interval and top SHAP drivers into its answer as supporting
-evidence. It **never** gates, defers, or terminates a run — the human gate is driven
-by tool **risk** only. There are three day-of reshape points:
+**The agent graph runs no ML step.** ML is a capability this deployment *offers* —
+served by `POST /ml/explain`, `GET /ml/model-card` and the admin forecast dashboard —
+not a stage of the pipeline. It was taken out of the graph because it decorated a
+decision it never made: nothing routed, gated or branched on its output. The human
+gate is driven by tool **risk** alone (`ToolSpec.risk` vs `AgentConfig.gate_min_risk`).
+
+Retarget it because the tenant's use case needs predicting, not because the agent
+needs it. Two day-of reshape points:
 
 - **Features / target / signal** → `adapter/ml_spec.py` (`FEATURES`, `TARGET`,
   the latent signal, `features_for_request`, `describe_prediction`). Adapter edit.
@@ -41,8 +45,6 @@ by tool **risk** only. There are three day-of reshape points:
   `_classification_members` (the soft-voting XGBoost + HistGradientBoosting ensemble;
   add a RandomForest / linear member or stack a meta-learner here). Core edit — the
   MAPIE conformal + SHAP plumbing adapts automatically.
-- **When ML runs** → the agent calls it best-effort whenever `features_for_request`
-  resolves a subject; return an empty feature dict to opt a query out of ML entirely.
 
 ## Invariants to preserve
 

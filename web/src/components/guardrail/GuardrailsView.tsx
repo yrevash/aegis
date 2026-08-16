@@ -13,14 +13,12 @@ import {
   ShieldAlert,
   ShieldCheck,
   Target,
-  WifiOff,
   type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { getSecurityPosture, runRedteam } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type {
   PostureEntry,
   RedteamReportResponse,
@@ -28,14 +26,10 @@ import type {
 } from '@/lib/api/platform'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
-import {
-  GuardrailReveal,
-  type GuardrailEntry,
-} from '@/components/guardrail/GuardrailReveal'
 import { MiniMeter } from '@/components/memory/MiniMeter'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
-import { cn } from '@/lib/utils'
+import { BackendGate } from '@/components/shared/BackendGate'
 
 /**
  * One rail in the defense-in-depth pipeline. Every field here is honest,
@@ -186,59 +180,6 @@ const SEMANTICS_META: Record<
   redact: { tone: 'risk', icon: Eraser },
   'block / flag': { tone: 'neutral', icon: ShieldAlert },
 }
-
-/**
- * An honest, illustrative SAMPLE verdict feed — the shape of the `guardrail`
- * events the run stream emits, rendered offline so the glass box is populated
- * without a live run. The strings are fabricated demo data, never real PII.
- */
-const SAMPLE_VERDICTS: GuardrailEntry[] = [
-  {
-    stage: 'input',
-    verdict: 'redact',
-    layer: 'pii',
-    reason: 'Presidio masked 1 PII span before the model ever saw it.',
-    redactions: [{ kind: 'credit_card' }],
-    before_masked: 'please refund my card 4111-1111-1111-1111',
-    after: 'please refund my card [CREDIT_CARD]',
-  },
-  {
-    stage: 'input',
-    verdict: 'block',
-    layer: 'injection',
-    reason: "Prompt injection blocked: matched signature 'ignore previous instructions'.",
-    redactions: [],
-    before_masked: null,
-    after: null,
-  },
-  {
-    stage: 'input',
-    verdict: 'pass',
-    layer: 'content_safety',
-    reason: 'No MLCommons S1–S13 hazard detected in the request.',
-    redactions: [],
-    before_masked: null,
-    after: null,
-  },
-  {
-    stage: 'output',
-    verdict: 'pass',
-    layer: 'grounding',
-    reason: 'Answer grounded in 3 retrieved sources; no unsupported claims.',
-    redactions: [],
-    before_masked: null,
-    after: null,
-  },
-  {
-    stage: 'output',
-    verdict: 'redact',
-    layer: 'pii',
-    reason: 'Masked 1 PII span in the draft answer before returning it to the user.',
-    redactions: [{ kind: 'phone' }],
-    before_masked: 'you can reach the desk at 415-555-0132',
-    after: 'you can reach the desk at [PHONE]',
-  },
-]
 
 /** Posture status → badge tone + label. */
 function statusBadge(status: string): { tone: 'ok' | 'risk' | 'neutral'; label: string } {
@@ -485,12 +426,13 @@ function RedteamTeaser({
 /**
  * Guardrails (§ rails) — the defense-in-depth pipeline made visible: the ordered
  * input then output rails with their true method, OWASP mapping and verdict
- * semantics; the active engine (programmatic vs NeMo Colang); a live verdict
- * feed (sample offline); and a compact red-team block-rate teaser. Rail statuses
- * derive from `GET /security/posture` where an OWASP row exists; the rest are
- * always-on parts of the pipeline, badged `wired`.
+ * semantics; the active engine (programmatic vs NeMo Colang); and a compact
+ * red-team block-rate teaser. Rail statuses derive from `GET /security/posture`
+ * where an OWASP row exists; the rest are always-on parts of the pipeline, badged
+ * `wired`. Per-run guardrail verdicts belong to a run, so they are rendered on the
+ * Console beside the run that produced them rather than mirrored here.
  */
-function GuardrailsView({ mock }: { mock: boolean }): ReactElement {
+function GuardrailsView(): ReactElement {
   // Live session token — the literal `null`s these two accessors were called with
   // sent no bearer, and an empty dependency array meant the calls never re-fired
   // once `AuthProvider` had restored the persisted session.
@@ -564,72 +506,18 @@ function GuardrailsView({ mock }: { mock: boolean }): ReactElement {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <p className="eyebrow">live verdict feed · guardrail events</p>
-            {mock && (
-              <Badge tone="neutral" className="uppercase">
-                sample
-              </Badge>
-            )}
-          </div>
-          <GuardrailReveal guardrails={mock ? SAMPLE_VERDICTS : []} />
-          {!mock && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              No active run — run a query in the Console to populate the verdict feed with live{' '}
-              <code className="font-mono">guardrail</code> events.
-            </p>
-          )}
-        </div>
-        <RedteamTeaser report={redteam} loading={redteamLoading} />
-      </div>
+      <RedteamTeaser report={redteam} loading={redteamLoading} />
     </div>
   )
 }
 
-/**
- * Client entry for the Guardrails section. Runs the boot probe once (live-first,
- * mock fallback) before mounting the view, mirroring `CacheMount`. Offline is
- * labelled with the honest banner; the rail stack + engine indicator render from
- * the module-real config, the verdict feed from a labelled sample, and the
- * red-team teaser from the offline battery.
- */
+/** Client entry for the Guardrails section — gated on a reachable backend. */
 export function GuardrailsMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className={cn(
-            'mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white',
-          )}
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
-      <GuardrailsView mock={isMock()} />
-    </TooltipProvider>
+    <BackendGate>
+      <TooltipProvider>
+        <GuardrailsView />
+      </TooltipProvider>
+    </BackendGate>
   )
 }

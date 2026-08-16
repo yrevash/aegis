@@ -40,16 +40,16 @@ def test_chunk_rejects_bad_params():
 # ── structure-aware recursive chunking ──────────────────────────────────────
 
 _DOC = """---
-title: Refund guide
+title: Closure guide
 ---
 
-# Refunds
+# Closures
 
-Refunds go back to the original payment method within a week. Verify identity first.
+Closures go back to the original approver for confirmation within a week. Verify identity first.
 
-## Duplicate charges
+## Duplicate requests
 
-Refund only the duplicate charge. Keep the original invoice open for the record.
+Close only the duplicate request. Keep the original request open for the record.
 
 # Escalation
 
@@ -61,8 +61,8 @@ def test_chunk_structured_tracks_section_paths():
     pieces = chunk_structured(_DOC, chunk_size=50, overlap=5)
     sections = {p.section for p in pieces}
     # Heading nesting is captured as a path; frontmatter is stripped.
-    assert "Refunds" in sections
-    assert "Refunds > Duplicate charges" in sections
+    assert "Closures" in sections
+    assert "Closures > Duplicate requests" in sections
     assert "Escalation" in sections
     assert all(isinstance(p, ChunkPiece) for p in pieces)
     # Ordinals are contiguous and in reading order.
@@ -71,10 +71,10 @@ def test_chunk_structured_tracks_section_paths():
 
 def test_chunk_structured_contextualizes_with_heading():
     pieces = chunk_structured(_DOC, chunk_size=50, overlap=5)
-    dup = next(p for p in pieces if p.section == "Refunds > Duplicate charges")
+    dup = next(p for p in pieces if p.section == "Closures > Duplicate requests")
     # Contextual retrieval: the section path is prepended to the embedded text.
-    assert dup.contextualized().startswith("[Refunds > Duplicate charges]")
-    assert "duplicate charge" in dup.contextualized().lower()
+    assert dup.contextualized().startswith("[Closures > Duplicate requests]")
+    assert "duplicate request" in dup.contextualized().lower()
 
 
 def test_chunk_structured_respects_size_with_overlap():
@@ -130,7 +130,7 @@ def test_dedup_pieces_drops_near_duplicates():
 
 
 def test_dedup_pieces_keeps_distinct_content():
-    a = _piece("billing refunds go to the original payment method", 0)
+    a = _piece("billing closures go to the original approver queue", 0)
     b = _piece("login failures returning http 500 need the status page", 1)
     result = dedup_pieces([a, b])
     assert len(result.kept) == 2
@@ -175,12 +175,12 @@ def test_dedup_pieces_keeps_identical_bodies_under_different_sections():
     # REGRESSION: in-batch dedup hashed the bare body while the ingestion ledger hashes
     # body+section, so "Contact support." under two different headings collided and the
     # second section was silently left with no indexed content.
-    refunds = ChunkPiece(text="Contact support.", ordinal=0, section="Refunds", word_count=2)
+    closures = ChunkPiece(text="Contact support.", ordinal=0, section="Closures", word_count=2)
     returns = ChunkPiece(text="Contact support.", ordinal=1, section="Returns", word_count=2)
 
-    result = dedup_pieces([refunds, returns])
+    result = dedup_pieces([closures, returns])
 
-    assert [p.section for p in result.kept] == ["Refunds", "Returns"]
+    assert [p.section for p in result.kept] == ["Closures", "Returns"]
     assert result.exact_duplicates == 0
     assert result.near_duplicates == 0
 
@@ -189,7 +189,7 @@ def test_dedup_pieces_keeps_long_shared_boilerplate_under_different_sections():
     # The same trap via the near-duplicate arm: two sections repeating a long passage
     # are distinct answers to distinct questions, not one passage seen twice.
     body = "escalate the request to a senior agent before the stated deadline lapses"
-    a = ChunkPiece(text=body, ordinal=0, section="Refunds", word_count=len(body.split()))
+    a = ChunkPiece(text=body, ordinal=0, section="Closures", word_count=len(body.split()))
     b = ChunkPiece(text=body, ordinal=1, section="Returns", word_count=len(body.split()))
 
     result = dedup_pieces([a, b])

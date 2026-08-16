@@ -10,15 +10,12 @@
 import type { Signal } from '@/config/signals'
 import { signalForEvent } from '@/config/signals'
 import type {
-  Abstained,
   ApprovalQueued,
   ApprovalRequired,
-  AutonomyBandKind,
   BudgetExceeded,
   Guardrail,
   GraphEdge,
   GraphNode,
-  MLExplanation,
   NodeFinished,
   NodeStarted,
   Provenance,
@@ -34,7 +31,6 @@ export type RunPhase =
   | 'idle'
   | 'streaming'
   | 'awaiting_approval'
-  | 'abstained'
   | 'completed'
   | 'blocked'
   | 'error'
@@ -45,23 +41,6 @@ export interface RunUsage {
   completion_tokens: number
   cost_usd: number
   cache_hit: boolean
-}
-
-/**
- * Bounded-autonomy gate readout, projected (camelCase) from the latest
- * {@link MLExplanation}. `gated === true` ⇒ the model was too uncertain to act
- * alone and the run must route to the human gate.
- */
-export interface MLGate {
-  gated: boolean | null
-  /**
-   * The graded autonomy band the policy assigned (§2.3), or null. Authoritative
-   * over {@link gated} when present — drives the {@link AutonomyBand} badge.
-   */
-  band: AutonomyBandKind | null
-  gateReason: string | null
-  minConfidence: number | null
-  maxRelWidth: number | null
 }
 
 /**
@@ -105,10 +84,6 @@ export interface RunState {
   toolResults: ToolResult[]
   /** Accumulated answer text. */
   answer: string
-  /** The latest ML explanation, if any. */
-  ml: MLExplanation | null
-  /** The latest bounded-autonomy gate readout (camelCase), or null. */
-  mlGate: MLGate | null
   /** The active approval gate, or null once resolved/terminal. */
   approval: ApprovalRequired | null
   /**
@@ -124,8 +99,6 @@ export interface RunState {
    * provenance chip so a cache hit is never mistaken for a fresh answer.
    */
   provenance: Provenance | null
-  /** The abstain terminal outcome (insufficient confidence), or null. */
-  abstained: Abstained | null
   /** The latest budget/rate-limit breach, or null. */
   budgetExceeded: BudgetExceeded | null
   /** Cumulative graph nodes touched by retrieval (deduped by id). */
@@ -165,13 +138,10 @@ export const initialRunState: RunState = {
   toolCalls: [],
   toolResults: [],
   answer: '',
-  ml: null,
-  mlGate: null,
   approval: null,
   approvalQueued: null,
   awaitedApproval: false,
   provenance: null,
-  abstained: null,
   budgetExceeded: null,
   touchedNodes: [],
   touchedEdges: [],
@@ -216,7 +186,6 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
         awaitedApproval: false,
         approvalQueued: null,
         provenance: null,
-        abstained: null,
         budgetExceeded: null,
       }
 
@@ -272,19 +241,6 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
     case 'tool_result':
       return { ...next, toolResults: [...state.toolResults, event] }
 
-    case 'ml_explanation':
-      return {
-        ...next,
-        ml: event,
-        mlGate: {
-          gated: event.gated,
-          band: event.band,
-          gateReason: event.gate_reason,
-          minConfidence: event.min_confidence,
-          maxRelWidth: event.max_rel_width,
-        },
-      }
-
     case 'approval_required':
       return { ...next, phase: 'awaiting_approval', approval: event, awaitedApproval: true }
 
@@ -299,9 +255,6 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
     case 'provenance':
       return { ...next, provenance: event }
 
-    case 'abstained':
-      return { ...next, phase: 'abstained', abstained: event, approval: null }
-
     case 'budget_exceeded':
       return { ...next, phase: 'blocked', budgetExceeded: event }
 
@@ -311,13 +264,7 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
     case 'run_finished':
       return {
         ...next,
-        // An abstain outcome is terminal in its own right; keep that phase even
-        // if a `run_finished` envelope follows to carry usage.
-        phase: state.abstained
-          ? 'abstained'
-          : event.status === 'completed'
-            ? 'completed'
-            : 'blocked',
+        phase: event.status === 'completed' ? 'completed' : 'blocked',
         running: false,
         approval: null,
         finishedStatus: event.status,

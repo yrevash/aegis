@@ -92,10 +92,10 @@ async def test_calling_retrieve_without_a_scope_raises():
 async def test_exact_cache_keys_differ_across_tenants():
     """The same query under two tenants is two entries, and neither can reach the other."""
     cache = _cache()
-    await cache.set("what is our refund policy?", _ACME, [1.0, 0.0], _result("acme answer"))
+    await cache.set("what is our escalation policy?", _ACME, [1.0, 0.0], _result("acme answer"))
 
-    assert await cache.get_exact("what is our refund policy?", _GLOBEX) is None
-    hit = await cache.get_exact("what is our refund policy?", _ACME)
+    assert await cache.get_exact("what is our escalation policy?", _GLOBEX) is None
+    hit = await cache.get_exact("what is our escalation policy?", _ACME)
     assert hit is not None
     assert hit.answer_context == "acme answer"
 
@@ -222,14 +222,14 @@ def _tenant_chunks(retriever: Retriever) -> list[str]:
 
 async def test_ingest_stamps_the_owning_tenant_on_every_chunk():
     retriever = _retriever()
-    await retriever.ingest([{"id": "a", "text": "Acme refunds take five days."}], scope=_ACME)
+    await retriever.ingest([{"id": "a", "text": "Acme closures take five days."}], scope=_ACME)
     assert _tenant_chunks(retriever) == [tenant_metadata_value(1)]
 
 
 async def test_ingest_ledger_is_per_tenant_so_two_tenants_can_hold_one_document():
     """The same document ingested by two tenants is two rows, not a deduped one."""
     retriever = _retriever()
-    doc = [{"id": "a", "text": "Refunds are issued to the original payment method."}]
+    doc = [{"id": "a", "text": "Closures are approved and returned to the original approver."}]
 
     first = await retriever.ingest(doc, scope=_ACME)
     second = await retriever.ingest(doc, scope=_GLOBEX)
@@ -252,15 +252,20 @@ async def _lite_backend() -> InMemoryKnowledgeBackend:
         config=RetrievalConfig(),
     )
     await retriever.ingest(
-        [{"id": "acme", "text": "Acme issues refunds within five business days."}],
+        [{"id": "acme", "text": "Acme approves closures within five business days."}],
         scope=_ACME,
     )
     await retriever.ingest(
-        [{"id": "globex", "text": "Globex issues refunds within five business days."}],
+        [{"id": "globex", "text": "Globex approves closures within five business days."}],
         scope=_GLOBEX,
     )
     await retriever.ingest(
-        [{"id": "handbook", "text": "Refunds are issued to the original payment method."}],
+        [
+            {
+                "id": "handbook",
+                "text": "Closures are approved and returned to the original approver.",
+            }
+        ],
         scope=_SHARED,
     )
     return backend
@@ -270,7 +275,7 @@ async def test_vector_arm_filters_by_tenant_in_the_chroma_query():
     """One embedded store, three owners: a tenant sees its own rows plus the shared ones."""
     backend = await _lite_backend()
     ranked = await backend.recall_ranked(
-        "refunds issued within business days", top_k=10, scope=_ACME
+        "closures approved within business days", top_k=10, scope=_ACME
     )
     vector = next(rl for rl in ranked.lists if RetrievalOrigin.VECTOR in rl.origins)
     docs = {c.metadata.get("doc") for c in vector.candidates}
@@ -281,7 +286,7 @@ async def test_keyword_arm_applies_the_same_tenant_predicate():
     """A BM25 arm that skipped the predicate would re-open the leak the vector arm closed."""
     backend = await _lite_backend()
     hits = await backend.keyword_recall(
-        "refunds issued within business days", top_k=10, scope=_ACME
+        "closures approved within business days", top_k=10, scope=_ACME
     )
     assert {c.metadata.get("doc") for c in hits} == {"acme", "handbook"}
 
@@ -290,7 +295,7 @@ async def test_unscoped_recall_sees_only_the_shared_corpus():
     """A null tenant is not a wildcard: it reads shared rows, never a tenant's."""
     backend = await _lite_backend()
     hits = await backend.keyword_recall(
-        "refunds issued within business days", top_k=10, scope=_SHARED
+        "closures approved within business days", top_k=10, scope=_SHARED
     )
     assert {c.metadata.get("doc") for c in hits} == {"handbook"}
 
@@ -299,7 +304,7 @@ async def test_graph_expansion_cannot_hop_through_another_tenants_chunk():
     """Foreign rows are excluded as seeds *and* as neighbours, not just from the output."""
     backend = await _lite_backend()
     ranked = await backend.recall_ranked(
-        "refunds issued within business days", top_k=10, scope=_ACME
+        "closures approved within business days", top_k=10, scope=_ACME
     )
     graph = next(rl for rl in ranked.lists if RetrievalOrigin.GRAPH in rl.origins)
     assert {c.metadata.get("doc") for c in graph.candidates} == {"acme", "handbook"}
@@ -315,7 +320,7 @@ async def test_end_to_end_one_tenants_passage_never_reaches_another():
         embed=SequenceEmbed([1.0, 0.0]),
         config=RetrievalConfig(recall_top_k=10, final_top_k=5),
     )
-    query = "how long do refunds take?"
+    query = "how long do closures take?"
 
     for _ in range(2):
         acme = await retriever.retrieve(query, scope=_ACME)

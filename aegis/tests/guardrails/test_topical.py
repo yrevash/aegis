@@ -41,7 +41,7 @@ def routing_completer(*, injection=False, unsafe=False, on_topic=True):
     return _c
 
 
-DOMAIN = "Customer support for a SaaS billing product: invoices, refunds, plans."
+DOMAIN = "Customer support for a SaaS service-request product: requests, invoices, plans."
 
 
 # ── describe_topics ──
@@ -51,7 +51,7 @@ def test_describe_topics_none_is_empty():
 
 
 def test_describe_topics_joins_a_list():
-    assert describe_topics(["Billing", " Refunds "]) == "Billing, Refunds"
+    assert describe_topics(["Billing", " Closures "]) == "Billing, Closures"
 
 
 # ── screen_topic unit ──
@@ -71,7 +71,7 @@ async def test_no_op_pass_when_no_completer():
 @pytest.mark.asyncio
 async def test_on_topic_query_passes():
     v = await screen_topic(
-        "How do I get a refund?",
+        "How do I close a request?",
         allowed_topics=DOMAIN,
         completer=completer_returning('{"on_topic": true, "reason": "billing"}'),
     )
@@ -136,7 +136,7 @@ async def test_pipeline_off_topic_flags_but_does_not_block():
 @pytest.mark.asyncio
 async def test_pipeline_on_topic_passes():
     guard = Guardrails(completer=routing_completer(on_topic=True), allowed_topics=DOMAIN)
-    res = await guard.check_input("How do I get a refund on my invoice?")
+    res = await guard.check_input("How do I close a duplicate request?")
     assert res.verdict is GuardVerdict.PASS
 
 

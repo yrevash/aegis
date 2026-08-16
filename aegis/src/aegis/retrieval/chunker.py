@@ -139,7 +139,7 @@ def _split_sections(text: str) -> list[tuple[str, str]]:
     """Split Markdown ``text`` into ``(heading_path, body)`` sections.
 
     Headings (``#``–``######``) open a new section; the heading *path* accumulates the
-    nesting (``"Guide > Refunds"``). Text before the first heading is emitted under an
+    nesting (``"Guide > Escalations"``). Text before the first heading is emitted under an
     empty path. Plain text with no headings yields a single ``("", text)`` section.
     """
     sections: list[tuple[str, str]] = []
@@ -331,7 +331,7 @@ def dedup_pieces(
     path — exactly like :meth:`ChunkPiece.content_id` and the ingestion idempotency
     ledger downstream. That agreement is the point: judging the bare body here while the
     ledger hashes body+section makes two sections that happen to share a sentence
-    ("Contact support." under *Refunds* and under *Returns*) collide, and the second
+    ("Contact support." under *Escalations* and under *Reassignments*) collide, and the second
     section is silently left with no indexed content while the run reports a benign
     duplicate. Near-duplicate detection is scoped to chunks under the same section path
     for the same reason: two sections repeating boilerplate are distinct answers to

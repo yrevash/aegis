@@ -5,7 +5,7 @@
  * @see backend/src/app/api/schemas.py
  */
 
-import type { GraphEdge, GraphNode, RiskLevel, Role, ShapFeature } from '@/lib/stream'
+import type { GraphEdge, GraphNode, Role, ShapFeature } from '@/lib/stream'
 
 /** Body for `POST /auth/login`. */
 export interface LoginRequest {
@@ -130,50 +130,6 @@ export interface AuditLogRow {
 /** Response from `GET /audit` — newest-first list of audit rows. */
 export interface AuditLogResponse {
   rows: AuditLogRow[]
-}
-
-// ── Approvals inbox (durable, async approval path) ──────────────────────────
-
-/** The ML readout captured with an approval row (for the inbox card). */
-export interface ApprovalMlSnapshot {
-  prediction?: number | string | null
-  conformal_confidence?: number | null
-  conformal_interval?: [number, number] | null
-  /** The autonomy band that routed this to the inbox, e.g. 'defer'. */
-  band?: string | null
-}
-
-/**
- * One row of the persisted approvals inbox. Mirrors the backend `approvals`
- * table surfaced by `GET /approvals`.
- */
-export interface ApprovalRow {
-  id: number
-  run_id: string
-  action: string
-  args: Record<string, unknown>
-  risk: RiskLevel
-  rationale: string
-  /** e.g. 'pending' | 'approved' | 'rejected' | 'escalated' | 'expired'. */
-  status: string
-  persona: string | null
-  /** ISO 8601 SLA deadline, or null. */
-  sla_deadline: string | null
-  /** ISO 8601 creation time. */
-  created_at: string
-  ml_snapshot: ApprovalMlSnapshot | null
-}
-
-/** Response from `GET /approvals`. */
-export interface ApprovalsResponse {
-  rows: ApprovalRow[]
-}
-
-/** Response from `POST /approvals/{id}/decision`. */
-export interface ApprovalDecisionResponse {
-  id: number
-  status: string
-  accepted: boolean
 }
 
 // ── Admin: tenants, users, budgets, usage (multi-tenant governance) ─────────

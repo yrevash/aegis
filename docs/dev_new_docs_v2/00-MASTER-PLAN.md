@@ -101,6 +101,18 @@ memory panel.
 agents on "what is my budget" is not impressive, it is wasteful — and with $100 of credits
 it is also expensive.
 
+**A library's defaults are its author's trade-offs, not ours.** Every third-party tool we
+adopt — Docling, the embedder, the reranker, the vector store — gets configured from evidence
+about what produces the best result *for this system*, and every deviation from a default is
+written down with the reason. Defaults are tuned for the average case, for fast first-run
+experience, or for the maintainer's own benchmark; none of those is our goal.
+
+The live example: Docling ships `heading_hierarchy_options.enabled = False`, so PDFs come out
+with every heading flattened to level 1. Accepting that default would have silently destroyed
+the hierarchical section context that the retrieval literature shows is one of the cheapest
+real quality wins — and nothing would have errored. A plan that says "we used Docling" is not
+a plan. A plan that says "we set these nine parameters, and here is the evidence for each" is.
+
 ---
 
 ## Budget reality

@@ -55,7 +55,7 @@ def test_deterministic_picks_memory_for_self_referential_query():
 
 def test_deterministic_defaults_to_qa_when_nothing_matches():
     roster = agent_roster()
-    role, reason = classify_deterministic("what is the refund policy?", roster)
+    role, reason = classify_deterministic("what is the escalation policy?", roster)
     assert role == "qa"
     assert "no specialist keywords matched" in reason
 
@@ -214,7 +214,6 @@ async def test_memory_query_routes_to_memory_specialist(make_deps):
     assert fake_mem.assemble_calls  # the memory subsystem was consulted
     assert "retrieval" not in types  # RAG did NOT run
     assert "tool_call" not in types  # no tool/gate path (would have gated on qa)
-    assert "ml_explanation" not in types
 
     # The glass-box memory event carries the recalled counts.
     mem_event = next(e for e in events if e.type == "memory")

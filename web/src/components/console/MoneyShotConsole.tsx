@@ -16,8 +16,6 @@ import { NodeGantt } from '@/components/charts/NodeGantt'
 import { GuardrailReveal } from '@/components/guardrail/GuardrailReveal'
 import { TrustBar } from '@/components/layout/TrustBar'
 import { EfficiencyPanel } from '@/components/metrics/EfficiencyPanel'
-import { ConfidenceCard } from '@/components/ml/ConfidenceCard'
-import { ShapPanel } from '@/components/ml/ShapPanel'
 import { RerankScoreboard } from '@/components/retrieval/RerankScoreboard'
 import { RevealOnScroll } from '@/components/shared'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
@@ -59,8 +57,7 @@ function GraphFallback(): ReactElement {
  * technical depth lives one hover / expander down.
  *
  * The console takes its `role` from the route and its bearer from the live auth
- * session, so live runs and the graph fetch carry `Authorization` (the mock
- * transport needs no auth and is unaffected).
+ * session, so runs and the graph fetch carry `Authorization`.
  */
 export function MoneyShotConsole({ role }: { role: Role }): ReactElement {
   // Live session token — a constant `null` would fetch the graph with no bearer
@@ -199,19 +196,13 @@ export function MoneyShotConsole({ role }: { role: Role }): ReactElement {
             the stage it flows 2-up (md); as the true rail at 2xl it stacks. */}
         <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 lg:col-span-12 2xl:col-span-3 2xl:grid-cols-1">
           <RevealOnScroll className="min-w-0" delayMs={40}>
-            <ConfidenceCard ml={state.ml} />
-          </RevealOnScroll>
-          <RevealOnScroll className="min-w-0" delayMs={80}>
             <RerankScoreboard
               scores={state.retrievalScores}
               candidates={state.candidates}
               provenance={state.provenance}
             />
           </RevealOnScroll>
-          <RevealOnScroll className="min-w-0" delayMs={120}>
-            <ShapPanel ml={state.ml} />
-          </RevealOnScroll>
-          <RevealOnScroll className="min-w-0" delayMs={160}>
+          <RevealOnScroll className="min-w-0" delayMs={80}>
             <EfficiencyPanel metrics={metrics} state={state} />
           </RevealOnScroll>
         </div>
@@ -224,7 +215,6 @@ export function MoneyShotConsole({ role }: { role: Role }): ReactElement {
             approval={state.approval}
             onDecision={handleDecision}
             resolved={decided}
-            ml={state.ml}
           />
         </ApprovalSpotlight>
       )}

@@ -44,7 +44,7 @@ async def test_completed_run_writes_eval_rows_keyed_by_run_id(db, make_deps, mon
     monkeypatch.setattr("app.core.llm.complete", _judge_complete)
     orch._TRACE_EVAL_TASKS.clear()
 
-    deps = make_deps(propose_tool=True, high_risk=False, uncertain=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     events = await _drain(
         run_agent(
             "Please resolve request R1",
@@ -89,7 +89,7 @@ async def test_kickoff_gated_on_stores_disabled(db, make_deps, monkeypatch):
     monkeypatch.setattr("app.core.llm.complete", _judge_complete)
     orch._TRACE_EVAL_TASKS.clear()
 
-    deps = make_deps(propose_tool=True, high_risk=False, uncertain=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     events = await _drain(
         run_agent(
             "Please resolve request R1",

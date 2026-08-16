@@ -4,43 +4,55 @@
  * for versions the API does not expose a body for, and are badged as such.
  */
 
-/** The prompt key the loop dashboard tracks (the console scenario's agent). */
-export const PROMPT_KEY = 'payments_ops_agent'
+/**
+ * The prompt key the loop dashboard tracks.
+ *
+ * Must be a key the backend can actually resolve: `/ops/prompts/active` falls
+ * back to `render_floor_prompt(prompt_key)`, which looks the id up in the
+ * adapter's persona table. The only real keys are `operations_lead` and
+ * `client` (`adapter/personas.py`); anything else raises `KeyError` behind the
+ * degrade-to-empty guard and the page silently shows nothing.
+ */
+export const PROMPT_KEY = 'operations_lead'
 
 /**
  * Illustrative per-version prompt bodies used by the diff. The API only exposes
  * the *active* version's body (`/ops/prompts/active`), which we use verbatim;
  * older/proposed bodies are sample content, badged "sample" in the diff — the
  * same honest convention the rest of the surface uses for illustrative series.
+ *
+ * They are written against the real world: the persona is the adapter's
+ * `operations_lead`, and the only tools named are the three in `TOOL_REGISTRY`
+ * (`update_request_status` HIGH, `assign_request` MEDIUM, `add_case_note` LOW).
  */
 export const SAMPLE_BODIES: Record<number, string> = {
   6: [
-    'You are the Payments Operations agent.',
+    'You are the Operations Lead: you triage, assign and resolve service requests.',
     'Ground every claim in retrieved context; if you cannot retrieve backing context, say so and stop.',
-    'For any refund or cancellation, verify the entitlement tier and the governing Refund Policy before acting.',
-    'Before issuing a refund, explicitly check the amount against the $2,000 ceiling and state the result.',
-    'Only call allowlisted tools. Never issue a refund above $2,000 without human approval.',
-    'Cite the source AND the Refund Policy version for any customer-facing statement.',
+    'Before changing a request, verify the customer tier and the governing escalation policy.',
+    'State which tool you will call and why it is in policy before calling it.',
+    'Only call allowlisted tools. update_request_status is HIGH risk and always needs human approval.',
+    'Cite the source KB article for any customer-facing statement.',
   ].join('\n'),
   4: [
-    'You are the Payments Operations agent.',
+    'You are the Operations Lead: you triage, assign and resolve service requests.',
     'Ground claims in retrieved context where possible.',
-    'For refunds, check the entitlement tier before acting.',
-    'Only call allowlisted tools. Refunds above $2,000 require human approval.',
+    'Check the customer tier before changing a request.',
+    'Only call allowlisted tools. update_request_status requires human approval.',
     'Cite the source for customer-facing statements.',
   ].join('\n'),
   3: [
-    'You are the Payments Operations agent.',
+    'You are the Operations Lead for service requests.',
     'Use retrieved context to answer.',
-    'For refunds, check the entitlement tier.',
-    'Only call allowlisted tools. Large refunds require approval.',
+    'Check the customer tier before acting.',
+    'Only call allowlisted tools. Resolving a request requires approval.',
   ].join('\n'),
   2: [
-    'You are the Payments Operations agent.',
-    'Answer customer billing questions.',
-    'Escalate refunds to a human.',
+    'You are the Operations Lead for service requests.',
+    'Answer customer questions about their open requests.',
+    'Escalate status changes to a human.',
   ].join('\n'),
-  1: ['You are a payments support assistant.', 'Answer billing questions.'].join('\n'),
+  1: ['You are a support operations assistant.', 'Answer questions about service requests.'].join('\n'),
 }
 
 /** Risk level → Badge tone (low healthy, medium gate, high guardrail). */

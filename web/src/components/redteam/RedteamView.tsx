@@ -7,17 +7,16 @@ import {
   ShieldCheck,
   Swords,
   Target,
-  WifiOff,
 } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { runRedteam } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { RedteamCategoryReport, RedteamReportResponse } from '@/lib/api/platform'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 
 /** Attack categories rendered as bars, in a stable order (benign_control is the FP measure — excluded). */
 const CATEGORY_ORDER = [
@@ -113,7 +112,7 @@ function CategoryBars({
  * /redteam/run`. Headline block-rate KPIs (block-rate, gate pass/fail, attacks
  * run, false-positive rate) over honest measured numbers, per-category bars with
  * the leaked probe ids called out, and a Run-red-team action that re-runs the
- * battery. Offline re-serves the deterministic mock; live hits the endpoint.
+ * battery — the endpoint runs it deterministically, with no LLM and no spend.
  */
 function RedteamView(): ReactElement {
   // Live session token — see `AdminCommandCenter`: a constant `null` would fetch
@@ -263,45 +262,11 @@ function RedteamView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the Red-team section. Runs the boot probe once (live-first,
- * mock fallback) before mounting the view, so `runRedteam` reads the resolved
- * mode — offline re-serves the deterministic mock battery behind the honest
- * offline banner; live posts to `/redteam/run`.
- */
+/** Client entry for the Red-team section — gated on a reachable backend. */
 export function RedteamMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <div>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
+    <BackendGate>
       <RedteamView />
-    </div>
+    </BackendGate>
   )
 }

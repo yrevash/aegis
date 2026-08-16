@@ -235,7 +235,7 @@ async def test_episodic_messages_recalled_via_chroma(db):
                 session_id="sess-1",
                 turn_index=0,
                 role="user",
-                content="old refund note",
+                content="old closure note",
                 embedding=[1.0, 0.0, 0.0, 0.0],
                 embedding_dim=4,
             ),
@@ -251,7 +251,7 @@ async def test_episodic_messages_recalled_via_chroma(db):
             k=5,
         )
     assert len(hits) == 1
-    assert hits[0][0].content == "old refund note"
+    assert hits[0][0].content == "old closure note"
     assert hits[0][1] == pytest.approx(1.0)
 
 

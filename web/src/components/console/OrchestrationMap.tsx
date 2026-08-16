@@ -46,7 +46,7 @@ interface OrchestrationMapProps {
  *
  * The topology is **served**, not assumed: it comes from `GET /agent/topology`,
  * which reads it off the compiled LangGraph. Until that lands — and for as long
- * as it fails, which includes mock mode with no backend — the map renders the
+ * as it fails — the map renders the
  * generated snapshot of the same graph, so it is never blank and never wrong.
  */
 export function OrchestrationMap({ state, beat }: OrchestrationMapProps): ReactElement {

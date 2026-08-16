@@ -1,7 +1,7 @@
 """Shared fixtures for the aegis.agent tests — fakes only, no host, no infrastructure.
 
-Everything the graph touches (the LLM gateway, retrieval, guardrails, the ML spine,
-the action tools, the supervisor roster) is faked here and injected through the
+Everything the graph touches (the LLM gateway, retrieval, guardrails, the action
+tools, the supervisor roster) is faked here and injected through the
 standalone ``aegis.agent.AgentDeps`` — plus the injected orchestrator seams (a plain
 dict-stamp event validator, an ``InMemorySaver`` checkpointer, and null durable
 approvals/trace-eval sinks). This is the proof the seam works: the whole vertical slice
@@ -18,7 +18,6 @@ import pytest
 
 from aegis.core.types import GuardResult, GuardVerdict, RiskLevel
 from aegis.gateway.types import LLMResult, ToolCallResult, Usage
-from aegis.ml.types import MLExplainResponse, ShapFeature
 from aegis.retrieval.models import GraphDelta, RetrievalResult, Source
 from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 
@@ -73,31 +72,19 @@ def fake_roster() -> _Roster:
     return _Roster()
 
 
-def _describe_prediction(resp: MLExplainResponse) -> str:
-    """Fake decision-support framing of a prediction (host-adapter role)."""
-    return (
-        f"ML decision-support: predicts {resp.prediction} "
-        f"(confidence {resp.conformal_confidence})."
-    )
-
-
 def build_fake_deps(
     *,
     propose_tool: bool = True,
-    uncertain: bool = True,
     block_input: bool = False,
     high_risk: bool = False,
-    degenerate: bool = False,
     with_roster: bool = True,
 ):
     """Build an ``aegis.agent.AgentDeps`` wired entirely to canned fakes.
 
     Args:
         propose_tool: Whether the planner proposes an action tool call.
-        uncertain: Whether the ML fake returns a wide interval.
         block_input: Whether the input rail blocks the query.
         high_risk: Whether the tool is reported as HIGH risk (forces the gate).
-        degenerate: Whether the ML fake returns a degenerate prediction.
         with_roster: Whether to inject the qa+memory fake roster (else the core
             qa-only fallback is used).
     """
@@ -118,7 +105,7 @@ def build_fake_deps(
     async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return RetrievalResult(
             answer_context="Spotlighted context about request R1.",
-            sources=[Source(id="kb-1", text="Refund policy", score=0.9)],
+            sources=[Source(id="kb-1", text="Escalation policy", score=0.9)],
             num_candidates=5,
             graph_delta=GraphDelta(
                 nodes=[GraphNode(id="R1", label="Request R1", kind="request")],
@@ -160,7 +147,7 @@ def build_fake_deps(
         if tools and propose_tool:
             return LLMResult(
                 content=(
-                    "The request is overdue and matches the refund policy. "
+                    "The request is overdue and matches the escalation policy. "
                     "I will update its status to resolved."
                 ),
                 tool_calls=[
@@ -178,25 +165,6 @@ def build_fake_deps(
             tool_calls=[],
             usage=Usage(prompt_tokens=9, completion_tokens=7, cost_usd=0.0006),
             model="fake-generation",
-        )
-
-    def predict_explain(features: dict) -> MLExplainResponse:
-        if degenerate:
-            interval, confidence = (0.0, 240.0), 0.3
-        elif uncertain:
-            interval, confidence = (2.0, 48.0), 0.6
-        else:
-            interval, confidence = (11.0, 13.0), 0.95
-        width = interval[1] - interval[0]
-        return MLExplainResponse(
-            prediction=12.0,
-            conformal_interval=interval,
-            conformal_confidence=confidence,
-            interval_width=width,
-            shap_attribution=[
-                ShapFeature(feature="priority", value=1.0, contribution=0.42),
-                ShapFeature(feature="queue_depth_at_open", value=8.0, contribution=-0.20),
-            ],
         )
 
     def tool_definitions_for(persona: str) -> list[dict]:
@@ -221,21 +189,15 @@ def build_fake_deps(
         base = "You are a helpful, grounded support assistant."
         return f"{base}\n\n{extra_context}" if extra_context else base
 
-    def features_for(query: str, persona: str | None) -> dict:
-        return {"priority": 1, "queue_depth_at_open": 8}
-
     kwargs = dict(
         complete=complete,
         retrieve=retrieve,
         check_input=check_input,
         check_output=check_output,
-        predict_explain=predict_explain,
         tool_definitions_for=tool_definitions_for,
         run_tool=run_tool,
         tool_risk=tool_risk,
         render_system_prompt=render_system_prompt,
-        features_for=features_for,
-        describe_prediction=_describe_prediction,
         config=AgentConfig(stream_chunk_words=4),
     )
     if with_roster:

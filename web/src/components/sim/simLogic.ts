@@ -11,13 +11,18 @@ import type { RunState } from '@/state/runReducer'
 export type Mark = 'allow' | 'deny' | 'gate' | 'none'
 
 /**
- * Refund-action outcome for a lane, derived only from its tool results/calls —
- * never fabricated. Denied results win, then executed, then a bare proposal.
+ * Action outcome for a lane, derived only from its tool results/calls — never
+ * fabricated. Denied results win, then executed, then a bare proposal.
+ *
+ * The label names the gated action itself (whatever tool the run actually
+ * proposed) rather than a fixed verb, so the cell cannot describe an action the
+ * lane did not take.
  */
 export function toolMark(state: RunState): { mark: Mark; label: string } {
-  if (state.toolResults.some((r) => !r.ok)) return { mark: 'deny', label: 'Refund denied' }
-  if (state.toolResults.some((r) => r.ok)) return { mark: 'allow', label: 'Refund executed' }
-  if (state.toolCalls.length > 0) return { mark: 'gate', label: 'Refund proposed' }
+  const tool = state.toolCalls[0]?.tool ?? 'Action'
+  if (state.toolResults.some((r) => !r.ok)) return { mark: 'deny', label: `${tool} denied` }
+  if (state.toolResults.some((r) => r.ok)) return { mark: 'allow', label: `${tool} executed` }
+  if (state.toolCalls.length > 0) return { mark: 'gate', label: `${tool} proposed` }
   return { mark: 'none', label: '—' }
 }
 

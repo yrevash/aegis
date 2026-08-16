@@ -36,16 +36,6 @@ export type RetrievalOrigin = 'vector' | 'graph' | 'bm25' | 'cache'
 /** How multiple retrieval origins were combined into one ranked list. */
 export type FusionMethod = 'none' | 'rrf' | 'mix'
 
-/**
- * Graded conformal-autonomy band (`autonomous` / `defer` / `abstain`). Mirrors
- * the backend `AutonomyBand` StrEnum, kept as a shared contract. Note: the live
- * backend does NOT route on this — by design the human gate is driven by the
- * action's TOOL RISK TIER, and ML is a solution signal that never gates. The
- * graded band is populated only by the frontend mock; treat it as supporting
- * evidence, not the flow decision.
- */
-export type AutonomyBandKind = 'autonomous' | 'defer' | 'abstain'
-
 /** Fields common to every streamed event. */
 export interface BaseEvent {
   /** Correlates all events of one query run. */
@@ -177,45 +167,6 @@ export interface ToolResult extends BaseEvent {
   summary: string
 }
 
-/** An ML prediction with its conformal interval and SHAP attribution. */
-export interface MLExplanation extends BaseEvent {
-  type: 'ml_explanation'
-  prediction: number | string
-  /** Calibrated bounds (guaranteed coverage), or null. */
-  conformal_interval: [number, number] | null
-  /** Target coverage rate, e.g. 0.9. */
-  conformal_confidence: number | null
-  /**
-   * Conformal interval width (upper − lower) — the deferral signal: a wide band
-   * means the model is uncertain. Null for non-numeric / no-interval predictions.
-   */
-  interval_width: number | null
-  /**
-   * Conformal prediction-set size for a classification target (1 ⇒ a confident
-   * singleton; >1 ⇒ ambiguous). Null for regression / no-interval predictions.
-   */
-  prediction_set_size: number | null
-  shap_attribution: ShapFeature[]
-  /**
-   * Legacy uncertainty readout carried for display, or null. Note: in the live
-   * backend ML never gates — the human gate fires on the action's tool risk
-   * tier, not on this flag; a true value is informational, not a flow decision.
-   */
-  gated: boolean | null
-  /**
-   * The graded autonomy band (§2.3), or null. The live backend does not populate
-   * a graded band (it gates on tool risk tier); this is set only by the frontend
-   * mock and shown as supporting evidence.
-   */
-  band: AutonomyBandKind | null
-  /** Why the gate did (or did not) trigger, or null. */
-  gate_reason: string | null
-  /** Minimum confidence required to act autonomously, or null. */
-  min_confidence: number | null
-  /** Maximum relative interval width tolerated to act autonomously, or null. */
-  max_rel_width: number | null
-}
-
 /** The run paused at the human-in-the-loop gate (bounded autonomy). */
 export interface ApprovalRequired extends BaseEvent {
   type: 'approval_required'
@@ -272,23 +223,6 @@ export interface ApprovalQueued extends BaseEvent {
 }
 
 /**
- * A terminal outcome: the model's conformal confidence was too low (degenerate
- * / no-coverage) to act, so the agent abstained rather than guess. Rendered as
- * an "insufficient confidence — did not act" terminal state.
- */
-export interface Abstained extends BaseEvent {
-  type: 'abstained'
-  /** Always the 'abstain' autonomy band. */
-  band: 'abstain'
-  /** Why the model abstained (degenerate interval, empty set, no coverage). */
-  reason: string
-  /** The (untrusted) prediction, surfaced for context only, or null. */
-  prediction: number | string | null
-  /** Target coverage the interval failed to satisfy, or null. */
-  conformal_confidence: number | null
-}
-
-/**
  * Provenance of the retrieval result — which origins contributed, how they were
  * fused, and whether the answer was served from cache. Turns the cache from an
  * opaque shortcut into an honest, auditable efficiency signal.
@@ -340,10 +274,8 @@ export type StreamEvent =
   | RetrievalStep
   | ToolCall
   | ToolResult
-  | MLExplanation
   | ApprovalRequired
   | ApprovalQueued
-  | Abstained
   | Provenance
   | BudgetExceeded
   | AnswerChunk

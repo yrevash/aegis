@@ -71,8 +71,8 @@ async def test_second_identical_input_hits_cache_classifier_called_once() -> Non
     cache = InMemoryInjectionCache()
     guard = Guardrails(completer=completer, injection_cache=cache)
 
-    first = await guard.check_input("what is the refund policy today")
-    second = await guard.check_input("what is the refund policy today")
+    first = await guard.check_input("what is the escalation policy today")
+    second = await guard.check_input("what is the escalation policy today")
 
     assert first.verdict.value == "pass"
     assert second.verdict.value == "pass"
@@ -100,7 +100,7 @@ async def test_different_text_is_a_cache_miss_and_reruns_classifier() -> None:
     cache = InMemoryInjectionCache()
     guard = Guardrails(completer=completer, injection_cache=cache)
 
-    await guard.check_input("what is the refund policy today")
+    await guard.check_input("what is the escalation policy today")
     await guard.check_input("how do I escalate a ticket to a senior agent")
 
     assert completer.calls == 2  # two different keys → two misses → two LLM calls
@@ -115,7 +115,7 @@ async def test_cache_emits_miss_then_hit_stream_event() -> None:
 
     sink1 = CaptureSink()
     em1 = AegisEmitter(thread_id="t", run_id="r1", sink=sink1)
-    await guard.stream_check_input_agui("what is the refund policy today", em1)
+    await guard.stream_check_input_agui("what is the escalation policy today", em1)
     cache_events1 = [
         p["value"] for p in _payloads(sink1.frames)
         if p.get("name") == stream_names.GUARDRAIL_CACHE
@@ -124,7 +124,7 @@ async def test_cache_emits_miss_then_hit_stream_event() -> None:
 
     sink2 = CaptureSink()
     em2 = AegisEmitter(thread_id="t", run_id="r2", sink=sink2)
-    await guard.stream_check_input_agui("what is the refund policy today", em2)
+    await guard.stream_check_input_agui("what is the escalation policy today", em2)
     cache_events2 = [
         p["value"] for p in _payloads(sink2.frames)
         if p.get("name") == stream_names.GUARDRAIL_CACHE
@@ -153,8 +153,8 @@ async def test_fail_open_on_broken_cache() -> None:
     completer = CountingCompleter()
     guard = Guardrails(completer=completer, injection_cache=BrokenCache())
 
-    first = await guard.check_input("what is the refund policy today")
-    second = await guard.check_input("what is the refund policy today")
+    first = await guard.check_input("what is the escalation policy today")
+    second = await guard.check_input("what is the escalation policy today")
 
     assert first.verdict.value == "pass"
     assert second.verdict.value == "pass"
@@ -169,7 +169,7 @@ async def test_default_cache_wired_without_explicit_injection() -> None:
     completer = CountingCompleter()
     guard = Guardrails(completer=completer)  # default injection cache
 
-    await guard.check_input("what is the refund policy today")
-    await guard.check_input("what is the refund policy today")
+    await guard.check_input("what is the escalation policy today")
+    await guard.check_input("what is the escalation policy today")
 
     assert completer.calls == 1  # default cache served the repeat

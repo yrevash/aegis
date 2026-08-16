@@ -16,17 +16,15 @@ from app.data.session import get_agent_checkpointer, reset_agent_checkpointer
 
 def test_agent_config_defaults_unchanged():
     cfg = AgentConfig()
-    # ML never gates: the human gate is driven by tool risk only (gate_min_risk).
+    # The human gate is driven by tool risk (gate_min_risk) and nothing else.
     assert cfg.gate_min_risk is RiskLevel.HIGH
-    assert cfg.run_ml is True
     assert cfg.stream_chunk_words == 4
     assert cfg.max_plan_iterations == 2
 
 
 def test_agent_config_fields_are_settable():
-    cfg = AgentConfig(gate_min_risk=RiskLevel.MEDIUM, run_ml=False, stream_chunk_words=8)
+    cfg = AgentConfig(gate_min_risk=RiskLevel.MEDIUM, stream_chunk_words=8)
     assert cfg.gate_min_risk is RiskLevel.MEDIUM
-    assert cfg.run_ml is False
     assert cfg.stream_chunk_words == 8
 
 

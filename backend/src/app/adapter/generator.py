@@ -545,7 +545,7 @@ def _next_text(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CATEGORY_HINTS: dict[Category, str] = {
-    Category.BILLING: "invoices, refunds, double charges, plan changes",
+    Category.BILLING: "invoices, double charges, payment failures, plan changes",
     Category.TECHNICAL: "errors, outages, integration failures, login problems",
     Category.ACCOUNT: "profile changes, permissions, password resets, seats",
     Category.SHIPPING: "delivery delays, damaged goods, tracking, returns",
@@ -694,7 +694,7 @@ async def _call_and_parse(
 _TEMPLATE_TITLES: dict[Category, tuple[str, ...]] = {
     Category.BILLING: (
         "Unexpected charge on invoice",
-        "Refund not received",
+        "Duplicate charge on invoice",
         "Plan upgrade query",
     ),
     Category.TECHNICAL: (

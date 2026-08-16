@@ -12,7 +12,6 @@ from pydantic import TypeAdapter
 from app.api.schemas import (
     ApprovalQueued,
     ApprovalRequired,
-    AutonomyBand,
     BudgetExceeded,
     FusionMethod,
     ProvenanceEvent,
@@ -115,6 +114,5 @@ def test_existing_variant_still_resolves():
 
 
 def test_enum_member_values_frozen():
-    assert [b.value for b in AutonomyBand] == ["autonomous", "defer", "abstain"]
     assert [o.value for o in RetrievalOrigin] == ["vector", "graph", "bm25", "cache"]
     assert [f.value for f in FusionMethod] == ["none", "rrf", "mix"]

@@ -52,7 +52,6 @@ async def test_gate_pause_and_resume_full_sequence(make_deps):
             "routing",
             "retrieval",
             "retrieval",
-            "ml_explanation",
             "approval_required",
             "tool_call",
             "tool_result",
@@ -101,7 +100,7 @@ async def test_gate_reject_skips_execution(make_deps):
 
 @pytest.mark.asyncio
 async def test_confident_low_risk_action_does_not_gate(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     registry = ApprovalRegistry()
 
     types = [
@@ -119,7 +118,7 @@ async def test_confident_low_risk_action_does_not_gate(make_deps):
 
 @pytest.mark.asyncio
 async def test_high_risk_action_forces_gate(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=True)
+    deps = make_deps(propose_tool=True, high_risk=True)
     registry = ApprovalRegistry()
     saw_gate = False
 
@@ -136,7 +135,7 @@ async def test_high_risk_action_forces_gate(make_deps):
 @pytest.mark.asyncio
 async def test_pure_qa_without_tools(make_deps):
     deps = make_deps(propose_tool=False)
-    events = [e async for e in run_agent("what is the refund policy?", deps=deps)]
+    events = [e async for e in run_agent("what is the escalation policy?", deps=deps)]
     types = [e["type"] for e in events]
 
     assert "tool_call" not in types

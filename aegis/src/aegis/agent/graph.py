@@ -1,7 +1,7 @@
 """The plan-and-execute LangGraph with a bounded self-repair loop and a human gate.
 
 The graph makes the agent's plan *visible and auditable*: each node is one step in
-the money-shot trace (guardrail → retrieve → ml_predict → plan → gate → act →
+the money-shot trace (guardrail → route → retrieve → plan → gate → act →
 reflect → guardrail → answer). Nodes emit event payloads through the LangGraph
 **custom stream writer**; the orchestrator stamps and forwards them to the SSE
 client (via an injected event validator, so the graph never imports a host schema).
@@ -18,18 +18,16 @@ terminate. On the common/tested happy path (the first action succeeds) the loop 
 single ``reflection`` event and routes straight to ``generate`` — the money-shot trace
 is otherwise unchanged.
 
-**ML is a solution signal, never a flow decider (founder decision).** An optional,
-best-effort ``ml_predict`` step runs *before* planning: when the adapter resolves a
-subject for the query it produces a calibrated prediction + interval + top SHAP
-drivers, which are injected into the planner and the final answer as *supporting
-evidence* — the answer can cite "the model predicts X (90% coverage)". No subject /
-no adapter model → the agent answers normally with zero ML involvement. A failed or
-low-confidence prediction is simply omitted; ML never blocks, defers, or terminates.
+**No machine-learning step runs in this graph.** The ML spine (``aegis.ml``) is a
+*tenant-facing capability* — served by the host's ``/ml/*`` endpoints and its forecast
+dashboard — not a stage of the agent pipeline. It was removed from the graph because it
+decorated a decision it never made: its output was injected into two prompts and emitted
+as one informational event, and nothing routed, gated, or branched on it.
 
-The ``gate`` node's human-in-the-loop pause is driven by **tool risk only**: a
-proposed action at or above ``config.gate_min_risk`` routes to the ``approval`` node,
-which calls :func:`langgraph.types.interrupt` and pauses on a checkpointer until
-``POST /approval`` resumes it (the money-shot). ML uncertainty is *not* a gate.
+The ``gate`` node's human-in-the-loop pause is driven by **tool risk**: a proposed
+action at or above ``config.gate_min_risk`` routes to the ``approval`` node, which
+calls :func:`langgraph.types.interrupt` and pauses on a checkpointer until
+``POST /approval`` resumes it (the money-shot). Tool risk is the only gating signal.
 
 The checkpointer (required for the gate's ``interrupt``/resume) is **injected** —
 ``build_agent(deps, *, checkpointer=...)`` — defaulting to an in-memory saver; the
@@ -56,7 +54,6 @@ from langgraph.types import RetryPolicy, interrupt
 
 from aegis.core.models import ModelRole
 from aegis.core.types import GuardStage, GuardVerdict, RiskLevel, RunStatus
-from aegis.ml.types import MLExplainResponse
 from aegis.observability import SpanKind, semconv, set_span_attributes, span
 from aegis.retrieval.agentic import agentic_retrieve
 from aegis.retrieval.corpus import corpus_version
@@ -92,9 +89,8 @@ NODE_LABELS: dict[str, str] = {
     "recall_memory": "Recall memory",
     "persist_memory": "Persist memory",
     "retrieve": "Agentic retrieval",
-    "ml_predict": "ML predict (solver)",
     "plan": "Reason & plan",
-    "gate": "Risk gate & ML evidence",
+    "gate": "Risk gate",
     "approval": "Human approval",
     "act": "Execute actions",
     "reflect": "Reflect & self-repair",
@@ -191,7 +187,7 @@ def _route_gate(state: AgentState) -> str:
 
     Returns:
         ``"approval"`` to route a risky action to the human gate, or ``"act"`` to
-        execute a within-ceiling action autonomously. ML never routes here.
+        execute a within-ceiling action autonomously.
     """
     if state.get("gated"):
         return "approval"
@@ -345,7 +341,7 @@ def build_agent(
     """Compile the agent graph, closing over injected ``deps``.
 
     Args:
-        deps: The capabilities (gateway, retrieval, guardrails, ML, tools) the
+        deps: The capabilities (gateway, retrieval, guardrails, tools, memory) the
             nodes call. Injecting fakes here drives the whole graph offline.
         checkpointer: The LangGraph checkpoint store the graph compiles against
             (required for the human gate's ``interrupt``/resume). Defaults to an
@@ -468,8 +464,8 @@ def build_agent(
     async def answer_memory(state: AgentState) -> dict[str, Any]:
         """Memory specialist: answer "what do you know about me" DIRECTLY from memory.
 
-        A genuinely distinct handler — NOT a copy of qa. It skips RAG, the ML signal,
-        the planner, the risk gate and tools entirely. Instead it recalls the subject's
+        A genuinely distinct handler — NOT a copy of qa. It skips RAG, the planner,
+        the risk gate and tools entirely. Instead it recalls the subject's
         profile + facts through the SAME memory deps the qa path uses, emits the glass-box
         ``memory`` event, and grounds a direct answer in that recalled block. When memory
         is inactive (no deps / no session / no subject) it answers honestly that nothing
@@ -747,30 +743,8 @@ def build_agent(
             logger.warning("Memory persist failed; turn not stored", exc_info=True)
         return {}
 
-    async def ml_predict(state: AgentState) -> dict[str, Any]:
-        """Optional, best-effort ML **solution signal** (adapter-driven, non-blocking).
-
-        When the adapter resolves a subject/feature row for the query, run the
-        ensemble spine to obtain a calibrated prediction + interval + SHAP drivers,
-        storing both the raw response and a domain-framed summary that later nodes
-        inject into the planner and the answer as *supporting evidence*. This is
-        purely additive: no subject / no adapter model → the run proceeds with zero
-        ML. Any failure is swallowed (logged) so ML can never block or terminate the
-        run — the agent still answers.
-        """
-        features = deps.features_for(state["query"], state.get("persona"))
-        if not (config.run_ml and features):
-            return {}
-        try:
-            resp: MLExplainResponse = deps.predict_explain(features)
-            return {"ml_response": resp, "ml_summary": deps.describe_prediction(resp)}
-        except Exception:  # noqa: BLE001 - ML is best-effort; never fail the run
-            logger.warning("ML solution signal unavailable; continuing without it",
-                           exc_info=True)
-            return {}
-
     async def plan(state: AgentState) -> dict[str, Any]:
-        """Reason over the context + ML prediction and propose action tool calls.
+        """Reason over the retrieved context and propose action tool calls.
 
         Before doing any of that, a qa turn first consults the answer-level semantic
         cache: on a hit the expensive generation call is skipped entirely and the cached
@@ -814,9 +788,6 @@ def build_agent(
             f"Context:\n{state.get('context', '')}\n\n"
             f"Question: {state['query']}"
         )
-        ml_summary = state.get("ml_summary")
-        if ml_summary:
-            user_content += f"\n\n{ml_summary}"
         # Self-repair: on a re-plan, feed back the previous attempt's failed/insufficient
         # outcomes so the planner can correct course (Reflexion-style reflection input).
         prior = state.get("tool_results")
@@ -864,16 +835,15 @@ def build_agent(
         return update
 
     async def gate(state: AgentState) -> dict[str, Any]:
-        """Decide the human gate on **tool risk only** — ML never gates.
+        """Decide the human gate from the proposed action's **tool risk**.
 
         Gates when a proposed action's risk tier is at or above
         ``config.gate_min_risk`` (the money-shot: a HIGH-risk action pauses for a
-        human). The ML prediction, if one ran, is surfaced as an *informational*
-        ``ml_explanation`` event carrying **no gating semantics** — it is supporting
-        evidence for the answer, not a routing signal.
+        human). ``ToolSpec.risk`` is the only input — the declared risk of the tool
+        the planner chose. There is no second, softer signal that can also gate, which
+        is why an unregistered tool name is resolved to HIGH by the host's
+        ``tool_risk``: the gate can only be escaped by a tool that declares itself safe.
         """
-        writer = get_stream_writer()
-        resp: MLExplainResponse | None = state.get("ml_response")
         calls = state.get("tool_calls", [])
         risk_of = {c["id"]: deps.tool_risk(c["name"]) for c in calls}
         top_risk = max(risk_of.values(), default=RiskLevel.LOW, key=risk_rank)
@@ -881,13 +851,7 @@ def build_agent(
         gated = any(risk_at_least(r, config.gate_min_risk) for r in risk_of.values())
         reason = f"Proposed action is {top_risk.value}-risk." if gated else ""
 
-        # Informational ML evidence only — no gating semantics attached.
-        ml_event = None
-        if resp is not None:
-            ml_event = events.ml_explanation(resp)
-            writer(ml_event)
         return {
-            "ml": ml_event,
             "gated": gated,
             "gate_reason": reason,
             "gate_risk": top_risk.value,
@@ -1019,8 +983,6 @@ def build_agent(
         )
         if state.get("gated") and not state.get("approved"):
             outcome_lines = "The proposed action was NOT approved by the human gate."
-        ml_summary = state.get("ml_summary")
-        ml_block = f"\n\n{ml_summary}" if ml_summary else ""
         messages = [
             {
                 "role": "system",
@@ -1032,11 +994,10 @@ def build_agent(
                 "role": "user",
                 "content": (
                     f"Context:\n{state.get('context', '')}\n\n"
-                    f"Question: {state['query']}"
-                    f"{ml_block}\n\n"
+                    f"Question: {state['query']}\n\n"
                     f"Actions taken:\n{outcome_lines or 'none'}\n\n"
-                    "Write the final answer for the user; ground any prediction or "
-                    "recommendation in the ML decision-support above when present."
+                    "Write the final answer for the user; ground every claim in the "
+                    "retrieved context and the actions above."
                 ),
             },
         ]
@@ -1145,7 +1106,7 @@ def build_agent(
     # Deliberately NOT applied to:
     #   ``act``      - executes real, externally-visible tool actions. Exactly-once is
     #                  guaranteed by the approvals DB lock, not by the graph; retrying
-    #                  here could issue a refund twice.
+    #                  here could update a request's status twice.
     #   ``approval`` - re-executes on resume by design; a retry would re-interrupt.
     #   memory nodes - already best-effort with their own degrade-to-nothing path.
     _MODEL_RETRY = RetryPolicy(max_attempts=3)
@@ -1166,7 +1127,7 @@ def build_agent(
         "route", _timed("route", NODE_LABELS["route"], retry=_MODEL_RETRY)(route)
     )
     # Memory specialist: answers self-referential turns straight from long-term memory,
-    # skipping RAG/ml/plan/gate/act. A genuinely distinct handler, not a qa copy.
+    # skipping RAG/plan/gate/act. A genuinely distinct handler, not a qa copy.
     builder.add_node(
         "answer_memory",
         _timed("answer_memory", NODE_LABELS["answer_memory"], retry=_MODEL_RETRY)(
@@ -1184,9 +1145,6 @@ def build_agent(
         _timed(
             "retrieve", NODE_LABELS["retrieve"], SpanKind.RETRIEVER, retry=_MODEL_RETRY
         )(retrieve),
-    )
-    builder.add_node(
-        "ml_predict", _timed("ml_predict", NODE_LABELS["ml_predict"])(ml_predict)
     )
     builder.add_node(
         "plan", _timed("plan", NODE_LABELS["plan"], retry=_MODEL_RETRY)(plan)
@@ -1228,9 +1186,7 @@ def build_agent(
     # qa, so the answer is guarded and the turn is still written to long-term memory.
     builder.add_edge("answer_memory", "guard_output")
     builder.add_edge("recall_memory", "retrieve")
-    # Predict-then-plan: ML runs before the planner so the plan is conditioned on it.
-    builder.add_edge("retrieve", "ml_predict")
-    builder.add_edge("ml_predict", "plan")
+    builder.add_edge("retrieve", "plan")
     builder.add_conditional_edges(
         "plan",
         lambda s: "gate" if s.get("tool_calls") else "generate",

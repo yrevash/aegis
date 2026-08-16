@@ -88,7 +88,7 @@ else:
     async def test_benign_input_passes_via_engine() -> None:
         """(c) A benign input PASSES the real engine, with a non-null layer."""
         result = await nemo.nemo_check_input(
-            "What is the refund policy for enterprise customers?"
+            "What is the escalation policy for enterprise customers?"
         )
         assert result.verdict is GuardVerdict.PASS
         assert result.layer == "nemo-input"

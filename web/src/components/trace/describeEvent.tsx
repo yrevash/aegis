@@ -12,7 +12,6 @@ import {
   Brain,
   CircleCheck,
   CircleDot,
-  CircleSlash,
   Eraser,
   Flag,
   Inbox,
@@ -104,21 +103,6 @@ export function describeEvent(event: StreamEvent): TraceDescriptor {
         title: `Tool result · ${event.ok ? 'ok' : 'failed'}`,
         detail: event.summary,
       }
-    case 'ml_explanation': {
-      const gate =
-        event.gated === true
-          ? 'uncertain → gating'
-          : event.gated === false
-            ? 'confident → autonomous'
-            : null
-      const base = `prediction ${event.prediction} · ${event.shap_attribution.length} features`
-      return {
-        signal,
-        icon: Sparkles,
-        title: 'ML score returned',
-        detail: gate ? `${base} · ${gate}` : base,
-      }
-    }
     case 'approval_required':
       return {
         signal,
@@ -135,13 +119,6 @@ export function describeEvent(event: StreamEvent): TraceDescriptor {
         detail: event.action,
       }
     }
-    case 'abstained':
-      return {
-        signal,
-        icon: CircleSlash,
-        title: 'Abstained — insufficient confidence',
-        detail: event.reason,
-      }
     case 'provenance': {
       const detail = event.cache_hit
         ? `served from cache${event.cache_kind ? ` · ${event.cache_kind}` : ''}`

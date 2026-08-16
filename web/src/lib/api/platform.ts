@@ -8,7 +8,7 @@
  * (`/gateway/optimization`), the harness (`/harness/config`), governance
  * (`/governance/dashboard`), security (`/security/posture`), latency
  * (`/latency`) and red-team (`/redteam/run`). Each shape matches its accessor
- * exactly, so the same view renders in mock and live mode.
+ * exactly.
  *
  * @see backend/src/app/api/schemas.py
  */

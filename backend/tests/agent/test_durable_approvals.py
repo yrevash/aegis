@@ -221,14 +221,14 @@ async def test_retrieve_emits_provenance_event(db, make_deps):
     deps = make_deps(propose_tool=False)  # pure Q&A, no gate
     types = [
         e.type
-        async for e in run_agent("what is the refund policy?", deps=deps)
+        async for e in run_agent("what is the escalation policy?", deps=deps)
     ]
     assert "provenance" in types
 
 
 async def test_provenance_event_carries_default_shape(db, make_deps):
     deps = make_deps(propose_tool=False)
-    events = [e async for e in run_agent("what is the refund policy?", deps=deps)]
+    events = [e async for e in run_agent("what is the escalation policy?", deps=deps)]
     prov = next(e for e in events if e.type == "provenance")
     assert prov.origins == []            # empty default until retrieval populates it
     assert prov.fusion.value == "none"

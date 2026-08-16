@@ -44,7 +44,7 @@ async def test_retrieve_node_passes_the_requests_tenant(make_deps):
     deps.current_tenant_id = lambda: 42
     seen = _record_scopes(deps)
 
-    async for _ in run_agent("what is the refund policy?", deps=deps):
+    async for _ in run_agent("what is the escalation policy?", deps=deps):
         pass
 
     assert seen, "the retrieve node must have run"
@@ -60,7 +60,7 @@ async def test_scope_carries_the_persona_and_the_tenants_corpus_version(make_dep
     seen = _record_scopes(deps)
 
     async for _ in run_agent(
-        "what is the refund policy?", deps=deps, persona="operations_lead"
+        "what is the escalation policy?", deps=deps, persona="operations_lead"
     ):
         pass
 
@@ -81,7 +81,7 @@ async def test_the_rewrite_branch_is_scoped_too(make_deps):
     deps.current_tenant_id = lambda: 42
     seen = _record_scopes(deps)
 
-    async for _ in run_agent("what is the refund policy?", deps=deps):
+    async for _ in run_agent("what is the escalation policy?", deps=deps):
         pass
 
     assert seen and all(scope.tenant_id == 42 for scope in seen)
@@ -96,7 +96,7 @@ async def test_the_single_shot_branch_is_scoped_too(make_deps):
     deps.current_tenant_id = lambda: 42
     seen = _record_scopes(deps)
 
-    async for _ in run_agent("what is the refund policy?", deps=deps):
+    async for _ in run_agent("what is the escalation policy?", deps=deps):
         pass
 
     assert seen and all(scope.tenant_id == 42 for scope in seen)
@@ -108,7 +108,7 @@ async def test_an_ungoverned_run_is_scoped_to_no_tenant_not_to_someone_elses(mak
     deps = make_deps(propose_tool=False)
     seen = _record_scopes(deps)
 
-    async for _ in run_agent("what is the refund policy?", deps=deps):
+    async for _ in run_agent("what is the escalation policy?", deps=deps):
         pass
 
     assert seen and all(scope.tenant_id is None for scope in seen)
@@ -143,7 +143,7 @@ async def _answer_cache_scope(deps) -> str:
         return result
 
     deps.retrieve = retrieve_with_vector
-    async for _ in run_agent("what is the refund policy?", deps=deps):
+    async for _ in run_agent("what is the escalation policy?", deps=deps):
         pass
     assert cache.reads, "the answer cache must have been consulted"
     return cache.reads[0]

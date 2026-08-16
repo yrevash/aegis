@@ -34,7 +34,7 @@ def output_completer(*, unsafe=False, grounded=True):
     return _c
 
 
-CONTEXTS = ["Refunds are processed within 5 business days.", "Premium plans renew monthly."]
+CONTEXTS = ["Closures are approved within 5 business days.", "Premium plans renew monthly."]
 
 
 # ── check_grounding unit ──
@@ -66,7 +66,7 @@ async def test_no_op_pass_when_no_completer():
 @pytest.mark.asyncio
 async def test_grounded_answer_passes():
     v = await check_grounding(
-        "Refunds take 5 business days.",
+        "Closures take 5 business days.",
         CONTEXTS,
         completer=completer_returning('{"grounded": true, "reason": "supported"}'),
     )
@@ -76,7 +76,7 @@ async def test_grounded_answer_passes():
 @pytest.mark.asyncio
 async def test_ungrounded_answer_flagged():
     v = await check_grounding(
-        "Refunds take 30 days and cost a fee.",
+        "Closures take 30 days and cost a fee.",
         CONTEXTS,
         completer=completer_returning('{"grounded": false, "reason": "fee unsupported"}'),
     )
@@ -123,14 +123,14 @@ async def test_pipeline_no_contexts_is_noop():
 @pytest.mark.asyncio
 async def test_pipeline_ungrounded_flags_but_does_not_block():
     guard = Guardrails(completer=output_completer(grounded=False), ground_answers=True)
-    res = await guard.check_output("Refunds take 30 days.", CONTEXTS)
+    res = await guard.check_output("Closures take 30 days.", CONTEXTS)
     assert res.verdict is GuardVerdict.FLAG and res.layer == "grounding"
 
 
 @pytest.mark.asyncio
 async def test_pipeline_grounded_passes():
     guard = Guardrails(completer=output_completer(grounded=True), ground_answers=True)
-    res = await guard.check_output("Refunds take 5 business days.", CONTEXTS)
+    res = await guard.check_output("Closures take 5 business days.", CONTEXTS)
     assert res.verdict is GuardVerdict.PASS
 
 
@@ -139,7 +139,7 @@ async def test_pipeline_block_mode_stops_ungrounded():
     guard = Guardrails(
         completer=output_completer(grounded=False), ground_answers=True, grounding_block=True
     )
-    res = await guard.check_output("Refunds take 30 days.", CONTEXTS)
+    res = await guard.check_output("Closures take 30 days.", CONTEXTS)
     assert res.verdict is GuardVerdict.BLOCK and res.layer == "grounding"
 
 

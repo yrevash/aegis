@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowRight, Waypoints, WifiOff } from 'lucide-react'
+import { ArrowRight, Waypoints } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
@@ -11,12 +11,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitive
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { ScrollArea } from '@/components/primitives/scroll-area'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { colorForKind } from '@/config/signals'
 import { personasForRole } from '@/config/personas'
 import { getGraph } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { GraphResponse } from '@/lib/api/types'
 import type { GraphEdge, GraphNode, Role } from '@/lib/stream'
 import type { RunState } from '@/state/runReducer'
@@ -131,7 +131,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
 
   const beat = beatFromSignal(state.lastSignal)
   const idle = !running && state.events.length === 0
-  // Unlock the bar when a mock run parks at the approval gate (no modal here).
+  // Unlock the bar when a run parks at the approval gate (no modal here).
   const barBusy = running && state.phase !== 'awaiting_approval'
 
   const view = useMemo(() => viewOf(graph, state), [graph, state])
@@ -268,45 +268,13 @@ function GraphView({ role }: { role: Role }): ReactElement {
   )
 }
 
-/**
- * Client entry for the Graph section. Runs the boot probe once (live-first, mock
- * fallback) before mounting, mirroring `RagMount` / `ConsoleMount`. Offline is
- * labelled with the honest banner and the graph reads the mock fixture; live, the
- * base graph is `/graph` and a run highlights the real evidence subgraph.
- */
+/** Client entry for the Graph section — gated on a reachable backend. */
 export function GraphMount({ role }: { role: Role }): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
-      <GraphView role={role} />
-    </TooltipProvider>
+    <BackendGate>
+      <TooltipProvider>
+        <GraphView role={role} />
+      </TooltipProvider>
+    </BackendGate>
   )
 }

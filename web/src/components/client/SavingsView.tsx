@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, Loader2, PiggyBank, TriangleAlert, WifiOff } from 'lucide-react'
+import { Check, Loader2, PiggyBank, TriangleAlert } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { getSavings } from '@/lib/api/client'
@@ -11,9 +11,9 @@ import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { SIGNALS } from '@/config/signals'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { SavingsResponse } from '@/lib/api/types'
 
@@ -305,28 +305,13 @@ function ReconcileChip({ reconciles, delta }: { reconciles: boolean; delta: numb
   )
 }
 
-/**
- * Client entry for the Savings section. Runs the boot probe once (live-first,
- * mock fallback), shows the honest offline banner, then renders the value story
- * wired to `GET /savings`.
- */
+/** Client entry for the Savings section — gated on a reachable backend. */
 export function SavingsMount(): ReactElement {
   // `GET /savings` is tenant-scoped: hand the view the real session bearer, and
   // hold it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
 
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null || !hydrated) {
+  if (!hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -335,23 +320,16 @@ export function SavingsMount(): ReactElement {
   }
 
   return (
-    <TooltipProvider>
-      <div className="space-y-4">
-        <div>
-          <p className="eyebrow mb-1">baseline vs actual</p>
-          <h1 className="t-hero text-foreground">Savings</h1>
-        </div>
-        {mode.mode === 'mock' && (
-          <div
-            role="status"
-            className="flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-          >
-            <WifiOff className="size-3.5 shrink-0" />
-            <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
+    <BackendGate>
+      <TooltipProvider>
+        <div className="space-y-4">
+          <div>
+            <p className="eyebrow mb-1">baseline vs actual</p>
+            <h1 className="t-hero text-foreground">Savings</h1>
           </div>
-        )}
-        <SavingsView token={session?.token ?? null} />
-      </div>
-    </TooltipProvider>
+          <SavingsView token={session?.token ?? null} />
+        </div>
+      </TooltipProvider>
+    </BackendGate>
   )
 }

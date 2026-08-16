@@ -42,17 +42,16 @@ function Cell({
 }
 
 /**
- * The Decision strip (§4.1 hero): the outcome read in a single glance — the
- * model's confidence, whether the guardrails held, how many sources backed the
- * answer, and what it cost — with the proposed action and its gate beneath.
- * Numbers count up on arrival and cross-fade as the run moves from thinking to
- * decided, so the jury reads the verdict before opening any panel. No jargon on
- * the face; the honest terms live in each ⓘ.
+ * The Decision strip (§4.1 hero): the outcome read in a single glance — whether
+ * the guardrails held, how many sources backed the answer, and what it cost —
+ * with the proposed action and its gate beneath. Numbers count up on arrival and
+ * cross-fade as the run moves from thinking to decided, so the jury reads the
+ * verdict before opening any panel. No jargon on the face; the honest terms live
+ * in each ⓘ.
  */
 export function DecisionStrip({ state }: { state: RunState }): ReactElement {
-  const { ml, guardrails, retrievalScores, candidates, usage, toolCalls, mlGate, abstained } = state
+  const { guardrails, retrievalScores, candidates, usage, toolCalls } = state
 
-  const confidence = ml?.conformal_confidence ?? null
   const fired = guardrails.filter((g) => g.verdict !== 'pass').length
   const checks = guardrails.length
   const sources = retrievalScores.length || candidates
@@ -61,33 +60,18 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
   const decided = state.finishedStatus != null
   const phaseKey = decided ? 'decided' : state.running ? 'thinking' : 'idle'
 
-  const hasVerdict =
-    toolCalls.length > 0 || mlGate !== null || abstained !== null || state.approvalQueued !== null
+  const hasVerdict = toolCalls.length > 0 || state.approvalQueued !== null
   const dash = <span className="text-muted-foreground/50">&mdash;</span>
 
   return (
     <div className="space-y-3">
-      {/* Metric tiles wrap 2-up and only reach 4-up at the widest breakpoint, so
+      {/* Metric tiles wrap 2-up and only reach 3-up at the widest breakpoint, so
           the display figures (e.g. the run cost) never clip inside the narrower
           centre column at mid-desktop widths. */}
-      <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
-        <Cell
-          label="Confidence"
-          index={0}
-          phaseKey={phaseKey}
-          tone="text-ml-ink"
-          info="Calibrated confidence with guaranteed coverage (conformal prediction)."
-        >
-          {confidence != null ? (
-            <CountUp value={confidence * 100} format={(n) => `${Math.round(n)}%`} />
-          ) : (
-            dash
-          )}
-        </Cell>
-
+      <div className="grid grid-cols-2 gap-3 2xl:grid-cols-3">
         <Cell
           label="Guardrails"
-          index={1}
+          index={0}
           phaseKey={phaseKey}
           tone={fired > 0 ? 'text-block-ink' : 'text-ok-ink'}
           info="Injection, PII, and schema checks on every request."
@@ -115,7 +99,7 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
 
         <Cell
           label="Sources"
-          index={2}
+          index={1}
           phaseKey={phaseKey}
           tone="text-graph-ink"
           info="Documents recalled, reranked, and used to ground the answer."
@@ -125,7 +109,7 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
 
         <Cell
           label="Cost"
-          index={3}
+          index={2}
           phaseKey={phaseKey}
           tone="text-foreground"
           info="Token spend for this run, after caching and small-model routing."
@@ -140,12 +124,7 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
 
       {hasVerdict && (
         <div className="rounded-lg border border-border/70 bg-surface-2/40 px-3.5 py-2.5">
-          <ActionVerdict
-            toolCalls={toolCalls}
-            mlGate={mlGate}
-            abstained={abstained}
-            queued={state.approvalQueued !== null}
-          />
+          <ActionVerdict toolCalls={toolCalls} queued={state.approvalQueued !== null} />
         </div>
       )}
     </div>

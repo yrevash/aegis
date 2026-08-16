@@ -228,11 +228,11 @@ async def test_ingest_incremental_adds_only_new_docs():
     backend = FakeBackend(make_recall())
     retriever = _retriever(complete, embed, backend)
 
-    await retriever.ingest([{"id": "a", "text": "Alpha document about billing refunds."}],
+    await retriever.ingest([{"id": "a", "text": "Alpha document about billing closures."}],
         scope=_SCOPE)
     report = await retriever.ingest(
         [
-            {"id": "a", "text": "Alpha document about billing refunds."},  # unchanged
+            {"id": "a", "text": "Alpha document about billing closures."},  # unchanged
             {"id": "b", "text": "Beta document about login failures and outages."},  # new
         ], scope=_SCOPE
     )
@@ -269,7 +269,7 @@ async def test_ingest_captures_section_metadata():
     backend = FakeBackend(make_recall())
     retriever = _retriever(complete, embed, backend)
 
-    doc = "# Billing\n\nRefunds are processed within seven business days for all tiers."
+    doc = "# Billing\n\nClosures are approved within seven business days for all tiers."
     await retriever.ingest([{"id": "kb", "text": doc}], scope=_SCOPE)
 
     chunk = backend.ingested[0]

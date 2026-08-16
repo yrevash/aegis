@@ -125,6 +125,10 @@ class Approval(Base):
         SAEnum(RiskLevel, name="approval_risk"), default=RiskLevel.LOW
     )
     rationale: Mapped[str | None] = mapped_column(String(), default=None)
+    #: Model evidence frozen at gate time. No longer written by the agent (the ML
+    #: step was removed from the graph), so new rows carry ``{}``. The column is kept
+    #: deliberately — dropping it needs a migration and those are deferred — and the
+    #: console guards on the value being absent, so an empty dict renders cleanly.
     ml_snapshot: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
     trace_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
     assignee_tier: Mapped[str | None] = mapped_column(String(64), default=None)

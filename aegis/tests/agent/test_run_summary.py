@@ -82,7 +82,7 @@ async def test_tools_match_call_and_result_events(make_deps):
 async def test_iterations_match_reflection_events(make_deps):
     import dataclasses as dc
 
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     calls = {"n": 0}
 
     class _Outcome:
@@ -110,7 +110,7 @@ async def test_iterations_match_reflection_events(make_deps):
 @pytest.mark.asyncio
 async def test_answer_matches_token_stream(make_deps):
     deps = make_deps(propose_tool=False)
-    events = await _drive(deps, query="what is the refund policy?")
+    events = await _drive(deps, query="what is the escalation policy?")
     summary = run_summary(events)
     tokens = "".join(e["text"] for e in events if e["type"] == "token")
     assert summary["answer"] == tokens
@@ -159,19 +159,10 @@ async def test_gate_reject_records_not_approved(make_deps):
 @pytest.mark.asyncio
 async def test_pure_qa_run_has_no_gate(make_deps):
     deps = make_deps(propose_tool=False)
-    summary = run_summary(await _drive(deps, query="what is the refund policy?"))
+    summary = run_summary(await _drive(deps, query="what is the escalation policy?"))
     assert summary["gate"]["gated"] is False
     assert summary["tools"] == []
     assert summary["routing"]["role"] == "qa"
-
-
-@pytest.mark.asyncio
-async def test_ml_evidence_recorded_on_action_run(make_deps):
-    deps = make_deps(propose_tool=True, high_risk=True)
-    summary = run_summary(await _drive(deps))
-    assert summary["ml"] is not None
-    assert summary["ml"]["prediction"] == 12.0
-    assert summary["ml"]["shap_attribution"]
 
 
 @pytest.mark.asyncio

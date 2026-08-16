@@ -254,7 +254,13 @@ async def run_agent(
                         args=args,
                         risk=risk,
                         rationale=rationale,
-                        ml_snapshot=_ml_snapshot(graph, config),
+                        # NOTE: no ``ml_snapshot`` is passed. The host's approvals
+                        # row still HAS that column and the console still reads it,
+                        # but no ML step runs in this graph any more, so there is
+                        # nothing honest to freeze at the gate. Every new row is
+                        # therefore ``{}`` by design — an empty snapshot is the
+                        # correct state, not a bug. The column stays because
+                        # dropping it needs a migration, which is deferred.
                     )
                     parked_runs.register(run_id, graph, config)
 
@@ -354,14 +360,6 @@ async def run_agent(
 def _is_interrupt(chunk: Any) -> bool:  # noqa: ANN401 - opaque astream chunk
     """Return whether an ``updates`` chunk carries a LangGraph interrupt."""
     return isinstance(chunk, dict) and "__interrupt__" in chunk
-
-
-def _ml_snapshot(graph: Any, config: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
-    """Return the ML explanation frozen in graph state at gate time (or ``{}``)."""
-    try:
-        return dict(graph.get_state(config).values.get("ml") or {})
-    except Exception:  # noqa: BLE001 - snapshot is best-effort metadata
-        return {}
 
 
 async def resume_parked_run(

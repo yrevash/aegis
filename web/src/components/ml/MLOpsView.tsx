@@ -1,10 +1,11 @@
 'use client'
 
-import { Boxes, Loader2, RefreshCw, Sigma, Target, WifiOff } from 'lucide-react'
+import { Boxes, Loader2, RefreshCw, Sigma, Target } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { ConformalBand } from '@/components/charts/ConformalBand'
 import { ShapWaterfall } from '@/components/charts/ShapWaterfall'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -13,21 +14,28 @@ import { getModelCard, mlExplain } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { MLExplainRequest, MLExplainResponse } from '@/lib/api/types'
 import type { ModelCardResponse } from '@/lib/api/platform'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 
 /**
- * An example prediction to explain. Against a live backend these feature values
- * drive the score; the mock returns a fixed explanation, so the panel is a
- * labelled sample the moment there is no real backend behind it.
+ * An example prediction to explain — these feature values drive the score the
+ * backend returns.
+ *
+ * Every key is a name in the adapter's `FEATURES` contract
+ * (`backend/src/app/adapter/ml_spec.py`). A key that is not in that contract is
+ * not an error — the spine reports it under `unknown_features` and imputes the
+ * training median in its place — so an invented feature set would quietly
+ * explain a prediction nobody asked for.
  */
 const EXAMPLE: MLExplainRequest = {
   features: {
-    duplicate_charge_confirmed: 1,
-    account_tenure_months: 41,
-    premium_tier: 1,
-    prior_refunds_90d: 2,
-    amount_usd: 4200,
-    chargeback_risk: 0.22,
+    priority: 'high',
+    category: 'billing',
+    channel: 'email',
+    region: 'na',
+    customer_tier: 'enterprise',
+    agent_tenure_months: 41,
+    queue_depth_at_open: 34,
+    reopened_count: 0,
+    description_length: 420,
   },
 }
 
@@ -353,45 +361,11 @@ function MLOpsView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the MLOps section. Runs the boot probe once (live-first, mock
- * fallback) before mounting the view, so the model-card + explain fetches read
- * the resolved mode — the offline demo seeds from the mock fixtures and is
- * labelled with the honest banner.
- */
+/** Client entry for the MLOps section — gated on a reachable backend. */
 export function MLOpsMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <div>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
+    <BackendGate>
       <MLOpsView />
-    </div>
+    </BackendGate>
   )
 }

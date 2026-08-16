@@ -39,7 +39,7 @@ class FakeGraphComplete:
         "Widget": "product",
         "London": "location",
         "John Doe": "person",
-        "refund policy": "policy",
+        "closure policy": "policy",
     }
     RELATIONS = [
         ("Acme Corp", "Widget", "launched"),
@@ -71,7 +71,7 @@ class FakeGraphComplete:
 # A small corpus where entities recur across documents (so merging is observable).
 _KG_DOCS = [
     ("docA", "Acme Corp launched Widget. Acme Corp is based in London."),
-    ("docB", "John Doe manages Acme Corp. Acme Corp published a refund policy."),
+    ("docB", "John Doe manages Acme Corp. Acme Corp published a closure policy."),
     ("docC", "Widget had an outage. John Doe handled Widget."),
 ]
 

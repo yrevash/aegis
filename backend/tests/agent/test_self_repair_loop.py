@@ -64,7 +64,7 @@ class _Outcome:
 @pytest.mark.asyncio
 async def test_failed_action_triggers_replan_and_second_tool_call(make_deps):
     # MEDIUM risk (no gate). The first action fails, the second succeeds.
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     run_tool, calls = _failing_run_tool(fail_first_n=1)
     deps = dataclasses.replace(deps, run_tool=run_tool)
 
@@ -102,7 +102,7 @@ async def test_failed_action_triggers_replan_and_second_tool_call(make_deps):
 # ── successful first action does NOT loop (money-shot unchanged) ─────────────
 @pytest.mark.asyncio
 async def test_successful_action_does_not_loop(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     events = await _drive(deps, approve=False)
     types = [e.type for e in events]
 
@@ -118,7 +118,6 @@ async def test_successful_action_does_not_loop(make_deps):
             "run_started",
             "guardrail",
             "retrieval",
-            "ml_explanation",
             "tool_call",
             "tool_result",
             "guardrail",
@@ -132,7 +131,7 @@ async def test_successful_action_does_not_loop(make_deps):
 @pytest.mark.asyncio
 async def test_iteration_budget_caps_planning_rounds(make_deps):
     # The tool fails on EVERY call; the loop must still terminate at the hard cap.
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     run_tool, calls = _failing_run_tool(fail_first_n=99)
     deps = dataclasses.replace(deps, run_tool=run_tool)
 
@@ -156,7 +155,7 @@ async def test_iteration_budget_caps_planning_rounds(make_deps):
 @pytest.mark.asyncio
 async def test_larger_budget_allows_more_rounds(make_deps):
     # Bumping the budget to 3 lets a tool that fails twice succeed on the 3rd round.
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     run_tool, calls = _failing_run_tool(fail_first_n=2)
     deps = dataclasses.replace(
         deps,

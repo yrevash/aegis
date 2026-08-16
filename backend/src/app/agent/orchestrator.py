@@ -295,7 +295,6 @@ async def _enqueue_gate(
     args: dict[str, Any],
     risk: Any,  # noqa: ANN401 - RiskLevel
     rationale: str,
-    ml_snapshot: dict[str, Any],
 ) -> str | None:
     """Persist the durable approvals-inbox row (best-effort), returning its SLA ISO.
 
@@ -322,8 +321,6 @@ async def _enqueue_gate(
             action=action,
             args=args,
             risk=risk,
-            rationale=rationale,
-            ml_snapshot=ml_snapshot,
             persona=persona,
             trace_id=trace_id,
             tenant_id=tenant_id,

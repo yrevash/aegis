@@ -1,11 +1,11 @@
 """Fixed seed corpus + labelled eval cases for the offline quality gate.
 
-The corpus is a small, self-contained customer-support knowledge base (mirroring the
+The corpus is a small, self-contained service-request knowledge base (mirroring the
 adapter's seed corpus theme) with deliberate **distractor** documents so retrieval is
-discriminative — a query about refunds must out-rank the login runbook, not merely
-return every chunk. Each :class:`EvalCase` carries the gold document id(s) a correct
-retrieval should surface and the claim keywords a grounded answer must be able to cite
-from the retrieved context.
+discriminative — a query about closing a request must out-rank the login runbook, not
+merely return every chunk. Each :class:`EvalCase` carries the gold document id(s) a
+correct retrieval should surface and the claim keywords a grounded answer must be able to
+cite from the retrieved context.
 
 Everything here is a constant: the gate is deterministic because its inputs are frozen.
 """
@@ -44,14 +44,15 @@ class EvalCase:
 # ── Seed corpus (5 topical docs; the last two are distractors) ────────────────
 SEED_CORPUS: tuple[SeedDoc, ...] = (
     SeedDoc(
-        id="kb-refunds",
+        id="kb-request-closure",
         text=(
-            "How refunds are processed. Refunds are issued to the original payment "
-            "method within 5 to 7 business days. Before issuing a refund, verify the "
-            "customer's identity and confirm the charge on the invoice. For duplicate "
-            "charges, refund the duplicate only and keep the original invoice open. "
-            "Enterprise-tier customers may request an expedited refund, approved by a "
-            "Tier-2 agent."
+            "How a customer request is closed. Closing a request is a high-risk write, "
+            "so the agent proposes the status change and a human approver confirms it "
+            "before the request moves to resolved. Before proposing a closure, verify "
+            "the customer's identity and confirm the work described on the request is "
+            "finished. For duplicate requests, close the duplicate only and keep the "
+            "original request open. Enterprise-tier customers may ask for an expedited "
+            "closure, approved by a Tier-2 agent."
         ),
     ),
     SeedDoc(
@@ -98,14 +99,14 @@ SEED_CORPUS: tuple[SeedDoc, ...] = (
 # ── Labelled eval cases ───────────────────────────────────────────────────────
 SEED_CASES: tuple[EvalCase, ...] = (
     EvalCase(
-        query="How long does a refund take and how is it returned to the customer?",
-        gold_doc_ids=frozenset({"kb-refunds"}),
-        claims=("refund", "original payment method", "business days"),
+        query="Who confirms a request closure before its status becomes resolved?",
+        gold_doc_ids=frozenset({"kb-request-closure"}),
+        claims=("human approver", "high-risk write", "resolved"),
     ),
     EvalCase(
-        query="A duplicate charge was made — what should I refund?",
-        gold_doc_ids=frozenset({"kb-refunds"}),
-        claims=("duplicate", "refund", "invoice"),
+        query="A duplicate request was filed — which one should I close?",
+        gold_doc_ids=frozenset({"kb-request-closure"}),
+        claims=("duplicate", "close the duplicate", "original request"),
     ),
     EvalCase(
         query="What is the SLA for an urgent request and when do we escalate?",

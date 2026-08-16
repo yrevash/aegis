@@ -29,12 +29,12 @@ def _real_retriever() -> Retriever:
     """Build an offline hybrid retriever over a tiny, overlapping corpus."""
     chunks = [
         Chunk(
-            id="refunds#0",
-            doc_id="refunds",
+            id="closures#0",
+            doc_id="closures",
             ordinal=0,
             text=(
-                "Refunds are issued to the original payment method within 5 to 7 "
-                "business days after the invoice charge is verified."
+                "A closure is confirmed by the original approver within 5 to 7 "
+                "business days after the request work is verified."
             ),
         ),
         Chunk(
@@ -42,8 +42,8 @@ def _real_retriever() -> Retriever:
             doc_id="escalation",
             ordinal=0,
             text=(
-                "Escalate a request to Tier-2 when its SLA is at risk; refunds for "
-                "enterprise invoices are approved one tier earlier."
+                "Escalate a request to Tier-2 when its SLA is at risk; closures for "
+                "enterprise requests are approved one tier earlier."
             ),
         ),
         Chunk(
@@ -80,7 +80,7 @@ async def test_query_emits_rrf_multi_origin_provenance(
 
     resp = await client.post(
         "/query",
-        json={"query": "How long does a refund take to the original payment method?"},
+        json={"query": "How long does a closure take to reach the original approver?"},
         headers=admin_headers,
     )
     assert resp.status_code == 200

@@ -15,7 +15,7 @@ import { Mermaid } from '@/components/landing/Mermaid'
 // nodes stack into a tall narrow column with dead space either side.
 const ARCHITECTURE = `flowchart TB
     B["<b>Browser</b>"]
-    L1["<b>1 · Console</b> — web/<br/>Next.js 15 · React 19 · TypeScript<br/>four role portals · REST + SSE client · live/mock probe"]
+    L1["<b>1 · Console</b> — web/<br/>Next.js 15 · React 19 · TypeScript<br/>four role portals · REST + SSE client · backend health probe"]
     L2["<b>2 · Composition root</b> — backend/src/app<br/>FastAPI · app factory · background sweepers<br/>routes.py — endpoints · JWT · RBAC · tenant scoping"]
     L3["<b>3 · Importable core</b> — aegis/src/aegis<br/>agent · gateway · guardrails · retrieval · memory · ml<br/>governance · ops · evals · observability · redteam · data · core"]
     L4["<b>4 · Stores and sinks</b><br/>Postgres · embedded vectors · Neo4j · Redis · Arize Phoenix"]

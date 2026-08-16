@@ -59,7 +59,7 @@ def _raw_msg(msg_id: int, content: str) -> MemoryMessage:
 def test_assembled_tokens_within_budget(cap: int, n_items: int):
     """Property: tokens_used never exceeds the budget, across sizes and caps."""
     cfg = MemoryConfig(ctx_token_cap=cap, answer_reserve=100)
-    query = "please summarise the account status and any refund history"
+    query = "please summarise the account status and any closure history"
     bundle = RecallBundle(
         profile_text="tier: enterprise\nregion: emea\ntimezone: Europe/Berlin",
         facts=[
@@ -70,7 +70,7 @@ def test_assembled_tokens_within_budget(cap: int, n_items: int):
             _episodic_candidate(500 + i, f"Earlier turn {i} discussing the issue at length.")
             for i in range(n_items)
         ],
-        skills=[("handling_refunds", "Follow the refund SOP: verify, authorise, confirm." * 3)],
+        skills=[("closing_requests", "Follow the closure SOP: verify, propose, confirm." * 3)],
         running_summary="The customer opened a billing dispute and escalated twice." * 2,
     )
     raw_turns = [
@@ -93,7 +93,7 @@ def test_profile_precedes_raw_turns():
         running_summary="Ongoing billing dispute.",
         episodic=[_episodic_candidate(500, "Earlier they mentioned a duplicate charge.")],
     )
-    raw_turns = [_raw_msg(1, "hi there"), _raw_msg(2, "any update on my refund?")]
+    raw_turns = [_raw_msg(1, "hi there"), _raw_msg(2, "any update on my request?")]
 
     assembled = build_working_text(bundle, raw_turns, query="update?", config=cfg)
     assert _PROFILE_HEADER in assembled.text
@@ -172,11 +172,11 @@ async def test_assemble_end_to_end(db):
             subject_id="user:1",
             session_id="sess-1",
             persona="ops",
-            query="what's the status of my refund?",
+            query="what's the status of my request?",
             query_vec=None,
             config=cfg,
         )
-    query = "what's the status of my refund?"
+    query = "what's the status of my request?"
     budget = cfg.ctx_token_cap - cfg.answer_reserve - count_tokens(query)
     assert assembled.tokens_used <= budget
     assert "Prior billing dispute." in assembled.text  # running summary injected

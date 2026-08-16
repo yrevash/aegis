@@ -34,13 +34,13 @@ import type { RunState } from '@/state/runReducer'
 export type FlowNodeId = string
 
 /**
- * Offline/mock topology — the generated snapshot of the real compiled graph.
+ * The generated snapshot of the real compiled graph.
  *
  * `src/config/graphTopology.json` is produced from `aegis.agent.graph_topology()`,
  * and `backend/tests/api/test_agent_topology.py` fails if it stops matching the
- * live graph. It is the fallback the console renders from before the fetch lands
- * and whenever the backend is unreachable, so mock mode draws the same picture a
- * live backend serves rather than a second hand-maintained copy.
+ * live graph. It is what the map draws from in the moment before `/agent/topology`
+ * lands, so the picture is the real topology throughout rather than a second
+ * hand-maintained copy.
  */
 export const FALLBACK_TOPOLOGY = graphTopologySnapshot as AgentTopologyResponse
 
@@ -61,7 +61,6 @@ const NODE_PRESENTATION: Record<string, NodePresentation> = {
   answer_memory: { short: 'Memory QA', signal: 'graph' },
   recall_memory: { short: 'Recall', signal: 'graph' },
   retrieve: { short: 'Retrieve', signal: 'graph' },
-  ml_predict: { short: 'ML score', signal: 'ml' },
   plan: { short: 'Plan', signal: 'agent' },
   gate: { short: 'Risk gate', signal: 'risk' },
   approval: { short: 'Approve', signal: 'risk' },
@@ -87,11 +86,9 @@ const SILENT_NODES: ReadonlySet<string> = new Set(['recall_memory', 'persist_mem
 
 /**
  * Legacy/alias node names accepted on the wire, mapped to their real node id.
- * Kept so an older backend (or a replayed fixture) still lights the right stage.
+ * Kept so an older backend still lights the right stage.
  */
 const NODE_ALIASES: Record<string, string> = {
-  ml: 'ml_predict',
-  score: 'ml_predict',
   stream_answer: 'stream',
 }
 

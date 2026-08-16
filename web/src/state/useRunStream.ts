@@ -3,15 +3,14 @@
 /**
  * React hook that drives a query run end to end.
  *
- * Owns a {@link RunTransport} (mock or live), feeds every event through the pure
- * {@link runReducer}, and exposes actions to start a run, resolve the human
- * approval gate, and reset. The whole console reads from the single
- * {@link RunState} it returns.
+ * Opens the SSE run, feeds every event through the pure {@link runReducer}, and
+ * exposes actions to start a run, resolve the human approval gate, and reset. The
+ * whole console reads from the single {@link RunState} it returns.
  */
 
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 
-import { createTransport } from '@/lib/api/factory'
+import { startRun } from '@/lib/api/liveTransport'
 import type { RunController } from '@/lib/api/transport'
 import type { ApprovalDecision } from '@/lib/api/types'
 import type { StreamEvent } from '@/lib/stream'
@@ -73,10 +72,7 @@ export function useRunStream(): UseRunStream {
       // Mark the run active up front so the UI locks immediately, before the
       // first `run_started` event arrives.
       dispatch({ kind: 'start' })
-      // Create the transport per run so it reads the *resolved* live/mock mode at
-      // run time — not a stale mode captured at mount, before the backend probe
-      // settles (which could otherwise pin a live transport after an offline fallback).
-      controllerRef.current = createTransport().start(query, persona, token, {
+      controllerRef.current = startRun(query, persona, token, {
         onEvent: (event) => {
           if (event.type === 'approval_required') approvalIdRef.current = event.approval_id
           dispatch({ kind: 'event', event })

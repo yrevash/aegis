@@ -1,7 +1,7 @@
 'use client'
 
-import { MessagesSquare, WifiOff } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { Brain, MessagesSquare } from 'lucide-react'
+import { useState, type ReactElement } from 'react'
 
 import {
   getMemoryFacts,
@@ -9,12 +9,11 @@ import {
   getMemorySessions,
   getMemoryWrites,
 } from '@/lib/api/client'
-import { isMock } from '@/lib/api/mode'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
+import { Button } from '@/components/primitives/button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { TooltipProvider } from '@/components/primitives/tooltip'
-import { cn } from '@/lib/utils'
+import { BackendGate } from '@/components/shared/BackendGate'
 
 import { EpisodicSessionsPanel } from './EpisodicSessionsPanel'
 import { LoadingRow } from './StateRow'
@@ -33,27 +32,13 @@ import {
   validFactCount,
 } from './memoryText'
 
-/** The known demo subjects (the console scenario's principals). */
-const SUBJECTS: { id: string; label: string }[] = [
-  { id: 'cust-mreed', label: 'M. Reed · A-771' },
-  { id: 'acct-771', label: 'Account A-771' },
-]
-
 /**
- * Memory (§4.3) — "what the agent knows about this subject". A subject-summary
- * hero, then the semantic facts / structured profile / episodic sessions /
- * write-log as varied panels, with the flagship recall trace as a
- * "Why did it recall this?" expander at the foot. The honest tier machinery
- * (semantic / episodic / structured, bitemporal, relevance × recency ×
- * importance) lives one layer down in tooltips and detail popovers.
- *
- * A faithful Next.js port of `frontend/src/components/memory/MemoryView.tsx`
- * onto the web app's Card/Badge components and shared library.
+ * Everything the platform holds on ONE subject: the summary hero, the semantic
+ * facts / structured profile / episodic sessions / write-log panels, and the
+ * recall trace. Split from {@link MemoryView} so the four `/memory/*` reads are
+ * only ever issued for a subject the operator actually asked for.
  */
-function MemoryView({ token }: { token: string | null }): ReactElement {
-  const [subject, setSubject] = useState(SUBJECTS[0].id)
-  const subjectLabel = SUBJECTS.find((s) => s.id === subject)?.label ?? subject
-
+function SubjectPanels({ token, subject }: { token: string | null; subject: string }): ReactElement {
   const facts = useAsync(() => getMemoryFacts(token, subject, true), [token, subject])
   const profile = useAsync(() => getMemoryProfile(token, subject), [token, subject])
   const sessions = useAsync(() => getMemorySessions(token, subject), [token, subject])
@@ -79,33 +64,11 @@ function MemoryView({ token }: { token: string | null }): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header + the one control on the surface: the subject picker. */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="eyebrow mb-1">long-term memory · Postgres + pgvector</p>
-          <h1 className="t-hero text-foreground">Memory</h1>
-        </div>
-        <label className="flex items-center gap-2">
-          <span className="eyebrow">subject</span>
-          <select
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            className="h-9 rounded-md border border-input bg-surface px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          >
-            {SUBJECTS.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      {/* Row 1 — subject-summary hero. */}
+        {/* Row 1 — subject-summary hero. */}
       <Card>
         <CardBody>
           <SubjectSummary
-            subjectLabel={subjectLabel}
+            subjectLabel={subject}
             highlights={highlights}
             lastSeen={lastSeen}
             stats={[
@@ -115,7 +78,6 @@ function MemoryView({ token }: { token: string | null }): ReactElement {
             ]}
             trend={growth}
             loading={profile.state.status === 'loading'}
-            sample={isMock()}
           />
         </CardBody>
       </Card>
@@ -173,28 +135,84 @@ function MemoryView({ token }: { token: string | null }): ReactElement {
 }
 
 /**
- * Client entry for the Memory section. Runs the boot probe once (live-first, mock
- * fallback) before mounting the view, so the `/memory/*` fetches read the
- * resolved mode; the offline demo seeds from the in-browser fixtures and is
- * labelled with the honest banner — mirrors `EvalsMount` / `LLMOpsMount`.
+ * Memory (§4.3) — "what the agent knows about this subject". The one control on
+ * the surface names the subject; everything below is that subject's record. The
+ * honest tier machinery (semantic / episodic / structured, bitemporal,
+ * relevance × recency × importance) lives one layer down in tooltips and detail
+ * popovers.
+ *
+ * A faithful Next.js port of `frontend/src/components/memory/MemoryView.tsx`
+ * onto the web app's Card/Badge components and shared library.
  */
+function MemoryView({ token }: { token: string | null }): ReactElement {
+  // The backend exposes no "list known subjects" route — memory is keyed by an
+  // arbitrary subject string the caller supplies — so the picker is a free-text
+  // field rather than a dropdown of ids the console would have to invent.
+  const [draft, setDraft] = useState('')
+  const [subject, setSubject] = useState('')
+
+  return (
+    <div className="space-y-6">
+      {/* Section header + the one control on the surface: the subject picker. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="eyebrow mb-1">long-term memory · Postgres + pgvector</p>
+          <h1 className="t-hero text-foreground">Memory</h1>
+        </div>
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setSubject(draft.trim())
+          }}
+        >
+          <label className="eyebrow" htmlFor="memory-subject">
+            subject
+          </label>
+          <input
+            id="memory-subject"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="subject id"
+            className="h-9 rounded-md border border-input bg-surface px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          />
+          <Button type="submit" size="sm" variant="outline" disabled={draft.trim() === ''}>
+            Load
+          </Button>
+        </form>
+      </div>
+
+
+      {subject === '' ? (
+        <Card>
+          <CardBody>
+            <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
+              <Brain className="size-8 text-muted-foreground/50" />
+              <div>
+                <p className="text-sm font-medium text-foreground">No subject selected</p>
+                <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                  Memory is keyed by subject. Enter the subject id you want to inspect — the
+                  facts, profile, sessions and write-log below are read straight from the store
+                  for that subject alone.
+                </p>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+      ) : (
+        <SubjectPanels token={token} subject={subject} />
+      )}
+    </div>
+  )
+}
+
+/** Client entry for the Memory section — gated on a reachable backend. */
 export function MemoryMount(): ReactElement {
   // The `/memory/*` accessors are RBAC-scoped: hand the view the real session
   // bearer, and hold it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
 
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null || !hydrated) {
+  if (!hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -203,19 +221,10 @@ export function MemoryMount(): ReactElement {
   }
 
   return (
-    <TooltipProvider>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className={cn(
-            'mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white',
-          )}
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
-      <MemoryView token={session?.token ?? null} />
-    </TooltipProvider>
+    <BackendGate>
+      <TooltipProvider>
+        <MemoryView token={session?.token ?? null} />
+      </TooltipProvider>
+    </BackendGate>
   )
 }

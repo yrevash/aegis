@@ -1,7 +1,6 @@
 import { notFound } from 'next/navigation'
 import { AuditMount } from '@/components/admin/AuditLog'
 import { RolesAccessMount } from '@/components/admin/RolesAccess'
-import { ApprovalsMount } from '@/components/approvals/ApprovalsInbox'
 import { CacheMount } from '@/components/cache/CacheView'
 import { RiskMount } from '@/components/client/RiskMap'
 import { SavingsMount } from '@/components/client/SavingsView'
@@ -67,7 +66,6 @@ export default async function SectionPage({
   if (section === 'redteam') return <RedteamMount />
   if (section === 'latency') return <LatencyMount />
   if (section === 'governance') return <GovernanceMount />
-  if (section === 'approvals') return <ApprovalsMount />
   if (section === 'roles') return <RolesAccessMount />
   if (section === 'audit') return <AuditMount />
   if (section === 'stack') return <StackMount />

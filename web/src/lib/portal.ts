@@ -19,7 +19,6 @@ import {
   Cpu,
   DatabaseZap,
   GitCompareArrows,
-  Inbox,
   Gauge,
   KeyRound,
   Landmark,
@@ -241,14 +240,6 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Aegis Loop — self-improving prompts · trace → eval → release',
     group: 'Governance',
   },
-  approvals: {
-    id: 'approvals',
-    label: 'Approvals',
-    icon: Inbox,
-    hint: 'human gate',
-    tooltip: 'Aegis Tools/MCP — human gate on risky actions',
-    group: 'Governance',
-  },
   governance: {
     id: 'governance',
     label: 'Governance',
@@ -285,7 +276,7 @@ export const SECTIONS: Record<string, Section> = {
 
 /** Which sections each role's portal exposes, in nav order (RBAC). */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
-  admin: ['dashboard', 'forecast', 'governance', 'approvals', 'audit', 'roles'],
+  admin: ['dashboard', 'forecast', 'governance', 'audit', 'roles'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'voice', 'vision', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit'],
   client: ['dashboard', 'savings', 'forecast', 'risk', 'simulation'],

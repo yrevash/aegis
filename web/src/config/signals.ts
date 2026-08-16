@@ -56,9 +56,6 @@ export function signalForEvent(type: StreamEventType): Signal {
     case 'tool_call':
     case 'tool_result':
       return 'agent'
-    case 'ml_explanation':
-    case 'abstained':
-      return 'ml'
     case 'approval_required':
     case 'approval_queued':
       return 'risk'

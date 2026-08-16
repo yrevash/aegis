@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 
 import { ArchitectureDiagram } from '@/components/landing/ArchitectureDiagram'
-import { Gallery } from '@/components/landing/Gallery'
 import { Hero } from '@/components/landing/Hero'
 import { LandingFooter } from '@/components/landing/LandingFooter'
 import { LandingHeader } from '@/components/landing/LandingHeader'
@@ -37,7 +36,6 @@ export default function Home() {
       <main>
         <Hero />
         <ModuleGrid />
-        <Gallery />
         <ArchitectureDiagram />
         <TrustStack />
         <MetricsStrip />

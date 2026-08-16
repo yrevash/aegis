@@ -1,9 +1,10 @@
 'use client'
 
-import { GitPullRequestArrow, WifiOff } from 'lucide-react'
+import { GitPullRequestArrow } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { CapabilityMap, type Capability } from '@/components/shared'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import {
@@ -14,7 +15,6 @@ import {
   getOpsPrompts,
 } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type {
   OpsActivePromptResponse,
   OpsEvalRow,
@@ -38,7 +38,7 @@ interface Loaded<T> {
 }
 
 /**
- * Load with a live/mock-aware call, re-running whenever `key` (the bearer token)
+ * Load with an async call, re-running whenever `key` (the bearer token)
  * or `nonce` changes, and held back until `enabled`.
  *
  * `AuthProvider` restores the persisted session in an effect that runs *after*
@@ -196,45 +196,13 @@ function LLMOpsView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the LLMOps section. Runs the boot probe once (live-first,
- * mock fallback) before mounting the view, so every `/ops/*` fetch reads the
- * resolved mode; the offline demo seeds from the mock fixtures and is labelled
- * with the honest banner — mirrors `MLOpsMount` / `ConsoleMount`.
- */
+/** Client entry for the LLMOps section — gated on a reachable backend. */
 export function LLMOpsMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
-      <LLMOpsView />
-    </TooltipProvider>
+    <BackendGate>
+      <TooltipProvider>
+        <LLMOpsView />
+      </TooltipProvider>
+    </BackendGate>
   )
 }

@@ -15,7 +15,7 @@ interface Stat {
 }
 
 interface SubjectSummaryProps {
-  /** Human subject name shown as the header (e.g. "M. Reed · A-771"). */
+  /** The subject id this record belongs to, shown as the header. */
   subjectLabel: string
   /** Up-to-3 plain highlights distilled from the profile. */
   highlights: SummaryHighlight[]

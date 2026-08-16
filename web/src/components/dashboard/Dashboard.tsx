@@ -1,7 +1,7 @@
 'use client'
 
-import { ChevronDown, DatabaseZap, ListChecks, Route, Target, Timer, WifiOff, Zap } from 'lucide-react'
-import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { ChevronDown, DatabaseZap, ListChecks, Route, Target, Timer, Zap } from 'lucide-react'
+import { type ReactElement, type ReactNode } from 'react'
 
 import { StatCard } from '@/components/metrics/StatCard'
 import { BentoGrid, BentoTile } from '@/components/shared/BentoGrid'
@@ -10,8 +10,8 @@ import { Card } from '@/components/primitives/card'
 import { Gauge } from '@/components/primitives/Gauge'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { useMetricsSeries } from '@/state/useMetrics'
 import type { Role } from '@/lib/stream'
 
@@ -231,31 +231,13 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
   )
 }
 
-/**
- * Client entry for the Overview section (devops + client portals). Runs the boot
- * probe once (live-first, mock fallback), shows the honest offline banner, then
- * mounts the money-shot dashboard wired to the metrics poller.
- *
- * The admin Overview deliberately uses its own surface (AdminCommandCenter), so
- * this mount is scoped to the devops + client portals.
- */
+/** Client entry for the Overview section — gated on a reachable backend. */
 export function DashboardMount({ role }: { role: Role }): ReactElement {
   // `/metrics` is RBAC-scoped: hand the dashboard the real session bearer, and
   // hold it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
 
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null || !hydrated) {
+  if (!hydrated) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
@@ -264,19 +246,10 @@ export function DashboardMount({ role }: { role: Role }): ReactElement {
   }
 
   return (
-    <TooltipProvider>
-      <div>
-        {mode.mode === 'mock' && (
-          <div
-            role="status"
-            className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-          >
-            <WifiOff className="size-3.5 shrink-0" />
-            <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-          </div>
-        )}
+    <BackendGate>
+      <TooltipProvider>
         <Dashboard role={role} token={session?.token ?? null} />
-      </div>
-    </TooltipProvider>
+      </TooltipProvider>
+    </BackendGate>
   )
 }

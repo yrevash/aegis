@@ -3,12 +3,11 @@
  * per-role roll-ups, and the self-demote safety guard. Side-effect free and free
  * of any React / chart import so every derivation stays unit-testable.
  *
- * `AdminUser.role` is a free-form string on the wire. The live backend stores the
- * four portal roles verbatim, but the in-repo mock still carries legacy RBAC
- * labels (`platform_admin` / `tenant_admin` / `member`). {@link normalizeRole}
- * folds both worlds onto the canonical portal {@link Role} so counts, chips and
- * the guard all agree — the one lossy edge (`member` → `client`) is called out
- * honestly at the mapping.
+ * `AdminUser.role` is a free-form string on the wire. Alongside the four portal
+ * roles the backend also stores the two admin sub-tiers (`platform_admin` /
+ * `tenant_admin`, see `require_platform_admin` / `require_tenant_admin` in
+ * `backend/src/app/api/routes.py`). {@link normalizeRole} folds them onto the
+ * canonical portal {@link Role} so counts, chips and the guard all agree.
  */
 
 import type { AdminUser } from '@/lib/api/types'
@@ -61,14 +60,11 @@ export const ROLE_CATALOG: Record<Role, RoleMeta> = {
 }
 
 /**
- * Fold any wire role string onto the canonical portal {@link Role}. Known legacy
- * mock labels map to their portal equivalent; the exact portal strings pass
- * through unchanged.
+ * Fold any wire role string onto the canonical portal {@link Role}. The two admin
+ * sub-tiers resolve to `admin`; the exact portal strings pass through unchanged.
  *
- * Honest limitation: the mock collapses `ai_team` / `devops` / `client` all to
- * `member` on write, so `member` can only be recovered as `client` — the least
- * privileged bucket. The live backend round-trips the exact portal role, so this
- * lossiness is a mock artifact, not a product one.
+ * An unrecognised role falls to `client`, the least privileged bucket — failing
+ * closed, so a role this build does not know about can never widen access.
  */
 export function normalizeRole(raw: string): Role {
   switch (raw) {
@@ -81,7 +77,6 @@ export function normalizeRole(raw: string): Role {
     case 'devops':
       return 'devops'
     case 'client':
-    case 'member':
     default:
       return 'client'
   }

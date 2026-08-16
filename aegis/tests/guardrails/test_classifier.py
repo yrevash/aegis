@@ -33,7 +33,7 @@ def test_deterministic_catches_override():
 @pytest.mark.asyncio
 async def test_model_layer_passes_benign():
     """Model layer passes benign text through."""
-    v = await detect_injection("what is the refund policy?", completer=_BenignCompleter())
+    v = await detect_injection("what is the escalation policy?", completer=_BenignCompleter())
     assert v.injection is False
 
 
@@ -47,6 +47,6 @@ async def test_fails_closed_on_completer_error():
 @pytest.mark.asyncio
 async def test_no_completer_is_deterministic_only_not_silent(caplog):
     """No completer means model layer is disabled explicitly (logged, not silent)."""
-    v = await detect_injection("what is the refund policy?", completer=None)
+    v = await detect_injection("what is the escalation policy?", completer=None)
     assert v.injection is False
     assert any("model injection layer disabled" in r.message.lower() for r in caplog.records)

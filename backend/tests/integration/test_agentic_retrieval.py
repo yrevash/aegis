@@ -100,7 +100,7 @@ async def _drive(deps) -> _Run:  # noqa: ANN001
     stream_input = {
         "run_id": config["configurable"]["thread_id"],
         "trace_id": "t",
-        "query": "How does the refund policy work for overdue requests?",
+        "query": "How does the closure policy work for overdue requests?",
         "persona": "operations_lead",
         "role": "user",
         "session_id": None,
@@ -154,11 +154,11 @@ async def test_insufficient_first_round_triggers_second_retrieval():
                     {
                         "sufficient": False,
                         "reason": "missing detail",
-                        "followup_query": "refund policy exceptions for overdue requests",
+                        "followup_query": "closure policy exceptions for overdue requests",
                     }
                 )
             return _json({"sufficient": True, "reason": "enough", "followup_query": None})
-        return _gen("Refunds on overdue requests follow the standard policy.")
+        return _gen("Closures on overdue requests follow the standard policy.")
 
     deps = dataclasses.replace(
         base,
@@ -178,12 +178,12 @@ async def test_insufficient_first_round_triggers_second_retrieval():
 
     # The loop ran a second retrieval pass on the insufficient verdict.
     assert len(retrieve_calls) == 2
-    assert retrieve_calls[1] == "refund policy exceptions for overdue requests"
+    assert retrieve_calls[1] == "closure policy exceptions for overdue requests"
     # The agentic rounds are now surfaced as a glass-box reasoning event (real
     # consumption) rather than write-only state; the follow-up query is visible in it.
     agentic_note = next(r for r in run.reasoning if "Agentic retrieval ran" in r)
     assert "2 rounds" in agentic_note
-    assert "refund policy exceptions for overdue requests" in agentic_note
+    assert "closure policy exceptions for overdue requests" in agentic_note
     # The two judge calls' spend is accrued into the run's per-run telemetry by the
     # retrieve node (2 calls × 5 prompt / 3 completion tokens each). Retrieve runs
     # before any generation, so its delta carries exactly the judge spend.
@@ -200,7 +200,7 @@ async def test_insufficient_first_round_triggers_second_retrieval():
 async def test_query_rewrite_changes_retrieval_query():
     base = build_fake_deps()
     retrieve_calls: list[str] = []
-    rewritten = "standalone: how the refund policy handles overdue requests"
+    rewritten = "standalone: how the closure policy handles overdue requests"
 
     async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         retrieve_calls.append(query)
@@ -209,7 +209,7 @@ async def test_query_rewrite_changes_retrieval_query():
     async def complete(role, messages, *, tools=None, temperature=0.0, response_format=None):  # noqa: ANN001
         if _is_rewrite(messages):
             return _json({"rewritten": rewritten, "reason": "resolved back-reference"})
-        return _gen("Here is how refunds work for overdue requests.")
+        return _gen("Here is how closures work for overdue requests.")
 
     deps = dataclasses.replace(
         base,
@@ -252,7 +252,7 @@ async def test_answer_cache_serves_second_run_without_generation():
     async def complete(role, messages, *, tools=None, temperature=0.0, response_format=None):  # noqa: ANN001
         # Only generation calls reach here (rewrite/agentic/judge are disabled).
         generation_calls["n"] += 1
-        return _gen("Refunds are issued within five business days.")
+        return _gen("Closures are approved within five business days.")
 
     deps = dataclasses.replace(
         base,
@@ -269,10 +269,10 @@ async def test_answer_cache_serves_second_run_without_generation():
 
     first = (await _drive(deps)).values
     assert not first.get("answer_cached")
-    assert first["answer"] == "Refunds are issued within five business days."
+    assert first["answer"] == "Closures are approved within five business days."
     assert generation_calls["n"] == 1  # first run paid for generation
 
     second = (await _drive(deps)).values
     assert second.get("answer_cached") is True  # served from the answer cache
-    assert second["answer"] == "Refunds are issued within five business days."
+    assert second["answer"] == "Closures are approved within five business days."
     assert generation_calls["n"] == 1  # NO second generation call — the cache saved it

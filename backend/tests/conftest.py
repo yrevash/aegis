@@ -93,22 +93,16 @@ class _Outcome:
 def build_fake_deps(
     *,
     propose_tool: bool = True,
-    uncertain: bool = True,
     block_input: bool = False,
     high_risk: bool = False,
-    degenerate: bool = False,
 ) -> AgentDeps:
     """Build an :class:`AgentDeps` wired entirely to canned fakes.
 
     Args:
         propose_tool: Whether the planner proposes an action tool call.
-        uncertain: Whether the ML fake returns a wide, defer-triggering interval.
         block_input: Whether the input rail blocks the query.
         high_risk: Whether the tool is reported as HIGH risk (forces the gate).
-        degenerate: Whether the ML fake returns a degenerate, abstain-triggering
-            prediction (very low confidence + very wide interval).
     """
-    from app.adapter import describe_prediction
     from app.agent import AgentConfig, AgentDeps  # local: keeps langgraph lazy
 
     async def check_input(text: str) -> GuardResult:
@@ -126,7 +120,7 @@ def build_fake_deps(
     async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return RetrievalResult(
             answer_context="Spotlighted context about request R1.",
-            sources=[Source(id="kb-1", text="Refund policy", score=0.9)],
+            sources=[Source(id="kb-1", text="Escalation policy", score=0.9)],
             # Wide recall pulled 5 candidates; rerank kept 1 survivor above.
             num_candidates=5,
             graph_delta=GraphDelta(
@@ -172,7 +166,7 @@ def build_fake_deps(
         if tools and propose_tool:
             return LLMResult(
                 content=(
-                    "The request is overdue and matches the refund policy. "
+                    "The request is overdue and matches the escalation policy. "
                     "I will update its status to resolved."
                 ),
                 tool_calls=[
@@ -190,25 +184,6 @@ def build_fake_deps(
             tool_calls=[],
             usage=Usage(prompt_tokens=9, completion_tokens=7, cost_usd=0.0006),
             model="fake-generation",
-        )
-
-    def predict_explain(features: dict) -> MLExplainResponse:
-        if degenerate:
-            interval, confidence = (0.0, 240.0), 0.3
-        elif uncertain:
-            interval, confidence = (2.0, 48.0), 0.6
-        else:
-            interval, confidence = (11.0, 13.0), 0.95
-        width = interval[1] - interval[0]
-        return MLExplainResponse(
-            prediction=12.0,
-            conformal_interval=interval,
-            conformal_confidence=confidence,
-            interval_width=width,
-            shap_attribution=[
-                ShapFeature(feature="priority", value=1.0, contribution=0.42),
-                ShapFeature(feature="queue_depth_at_open", value=8.0, contribution=-0.20),
-            ],
         )
 
     def tool_definitions_for(persona: str) -> list[dict]:
@@ -233,21 +208,15 @@ def build_fake_deps(
         base = "You are a helpful, grounded support assistant."
         return f"{base}\n\n{extra_context}" if extra_context else base
 
-    def features_for(query: str, persona: str | None) -> dict:
-        return {"priority": 1, "queue_depth_at_open": 8}
-
     return AgentDeps(
         complete=complete,
         retrieve=retrieve,
         check_input=check_input,
         check_output=check_output,
-        predict_explain=predict_explain,
         tool_definitions_for=tool_definitions_for,
         run_tool=run_tool,
         tool_risk=tool_risk,
         render_system_prompt=render_system_prompt,
-        features_for=features_for,
-        describe_prediction=describe_prediction,
         config=AgentConfig(stream_chunk_words=4),
     )
 

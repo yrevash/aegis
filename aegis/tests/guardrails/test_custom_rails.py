@@ -59,7 +59,7 @@ async def test_async_custom_rail_runs():
 @pytest.mark.asyncio
 async def test_custom_rail_abstains_lets_clean_input_pass():
     guard = Guardrails(completer=_benign(), input_rails=[block_competitor])
-    res = await guard.check_input("What is our standard refund window?")
+    res = await guard.check_input("What is our standard closure window?")
     assert res.verdict is GuardVerdict.PASS
 
 

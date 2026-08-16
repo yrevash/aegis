@@ -73,10 +73,10 @@ async def test_real_pipeline_produces_rrf_multi_origin_provenance():
     result = await retriever.retrieve(SEED_CASES[0].query, scope=_SCOPE)
     assert result.provenance.fusion.value == "rrf"
     assert len(result.provenance.origins) >= 2  # e.g. vector + graph (+ bm25)
-    # A per-case score is well-formed and grounded on the top-ranked refund doc.
+    # A per-case score is well-formed and grounded on the top-ranked closure doc.
     score = score_case(SEED_CASES[0], result, precision_k=1)
     assert score.context_recall == 1.0
-    assert score.retrieved_docs[0] == "kb-refunds"
+    assert score.retrieved_docs[0] == "kb-request-closure"
 
 
 async def test_default_thresholds_are_sane():
@@ -100,9 +100,9 @@ async def test_llm_judge_parses_scores_offline():
         return LLMResult(content='{"groundedness": 0.9, "relevance": 1.0}')
 
     verdict = await judge_answer(
-        "How long does a refund take?",
-        "Refunds are issued within 5 to 7 business days.",
-        "Refunds take 5 to 7 business days.",
+        "Who confirms a request closure?",
+        "A human approver confirms a proposed closure.",
+        "A human approver confirms the closure.",
         complete=fake_complete,
     )
     assert verdict.groundedness == pytest.approx(0.9)

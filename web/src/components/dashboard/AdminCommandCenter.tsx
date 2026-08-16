@@ -10,13 +10,11 @@ import {
   DatabaseZap,
   GitBranch,
   Landmark,
-  ListChecks,
   Loader2,
   PiggyBank,
   ShieldCheck,
   Target,
   Timer,
-  WifiOff,
   Zap,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
@@ -29,14 +27,13 @@ import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import {
-  getApprovals,
   getGatewayOptimization,
   getGovernanceDashboard,
   getLatency,
   getSecurityPosture,
 } from '@/lib/api/client'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type {
   BudgetStatusRow,
@@ -46,7 +43,6 @@ import type {
   PostureStatus,
   SecurityPostureResponse,
 } from '@/lib/api/platform'
-import type { ApprovalsResponse, ApprovalRow } from '@/lib/api/types'
 import { useMetricsSeries } from '@/state/useMetrics'
 
 // ── formatting helpers ───────────────────────────────────────────────────────
@@ -90,17 +86,6 @@ function meterTone(frac: number): string {
   return 'var(--success)'
 }
 
-function riskTone(risk: string): BadgeTone {
-  switch (risk) {
-    case 'low':
-      return 'ok'
-    case 'medium':
-      return 'risk'
-    default:
-      return 'block'
-  }
-}
-
 function postureTone(status: PostureStatus | string): BadgeTone {
   switch (status) {
     case 'enforced':
@@ -128,10 +113,10 @@ function Empty({ children }: { children: ReactNode }): ReactElement {
 
 /**
  * Admin command center — the platform's single pane of glass, ordered for what an
- * admin acts on first: alerts, the approvals queue, customer/budget health, then
+ * admin acts on first: alerts, customer/budget health, then
  * the financial and health charts. Every figure is a real projection of a live
  * accessor (`/metrics`, `/gateway/optimization`, `/governance/dashboard`,
- * `/latency`, `/security/posture`, `/approvals`); panels with no data yet say so.
+ * `/latency`, `/security/posture`); panels with no data yet say so.
  */
 function AdminCommandCenter(): ReactElement {
   // Read the live session token. The module-level fallback in `request` is not
@@ -149,7 +134,6 @@ function AdminCommandCenter(): ReactElement {
   const [gov, setGov] = useState<GovernanceDashboardResponse | null>(null)
   const [latency, setLatency] = useState<LatencyResponse | null>(null)
   const [posture, setPosture] = useState<SecurityPostureResponse | null>(null)
-  const [approvals, setApprovals] = useState<ApprovalsResponse | null>(null)
   // True once every accessor above has settled (fulfilled *or* rejected), so a
   // failed fetch resolves the spinner into the honest per-panel empty states
   // instead of leaving it spinning forever.
@@ -167,7 +151,6 @@ function AdminCommandCenter(): ReactElement {
       getGovernanceDashboard(token).then(set(setGov)),
       getLatency(token).then(set(setLatency)),
       getSecurityPosture(token).then(set(setPosture)),
-      getApprovals(token, { status: 'pending' }).then(set(setApprovals)),
     ]).then(() => {
       if (alive) setSettled(true)
     })
@@ -189,7 +172,6 @@ function AdminCommandCenter(): ReactElement {
   const cacheHit = metrics?.cache_hit_rate ?? null
   const smallShare = summary?.small_model_share ?? metrics?.small_model_share ?? null
   const p95 = latency?.run_p95_ms ?? null
-  const pending = approvals?.rows.length ?? null
 
   // ── real cost trend from the ledger's own time buckets ───────────────────────
   const trend = useMemo(
@@ -303,9 +285,8 @@ function AdminCommandCenter(): ReactElement {
       out.push({ tone: 'block', text: `${postureCounts.not_covered} security control(s) not covered` })
     if (postureCounts.partial > 0)
       out.push({ tone: 'risk', text: `${postureCounts.partial} security control(s) only partial` })
-    if ((pending ?? 0) > 0) out.push({ tone: 'risk', text: `${pending} action(s) awaiting human approval` })
     return out
-  }, [tenants, budgetByTenant, postureCounts, pending])
+  }, [tenants, budgetByTenant, postureCounts])
 
   const loading = !settled && opt == null && gov == null && metrics == null
 
@@ -345,16 +326,10 @@ function AdminCommandCenter(): ReactElement {
             <StatCard label="Cache hit rate" value={fmtPct(cacheHit)} icon={DatabaseZap} tone="ok" />
             <StatCard label="Small-model share" value={fmtPct(smallShare)} icon={GitBranch} tone="graph" />
             <StatCard label="p95 latency" value={fmtMs(p95)} icon={Timer} tone="graph" />
-            <StatCard
-              label="Pending approvals"
-              value={pending == null ? '—' : String(pending)}
-              icon={ListChecks}
-              tone={pending && pending > 0 ? 'risk' : 'ok'}
-            />
           </div>
 
-          {/* ── B · Needs attention: alerts (highlighted) + approvals queue ────── */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {/* ── B · Needs attention: alerts ────────────────────────────────────── */}
+          <div>
             <Card
               className={
                 alerts.length > 0
@@ -404,44 +379,6 @@ function AdminCommandCenter(): ReactElement {
               </CardBody>
             </Card>
 
-            <Card>
-              <CardHeader
-                title="Approvals queue"
-                actions={
-                  <Link
-                    href="/app/admin/approvals"
-                    className="inline-flex items-center gap-1 text-[0.78rem] font-medium text-primary hover:underline"
-                  >
-                    Open inbox <ChevronRight className="size-3.5" />
-                  </Link>
-                }
-              />
-              <CardBody className="pt-0">
-                {approvals && approvals.rows.length > 0 ? (
-                  <ul className="flex flex-col gap-2">
-                    {approvals.rows.slice(0, 4).map((row: ApprovalRow) => (
-                      <li key={row.id} className="rounded-xl border border-border bg-surface-2/30 px-3.5 py-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-mono text-[0.8rem] text-foreground">{row.action}</span>
-                          <Badge tone={riskTone(row.risk)} className="font-mono uppercase">
-                            {row.risk}
-                          </Badge>
-                        </div>
-                        <div className="mt-1 flex items-center justify-between text-[0.72rem] text-muted-foreground">
-                          <span className="truncate">{row.persona ?? '—'}</span>
-                          <span className="tabular font-mono">{fmtTs(row.created_at)}</span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-6 text-sm text-muted-foreground">
-                    <CheckCircle2 className="size-4 text-ok-ink" />
-                    No pending approvals — the human gate is clear.
-                  </div>
-                )}
-              </CardBody>
-            </Card>
           </div>
 
           {/* ── C · Customers & budgets (summary → own page) ───────────────────── */}
@@ -648,47 +585,13 @@ function AdminCommandCenter(): ReactElement {
   )
 }
 
-/**
- * Client entry for the admin Overview section. Runs the boot probe once
- * (live-first, mock fallback) before mounting, so every accessor fetch reads the
- * resolved mode — the offline demo seeds from the mock fixtures and is labelled
- * with the honest banner.
- */
+/** Client entry for the admin Overview section — gated on a reachable backend. */
 export function AdminDashboardMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      <div>
-        {mode.mode === 'mock' && (
-          <div
-            role="status"
-            className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-          >
-            <WifiOff className="size-3.5 shrink-0" />
-            <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-          </div>
-        )}
+    <BackendGate>
+      <TooltipProvider>
         <AdminCommandCenter />
-      </div>
-    </TooltipProvider>
+      </TooltipProvider>
+    </BackendGate>
   )
 }

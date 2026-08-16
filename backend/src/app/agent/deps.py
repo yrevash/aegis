@@ -6,8 +6,8 @@ in the standalone ``aegis.agent.deps``. This module is the strangler shim + the
 composition root: it re-exports that contract by identity, provides the concrete,
 DB-backed :class:`MemoryDeps` implementation (which opens tenant-scoped sessions and
 writes the memory stores — the host coupling that could not move), and binds
-:meth:`AgentDeps.default` to the live gateway, retrieval, guardrails, ML spine,
-domain adapter and durable data layer — mirroring the ``gateway.configure(...)``
+:meth:`AgentDeps.default` to the live gateway, retrieval, guardrails, domain
+adapter and durable data layer — mirroring the ``gateway.configure(...)``
 pattern every other module proved.
 
 Nothing about the graph's behaviour changes: every existing
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -36,7 +35,7 @@ from aegis.agent.deps import (
 )
 from aegis.agent.router import load_roster as _core_load_roster
 
-from app.api.schemas import MLExplainResponse, RiskLevel
+from app.api.schemas import RiskLevel
 
 if TYPE_CHECKING:
     from app.memory.config import MemoryConfig
@@ -312,15 +311,14 @@ class AgentDeps(_AegisAgentDeps):
             config: Optional bounded-autonomy configuration.
 
         Returns:
-            An :class:`AgentDeps` wired to the live gateway, retrieval, guardrails,
-            ML spine and adapter tools, plus the durable seams (tenant scope + route
-            audit) ``aegis.agent`` reaches through injected callables.
+            An :class:`AgentDeps` wired to the live gateway, retrieval, guardrails
+            and adapter tools, plus the durable seams (tenant scope + route audit)
+            ``aegis.agent`` reaches through injected callables.
         """
         from app.adapter import DEFAULT_PERSONA_ID
         from app.config import get_settings
         from app.core.llm import complete
         from app.guardrails import check_input, check_output
-        from app.ml import predict_explain
         from app.retrieval import retrieve
 
         settings = get_settings()
@@ -340,13 +338,10 @@ class AgentDeps(_AegisAgentDeps):
             retrieve=retrieve,
             check_input=check_input,
             check_output=check_output,
-            predict_explain=predict_explain,
             tool_definitions_for=_default_tool_definitions_for,
             run_tool=_default_run_tool,
             tool_risk=_default_tool_risk,
             render_system_prompt=_default_render_system_prompt,
-            features_for=_default_features_for,
-            describe_prediction=_default_describe_prediction,
             agent_roster=_default_agent_roster,
             config=config,
             memory=MemoryDeps.default(),
@@ -394,8 +389,8 @@ def _get_shared_store() -> Any:  # noqa: ANN401 - adapter store type
     synchronous seams *and* from inside the running agent event loop (where
     ``asyncio.run`` would raise), and the store only needs schema-valid records with
     their real ``resolution_hours`` label — not LLM-written prose. Seeding a real
-    store is what makes the ML solution-signal actually run (``features_for`` resolves
-    a subject → ``predict_explain`` produces a genuine, distinct prediction).
+    store is what gives ``run_tool`` concrete records to act on, so a gated action
+    changes an actual row rather than succeeding against nothing.
     """
     global _shared_store
     if _shared_store is None:
@@ -450,13 +445,6 @@ def _default_render_system_prompt(
     return render_system_prompt(get_persona(persona_id), extra_context=extra_context)
 
 
-def _default_describe_prediction(resp: MLExplainResponse) -> str:
-    """Render a prediction as planner-facing decision-support text (adapter framing)."""
-    from app.adapter import describe_prediction
-
-    return describe_prediction(resp)
-
-
 def _default_agent_roster() -> Any:  # noqa: ANN401 - adapter AgentRoster duck-type
     """Return the adapter's supervisor roster (routable specialists), lazily imported."""
     from app.agent.router import load_roster
@@ -497,41 +485,6 @@ async def _default_record_audit(**kwargs: Any) -> None:  # noqa: ANN401 - audit 
     from app.data import record_audit
 
     await record_audit(**kwargs)
-
-
-# Matches an id-like token (e.g. ``req-000123``) referenced in a query's text.
-_ID_TOKEN = re.compile(r"[A-Za-z]+-\d+")
-
-
-def _resolve_subject(query: str, store: Any) -> Any:  # noqa: ANN401 - adapter record type
-    """Resolve the record a query is about, else the first record in the store.
-
-    Scans ``query`` for id-like tokens and returns the first that names a record
-    the store actually holds; when the query references no known record it falls
-    back to the first record via the public accessor. Deterministic for tests.
-    """
-    for token in _ID_TOKEN.findall(query):
-        match = store.get_request(token) or store.get_request(token.lower())
-        if match is not None:
-            return match
-    records = store.list_requests()
-    return records[0] if records else None
-
-
-def _default_features_for(query: str, persona_id: str | None) -> dict[str, Any]:
-    """Derive an ML feature dict for the current request.
-
-    Resolves the concrete record the query references (by matching an id token in
-    the query text against the store); when no known record is named it falls back
-    to the first record via the store's public accessor.
-    """
-    from app.adapter import features_for_request
-
-    store = _get_shared_store()
-    subject = _resolve_subject(query, store)
-    if subject is None:
-        return {}
-    return features_for_request(subject, agent=None, customer=None)
 
 
 async def _default_run_tool(

@@ -3,8 +3,8 @@
 Drives :func:`aegis.agent.run_agent` with the shared fakes and asserts the additive event
 variants/fields a frontend needs to show the whole process: per-node ``node_finished``
 timing/usage, the planner's ``reasoning`` chunks, retrieval ``candidates``/``reranked``
-progress with scored sources, the informational (non-gating) ``ml_explanation``, and
-masked-only guardrail redaction detail. Events are plain dicts (the dict-stamp seam).
+progress with scored sources, the tool-risk gate detail, and masked-only guardrail
+redaction detail. Events are plain dicts (the dict-stamp seam).
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ async def test_generate_node_finished_carries_model_usage(make_deps):
 
 @pytest.mark.asyncio
 async def test_plan_emits_reasoning_chunks(make_deps):
-    events = await _run(make_deps(propose_tool=True, uncertain=True))
+    events = await _run(make_deps(propose_tool=True))
     reasoning = [e for e in events if e["type"] == "reasoning"]
     assert len(reasoning) == 2
     assert all(e["text"] for e in reasoning)
@@ -93,24 +93,29 @@ async def test_retrieve_emits_candidates_and_reranked(make_deps):
 
 
 @pytest.mark.asyncio
-async def test_ml_event_is_informational_evidence_no_gating(make_deps):
+async def test_high_risk_action_gates_on_tool_risk_alone(make_deps):
+    """The gate is the tool's declared risk tier and nothing else.
+
+    Formerly this pair of tests asserted that the ``ml_explanation`` event carried no
+    gating semantics. The ML step is gone from the graph, so the claim is now stated
+    the only way it can still be falsified: the gate fires for a HIGH-risk tool, does
+    not fire for a within-ceiling one, and no ML event exists on either stream.
+    """
     events = await _run(make_deps(propose_tool=True, high_risk=True))
-    ml = next(e for e in events if e["type"] == "ml_explanation")
-    assert ml.get("gated") is None
-    assert ml.get("gate_reason") is None
-    assert ml["prediction"] is not None
-    assert ml["conformal_interval"] is not None
-    assert ml["shap_attribution"]
+    types = [e["type"] for e in events]
+    assert "approval_required" in types
+    approval = next(e for e in events if e["type"] == "approval_required")
+    assert approval["risk"] == "high"
+    assert "ml_explanation" not in types
 
 
 @pytest.mark.asyncio
-async def test_ml_event_present_but_never_gates_a_low_risk_action(make_deps):
-    events = await _run(make_deps(propose_tool=True, uncertain=True, high_risk=False))
+async def test_within_ceiling_action_executes_without_a_gate(make_deps):
+    events = await _run(make_deps(propose_tool=True, high_risk=False))
     types = [e["type"] for e in events]
     assert "approval_required" not in types
-    ml = next(e for e in events if e["type"] == "ml_explanation")
-    assert ml.get("gated") is None
-    assert ml["prediction"] is not None
+    assert "tool_result" in types
+    assert "ml_explanation" not in types
 
 
 @pytest.mark.asyncio

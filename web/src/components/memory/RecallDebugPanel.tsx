@@ -119,8 +119,10 @@ interface Props {
  */
 export function RecallDebugPanel({ token, subject }: Props): ReactElement {
   const [open, setOpen] = useState(true)
-  const [draft, setDraft] = useState('Refund status for the duplicate charge on A-771')
-  const [query, setQuery] = useState(draft)
+  // No seeded query: a placeholder question would put words in the operator's
+  // mouth and trace a recall nobody asked for.
+  const [draft, setDraft] = useState('')
+  const [query, setQuery] = useState('')
   const { state } = useAsync(() => getRecallDebug(token, subject, query), [token, subject, query])
 
   const data = state.status === 'ready' ? state.data : null
@@ -156,7 +158,7 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
             className="flex flex-col gap-2 sm:flex-row"
             onSubmit={(e) => {
               e.preventDefault()
-              setQuery(draft.trim() || 'refund status')
+              setQuery(draft.trim() || 'request status')
             }}
           >
             <div className="relative flex-1">

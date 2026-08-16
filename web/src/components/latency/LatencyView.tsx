@@ -1,8 +1,9 @@
 'use client'
 
-import { Activity, Gauge, Hash, Loader2, Timer, TrendingUp, WifiOff } from 'lucide-react'
+import { Activity, Gauge, Hash, Loader2, Timer, TrendingUp } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -10,19 +11,11 @@ import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { getLatency } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { LatencyResponse, NodeLatency } from '@/lib/api/platform'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 
 /** Format a millisecond figure honestly — `null` (no reading) reads as an em dash. */
 function fmtMs(ms: number | null | undefined): string {
   if (ms == null) return '—'
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(1)}ms`
-}
-
-/** Human label for the honest window source. `sample` is the offline mock fixture. */
-function sourceLabel(source: string): { text: string; tone: 'ml' | 'neutral' } {
-  return source === 'sample'
-    ? { text: 'sample window', tone: 'ml' }
-    : { text: source, tone: 'neutral' }
 }
 
 /**
@@ -148,7 +141,7 @@ function LatencyEmpty({ data }: { data: LatencyResponse }): ReactElement {
  * tiles plus a per-node breakdown (count · p50 · p95 · max · total) with a p95
  * bar visual, all drawn from real samples in a per-process rolling window. When
  * no runs have been recorded the view renders an honest empty state (never fake
- * zeros); the offline mock serves a labelled `sample` window.
+ * zeros).
  */
 function LatencyView(): ReactElement {
   // Live session token — a constant `null` would 401 on a reload and, being
@@ -178,7 +171,6 @@ function LatencyView(): ReactElement {
     }
   }, [token, hydrated])
 
-  const src = data ? sourceLabel(data.source) : null
 
   return (
     <div className="space-y-6">
@@ -228,9 +220,9 @@ function LatencyView(): ReactElement {
               title="Per-node p95"
               description="Tail latency by graph node — each bar scaled to the slowest node's p95."
               actions={
-                src ? (
-                  <Badge tone={src.tone} className="gap-1.5 font-mono">
-                    {src.text}
+                data ? (
+                  <Badge tone="neutral" className="gap-1.5 font-mono">
+                    {data.source}
                   </Badge>
                 ) : null
               }
@@ -262,9 +254,6 @@ function LatencyView(): ReactElement {
             Source <span className="font-mono text-foreground">{data.source}</span> · window capacity{' '}
             <span className="font-mono text-foreground">{data.window_capacity ?? '—'}</span>. The
             window is a per-process rolling buffer that resets on restart.
-            {data.source === 'sample'
-              ? ' These figures are a labelled sample window served offline — real percentiles are metered from live runs.'
-              : ''}
           </p>
         </>
       )}
@@ -272,44 +261,11 @@ function LatencyView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the Latency section. Runs the boot probe once (live-first,
- * mock fallback) before mounting the view, so the fetch reads the resolved mode —
- * offline seeds from the labelled `sample` fixture behind the honest banner.
- */
+/** Client entry for the Latency section — gated on a reachable backend. */
 export function LatencyMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <div>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
+    <BackendGate>
       <LatencyView />
-    </div>
+    </BackendGate>
   )
 }

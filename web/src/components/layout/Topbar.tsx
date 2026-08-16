@@ -5,14 +5,16 @@ import { usePathname, useRouter } from 'next/navigation'
 import { LogOut, UserRound } from 'lucide-react'
 import { portalLabelFor, SECTIONS, type Role } from '@/lib/portal'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { NotificationBell } from './NotificationBell'
 
 /**
  * Topbar — TailAdmin's header restyled to our tokens: a breadcrumb (portal ›
- * section) on the left, and a present toggle + user chip on the right. The user
- * chip reflects the real signed-in session (username + role); sign-out clears the
- * session and returns to `/login`. The present button is a placeholder hook for
- * projector mode (wired later).
+ * section) on the left, and the user chip + sign-out on the right. The user chip
+ * reflects the real signed-in session (username + role); sign-out clears the
+ * session and returns to `/login`.
+ *
+ * The notification bell that used to sit here was fed by nothing, so it answered
+ * "you're all caught up" whatever the platform's actual state — a reassurance the
+ * console had not earned. It comes back when there is a feed behind it.
  */
 export function Topbar({ role }: { role: Role }) {
   const pathname = usePathname()
@@ -40,7 +42,6 @@ export function Topbar({ role }: { role: Role }) {
 
       {/* Right cluster */}
       <div className="flex items-center gap-2">
-        <NotificationBell />
         <div
           className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground"
           title={`${displayName} · ${portalLabelFor(role)}`}

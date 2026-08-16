@@ -18,7 +18,7 @@ class _Benign:
 @pytest.mark.asyncio
 async def test_module_level_check_input():
     """Test check_input module-level function."""
-    r = await check_input("what is the refund policy?", completer=_Benign())
+    r = await check_input("what is the escalation policy?", completer=_Benign())
     assert isinstance(r, GuardResult) and r.verdict == GuardVerdict.PASS
 
 

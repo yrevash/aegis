@@ -31,7 +31,7 @@ async def test_guard_output_receives_retrieved_contexts(make_deps):
 
     deps.check_output = recording_check_output
 
-    async for _ in run_agent("what is the refund policy?", deps=deps):
+    async for _ in run_agent("what is the escalation policy?", deps=deps):
         pass
 
     # The retrieve fake sets answer_context="Spotlighted context about request R1.";
@@ -57,7 +57,7 @@ async def test_ungrounded_answer_flags_but_does_not_block(make_deps):
 
     deps.check_output = ungrounded_check_output
 
-    events = [e async for e in run_agent("what is the refund policy?", deps=deps)]
+    events = [e async for e in run_agent("what is the escalation policy?", deps=deps)]
     types = [e["type"] for e in events]
 
     grounding_flags = [
@@ -90,7 +90,7 @@ async def test_grounding_flag_does_not_withhold_answer(make_deps):
 
     tokens = [
         e["text"]
-        async for e in run_agent("what is the refund policy?", deps=deps)
+        async for e in run_agent("what is the escalation policy?", deps=deps)
         if e["type"] == "token"
     ]
     answer = "".join(tokens).strip()

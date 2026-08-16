@@ -101,11 +101,11 @@ async def test_episodic_dedup_vs_raw_window(db):
         # first and Postgres rejects them. SQLite never enforced the constraint.
         await s.flush()
         # turn 0 is OLD but a strong vector match → should surface via episodic recall.
-        s.add(_msg("user:1", "sess-1", 0, "old but relevant refund note", [1.0, 0.0, 0.0, 0.0]))
+        s.add(_msg("user:1", "sess-1", 0, "old but relevant closure note", [1.0, 0.0, 0.0, 0.0]))
         s.add(_msg("user:1", "sess-1", 1, "chit chat one", [0.0, 1.0, 0.0, 0.0]))
         s.add(_msg("user:1", "sess-1", 2, "chit chat two", [0.0, 1.0, 0.0, 0.0]))
         # turn 3 is recent (in the 2-turn raw window) AND a vector match → must be deduped.
-        s.add(_msg("user:1", "sess-1", 3, "recent relevant refund note", [1.0, 0.0, 0.0, 0.0]))
+        s.add(_msg("user:1", "sess-1", 3, "recent relevant closure note", [1.0, 0.0, 0.0, 0.0]))
         await s.commit()
         ids = {
             m.turn_index: m.id
@@ -118,7 +118,7 @@ async def test_episodic_dedup_vs_raw_window(db):
             subject_id="user:1",
             session_id="sess-1",
             persona="ops",
-            query="refund",
+            query="closure",
             query_vec=[1.0, 0.0, 0.0, 0.0],
             config=cfg,
         )
@@ -153,7 +153,7 @@ async def test_subject_isolation_rls_off(db):
     assert all(c.payload.subject_id == "user:B" for c in bundle.facts)
 
 
-async def test_skills_selected_for_refund_query(db):
+async def test_skills_selected_for_closure_query(db):
     cfg = MemoryConfig()
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1"))
@@ -165,12 +165,12 @@ async def test_skills_selected_for_refund_query(db):
             subject_id="user:1",
             session_id="sess-1",
             persona="ops",
-            query="I want a refund for a duplicate charge",
+            query="please close my duplicate request",
             query_vec=None,
             config=cfg,
         )
     names = [name for name, _ in bundle.skills]
-    assert "handling_refunds" in names
+    assert "closing_requests" in names
     assert all(text.strip() for _, text in bundle.skills)  # bodies actually read
 
 
@@ -186,7 +186,7 @@ async def test_recall_bumps_access_count_durably(db):
         await s.flush()
         s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0]))
         # turn 0 is OLD (outside the 1-turn window) yet a strong vector match → recalled.
-        s.add(_msg("user:1", "sess-1", 0, "old relevant refund note", [1.0, 0.0, 0.0, 0.0]))
+        s.add(_msg("user:1", "sess-1", 0, "old relevant closure note", [1.0, 0.0, 0.0, 0.0]))
         s.add(_msg("user:1", "sess-1", 1, "recent chit chat", [0.0, 1.0, 0.0, 0.0]))
         await s.commit()
 
@@ -196,7 +196,7 @@ async def test_recall_bumps_access_count_durably(db):
             subject_id="user:1",
             session_id="sess-1",
             persona="ops",
-            query="refund by email",
+            query="closure by email",
             query_vec=[1.0, 0.0, 0.0, 0.0],
             config=cfg,
         )

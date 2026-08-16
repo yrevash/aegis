@@ -71,7 +71,7 @@ async def test_metrics_quality_score_measured_after_grounded_run(
     )
     run = await client.post(
         "/query",
-        json={"query": "what is the refund policy?", "persona": "operations_lead"},
+        json={"query": "what is the escalation policy?", "persona": "operations_lead"},
         headers=admin_headers,
     )
     assert run.status_code == 200
@@ -102,7 +102,7 @@ async def test_metrics_actions_approved_counts_cleared_gates(client, db, admin_h
     from app.data import enqueue_approval, finalize_resumed, resolve_approval
 
     # Enqueue a gate, approve it, and finalise its resume → terminal APPROVED.
-    await enqueue_approval(approval_id="gate-1", run_id="run-1", action="issue_refund")
+    await enqueue_approval(approval_id="gate-1", run_id="run-1", action="update_request_status")
     resolution = await resolve_approval(
         "gate-1", ApprovalDecision.APPROVE, approver="admin"
     )
@@ -213,7 +213,7 @@ async def test_login_and_query_write_audit_rows(client, db, admin_headers, make_
     )
     resp = await client.post(
         "/query",
-        json={"query": "what is the refund policy?", "persona": "operations_lead"},
+        json={"query": "what is the escalation policy?", "persona": "operations_lead"},
         headers=admin_headers,
     )
     assert resp.status_code == 200

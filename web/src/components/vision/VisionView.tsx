@@ -9,10 +9,10 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
-  WifiOff,
 } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 
+import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -21,7 +21,6 @@ import { ImageDropzone, type PickedImage } from '@/components/vision/ImageDropzo
 import { PIIOverlay } from '@/components/vision/PIIOverlay'
 import { ScreenVerdictPanel } from '@/components/vision/ScreenVerdict'
 import { analyseImage } from '@/lib/api/client'
-import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { VisionAnalyseResponse } from '@/lib/api/types'
 import { useAuth } from '@/lib/auth/AuthContext'
 
@@ -86,7 +85,6 @@ function VisionView(): ReactElement {
         filename: image.name,
       },
       token,
-      { width: image.width, height: image.height },
     )
       .then(setResult)
       .catch(() => setError('Could not analyse that image. Is the backend running?'))
@@ -349,44 +347,11 @@ function VisionView(): ReactElement {
   )
 }
 
-/**
- * Client entry for the Vision section. Runs the boot probe once (live-first, mock
- * fallback) so `analyseImage` reads the resolved mode: offline serves the scripted
- * fixture behind the honest offline banner; live posts to `/vision/analyse`.
- */
+/** Client entry for the Vision section — gated on a reachable backend. */
 export function VisionMount(): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <div>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
+    <BackendGate>
       <VisionView />
-    </div>
+    </BackendGate>
   )
 }

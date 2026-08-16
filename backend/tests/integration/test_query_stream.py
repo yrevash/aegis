@@ -78,7 +78,6 @@ async def test_query_streams_full_sequence_with_gate_and_approval(
             "guardrail",          # input rail
             "retrieval",          # started
             "retrieval",          # done (graph delta)
-            "ml_explanation",     # conformal + SHAP
             "approval_required",  # the human gate (money-shot pause)
             "tool_call",          # only after approval
             "tool_result",

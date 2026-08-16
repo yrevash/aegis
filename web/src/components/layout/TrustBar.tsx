@@ -3,10 +3,15 @@
 /**
  * The signature element — the winning sentence rendered as a live pipeline.
  *
- * "Every autonomous action is uncertainty-bounded, explainable, guarded,
- * approved, and fully traced." Each clause is a stage that lights in its own
- * signal hue the moment the run reaches it, so the jury watches the trust stack
- * assemble in real time. This is the one bold element; everything else is quiet.
+ * "Every autonomous action is grounded, guarded, approved, and fully traced."
+ * Each clause is a stage that lights in its own signal hue the moment the run
+ * reaches it, so the jury watches the trust stack assemble in real time. This is
+ * the one bold element; everything else is quiet.
+ *
+ * Every stage must be decidable from the run's own event stream. Two former
+ * stages ("uncertainty-bounded", "explainable") read a conformal interval and a
+ * SHAP list off an ML step that the agent graph no longer runs — they could only
+ * ever have stayed dark, so they are gone rather than dark.
  */
 
 import { Check } from 'lucide-react'
@@ -26,16 +31,11 @@ interface Stage {
 
 const STAGES: Stage[] = [
   {
-    key: 'bounded',
-    label: 'Uncertainty-bounded',
-    signal: 'ml',
-    done: (s) => s.ml?.conformal_interval != null,
-  },
-  {
-    key: 'explained',
-    label: 'Explainable',
-    signal: 'ml',
-    done: (s) => (s.ml?.shap_attribution.length ?? 0) > 0,
+    key: 'grounded',
+    label: 'Grounded',
+    signal: 'graph',
+    // Lights once retrieval actually returned ranked passages for the answer.
+    done: (s) => s.retrievalScores.length > 0 || s.provenance != null,
   },
   {
     key: 'guarded',

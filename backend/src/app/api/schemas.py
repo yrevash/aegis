@@ -12,7 +12,6 @@ the variant's `type` and whose `data:` field is the model's JSON.
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from aegis.core.types import (  # noqa: F401 - re-exported for identity, see docstrings below
@@ -91,26 +90,6 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validat
 # ``RiskLevel`` now lives in ``aegis.core.types`` (a shared cross-module contract, like
 # ``GuardVerdict``) and is re-exported above under its historical name/location so the
 # approvals model and every existing importer are unchanged.
-
-
-class AutonomyBand(StrEnum):
-    """Graded conformal-autonomy band for an ML-backed decision (§2.3).
-
-    Replaces the legacy binary "gated / not-gated" signal with three bands so the
-    agent can act, defer to a human, or refuse. Frozen here as the shared contract;
-    the node logic that assigns a band lands in the ML-autonomy phase.
-
-    Members:
-        AUTONOMOUS: Tight interval / singleton set / high confidence — act (subject
-            to the tool's risk tier).
-        DEFER: Wide interval / non-singleton set — route to the human approval inbox.
-        ABSTAIN: Degenerate / empty / no-coverage prediction — do not act; return an
-            "insufficient confidence" answer (a new terminal state).
-    """
-
-    AUTONOMOUS = "autonomous"
-    DEFER = "defer"
-    ABSTAIN = "abstain"
 
 
 # RetrievalOrigin, FusionMethod re-exported above from aegis.retrieval.types (§4.3);
@@ -237,44 +216,6 @@ class ToolResult(_BaseEvent):
     call_id: str
     ok: bool
     summary: str
-
-
-class MLExplanation(_BaseEvent):
-    """An ML prediction with its conformal interval and SHAP attribution."""
-
-    type: Literal["ml_explanation"] = "ml_explanation"
-    prediction: float | str
-    conformal_interval: tuple[float, float] | None = Field(
-        default=None, description="Calibrated bounds (guaranteed coverage)."
-    )
-    conformal_confidence: float | None = Field(
-        default=None, description="Target coverage rate, e.g. 0.9."
-    )
-    interval_width: float | None = Field(
-        default=None,
-        description="Conformal interval width (upper − lower); the deferral signal.",
-    )
-    prediction_set_size: int | None = Field(
-        default=None,
-        description="Conformal prediction-set size (classification); 1 = singleton.",
-    )
-    shap_attribution: list[ShapFeature] = Field(default_factory=list)
-    gated: bool | None = Field(
-        default=None, description="Whether this prediction forced the human gate."
-    )
-    band: AutonomyBand | None = Field(
-        default=None, description="Graded conformal-autonomy band assigned (§2.3)."
-    )
-    gate_reason: str | None = Field(
-        default=None, description="Why the gate fired (risk/uncertainty), if it did."
-    )
-    min_confidence: float | None = Field(
-        default=None, description="Confidence threshold below which the gate fires."
-    )
-    max_rel_width: float | None = Field(
-        default=None,
-        description="Max conformal interval width (rel. to prediction) before gating.",
-    )
 
 
 class ApprovalRequired(_BaseEvent):
@@ -454,7 +395,6 @@ StreamEvent = Annotated[
     | RetrievalStep
     | ToolCall
     | ToolResult
-    | MLExplanation
     | ApprovalRequired
     | AnswerChunk
     | RunFinished
@@ -700,7 +640,12 @@ class ApprovalRow(BaseModel):
     )
     created_at: str = Field(description="ISO 8601 UTC time the row was enqueued.")
     ml_snapshot: dict = Field(
-        default_factory=dict, description="Frozen ML explanation at gate time."
+        default_factory=dict,
+        description=(
+            "Model evidence frozen at gate time. No longer populated — the agent "
+            "graph runs no ML step — so this is {} on every row raised since. Kept "
+            "on the contract because the underlying column is kept."
+        ),
     )
 
 
@@ -1214,9 +1159,10 @@ class RiskEntry(BaseModel):
     real control named in ``control_ref``. The movement between the two points is
     the thing worth showing a client.
 
-    Controls overwhelmingly move **likelihood**: a human gate does not make a wrong
-    refund cheaper, it makes it far less likely to ever be issued. Impact moves only
-    where the control genuinely shrinks the consequence (e.g. reversible tools).
+    Controls overwhelmingly move **likelihood**: a human gate does not make a wrongly
+    closed customer request cheaper, it makes it far less likely to ever happen. Impact
+    moves only where the control genuinely shrinks the consequence (e.g. reversible
+    tools).
 
     ``residual`` is **derived** from the residual coordinate via :func:`risk_band`
     rather than authored beside it, so a band can never contradict its own point.

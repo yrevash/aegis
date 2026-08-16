@@ -1,7 +1,7 @@
 """Dependency injection for the agent graph — the seam that makes it testable.
 
 Every cross-module capability the graph needs (the LLM gateway, retrieval, the
-guardrails, the ML spine, the action tools, the audit sink, the tenant scope) is
+guardrails, the action tools, the audit sink, the tenant scope) is
 reached through a callable on :class:`AgentDeps`. This module holds only the
 *contract* — the dataclasses + type aliases + the risk-ordering helpers — so it
 imports nothing heavy and nothing host-specific: a host application wires the real
@@ -10,8 +10,8 @@ mirroring ``gateway.configure(...)``), while tests inject fakes and drive the en
 vertical slice with no live infrastructure, no API keys, and no network.
 
 :class:`AgentConfig` holds the human-gate threshold: the minimum tool risk that
-forces a human approval gate (the money-shot). ML is a supporting solution signal,
-never a flow decider.
+forces a human approval gate (the money-shot). That threshold, compared against the
+tool's own declared risk, is the whole gating rule — there is no second signal.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from aegis.core.types import RiskLevel
-from aegis.ml.types import MLExplainResponse
 from aegis.retrieval.types import RetrievalScope
 
 from .router import load_roster
@@ -61,12 +60,9 @@ class RetrieveFn(Protocol):
 # passages the answer was generated from. Kept loose (``...``) so a plain
 # ``check_output(text)`` fake and a ``check_output(text, contexts=...)`` one both fit.
 GuardFn = Callable[..., Awaitable[Any]]
-PredictFn = Callable[[dict[str, Any]], MLExplainResponse]
 ToolDefsFn = Callable[[str], list[dict[str, Any]]]
 RiskFn = Callable[[str], RiskLevel]
 RenderPromptFn = Callable[..., str]
-FeaturesFn = Callable[[str, str | None], dict[str, Any]]
-DescribeFn = Callable[[MLExplainResponse], str]
 RosterFn = Callable[[], Any]
 TenantFn = Callable[[], int | None]
 AuditFn = Callable[..., Awaitable[Any]]
@@ -110,17 +106,14 @@ def _no_tenant() -> int | None:
 class AgentConfig:
     """Human-gate threshold and streaming knobs.
 
-    **ML never gates.** By founder decision the human-in-the-loop gate is driven by
-    **tool risk only** (``gate_min_risk``): a proposed action at or above that tier
-    routes to the human approval inbox — the money-shot. ML is a *solution signal*,
-    not a flow decider; a low-confidence or failed prediction never defers, abstains,
-    or terminates a run.
+    The human-in-the-loop gate is driven by **tool risk** (``gate_min_risk``): a
+    proposed action at or above that tier routes to the human approval inbox — the
+    money-shot. Nothing else can force or skip the gate, which is what makes the
+    guarantee explainable on stage: read the tool's declared risk, read this floor.
 
     Attributes:
         gate_min_risk: The minimum tool risk that forces the human gate. This is the
-            **only** gating signal (risk-driven, never ML).
-        run_ml: Whether to run the best-effort ML solution step when a subject is
-            resolved. The prediction is injected as supporting evidence, never gates.
+            **only** gating signal.
         stream_chunk_words: How many words per streamed answer ``token`` event.
         approval_park_timeout: Seconds the live ``/query`` socket holds a gate open
             before *parking* the run (durable row remains the source of truth).
@@ -140,7 +133,6 @@ class AgentConfig:
     """
 
     gate_min_risk: RiskLevel = RiskLevel.HIGH
-    run_ml: bool = True
     stream_chunk_words: int = 4
     max_plan_iterations: int = 2
     self_repair_enabled: bool = True
@@ -168,7 +160,6 @@ class AgentConfig:
         """
         return {
             "gate_min_risk": self.gate_min_risk.value,
-            "run_ml": self.run_ml,
             "stream_chunk_words": self.stream_chunk_words,
             "max_plan_iterations": self.max_plan_iterations,
             "self_repair_enabled": self.self_repair_enabled,
@@ -246,13 +237,10 @@ class AgentDeps:
     retrieve: RetrieveFn
     check_input: GuardFn
     check_output: GuardFn
-    predict_explain: PredictFn
     tool_definitions_for: ToolDefsFn
     run_tool: RunToolFn
     tool_risk: RiskFn
     render_system_prompt: RenderPromptFn
-    features_for: FeaturesFn
-    describe_prediction: DescribeFn
     #: Supervisor roster provider — returns the host adapter's routable specialists.
     #: Defaults to the core ``qa``-only fallback roster, so test fakes that omit it
     #: still route (to ``qa``); the host wires the real adapter roster here.

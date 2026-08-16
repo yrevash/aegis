@@ -1,11 +1,11 @@
 """``GET /agent/topology`` — the served agent-graph shape must BE the real graph.
 
 The console's orchestration map used to hardcode its own DAG and drifted badly from
-:mod:`aegis.agent.graph`: nine nodes instead of fifteen, and a human-approval branch
-drawn out of the ML step even though the graph gates on **tool risk** in ``gate`` and
-documents that ML never gates. These tests pin the two properties that made that
-drift possible — the full node set, and where the gate's branches actually go — plus
-the offline snapshot the web console falls back to when the backend is unreachable.
+:mod:`aegis.agent.graph`: nine nodes instead of the real set, and a human-approval
+branch drawn out of a step that never decided anything, even though the graph gates on
+**tool risk** in ``gate``. These tests pin the two properties that made that drift
+possible — the full node set, and where the gate's branches actually go — plus the
+offline snapshot the web console falls back to when the backend is unreachable.
 
 Everything here is offline: the topology is compiled over inert deps, so no node body
 ever runs and nothing reaches the wire.
@@ -33,7 +33,6 @@ REAL_NODE_IDS = {
     "answer_memory",
     "recall_memory",
     "retrieve",
-    "ml_predict",
     "plan",
     "gate",
     "approval",
@@ -63,7 +62,7 @@ async def test_topology_serves_every_real_node_with_its_label(client):
     body = resp.json()
 
     served = {n["id"] for n in body["nodes"]}
-    assert served == REAL_NODE_IDS, "served topology must be the real 15-node graph"
+    assert served == REAL_NODE_IDS, "served topology must be the real 14-node graph"
     # Labels come from the ONE table the ``_timed`` wrapper streams from.
     for node in body["nodes"]:
         assert node["label"] == NODE_LABELS[node["id"]]
@@ -77,8 +76,8 @@ async def test_topology_serves_every_real_node_with_its_label(client):
     }
 
 
-async def test_human_gate_branches_out_of_gate_never_out_of_ml(client):
-    """The human gate hangs off ``gate`` (tool risk) — ML is never a flow decider."""
+async def test_human_gate_branches_out_of_gate_and_nowhere_else(client):
+    """The human gate hangs off ``gate`` — the tool-risk decision — and only there."""
     resp = await client.get("/agent/topology", headers=_headers())
     edges = resp.json()["edges"]
 
@@ -86,11 +85,12 @@ async def test_human_gate_branches_out_of_gate_never_out_of_ml(client):
     assert out_of_gate == {"approval", "act"}
     assert all(e["conditional"] for e in edges if e["source"] == "gate")
 
-    # ML feeds the planner and nothing else; it can reach neither the gate nor the
-    # approval node directly. This is the exact claim the old hardcoded map broke.
-    assert {e["target"] for e in edges if e["source"] == "ml_predict"} == {"plan"}
+    # Retrieval hands straight to the planner: nothing sits between them any more.
+    assert {e["target"] for e in edges if e["source"] == "retrieve"} == {"plan"}
+    # Nothing but ``gate`` can reach the human approval node, and only ``gate`` and
+    # ``approval`` can reach ``act`` — so no path executes an action ungated.
     assert not [e for e in edges if e["target"] == "approval" and e["source"] != "gate"]
-    assert "ml_predict" not in {e["source"] for e in edges if e["target"] == "act"}
+    assert {e["source"] for e in edges if e["target"] == "act"} == {"gate", "approval"}
 
 
 async def test_topology_requires_authentication(client):

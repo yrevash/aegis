@@ -57,7 +57,6 @@ async def test_gate_pause_and_resume_full_sequence(make_deps):
             "routing",             # supervisor hand-off (right after the input rail)
             "retrieval",           # started
             "retrieval",           # done (graph delta)
-            "ml_explanation",
             "approval_required",   # the human gate
             "tool_call",           # only AFTER approval
             "tool_result",
@@ -108,7 +107,7 @@ async def test_gate_reject_skips_execution(make_deps):
 
 @pytest.mark.asyncio
 async def test_confident_low_risk_action_does_not_gate(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=False)
+    deps = make_deps(propose_tool=True, high_risk=False)
     registry = ApprovalRegistry()
 
     types = [
@@ -124,7 +123,7 @@ async def test_confident_low_risk_action_does_not_gate(make_deps):
 
 @pytest.mark.asyncio
 async def test_high_risk_action_forces_gate(make_deps):
-    deps = make_deps(propose_tool=True, uncertain=False, high_risk=True)
+    deps = make_deps(propose_tool=True, high_risk=True)
     registry = ApprovalRegistry()
     saw_gate = False
 
@@ -141,11 +140,11 @@ async def test_high_risk_action_forces_gate(make_deps):
 @pytest.mark.asyncio
 async def test_pure_qa_without_tools(make_deps):
     deps = make_deps(propose_tool=False)
-    events = [e async for e in run_agent("what is the refund policy?", deps=deps)]
+    events = [e async for e in run_agent("what is the escalation policy?", deps=deps)]
     types = [e.type for e in events]
 
     assert "tool_call" not in types
-    assert "ml_explanation" not in types  # ML only runs to gate an action
+    assert "ml_explanation" not in types  # no ML step runs in the graph at all
     # A plain question is routed to the qa specialist and runs the full pipeline.
     routing = next(e for e in events if e.type == "routing")
     assert routing.role == "qa"

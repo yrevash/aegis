@@ -1,8 +1,8 @@
 """Backend shim: the plan-and-execute LangGraph now lives in ``aegis.agent.graph``.
 
-The graph topology + every node body — guardrail → route → retrieve → ml_predict →
-plan → gate → act → reflect → generate → guardrail → stream, the bounded self-repair
-loop and the human-in-the-loop gate — moved into the standalone ``aegis.agent``
+The graph topology + every node body — guardrail → route → retrieve → plan → gate →
+act → reflect → generate → guardrail → stream, the bounded self-repair loop and the
+human-in-the-loop gate — moved into the standalone ``aegis.agent``
 package as a pure graph-over-injected-deps. This module is the strangler shim:
 
 - :func:`build_agent` re-binds the core builder to this host's **shared** agent

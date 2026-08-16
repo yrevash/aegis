@@ -8,9 +8,7 @@ import {
   Hand,
   Loader2,
   RefreshCcw,
-  Sparkles,
   Timer,
-  WifiOff,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
@@ -21,11 +19,11 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { QueryBar } from '@/components/console/QueryBar'
 import { cn } from '@/lib/utils'
 import { getHarnessConfig } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { isMock, probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import type { HarnessConfigResponse, HarnessKnob } from '@/lib/api/platform'
 import { personasForRole } from '@/config/personas'
 import type { Role } from '@/lib/stream'
@@ -60,7 +58,7 @@ const TYPE_TONE: Record<string, BadgeTone> = {
   str: 'neutral',
 }
 
-// ── Run-trace shape (derived from the run stream, or the offline sample) ───────
+// ── Run-trace shape (derived from the run stream) ─────────────────────────────
 
 interface TraceNode {
   node: string
@@ -102,8 +100,6 @@ interface RunTrace {
     durationMs: number
     cacheHit: boolean
   }
-  /** True when this is the illustrative offline sample, not a real run. */
-  sample: boolean
 }
 
 /**
@@ -162,33 +158,7 @@ function deriveTrace(state: RunState): RunTrace {
       durationMs,
       cacheHit: state.usage?.cache_hit ?? false,
     },
-    sample: false,
   }
-}
-
-/** The illustrative offline trace — the ops "gated refund" flow, clearly sampled. */
-const MOCK_TRACE: RunTrace = {
-  runId: 'run-mock-ops',
-  traceId: 'trace-mock-ops',
-  status: 'awaiting_approval',
-  nodes: [
-    { node: 'guard_input', label: 'Screening input', durationMs: 42, model: null, promptTokens: 0, completionTokens: 0, costUsd: 0 },
-    { node: 'retrieve', label: 'Searching knowledge base', durationMs: 380, model: null, promptTokens: 0, completionTokens: 0, costUsd: 0 },
-    { node: 'plan', label: 'Planning approach', durationMs: 910, model: 'gpt-4o-mini', promptTokens: 1120, completionTokens: 96, costUsd: 0.0009 },
-    { node: 'ml', label: 'Scoring refund eligibility', durationMs: 120, model: null, promptTokens: 0, completionTokens: 0, costUsd: 0 },
-    { node: 'act', label: 'Preparing action', durationMs: 210, model: 'gpt-4o-mini', promptTokens: 540, completionTokens: 82, costUsd: 0.0009 },
-  ],
-  gate: {
-    gated: true,
-    risk: 'high',
-    action: 'issue_refund',
-    rationale: 'Refund of $4,200 exceeds the $2,000 auto-approval ceiling — routing to the human gate.',
-    resolved: false,
-  },
-  tools: [{ tool: 'issue_refund', risk: 'high', ok: null, summary: 'Awaiting approval' }],
-  iterations: 0,
-  totals: { promptTokens: 1660, completionTokens: 178, costUsd: 0.0018, durationMs: 1662, cacheHit: false },
-  sample: true,
 }
 
 // ── Small presentation helpers ────────────────────────────────────────────────
@@ -312,16 +282,7 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
       <CardHeader
         eyebrow="aegis.agent · run_summary()"
         title="Run trace"
-        actions={
-          trace.sample ? (
-            <Badge tone="risk" className="gap-1.5">
-              <Sparkles className="size-3" />
-              sample
-            </Badge>
-          ) : (
-            <Badge tone={statusTone(trace.status)}>{trace.status ?? '—'}</Badge>
-          )
-        }
+        actions={<Badge tone={statusTone(trace.status)}>{trace.status ?? '—'}</Badge>}
       />
       <CardBody className="space-y-6 pt-0">
         {/* Node timeline */}
@@ -484,10 +445,10 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
  * `getHarnessConfig()` (value / default / bounds / doc), read-only and honest;
  * the run-trace panel folds a live run's event stream into the same record the
  * backend's `run_summary()` produces — node timeline, gate decision + risk tier,
- * tool calls, self-repair iterations and terminal totals. Offline it seeds the
- * trace from a clearly-labelled sample; a run replaces it with the real one.
+ * tool calls, self-repair iterations and terminal totals. Before a run there is
+ * no trace to show, and the panel says so rather than seeding a stand-in.
  */
-function HarnessView({ role, mock }: { role: Role; mock: boolean }): ReactElement {
+function HarnessView({ role }: { role: Role }): ReactElement {
   // Live session token — a constant `null` would fetch (and stream runs) with no
   // bearer on a reload and, being constant in the dependency array, never retry.
   const { session, hydrated } = useAuth()
@@ -518,7 +479,7 @@ function HarnessView({ role, mock }: { role: Role; mock: boolean }): ReactElemen
   const [personaId, setPersonaId] = useState<string>(() => personasForRole(role)[0]?.id ?? '')
 
   const hasRun = state.events.length > 0
-  const trace: RunTrace | null = hasRun ? deriveTrace(state) : mock ? MOCK_TRACE : null
+  const trace: RunTrace | null = hasRun ? deriveTrace(state) : null
 
   return (
     <div className="space-y-6">
@@ -567,45 +528,13 @@ function HarnessView({ role, mock }: { role: Role; mock: boolean }): ReactElemen
   )
 }
 
-/**
- * Client entry for the Harness section. Runs the boot probe once (live-first,
- * mock fallback) before mounting the view, mirroring `TokenOptMount` /
- * `CacheMount`. Offline is labelled with the honest banner; the config panel
- * reads the mock knob set and the trace seeds from the sample until a run.
- */
+/** Client entry for the Harness section — gated on a reachable backend. */
 export function HarnessMount({ role }: { role: Role }): ReactElement {
-  const [mode, setMode] = useState<ResolvedMode | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    void probeBackend().then((resolved) => {
-      if (alive) setMode(resolved)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  if (mode === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
   return (
-    <TooltipProvider>
-      {mode.mode === 'mock' && (
-        <div
-          role="status"
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-block px-4 py-1.5 text-center text-[0.78rem] font-medium text-white"
-        >
-          <WifiOff className="size-3.5 shrink-0" />
-          <span className="font-mono uppercase tracking-wide">Offline demo — mock data</span>
-        </div>
-      )}
-      <HarnessView role={role} mock={isMock()} />
-    </TooltipProvider>
+    <BackendGate>
+      <TooltipProvider>
+        <HarnessView role={role} />
+      </TooltipProvider>
+    </BackendGate>
   )
 }

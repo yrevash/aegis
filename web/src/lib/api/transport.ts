@@ -1,10 +1,10 @@
 /**
- * Transport abstraction for a query run.
+ * Transport contract for a query run.
  *
- * A run is a bidirectional session: the backend streams {@link StreamEvent}s,
- * and the human may resolve an approval gate mid-stream. Both the live SSE
- * backend and the in-browser mock implement {@link RunTransport}, so the UI and
- * the `useRunStream` hook are identical whether or not a backend is present.
+ * A run is a bidirectional session: the backend streams {@link StreamEvent}s over
+ * SSE, and the human may resolve an approval gate mid-stream. These types are the
+ * seam between `useRunStream` (which reduces events into state) and
+ * `liveTransport` (which speaks HTTP), so the hook never touches fetch directly.
  */
 
 import type { ApprovalDecision } from '@/lib/api/types'
@@ -26,22 +26,4 @@ export interface RunController {
   resolveApproval: (approvalId: string, decision: ApprovalDecision) => void
   /** Abort the run and release resources. */
   abort: () => void
-}
-
-/** Starts runs and returns a controller for each. */
-export interface RunTransport {
-  /**
-   * Begin a run.
-   *
-   * @param query - The user query.
-   * @param persona - Optional adapter persona id.
-   * @param token - Bearer token for RBAC, or null.
-   * @param handlers - Run lifecycle callbacks.
-   */
-  start: (
-    query: string,
-    persona: string | null,
-    token: string | null,
-    handlers: RunHandlers,
-  ) => RunController
 }

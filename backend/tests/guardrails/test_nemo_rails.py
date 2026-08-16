@@ -58,7 +58,7 @@ async def test_colang_input_rail_blocks_jailbreak():
 
 
 async def test_colang_input_rail_passes_benign():
-    result = await nemo.nemo_check_input("What is the refund policy for enterprise customers?")
+    result = await nemo.nemo_check_input("What is the escalation policy for enterprise customers?")
     assert result.verdict is GuardVerdict.PASS
 
 
@@ -78,5 +78,7 @@ async def test_colang_output_rail_redacts_pii():
 
 
 async def test_colang_output_rail_passes_clean():
-    result = await nemo.nemo_check_output("Refunds are available within 30 days of purchase.")
+    result = await nemo.nemo_check_output(
+        "Closures are confirmed within 30 days of the last customer reply."
+    )
     assert result.verdict is GuardVerdict.PASS
