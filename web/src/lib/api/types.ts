@@ -287,19 +287,31 @@ export interface PatchCheckResponse {
 
 // ── Client: risk map + savings (value + assurance) ──────────────────────────
 
-/** One entry on the risk heat-map (OWASP-Agentic-aligned). */
+/**
+ * One entry on the risk map (OWASP-Agentic-aligned). Carries **two** points on
+ * the same 1..5 grid — where the risk sits with no control (`likelihood` ×
+ * `impact`) and where the Aegis control leaves it (`residual_*`). `residual` is
+ * derived server-side from the residual point, never authored beside it.
+ */
 export interface RiskEntry {
   id: string
   title: string
   category: string
-  /** 1..5 likelihood band. */
+  /** Inherent 1..5 likelihood, before the control. */
   likelihood: number
-  /** 1..5 impact band. */
+  /** Inherent 1..5 impact, before the control. */
   impact: number
+  /** 1..5 likelihood left after the control — the axis controls actually move. */
+  residual_likelihood: number
+  /** 1..5 impact left after the control — moves only if the blast radius shrinks. */
+  residual_impact: number
+  /** Short client-facing name of the control, e.g. 'Human approval gate'. */
+  control_name: string
+  /** One plain-language sentence: what the control does. */
   mitigation: string
-  /** The control / requirement this maps to. */
+  /** Real file/module implementing the control — auditor provenance, not client copy. */
   control_ref: string
-  /** Residual risk after mitigation. */
+  /** Residual band, derived from `residual_likelihood × residual_impact`. */
   residual: 'low' | 'medium' | 'high'
 }
 

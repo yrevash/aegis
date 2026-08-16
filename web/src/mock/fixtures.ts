@@ -29,6 +29,7 @@ import type {
   MetricsResponse,
   PatchCheckResponse,
   PublicMetricsResponse,
+  RiskEntry,
   RiskMapResponse,
   SavingsResponse,
   StackResponse,
@@ -441,76 +442,156 @@ export function mockPatchCheck(packages?: string[]): PatchCheckResponse {
 // ── Client: risk map + savings ───────────────────────────────────────────────
 
 /**
- * Mock `GET /risk-map`. Six OWASP-Agentic-style agent risks placed on a 1..5
- * likelihood × impact grid, each mapped to the concrete Aegis control that
- * mitigates it and a residual band after that control.
+ * Band a 1..25 exposure exactly as the backend's `schemas.risk_band` does
+ * (≤6 low, ≤12 medium, else high). The fixture *derives* every residual band
+ * from its residual coordinate instead of hand-authoring it beside the point,
+ * so the mock cannot drift the way two independent fields would.
+ */
+function riskBand(exposure: number): RiskEntry['residual'] {
+  return exposure <= 6 ? 'low' : exposure <= 12 ? 'medium' : 'high'
+}
+
+/** A mock risk authored as its two points; the band is derived, never typed in. */
+function mockRisk(
+  r: Omit<RiskEntry, 'residual'>,
+): RiskEntry {
+  return { ...r, residual: riskBand(r.residual_likelihood * r.residual_impact) }
+}
+
+/**
+ * Mock `GET /risk-map`. The **same nine** OWASP-Agentic risks the live backend
+ * publishes, generated from `app/platform/risk_map.py` so an id means the same risk
+ * in demo mode and in live mode (they previously diverged: mock AA-05 was cost
+ * runaway, live AA-05 is insecure output handling). Each carries **two** points on
+ * the same 1..5 likelihood × impact grid: the inherent position with no control, and
+ * where the concrete Aegis control leaves it. Mirrors the backend's
+ * posture — controls move likelihood far more than impact (a human gate does not
+ * make a wrong action cheaper), and prompt injection keeps its full impact because
+ * the rails reduce how often it lands, not what a landed injection is worth.
  */
 export function mockRiskMap(): RiskMapResponse {
   return {
     generated_at: new Date().toISOString(),
-    note: 'Sample assurance map — OWASP-Agentic-aligned. Bands are illustrative; a live backend derives residuals from real guardrail + audit telemetry.',
+    note: 'Sample assurance map — OWASP-Agentic-aligned. Both positions are illustrative engineering judgement; a live backend publishes this deployment’s own posture.',
     scale: { likelihood: [1, 2, 3, 4, 5], impact: [1, 2, 3, 4, 5] },
     risks: [
-      {
+      mockRisk({
         id: 'AA-01',
-        title: 'Excessive agency',
+        title: 'Excessive agency / autonomy',
         category: 'Autonomy',
         likelihood: 3,
         impact: 5,
-        mitigation: 'Human-in-the-loop gate on high-risk tools; conformal deferral routes uncertain actions to an approver.',
-        control_ref: 'Aegis Tools · approval gate',
-        residual: 'low',
-      },
-      {
+        residual_likelihood: 1,
+        residual_impact: 5,
+        control_name: 'Human approval gate',
+        mitigation:
+          'Any action rated high-risk stops and waits for a named person to approve it. The agent cannot complete a consequential action on its own.',
+        control_ref: 'agent/graph.py (gate/approval nodes), agent/deps.py (gate_min_risk)',
+      }),
+      mockRisk({
         id: 'AA-02',
-        title: 'Tool misuse / unsafe invocation',
+        title: 'Tool misuse / hijacking',
         category: 'Tools',
         likelihood: 3,
         impact: 4,
-        mitigation: 'Allowlisted tools with typed args; non-allowlisted calls are denied and audited.',
-        control_ref: 'Aegis Tools · allowlist',
-        residual: 'low',
-      },
-      {
+        residual_likelihood: 1,
+        residual_impact: 3,
+        control_name: 'Tool allowlist + reversible actions',
+        mitigation:
+          'Each agent role can only use the tools on its own approved list, checked before anything happens — and every action it does take can be undone.',
+        control_ref: 'adapter/tools.py (ALLOWLIST, run_tool, is_allowed, InverseAction)',
+      }),
+      mockRisk({
         id: 'AA-03',
-        title: 'Prompt injection',
+        title: 'Prompt injection / jailbreak',
         category: 'Input integrity',
         likelihood: 4,
         impact: 4,
-        mitigation: 'Input rail scans and neutralises injection patterns before the planner sees untrusted context.',
-        control_ref: 'Aegis Guardrails · input rail',
-        residual: 'medium',
-      },
-      {
+        residual_likelihood: 3,
+        residual_impact: 4,
+        control_name: 'Fail-closed injection screening',
+        mitigation:
+          'Untrusted text is screened for hidden instructions before the planner reads it. If the screening itself fails, the input is treated as an attack rather than waved through — but no defence available today stops every injection.',
+        control_ref: 'guardrails/classifier.py (detect_injection), guardrails/rails.py (check_input)',
+      }),
+      mockRisk({
         id: 'AA-04',
         title: 'Sensitive-information disclosure',
         category: 'Output integrity',
         likelihood: 3,
         impact: 5,
-        mitigation: 'Output rail redacts PII (kind-only logging); RBAC scopes retrieval so answers never exceed the caller.',
-        control_ref: 'Aegis Guardrails · output rail + RBAC',
-        residual: 'low',
-      },
-      {
+        residual_likelihood: 1,
+        residual_impact: 5,
+        control_name: 'PII redaction, both directions',
+        mitigation:
+          'Personal data is masked before the model sees a question and again before an answer goes back out. Only the kind of data found is ever logged, never the value.',
+        control_ref: 'guardrails/pii.py, guardrails/rails.py (check_input/check_output)',
+      }),
+      mockRisk({
         id: 'AA-05',
-        title: 'Unbounded consumption / cost runaway',
+        title: 'Insecure output handling / trust-chain abuse',
+        category: 'Output integrity',
+        likelihood: 3,
+        impact: 4,
+        residual_likelihood: 2,
+        residual_impact: 4,
+        control_name: 'Output rail',
+        mitigation:
+          'Every answer is checked for a valid shape and screened for leaked internal instructions before anything downstream is allowed to trust it.',
+        control_ref: 'guardrails/rails.py (check_output), guardrails/schema.py',
+      }),
+      mockRisk({
+        id: 'AA-06',
+        title: 'Identity / privilege abuse across tenants',
         category: 'Governance',
+        likelihood: 2,
+        impact: 5,
+        residual_likelihood: 1,
+        residual_impact: 5,
+        control_name: 'Tenant isolation (roles + database-enforced)',
+        mitigation:
+          'Each customer\'s data is walled off by the database itself, underneath the application, with a second check in the application on top. Reading across that wall would take two independent failures.',
+        control_ref: 'core/governance.py, data/session.py (set_tenant_scope, RLS policies)',
+      }),
+      mockRisk({
+        id: 'AA-07',
+        title: 'Untraceable / unaccountable actions',
+        category: 'Accountability',
+        likelihood: 2,
+        impact: 4,
+        residual_likelihood: 1,
+        residual_impact: 4,
+        control_name: 'Immutable audit log',
+        mitigation:
+          'Every action the agent takes writes a permanent record — who asked, which model ran, what was done, who approved it — on the same path that performs it.',
+        control_ref: 'data/audit.py (record_audit), observability/otel.py',
+      }),
+      mockRisk({
+        id: 'AA-08',
+        title: 'Cascading failures / unbounded consumption',
+        category: 'Reliability',
         likelihood: 3,
         impact: 3,
-        mitigation: 'Per-tenant and per-user budgets at the model chokepoint degrade gracefully to "budget exceeded".',
-        control_ref: 'Aegis Governance · budgets',
-        residual: 'low',
-      },
-      {
-        id: 'AA-06',
+        residual_likelihood: 1,
+        residual_impact: 3,
+        control_name: 'Hard loop cap + spend ceiling',
+        mitigation:
+          'The agent\'s self-correction loop has a fixed maximum number of rounds, and per-customer spend limits stop a run before cost can escalate.',
+        control_ref: 'agent/graph.py (reflect), data/governance.py (enforce_governance)',
+      }),
+      mockRisk({
+        id: 'AA-09',
         title: 'Hallucination / ungrounded answer',
         category: 'Reliability',
         likelihood: 4,
         impact: 3,
-        mitigation: 'Retrieval-grounded generation with provenance; conformal abstention when confidence is degenerate.',
-        control_ref: 'Aegis ML · conformal + provenance',
-        residual: 'medium',
-      },
+        residual_likelihood: 3,
+        residual_impact: 3,
+        control_name: 'Grounded answers + abstention',
+        mitigation:
+          'Answers are built from retrieved source documents and cite them, and the system declines to answer rather than guessing when its confidence is too low.',
+        control_ref: 'retrieval/pipeline.py, ml/model.py (conformal intervals)',
+      }),
     ],
   }
 }

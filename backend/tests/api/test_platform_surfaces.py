@@ -11,8 +11,10 @@ from __future__ import annotations
 from importlib import metadata
 
 import pytest
+from pydantic import ValidationError
 
 import app.platform.patches as patch_check_mod
+from app.api.schemas import RiskEntry, risk_band
 from app.core.security import create_access_token
 from app.platform.patches import RegistryUnreachableError
 from app.platform.stack import _installed_version
@@ -258,12 +260,73 @@ async def test_risk_map_shape_and_integrity(client, db):
     for r in risks:
         assert 1 <= r["likelihood"] <= 5
         assert 1 <= r["impact"] <= 5
+        assert 1 <= r["residual_likelihood"] <= 5
+        assert 1 <= r["residual_impact"] <= 5
+        # A control holds a risk down; it can never make it worse.
+        assert r["residual_likelihood"] <= r["likelihood"]
+        assert r["residual_impact"] <= r["impact"]
         assert r["control_ref"].strip(), "control_ref must point at a real file"
+        assert r["control_name"].strip(), "every risk needs a client-facing control name"
         assert r["mitigation"].strip()
+        # The client-facing copy must stay client-facing: a code path leaking into the
+        # control name or the mitigation sentence is how this page stops being readable.
+        for field in ("control_name", "mitigation"):
+            assert ".py" not in r[field], f"{r['id']}.{field} reads as code, not as English"
         assert r["residual"] in {"low", "medium", "high"}
+        # The band is derived from the residual point — one source of truth.
+        assert r["residual"] == risk_band(r["residual_likelihood"] * r["residual_impact"])
     # Injection is never marked fully resolved (honest posture).
     injection = next(r for r in risks if "injection" in r["title"].lower())
     assert injection["residual"] != "low"
+    # ...and the rails are credited with landing it less often, not with making a
+    # landed injection cheaper: impact must be untouched.
+    assert injection["residual_likelihood"] < injection["likelihood"]
+    assert injection["residual_impact"] == injection["impact"]
+
+
+async def test_risk_map_every_risk_moves_and_totals_reduce(client, db):
+    """The page's whole claim: every risk moves, and the total genuinely drops."""
+    resp = await client.get("/risk-map", headers=_headers("platform_admin"))
+    risks = resp.json()["risks"]
+    inherent = sum(r["likelihood"] * r["impact"] for r in risks)
+    residual = sum(r["residual_likelihood"] * r["residual_impact"] for r in risks)
+    assert residual < inherent, "the map must show a real reduction, not a flat line"
+    for r in risks:
+        assert r["residual_likelihood"] * r["residual_impact"] < r["likelihood"] * r["impact"], (
+            f"{r['id']} claims a control but does not move"
+        )
+    # Controls move likelihood far more often than impact (a human gate does not
+    # make a wrong action cheaper) — assert that shape rather than a bare total.
+    moved_l = sum(1 for r in risks if r["residual_likelihood"] < r["likelihood"])
+    moved_i = sum(1 for r in risks if r["residual_impact"] < r["impact"])
+    assert moved_l == len(risks)
+    assert moved_i < moved_l
+
+
+async def test_risk_band_is_the_single_definition_of_a_band():
+    """Bands are a published rule over the 1..25 exposure scale, not an opinion."""
+    assert risk_band(1) == "low"
+    assert risk_band(6) == "low"
+    assert risk_band(7) == "medium"
+    assert risk_band(12) == "medium"
+    assert risk_band(13) == "high"
+    assert risk_band(25) == "high"
+
+
+async def test_risk_entry_rejects_a_control_that_adds_risk():
+    with pytest.raises(ValidationError, match="cannot add risk"):
+        RiskEntry(
+            id="AA-XX",
+            title="impossible",
+            category="Test",
+            likelihood=2,
+            impact=2,
+            residual_likelihood=3,
+            residual_impact=2,
+            mitigation="m",
+            control_name="n",
+            control_ref="c",
+        )
 
 
 async def test_risk_map_authz(client, db):

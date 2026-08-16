@@ -1,25 +1,35 @@
 /**
- * Pure ranking + scoring logic for the client Risk Map.
+ * Pure movement + ranking logic for the client Risk Map.
  *
  * Side-effect free and chart-library-free so it is unit-testable in a plain Node
- * environment; `RiskMap.tsx` and `RiskLadder.tsx` only render what these
+ * environment; `RiskMap.tsx` and `RiskDumbbell.tsx` only render what these
  * functions derive.
  *
- * The view is a **ranked ladder**, not a heat-map grid. With a handful of risks
- * a 5×5 matrix is 80% empty space and forces the reader to cross-reference a
- * pill against a card. A sorted list answers the page's actual question —
- * "which risk should worry me, and what did the control buy?" — in one pass:
+ * The page answers exactly one question — **"how much has Aegis reduced my
+ * risk?"** — so every function here is about the *distance between two points*,
+ * not about a single score. Each risk arrives with an inherent coordinate
+ * (`likelihood × impact`, before any control) and a residual coordinate
+ * (`residual_likelihood × residual_impact`, after the real control named in
+ * `control_ref`). The gap between them is the product story.
  *
- *   • ordering + bar length  → inherent exposure (likelihood × impact), *before*
- *   • colour                 → residual band, *after* the mitigating control
+ * Two encodings, and only two:
  *
- * One colour, one meaning: residual. Length is the only other channel.
+ *   • **position + distance** → exposure before, exposure after, and the move.
+ *   • **colour**              → the residual band, i.e. what is still carried.
+ *
+ * Colour has one meaning on this page. The "before" mark is deliberately
+ * achromatic — it is where you started, not a second severity scale.
+ *
+ * History worth not repeating: v1 was a 5×5 matrix (20 of 25 cells empty, two
+ * competing colour scales); v2 was a ranked ladder that encoded before and after
+ * as *separate* channels and so never showed the movement between them. This
+ * module exists to make the movement first-class.
  */
 
 import type { Signal } from '@/config/signals'
 import type { RiskEntry } from '@/lib/api/types'
 
-/** Residual risk band after the mitigating control. */
+/** Residual risk band after the mitigating control (derived server-side). */
 export type Residual = RiskEntry['residual']
 
 /** The three signals a residual band maps onto (green / amber / red). */
@@ -44,17 +54,24 @@ export const RESIDUAL_META: Record<Residual, ResidualMeta> = {
   high: { label: 'High', signal: 'block', rank: 2 },
 }
 
-/** Residual bands worst-first — the order the ladder and the tally read in. */
+/** Residual bands worst-first — the order the tally reads in. */
 export const RESIDUAL_ORDER: readonly Residual[] = ['high', 'medium', 'low']
 
-/** Resolve a residual band to the signal hue that colours its bar. */
+/** Resolve a residual band to the signal hue that colours its mark. */
 export function residualSignal(residual: Residual): ResidualSignal {
   return RESIDUAL_META[residual].signal
 }
 
-/** Inherent exposure before mitigation: likelihood × impact. */
-export function exposureScore(risk: Pick<RiskEntry, 'likelihood' | 'impact'>): number {
+/** Exposure before any control: inherent likelihood × impact. */
+export function inherentExposure(risk: Pick<RiskEntry, 'likelihood' | 'impact'>): number {
   return risk.likelihood * risk.impact
+}
+
+/** Exposure left after the control: residual likelihood × impact. */
+export function residualExposure(
+  risk: Pick<RiskEntry, 'residual_likelihood' | 'residual_impact'>,
+): number {
+  return risk.residual_likelihood * risk.residual_impact
 }
 
 /** The scale the backend publishes with the map (`likelihood` × `impact` bands). */
@@ -65,58 +82,137 @@ export interface RiskScale {
 
 /**
  * Worst exposure the published scale allows (max likelihood × max impact) — the
- * denominator every bar is drawn against, so bar lengths are comparable and the
- * "of 25" in the key is derived from the response rather than hard-coded.
- * Falls back to the largest observed exposure when a scale arrives empty.
+ * shared axis every row is drawn against, so distances are comparable across
+ * rows and the "of 25" in the key is derived from the response rather than
+ * hard-coded. Falls back to the largest observed exposure when a scale arrives
+ * empty.
  */
 export function maxExposure(scale: RiskScale, risks: RiskEntry[] = []): number {
   const maxL = Math.max(0, ...scale.likelihood)
   const maxI = Math.max(0, ...scale.impact)
   const fromScale = maxL * maxI
-  const fromRisks = Math.max(0, ...risks.map(exposureScore))
+  const fromRisks = Math.max(0, ...risks.map(inherentExposure))
   return Math.max(fromScale, fromRisks, 1)
 }
 
-/** One rung of the ladder: a risk with its derived exposure and bar length. */
-export interface RankedRisk {
+/** One risk as a *move*: where it started, where it ended, and how far it came. */
+export interface RiskMovement {
   risk: RiskEntry
-  /** Inherent exposure, likelihood × impact. */
-  exposure: number
-  /** Exposure as a percentage of the scale's worst cell — the bar length, 0..100. */
-  pct: number
-  /** 1-based position in the ranking. */
-  rank: number
+  /** Exposure before the control (likelihood × impact). */
+  inherent: number
+  /** Exposure after the control (residual likelihood × impact). */
+  residual: number
+  /** Exposure points the control removed — `inherent − residual`, never negative. */
+  removed: number
+  /** Share of the inherent exposure removed, 0..100 (the row's "−67%"). */
+  removedPct: number
+  /** Inherent position along the shared axis, 0..100 — the hollow "before" mark. */
+  inherentPos: number
+  /** Residual position along the shared axis, 0..100 — the filled "after" mark. */
+  residualPos: number
+}
+
+/** Clamp a raw percentage into 0..100 so a stray value can never overflow a track. */
+function clampPct(n: number): number {
+  return Math.max(0, Math.min(100, n))
 }
 
 /**
- * Rank the risks the way a reader needs them: **worst residual first** (what is
- * still carried after the control), then highest inherent exposure, then id for
- * a stable order. Bars therefore descend within each residual band, and the
- * colour boundaries in the list line up with the residual tally above it.
+ * Turn each risk into its movement along a shared 0..`maxExposure` axis, ordered
+ * **largest reduction first** (tie: the larger residual first, so the thing still
+ * worth worrying about outranks an equal-sized win; then id for stability).
+ *
+ * Reduction-first ordering is the point of the page: the rows form a wedge of
+ * long arrows narrowing to short ones, which *is* the answer to "how much did
+ * you reduce my risk?". It does not hide the honest part — the shortest arrows
+ * sit at the bottom with their residual dots furthest right, exactly where an
+ * unsolved problem like prompt injection belongs.
  */
-export function rankRisks(scale: RiskScale, risks: RiskEntry[]): RankedRisk[] {
-  const denominator = maxExposure(scale, risks)
-  return [...risks]
-    .sort(
-      (a, b) =>
-        RESIDUAL_META[b.residual].rank - RESIDUAL_META[a.residual].rank ||
-        exposureScore(b) - exposureScore(a) ||
-        a.id.localeCompare(b.id),
-    )
-    .map((risk, index) => {
-      const exposure = exposureScore(risk)
+export function rankByReduction(scale: RiskScale, risks: RiskEntry[]): RiskMovement[] {
+  const axis = maxExposure(scale, risks)
+  return risks
+    .map((risk): RiskMovement => {
+      const inherent = inherentExposure(risk)
+      const residual = residualExposure(risk)
+      const removed = Math.max(0, inherent - residual)
       return {
         risk,
-        exposure,
-        pct: Math.max(0, Math.min(100, (exposure / denominator) * 100)),
-        rank: index + 1,
+        inherent,
+        residual,
+        removed,
+        removedPct: inherent > 0 ? clampPct((removed / inherent) * 100) : 0,
+        inherentPos: clampPct((inherent / axis) * 100),
+        residualPos: clampPct((residual / axis) * 100),
       }
     })
+    .sort(
+      (a, b) =>
+        b.removed - a.removed ||
+        b.residual - a.residual ||
+        a.risk.id.localeCompare(b.risk.id),
+    )
+}
+
+/** The one number a client repeats to their boss. */
+export interface RiskTotals {
+  /** Total exposure across every risk with no Aegis control in the way. */
+  inherent: number
+  /** Total exposure left after the controls. */
+  residual: number
+  /** Exposure points removed — `inherent − residual`. */
+  removed: number
+  /** Share of total exposure removed, 0..100. */
+  removedPct: number
+  /** How many risks actually moved (an unmoved risk would be an honest zero). */
+  moved: number
+  /** How many risks are on the map. */
+  total: number
+}
+
+/**
+ * Aggregate the whole map into the headline: total exposure before, total after,
+ * and the percentage removed. Summing likelihood × impact is a crude aggregate
+ * and is labelled as such in the UI — but it is *derived from the same numbers
+ * every row shows*, so a reader can audit the headline against the rows.
+ */
+export function riskTotals(risks: RiskEntry[]): RiskTotals {
+  let inherent = 0
+  let residual = 0
+  let moved = 0
+  for (const r of risks) {
+    const before = inherentExposure(r)
+    const after = residualExposure(r)
+    inherent += before
+    residual += after
+    if (after < before) moved += 1
+  }
+  const removed = Math.max(0, inherent - residual)
+  return {
+    inherent,
+    residual,
+    removed,
+    removedPct: inherent > 0 ? clampPct((removed / inherent) * 100) : 0,
+    moved,
+    total: risks.length,
+  }
 }
 
 /** Count of risks in each residual band (always all three keys present). */
 export function residualCounts(risks: RiskEntry[]): Record<Residual, number> {
   const out: Record<Residual, number> = { low: 0, medium: 0, high: 0 }
   for (const r of risks) out[r.residual] += 1
+  return out
+}
+
+/**
+ * Residual *exposure* summed per band — how the leftover total splits between
+ * green and amber. This is what lets the headline bar show, in the same colour
+ * scale the rows use, that the remainder is not uniformly harmless: the amber
+ * slice is prompt injection and friends, and it stays visible at the top of the
+ * page rather than being averaged away.
+ */
+export function residualByBand(risks: RiskEntry[]): Record<Residual, number> {
+  const out: Record<Residual, number> = { low: 0, medium: 0, high: 0 }
+  for (const r of risks) out[r.residual] += residualExposure(r)
   return out
 }

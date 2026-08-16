@@ -14,31 +14,34 @@ import { probeBackend, type ResolvedMode } from '@/lib/api/mode'
 import { cn } from '@/lib/utils'
 import type { RiskMapResponse } from '@/lib/api/types'
 
-import { RiskLadder } from './RiskLadder'
+import { RiskDumbbell } from './RiskDumbbell'
 import {
   maxExposure,
-  rankRisks,
+  rankByReduction,
   RESIDUAL_META,
   RESIDUAL_ORDER,
+  residualByBand,
   residualCounts,
   residualSignal,
-  type Residual,
+  riskTotals,
+  type RiskTotals,
 } from './riskRanking'
 
 /**
  * Client — Risk Map.
  *
- * The business-facing assurance view: every way an autonomous agent can go
- * wrong, **ranked worst residual first**, each with the concrete Aegis control
- * that holds it down. Ordering and bar length carry inherent exposure
- * (likelihood × impact) — the *before*; colour carries the residual band left
- * after the control — the *after*. Pure ranking/scoring lives in the
- * render-free `riskRanking.ts`; this file fetches and composes.
+ * One question, answered once: **how much has Aegis reduced my risk?**
  *
- * This deliberately replaced a 5×5 heat-map grid: with a handful of risks the
- * matrix was mostly empty cells and needed a second pass over cards below to
- * decode each marker. The ladder is one reading order — no cross-referencing,
- * no duplicated likelihood/impact readout, one colour with one meaning.
+ * The headline gives the number a client repeats to their boss (total exposure
+ * before → after, and the % removed), split by the residual band so the amber
+ * that is left is visible in the very first thing you read. Under it, one
+ * dumbbell per risk shows the *movement* — hollow mark where the risk sits with
+ * no control, filled mark where the real Aegis control leaves it, arrow along the
+ * distance removed — with the control that did the moving named on the same row.
+ *
+ * Pure scoring lives in the render-free `riskRanking.ts`; this file fetches and
+ * composes. Colour means exactly one thing on this page: the residual band still
+ * carried. Everything about "before" is achromatic on purpose.
  */
 
 type LoadState =
@@ -100,9 +103,9 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
   }
 
   const { note, generated_at, scale, risks } = load.data
-  const counts = residualCounts(risks)
+  const totals = riskTotals(risks)
   const ceiling = maxExposure(scale, risks)
-  const ranked = rankRisks(scale, risks)
+  const moves = rankByReduction(scale, risks)
   const sample = isSample(note)
 
   return (
@@ -112,15 +115,16 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <ShieldAlert className="size-4 shrink-0 text-risk" />
           <p className="t-body max-w-2xl text-muted-foreground">
-            Every way an autonomous agent can go wrong, ranked by what is still left after the
-            control that holds it down.
+            Every way an autonomous agent can go wrong — and how far each one moved once the Aegis
+            control was put on it.
           </p>
           <InfoTip label="How to read this">
-            How to read this: risks are ordered worst residual first. A bar&apos;s length is the
-            inherent exposure before mitigation (likelihood × impact, out of {ceiling}); its colour
-            is the residual band after the Aegis control. A long green bar is the point — a serious
-            risk the guardrail brought down. This map is populated for this deployment&apos;s posture
-            and is repopulated per problem.
+            How to read this: each risk is scored likelihood × impact, out of {ceiling}. The hollow
+            mark is where it sits with no control in the way; the filled mark is where the Aegis
+            control leaves it, and the arrow is the distance removed. Left is safer. Colour means one
+            thing only — the risk still carried after the control. Both positions are engineering
+            judgement grounded in the OWASP-Agentic mapping, not measured incident rates, and prompt
+            injection is deliberately never shown as solved.
           </InfoTip>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -133,23 +137,20 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
         </div>
       </div>
 
-      {/* Residual band tally — the headline number the ladder then explains. */}
-      <div className="flex flex-wrap gap-2">
-        {RESIDUAL_ORDER.map((band) => (
-          <ResidualCount key={band} band={band} count={counts[band]} />
-        ))}
-      </div>
+      {/* The headline: what the whole map adds up to. */}
+      <ReductionHero totals={totals} risks={risks} />
 
-      {/* The ranked ladder: risks, their exposure, and their controls in one pass. */}
+      {/* The movement, risk by risk. */}
       <Card>
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-5 pt-4 pb-3">
-          <p className="eyebrow">Risks &amp; controls · worst residual first</p>
-          <p className="t-body text-muted-foreground">
-            Bar = inherent exposure (likelihood × impact, of {ceiling}) · colour = residual after
-            control
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-5 pt-4 pb-2">
+          <p className="eyebrow">How far each risk moved · biggest reduction first</p>
+          <p className="t-body flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+            <MarkKey kind="before" label="before Aegis" />
+            <MarkKey kind="after" label="after the control" />
+            <span className="text-muted-foreground/80">← lower risk</span>
           </p>
         </div>
-        <RiskLadder ranked={ranked} ceiling={ceiling} />
+        <RiskDumbbell moves={moves} ceiling={ceiling} />
       </Card>
 
       <p className="font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
@@ -159,29 +160,148 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
   )
 }
 
-/** A residual-band tally chip. */
-function ResidualCount({ band, count }: { band: Residual; count: number }): ReactElement {
-  const token = SIGNALS[residualSignal(band)]
+/**
+ * The number a client repeats to their boss: total exposure before Aegis, total
+ * after, and the share removed — reconciled against a bar whose remaining
+ * portion is split by residual band, so "what is left" never reads as uniformly
+ * safe. The removed portion is deliberately achromatic: it is absence of risk,
+ * not a fourth signal colour.
+ */
+function ReductionHero({
+  totals,
+  risks,
+}: {
+  totals: RiskTotals
+  risks: RiskMapResponse['risks']
+}): ReactElement {
+  const byBand = residualByBand(risks)
+  const counts = residualCounts(risks)
+  const pctOf = (n: number): number => (totals.inherent > 0 ? (n / totals.inherent) * 100 : 0)
+
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 rounded-lg border px-3 py-1.5',
-        token.border,
-        token.bg,
-      )}
-    >
-      <span className="tabular font-display text-lg leading-none font-semibold text-foreground">
-        {count}
-      </span>
-      <span className={cn('t-label', token.text)}>{RESIDUAL_META[band].label} residual</span>
+    <Card className="gap-0 p-6">
+      <div className="flex items-center gap-2">
+        <span className="size-2 rounded-full" style={{ background: SIGNALS.ok.hex }} aria-hidden />
+        <span className="eyebrow">Risk removed by Aegis</span>
+        <InfoTip label="About this number">
+          Total exposure is every risk&apos;s likelihood × impact added up — a crude aggregate, but
+          derived from exactly the numbers each row below shows, so you can audit it against them.
+          The &quot;after&quot; total is the same sum taken at each risk&apos;s residual position.
+        </InfoTip>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-end justify-between gap-x-10 gap-y-4">
+        <div className="flex items-end gap-3">
+          <span className="tabular font-display text-5xl leading-none font-semibold text-foreground">
+            {Math.round(totals.removedPct)}%
+          </span>
+          <span className="t-body mb-1 max-w-[20rem] text-muted-foreground">
+            less agent-risk exposure across all {totals.total} risks
+          </span>
+        </div>
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <Figure label="Before Aegis" value={totals.inherent} muted />
+          <Figure label="After Aegis" value={totals.residual} />
+          <Figure label="Risks moved" value={totals.moved} suffix={`of ${totals.total}`} />
+        </div>
+      </div>
+
+      {/* Before (whole bar) vs after (the coloured head) — reconciles the % above. */}
+      <div
+        className="mt-5 flex h-3.5 w-full overflow-hidden rounded-full bg-surface-2"
+        role="img"
+        aria-label={`Total exposure fell from ${totals.inherent} to ${totals.residual}, removing ${Math.round(totals.removedPct)} percent. Of what remains, ${byBand.low} sits in the low band, ${byBand.medium} in medium and ${byBand.high} in high.`}
+      >
+        {RESIDUAL_ORDER.slice()
+          .reverse()
+          .map((band) =>
+            byBand[band] > 0 ? (
+              <span
+                key={band}
+                className="h-full"
+                style={{ width: `${pctOf(byBand[band])}%`, background: SIGNALS[residualSignal(band)].hex }}
+              />
+            ) : null,
+          )}
+      </div>
+
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[0.72rem] text-muted-foreground">
+        {RESIDUAL_ORDER.slice()
+          .reverse()
+          .map((band) =>
+            counts[band] > 0 ? (
+              <span key={band} className="flex items-center gap-1.5">
+                <span
+                  className="size-2.5 rounded-full"
+                  style={{ background: SIGNALS[residualSignal(band)].hex }}
+                  aria-hidden
+                />
+                {RESIDUAL_META[band].label} residual ·{' '}
+                <span className="tabular font-medium text-foreground">{counts[band]} risks</span>,{' '}
+                <span className="tabular font-medium text-foreground">{byBand[band]}</span> still
+                carried
+              </span>
+            ) : null,
+          )}
+        <span className="flex items-center gap-1.5">
+          <span className="size-2.5 rounded-full bg-surface-2 ring-1 ring-border" aria-hidden />
+          Removed by Aegis ·{' '}
+          <span className="tabular font-medium text-foreground">{totals.removed}</span>
+        </span>
+      </div>
+    </Card>
+  )
+}
+
+/** One labelled headline figure. */
+function Figure({
+  label,
+  value,
+  suffix,
+  muted = false,
+}: {
+  label: string
+  value: number
+  suffix?: string
+  muted?: boolean
+}): ReactElement {
+  return (
+    <div>
+      <p className="eyebrow mb-1">{label}</p>
+      <p
+        className={cn(
+          'tabular font-display text-2xl leading-none font-semibold',
+          muted ? 'text-muted-foreground' : 'text-foreground',
+        )}
+      >
+        {value}
+        {suffix && <span className="ml-1 text-sm font-normal text-muted-foreground">{suffix}</span>}
+      </p>
     </div>
   )
 }
 
 /**
+ * The two marks, shown once in the chart header so the dumbbells need no legend
+ * lecture: a hollow mark for "before", a filled one for "after".
+ */
+function MarkKey({ kind, label }: { kind: 'before' | 'after'; label: string }): ReactElement {
+  return (
+    <span className="flex items-center gap-1.5">
+      {kind === 'before' ? (
+        <span className="size-2.5 rounded-full border-[1.5px] border-muted-foreground bg-card" aria-hidden />
+      ) : (
+        <span className="size-2.5 rounded-full bg-muted-foreground" aria-hidden />
+      )}
+      {label}
+    </span>
+  )
+}
+
+/**
  * Client entry for the Risk Map section. Runs the boot probe once (live-first,
- * mock fallback), shows the honest offline banner, then renders the ladder wired
- * to `GET /risk-map`.
+ * mock fallback), shows the honest offline banner, then renders the reduction
+ * view wired to `GET /risk-map`.
  */
 export function RiskMount(): ReactElement {
   // `GET /risk-map` is tenant-scoped: hand the view the real session bearer, and

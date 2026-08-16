@@ -65,7 +65,7 @@ from aegis.vision import (  # noqa: F401 - re-exported: identity with aegis.visi
     ScreenVerdict,
     VisionAnalysis,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enums
@@ -1182,30 +1182,113 @@ class PatchCheckResponse(BaseModel):
     results: list[PatchResult] = Field(default_factory=list)
 
 
+RiskBand = Literal["low", "medium", "high"]
+
+# Band cut-points on the 1..25 exposure scale, expressed as fractions of the worst
+# cell (5 × 5 = 25): at or under a quarter of the scale is **low**, past half is
+# **high**, everything between is **medium**. Stated as constants so the band is a
+# published rule rather than a per-entry opinion.
+_BAND_LOW_MAX = 6  # ≤ 25 × 0.25
+_BAND_MEDIUM_MAX = 12  # ≤ 25 × 0.50
+
+
+def risk_band(exposure: int) -> RiskBand:
+    """Band a likelihood × impact exposure (1..25) as low / medium / high.
+
+    The **single** definition of what a band means, used for the residual point so
+    that the band and the coordinate can never drift apart.
+    """
+    if exposure <= _BAND_LOW_MAX:
+        return "low"
+    if exposure <= _BAND_MEDIUM_MAX:
+        return "medium"
+    return "high"
+
+
 class RiskEntry(BaseModel):
-    """One entry on the agent-risk heat-map (OWASP-Agentic-aligned)."""
+    """One entry on the agent-risk map (OWASP-Agentic-aligned).
+
+    Two coordinates, not one. ``likelihood`` × ``impact`` is the **inherent**
+    position — where the risk sits with no Aegis control in the way.
+    ``residual_likelihood`` × ``residual_impact`` is where it sits **after** the
+    real control named in ``control_ref``. The movement between the two points is
+    the thing worth showing a client.
+
+    Controls overwhelmingly move **likelihood**: a human gate does not make a wrong
+    refund cheaper, it makes it far less likely to ever be issued. Impact moves only
+    where the control genuinely shrinks the consequence (e.g. reversible tools).
+
+    ``residual`` is **derived** from the residual coordinate via :func:`risk_band`
+    rather than authored beside it, so a band can never contradict its own point.
+    """
 
     id: str
     title: str
     category: str
-    likelihood: int = Field(ge=1, le=5, description="1..5 likelihood band.")
-    impact: int = Field(ge=1, le=5, description="1..5 impact band.")
-    mitigation: str = Field(description="The real Aegis control that mitigates the risk.")
-    control_ref: str = Field(description="Real file/module implementing the control.")
-    residual: Literal["low", "medium", "high"] = Field(
-        description="Residual risk after the mitigation."
+    likelihood: int = Field(ge=1, le=5, description="Inherent 1..5 likelihood, before the control.")
+    impact: int = Field(ge=1, le=5, description="Inherent 1..5 impact, before the control.")
+    residual_likelihood: int = Field(
+        ge=1,
+        le=5,
+        description="1..5 likelihood left after the control — the axis controls actually move.",
     )
+    residual_impact: int = Field(
+        ge=1,
+        le=5,
+        description="1..5 impact left after the control — moves only if the blast radius shrinks.",
+    )
+    control_name: str = Field(
+        description="Short client-facing name of the control, e.g. 'Human approval gate'."
+    )
+    mitigation: str = Field(
+        description="One plain-language sentence a non-engineer can read: what the control does."
+    )
+    control_ref: str = Field(
+        description=(
+            "Real file/module implementing the control — auditor provenance, not client copy. "
+            "The engineering rationale for each position lives in comments in "
+            "app/platform/risk_map.py rather than on the wire."
+        )
+    )
+
+    @model_validator(mode="after")
+    def _residual_never_exceeds_inherent(self) -> RiskEntry:
+        """A control may hold a risk down; it may never make it worse."""
+        if self.residual_likelihood > self.likelihood or self.residual_impact > self.impact:
+            raise ValueError(
+                f"{self.id}: residual ({self.residual_likelihood}×{self.residual_impact}) "
+                f"exceeds inherent ({self.likelihood}×{self.impact}) — a control cannot add risk"
+            )
+        return self
+
+    @property
+    def inherent_exposure(self) -> int:
+        """Exposure before the control: inherent likelihood × impact (1..25)."""
+        return self.likelihood * self.impact
+
+    @property
+    def residual_exposure(self) -> int:
+        """Exposure after the control: residual likelihood × impact (1..25)."""
+        return self.residual_likelihood * self.residual_impact
+
+    @computed_field(  # type: ignore[prop-decorator]
+        description="Residual band, derived from residual_likelihood × residual_impact."
+    )
+    @property
+    def residual(self) -> RiskBand:
+        """The residual band — derived, never hand-authored (one source of truth)."""
+        return risk_band(self.residual_exposure)
 
 
 class RiskScale(BaseModel):
-    """The 1..5 axes the heat-map is plotted on."""
+    """The 1..5 axes the map is plotted on."""
 
     likelihood: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
     impact: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
 
 
 class RiskMapResponse(BaseModel):
-    """Body for `GET /risk-map` — the agent-risk heat-map + its scale."""
+    """Body for `GET /risk-map` — the agent-risk map + its scale."""
 
     generated_at: str = Field(description="ISO 8601 UTC time the map was generated.")
     note: str = Field(description="How to read the map (this deployment's own posture).")
