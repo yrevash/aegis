@@ -1,5 +1,13 @@
 # MEMORY & CONTEXT-ENGINEERING SPEC (SOTA, buildable)
 
+> **Vector-layer correction (2026-08-15, ADR 0009).** This spec was written when
+> embeddings were searched with the `pgvector` Postgres extension. They no longer are.
+> Embeddings persist in Postgres as a portable JSON `list[float]` — the durable
+> *source of record* — and ANN search runs in an **embedded vector store**
+> (`aegis.retrieval.vector_store.ChromaVectorStore`, an on-disk index with no server).
+> Wherever the text below says "pgvector top-k" or "`<=>` operator", read "vector-store
+> top-k". The scoring, bitemporal, budget and assembly design is unaffected.
+
 Authoritative spec for the memory subsystem + context engineering. Design-only until
 the critic pass verifies the load-bearing code seams. Core is domain-agnostic
 (`app/memory/*`); all domain meaning via `app/adapter/memory_spec.py` (+ `skills/*.md`).
@@ -23,7 +31,7 @@ user/session over time*) is SEPARATE from the Neo4j/LightRAG domain-knowledge gr
 - **Fusion:** reuse existing `reciprocal_rank_fusion` (k=60).
 
 ## A. WRITE PATH (saving)
-Tiers: **Working** (ephemeral `AgentState`) · **Episodic** (Postgres `memory_message` +pgvector, per turn) · **Semantic** (`memory_fact` bitemporal + `memory_profile` JSONB, batched) · **Procedural** (`adapter/skills/*.md`) · **Write audit** (`memory_write_log`).
+Tiers: **Working** (ephemeral `AgentState`) · **Episodic** (Postgres `memory_message` + a mirrored vector-store entry, per turn) · **Semantic** (`memory_fact` bitemporal + `memory_profile` JSONB, batched) · **Procedural** (`adapter/skills/*.md`) · **Write audit** (`memory_write_log`).
 
 **Embedding-cost rule:** embed on consolidation, NOT every raw turn — EXCEPT reuse the
 user-query embedding `retrieve()`/`SemanticCache` already computes (free) for the user turn.
@@ -50,7 +58,7 @@ created_at, expired_at?, last_access_at, access_count, source_turn_ids[], supers
 `recency=0.5**(age_days/half_life)`, `importance=imp/10`, `frequency=log1p(access)/log1p(max)`.
 Defaults `w_rel=1.0, w_rec=0.5, w_imp=0.5, w_freq=0`; half-life facts=30d, episodic=3d.
 
-**Per-tier recall:** semantic facts = pgvector top-k(20) over valid facts → composite → top-n(6);
+**Per-tier recall:** semantic facts = vector-store top-k(20) over valid facts → composite → top-n(6);
 profile = injected whole (tiny, high value); episodic = RRF-fuse (recency-SQL last-K ∪ vector
 top-k(20)) → top-n(4) minus those already in the raw window; procedural = top-n(1–2) skills by
 cosine on skill descriptions, persona-gated, adapter may override.
@@ -110,7 +118,7 @@ Mirrors the ML adapter pattern (core never knows domain nouns).
 **Schemas/RLS:** models in `memory/stores.py` (`VectorType(3072)`, `JsonB`, nullable
 `tenant_id` FK, cross-dialect for SQLite tests). Add the 5 memory tables to `_RLS_TABLES`
 in `data/session.py` (auto RLS via `bootstrap_rls()`); recall/persist call `set_tenant_scope`.
-pgvector HNSW/IVFFlat cosine on embeddings; btree `(subject_id, created_at DESC)`; partial
+HNSW cosine index in the embedded vector store; btree `(subject_id, created_at DESC)` in Postgres; partial
 index `WHERE invalid_at IS NULL AND expired_at IS NULL`.
 
 **Degradation ladder:** Postgres → full; no Postgres → Redis rolling window (recency only);
@@ -152,13 +160,13 @@ _Refs: mem0 2504.19413 · MemGPT/Letta 2310.08560 · Zep/Graphiti 2501.13956 · 
 - `render_system_prompt(persona, *, extra_context=None)` exists (`adapter/prompts.py:63`) BUT the graph calls `deps.render_system_prompt(persona)` and the prod wrapper `_default_render_system_prompt(persona_id)` (`deps.py:413`) **drops extra_context**. Build must widen the dep wrapper to accept+forward `extra_context` and update both call sites (`graph.py:301,480`).
 - The query embedding is computed at `pipeline.py:109` and **discarded** (not on `RetrievalResult`, not in `SemanticCache`); on an **exact cache hit** it's never computed; in lite mode it's `_local_embed` **dim 256** (`retrieval/memory.py:49`), not 3072. Reuse requires returning `query_vec` (+dim/source) from `retrieve`; use it for the user-turn embedding **only when dim==EMBED_DIM and it's a real gateway vector**, else embed at consolidation.
 - `reciprocal_rank_fusion(*, k=60)` consumes `RankedList[Candidate]` — episodic fusion must wrap memory rows as `Candidate` + `RankedList`; `RetrievalOrigin` has no "recency" — tag the recency list as an existing origin (e.g. BM25) or extend the enum.
-- `cosine_similarity(a,b)` exists pure-Python (`retrieval/vectors.py:13`). `AgentState` is `total=False` (safe to add optional keys). Test DB is **SQLite/aiosqlite** everywhere → **no pgvector operators in tests**.
+- `cosine_similarity(a,b)` exists pure-Python (`retrieval/vectors.py:13`). `AgentState` is `total=False` (safe to add optional keys). Test DB is **SQLite/aiosqlite** everywhere → **no SQL vector operators in tests**.
 
-**BLOCKER 1 — dual-path recall (pgvector vs SQLite).** `recall.py` must branch on
-`session.get_bind().dialect.name == "postgresql"`: Postgres → `ORDER BY embedding <=> :qvec LIMIT k`
-(+ HNSW/IVFFlat cosine index); non-pg (SQLite tests) → app-level `WHERE subject_id/tenant_id` +
-valid-only predicates to bound the candidate set, fetch rows, cosine **in Python** via
-`cosine_similarity`, sort, top-k. Never a single pgvector-only query.
+**BLOCKER 1 — dual-path recall (resolved by ADR 0009).** Originally: branch `recall.py` on
+the SQL dialect so Postgres could use `ORDER BY embedding <=> :qvec` while SQLite fell back to
+Python cosine. The embedded vector store removed the branch — recall bounds the candidate set
+with `WHERE subject_id/tenant_id` + valid-only predicates and scores against the vector store
+(or pure-Python `cosine_similarity` when it is unavailable), identically on both dialects.
 
 **BLOCKER 2 — isolation must not depend on RLS.** The bootstrapped policy `tenant_id =
 NULLIF(current_setting('app.tenant_id',true),'')::int` **fails closed on NULL** → a nullable-tenant

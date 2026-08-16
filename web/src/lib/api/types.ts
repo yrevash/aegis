@@ -169,11 +169,6 @@ export interface ApprovalsResponse {
   rows: ApprovalRow[]
 }
 
-/** Body for `POST /approvals/{id}/decision`. */
-export interface ApprovalDecisionRequest {
-  decision: ApprovalDecision
-}
-
 /** Response from `POST /approvals/{id}/decision`. */
 export interface ApprovalDecisionResponse {
   id: number
@@ -267,14 +262,6 @@ export interface PatchResult {
   note?: string
 }
 
-/**
- * Body for `POST /stack/patch-check` — optionally narrow the check to a subset
- * of packages; omit to check the whole stack.
- */
-export interface PatchCheckRequest {
-  packages?: string[]
-}
-
 /** Response from `POST /stack/patch-check` — installed vs latest per package. */
 export interface PatchCheckResponse {
   /** ISO 8601 timestamp the check ran. */
@@ -345,11 +332,6 @@ export interface SavingsResponse {
   saved_pct: number
   note: string
   breakdown: SavingsBreakdownRow[]
-}
-
-/** Body for `POST /admin/users/{id}/role` — reassign a user's portal role. */
-export interface UserRoleUpdateRequest {
-  role: Role
 }
 
 /** Per-model usage roll-up row. */

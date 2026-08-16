@@ -110,11 +110,6 @@ export interface OpsReleaseResponse {
   approval_id: string | null
 }
 
-/** Body for `POST /ops/rollback`. */
-export interface OpsRollbackRequest {
-  prompt_key: string
-}
-
 /** Response from `POST /ops/rollback`. */
 export interface OpsRollbackResponse {
   prompt_key: string

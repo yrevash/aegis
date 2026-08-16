@@ -331,12 +331,17 @@ minutes rather than at audit — and it generalises: distinguish a transient net
 from a schema failure, because the second is permanent and will affect every subsequent
 call.
 
-**Three pieces of documentation are stale**, and I would fix them because each teaches
-something false to whoever reads it next. `docs/module/aegis-data.md` still describes the
-removed `VectorType` compiling to `vector(dim)`. The forecast ledger's helper says its `ts`
-is `TIMESTAMP WITHOUT TIME ZONE`, which the timestamp alignment already converted. And the
-host's RLS wrapper claims the policy fails closed on an unset scope, which the policy's own
-documentation says it deliberately does not.
+**Documentation goes stale in a way that teaches something false**, so I treat it as a
+defect. Three examples we found and fixed: a module doc still describing a `VectorType`
+that compiled to `vector(dim)` after it had been deleted; the host's RLS wrapper claiming
+the policy fails closed on an unset scope when it deliberately fails open; and the forecast
+ledger's helper asserting its `ts` is `TIMESTAMP WITHOUT TIME ZONE` when the startup
+alignment converts it to `timestamptz` on Postgres.
+
+That last one turned out to be more than a wording problem. If the column is `timestamptz`
+and the bound is naive, Postgres reads the bound in the session timezone — which we do not
+pin — so the lookback window silently shifts by the server's offset. A stale comment was
+the only visible symptom of a real behaviour risk.
 
 ---
 

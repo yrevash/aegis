@@ -16,9 +16,9 @@ source of truth also used by the README and the frontend Platform view.
 |---|---|---|---|
 | **Aegis Gateway** | LiteLLM | `app.core.llm` | live |
 | **Aegis Router** | LangGraph | `app.agent.router` | live |
-| **Aegis Memory** | Postgres + pgvector | `app.memory` | live |
+| **Aegis Memory** | Postgres + embedded Chroma | `app.memory` | live |
 | **Aegis Cache** | Redis | `app.retrieval.cache` | live |
-| **Aegis Retrieval** | Neo4j/LightRAG + pgvector | `app.retrieval.pipeline` | live |
+| **Aegis Retrieval** | Neo4j/LightRAG + embedded NanoVectorDB | `app.retrieval.pipeline` | live |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | `app.ml.model` | live |
 | **Aegis Guardrails** | programmatic + NeMo Colang | `app.guardrails.rails` | live |
 | **Aegis Evals** | RAGAS-style proxies + LLM judge | `app.eval.harness` | live |
@@ -94,9 +94,9 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 
 ## 4. Retrieval (LightRAG + hybrid stores)
 
-- **LightRAG is the pipeline; Neo4j and pgvector are the stores.** LightRAG ingests documents (`insert()`), calls an LLM to extract entities+relationships, builds the graph + embeddings, and retrieves over both at query time. Extraction + embeddings run **via API** (`gpt-4o-mini` + `text-embedding-3-large`), so nothing heavy runs locally.
+- **LightRAG is the pipeline; Neo4j and the embedded vector store are the stores.** LightRAG ingests documents (`insert()`), calls an LLM to extract entities+relationships, builds the graph + embeddings, and retrieves over both at query time. Extraction + embeddings run **via API** (`gpt-4o-mini` + `text-embedding-3-large`), so nothing heavy runs locally.
 - **Why LightRAG (not Microsoft GraphRAG):** it skips the expensive community-summarization step, so indexing is fast and cheap — right for indexing synthetic data on the day. (This is an ADR-worthy decision.)
-- **Stores:** Neo4j (graph, local) + **local Postgres with pgvector** (vectors + relational). Graph traversal answers relationship questions; vector search answers similarity questions; LightRAG uses both.
+- **Stores:** Neo4j (graph, local) + an **embedded vector store** (Chroma for retrieval and memory recall, NanoVectorDB for LightRAG's own internal vectors) + local Postgres (relational, KV, doc-status). No vector server and no `pgvector` extension — see ADR 0009. Graph traversal answers relationship questions; vector search answers similarity questions; LightRAG uses both.
 - **Two-stage retrieval:** retrieve a wide candidate set → **rerank** → pass top context to generation.
 - **Semantic cache in front:** embed query → nearest-neighbour lookup in **Redis (local)** → hit returns instantly; miss runs retrieval then writes back. Exact-match tier first, semantic tier on top.
 - **Agentic RAG:** the agent decides *what* to retrieve dynamically — this is the differentiator, not the components.
@@ -118,11 +118,12 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 | Store | Tech (local) | Holds |
 |---|---|---|
 | Knowledge graph | Neo4j (Desktop/Community) | entities + relationships from LightRAG |
-| Vector + relational | **PostgreSQL + pgvector** | chunk embeddings; users+roles (RBAC); domain records; **audit log**; eval results |
+| Vector index | **Embedded Chroma / NanoVectorDB** (on-disk, no server) | chunk + memory embeddings, ANN search |
+| Relational | **PostgreSQL** (no extension needed) | embeddings of record (JSON); users+roles (RBAC); domain records; **audit log**; eval results |
 | Semantic cache | Redis (WSL2 or Memurai) | query-embedding → answer (TTL) |
 | Traces | Arize Phoenix (in-process) | `gen_ai.*` spans |
 
-- **No Supabase.** Install PostgreSQL locally and enable pgvector (`CREATE EXTENSION vector;`). One local DB serves both relational and vector needs.
+- **No Supabase, and no `pgvector`.** Install PostgreSQL locally; no server-side extension is required. ANN search lives in the embedded vector store, which is a directory on disk, not a service (ADR 0009).
 - **Audit log is a first-class table:** every autonomous action, the approving human (if any), the model used, and the trace id. This is what makes the system defensible (security + maintainability).
 
 ---

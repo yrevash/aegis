@@ -38,11 +38,6 @@ export function decideMode(forceMock: boolean, reachable: boolean | null): Resol
 /** The cached resolved mode; starts optimistic (or forced) before the probe. */
 let resolved: ResolvedMode = decideMode(FORCE_MOCK, null)
 
-/** The current resolved mode. */
-export function getResolvedMode(): ResolvedMode {
-  return resolved
-}
-
 /** Whether the app is currently using the mock transport. */
 export function isMock(): boolean {
   return resolved.mode === 'mock'

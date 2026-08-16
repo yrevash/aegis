@@ -236,7 +236,8 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
  * probe once (live-first, mock fallback), shows the honest offline banner, then
  * mounts the money-shot dashboard wired to the metrics poller.
  *
- * The admin Overview is intentionally NOT wired to this — it stays a placeholder.
+ * The admin Overview deliberately uses its own surface (AdminCommandCenter), so
+ * this mount is scoped to the devops + client portals.
  */
 export function DashboardMount({ role }: { role: Role }): ReactElement {
   // `/metrics` is RBAC-scoped: hand the dashboard the real session bearer, and

@@ -18,7 +18,6 @@ from aegis.retrieval.graph_extract import (
     ENTITY_TYPES,
     Entity,
     LLMCachedExtractor,
-    Relation,
     SpacyExtractor,
     build_extractor,
     find_mentions,

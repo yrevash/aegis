@@ -33,10 +33,13 @@ aegis = { path = "../aegis", editable = true }
 # Embeddings persist as JSON of record; vector ANN search lives in the embedded vector
 # store (retrieval extra), so pgvector was removed — Postgres stays for
 # relational/KV/governance only.
+# No ``alembic``: this project has no migration tree (no ``alembic.ini``, no
+# ``versions/``), because the schema is materialised by ``app.data.session.bootstrap``
+# via ``metadata.create_all``. Declaring alembic bought an unusable CLI and a heavier
+# install; add it back with a real migration tree if create_all is ever outgrown.
 data = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
-    "alembic>=1.13",
 ]
 # Multi-tenant RBAC + governance (§3.3): JWT access tokens + Argon2 password hashing.
 auth = [

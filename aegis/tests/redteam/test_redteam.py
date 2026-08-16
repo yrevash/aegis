@@ -22,7 +22,7 @@ from aegis.redteam import (
     run_redteam,
 )
 from aegis.redteam.battery import Attack
-from aegis.redteam.runner import AttackResult, _score
+from aegis.redteam.runner import _score
 
 
 @pytest.fixture(autouse=True)

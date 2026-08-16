@@ -27,14 +27,14 @@ import { SecurityMount } from '@/components/security/SecurityView'
 import { SimulationMount } from '@/components/sim/SimulationView'
 import { VisionMount } from '@/components/vision/VisionView'
 import { VoiceMount } from '@/components/voice/VoiceView'
-import { SectionPlaceholder } from '@/components/portal/SectionPlaceholder'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
 
 /**
  * A single portal section. Validates that `section` is exposed by `role` (RBAC),
- * then renders the Console's dedicated live-run placeholder or the generic
- * titled placeholder. generateStaticParams enumerates every role/section combo
- * so `next build` prints the full portal route tree.
+ * then renders that section's live surface — every section in ROLE_SECTIONS has
+ * one, so an unmatched slug is a 404 rather than an empty shell.
+ * generateStaticParams enumerates every role/section combo so `next build`
+ * prints the full portal route tree.
  */
 export function generateStaticParams(): Array<{ role: string; section: string }> {
   return Object.entries(ROLE_SECTIONS).flatMap(([role, sections]) =>
@@ -82,5 +82,5 @@ export default async function SectionPage({
   // devops + client get the money-shot metrics dashboard.
   if (section === 'dashboard' && role === 'admin') return <AdminDashboardMount />
   if (section === 'dashboard') return <DashboardMount role={role} />
-  return <SectionPlaceholder section={def} />
+  notFound()
 }

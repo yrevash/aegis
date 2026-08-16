@@ -173,7 +173,7 @@ hand-authored `adapter/corpus/*.md` files are ingested by the retrieval pipeline
 ([`retrieval/pipeline.py`](../../backend/src/app/retrieval/pipeline.py)), which chunks them
 **structure-aware** (heading-scoped chunks with overlap and a section prefix), validates
 each chunk for poisoning, deduplicates (exact **and** near-duplicate), and writes them into
-pgvector (vectors) and Neo4j (graph, via LightRAG). Re-ingesting the same corpus is
+the embedded vector store (vectors) and Neo4j (graph, via LightRAG). Re-ingesting the same corpus is
 **idempotent** — it won't create duplicates — so you can regenerate and re-run freely.
 Writing varied, well-structured documents here directly improves retrieval quality
 downstream.

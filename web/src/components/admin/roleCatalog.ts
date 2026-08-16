@@ -61,19 +61,6 @@ export const ROLE_CATALOG: Record<Role, RoleMeta> = {
 }
 
 /**
- * Privilege ranking; higher = more access. Admin is strictly the top so the guard
- * can reason about "demotion out of admin". The three focused roles sit below it
- * and are treated as peers — moving between ai_team / devops / client is a lateral
- * scope change, never a lockout risk, so it is never guarded.
- */
-export const ROLE_RANK: Record<Role, number> = {
-  admin: 3,
-  ai_team: 2,
-  devops: 2,
-  client: 1,
-}
-
-/**
  * Fold any wire role string onto the canonical portal {@link Role}. Known legacy
  * mock labels map to their portal equivalent; the exact portal strings pass
  * through unchanged.

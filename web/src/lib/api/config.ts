@@ -34,10 +34,3 @@ function mockQueryParam(): boolean {
  */
 export const FORCE_MOCK: boolean =
   process.env.NEXT_PUBLIC_USE_MOCK === 'true' || mockQueryParam()
-
-/**
- * Legacy flag kept for compatibility. Defaults to **false** (live-first); it is
- * true only when mock is explicitly forced. Prefer `isMock()` from `mode.ts`,
- * which also reflects the boot probe's fallback.
- */
-export const USE_MOCK: boolean = FORCE_MOCK

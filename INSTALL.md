@@ -24,8 +24,9 @@
 > **Fastest path (no agent needed):** `scripts\bootstrap.ps1` → `scripts\preflight.ps1`
 > → `scripts\start.ps1 -Mode lite` (Windows; `.sh` twins for mac/Linux). The
 > one-page day-of guide with the fallback ladder is **`docs/operations/runbook.md`**;
-> the teaching path starts at **`docs/learn/00-what-aegis-is.md`**. The rest of this
-> file is the long-form manual.
+> the system walkthrough starts at **`docs/learn/00-what-aegis-is.md`** and the
+> per-module course at **`docs/teaching/README.md`**. The rest of this file is the
+> long-form manual.
 
 Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
 

@@ -10,8 +10,7 @@
  *
  * Every section carries a short executive label, the honest tech `hint`, a
  * plain-language `tooltip` (a hard requirement), and an optional `group` heading.
- * In this scaffold each section renders a titled placeholder page; the Console is
- * the one surface with a dedicated live-run placeholder.
+ * Every section listed in ROLE_SECTIONS renders a live surface.
  */
 
 import {
@@ -35,7 +34,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sigma,
-  SlidersHorizontal,
   Sparkles,
   Swords,
   Timer,
@@ -64,7 +62,7 @@ export interface Section {
   tooltip: string
   /** Optional group heading this item sits under (defaults to "Workspace"). */
   group?: string
-  /** Whether this is the live Console surface (special placeholder). */
+  /** Whether this is the live Console surface. */
   console?: boolean
 }
 
@@ -257,14 +255,6 @@ export const SECTIONS: Record<string, Section> = {
     icon: Landmark,
     hint: 'tenants · budgets',
     tooltip: 'Aegis Governance — tenants, budgets, usage & RBAC read straight from the ledger',
-    group: 'Governance',
-  },
-  admin: {
-    id: 'admin',
-    label: 'Settings',
-    icon: SlidersHorizontal,
-    hint: 'tenants · budgets',
-    tooltip: 'Aegis Governance settings — tenants · budgets · usage · RBAC',
     group: 'Governance',
   },
   audit: {

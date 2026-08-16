@@ -40,6 +40,13 @@ backend/scripts/garak_reports/
 .DS_Store
 Thumbs.db
 
+# Local service runtime artifacts. These were committed by accident once: a Postgres
+# startup log and an 88-byte Redis snapshot, neither of which says anything about this
+# codebase. They reappear whenever someone runs the stack locally.
+.pglog
+*.rdb
+dump.rdb
+
 # Editor
 .vscode/
 .idea/

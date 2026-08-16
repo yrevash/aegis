@@ -53,7 +53,6 @@ forecast = [
 ]
 pii = [
     { name = "presidio-analyzer" },
-    { name = "presidio-anonymizer" },
     { name = "spacy" },
 ]
 
@@ -86,7 +85,6 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'ml'", specifier = ">=2.2,<2.4" },
     { name = "pillow", marker = "extra == 'media'", specifier = ">=10.0" },
     { name = "presidio-analyzer", marker = "extra == 'pii'", specifier = ">=2.2" },
-    { name = "presidio-anonymizer", marker = "extra == 'pii'", specifier = ">=2.2" },
     { name = "presidio-image-redactor", marker = "extra == 'media'", specifier = ">=0.0.53" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
@@ -3727,18 +3725,6 @@ wheels = [
 ]
 
 [[package]]
-name = "presidio-anonymizer"
-version = "2.2.364"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cryptography" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/66/93/0889954ed2448fe20b1a714e96fccd7c4a60dc1cc078efaeae10b7975807/presidio_anonymizer-2.2.364.tar.gz", hash = "sha256:eced015f1195f79a91ad11b34a531ceca2e5c673ed57e97649efea3d3293155d", size = 26006 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/47/9a353565cbd6d1af87c9e6f68e9e2b89dd5ced7be9634284c6975abd63d2/presidio_anonymizer-2.2.364-py3-none-any.whl", hash = "sha256:f3edfe80b5e83a22976439727e9d449c796b12efdf6cd70a6db860d4942a6b72", size = 38128 },
-]
-
-[[package]]
 name = "prometheus-client"
 version = "0.26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5672,7 +5658,6 @@ auth = [
     { name = "pyjwt" },
 ]
 data = [
-    { name = "alembic" },
     { name = "asyncpg" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
@@ -5725,7 +5710,6 @@ requires-dist = [
     { name = "aegis", extras = ["forecast"], marker = "extra == 'forecast'", editable = "../aegis" },
     { name = "aegis", extras = ["pii"], marker = "extra == 'guardrails'", editable = "../aegis" },
     { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.20" },
-    { name = "alembic", marker = "extra == 'data'", specifier = ">=1.13" },
     { name = "argon2-cffi", marker = "extra == 'auth'", specifier = ">=23.1" },
     { name = "arize-phoenix", marker = "extra == 'observability'", specifier = ">=14.6,<15" },
     { name = "arize-phoenix-otel", marker = "extra == 'observability'", specifier = ">=0.6" },

@@ -77,4 +77,5 @@ Every Aegis module adheres to a single design contract enforcing modularity, obs
 
 ---
 
-**Design spec:** [Aegis Module Contract + Guardrails Pilot](../docs/module/00-overview.md)
+**Design spec:** [The Aegis module reference — contract, streaming spine, module map](../docs/module/MODULE_REFERENCE.md)
+**Course:** [Teaching Aegis — zero to mastery](../docs/teaching/README.md)

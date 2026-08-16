@@ -164,8 +164,16 @@ async def bootstrap_rls(engine: AsyncEngine | None = None) -> None:
     """Enable Row-Level Security + a per-tenant policy on the tenant-scoped tables.
 
     Delegates to :func:`aegis.governance.rls.bootstrap_rls` (the RLS policy on
-    ``users`` / ``usage_ledger`` / ``approvals``, failing closed on an unset GUC).
-    Postgres-only and idempotent; a no-op on other dialects.
+    ``users`` / ``usage_ledger`` / ``approvals``). Postgres-only and idempotent; a
+    no-op on other dialects.
+
+    Note the policy's unset-scope behaviour, because it is the opposite of what this
+    docstring used to claim: an unset, empty or non-numeric ``app.tenant_id`` makes the
+    predicate **stop restricting** — it fails *open*, deliberately, because the host
+    reads ``users`` by username before any tenant is known and platform-admin surfaces
+    span tenants. A row whose ``tenant_id`` column is NULL is the case that fails
+    *closed* under a bound scope. See ``_TENANT_ISOLATION_PREDICATE`` in
+    :mod:`aegis.governance.rls` for the full reasoning.
 
     Args:
         engine: Engine to configure; defaults to the process-wide engine.

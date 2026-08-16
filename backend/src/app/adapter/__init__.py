@@ -5,7 +5,7 @@ through the names re-exported here. Everything domain-specific lives in the five
 sibling modules; this file is the interface contract. Swapping the domain means
 editing those modules and keeping these exports stable.
 
-Exposed surface (matches ``docs/module/MODULE_REFERENCE.md`` §"app.adapter"):
+Exposed surface (the domain seam described in ``docs/learn/50-run-and-extend.md``):
 
 * **schema** — the :mod:`app.adapter.schema` module + key record types.
 * **personas** — :data:`PERSONAS`, :func:`get_persona`, :class:`Persona`.

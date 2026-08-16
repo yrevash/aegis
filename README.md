@@ -180,7 +180,7 @@ Domain logic never leaks into the core.
 ## Repository layout
 
 ```
-aegis/          # the importable core — 14 modules, 723 tests
+aegis/          # the importable core — 18 packages, 723 tests
 backend/        # FastAPI composition root — 51 endpoints, 593 tests
   src/app/
     api/        # routes + Pydantic contracts + SSE event schema
@@ -188,7 +188,7 @@ backend/        # FastAPI composition root — 51 endpoints, 593 tests
     adapter/    # the domain seam
     platform/   # role-portal read surfaces
 web/            # Next.js console — landing page + four role portals
-docs/           # teaching path, ADRs, module reference, threat model
+docs/           # learn path, teaching course, ADRs, module reference, threat model
 scripts/        # bootstrap · preflight · start  (.sh and .ps1)
 ```
 
@@ -207,9 +207,10 @@ a six-file path from zero to the whole system. `INSTALL.md` is the setup manual;
 
 | | |
 |---|---|
-| [`docs/learn/`](docs/learn/) | The teaching path — architecture, backend, frontend, pipelines |
-| [`docs/module/`](docs/module/) | Per-module reference for the importable core |
-| [`docs/adr/`](docs/adr/) | Eight architecture decision records |
+| [`docs/learn/`](docs/learn/00-what-aegis-is.md) | The system, end to end — architecture, backend, frontend, pipelines, run and extend |
+| [`docs/teaching/`](docs/teaching/README.md) | The course — one folder per module, from no prior knowledge to defending every design decision |
+| [`docs/module/MODULE_REFERENCE.md`](docs/module/MODULE_REFERENCE.md) | The Module Contract, the streaming spine, and the module map for the importable core |
+| [`docs/adr/`](docs/adr/) | Nine architecture decision records |
 | [`docs/security/`](docs/security/) | Threat model and OWASP Agentic Top-10 mapping |
 | [`docs/operations/runbook.md`](docs/operations/runbook.md) | One-page operations guide and fallback ladder |
 

@@ -46,8 +46,16 @@ _WINDOW_SECONDS: dict[str, int] = {"day": 24 * 3600, "month": 30 * 24 * 3600}
 def _now_naive() -> datetime:
     """Return the current UTC time as a naive datetime.
 
-    The ledger's ``ts`` is ``TIMESTAMP WITHOUT TIME ZONE`` (naive UTC on both Postgres
-    and SQLite), so every bound compared against it must be naive UTC too.
+    The ledger's ``ts`` is naive UTC on SQLite. On PostgreSQL it is **not**: the
+    startup alignment in :mod:`app.data.session` converts pre-existing naive timestamp
+    columns to ``timestamptz``, so the column is tz-aware there.
+
+    That mismatch is worth knowing about. Comparing a naive bound against a
+    ``timestamptz`` column makes PostgreSQL interpret the bound in the *session*
+    ``TimeZone``, which this application does not pin — so on a server whose timezone
+    is not UTC, the lookback and budget windows below are offset by that amount.
+    Fixing it properly means making the bound dialect-aware rather than assuming
+    naive, which is a behaviour change and needs its own test.
 
     Returns:
         The current UTC instant, tz-naive.

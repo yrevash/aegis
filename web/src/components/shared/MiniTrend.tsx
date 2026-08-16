@@ -22,8 +22,7 @@ const VIEW_W = 120
  * A small inline trend for a KPI hero or stat tile — a dependency-free,
  * SSR/test-safe SVG that honours the signal palette. Below two finite points it
  * shows a quiet baseline rather than inventing a shape (numbers stay honest).
- * Self-contained so any surface can use it without touching `charts/` or
- * `metrics/`; the fuller live `Sparkline` remains available for polled history.
+ * Self-contained so any surface can use it without touching `charts/`.
  */
 export function MiniTrend({
   data,

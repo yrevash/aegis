@@ -30,7 +30,7 @@ The only secret you must set is `GENAILAB_API_KEY` in `backend/.env`.
 
 | Rung | Command | Needs | You get |
 |---|---|---|---|
-| **Full** | `start … full` | gateway + Postgres/pgvector + Neo4j + Redis | Real RAG over stores, persisted audit, live Phoenix traces |
+| **Full** | `start … full` | gateway + Postgres + Neo4j + Redis | Real RAG over stores, persisted audit, live Phoenix traces |
 | **Lite** ⭐ | `start … lite` | **gateway only** (no databases) | **Real** agent, LLM, streaming, tools, gate, token/cost — in-memory records/graph/cache, SQLite audit |
 | **Demo-safe** | `start … safe` | nothing | Full UI money-shot on the in-browser mock — cannot fail |
 
@@ -55,15 +55,16 @@ Backend (http://localhost:8000, FastAPI/uvicorn)   endpoints: /auth/login(JWT) /
   ├── Model gateway  →  https://genailab.tcs.in     (GENAILAB_API_KEY, self-signed cert → SSL verify off)
   │        └─ chokepoint enforces per-tenant budget/RPM/TPM before spend (governed logins only)
   ├── STORES=off (lite): in-memory hybrid recall + in-memory cache, SQLite, memory checkpointer ← no databases
-  └── STORES=on  (full): Postgres/pgvector 5432 (primary: tenants/budgets/ledger/approvals/
-             checkpoints/audit/vectors) · Neo4j 7687 · Redis 6379 · Phoenix 6006
+  └── STORES=on  (full): Postgres 5432 (primary: tenants/budgets/ledger/approvals/
+             checkpoints/audit) · Neo4j 7687 · Redis 6379 · Phoenix 6006
+             plus the EMBEDDED vector store — an on-disk directory, no server, no port
 ```
 
 | Port | Service | Needed in |
 |---|---|---|
 | 3000 | Console (Next.js, `web/`) | all modes |
 | 8000 | Backend (FastAPI) | lite, full |
-| 5432 | Postgres + pgvector | full |
+| 5432 | Postgres (no extension required) | full |
 | 7687 | Neo4j (bolt) | full |
 | 6379 | Redis / Memurai | full |
 | 6006 | Arize Phoenix (traces) | full (optional) |
@@ -77,9 +78,9 @@ plus the console (`web/`) via `npm`. You never install these by hand.
 
 | Extra | Powers | Key libs |
 |---|---|---|
-| `data` | audit log, vectors, RBAC tables | sqlalchemy, asyncpg, pgvector, alembic |
+| `data` | audit log, embeddings of record, RBAC tables | sqlalchemy, asyncpg, alembic |
 | `agent` | the LangGraph loop + gate | langgraph, langchain-core/openai |
-| `retrieval` | RAG over stores (full mode) | lightrag-hku, neo4j, redis |
+| `retrieval` | RAG over stores (full mode) | lightrag-hku, neo4j, redis, chromadb (embedded) |
 | `ml` | prediction + conformal + SHAP | xgboost, scikit-learn, mapie, shap |
 | `guardrails` | input/output rails | nemoguardrails |
 | `observability` | OTel → Phoenix | opentelemetry-*, arize-phoenix |

@@ -248,16 +248,6 @@ def risks() -> tuple[RiskEntry, ...]:
     return _RISKS
 
 
-def total_inherent_exposure() -> int:
-    """Sum of every risk's inherent likelihood × impact — the 'before' total."""
-    return sum(r.inherent_exposure for r in _RISKS)
-
-
-def total_residual_exposure() -> int:
-    """Sum of every risk's residual likelihood × impact — the 'after' total."""
-    return sum(r.residual_exposure for r in _RISKS)
-
-
 def build_risk_map() -> RiskMapResponse:
     """Build the agent-risk map response for this deployment's posture."""
     return RiskMapResponse(

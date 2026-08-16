@@ -2,7 +2,7 @@
 
 The look the problem statement drops into on the day. Synthesized from two Figma
 references the team chose (both accessible + extracted via Figma MCP). Source of
-truth for the UI build. Screenshots in `scratchpad/`:
+truth for the UI build. The two Figma sources (screenshots are no longer kept in the repo):
 - `figma_snowui_admin.png` — **SnowUI / ByeWind** admin (`x4aT6z1dFul30bPSDyCM7L`, frame `549:8646`) — minimal, enterprise.
 - `figma_saas_dashboard.png` — **SaaS Dashboard UI Kit** (`atV80NmxCOHvCjUuMxrnRj`, frame `2:60`) — friendlier, rounded.
 

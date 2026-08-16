@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # delegating to ``aegis.guardrails.nemo``) callable directly for the jury's
     # readable security artifact. This field is currently unused for automatic
     # dispatch (the strangler shim onto ``aegis.guardrails`` — see
-    # docs/module/00-overview.md — always uses
+    # docs/module/MODULE_REFERENCE.md — always uses
     # the programmatic rails); kept for forward compatibility / config parity.
     guardrails_engine: str = Field(default="programmatic")
 

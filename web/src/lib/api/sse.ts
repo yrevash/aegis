@@ -72,23 +72,3 @@ export async function readSSEStream(
     reader.releaseLock()
   }
 }
-
-/**
- * AG-UI event shape (subset consumed). Ported from frontend/src/agui/decode.ts —
- * AG-UI carries domain payloads via CustomEvent(name, value).
- */
-export interface AguiEvent {
-  type: string
-  name?: string
-  value?: unknown
-  [k: string]: unknown
-}
-
-/** Split an AG-UI SSE text blob into decoded events (frames are `data: {json}\n\n`). */
-export function decodeAguiStream(text: string): AguiEvent[] {
-  return text
-    .split('\n\n')
-    .map((f) => f.trim())
-    .filter((f) => f.startsWith('data:'))
-    .map((f) => JSON.parse(f.slice(f.indexOf('data:') + 5).trim()) as AguiEvent)
-}
