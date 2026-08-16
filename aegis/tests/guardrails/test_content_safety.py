@@ -48,7 +48,10 @@ def test_all_hazard_codes_are_s1_through_s13():
 @pytest.mark.asyncio
 async def test_classify_content_parses_unsafe_json():
     v = await classify_content(
-        "…", completer=completer_returning('{"unsafe": true, "categories": ["S10"], "reason": "hate"}')
+        "…",
+        completer=completer_returning(
+            '{"unsafe": true, "categories": ["S10"], "reason": "hate"}'
+        ),
     )
     assert v.unsafe and v.categories == ["S10"]
 

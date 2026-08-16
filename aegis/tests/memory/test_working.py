@@ -2,7 +2,7 @@
 
 These exercise the pure :func:`build_working_text` (no DB) so the budget/ordering logic
 is verified deterministically, plus one end-to-end pass through
-:func:`assemble_working_memory` over SQLite.
+:func:`assemble_working_memory` over the real PostgreSQL store.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from aegis.memory.working import (
     assemble_working_memory,
     build_working_text,
 )
+
+from .._seed import add_in_fk_order
 
 
 def _fact_candidate(idx: int, text: str) -> RecallCandidate:
@@ -155,15 +157,18 @@ async def test_assemble_end_to_end(db):
     """Full recall → assemble path returns a budgeted block with recorded ids."""
     cfg = MemoryConfig()
     async with db() as s:
-        s.add(MemorySession(id="sess-1", subject_id="user:1", summary="Prior billing dispute."))
-        s.add(
+        await add_in_fk_order(
+            s,
+            MemorySession(
+                id="sess-1", subject_id="user:1", summary="Prior billing dispute."
+            ),
             MemoryMessage(
                 subject_id="user:1",
                 session_id="sess-1",
                 turn_index=0,
                 role="user",
                 content="I was charged twice for my subscription.",
-            )
+            ),
         )
         await s.commit()
 

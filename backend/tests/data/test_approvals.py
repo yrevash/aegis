@@ -1,4 +1,4 @@
-"""Durable approvals-inbox data-layer tests (SQLite in-memory, no Postgres).
+"""Durable approvals-inbox data-layer tests, over the shared scratch PostgreSQL.
 
 Covers the source-of-truth CRUD for a paused run: enqueue on gate, the admin
 ``list_pending`` query, the optimistic single-winner decision transition (the

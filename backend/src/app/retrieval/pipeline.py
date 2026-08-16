@@ -10,10 +10,11 @@ process-wide default retriever (honouring the ``STORES`` run-mode setting), and 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.protocols import GraphBackend
-from aegis.retrieval.types import GraphEdge, GraphNode
+from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 
 from app.config import Settings, get_settings
 
@@ -24,7 +25,9 @@ from .models import IngestReport, RetrievalResult
 
 __all__ = [
     "RetrievalConfig",
+    "RetrievalScope",
     "Retriever",
+    "TenantScopeMismatch",
     "build_default_retriever",
     "ingest",
     "knowledge_graph",
@@ -89,14 +92,91 @@ def _get_retriever() -> Retriever:
     return _default_retriever
 
 
-async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:
-    """Public entry point: run retrieval for `query` (see `Retriever.retrieve`)."""
-    return await _get_retriever().retrieve(query, persona=persona)
+class TenantScopeMismatch(RuntimeError):
+    """A caller's retrieval scope disagreed with the request's governance tenant.
+
+    Raised, never reconciled: if the two disagree, one of them is wrong, and guessing
+    which would mean either serving another tenant's documents or silently answering the
+    wrong question. The caller is expected to build its scope from the same governance
+    context this process bound at the edge of the request.
+    """
 
 
-async def ingest(docs: Sequence[object]) -> IngestReport:
-    """Public entry point: ingest `docs` into the knowledge store (see `Retriever.ingest`)."""
-    return await _get_retriever().ingest(docs)
+def _governed_scope(scope: RetrievalScope) -> RetrievalScope:
+    """Reconcile a caller's ``scope`` with the request's governance context.
+
+    The governance context bound at the request edge (``app.core.governance``, the same
+    contextvar the LLM gateway chokepoint and the memory stores read) is the authority on
+    which tenant a request belongs to. This is the last point before the shared,
+    process-wide retriever, so it is where that authority is applied:
+
+    * No governance context, or one without a tenant → the caller's scope stands. This is
+      the offline / single-tenant / ungoverned path, unchanged.
+    * A governed request whose caller passed **no** tenant → the governance tenant is
+      threaded in. Narrowing an unscoped request to the tenant it actually belongs to is
+      strictly safer than running it unscoped, and it is what makes the request's tenant
+      reach retrieval at all.
+    * A governed request whose caller passed a **different** tenant → :class:`TenantScopeMismatch`.
+      Never widened, never narrowed, never ignored.
+
+    Args:
+        scope: The scope the caller built.
+
+    Returns:
+        The scope to run under.
+
+    Raises:
+        TenantScopeMismatch: If ``scope`` names a different tenant from the governance
+            context in force.
+    """
+    from app.core.governance import get_governance_context
+
+    gov = get_governance_context()
+    if gov is None or gov.tenant_id is None:
+        return scope
+    if scope.tenant_id is None:
+        return replace(scope, tenant_id=gov.tenant_id)
+    if scope.tenant_id != gov.tenant_id:
+        raise TenantScopeMismatch(
+            f"retrieval scope names tenant {scope.tenant_id} but the request's "
+            f"governance context is tenant {gov.tenant_id}"
+        )
+    return scope
+
+
+async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
+    """Public entry point: run retrieval for `query` (see `Retriever.retrieve`).
+
+    Args:
+        query: The user query.
+        scope: The caller's retrieval scope, reconciled against the request's governance
+            tenant by :func:`_governed_scope` before it reaches the shared retriever.
+
+    Returns:
+        The `RetrievalResult` for `query` within the effective scope.
+
+    Raises:
+        TenantScopeMismatch: If the caller's scope contradicts the governance context.
+    """
+    return await _get_retriever().retrieve(query, scope=_governed_scope(scope))
+
+
+async def ingest(docs: Sequence[object], *, scope: RetrievalScope) -> IngestReport:
+    """Public entry point: ingest `docs` into the knowledge store (see `Retriever.ingest`).
+
+    Args:
+        docs: The documents to ingest.
+        scope: The scope whose tenant will **own** the written chunks, reconciled against
+            the request's governance tenant exactly as on the read path — writing under
+            the wrong tenant is the same defect as reading under it.
+
+    Returns:
+        The `IngestReport` for this run.
+
+    Raises:
+        TenantScopeMismatch: If the caller's scope contradicts the governance context.
+    """
+    return await _get_retriever().ingest(docs, scope=_governed_scope(scope))
 
 
 async def knowledge_graph(

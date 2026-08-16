@@ -36,6 +36,24 @@ Row $gwOk 'Model gateway' $(if($key){"$base"}else{'no key in backend\.env'})
 Row (Port 'localhost' 5432) 'Postgres (5432)'  'full mode only'
 Row (Port 'localhost' 7687) 'Neo4j (7687)'     'full mode only'
 
+# Is tenant isolation actually ON? An open 5432 says nothing about it: Postgres skips
+# row security ENTIRELY for a superuser, so serving as `postgres` leaves all 13
+# tenant_isolation policies installed and enforced against nobody. This row asks the
+# database the same question the backend asks at boot (app.data.rls_check), so the
+# day-of board and the running platform cannot disagree. Read-only.
+$rlsOk = $false
+$rlsNote = 'backend\.venv missing - run scripts\bootstrap.ps1'
+$pyExe = "$root\backend\.venv\Scripts\python.exe"
+if (Test-Path $pyExe) {
+  Push-Location "$root\backend"
+  $env:PYTHONPATH = "$root\aegis\src;src"
+  $rlsNote = (& $pyExe -m app.data.rls_check 2>$null | Select-Object -Last 1)
+  $rlsOk = ($LASTEXITCODE -eq 0)
+  Pop-Location
+  if (-not $rlsNote) { $rlsNote = 'rls_check produced no output' }
+}
+Row $rlsOk 'RLS serving role' $rlsNote
+
 # The vector store is EMBEDDED (in-process, file-backed) - no server, no port. What
 # can fail is the directory, so that is what we check: it must exist and be writable,
 # otherwise full mode refuses to boot rather than degrading to a RAM index.

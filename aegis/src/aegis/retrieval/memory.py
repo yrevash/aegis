@@ -50,7 +50,13 @@ from aegis.retrieval.graph_extract import (
 from aegis.retrieval.models import Candidate, Chunk, Recall
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever, bm25_ranked
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
-from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalOrigin
+from aegis.retrieval.types import (
+    TENANT_METADATA_KEY,
+    GraphEdge,
+    GraphNode,
+    RetrievalOrigin,
+    RetrievalScope,
+)
 from aegis.retrieval.vector_store import ChromaVectorStore
 
 _WORD = re.compile(r"[a-z0-9]+")
@@ -160,7 +166,11 @@ class InMemoryKnowledgeBackend:
     The vector store is injectable; it defaults to an embedded ``:memory:`` Chroma so a
     directly-constructed backend (tests, offline evals) still uses the genuine engine.
     Optional ``tenant``/``subject`` scope every upsert payload and every search filter,
-    so one process can hold isolated corpora.
+    so one process can hold isolated corpora. That construction-time ``tenant`` is a
+    *corpus namespace* and is distinct from the per-request governance tenant carried by
+    the :class:`~aegis.retrieval.types.RetrievalScope` every recall method now takes —
+    the latter is matched against each row's own owner (see :meth:`_payload`), so a
+    single shared backend still isolates tenants without one instance per tenant.
 
     Alongside recall it maintains a *genuine* knowledge graph: an injected
     :class:`~aegis.retrieval.graph_extract.Extractor` turns chunk text into typed
@@ -274,22 +284,65 @@ class InMemoryKnowledgeBackend:
         self._indexed_ids.update(c.id for c in pending)
 
     def _payload(self, chunk: Chunk) -> dict[str, object]:
-        """Build the Chroma metadata for ``chunk`` (doc + text + tenant/subject scope)."""
-        payload: dict[str, object] = {"doc": chunk.doc_id, "text": chunk.text}
+        """Build the Chroma metadata for ``chunk`` (doc + text + both scopes).
+
+        Two independent scopes are recorded, and they are not the same thing:
+
+        * ``tenant``/``subject`` — the *corpus namespace this backend instance was built
+          for*, fixed at construction. It exists so one process can hold several isolated
+          corpora in one embedded store.
+        * :data:`~aegis.retrieval.types.TENANT_METADATA_KEY` — the *governance tenant
+          that owns this row*, carried per-chunk from the ingest
+          :class:`~aegis.retrieval.types.RetrievalScope`. This is the one a per-request
+          scope matches against, and it is written for every chunk (``None`` for the
+          shared corpus) so the key is always present to filter on.
+        """
+        payload: dict[str, object] = {
+            "doc": chunk.doc_id,
+            "text": chunk.text,
+            # Always written, even when ``None``: the store encodes ``None`` as its
+            # explicit null sentinel, and a key that is sometimes absent cannot be
+            # filtered on at all (Chroma drops missing keys from a ``where`` match).
+            TENANT_METADATA_KEY: chunk.metadata.get(TENANT_METADATA_KEY),
+        }
         if self._tenant is not None:
             payload["tenant"] = self._tenant
         if self._subject is not None:
             payload["subject"] = self._subject
         return payload
 
-    def _scope_filter(self) -> dict[str, object] | None:
-        """Return the tenant/subject payload filter for searches, or ``None`` if unscoped."""
-        flt: dict[str, object] = {}
+    def _scope_filter(self, scope: RetrievalScope) -> dict[str, object] | None:
+        """Return the Chroma ``where`` filter for a search under ``scope``.
+
+        Combines this instance's construction-time corpus namespace with the per-request
+        governance tenant. The tenant clause is a match-any over
+        :meth:`~aegis.retrieval.types.RetrievalScope.visible_tenant_values` — this
+        tenant's rows plus the shared, tenant-less corpus — and never a wildcard: an
+        unscoped request narrows to the shared rows only.
+
+        Args:
+            scope: The request's retrieval scope.
+
+        Returns:
+            A ``{field: value | [values]}`` filter for
+            :meth:`~aegis.retrieval.vector_store.ChromaVectorStore.search`.
+        """
+        flt: dict[str, object] = {TENANT_METADATA_KEY: scope.visible_tenant_values()}
         if self._tenant is not None:
             flt["tenant"] = self._tenant
         if self._subject is not None:
             flt["subject"] = self._subject
-        return flt or None
+        return flt
+
+    def _visible(self, chunk: Chunk, scope: RetrievalScope) -> bool:
+        """Return whether ``scope`` may read ``chunk``.
+
+        The in-Python twin of :meth:`_scope_filter`, for the arms that rank over
+        ``self._chunks`` directly (BM25 and graph expansion) instead of through Chroma.
+        It applies the *same* rule to the *same* row, because a keyword arm that ignores
+        the tenant re-opens the leak the vector arm just closed.
+        """
+        return chunk.metadata.get(TENANT_METADATA_KEY) in scope.visible_tenant_values()
 
     @classmethod
     def from_corpus(
@@ -438,19 +491,23 @@ class InMemoryKnowledgeBackend:
                 for entity_id in hits:
                     self.entity_chunks.setdefault(entity_id, set()).add(chunk.id)
 
-    async def _vector_list(self, query: str, top_k: int) -> RankedList:
+    async def _vector_list(
+        self, query: str, top_k: int, scope: RetrievalScope
+    ) -> RankedList:
         """Rank chunks by a real Chroma vector ``search`` against the embedded query.
 
         The query is embedded with the *same* injected embedder as the chunks, then the
-        embedded-Chroma store returns the nearest chunks (metadata-filtered to this
-        backend's tenant/subject scope). No brute-force dict scan is involved.
+        embedded-Chroma store returns the nearest chunks. The tenant predicate is part of
+        the store's ``where`` filter, so it constrains the ANN query itself rather than
+        being applied to whatever the query happened to return. No brute-force dict scan
+        is involved.
         """
         vectors = await self._embed([query])
         q_vec = vectors[0] if vectors else []
         if not any(q_vec):  # empty/degenerate query embedding → honestly no vector hits
             return RankedList(origins=(RetrievalOrigin.VECTOR,), candidates=[])
         hits = self._vector_store.search(
-            self._collection, q_vec, top_k, filter=self._scope_filter()
+            self._collection, q_vec, top_k, filter=self._scope_filter(scope)
         )
         candidates = [
             Candidate(
@@ -463,25 +520,41 @@ class InMemoryKnowledgeBackend:
         ]
         return RankedList(origins=(RetrievalOrigin.VECTOR,), candidates=candidates)
 
-    def _graph_list(self, query: str, top_k: int) -> RankedList:
+    def _graph_list(self, query: str, top_k: int, scope: RetrievalScope) -> RankedList:
         """Rank chunks by graph proximity to keyword-seed chunks (graph expansion).
 
         Seeds are chunks that directly share query terms; each seed then propagates its
         weight one hop along the co-occurrence graph, so strongly-connected neighbours
         surface even when they do not themselves match the query — a real graph slice.
+
+        The tenant predicate is applied to **both** ends of every hop: a row the scope
+        cannot read is neither a seed nor a reachable neighbour. Filtering only the final
+        ranking would let another tenant's chunk still influence which of *this* tenant's
+        chunks surface, which is a quieter version of the same leak.
         """
         q = _tokens(query)
+        visible = self._visible_indices(scope)
         scores: dict[int, float] = {}
-        for index, toks in enumerate(self._tokens):
-            seed = len(q & toks)
+        for index in visible:
+            seed = len(q & self._tokens[index])
             if seed <= 0:
                 continue
             scores[index] = scores.get(index, 0.0) + float(seed)
             for neighbour, weight in self._adjacency[index]:
+                if neighbour not in visible:
+                    continue
                 scores[neighbour] = scores.get(neighbour, 0.0) + seed * weight
         ranked = sorted(scores.items(), key=lambda row: (-row[1], row[0]))
         candidates = [self._candidate(index, score) for index, score in ranked[:top_k]]
         return RankedList(origins=(RetrievalOrigin.GRAPH,), candidates=candidates)
+
+    def _visible_indices(self, scope: RetrievalScope) -> set[int]:
+        """Return the positions in ``self._chunks`` that ``scope`` is allowed to read."""
+        return {
+            index
+            for index, chunk in enumerate(self._chunks)
+            if self._visible(chunk, scope)
+        }
 
     def _candidate(self, index: int, score: float) -> Candidate:
         """Wrap chunk ``index`` as a scored :class:`Candidate` (carrying its doc id)."""
@@ -517,33 +590,47 @@ class InMemoryKnowledgeBackend:
         return nodes, edges
 
     async def recall_ranked(
-        self, query: str, *, top_k: int, persona: str | None = None
+        self, query: str, *, top_k: int, scope: RetrievalScope
     ) -> RankedRecall:
-        """Return split vector + graph ranked lists plus the entity graph slice."""
+        """Return split vector + graph ranked lists plus the entity graph slice.
+
+        Args:
+            query: The user query.
+            top_k: Candidate breadth per list.
+            scope: The request's retrieval scope; both arms restrict themselves to the
+                rows it may read before they rank anything.
+
+        Returns:
+            A :class:`RankedRecall` over this scope's visible corpus only.
+        """
         await self._ensure_indexed()  # lazily embed + upsert chunk vectors into Chroma
         await self._ensure_extracted()  # lazily populate the KG (e.g. after from_corpus)
-        vector_list = await self._vector_list(query, top_k)
-        graph_list = self._graph_list(query, top_k)
+        vector_list = await self._vector_list(query, top_k, scope)
+        graph_list = self._graph_list(query, top_k, scope)
         seed = list(vector_list.candidates) or list(graph_list.candidates)
         nodes, edges = self._graph_slice(seed)
         return RankedRecall(lists=[vector_list, graph_list], nodes=nodes, edges=edges)
 
     async def keyword_recall(
-        self, query: str, *, top_k: int, persona: str | None = None
+        self, query: str, *, top_k: int, scope: RetrievalScope
     ) -> list[Candidate]:
-        """Return the best corpus-wide BM25 matches (the genuine keyword arm).
+        """Return the best corpus-wide BM25 matches within ``scope`` (the keyword arm).
 
         Implements :class:`~aegis.retrieval.protocols.KeywordBackend`: BM25 is scored
-        over **every** chunk this backend holds, not over what the vector/graph arms
-        happened to return, so the IDF weights are real corpus statistics and a
-        keyword-only chunk — one no dense or graph arm surfaced — can genuinely enter
-        the fused pool. That is what earns this arm its ``bm25`` provenance origin.
+        over **every** chunk this backend holds *that the scope may read*, not over what
+        the vector/graph arms happened to return, so the IDF weights are real corpus
+        statistics and a keyword-only chunk — one no dense or graph arm surfaced — can
+        genuinely enter the fused pool. That is what earns this arm its ``bm25``
+        provenance origin.
+
+        The tenant predicate is applied to the corpus *before* scoring, not to the
+        results after: excluded rows must not contribute document frequencies either, or
+        one tenant's corpus would still be shaping another tenant's IDF weights.
 
         Args:
             query: The user query.
             top_k: Maximum number of matches to return.
-            persona: Accepted for protocol parity; this backend scopes by
-                tenant/subject at construction, not per call.
+            scope: The request's retrieval scope (tenant rows + the shared corpus).
 
         Returns:
             Up to ``top_k`` matching candidates, best first (empty when nothing matches).
@@ -551,12 +638,13 @@ class InMemoryKnowledgeBackend:
         corpus = [
             Candidate(id=ch.id, text=ch.text, metadata={"doc": ch.doc_id})
             for ch in self._chunks
+            if self._visible(ch, scope)
         ]
         return bm25_ranked(query, corpus)[:top_k]
 
-    async def recall(self, query: str, *, top_k: int, persona: str | None = None) -> Recall:
+    async def recall(self, query: str, *, top_k: int, scope: RetrievalScope) -> Recall:
         """Fuse the vector + graph lists via RRF for direct callers (protocol path)."""
-        ranked = await self.recall_ranked(query, top_k=top_k, persona=persona)
+        ranked = await self.recall_ranked(query, top_k=top_k, scope=scope)
         fused = reciprocal_rank_fusion(ranked.lists)[:top_k]
         return Recall(candidates=fused, nodes=ranked.nodes, edges=ranked.edges)
 

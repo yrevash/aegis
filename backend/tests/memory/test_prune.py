@@ -1,4 +1,4 @@
-"""Forgetting-sweep tests (SQLite): stale low-value facts are soft-archived, fresh kept.
+"""Forgetting-sweep tests: stale low-value facts are soft-archived, fresh ones kept.
 
 Proves :func:`app.memory.consolidate.prune_forgotten` (wired into the sweeper) actually
 retires memories per ``ForgetPolicy`` — closing them in transaction-time (``expired_at``)
@@ -11,25 +11,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.memory.config import MemoryConfig
 from app.memory.consolidate import prune_forgotten, sweep_pending
 from app.memory.stores import MemoryFact, MemoryWriteLog, WriteOp
 
 pytestmark = pytest.mark.asyncio
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'prune.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
 
 
 def _fact(subject_id: str, predicate: str, **kw) -> MemoryFact:

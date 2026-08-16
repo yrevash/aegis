@@ -15,7 +15,7 @@ from __future__ import annotations
 from aegis.governance import security
 from aegis.governance.enforcement import _RATE_SECONDS, _WINDOW_SECONDS
 from aegis.governance.models import BudgetWindow
-from aegis.governance.rls import _RLS_TABLES
+from aegis.governance.rls import _TENANT_SCOPED_TABLES
 from aegis.governance.security import (
     DEFAULT_JWT_SECRET,
     MEMBER,
@@ -131,6 +131,10 @@ def effective_config() -> GovernanceConfig:
             # gap it hides. It flips to True once the auth path binds a scope before
             # querying ``users`` — until then a strict predicate would break login.
             fail_closed=False,
-            tables=list(_RLS_TABLES),
+            # The registry, not a hand-kept copy of it: a table added to
+            # ``rls._TENANT_SCOPED_TABLES`` shows up on the Security page the same
+            # boot it starts being enforced, so the dashboard can never overstate
+            # (or understate) the coverage that actually exists.
+            tables=list(_TENANT_SCOPED_TABLES),
         ),
     )

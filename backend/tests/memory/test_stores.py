@@ -1,13 +1,16 @@
-"""Slice-2 schema tests: the memory tables materialise + round-trip on SQLite."""
+"""Slice-2 schema tests: the memory tables materialise + round-trip on PostgreSQL.
+
+The schema is the one ``app.data.session.bootstrap`` builds on the scratch database
+from the shared ``db`` fixture, so what is asserted here is the shape a deployment
+actually gets — including the ``jsonb`` embedding columns and the enum types SQLite
+used to flatten to plain text.
+"""
 
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.memory.stores import (
     ConsolidationStatus,
     MemoryConsolidationJob,
@@ -22,18 +25,15 @@ from app.memory.stores import (
 pytestmark = pytest.mark.asyncio
 
 
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mem.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)  # imports app.memory.stores → creates memory tables
-    yield get_sessionmaker()
-    await engine.dispose()
-
-
 async def test_session_message_vector_roundtrip(db):
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1", persona="ops"))
+        # Flush the parent before its children: ``memory_message`` and
+        # ``memory_consolidation_job`` carry a real FK to ``memory_session``, and
+        # nothing declares an ORM relationship to order the INSERTs — so the write
+        # path flushes the session first (see ``app.agent.deps``). SQLite never
+        # enforced the constraint, so this ordering used not to matter here.
+        await s.flush()
         s.add(
             MemoryMessage(
                 subject_id="user:1",
@@ -42,7 +42,7 @@ async def test_session_message_vector_roundtrip(db):
                 role="user",
                 origin=MemoryOrigin.USER,
                 content="hello",
-                embedding=[0.1, 0.2, 0.3],  # VectorColumn → JSON on SQLite
+                embedding=[0.1, 0.2, 0.3],  # VectorColumn → jsonb on PostgreSQL
                 embedding_dim=3,
             )
         )
@@ -87,6 +87,7 @@ async def test_bitemporal_fact_and_writelog(db):
 async def test_consolidation_job_enqueue(db):
     async with db() as s:
         s.add(MemorySession(id="sess-2", subject_id="user:2"))
+        await s.flush()
         s.add(MemoryConsolidationJob(subject_id="user:2", session_id="sess-2"))
         await s.commit()
     async with db() as s:

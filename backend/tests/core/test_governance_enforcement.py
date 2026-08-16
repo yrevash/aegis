@@ -1,8 +1,11 @@
 """Budget/rate enforcement + usage-ledger writes at the LiteLLM chokepoint (§3.3).
 
 These run with no network and no litellm installed (a fake ``litellm`` is injected),
-and against the in-memory aiosqlite database bound by the ``db`` fixture so the
-budget reads and ledger writes actually round-trip.
+and against the real PostgreSQL database bound by the ``db`` fixture so the budget
+reads and ledger writes actually round-trip — through the same
+``NOSUPERUSER NOBYPASSRLS`` serving role production uses, so the tenant scoping applied
+by :func:`app.data.governance.record_usage` is enforced by the database rather than
+assumed.
 """
 
 from __future__ import annotations
@@ -12,8 +15,10 @@ from types import SimpleNamespace
 
 import aegis.gateway.llm as llm_mod
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
 
+from app.api.schemas import Role
 from app.core.governance import (
     GovernanceContext,
     reset_governance_context,
@@ -25,7 +30,9 @@ from app.data import (
     Budget,
     BudgetScope,
     BudgetWindow,
+    Tenant,
     UsageLedger,
+    User,
     get_sessionmaker,
 )
 
@@ -72,9 +79,36 @@ async def _seed(*rows):
         await session.commit()
 
 
-async def test_over_token_budget_raises(fake_litellm, db):
+@pytest_asyncio.fixture
+async def principals(db):
+    """Seed the tenant and user rows every ledger row in this module hangs off.
+
+    PostgreSQL enforces ``usage_ledger.tenant_id → tenants.id`` and
+    ``usage_ledger.user_id → users.id``. SQLite, where these tests used to run, has
+    foreign-key enforcement **off by default**, so they wrote ledger rows attributed to
+    a tenant and a user that did not exist — a shape the running platform could never
+    produce, which made the budget aggregations below query a graph no deployment has.
+    Seeding the parents is what makes them query the real one.
+
+    Returns:
+        The session factory from ``db``, so a test needs only this fixture.
+    """
+    async with get_sessionmaker()() as session:
+        session.add_all(
+            [
+                Tenant(id=1, name="Tenant One"),
+                Tenant(id=7, name="Tenant Seven"),
+                User(id=2, username="member", role=Role.CLIENT, tenant_id=1),
+            ]
+        )
+        await session.commit()
+    return db
+
+
+async def test_over_token_budget_raises(fake_litellm, principals):
     await _seed(
         Budget(
+            tenant_id=1,
             scope_type=BudgetScope.TENANT,
             scope_id=1,
             window=BudgetWindow.DAY,
@@ -93,11 +127,11 @@ async def test_over_token_budget_raises(fake_litellm, db):
     assert ei.value.limit == 100
 
 
-async def test_user_cap_binds_before_tenant(fake_litellm, db):
+async def test_user_cap_binds_before_tenant(fake_litellm, principals):
     # Both caps tripped; the user cap is checked first and attributed to the user.
     await _seed(
-        Budget(scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
-        Budget(scope_type=BudgetScope.USER, scope_id=2, token_cap=10),
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
+        Budget(tenant_id=1, scope_type=BudgetScope.USER, scope_id=2, token_cap=10),
         UsageLedger(tenant_id=1, user_id=2, prompt_tokens=20, completion_tokens=0),
     )
     tok = set_governance_context(GovernanceContext(tenant_id=1, user_id=2))
@@ -109,8 +143,10 @@ async def test_user_cap_binds_before_tenant(fake_litellm, db):
     assert ei.value.scope == "user"
 
 
-async def test_under_budget_passes_and_writes_ledger(fake_litellm, db):
-    await _seed(Budget(scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100_000))
+async def test_under_budget_passes_and_writes_ledger(fake_litellm, principals):
+    await _seed(
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100_000)
+    )
     tok = set_governance_context(GovernanceContext(tenant_id=1, user_id=2))
     try:
         result = await complete(ModelRole.CHEAP, [{"role": "user", "content": "hi"}])
@@ -128,9 +164,9 @@ async def test_under_budget_passes_and_writes_ledger(fake_litellm, db):
     assert rows[0].completion_tokens == 7
 
 
-async def test_rpm_cap_raises_on_recent_calls(fake_litellm, db):
+async def test_rpm_cap_raises_on_recent_calls(fake_litellm, principals):
     await _seed(
-        Budget(scope_type=BudgetScope.TENANT, scope_id=1, rpm=1),
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, rpm=1),
         UsageLedger(tenant_id=1, prompt_tokens=1, completion_tokens=1),
     )
     tok = set_governance_context(GovernanceContext(tenant_id=1, user_id=2))
@@ -184,7 +220,7 @@ async def test_enforcement_error_can_opt_into_fail_open(fake_litellm, db, monkey
     assert result.content == "ok"
 
 
-async def test_governed_writes_apply_tenant_scope(db, monkeypatch):
+async def test_governed_writes_apply_tenant_scope(principals, monkeypatch):
     # H1: per-request RLS binding (``set_tenant_scope``) is actually applied inside
     # the governed data-layer calls — pre-fix it was defined but called nowhere.
     import app.data.governance as gov_mod
@@ -210,8 +246,10 @@ async def test_governed_writes_apply_tenant_scope(db, monkeypatch):
     assert 7 in seen
 
 
-async def test_embed_is_governed_and_ledgered(fake_litellm, db):
-    await _seed(Budget(scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100_000))
+async def test_embed_is_governed_and_ledgered(fake_litellm, principals):
+    await _seed(
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100_000)
+    )
     tok = set_governance_context(GovernanceContext(tenant_id=1, user_id=2))
     try:
         vectors = await embed(["a"])

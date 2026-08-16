@@ -3,27 +3,18 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapter import DEFAULT_PERSONA_ID, get_persona, render_system_prompt
 from app.agent import deps as agent_deps
 from app.data.models import PromptStatus
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.ops import registry
 
 pytestmark = pytest.mark.asyncio
 
-
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ops.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    registry.clear_cache()
-    yield get_sessionmaker()
-    registry.clear_cache()
-    await engine.dispose()
+# ``db`` comes from ``tests/conftest.py``: the shared scratch-PostgreSQL fixture, which
+# already binds the serving/owner engine pair and clears the active-prompt cache on both
+# sides of each test. The private aiosqlite fixture this file used to declare shadowed it
+# with a database whose dialect the registry's own guards treat differently.
 
 
 async def test_create_draft_increments_version(db):

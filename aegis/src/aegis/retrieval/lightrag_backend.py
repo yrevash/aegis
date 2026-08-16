@@ -44,7 +44,13 @@ from aegis.core.models import ModelRole
 from aegis.retrieval.fusion import RankedList, RankedRecall
 from aegis.retrieval.models import Candidate, Chunk, Recall
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
-from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalOrigin
+from aegis.retrieval.types import (
+    TENANT_METADATA_KEY,
+    GraphEdge,
+    GraphNode,
+    RetrievalOrigin,
+    RetrievalScope,
+)
 
 #: Dimension of `text-embedding-3-large` (the default embedding model this backend
 #: targets). Independent of :attr:`~aegis.retrieval.pipeline.RetrievalConfig.embed_dim`
@@ -62,6 +68,18 @@ _GRAPH_SNAPSHOT_CAP = 1_000_000
 #: (vs the generic person/org/geo defaults). Passed via ``addon_params`` so the
 #: extractor labels nodes by a broad, domain-agnostic vocabulary — richer, more
 #: connectable graph, still fully API-driven (no local model).
+#: Separator between the owning-tenant tag and the real source path in the ``file_path``
+#: LightRAG stores per chunk. LightRAG has no metadata channel of its own — ``file_path``
+#: is the only per-chunk field it round-trips — so the tenant tag rides in it and is
+#: stripped back off on the way out, leaving citations exactly as they were.
+_TENANT_TAG_SEP = "::"
+
+#: Candidate-metadata flag meaning "this row's owning tenant is known". Absent on the
+#: whole-context fallback, which is a blend with no per-chunk provenance — the difference
+#: between "owned by the shared corpus" and "we cannot tell", which must not be conflated
+#: when the answer is about to cross a tenant boundary.
+_ATTRIBUTED_KEY = "tenant_attributed"
+
 _ENTITY_TYPES: tuple[str, ...] = (
     "organization",
     "person",
@@ -223,6 +241,12 @@ class LightRAGBackend:
         current mode, the corresponding count is ``None`` (honest "unknown"), never a
         fabricated zero.
 
+        Each chunk's owning tenant is tagged into the ``file_path`` LightRAG stores for
+        it (see :func:`_tag_file_path`), because that is the only per-chunk field
+        LightRAG hands back at recall time. Recall parses the tag off again, so this is
+        invisible to citations. It is what makes :meth:`recall`'s tenant filter possible
+        at all; per-tenant LightRAG instances — the real partition — are a later phase.
+
         Args:
             chunks: Validated, deduplicated chunks to write.
 
@@ -235,7 +259,13 @@ class LightRAGBackend:
         if not texts:
             return (0, 0)
         ids = [c.id for c in chunks]
-        file_paths = [str(c.metadata.get("source") or c.doc_id) for c in chunks]
+        file_paths = [
+            _tag_file_path(
+                str(c.metadata.get("source") or c.doc_id),
+                c.metadata.get(TENANT_METADATA_KEY),
+            )
+            for c in chunks
+        ]
 
         before_nodes, before_edges = await _graph_counts(rag)
         await rag.ainsert(texts, ids=ids, file_paths=file_paths)  # type: ignore[attr-defined]
@@ -243,22 +273,23 @@ class LightRAGBackend:
 
         return (_delta(before_nodes, after_nodes), _delta(before_edges, after_edges))
 
-    async def recall(self, query: str, *, top_k: int, persona: str | None = None) -> Recall:
-        """Retrieve a wide candidate set plus the touched graph slice.
+    async def recall(self, query: str, *, top_k: int, scope: RetrievalScope) -> Recall:
+        """Retrieve a wide candidate set plus the touched graph slice, scoped to a tenant.
 
         Args:
             query: The user query.
             top_k: Candidate breadth for the recall stage (reranked later).
-            persona: Active persona (reserved for store-side scoping).
+            scope: The request's retrieval scope; rows owned by another tenant are
+                dropped from the returned candidates (see :meth:`_context`).
 
         Returns:
             A `Recall` with candidates and any graph nodes/edges the query touched.
         """
         rag = await self._ensure()
-        return await self._context(rag, query, mode="mix", top_k=top_k)
+        return await self._context(rag, query, mode="mix", top_k=top_k, scope=scope)
 
     async def recall_ranked(
-        self, query: str, *, top_k: int, persona: str | None = None
+        self, query: str, *, top_k: int, scope: RetrievalScope
     ) -> RankedRecall:
         """Recall **split** vector + graph lists so RRF genuinely fuses two signals.
 
@@ -278,15 +309,15 @@ class LightRAGBackend:
         Args:
             query: The user query.
             top_k: Candidate breadth per list (reranked later).
-            persona: Active persona (reserved for store-side scoping).
+            scope: The request's retrieval scope; applied to both lists.
 
         Returns:
             A :class:`RankedRecall` with the vector and graph ranked lists and the
             touched graph nodes/edges.
         """
         rag = await self._ensure()
-        vector = await self._context(rag, query, mode="naive", top_k=top_k)
-        graph = await self._context(rag, query, mode="local", top_k=top_k)
+        vector = await self._context(rag, query, mode="naive", top_k=top_k, scope=scope)
+        graph = await self._context(rag, query, mode="local", top_k=top_k, scope=scope)
         vector_list = RankedList(
             origins=(RetrievalOrigin.VECTOR,), candidates=vector.candidates
         )
@@ -352,15 +383,38 @@ class LightRAGBackend:
 
         return (nodes, edges)
 
-    async def _context(self, rag: object, query: str, *, mode: str, top_k: int) -> Recall:
-        """Run one LightRAG context query in ``mode`` and normalise it to a `Recall`."""
+    async def _context(
+        self, rag: object, query: str, *, mode: str, top_k: int, scope: RetrievalScope
+    ) -> Recall:
+        """Run one LightRAG context query in ``mode``, tenant-filter it, return a `Recall`.
+
+        **This is a filter, not a partition, and that is a deliberate interim.** LightRAG
+        owns its own retrieval internals: one instance means one working directory, one
+        vector index and one Neo4j graph for every tenant in the process, and it exposes
+        no per-query metadata predicate to push the tenant down into. So the search space
+        is still shared and foreign rows are discarded on the way out. Giving each tenant
+        its own instance is the real fix and is scheduled as its own phase; until then the
+        row-level filter is what prevents another tenant's *content* from reaching the
+        answer, and it is documented as the weaker guarantee it is — unlike the vector,
+        keyword and cache tiers, which are genuinely partitioned.
+
+        Args:
+            rag: The initialised LightRAG instance.
+            query: The user query.
+            mode: LightRAG retrieval mode (``naive``/``local``/``mix``).
+            top_k: Candidate breadth.
+            scope: The request's retrieval scope.
+
+        Returns:
+            The recall with every candidate the scope may not read removed.
+        """
         from lightrag import QueryParam  # lazy
 
         param = QueryParam(
             mode=mode, top_k=top_k, only_need_context=True, enable_rerank=False
         )
         raw = await rag.aquery(query, param=param)  # type: ignore[attr-defined]
-        return _to_recall(raw)
+        return _scoped_recall(_to_recall(raw), scope)
 
 
 async def _graph_counts(rag: object) -> tuple[int | None, int | None]:
@@ -443,6 +497,86 @@ def _delta(before: int | None, after: int | None) -> int | None:
     return max(0, after - before)
 
 
+def _tag_file_path(source: str, tenant_value: str | None) -> str:
+    """Return ``source`` tagged with the tenant that owns it, for LightRAG storage.
+
+    A shared-corpus chunk (``tenant_value is None``) is stored with its path untouched,
+    so an unscoped deployment's stored paths are byte-identical to what they were before
+    tenanting existed.
+
+    Args:
+        source: The real source path/id for the chunk.
+        tenant_value: The owning tenant's metadata value
+            (:func:`~aegis.retrieval.types.tenant_metadata_value`), or ``None`` for the
+            shared corpus.
+
+    Returns:
+        The tagged path, e.g. ``"t7::handbook.md"``.
+    """
+    if tenant_value is None:
+        return source
+    return f"{tenant_value}{_TENANT_TAG_SEP}{source}"
+
+
+def _untag_file_path(file_path: object) -> tuple[str | None, str | None]:
+    """Split a stored ``file_path`` back into ``(tenant_value, source)``.
+
+    Only a tag this module wrote is recognised — ``t<digits>`` before the separator.
+    Anything else is treated as an ordinary path that happens to contain the separator,
+    so a real source path is never mistaken for a tenant tag.
+
+    Args:
+        file_path: The value LightRAG returned for the chunk (may be ``None``).
+
+    Returns:
+        ``(tenant_value, source)``; ``tenant_value`` is ``None`` for a shared-corpus row,
+        and ``source`` is ``None`` when LightRAG reported no path at all.
+    """
+    if file_path is None:
+        return (None, None)
+    text = str(file_path)
+    tag, sep, rest = text.partition(_TENANT_TAG_SEP)
+    if sep and tag.startswith("t") and tag[1:].isdigit():
+        return (tag, rest)
+    return (None, text)
+
+
+def _scoped_recall(recall: Recall, scope: RetrievalScope) -> Recall:
+    """Drop every candidate in ``recall`` that ``scope``'s tenant may not read.
+
+    Args:
+        recall: The recall as LightRAG returned it.
+        scope: The request's retrieval scope.
+
+    Returns:
+        The recall with only visible candidates (graph nodes/edges are left as-is: they
+        are entity labels for the visualisation, not document content).
+
+    Raises:
+        RuntimeError: If a tenant-scoped request receives an **unattributable** candidate
+            — LightRAG's whole-context fallback, which blends passages with no per-chunk
+            path and therefore cannot be shown to belong to this tenant. Serving it would
+            be the leak; quietly dropping it would hide a store that cannot be scoped. It
+            fails loudly instead, and only ever for a tenant-scoped run.
+    """
+    visible = scope.visible_tenant_values()
+    kept = []
+    for candidate in recall.candidates:
+        if candidate.metadata.get(_ATTRIBUTED_KEY) is not True:
+            if scope.tenant_id is not None:
+                raise RuntimeError(
+                    "LightRAG returned an unattributable blended context for a "
+                    f"tenant-scoped request ({scope!r}); it cannot be shown to belong "
+                    "to this tenant, so it is refused rather than served. Per-tenant "
+                    "LightRAG instances are required for this store/version."
+                )
+            kept.append(candidate)  # unscoped run: the whole corpus is the shared corpus
+            continue
+        if candidate.metadata.get(TENANT_METADATA_KEY) in visible:
+            kept.append(candidate)
+    return Recall(candidates=kept, nodes=recall.nodes, edges=recall.edges)
+
+
 def _to_recall(raw: object) -> Recall:
     """Normalise a LightRAG context result (string or object) into a `Recall`.
 
@@ -461,7 +595,14 @@ def _to_recall(raw: object) -> Recall:
 
 
 def _candidates_from_payload(payload: dict, *, fallback_context: str) -> list[Candidate]:
-    """Extract rerankable candidates from LightRAG chunk data (with a text fallback)."""
+    """Extract rerankable candidates from LightRAG chunk data (with a text fallback).
+
+    Per-chunk candidates carry their owning tenant, parsed back out of the tagged
+    ``file_path`` (see :func:`_untag_file_path`), plus :data:`_ATTRIBUTED_KEY` recording
+    that the ownership is *known*. The whole-context fallback carries neither: it is a
+    blend with no per-chunk path, so its ownership is genuinely unknown and
+    :func:`_scoped_recall` refuses it under a tenant scope rather than guessing.
+    """
     chunks = payload.get("chunks") if isinstance(payload, dict) else None
     candidates: list[Candidate] = []
     if isinstance(chunks, list):
@@ -471,11 +612,16 @@ def _candidates_from_payload(payload: dict, *, fallback_context: str) -> list[Ca
             text = chunk.get("content") or chunk.get("text") or ""
             if not text:
                 continue
+            tenant_value, source = _untag_file_path(chunk.get("file_path"))
             candidates.append(
                 Candidate(
                     id=str(chunk.get("id", chunk.get("chunk_id", i))),
                     text=str(text),
-                    metadata={"file_path": chunk.get("file_path")},
+                    metadata={
+                        "file_path": source,
+                        TENANT_METADATA_KEY: tenant_value,
+                        _ATTRIBUTED_KEY: True,
+                    },
                 )
             )
     if not candidates and fallback_context.strip():

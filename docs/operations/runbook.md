@@ -100,11 +100,53 @@ plus the console (`web/`) via `npm`. You never install these by hand.
 | `GENAILAB_SSL_VERIFY` | `backend/.env` | Keep `false` (gateway has a self-signed cert). |
 | `STORES` | set by start script | `off` = lite (no databases), `on` = full (Postgres-primary). |
 | `DB_BOOTSTRAP` | set by start script | `true` = create tables on startup (best-effort). |
-| `POSTGRES_DSN` | set by start script | lite points this at SQLite; full at Postgres. |
+| `POSTGRES_DSN` | `backend/.env` | The **serving** connection — every request. Must be a non-superuser role (see *Database roles* below). Lite points it at SQLite. |
+| `POSTGRES_ADMIN_DSN` | `backend/.env` | The **owner/DDL** connection — `create_all`, the schema reconciler, the RLS bootstrap, and nothing else. Empty = no split (loudly reported). |
 | `AGENT_CHECKPOINTER` | `memory` (set `postgres` for full) | `memory` = single-process; `postgres` = durable, resumable HITL (ADR 0005). |
 | `JWT_SECRET` | `backend/.env` | HS256 signing secret — **set a real one for any shared deploy** (ADR 0008). |
 | `APPROVAL_SLA_SECONDS` | `backend/.env` | SLA before the sweeper auto-rejects a HIGH-risk pending gate. |
 | `NEXT_PUBLIC_USE_MOCK` | set by start script | `true` = console runs with no backend. |
+
+---
+
+## Database roles — the half of tenant isolation that is not code
+
+**Full mode only.** PostgreSQL skips row security **entirely** for a superuser or a role
+with `BYPASSRLS`. `FORCE ROW LEVEL SECURITY` removes the table *owner's* exemption, not
+that one. So a backend connected as `postgres` installs all 13 `tenant_isolation`
+policies, shows them in `pg_policies` — and is filtered by none of them. Aegis ran that
+way until this split; the fix is two connections, not two lines of application code.
+
+```bash
+./scripts/db-roles.sh          # macOS/Linux
+.\scripts\db-roles.ps1         # Windows (install-windows.ps1 already runs this once)
+```
+
+It creates `aegis_app` — `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`, owning
+nothing, holding only `SELECT/INSERT/UPDATE/DELETE` on the app's tables — and rewrites
+`backend/.env`:
+
+| DSN | Role | Used by | Bypasses RLS |
+|---|---|---|---|
+| `POSTGRES_DSN` | `aegis_app` | every request | **no** — this is the point |
+| `POSTGRES_ADMIN_DSN` | `postgres` (owner) | `create_all`, schema reconciler, RLS bootstrap, serving-role grants | yes, legitimately |
+
+Idempotent — re-running rotates the password and re-applies the grants. The SQL it runs
+is `scripts/sql/aegis-app-role.sql`, readable on its own.
+
+**How you know it worked.**
+
+```bash
+cd backend && PYTHONPATH=../aegis/src:src .venv/bin/python -m app.data.rls_check
+# ENFORCED    serving role 'aegis_app' is subject to RLS (owner DSN split)
+```
+
+Same line appears as the `RLS serving role` row in `preflight`. The backend runs the
+same check at boot: if the serving role can bypass, it logs at ERROR — *"row-level
+security is inert; every tenant policy is bypassed"* — and, when `APP_ENV` is not `dev`,
+**refuses to start**. A dev box left on the superuser DSN keeps working and keeps
+complaining; that asymmetry is deliberate, because a check that blocks the dev loop is a
+check that gets disabled.
 
 ---
 
@@ -114,6 +156,9 @@ plus the console (`web/`) via `npm`. You never install these by hand.
 |---|---|
 | Gateway DOWN in preflight | Check `GENAILAB_API_KEY` in `backend/.env`; you're on the venue network. Until then, `start … safe` still demos the whole UI. |
 | Postgres/Neo4j/Redis DOWN | Don't fight it — run `start … lite`. It needs none of them. |
+| `RLS serving role` DOWN / boot logs "row-level security is inert" | The backend is connected as a superuser, so every tenant policy is bypassed. Run `./scripts/db-roles.sh` (or `.\scripts\db-roles.ps1`) and restart. See *Database roles* above. |
+| Backend refuses to boot with `RlsBypassError` | Same cause, non-dev `APP_ENV`: it will not serve tenants with isolation off. Provision `aegis_app` as above; do not "fix" it by setting `APP_ENV=dev`. |
+| `permission denied for table …` after adding a model | The serving role has no grant on a brand-new table. Restart with `DB_BOOTSTRAP=true` — bootstrap re-grants on the owner connection — or re-run `db-roles`. |
 | Backend won't boot | You're likely missing the venv — re-run `bootstrap`. Lite needs no databases, so it's almost always an install issue. |
 | `/audit` empty in lite | Expected until an action runs; it writes to `taif_lite.db` (SQLite) on the fly. |
 | Console shows `—` everywhere | Backend not reachable or no query run yet. Confirm `http://localhost:8000/docs` opens; run a query. |

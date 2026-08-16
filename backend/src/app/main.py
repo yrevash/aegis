@@ -142,6 +142,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     binding — the system serves paid model calls with no spend ceiling and no
     record. Booting anyway would be the silent failure this exception exists to
     prevent, so it propagates.
+
+    **The second non-degradable failure is an inert tenant-isolation control.**
+    :func:`app.data.session.verify_rls_enforcement` asks the database whether the role
+    serving requests can bypass Row-Level Security. In dev that is logged at ERROR and
+    the process continues; anywhere else it raises
+    :class:`~aegis.governance.rls.RlsBypassError` and the API does not start, because a
+    deployment whose isolation policies are enforced against nobody would still *look*
+    healthy on every dashboard.
     """
     init_observability(app)
     settings = get_settings()
@@ -160,6 +168,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             raise
         except Exception:  # noqa: BLE001 - the database is optional; degrade cleanly
             logger.warning("DB bootstrap skipped — database unreachable.", exc_info=True)
+
+    # Is the tenant-isolation control actually ON? Postgres skips row security entirely
+    # for a SUPERUSER/BYPASSRLS role, so serving requests as ``postgres`` leaves every
+    # tenant_isolation policy installed and enforced against nobody — which is how this
+    # platform ran until the owner/serving DSN split. The check is deliberately NOT
+    # inside a try/except here: ``verify_rls_enforcement`` catches connection failures
+    # itself (an absent database still starts, as documented) and lets the bypass
+    # verdict through, so a broad handler at this level is exactly what would make the
+    # diagnostic unable to fire. Outside dev it raises and the API does not start.
+    if settings.stores_enabled:
+        from app.data.session import verify_rls_enforcement
+
+        await verify_rls_enforcement()
 
     # Load every ACTIVE prompt version into the LLM-Ops registry's process-wide cache
     # so the harness reads a live, promoted system prompt synchronously on the hot path

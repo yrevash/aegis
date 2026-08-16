@@ -172,7 +172,7 @@ async def classify_image(
 async def screen_image(
     payload: ImagePayload, *, completer: ChatCompleter | None
 ) -> ImageScreenVerdict:
-    """Screen an image for instructions aimed at the model. **Fails closed.**
+    """Screen an image for instructions aimed at the model — and fail closed.
 
     Unlike the text rails there is no deterministic backstop to fall back on, so
     a missing completer is not a degraded mode — it is *no control*, and the

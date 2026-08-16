@@ -74,7 +74,16 @@ from aegis.governance.models import (
     UsageLedger,
     User,
 )
-from aegis.governance.rls import bootstrap_rls, set_tenant_scope
+from aegis.governance.rls import (
+    SERVING_ROLE,
+    RlsBypassError,
+    RlsEnforcement,
+    audit_rls_enforcement,
+    bootstrap_rls,
+    grant_serving_role,
+    report_rls_enforcement,
+    set_tenant_scope,
+)
 from aegis.governance.schema import (
     SchemaDriftError,
     plan_additive_columns,
@@ -133,7 +142,10 @@ __all__ = [
     "JwtConfig",
     "CrossTenantBudgetError",
     "LastPlatformAdminError",
+    "SERVING_ROLE",
+    "RlsBypassError",
     "RlsConfig",
+    "RlsEnforcement",
     "Role",
     "RoleTier",
     "SchemaDriftError",
@@ -147,6 +159,7 @@ __all__ = [
     "UsageSeriesPoint",
     "UsageSummary",
     "User",
+    "audit_rls_enforcement",
     "bootstrap_rls",
     "budget_status",
     "coarse_role_from_fine",
@@ -161,6 +174,7 @@ __all__ = [
     "enforce_governance",
     "get_governance_context",
     "governance_dashboard",
+    "grant_serving_role",
     "hash_password",
     "list_budgets",
     "list_recent_audit",
@@ -175,6 +189,7 @@ __all__ = [
     "reconcile_additive_columns",
     "record_audit",
     "record_usage",
+    "report_rls_enforcement",
     "reset_governance_context",
     "role_rank",
     "set_governance_context",

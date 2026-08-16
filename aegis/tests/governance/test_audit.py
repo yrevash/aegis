@@ -1,4 +1,10 @@
-"""The audit writer persists rows and pulls the tenant from context when omitted."""
+"""The audit writer persists rows and pulls the tenant from context when omitted.
+
+``audit_log.tenant_id`` is a real foreign key, so the tenant an entry is attributed to
+has to exist before the entry can be written. That is not ceremony: an audit row nobody
+can attribute is not evidence, and it is precisely what the SQLite fixture used to let
+these tests create.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +16,11 @@ from aegis.governance import (
     set_governance_context,
 )
 
+from .._seed import ensure_tenants
+
 
 async def test_record_and_list_recent_audit(db):
+    await ensure_tenants(db, 1)
     await record_audit(
         action="tool:update_request_status",
         actor="alice",
@@ -30,6 +39,9 @@ async def test_record_and_list_recent_audit(db):
 
 
 async def test_record_audit_pulls_tenant_from_context(db):
+    # Tenant 4 exists too, so the negative read below is about *this row's* attribution
+    # rather than about a tenant the database has never heard of.
+    await ensure_tenants(db, 3, 4)
     token = set_governance_context(GovernanceContext(tenant_id=3, user_id=9))
     try:
         # tenant_id omitted → taken from the bound governance context.

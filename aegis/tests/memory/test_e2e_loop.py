@@ -4,7 +4,8 @@ Turn 1 persists raw turns and enqueues a durable consolidation job; draining tha
 queue with :func:`sweep_pending` distils a bitemporal fact; turn 2's
 :func:`assemble_working_memory` recalls that fact into the injected working-memory block.
 Proves the fact is *learned* in turn 1 and *surfaced* in turn 2 — the honest durability
-backstop (a job row, not a lost fire-and-forget task). SQLite + scripted fakes; no network.
+backstop (a job row, not a lost fire-and-forget task). Real PostgreSQL + scripted
+fakes; no network.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from aegis.memory.stores import (
 )
 from aegis.memory.working import assemble_working_memory
 
+from .._seed import add_in_fk_order
 from ._spec import FACT_EXTRACTION_PROMPT
 
 pytestmark = pytest.mark.asyncio
@@ -125,7 +127,9 @@ async def test_multi_turn_write_consolidate_recall(db):
 
     # ── Turn 1: persist the raw turns and ENQUEUE a durable consolidation job ────────
     async with db() as s:
-        s.add(MemorySession(id=session_id, subject_id=subject))
+        # The session row is flushed on its own first: ``memory_message.session_id``
+        # references it, and the unit of work would otherwise emit the messages first.
+        await add_in_fk_order(s, MemorySession(id=session_id, subject_id=subject))
         await _add_turn(
             s,
             subject=subject,

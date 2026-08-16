@@ -1,24 +1,51 @@
-"""Shared fixtures for the wiring tests — fakes only, no live infrastructure.
+"""Shared fixtures for the wiring tests — faked services over a **real** PostgreSQL.
 
-Everything the vertical slice touches (the LLM gateway, retrieval, guardrails, the
-ML spine, the action tools) is faked here and injected through :class:`AgentDeps`
-so the agent graph and the API run with no network, no keys, and no Postgres/
-Neo4j/Redis. The one real dependency exercised is the audit log, bound to an
-in-memory aiosqlite database so audit writes actually round-trip.
+Everything the vertical slice touches that is *not* the database (the LLM gateway,
+retrieval, guardrails, the ML spine, the action tools) is faked here and injected
+through :class:`AgentDeps`, so the agent graph and the API run with no network and no
+keys. The database is the one dependency that is never faked.
+
+**Why the database is real, and why it is not SQLite.** Production carries guards
+shaped like ``if bind.dialect.name != "postgresql": return``. On SQLite
+:func:`aegis.governance.rls.set_tenant_scope` therefore did nothing at all, so every
+test that read like a proof of tenant isolation only ever exercised the app-level
+``WHERE tenant_id = :ctx`` filter — which is exactly how ten tenant-scoped tables ended
+up with no Row-Level Security policy while this suite stayed green. SQLite was removed
+from the backend tests on 2026-08-16. The :func:`db` fixture binds a scratch PostgreSQL
+database served by a ``NOSUPERUSER NOBYPASSRLS`` role, so RLS is genuinely enforced
+against the connection the tests run on and a policy regression fails a test.
+
+The scratch database and its role are provisioned once per session (see
+:func:`postgres_database`) and destroyed in a ``finally``; each test starts from an
+empty schema via a single ``TRUNCATE ... RESTART IDENTITY CASCADE``. See
+``tests/pgsupport.py`` for the provisioning primitives, which
+``tests/integration/test_tenant_isolation_live.py`` shares.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+
+from aegis.retrieval.types import RetrievalScope
 
 # Ensure the ``src`` layout is importable even when the editable install's .pth
 # is not honoured by the active interpreter (keeps the suite runnable anywhere).
 _SRC = str(Path(__file__).resolve().parents[1] / "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
+
+# ``tests/`` itself, so ``import pgsupport`` resolves from every test package. pytest's
+# ``prepend`` import mode already puts this directory on ``sys.path`` (there is no
+# ``tests/__init__.py``), but relying on that is relying on a collection detail — and a
+# suite that cannot import its database scaffolding does not skip, it errors.
+_TESTS = str(Path(__file__).resolve().parent)
+if _TESTS not in sys.path:
+    sys.path.insert(0, _TESTS)
 
 # Same guard for the sibling ``aegis`` package: its editable install's .pth is
 # subject to the identical interpreter quirk (observed on macOS, where the
@@ -31,8 +58,11 @@ if _AEGIS_SRC.is_dir() and str(_AEGIS_SRC) not in sys.path:
 
 from typing import TYPE_CHECKING  # noqa: E402
 
+import pgsupport  # noqa: E402
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from app.api.schemas import (  # noqa: E402
@@ -93,7 +123,7 @@ def build_fake_deps(
     ) -> GuardResult:  # noqa: ARG001 - contexts accepted for the grounding-aware signature
         return GuardResult(verdict=GuardVerdict.PASS, reason="clean", text=text)
 
-    async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:
+    async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return RetrievalResult(
             answer_context="Spotlighted context about request R1.",
             sources=[Source(id="kb-1", text="Refund policy", score=0.9)],
@@ -243,14 +273,158 @@ def fake_predict():
     return _predict
 
 
+@dataclass(frozen=True, slots=True)
+class PostgresDatabase:
+    """The session-wide scratch database every ``db`` fixture binds to.
+
+    Attributes:
+        scratch: The provisioned database + unprivileged role.
+        truncate_sql: A single ``TRUNCATE ... RESTART IDENTITY CASCADE`` covering every
+            table the bootstrap created, used to reset between tests.
+    """
+
+    scratch: pgsupport.Scratch
+    truncate_sql: str
+
+
+async def _build_schema(scratch: pgsupport.Scratch) -> str:
+    """Materialise the application schema on the scratch database, once.
+
+    This calls the shipped :func:`app.data.session.bootstrap` rather than a test-local
+    ``create_all``, deliberately: ``bootstrap`` is what a real deployment runs, so the
+    suite exercises the same ``create_all`` → additive reconcile → ``timestamptz``
+    alignment → :func:`aegis.governance.rls.grant_serving_role` →
+    :func:`aegis.governance.rls.bootstrap_rls` sequence. A regression in any of those
+    steps breaks the suite at setup instead of hiding behind a hand-rolled schema.
+
+    The serving engine is then interrogated (:func:`pgsupport.assert_unprivileged`)
+    before a single test runs, because a superuser serving role would make every
+    tenant-isolation assertion in the suite vacuous.
+
+    Args:
+        scratch: The provisioned scratch handle. ``app.config`` must already point at
+            it, since ``bootstrap`` reads the serving role's name from settings.
+
+    Returns:
+        The ``TRUNCATE`` statement that empties every table the bootstrap created.
+
+    Raises:
+        RuntimeError: If the serving role turns out to be exempt from row security.
+    """
+    owner = create_async_engine(scratch.owner_dsn)
+    serving = create_async_engine(scratch.app_dsn)
+    try:
+        await bootstrap(owner)
+        await pgsupport.assert_unprivileged(serving, expected_role=scratch.role)
+        async with owner.connect() as conn:
+            tables = (
+                await conn.execute(
+                    text(
+                        "SELECT c.relname FROM pg_class c "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = current_schema() AND c.relkind = 'r' "
+                        "ORDER BY c.relname"
+                    )
+                )
+            ).scalars().all()
+    finally:
+        await serving.dispose()
+        await owner.dispose()
+    if not tables:
+        raise RuntimeError(
+            f"bootstrap created no tables in {scratch.database}; every test that "
+            "believes it wrote a row would silently prove nothing"
+        )
+    names = ", ".join(f'"{name}"' for name in tables)
+    return f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"
+
+
+@pytest.fixture(scope="session")
+def postgres_database():
+    """Provision one scratch database + unprivileged role for the whole session.
+
+    Session-scoped because provisioning a database per test would dominate the runtime
+    of a ~700-test suite; per-test isolation comes from the ``TRUNCATE`` in :func:`db`
+    instead, which costs milliseconds. Synchronous (driving ``asyncio.run`` itself) so
+    each async test still builds its engines inside its *own* event loop — there is no
+    session-scoped loop to keep in step, and no pooled connection can be handed across
+    loops.
+
+    ``app.config``'s DSNs are repointed at the scratch database for the session and
+    restored in the ``finally``, so ``bootstrap`` grants to the right serving role and
+    any code under test that reads settings sees the same database the fixtures do.
+
+    Yields:
+        The :class:`PostgresDatabase` handle. Skips (or, under
+        ``AEGIS_REQUIRE_PG_TESTS=1``, fails) the dependent tests when no cluster can be
+        provisioned.
+    """
+    from app.config import get_settings
+
+    dsn = pgsupport.admin_dsn()
+    try:
+        scratch = asyncio.run(pgsupport.create_scratch(dsn, prefix="aegis_backend"))
+    except (OSError, SQLAlchemyError) as exc:
+        pgsupport.skip_or_fail(
+            unverified=(
+                "the entire database-backed backend suite — tenant scoping, RLS "
+                "enforcement, governed persistence and every API surface that reads or "
+                "writes a row."
+            ),
+            reason=f"{type(exc).__name__}: {exc}",
+        )
+
+    settings = get_settings()
+    restore = (settings.postgres_dsn, settings.postgres_admin_dsn)
+    settings.postgres_dsn = scratch.app_dsn
+    settings.postgres_admin_dsn = scratch.owner_dsn
+    try:
+        truncate_sql = asyncio.run(_build_schema(scratch))
+        yield PostgresDatabase(scratch=scratch, truncate_sql=truncate_sql)
+    finally:
+        settings.postgres_dsn, settings.postgres_admin_dsn = restore
+        asyncio.run(pgsupport.drop_scratch(dsn, scratch))
+
+
 @pytest_asyncio.fixture
-async def db(tmp_path):
-    """Bind an aiosqlite engine and create every table (for the audit log)."""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'wiring.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
+async def db(postgres_database):
+    """Bind the process-wide session factory to the scratch PostgreSQL database.
+
+    The serving engine connects as the ``NOSUPERUSER NOBYPASSRLS`` scratch role, so the
+    ``tenant_isolation`` policies actually apply to everything the tests do; the owner
+    engine is bound separately as the DDL engine, mirroring the production split in
+    :mod:`app.data.session`. That split is the reason ``set_tenant_scope`` is a real
+    filter here and not the no-op it was on SQLite.
+
+    Isolation between tests is one ``TRUNCATE ... RESTART IDENTITY CASCADE`` rather than
+    a fresh schema (which, per test, would cost more than the rest of the suite put
+    together). It runs on the **owner** connection because truncation is an owner
+    privilege the serving role deliberately does not have.
+
+    The engines are built per test, inside the test's own event loop, and disposed in a
+    ``finally``: an ``asyncpg`` connection is bound to the loop that opened it, so a
+    session-scoped pool would hand a dead connection to the next test.
+
+    Yields:
+        The process-wide ``async_sessionmaker``, ready to use.
+    """
+    from app.ops import registry
+
+    owner = create_async_engine(postgres_database.scratch.owner_dsn)
+    serving = create_async_engine(postgres_database.scratch.app_dsn)
+    try:
+        async with owner.begin() as conn:
+            await conn.execute(text(postgres_database.truncate_sql))
+        configure_engine(serving, admin_engine=owner)
+        # The active-prompt cache mirrors a ``prompt_versions`` row; the TRUNCATE above
+        # just deleted every one of them, so a cache left populated is a lie about the
+        # database this test is looking at.
+        registry.clear_cache()
+        yield get_sessionmaker()
+    finally:
+        registry.clear_cache()
+        await serving.dispose()
+        await owner.dispose()
 
 
 @pytest_asyncio.fixture

@@ -9,8 +9,10 @@ These lock the three Phase-1 governance guarantees the later UI/tests depend on:
 - **Config / RBAC ladder** — the effective config surfaces the knobs and the RBAC
   ladder is strictly ordered by administrative privilege.
 
-They run against the offline SQLite ``db`` fixture from ``conftest.py`` (RLS is a
-documented no-op there; app-level scoping is the layer under test).
+They run against the private PostgreSQL ``db`` fixture from ``conftest.py``, over the
+``NOSUPERUSER NOBYPASSRLS`` role — so the ``tenant_isolation`` policy is live underneath
+the app-level scoping these tests exercise, and an isolation assertion here fails if
+*either* layer stops working.
 """
 
 from __future__ import annotations
@@ -39,12 +41,7 @@ from aegis.governance import (
 from aegis.governance.config import RBAC_LADDER
 from aegis.governance.security import DEFAULT_JWT_SECRET
 
-
-async def _seed(db, *rows):
-    async with db() as session:
-        for row in rows:
-            session.add(row)
-        await session.commit()
+from .._seed import add_in_fk_order, seed
 
 
 async def _ledger_totals(db, tenant_id=None):
@@ -66,7 +63,7 @@ async def _ledger_totals(db, tenant_id=None):
 
 
 async def test_usage_summary_totals_equal_ledger_sum(db):
-    await _seed(
+    await seed(
         db,
         UsageLedger(tenant_id=1, model="gpt", prompt_tokens=10, completion_tokens=5, cost_usd=0.5),
         UsageLedger(tenant_id=1, model="gpt", prompt_tokens=7, completion_tokens=3, cost_usd=0.2),
@@ -96,7 +93,7 @@ async def test_usage_summary_empty_is_all_zero(db):
 
 
 async def test_budget_status_spend_equals_ledger_and_remaining(db):
-    await _seed(
+    await seed(
         db,
         Budget(
             tenant_id=1,
@@ -127,7 +124,7 @@ async def test_budget_status_matches_enforcer_view(db):
 
     from aegis.gateway.types import BudgetExceededError
 
-    await _seed(
+    await seed(
         db,
         Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=40),
         UsageLedger(tenant_id=1, prompt_tokens=30, completion_tokens=10, cost_usd=0.0),
@@ -140,14 +137,14 @@ async def test_budget_status_matches_enforcer_view(db):
 
 
 async def test_budget_status_uncapped_remaining_is_none(db):
-    await _seed(db, Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1))
+    await seed(db, Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1))
     [status] = await budget_status(tenant_id=1)
     assert status.tokens_remaining is None
     assert status.usd_remaining is None
 
 
 async def test_budget_status_over_cap_floors_remaining_at_zero(db):
-    await _seed(
+    await seed(
         db,
         Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=10),
         UsageLedger(tenant_id=1, prompt_tokens=50, completion_tokens=0, cost_usd=0.0),
@@ -161,7 +158,7 @@ async def test_budget_status_over_cap_floors_remaining_at_zero(db):
 
 
 async def test_usage_summary_is_tenant_scoped(db):
-    await _seed(
+    await seed(
         db,
         UsageLedger(tenant_id=1, prompt_tokens=10, completion_tokens=0, cost_usd=1.0),
         UsageLedger(tenant_id=2, prompt_tokens=999, completion_tokens=0, cost_usd=99.0),
@@ -173,7 +170,7 @@ async def test_usage_summary_is_tenant_scoped(db):
 
 
 async def test_budget_status_is_tenant_scoped(db):
-    await _seed(
+    await seed(
         db,
         Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
         Budget(tenant_id=2, scope_type=BudgetScope.TENANT, scope_id=2, token_cap=200),
@@ -184,17 +181,19 @@ async def test_budget_status_is_tenant_scoped(db):
 
 async def test_governance_dashboard_is_tenant_scoped(db):
     async with db() as session:
-        session.add_all(
-            [
-                Tenant(name="acme"),
-                Tenant(name="globex"),
-                User(username="a-user", role=Role.CLIENT, tenant_id=1),
-                User(username="b-user", role=Role.CLIENT, tenant_id=2),
-                Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
-                Budget(tenant_id=2, scope_type=BudgetScope.TENANT, scope_id=2, token_cap=200),
-                UsageLedger(tenant_id=1, prompt_tokens=10, completion_tokens=0, cost_usd=1.0),
-                UsageLedger(tenant_id=2, prompt_tokens=50, completion_tokens=0, cost_usd=5.0),
-            ]
+        # ``add_in_fk_order`` rather than ``add_all``: the tenants must be flushed before
+        # the users/budgets/ledger rows that reference them, and the unit of work has no
+        # ``relationship`` to derive that from.
+        await add_in_fk_order(
+            session,
+            Tenant(name="acme"),
+            Tenant(name="globex"),
+            User(username="a-user", role=Role.CLIENT, tenant_id=1),
+            User(username="b-user", role=Role.CLIENT, tenant_id=2),
+            Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
+            Budget(tenant_id=2, scope_type=BudgetScope.TENANT, scope_id=2, token_cap=200),
+            UsageLedger(tenant_id=1, prompt_tokens=10, completion_tokens=0, cost_usd=1.0),
+            UsageLedger(tenant_id=2, prompt_tokens=50, completion_tokens=0, cost_usd=5.0),
         )
         await session.commit()
     await record_audit(
@@ -221,7 +220,7 @@ async def test_governance_dashboard_platform_view_sees_all(db):
 
 
 async def test_governance_dashboard_usage_equals_ledger_sum(db):
-    await _seed(
+    await seed(
         db,
         UsageLedger(tenant_id=1, prompt_tokens=12, completion_tokens=8, cost_usd=2.0),
         UsageLedger(tenant_id=1, prompt_tokens=3, completion_tokens=1, cost_usd=0.5),

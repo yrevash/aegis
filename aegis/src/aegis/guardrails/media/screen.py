@@ -222,7 +222,7 @@ class MediaScreen:
         custom: CustomRunner | None,
         skipped_custom: list[str] | None,
     ) -> MediaGuardResult:
-        """hygiene → image-PII redaction → injection screen → custom rails."""
+        """Hygiene → image-PII redaction → injection screen → custom rails."""
         blocked = self._hygiene(payload)
         if blocked is not None:
             return blocked

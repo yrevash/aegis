@@ -12,8 +12,12 @@ from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.memory import InMemoryKnowledgeBackend, InMemoryRedis
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.stream import stream_retrieve
+from aegis.retrieval.types import RetrievalScope
 
 from .conftest import RecordingComplete, SequenceEmbed
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 _DOCS = [
     ("refunds", "Refunds are issued to the original payment method within a week."),
@@ -58,7 +62,12 @@ async def test_stream_retrieve_emits_step_then_citations_then_finished():
     sink = CaptureSink()
     emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
 
-    result = await stream_retrieve(retriever, "refunds payment method", emitter, persona="ops")
+    result = await stream_retrieve(
+        retriever,
+        "refunds payment method",
+        emitter,
+        scope=RetrievalScope(tenant_id=None, persona="ops"),
+    )
 
     payloads = _payloads(sink.frames)
     assert [p["type"] for p in payloads] == [
@@ -93,7 +102,9 @@ async def test_stream_retrieve_citations_reflect_real_sources():
     sink = CaptureSink()
     emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
 
-    result = await stream_retrieve(retriever, "refund payment method original", emitter)
+    result = await stream_retrieve(
+        retriever, "refund payment method original", emitter, scope=_SCOPE
+    )
 
     citations = _payloads(sink.frames)[2]["value"]
     assert [s["id"] for s in citations["sources"]] == [s.id for s in result.sources]
@@ -108,7 +119,12 @@ async def test_stream_retrieve_emits_cache_miss_then_hit_with_provenance():
     # First pass: cold cache → a miss, and the result is written back to the cache.
     sink1 = CaptureSink()
     em1 = AegisEmitter(thread_id="t", run_id="r1", sink=sink1)
-    await stream_retrieve(retriever, "refunds payment method", em1, persona="ops")
+    await stream_retrieve(
+        retriever,
+        "refunds payment method",
+        em1,
+        scope=RetrievalScope(tenant_id=None, persona="ops"),
+    )
     cache1 = next(
         p["value"] for p in _payloads(sink1.frames)
         if p.get("name") == stream_names.RETRIEVAL_CACHE
@@ -119,7 +135,12 @@ async def test_stream_retrieve_emits_cache_miss_then_hit_with_provenance():
     # Second pass: identical query+persona → an exact cache hit with provenance.
     sink2 = CaptureSink()
     em2 = AegisEmitter(thread_id="t", run_id="r2", sink=sink2)
-    result2 = await stream_retrieve(retriever, "refunds payment method", em2, persona="ops")
+    result2 = await stream_retrieve(
+        retriever,
+        "refunds payment method",
+        em2,
+        scope=RetrievalScope(tenant_id=None, persona="ops"),
+    )
     cache2 = next(
         p["value"] for p in _payloads(sink2.frames)
         if p.get("name") == stream_names.RETRIEVAL_CACHE
@@ -136,7 +157,7 @@ async def test_stream_retrieve_returns_the_full_result():
     sink = CaptureSink()
     emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
 
-    result = await stream_retrieve(retriever, "escalate senior agent", emitter)
+    result = await stream_retrieve(retriever, "escalate senior agent", emitter, scope=_SCOPE)
 
     assert result.answer_context or result.sources == []
     assert result.num_candidates >= len(result.sources)

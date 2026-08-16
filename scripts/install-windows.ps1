@@ -119,8 +119,8 @@ if (-not $SkipStores) {
     if (Test-Port 5432) { Ok 'PostgreSQL up on 5432' } else { Bad 'PostgreSQL not answering on 5432' }
   }
 
-  # The app expects a `taif` database owned by a `postgres` superuser, matching
-  # POSTGRES_DSN in .env.example.
+  # The app expects a `taif` database, created and owned by the `postgres` superuser.
+  # It is then served by a SEPARATE, non-superuser role - see the block below.
   if (Test-Port 5432) {
     $psql = Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\psql.exe' -ErrorAction SilentlyContinue |
             Select-Object -Last 1
@@ -138,6 +138,32 @@ if (-not $SkipStores) {
     } else {
       Warn "psql.exe not found - create the 'taif' database manually"
     }
+  }
+
+  # -- The serving role - the half of tenant isolation that is not code --------
+  # Postgres skips row security ENTIRELY for a superuser, and FORCE ROW LEVEL
+  # SECURITY only removes the table owner's exemption. Connecting as `postgres`
+  # therefore installs 13 tenant policies and is filtered by none of them. So a
+  # fresh machine gets a second, non-superuser role (`aegis_app`) that requests are
+  # served as, while `postgres` stays behind POSTGRES_ADMIN_DSN for DDL only.
+  #
+  # Only provisioned when it is missing: db-roles.ps1 rotates the password and
+  # rewrites backend\.env, which should not happen on every re-run of the installer.
+  Head 'Database roles (RLS enforcement)'
+  if ((Test-Port 5432) -and $psql) {
+    $env:PGPASSWORD = 'postgres'
+    $roleExists = & $psql.FullName -U postgres -h 127.0.0.1 -tAc "SELECT 1 FROM pg_roles WHERE rolname='aegis_app'" 2>$null
+    Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+    if ($roleExists -match '1') {
+      Ok "serving role 'aegis_app' exists (re-run scripts\db-roles.ps1 to rotate its password)"
+    } else {
+      & (Join-Path $PSScriptRoot 'db-roles.ps1')
+      if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) { Ok "serving role 'aegis_app' provisioned" }
+      else { Bad 'could not provision the aegis_app role - run scripts\db-roles.ps1 by hand' }
+    }
+  } else {
+    Warn 'skipped - Postgres or psql.exe unavailable; run scripts\db-roles.ps1 once both are'
+    Warn '  until then the backend serves as a superuser and every tenant RLS policy is bypassed'
   }
 
   # -- Redis / Memurai - near-exact retrieval cache + answer cache ------------

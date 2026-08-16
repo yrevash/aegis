@@ -52,9 +52,9 @@ from aegis.retrieval.models import (
 from aegis.retrieval.protocols import CompleteFn
 from aegis.retrieval.query_rewrite import CallUsage, RewriteResult, usage_of
 from aegis.retrieval.spotlight import build_plain_context, build_spotlighted_context
-from aegis.retrieval.types import GraphEdge, GraphNode
+from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 
-#: Injected retrieval callable: ``retrieve_fn(query, *, persona) -> RetrievalResult``.
+#: Injected retrieval callable: ``retrieve_fn(query, *, scope) -> RetrievalResult``.
 RetrieveFn = Callable[..., Awaitable[RetrievalResult]]
 #: Optional injected rewriter: ``rewrite_fn(query, *, history) -> RewriteResult``.
 RewriteFn = Callable[..., Awaitable[RewriteResult]]
@@ -356,7 +356,7 @@ async def agentic_retrieve(
     rewrite_fn: RewriteFn | None = None,
     history: Sequence[dict] | None = None,
     max_rounds: int = 2,
-    persona: str | None = None,
+    scope: RetrievalScope,
 ) -> AgenticRetrievalResult:
     """Retrieve for ``query``, judging sufficiency and iterating up to ``max_rounds``.
 
@@ -368,7 +368,7 @@ async def agentic_retrieve(
 
     Args:
         query: The entry query.
-        retrieve_fn: Injected ``retrieve_fn(query, *, persona) -> RetrievalResult``.
+        retrieve_fn: Injected ``retrieve_fn(query, *, scope) -> RetrievalResult``.
         complete: Chat-completion callable for the judge (``None`` ⇒ deterministic
             fallback verdict).
         rewrite_fn: Optional ``rewrite_fn(query, *, history) -> RewriteResult`` applied
@@ -379,7 +379,11 @@ async def agentic_retrieve(
             back-references it exists to resolve — so it is an explicit parameter of the
             loop rather than something a caller is left to bind into its closure.
         max_rounds: Upper bound on retrieval passes (floored at 1).
-        persona: Persona forwarded to ``retrieve_fn``.
+        scope: The tenant/persona scope forwarded, unchanged, to **every** round. The
+            loop reformulates the query, never the isolation boundary: a follow-up
+            retrieval runs inside exactly the same scope as the first. Required, with no
+            default, for the same reason :meth:`aegis.retrieval.pipeline.Retriever.retrieve`
+            requires one.
 
     Returns:
         An :class:`AgenticRetrievalResult` with the merged result and per-round metadata.
@@ -398,7 +402,7 @@ async def agentic_retrieve(
         if rewrite.changed and rewrite.rewritten.strip():
             active_query = rewrite.rewritten
 
-    result = await retrieve_fn(active_query, persona=persona)
+    result = await retrieve_fn(active_query, scope=scope)
 
     verdict = await assess_sufficiency(active_query, result.answer_context, complete=complete)
     total_usage += verdict.usage
@@ -414,7 +418,7 @@ async def agentic_retrieve(
 
     while not verdict.sufficient and used_rounds < rounds_cap:
         followup = verdict.followup_query or _fallback_followup(active_query)
-        followup_result = await retrieve_fn(followup, persona=persona)
+        followup_result = await retrieve_fn(followup, scope=scope)
         before = {s.id for s in result.sources}
         result = _merge_results(
             result, followup_result, cap=_merge_cap(result, followup_result)

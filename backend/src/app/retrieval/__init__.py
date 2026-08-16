@@ -15,9 +15,12 @@ surface and call sites (notably ``app.agent.deps.AgentDeps.default``'s
 
 Public surface (the `app.retrieval` contract, unchanged since before the migration):
 
-* `retrieve(query, *, persona=None) -> RetrievalResult` — semantic cache in front of
-  two-stage graph+vector retrieval with LLM-as-reranker and Spotlighting.
-* `ingest(docs) -> IngestReport` — validated ingestion into LightRAG (Neo4j + vectors).
+* `retrieve(query, *, scope) -> RetrievalResult` — semantic cache in front of
+  two-stage graph+vector retrieval with LLM-as-reranker and Spotlighting. The
+  `RetrievalScope` is required and is reconciled against the request's governance
+  tenant before it reaches the process-wide retriever.
+* `ingest(docs, *, scope) -> IngestReport` — validated ingestion into LightRAG (Neo4j +
+  vectors), with the scope's tenant stamped onto every chunk written.
 
 The pipeline (LightRAG), stores (Neo4j graph + embedded NanoVectorDB vectors + Postgres
 KV), reranker (LLM-as-
@@ -38,7 +41,9 @@ from .models import (
 )
 from .pipeline import (
     RetrievalConfig,
+    RetrievalScope,
     Retriever,
+    TenantScopeMismatch,
     build_default_retriever,
     ingest,
     knowledge_graph,
@@ -54,8 +59,10 @@ __all__ = [
     "Provenance",
     "RetrievalConfig",
     "RetrievalResult",
+    "RetrievalScope",
     "Retriever",
     "Source",
+    "TenantScopeMismatch",
     "build_default_retriever",
     "ingest",
     "knowledge_graph",

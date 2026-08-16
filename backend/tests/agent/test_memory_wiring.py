@@ -25,7 +25,10 @@ from app.data.models import EMBED_DIM
 from app.memory.working import AssembledMemory
 from app.retrieval.cache import SemanticCache
 from app.retrieval.models import Candidate, Recall
-from app.retrieval.pipeline import RetrievalConfig, Retriever
+from app.retrieval.pipeline import RetrievalConfig, RetrievalScope, Retriever
+
+#: The unscoped (no tenant) partition these tests retrieve under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 # The money-shot subsequence every /query run preserves (see test_orchestrator.py).
 _MONEY_SHOT = ["run_started", "retrieval", "token", "run_finished"]
@@ -206,7 +209,7 @@ class _FakeBackend:
         self._recall = recall
         self.recall_calls = 0
 
-    async def recall(self, query, *, top_k, persona=None):  # noqa: ANN001
+    async def recall(self, query, *, top_k, scope):  # noqa: ANN001
         self.recall_calls += 1
         return self._recall
 
@@ -244,7 +247,7 @@ def _retriever(embed: _Embed) -> Retriever:
 @pytest.mark.asyncio
 async def test_retrieve_surfaces_real_embed_dim_query_vec():
     retriever = _retriever(_Embed([0.1] * EMBED_DIM))
-    result = await retriever.retrieve("why is the sky blue?", persona=None)
+    result = await retriever.retrieve("why is the sky blue?", scope=_SCOPE)
 
     assert result.cache_hit is False
     assert result.query_vec is not None
@@ -255,7 +258,7 @@ async def test_retrieve_surfaces_real_embed_dim_query_vec():
 @pytest.mark.asyncio
 async def test_retrieve_leaves_query_vec_none_for_lite_256_dim():
     retriever = _retriever(_Embed([0.1] * 256))
-    result = await retriever.retrieve("why is the sky blue?", persona=None)
+    result = await retriever.retrieve("why is the sky blue?", scope=_SCOPE)
 
     # Recorded by dimension, but NOT reusable → not a recall-comparable vector.
     assert result.query_vec is None
@@ -265,12 +268,12 @@ async def test_retrieve_leaves_query_vec_none_for_lite_256_dim():
 @pytest.mark.asyncio
 async def test_exact_cache_hit_leaves_query_vec_none():
     retriever = _retriever(_Embed([0.1] * EMBED_DIM))
-    first = await retriever.retrieve("why is the sky blue?", persona=None)
+    first = await retriever.retrieve("why is the sky blue?", scope=_SCOPE)
     assert first.query_vec is not None  # the miss surfaced it
 
     # The identical query is served from the exact cache — no embedding recomputed, so
     # the reusable vector is absent (the cache never stored a 3072-float blob).
-    hit = await retriever.retrieve("why is the sky blue?", persona=None)
+    hit = await retriever.retrieve("why is the sky blue?", scope=_SCOPE)
     assert hit.cache_hit is True
     assert hit.query_vec is None
     assert hit.query_vec_dim is None

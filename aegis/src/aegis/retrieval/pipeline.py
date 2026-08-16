@@ -2,8 +2,14 @@
 
 This module wires the stages behind the `Retriever` dataclass's two entry points:
 
-* `Retriever.retrieve(query, *, persona=None) -> RetrievalResult`
-* `Retriever.ingest(docs) -> IngestReport`
+* `Retriever.retrieve(query, *, scope) -> RetrievalResult`
+* `Retriever.ingest(docs, *, scope) -> IngestReport`
+
+Both take a required :class:`~aegis.retrieval.types.RetrievalScope`. Tenant scope is a
+parameter, not a convention: it keys the cache, filters the backend, and is stamped onto
+every chunk written, so what one tenant stores is what that tenant — and only that
+tenant — can read back. There is deliberately **no default**; an omitted scope is a
+call-site error the type checker reports, not a silent unscoped query.
 
 `Retriever` holds its collaborators (knowledge backend, semantic cache, completer,
 embedder) by dependency injection, so the whole flow is unit-testable with fakes and
@@ -48,7 +54,14 @@ from aegis.retrieval.protocols import (
 )
 from aegis.retrieval.reranker import rerank_scored
 from aegis.retrieval.spotlight import build_plain_context, build_spotlighted_context
-from aegis.retrieval.types import FusionMethod, GraphEdge, GraphNode, RetrievalOrigin
+from aegis.retrieval.types import (
+    TENANT_METADATA_KEY,
+    FusionMethod,
+    GraphEdge,
+    GraphNode,
+    RetrievalOrigin,
+    RetrievalScope,
+)
 from aegis.retrieval.validation import validate_content
 
 #: Dimension of the default gateway embedding (`text-embedding-3-large`); the default
@@ -133,13 +146,16 @@ class Retriever:
     complete: CompleteFn
     embed: EmbedFn
     config: RetrievalConfig = field(default_factory=RetrievalConfig)
-    #: Content hashes already accepted, so re-ingesting a corpus is idempotent and
-    #: incremental (only genuinely new chunks reach the backend). Process-scoped; the
-    #: LightRAG backend additionally dedupes by content hash in its own store.
-    _seen_hashes: set[str] = field(default_factory=set)
+    #: ``(tenant_id, content_hash)`` pairs already accepted, so re-ingesting a corpus is
+    #: idempotent and incremental (only genuinely new chunks reach the backend).
+    #: Process-scoped; the LightRAG backend additionally dedupes by content hash in its
+    #: own store. The tenant is part of the key because the *same* document ingested by
+    #: two tenants is two genuinely distinct rows — deduping it away would leave the
+    #: second tenant unable to retrieve its own document.
+    _seen_hashes: set[tuple[int | None, str]] = field(default_factory=set)
 
-    async def retrieve(self, query: str, *, persona: str | None = None) -> RetrievalResult:
-        """Answer a retrieval request end-to-end.
+    async def retrieve(self, query: str, *, scope: RetrievalScope) -> RetrievalResult:
+        """Answer a retrieval request end-to-end, inside ``scope``.
 
         Flow: near-exact cache → **hybrid wide recall** (vector + graph, plus a BM25
         keyword arm when the backend can search its corpus by keyword, fused by
@@ -149,25 +165,31 @@ class Retriever:
         below that runs the full fused pipeline (the sub-threshold match is only a
         prefetch hint, never a substituted answer).
 
+        ``scope`` reaches every stage that could otherwise cross a tenant boundary: both
+        cache tiers are *partitioned* by it (not filtered after the fact), and it is
+        forwarded to the backend so each recall arm applies the tenant predicate to the
+        rows it scans.
+
         Args:
             query: The user query.
-            persona: Optional adapter persona id (scopes cache and, later, store access).
+            scope: The tenant / persona / corpus-version this request runs inside.
+                **Required, with no default** — see the module docstring.
 
         Returns:
             A `RetrievalResult` with spotlighted context, sources, a graph delta, the
             cache-hit flag, and populated `provenance` (origins + RRF fusion).
         """
-        exact = await self.cache.get_exact(query, persona)
+        exact = await self.cache.get_exact(query, scope)
         if exact is not None:
             return exact
 
         query_vec = (await self.embed([query]))[0]
-        semantic = await self.cache.get_semantic(query_vec, persona)
+        semantic = await self.cache.get_semantic(query_vec, scope)
         if semantic is not None:
             return semantic
 
         fused, origins, nodes, edges, arms, keyword = await self._recall_and_fuse(
-            query, persona
+            query, scope
         )
         if self.config.rerank_enabled:
             outcome = await rerank_scored(
@@ -209,7 +231,7 @@ class Retriever:
             rerank=rerank_report,
             keyword=keyword,
         )
-        await self.cache.set(query, persona, query_vec, result)
+        await self.cache.set(query, scope, query_vec, result)
         # Surface the query embedding for the "free" episodic-write reuse — but only on
         # the returned object, AFTER caching, so the (serialised) cache never stores a
         # large float blob and a later exact/near cache hit correctly yields
@@ -222,7 +244,7 @@ class Retriever:
         return result
 
     async def _recall_and_fuse(
-        self, query: str, persona: str | None
+        self, query: str, scope: RetrievalScope
     ) -> tuple[
         list[Candidate],
         list[RetrievalOrigin],
@@ -240,7 +262,8 @@ class Retriever:
 
         Args:
             query: The user query.
-            persona: Active persona (scopes store access where supported).
+            scope: The tenant/persona partition; forwarded to every recall arm so each
+                one filters the rows it scans rather than trusting a later stage to.
 
         Returns:
             A tuple ``(fused_candidates, origins, nodes, edges, arms, keyword)`` where
@@ -249,8 +272,8 @@ class Retriever:
             *before* fusion, and ``keyword`` records what the keyword signal was. A
             pool-scoped keyword pass is fused but is neither an arm nor an origin.
         """
-        lists, nodes, edges = await self._recall_lists(query, persona)
-        keyword_list, keyword = await self._keyword_signal(query, lists, persona)
+        lists, nodes, edges = await self._recall_lists(query, scope)
+        keyword_list, keyword = await self._keyword_signal(query, lists, scope)
         recall_arms = [*lists, keyword_list] if keyword.adds_recall else list(lists)
         fused = reciprocal_rank_fusion([*lists, keyword_list], k=self.config.rrf_k)
         arms = [
@@ -264,7 +287,7 @@ class Retriever:
         return fused, collect_origins(fused), nodes, edges, arms, keyword
 
     async def _keyword_signal(
-        self, query: str, lists: Sequence[RankedList], persona: str | None
+        self, query: str, lists: Sequence[RankedList], scope: RetrievalScope
     ) -> tuple[RankedList, KeywordReport]:
         """Produce the BM25/keyword ranked list — and say honestly what it is.
 
@@ -287,7 +310,10 @@ class Retriever:
         Args:
             query: The user query.
             lists: The dense/graph ranked lists already recalled this turn.
-            persona: Active persona (scopes store access where supported).
+            scope: The tenant/persona partition. The corpus-wide branch forwards it so
+                the keyword arm carries the same tenant predicate as the dense arms; the
+                pool branch inherits scoping for free, because the pool it re-scores was
+                itself recalled under ``scope``.
 
         Returns:
             ``(ranked_list, report)`` — the list to fuse and the honest label for it.
@@ -295,7 +321,7 @@ class Retriever:
         if isinstance(self.backend, KeywordBackend):
             hits = list(
                 await self.backend.keyword_recall(
-                    query, top_k=self.config.recall_top_k, persona=persona
+                    query, top_k=self.config.recall_top_k, scope=scope
                 )
             )
             return (
@@ -312,22 +338,24 @@ class Retriever:
         )
 
     async def _recall_lists(
-        self, query: str, persona: str | None
+        self, query: str, scope: RetrievalScope
     ) -> tuple[list[RankedList], list[GraphNode], list[GraphEdge]]:
-        """Recall origin-tagged ranked lists from the backend.
+        """Recall origin-tagged ranked lists from the backend, scoped to ``scope``.
 
         Backends implementing :class:`~aegis.retrieval.protocols.MultiListBackend` hand
         back split per-signal lists (e.g. vector + graph); a plain backend returns one
         pre-blended list, tagged with its declared origins (default: vector+graph mix).
+        Either way the scope goes to the backend, which is the only layer that can apply
+        the tenant predicate where the rows actually are.
         """
         if isinstance(self.backend, MultiListBackend):
             recall = await self.backend.recall_ranked(
-                query, top_k=self.config.recall_top_k, persona=persona
+                query, top_k=self.config.recall_top_k, scope=scope
             )
             return list(recall.lists), recall.nodes, recall.edges
 
         recall = await self.backend.recall(
-            query, top_k=self.config.recall_top_k, persona=persona
+            query, top_k=self.config.recall_top_k, scope=scope
         )
         origins = getattr(self.backend, "recall_origins", _DEFAULT_RECALL_ORIGINS)
         dense = RankedList(origins=tuple(origins), candidates=recall.candidates)
@@ -385,8 +413,10 @@ class Retriever:
             ),
         )
 
-    async def ingest(self, docs: Sequence[object]) -> IngestReport:
-        """Chunk, validate, dedup, and write documents into the knowledge store.
+    async def ingest(
+        self, docs: Sequence[object], *, scope: RetrievalScope
+    ) -> IngestReport:
+        """Chunk, validate, dedup, and write documents into ``scope``'s knowledge store.
 
         The ingestion path:
 
@@ -401,10 +431,23 @@ class Retriever:
            protects the vector store *and* the graph.
         4. **Provenance metadata** on every chunk (doc id, ordinal, section, word span,
            content hash, source) so citations and the graph carry lineage.
+        5. **Tenant ownership** stamped on every chunk from ``scope``, which is what the
+           recall-side tenant predicate later matches on. A ``None`` tenant writes a
+           *shared*-corpus chunk (readable by every tenant, e.g. a bundled adapter
+           corpus), not a chunk that belongs to whoever asks next.
+
+        Both the idempotency ledger and the chunk id are keyed by tenant as well as by
+        content. Without that, two tenants ingesting the same document would collide:
+        the second would be counted as an already-ingested duplicate and never written
+        for its own tenant, and its chunk id would overwrite the first tenant's row in
+        the vector store. An unscoped ingest keeps its historical ids exactly, so the
+        shared corpus is byte-identical to before.
 
         Args:
             docs: Documents to ingest. Each item may be a raw string or a mapping with a
                 `text`/`content` field and optional `id`.
+            scope: The tenant that will own these documents. **Required, with no
+                default.**
 
         Returns:
             An honest `IngestReport`: documents, chunks written, in-batch duplicates,
@@ -412,6 +455,8 @@ class Retriever:
         """
         report = IngestReport(documents=0)
         accepted: list[Chunk] = []
+        tenant_value = scope.tenant_value()
+        id_prefix = "" if tenant_value is None else f"{tenant_value}:"
 
         for doc_index, doc in enumerate(docs):
             report.documents += 1
@@ -423,7 +468,8 @@ class Retriever:
             report.chunks_skipped += deduped.exact_duplicates + deduped.near_duplicates
             for piece in deduped.kept:
                 content_hash = piece.content_id()
-                if content_hash in self._seen_hashes:
+                ledger_key = (scope.tenant_id, content_hash)
+                if ledger_key in self._seen_hashes:
                     report.chunks_duplicate += 1
                     continue
                 verdict = validate_content(piece.text)
@@ -431,10 +477,10 @@ class Retriever:
                     report.chunks_rejected += 1
                     report.rejections.append(f"{doc_id}#{piece.ordinal}: {verdict.reason}")
                     continue
-                self._seen_hashes.add(content_hash)
+                self._seen_hashes.add(ledger_key)
                 accepted.append(
                     Chunk(
-                        id=f"{doc_id}#{piece.ordinal}-{content_hash[:8]}",
+                        id=f"{id_prefix}{doc_id}#{piece.ordinal}-{content_hash[:8]}",
                         doc_id=doc_id,
                         ordinal=piece.ordinal,
                         text=piece.contextualized(),
@@ -444,6 +490,7 @@ class Retriever:
                             "word_count": piece.word_count,
                             "content_hash": content_hash,
                             "source": doc_id,
+                            TENANT_METADATA_KEY: tenant_value,
                         },
                     )
                 )

@@ -48,7 +48,22 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=60.0)
 
     # ── Stores ───────────────────────────────────────────────────────────────
+    # The **serving** DSN: the connection every request runs on. It must name a role
+    # with neither SUPERUSER nor BYPASSRLS (``aegis_app``, provisioned by
+    # ``scripts/db-roles.sh`` / ``scripts/db-roles.ps1``), because Postgres skips row
+    # security entirely for a role that has either — which would make all thirteen
+    # tenant_isolation policies inert. The default still points at ``postgres`` so a
+    # bare checkout runs; ``verify_rls_enforcement`` logs an ERROR naming that exact
+    # consequence when it does. See docs/operations/runbook.md § Database roles.
     postgres_dsn: str = Field(default="postgresql://postgres:postgres@localhost:5432/taif")
+    # The **owner/DDL** DSN: the connection that runs ``create_all``, the additive
+    # schema reconciler and the RLS bootstrap. Those legitimately bypass RLS (they own
+    # the tables), and keeping them on a second connection is what makes bypass a
+    # property of the *connection* rather than something request-handling code could
+    # forget to avoid. Empty (the default) means "no split configured": DDL falls back
+    # to ``postgres_dsn`` and the platform runs exactly as it did before — loudly, not
+    # silently, because that is also the configuration in which RLS does nothing.
+    postgres_admin_dsn: str = Field(default="")
     neo4j_uri: str = Field(default="bolt://localhost:7687")
     neo4j_user: str = Field(default="neo4j")
     neo4j_password: str = Field(default="")
@@ -168,6 +183,29 @@ class Settings(BaseSettings):
     def is_dev(self) -> bool:
         """Whether the app is running in the developer/offline environment."""
         return self.app_env.strip().lower() == "dev"
+
+    @property
+    def admin_dsn(self) -> str:
+        """The DSN for DDL — the owner connection, falling back to the serving one.
+
+        The fallback is what keeps a single-DSN developer install working: with no
+        ``POSTGRES_ADMIN_DSN`` set, ``create_all``/RLS bootstrap run on the same
+        connection that serves requests, exactly as they did before the split. It is
+        not a silent fallback — :func:`app.data.session.serving_role_name` returns
+        ``None`` in that case (there is no distinct serving role), and
+        :func:`app.data.session.verify_rls_enforcement` says so at WARNING and reports
+        at ERROR that row security is inert whenever the serving role can bypass it.
+
+        A **non-Postgres** serving DSN overrides the admin one entirely. Lite mode and
+        the test suite repoint only ``POSTGRES_DSN`` (at SQLite); honouring a leftover
+        ``POSTGRES_ADMIN_DSN`` there would create the tables in one database while
+        serving reads from another — a split brain far worse than the unsplit posture,
+        and invisible until a query returned nothing. There are no roles on SQLite, so
+        there is nothing the split could buy in exchange.
+        """
+        if not self.postgres_dsn.startswith(("postgresql:", "postgresql+", "postgres:")):
+            return self.postgres_dsn
+        return self.postgres_admin_dsn.strip() or self.postgres_dsn
 
     def ensure_secure_secrets(self) -> None:
         """Fail-fast on an insecure JWT signing secret outside dev (§3.3, H4).

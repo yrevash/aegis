@@ -22,6 +22,7 @@ from typing import Any, Protocol
 
 from aegis.core.types import RiskLevel
 from aegis.ml.types import MLExplainResponse
+from aegis.retrieval.types import RetrievalScope
 
 from .router import load_roster
 
@@ -37,7 +38,24 @@ __all__ = [
 
 # Structural aliases for the injected callables (kept loose to avoid coupling).
 CompleteFn = Callable[..., Awaitable[Any]]
-RetrieveFn = Callable[..., Awaitable[Any]]
+
+
+class RetrieveFn(Protocol):
+    """Structural type of the injected retrieval callable.
+
+    Spelled out as a Protocol rather than a loose ``Callable[..., Awaitable[Any]]``
+    because this signature is a **security boundary**, and a loose alias is what let the
+    graph call retrieval without a tenant while holding one two lines above. ``scope``
+    is keyword-only and has no default, so every implementation and every call site has
+    to name it.
+    """
+
+    async def __call__(
+        self, query: str, *, scope: RetrievalScope
+    ) -> Any:  # noqa: ANN401 - structural RetrievalResult (host/package type)
+        """Retrieve for ``query`` within ``scope`` and return a retrieval result."""
+        ...
+
 # The input rail takes the query text; the output rail additionally accepts the
 # retrieved ``contexts`` (keyword) so the grounding self-check can run on the same
 # passages the answer was generated from. Kept loose (``...``) so a plain

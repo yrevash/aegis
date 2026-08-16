@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pgsupport
 import pytest
-from aegis.governance.models import UsageLedger
+from aegis.governance.models import Tenant, UsageLedger
 
 from app.forecast.ledger import ledger_series, window_spend
 
@@ -31,12 +32,27 @@ def _midday_days_ago(days: int) -> datetime:
 
 
 async def _seed(sessionmaker, rows: list[tuple[int, datetime, float]]) -> None:
-    """Insert ``(tenant_id, ts, cost_usd)`` ledger rows."""
+    """Insert ``(tenant_id, ts, cost_usd)`` ledger rows plus the tenants that own them.
+
+    ``usage_ledger.tenant_id`` is a real foreign key to ``tenants.id``. Under the suite's
+    former SQLite binding that constraint was never enforced (SQLite ignores foreign keys
+    unless ``PRAGMA foreign_keys=ON``), so these rows were orphans: spend attributed to a
+    tenant that did not exist — exactly the state a usage ledger is meant to make
+    impossible. The owning tenant is now created from the ids the rows already name, so
+    the fixture states what it always meant instead of relying on an unenforced schema.
+    """
     async with sessionmaker() as session:
-        for tenant_id, ts, cost in rows:
-            session.add(
+        await pgsupport.seed(
+            session,
+            *(
+                Tenant(id=tenant_id, name=f"tenant-{tenant_id}")
+                for tenant_id in sorted({row[0] for row in rows})
+            ),
+            *(
                 UsageLedger(tenant_id=tenant_id, ts=ts, cost_usd=cost, model="m")
-            )
+                for tenant_id, ts, cost in rows
+            ),
+        )
         await session.commit()
 
 

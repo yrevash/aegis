@@ -1,7 +1,8 @@
-"""Shared fixtures for the memory suite — an offline SQLite store + a default fake spec.
+"""Shared fixtures for the memory suite — a real PostgreSQL store + a default fake spec.
 
-Every test gets a fresh SQLite database with the ``aegis.data.AegisBase`` schema created,
-and a process-wide default :class:`~aegis.memory.spec.MemorySpec` set to the offline
+Every DB-touching test gets its own clone of the session template database (see
+``tests/conftest.py``), reached over the ``LOGIN NOSUPERUSER NOBYPASSRLS`` role, and a
+process-wide default :class:`~aegis.memory.spec.MemorySpec` set to the offline
 :data:`FAKE_SPEC` so recall/consolidate resolve the domain seam without a host.
 """
 
@@ -9,9 +10,8 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from aegis.data import AegisBase
 from aegis.memory import reset_default_index, set_default_spec
 
 from ._spec import FAKE_SPEC
@@ -32,10 +32,10 @@ def _fresh_vector_index():
 
 
 @pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    """A dedicated SQLite memory DB with the aegis schema materialised."""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mem.db'}")
-    async with engine.begin() as conn:
-        await conn.run_sync(AegisBase.metadata.create_all)
-    yield async_sessionmaker(engine, expire_on_commit=False)
-    await engine.dispose()
+async def db(pg_sessionmaker: async_sessionmaker) -> async_sessionmaker:
+    """A private PostgreSQL memory database with the aegis schema materialised.
+
+    Args:
+        pg_sessionmaker: The unprivileged sessionmaker over this test's scratch database.
+    """
+    return pg_sessionmaker

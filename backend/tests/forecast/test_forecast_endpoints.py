@@ -10,8 +10,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pgsupport
 import pytest
-from aegis.governance.models import Budget, BudgetScope, BudgetWindow, UsageLedger
+from aegis.governance.models import (
+    Budget,
+    BudgetScope,
+    BudgetWindow,
+    Tenant,
+    UsageLedger,
+)
 
 from app.core.security import PLATFORM_ADMIN, TENANT_ADMIN, create_access_token
 
@@ -33,7 +40,14 @@ async def _login(client, username: str) -> dict[str, str]:
 
 
 async def _seed_history(sessionmaker, tenant_id: int, days: int) -> None:
-    """Seed ``days`` daily ledger rows with a trend, a weekly cycle and noise."""
+    """Seed the owning tenant plus ``days`` daily ledger rows with trend, cycle and noise.
+
+    The ``Tenant`` row is not decoration: ``usage_ledger.tenant_id`` is a foreign key to
+    ``tenants.id``, and the suite's former SQLite binding simply did not enforce it (SQLite
+    ignores foreign keys unless ``PRAGMA foreign_keys=ON``). The history therefore used to
+    be attributed to a tenant that did not exist, which is not a state the forecast surface
+    should ever be asked to reason about.
+    """
     import math
     import random
 
@@ -43,18 +57,27 @@ async def _seed_history(sessionmaker, tenant_id: int, days: int) -> None:
     rng = random.Random(7)
     start = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
     async with sessionmaker() as session:
-        for i in range(days):
-            cost = 4.0 + 0.05 * i + 1.5 * math.sin(i * 2 * math.pi / 7) + rng.gauss(0, 0.3)
-            session.add(
+        await pgsupport.seed(
+            session,
+            Tenant(id=tenant_id, name=f"tenant-{tenant_id}"),
+            *(
                 UsageLedger(
                     tenant_id=tenant_id,
                     ts=start + timedelta(days=i, hours=9),
-                    cost_usd=max(cost, 0.1),
+                    cost_usd=max(
+                        4.0
+                        + 0.05 * i
+                        + 1.5 * math.sin(i * 2 * math.pi / 7)
+                        + rng.gauss(0, 0.3),
+                        0.1,
+                    ),
                     model="gpt-small",
                     prompt_tokens=100,
                     completion_tokens=50,
                 )
-            )
+                for i in range(days)
+            ),
+        )
         await session.commit()
 
 

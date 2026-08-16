@@ -27,6 +27,8 @@ from aegis.memory.recall import recall
 from aegis.memory.stores import MemoryFact, MemoryMessage, MemorySession
 from aegis.memory.vector_ops import topk_by_cosine
 
+from .._seed import add_in_fk_order
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -225,8 +227,9 @@ async def test_none_query_vec_and_nonpositive_k_short_circuit(db):
 async def test_episodic_messages_recalled_via_chroma(db):
     """Message (episodic) vectors are indexed + searched through the same Chroma path."""
     async with db() as s:
-        s.add(MemorySession(id="sess-1", subject_id="user:1"))
-        s.add(
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-1", subject_id="user:1"),
             MemoryMessage(
                 subject_id="user:1",
                 session_id="sess-1",
@@ -235,7 +238,7 @@ async def test_episodic_messages_recalled_via_chroma(db):
                 content="old refund note",
                 embedding=[1.0, 0.0, 0.0, 0.0],
                 embedding_dim=4,
-            )
+            ),
         )
         await s.commit()
 

@@ -12,12 +12,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapter.memory_spec import FACT_EXTRACTION_PROMPT
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.memory.config import MemoryConfig
 from app.memory.consolidate import (
     ConsolidationResult,
@@ -113,17 +110,12 @@ def _fact(**kw):
 # --------------------------------------------------------------------------- fixtures
 
 
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mem.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
-
-
 async def _seed_session(s, *, subject="user:1", session_id="sess-1", summary=None):
     s.add(MemorySession(id=session_id, subject_id=subject, summary=summary))
+    # Flush the parent before its children: ``memory_message`` carries a real FK to
+    # ``memory_session`` and no ORM relationship orders the INSERTs, so the write path
+    # flushes the session first (see ``app.agent.deps``). SQLite never enforced it.
+    await s.flush()
     s.add(
         MemoryMessage(
             subject_id=subject,

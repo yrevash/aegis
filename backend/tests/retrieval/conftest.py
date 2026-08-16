@@ -98,7 +98,7 @@ class FakeBackend:
         self.ingested.extend(chunks)
         return (len(chunks), max(0, len(chunks) - 1))
 
-    async def recall(self, query, *, top_k, persona=None):
+    async def recall(self, query, *, top_k, scope):
         self.recall_calls += 1
         return self._recall
 

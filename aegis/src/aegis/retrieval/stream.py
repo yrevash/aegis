@@ -1,7 +1,7 @@
 """AG-UI streaming for retrieval — emits its work à la carte over the emitter.
 
 Wraps one `Retriever.retrieve` (or any injected retriever with a compatible
-`retrieve(query, *, persona=None) -> RetrievalResult`) call in a
+`retrieve(query, *, scope) -> RetrievalResult`) call in a
 `STEP_STARTED`/`STEP_FINISHED` bracket, emitting the `RETRIEVAL_CITATIONS` custom
 event in between so the frontend can render candidates, sources, and provenance as
 soon as retrieval finishes.
@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Protocol
 from aegis.core import stream_names
 from aegis.core.events import SpanKind
 from aegis.retrieval.models import RetrievalResult
+from aegis.retrieval.types import RetrievalScope
 
 if TYPE_CHECKING:
     from aegis.core.stream import AegisEmitter
@@ -25,9 +26,9 @@ class RetrieveLike(Protocol):
     """Structural type of the retriever `stream_retrieve` drives."""
 
     async def retrieve(
-        self, query: str, *, persona: str | None = None
+        self, query: str, *, scope: RetrievalScope
     ) -> RetrievalResult:
-        """Run retrieval for `query` and return a `RetrievalResult`."""
+        """Run retrieval for `query` inside `scope` and return a `RetrievalResult`."""
         ...
 
 
@@ -106,7 +107,7 @@ async def stream_retrieve(
     query: str,
     emitter: AegisEmitter,
     *,
-    persona: str | None = None,
+    scope: RetrievalScope,
 ) -> RetrievalResult:
     """Retrieve for `query`, streaming the citations evidence over `emitter`.
 
@@ -118,13 +119,15 @@ async def stream_retrieve(
             :class:`~aegis.retrieval.pipeline.Retriever`).
         query: The user query.
         emitter: The AG-UI emitter for streaming events.
-        persona: Optional adapter persona id, forwarded to `retriever.retrieve`.
+        scope: The tenant/persona scope, forwarded unchanged to `retriever.retrieve`.
+            Required (no default) so a streamed retrieval cannot be the one call site
+            that quietly runs unscoped.
 
     Returns:
         The full :class:`~aegis.retrieval.models.RetrievalResult`.
     """
     async with emitter.step(_STEP_NAME, SpanKind.RETRIEVER):
-        result = await retriever.retrieve(query, persona=persona)
+        result = await retriever.retrieve(query, scope=scope)
 
         # Cache observability: the pipeline has already decided hit vs miss (a served
         # result carries `cache_hit=True` + `provenance.cache`). Surface it as its own

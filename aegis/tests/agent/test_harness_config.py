@@ -19,7 +19,7 @@ import pytest
 from aegis.agent import AgentConfig, ApprovalRegistry, harness_config, run_agent
 from aegis.core.types import ApprovalDecision, RiskLevel
 from aegis.retrieval.models import GraphDelta, RetrievalResult, Source
-from aegis.retrieval.types import GraphEdge, GraphNode
+from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 
 
 def _ordered_subsequence(whole: list[str], sub: list[str]) -> bool:
@@ -225,7 +225,7 @@ def _cache_deps(make_deps, *, enabled: bool, hit_answer: str | None):
     (carrying ``query_vec``) reaches the plan node unchanged and the cache lookup fires.
     """
 
-    async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:
+    async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return RetrievalResult(
             answer_context="ctx",
             sources=[Source(id="kb-1", text="Refund policy", score=0.9)],

@@ -14,25 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.models import ModelRole
 from app.data.models import EvalResult
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.ops.trace_eval import RunEval, evaluate_run
 
 pytestmark = pytest.mark.asyncio
 
-
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ops.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
+# ``db`` is the shared scratch-PostgreSQL fixture from ``tests/conftest.py``.
 
 
 @dataclass

@@ -1,8 +1,12 @@
-"""Recall READ-path tests (SQLite): ranking, valid-only, dedup, isolation, skills.
+"""Recall READ-path tests: ranking, valid-only, dedup, subject isolation, skills.
 
-Seeds via the same ``bootstrap`` + ``async_sessionmaker`` pattern as ``test_stores.py``.
-All isolation is proven with **RLS off** (SQLite) — the app-level ``WHERE subject_id``
-is the sole isolator (``docs/architecture/memory-spec.md`` BLOCKER 2).
+Seeds through the shared ``db`` fixture (a real PostgreSQL scratch database served by a
+``NOSUPERUSER NOBYPASSRLS`` role), so the tenant RLS policies are live underneath.
+
+The isolation asserted *here* is nevertheless the app-level ``WHERE subject_id`` filter
+(``docs/architecture/memory-spec.md`` BLOCKER 2): subjects are not tenants, and no
+policy separates two subjects inside one tenant. Tenant-level isolation is proved
+separately in ``tests/integration/test_tenant_isolation_live.py``.
 """
 
 from __future__ import annotations
@@ -10,25 +14,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.memory.config import MemoryConfig
 from app.memory.recall import recall
 from app.memory.stores import MemoryFact, MemoryMessage, MemorySession
 
 pytestmark = pytest.mark.asyncio
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mem.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
 
 
 def _fact(subject_id: str, predicate: str, obj: str, emb: list[float], **kw) -> MemoryFact:
@@ -62,6 +54,12 @@ async def test_facts_ranked_and_valid_only(db):
     cfg = MemoryConfig()
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        # Flush the parent before its children: ``memory_message`` and
+        # ``memory_consolidation_job`` carry a real FK to ``memory_session``, and
+        # nothing declares an ORM relationship to order the INSERTs — so the write
+        # path flushes the session first (see ``app.agent.deps``). SQLite never
+        # enforced the constraint, so this ordering used not to matter here.
+        await s.flush()
         s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0], importance=6))
         s.add(_fact("user:1", "region", "emea", [0.0, 1.0, 0.0, 0.0], importance=6))
         # Invalidated fact that is ALSO a strong vector match — must be excluded.
@@ -97,6 +95,11 @@ async def test_episodic_dedup_vs_raw_window(db):
     cfg = MemoryConfig(raw_window_turns=2)
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        # Flush the parent before its children, as everywhere else in this file:
+        # ``memory_message.session_id`` is a real FK to ``memory_session.id`` and no ORM
+        # relationship orders the INSERTs, so without this the messages are written
+        # first and Postgres rejects them. SQLite never enforced the constraint.
+        await s.flush()
         # turn 0 is OLD but a strong vector match → should surface via episodic recall.
         s.add(_msg("user:1", "sess-1", 0, "old but relevant refund note", [1.0, 0.0, 0.0, 0.0]))
         s.add(_msg("user:1", "sess-1", 1, "chit chat one", [0.0, 1.0, 0.0, 0.0]))
@@ -130,6 +133,7 @@ async def test_subject_isolation_rls_off(db):
     async with db() as s:
         s.add(MemorySession(id="sess-a", subject_id="user:A"))
         s.add(MemorySession(id="sess-b", subject_id="user:B"))
+        await s.flush()
         s.add(_fact("user:A", "secret", "alpha", [1.0, 0.0, 0.0, 0.0], importance=9))
         s.add(_fact("user:B", "topic", "beta", [0.0, 1.0, 0.0, 0.0], importance=5))
         await s.commit()
@@ -179,6 +183,7 @@ async def test_recall_bumps_access_count_durably(db):
     cfg = MemoryConfig(raw_window_turns=1)
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        await s.flush()
         s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0]))
         # turn 0 is OLD (outside the 1-turn window) yet a strong vector match → recalled.
         s.add(_msg("user:1", "sess-1", 0, "old relevant refund note", [1.0, 0.0, 0.0, 0.0]))
@@ -219,6 +224,7 @@ async def test_facts_recency_only_when_no_query_vec(db):
     cfg = MemoryConfig()
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        await s.flush()
         s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0]))
         await s.commit()
 

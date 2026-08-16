@@ -17,6 +17,10 @@ from app.eval import DEFAULT_THRESHOLDS, SEED_CASES, evaluate
 from app.eval.harness import EvalThresholds, build_eval_retriever
 from app.eval.judge import JUDGE_ENV_FLAG, judge_answer, judge_enabled
 from app.eval.metrics import score_case
+from app.retrieval import RetrievalScope
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,7 +69,7 @@ async def test_gate_trips_on_a_regression():
 async def test_real_pipeline_produces_rrf_multi_origin_provenance():
     """The eval drives the genuine hybrid pipeline: RRF fusion over multiple origins."""
     retriever = build_eval_retriever()
-    result = await retriever.retrieve(SEED_CASES[0].query)
+    result = await retriever.retrieve(SEED_CASES[0].query, scope=_SCOPE)
     assert result.provenance.fusion.value == "rrf"
     assert len(result.provenance.origins) >= 2  # e.g. vector + graph (+ bm25)
     # A per-case score is well-formed and grounded on the top-ranked refund doc.
@@ -150,7 +154,7 @@ async def test_llm_judge_grades_seed_answers_against_gateway():
     """Graded pass over the real gateway (opt-in): every seed answer is reasonably grounded."""
     retriever = build_eval_retriever()
     for case in SEED_CASES:
-        result = await retriever.retrieve(case.query)
+        result = await retriever.retrieve(case.query, scope=_SCOPE)
         # A trivially-grounded answer echoing the context should score high.
         verdict = await judge_answer(case.query, result.answer_context, result.answer_context)
         assert verdict.groundedness >= 0.5

@@ -26,8 +26,22 @@ from sqlalchemy.ext.asyncio import create_async_engine
 pytestmark = pytest.mark.asyncio
 
 
-async def test_bootstrap_reconciles_additive_drift_after_create_all(monkeypatch, tmp_path):
-    """The reconciliation runs, on the same connection, with both metadatas."""
+async def test_bootstrap_reconciles_additive_drift_after_create_all(
+    monkeypatch, postgres_database
+):
+    """The reconciliation runs, on the same connection, with both metadatas.
+
+    Driven over the session's scratch **PostgreSQL** database via its owner DSN, which is
+    the role that may run DDL. The dialect is part of the assertion rather than incidental:
+    ``reconcile_additive_columns`` inspects and ``ALTER``s real Postgres catalogs, and the
+    drift this whole file exists to catch (a live cluster missing ``usage_ledger``'s newer
+    columns) cannot occur on a database recreated from scratch on every connection — which
+    is exactly what the temp-file SQLite engine this test used to build gave it.
+
+    ``bootstrap`` is idempotent — ``create_all`` is ``CREATE TABLE IF NOT EXISTS`` and the
+    grant/RLS steps re-apply cleanly — so re-running it against the already-bootstrapped
+    scratch database leaves it in the same state the other tests expect.
+    """
     seen: dict = {}
 
     async def _spy(conn, metadatas):
@@ -39,13 +53,13 @@ async def test_bootstrap_reconciles_additive_drift_after_create_all(monkeypatch,
 
     from app.data.session import bootstrap
 
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'boot.db'}")
+    engine = create_async_engine(postgres_database.scratch.owner_dsn)
     try:
         await bootstrap(engine)
     finally:
         await engine.dispose()
 
-    assert seen["dialect"] == "sqlite"
+    assert seen["dialect"] == "postgresql"
     tables = {name for md in seen["metadatas"] for name in md.tables}
     # The governance metadata is included — the ledger is the table that matters.
     assert "usage_ledger" in tables

@@ -15,10 +15,13 @@ from aegis.retrieval.memory import (
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.protocols import MultiListBackend
 from aegis.retrieval.spotlight import DATAMARK_TOKEN
-from aegis.retrieval.types import FusionMethod, RetrievalOrigin
+from aegis.retrieval.types import FusionMethod, RetrievalOrigin, RetrievalScope
 from aegis.retrieval.vector_store import ChromaVectorStore
 
 from .conftest import RecordingComplete, SequenceEmbed
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 # A small, overlapping, caller-supplied corpus standing in for a host app's real
 # knowledge base — this package has no bundled corpus of its own (see
@@ -77,7 +80,7 @@ async def test_backend_loads_supplied_corpus_and_recalls():
     # Query from a real chunk's own words so token overlap is guaranteed.
     sample = backend._chunks[0]
     query = " ".join(sample.text.split()[:8])
-    recall = await backend.recall(query, top_k=5)
+    recall = await backend.recall(query, top_k=5, scope=_SCOPE)
 
     assert recall.candidates, "a corpus-overlapping query should recall candidates"
     assert any(c.metadata.get("doc") == sample.doc_id for c in recall.candidates)
@@ -102,12 +105,12 @@ async def test_lite_retriever_runs_end_to_end_and_caches():
     )
 
     query = " ".join(backend._chunks[0].text.split()[:8])
-    first = await retriever.retrieve(query, persona="ops")
+    first = await retriever.retrieve(query, scope=RetrievalScope(tenant_id=None, persona="ops"))
     assert first.cache_hit is False
     assert first.sources
     assert DATAMARK_TOKEN in first.answer_context  # spotlighted, no infra needed
 
-    second = await retriever.retrieve(query, persona="ops")
+    second = await retriever.retrieve(query, scope=RetrievalScope(tenant_id=None, persona="ops"))
     assert second.cache_hit is True  # served from the in-memory cache
 
 
@@ -134,7 +137,7 @@ async def test_vector_recall_reads_back_through_chroma():
     backend = _backend()
     sample = backend._chunks[0]
     query = " ".join(sample.text.split()[:8])
-    ranked = await backend.recall_ranked(query, top_k=5)
+    ranked = await backend.recall_ranked(query, top_k=5, scope=_SCOPE)
 
     # After recall, the fresh chunks have been embedded + upserted into Chroma.
     assert backend._indexed_ids == {c.id for c in backend._chunks}
@@ -161,9 +164,9 @@ async def test_tenant_scope_filters_vector_recall():
         vector_store=shared,
         tenant="globex",
     )
-    await acme.recall_ranked("refunds issued within business days", top_k=5)
+    await acme.recall_ranked("refunds issued within business days", top_k=5, scope=_SCOPE)
     globex_ranked = await globex.recall_ranked(
-        "refunds issued within business days", top_k=5
+        "refunds issued within business days", top_k=5, scope=_SCOPE
     )
     vector_list = next(
         rl for rl in globex_ranked.lists if RetrievalOrigin.VECTOR in rl.origins
@@ -192,7 +195,7 @@ def test_backend_is_multilist_and_splits_vector_and_graph():
 async def test_recall_ranked_returns_vector_and_graph_lists_offline():
     backend = _backend()
     query = " ".join(backend._chunks[0].text.split()[:8])
-    ranked = await backend.recall_ranked(query, top_k=6)
+    ranked = await backend.recall_ranked(query, top_k=6, scope=_SCOPE)
 
     origins = {o for rl in ranked.lists for o in rl.origins}
     assert origins == {RetrievalOrigin.VECTOR, RetrievalOrigin.GRAPH}
@@ -216,7 +219,7 @@ async def test_lite_result_carries_hybrid_provenance_offline():
     )
 
     query = " ".join(backend._chunks[0].text.split()[:8])
-    result = await retriever.retrieve(query, persona="ops")
+    result = await retriever.retrieve(query, scope=RetrievalScope(tenant_id=None, persona="ops"))
 
     assert result.cache_hit is False
     assert result.provenance.fusion is FusionMethod.RRF

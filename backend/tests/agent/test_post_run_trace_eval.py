@@ -1,6 +1,7 @@
 """Post-run trace-eval kickoff — a completed run persists EvalResult rows off the hot path.
 
-Drives :func:`app.agent.run_agent` end-to-end with fake deps + an aiosqlite DB, then
+Drives :func:`app.agent.run_agent` end-to-end with fake deps + the shared scratch
+PostgreSQL database, then
 awaits the tracked background grade and asserts one ``EvalResult`` row per graded facet,
 all keyed by the real ``run_id``. The judge callable is a fake ``app.core.llm.complete``
 (the seam the kickoff imports lazily) returning parseable JSON scores, so the grade runs
@@ -12,27 +13,17 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.agent import orchestrator as orch
 from app.agent import run_agent
 from app.api.schemas import RunStatus
 from app.core.llm import LLMResult, Usage
 from app.data.models import EvalResult
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 
 pytestmark = pytest.mark.asyncio
 
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'traceeval.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
+# ``db`` is the shared scratch-PostgreSQL fixture from ``tests/conftest.py``.
 
 
 async def _judge_complete(role, messages, *, tools=None, temperature=0.0, response_format=None):  # noqa: ANN001

@@ -2,8 +2,9 @@
 
 Proves the embedding-of-record column is now a portable JSON ``list[float]`` (not a
 pgvector ``vector`` type), that ``VectorType`` is gone, and that nothing under
-``aegis/`` imports ``pgvector`` any more. Vector ANN search lives in the embedded vector store; these SQL
-columns are only the durable mirror source the memory index reads.
+``aegis/`` imports ``pgvector`` any more. Vector ANN search lives in the embedded
+vector store; these SQL columns are only the durable mirror source the memory index
+reads.
 """
 
 from __future__ import annotations
@@ -11,10 +12,10 @@ from __future__ import annotations
 import pathlib
 
 import pytest
-from sqlalchemy import Column, Integer, MetaData, Table, create_engine, insert, select
+from sqlalchemy import Column, Integer, MetaData, Table, insert, select
+from sqlalchemy.dialects.mysql import dialect as non_pg_dialect
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import dialect as pg_dialect
-from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
 
 import aegis.data
 from aegis.data import EMBED_DIM, VectorColumn
@@ -31,25 +32,32 @@ def test_vectorcolumn_compiles_to_json_not_pgvector() -> None:
     # PostgreSQL → native jsonb (NOT a pgvector ``vector(dim)`` type).
     pg_impl = col.load_dialect_impl(pg_dialect())
     assert isinstance(pg_impl, JSONB)
-    # SQLite (tests) → portable JSON.
-    sqlite_impl = col.load_dialect_impl(sqlite_dialect())
-    assert "JSON" in type(sqlite_impl).__name__.upper()
+    # Any other dialect → portable JSON, so the column is not welded to one vendor.
+    other_impl = col.load_dialect_impl(non_pg_dialect())
+    assert "JSON" in type(other_impl).__name__.upper()
 
 
-def test_vectorcolumn_roundtrips_list_of_float_on_sqlite() -> None:
+async def test_vectorcolumn_roundtrips_list_of_float_on_postgres(pg_owner_engine) -> None:
+    """The durable mirror really survives a PostgreSQL round-trip, floats and all.
+
+    Round-tripped through the actual ``jsonb`` column the application will use rather
+    than through the throwaway SQLite file this test used to build. Those are not the
+    same claim: ``jsonb`` normalises numbers on the way in, so "the list comes back
+    equal, and still as floats" is a fact about PostgreSQL that a SQLite round-trip
+    cannot establish. Run over the owning role because it issues DDL.
+    """
     md = MetaData()
-    t = Table(
+    probe = Table(
         "emb_probe",
         md,
         Column("id", Integer, primary_key=True),
         Column("embedding", VectorColumn(EMBED_DIM)),
     )
-    engine = create_engine("sqlite://")
-    md.create_all(engine)
     vec = [0.1, 0.2, 0.3, -0.4]
-    with engine.begin() as conn:
-        conn.execute(insert(t).values(id=1, embedding=vec))
-        stored = conn.execute(select(t.c.embedding)).scalar_one()
+    async with pg_owner_engine.begin() as conn:
+        await conn.run_sync(md.create_all)
+        await conn.execute(insert(probe).values(id=1, embedding=vec))
+        stored = (await conn.execute(select(probe.c.embedding))).scalar_one()
     assert stored == vec
     assert all(isinstance(x, float) for x in stored)
 

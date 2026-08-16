@@ -29,9 +29,12 @@ from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.query_rewrite import RewriteResult
 from aegis.retrieval.spotlight import DATAMARK_TOKEN
 from aegis.retrieval.stream import stream_retrieve
-from aegis.retrieval.types import FusionMethod, RetrievalOrigin
+from aegis.retrieval.types import FusionMethod, RetrievalOrigin, RetrievalScope
 
 from .conftest import RecordingComplete
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 _DOCS = [
     ("refunds", "Refunds are issued to the original payment method within a week."),
@@ -78,7 +81,7 @@ class CaptureSink:
 
 @pytest.mark.asyncio
 async def test_all_three_recall_arms_fire_offline():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     arms = {tuple(a.origins): a for a in result.observability.arms}
     # Vector, graph, and bm25 are each present as their own arm.
     assert (RetrievalOrigin.VECTOR,) in arms
@@ -88,7 +91,7 @@ async def test_all_three_recall_arms_fire_offline():
 
 @pytest.mark.asyncio
 async def test_arm_candidate_counts_are_measured_and_positive():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     for arm in result.observability.arms:
         # A fired arm reports a real, positive candidate count == fired flag.
         assert arm.fired is (arm.candidates > 0)
@@ -97,7 +100,7 @@ async def test_arm_candidate_counts_are_measured_and_positive():
 
 @pytest.mark.asyncio
 async def test_vector_arm_fires_for_lite_backend():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     vector = next(a for a in result.observability.arms if a.origins == [RetrievalOrigin.VECTOR])
     assert vector.fired is True
     assert vector.candidates > 0
@@ -106,7 +109,7 @@ async def test_vector_arm_fires_for_lite_backend():
 @pytest.mark.asyncio
 async def test_bm25_arm_reports_zero_when_no_keyword_overlap():
     # A query with no shared tokens against the corpus → the BM25 arm honestly fires nothing.
-    result = await _lite_retriever().retrieve("zzz qqq wxyz")
+    result = await _lite_retriever().retrieve("zzz qqq wxyz", scope=_SCOPE)
     bm25 = next(a for a in result.observability.arms if a.origins == [RetrievalOrigin.BM25])
     assert bm25.candidates == 0
     assert bm25.fired is False
@@ -117,7 +120,7 @@ async def test_bm25_arm_reports_zero_when_no_keyword_overlap():
 
 @pytest.mark.asyncio
 async def test_fusion_is_rrf_and_reported_in_observability_and_provenance():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     assert result.observability.fusion is FusionMethod.RRF
     assert result.provenance.fusion is FusionMethod.RRF
     # fused_candidates is the honest wide-recall pool size N (>= surviving sources K).
@@ -130,7 +133,7 @@ async def test_fusion_is_rrf_and_reported_in_observability_and_provenance():
 
 @pytest.mark.asyncio
 async def test_rerank_runs_and_reports_top_scores_when_enabled():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     rr = result.observability.rerank
     assert rr.ran is True
     assert rr.kept == len(result.sources)
@@ -142,7 +145,7 @@ async def test_rerank_runs_and_reports_top_scores_when_enabled():
 
 @pytest.mark.asyncio
 async def test_rerank_top_scores_are_descending_grades():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     scores = result.observability.rerank.top_scores
     assert scores == sorted(scores, reverse=True)
 
@@ -151,7 +154,7 @@ async def test_rerank_top_scores_are_descending_grades():
 async def test_rerank_knob_off_skips_model_call_and_keeps_fused_order():
     config = RetrievalConfig(recall_top_k=8, final_top_k=3, rerank_enabled=False)
     retriever = _lite_retriever(config)
-    result = await retriever.retrieve("refund payment method")
+    result = await retriever.retrieve("refund payment method", scope=_SCOPE)
 
     rr = result.observability.rerank
     assert rr.ran is False
@@ -166,10 +169,10 @@ async def test_rerank_knob_off_skips_model_call_and_keeps_fused_order():
 async def test_rerank_on_vs_off_changes_source_ordering_signal():
     on = await _lite_retriever(
         RetrievalConfig(recall_top_k=8, final_top_k=3, rerank_enabled=True)
-    ).retrieve("refund payment method")
+    ).retrieve("refund payment method", scope=_SCOPE)
     off = await _lite_retriever(
         RetrievalConfig(recall_top_k=8, final_top_k=3, rerank_enabled=False)
-    ).retrieve("refund payment method")
+    ).retrieve("refund payment method", scope=_SCOPE)
     # Rerank-on scores come from the LLM grades; rerank-off from RRF — observably different.
     assert on.observability.rerank.ran and not off.observability.rerank.ran
     assert max(on.observability.rerank.top_scores) >= 1.0
@@ -181,7 +184,7 @@ async def test_rerank_on_vs_off_changes_source_ordering_signal():
 
 @pytest.mark.asyncio
 async def test_spotlight_applied_by_default():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     assert result.observability.spotlight_applied is True
     assert DATAMARK_TOKEN in result.answer_context
 
@@ -189,7 +192,7 @@ async def test_spotlight_applied_by_default():
 @pytest.mark.asyncio
 async def test_spotlight_knob_off_changes_context_and_flag():
     config = RetrievalConfig(recall_top_k=8, final_top_k=3, spotlight_enabled=False)
-    result = await _lite_retriever(config).retrieve("refund payment method")
+    result = await _lite_retriever(config).retrieve("refund payment method", scope=_SCOPE)
     assert result.observability.spotlight_applied is False
     # The datamarking token is gone → the injection-defence layer was really omitted.
     assert DATAMARK_TOKEN not in result.answer_context
@@ -200,7 +203,7 @@ async def test_spotlight_knob_off_changes_context_and_flag():
 @pytest.mark.asyncio
 async def test_spotlight_applied_false_when_no_sources():
     # A query with a degenerate embedding + no keyword overlap → no sources → nothing to spotlight.
-    result = await _lite_retriever().retrieve("zzz qqq wxyz")
+    result = await _lite_retriever().retrieve("zzz qqq wxyz", scope=_SCOPE)
     if not result.sources:
         assert result.observability.spotlight_applied is False
 
@@ -229,6 +232,7 @@ async def test_query_rewrite_reported_with_rewritten_query():
         complete=judge,
         rewrite_fn=_changed_rewrite,
         max_rounds=2,
+        scope=_SCOPE,
     )
     rw = out.result.observability.rewrite
     assert rw is not None
@@ -241,7 +245,7 @@ async def test_query_rewrite_reported_with_rewritten_query():
 
 @pytest.mark.asyncio
 async def test_rewrite_absent_on_single_shot_retrieve():
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     # A bare retrieve() had no rewrite layer → honestly None (not a fabricated no-op).
     assert result.observability.rewrite is None
     assert result.observability.agentic is None
@@ -255,7 +259,11 @@ async def test_self_rag_iteration_count_reported_single_round():
     retriever = _lite_retriever()
     judge = RecordingComplete('{"sufficient": true, "reason": "ok", "followup_query": null}')
     out = await agentic_retrieve(
-        "refund payment method", retrieve_fn=retriever.retrieve, complete=judge, max_rounds=3
+        "refund payment method",
+        retrieve_fn=retriever.retrieve,
+        complete=judge,
+        max_rounds=3,
+        scope=_SCOPE,
     )
     ag = out.result.observability.agentic
     assert ag is not None
@@ -273,7 +281,11 @@ async def test_self_rag_iterates_and_reports_multiple_rounds():
         '{"sufficient": false, "reason": "need more", "followup_query": "senior agent deadline"}'
     )
     out = await agentic_retrieve(
-        "refund payment method", retrieve_fn=retriever.retrieve, complete=judge, max_rounds=2
+        "refund payment method",
+        retrieve_fn=retriever.retrieve,
+        complete=judge,
+        max_rounds=2,
+        scope=_SCOPE,
     )
     ag = out.result.observability.agentic
     assert ag.used_rounds == 2
@@ -289,7 +301,7 @@ async def test_stream_emits_observability_payload():
     retriever = _lite_retriever()
     sink = CaptureSink()
     emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
-    result = await stream_retrieve(retriever, "refund payment method", emitter)
+    result = await stream_retrieve(retriever, "refund payment method", emitter, scope=_SCOPE)
 
     citations = next(
         p["value"] for p in _payloads(sink.frames)
@@ -316,7 +328,7 @@ async def test_stream_observability_arm_counts_match_result():
     retriever = _lite_retriever()
     sink = CaptureSink()
     emitter = AegisEmitter(thread_id="t", run_id="r", sink=sink)
-    result = await stream_retrieve(retriever, "refund payment method", emitter)
+    result = await stream_retrieve(retriever, "refund payment method", emitter, scope=_SCOPE)
 
     citations = next(
         p["value"] for p in _payloads(sink.frames)
@@ -345,7 +357,7 @@ def test_observability_defaults_are_empty_and_unaffecting():
 @pytest.mark.asyncio
 async def test_knobs_untouched_preserve_existing_behaviour():
     # With default config, rerank + spotlight are ON (unchanged from pre-observability).
-    result = await _lite_retriever().retrieve("refund payment method")
+    result = await _lite_retriever().retrieve("refund payment method", scope=_SCOPE)
     assert result.observability.rerank.ran is True
     assert result.observability.spotlight_applied is True
     assert result.provenance.fusion is FusionMethod.RRF
@@ -354,11 +366,15 @@ async def test_knobs_untouched_preserve_existing_behaviour():
 @pytest.mark.asyncio
 async def test_observability_round_trips_through_cache():
     retriever = _lite_retriever()
-    first = await retriever.retrieve("refund payment method", persona="p")
+    first = await retriever.retrieve(
+        "refund payment method", scope=RetrievalScope(tenant_id=None, persona="p")
+    )
     assert first.cache_hit is False
     # Exact repeat → served from cache; the ORIGINAL retrieval's observability is preserved
     # (consistent with how num_candidates / provenance round-trip through the cache).
-    cached = await retriever.retrieve("refund payment method", persona="p")
+    cached = await retriever.retrieve(
+        "refund payment method", scope=RetrievalScope(tenant_id=None, persona="p")
+    )
     assert cached.cache_hit is True
     assert cached.observability.fusion is FusionMethod.RRF
     assert cached.observability.fused_candidates == first.observability.fused_candidates

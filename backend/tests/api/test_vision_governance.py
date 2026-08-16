@@ -11,7 +11,7 @@ the token dashboard.
 
 Nothing is stubbed between the ends here: the real route → the real ``aegis.vision``
 pipeline → the real ``app.core.llm.complete`` → the real governance hook → the real
-``record_usage`` → ``UsageLedger`` rows in the aiosqlite database bound by ``db``.
+``record_usage`` → ``UsageLedger`` rows in the real PostgreSQL database bound by ``db``.
 Only ``litellm`` is faked (the gateway credential is a placeholder, so no network call
 is possible) and the output rails are replaced, since the real ones reach a
 content-safety model and would fail closed offline.
@@ -25,11 +25,20 @@ import sys
 from types import SimpleNamespace
 
 import aegis.gateway.llm as llm_mod
+import pgsupport
 import pytest
 from sqlalchemy import select
 
 from app.core.security import create_access_token
-from app.data import Budget, BudgetScope, BudgetWindow, UsageLedger, get_sessionmaker
+from app.data import (
+    Budget,
+    BudgetScope,
+    BudgetWindow,
+    Tenant,
+    UsageLedger,
+    User,
+    get_sessionmaker,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -132,9 +141,23 @@ def passing_rails(monkeypatch):
 
 
 async def _seed(*rows) -> None:
+    """Seed the acting principal, then ``rows``, parent-first.
+
+    The ``Tenant``/``User`` pair is not boilerplate: ``usage_ledger`` carries real foreign
+    keys to ``tenants.id`` and ``users.id``, so the principal that ``_tenant_headers``
+    authenticates as has to exist before the route can ledger a single call against it.
+    Under the suite's former SQLite binding those keys were unenforced (SQLite ignores
+    foreign keys unless ``PRAGMA foreign_keys=ON``), so the spend recorded here was
+    attributed to a tenant and a user that were not in the database — which is precisely
+    the unattributable state this file exists to prove impossible.
+    """
     async with get_sessionmaker()() as session:
-        for row in rows:
-            session.add(row)
+        await pgsupport.seed(
+            session,
+            Tenant(id=TENANT_ID, name="vision-tenant"),
+            User(id=USER_ID, username="vision-user", tenant_id=TENANT_ID),
+            *rows,
+        )
         await session.commit()
 
 
@@ -167,6 +190,7 @@ async def test_every_paid_vision_call_lands_in_the_usage_ledger(
     """
     await _seed(
         Budget(
+            tenant_id=TENANT_ID,
             scope_type=BudgetScope.TENANT,
             scope_id=TENANT_ID,
             window=BudgetWindow.DAY,
@@ -224,6 +248,7 @@ async def test_a_tenant_over_its_usd_cap_cannot_analyse_images(
     """
     await _seed(
         Budget(
+            tenant_id=TENANT_ID,
             scope_type=BudgetScope.TENANT,
             scope_id=TENANT_ID,
             window=BudgetWindow.DAY,
@@ -258,7 +283,12 @@ async def test_the_governance_context_does_not_leak_to_the_next_request(
     cross-tenant budget one.
     """
     await _seed(
-        Budget(scope_type=BudgetScope.TENANT, scope_id=TENANT_ID, usd_cap=100.0)
+        Budget(
+            tenant_id=TENANT_ID,
+            scope_type=BudgetScope.TENANT,
+            scope_id=TENANT_ID,
+            usd_cap=100.0,
+        )
     )
 
     await client.post("/vision/analyse", headers=_tenant_headers(), json=_body())

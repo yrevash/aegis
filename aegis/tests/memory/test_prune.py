@@ -1,4 +1,4 @@
-"""Forgetting-sweep tests (SQLite): stale low-value facts are soft-archived, fresh kept.
+"""Forgetting-sweep tests: stale low-value facts are soft-archived, fresh ones kept.
 
 Proves :func:`aegis.memory.consolidate.prune_forgotten` (wired into the sweeper) actually
 retires memories per ``ForgetPolicy`` — closing them in transaction-time (``expired_at``)

@@ -103,6 +103,7 @@ def make_eval_fn(complete: Any, *, limit: int = DEFAULT_EVAL_SUBSET) -> Any:  # 
         RuntimeError: (from the returned ``eval_fn``) when no case could be graded.
     """
     from aegis.evals.corpus import SEED_CASES
+    from aegis.evals.harness import EVAL_SCOPE as _EVAL_SCOPE
     from aegis.evals.harness import build_eval_retriever
     from aegis.evals.judge import judge_answer
 
@@ -114,7 +115,7 @@ def make_eval_fn(complete: Any, *, limit: int = DEFAULT_EVAL_SUBSET) -> Any:  # 
         for case in cases:
             # A fresh retriever per case so a prior query can never semantic-hit a later.
             retriever = build_eval_retriever()
-            result = await retriever.retrieve(case.query)
+            result = await retriever.retrieve(case.query, scope=_EVAL_SCOPE)
             context = result.answer_context
             generation = await complete(
                 ModelRole.GENERATION,

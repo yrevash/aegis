@@ -62,14 +62,18 @@ from .models import (
     VectorColumn,
 )
 from .session import (
+    RlsBypassError,
     bootstrap,
     bootstrap_rls,
     configure_engine,
+    get_admin_engine,
     get_engine,
     get_session,
     get_sessionmaker,
+    serving_role_name,
     set_tenant_scope,
     to_asyncpg_dsn,
+    verify_rls_enforcement,
 )
 
 __all__ = [
@@ -85,6 +89,7 @@ __all__ = [
     "Chunk",
     "EvalResult",
     "LastPlatformAdminError",
+    "RlsBypassError",
     "SweepAction",
     "Tenant",
     "TenantStatus",
@@ -100,6 +105,7 @@ __all__ = [
     "enqueue_approval",
     "finalize_resumed",
     "get_approval",
+    "get_admin_engine",
     "get_engine",
     "get_session",
     "get_sessionmaker",
@@ -117,6 +123,7 @@ __all__ = [
     "record_usage",
     "resolve_approval",
     "run_sla_sweeper",
+    "serving_role_name",
     "set_tenant_scope",
     "sweep_expired",
     "to_asyncpg_dsn",
@@ -124,4 +131,5 @@ __all__ = [
     "upsert_budget",
     "usage_rollup",
     "user_tenant_id",
+    "verify_rls_enforcement",
 ]

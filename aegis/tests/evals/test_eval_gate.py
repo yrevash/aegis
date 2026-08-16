@@ -18,6 +18,10 @@ from aegis.evals.harness import EvalThresholds, build_eval_retriever
 from aegis.evals.judge import JUDGE_ENV_FLAG, judge_answer, judge_enabled
 from aegis.evals.metrics import score_case
 from aegis.gateway import LLMResult
+from aegis.retrieval.types import RetrievalScope
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 pytestmark = pytest.mark.asyncio
 
@@ -66,7 +70,7 @@ async def test_gate_trips_on_a_regression():
 async def test_real_pipeline_produces_rrf_multi_origin_provenance():
     """The eval drives the genuine hybrid pipeline: RRF fusion over multiple origins."""
     retriever = build_eval_retriever()
-    result = await retriever.retrieve(SEED_CASES[0].query)
+    result = await retriever.retrieve(SEED_CASES[0].query, scope=_SCOPE)
     assert result.provenance.fusion.value == "rrf"
     assert len(result.provenance.origins) >= 2  # e.g. vector + graph (+ bm25)
     # A per-case score is well-formed and grounded on the top-ranked refund doc.
@@ -184,7 +188,7 @@ async def test_an_unlabelled_case_is_not_measured_rather_than_perfect():
     from aegis.evals.corpus import EvalCase
 
     retriever = build_eval_retriever()
-    result = await retriever.retrieve("unlabelled query")
+    result = await retriever.retrieve("unlabelled query", scope=_SCOPE)
     score = score_case(
         EvalCase(query="unlabelled query", gold_doc_ids=frozenset(), claims=()),
         result,
@@ -201,7 +205,7 @@ async def test_unlabelled_cases_cannot_mask_a_regression():
 
     retriever = build_eval_retriever()
     labelled = SEED_CASES[0]
-    labelled_result = await retriever.retrieve(labelled.query)
+    labelled_result = await retriever.retrieve(labelled.query, scope=_SCOPE)
     bad = score_case(
         EvalCase(query=labelled.query, gold_doc_ids=frozenset({"no-such-doc"}),
                  claims=("a claim that is definitely absent from the corpus",)),
@@ -233,7 +237,7 @@ async def test_a_wholly_unlabelled_corpus_fails_the_gate_rather_than_passing_it(
     from aegis.evals.metrics import aggregate
 
     retriever = build_eval_retriever()
-    result = await retriever.retrieve(SEED_CASES[0].query)
+    result = await retriever.retrieve(SEED_CASES[0].query, scope=_SCOPE)
     scores = [
         score_case(
             EvalCase(query="x", gold_doc_ids=frozenset(), claims=()), result, precision_k=1

@@ -34,6 +34,21 @@ port localhost 5432; row $? "Postgres (5432)" "full mode only"
 port localhost 7687; row $? "Neo4j (7687)"    "full mode only"
 port localhost 6379; row $? "Redis (6379)"    "full mode only"
 
+# Is tenant isolation actually ON? An open 5432 says nothing about it: Postgres skips
+# row security entirely for a superuser, so serving as `postgres` leaves all 13
+# tenant_isolation policies installed and enforced against nobody. This row asks the
+# database the same question the backend asks at boot (app.data.rls_check), so the
+# day-of board and the running platform cannot disagree.
+rls_note='backend/.venv missing — run scripts/bootstrap.sh'
+rls=1
+if [ -x "$ROOT/backend/.venv/bin/python" ]; then
+  rls_note="$( cd "$ROOT/backend" && PYTHONPATH="$ROOT/aegis/src:src" \
+                 .venv/bin/python -m app.data.rls_check 2>/dev/null )"
+  [ $? -eq 0 ] && rls=0
+  [ -n "$rls_note" ] || rls_note='rls_check produced no output'
+fi
+row "$rls" "RLS serving role" "$rls_note"
+
 # Regression gate (DeepEval-pattern) — offline CI gate over the seed corpus + the
 # agentic router case. No network, no keys, no stores; a nonzero exit FAILS preflight.
 gate=1

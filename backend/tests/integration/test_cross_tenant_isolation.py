@@ -1,14 +1,17 @@
-"""E2E (e): cross-tenant isolation via the app-scoping path (§3.3).
+"""E2E (e): cross-tenant isolation end-to-end through the HTTP surface (§3.3).
 
-RLS is the enforced boundary on Postgres; on the SQLite test database these tests
-exercise the belt-and-suspenders **app-level scoping** (``_scope_tenant`` + a
-``WHERE tenant_id = :ctx`` filter) that backs it end-to-end through the HTTP surface:
-a tenant-admin bound to tenant A can never read or write tenant B's users, usage, or
-budgets, while a platform-admin may target any tenant.
+Both layers of the boundary are live here, because the suite runs on a real PostgreSQL
+served by a ``NOSUPERUSER NOBYPASSRLS`` role: the ``tenant_isolation`` row-security
+policies *and* the belt-and-suspenders **app-level scoping** (``_scope_tenant`` + a
+``WHERE tenant_id = :ctx`` filter) that backs them. A tenant-admin bound to tenant A can
+never read or write tenant B's users, usage, or budgets, while a platform-admin may
+target any tenant. On the suite's former SQLite binding the RLS half was inert, so only
+the app-level filter was ever under test.
 """
 
 from __future__ import annotations
 
+import pgsupport
 import pytest
 
 from app.api.schemas import Role
@@ -27,15 +30,14 @@ def _headers(role: str, *, tenant_id=None, user_id=None, username="admin") -> di
 
 async def _seed_two_tenants() -> None:
     async with get_sessionmaker()() as session:
-        session.add_all(
-            [
-                Tenant(id=1, name="Tenant A"),
-                Tenant(id=2, name="Tenant B"),
-                User(id=11, username="a-user", role=Role.CLIENT, tenant_id=1),
-                User(id=22, username="b-user", role=Role.CLIENT, tenant_id=2),
-                UsageLedger(tenant_id=1, user_id=11, model="m", cost_usd=1.0),
-                UsageLedger(tenant_id=2, user_id=22, model="m", cost_usd=9.0),
-            ]
+        await pgsupport.seed(
+            session,
+            Tenant(id=1, name="Tenant A"),
+            Tenant(id=2, name="Tenant B"),
+            User(id=11, username="a-user", role=Role.CLIENT, tenant_id=1),
+            User(id=22, username="b-user", role=Role.CLIENT, tenant_id=2),
+            UsageLedger(tenant_id=1, user_id=11, model="m", cost_usd=1.0),
+            UsageLedger(tenant_id=2, user_id=22, model="m", cost_usd=9.0),
         )
         await session.commit()
 

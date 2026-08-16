@@ -16,7 +16,7 @@ from typing import Protocol, runtime_checkable
 from aegis.core.models import ModelRole
 from aegis.retrieval.fusion import RankedRecall
 from aegis.retrieval.models import Candidate, Chunk, Recall
-from aegis.retrieval.types import GraphEdge, GraphNode
+from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 
 
 @runtime_checkable
@@ -63,8 +63,14 @@ class KnowledgeBackend(Protocol):
         """
         ...
 
-    async def recall(self, query: str, *, top_k: int, persona: str | None = None) -> Recall:
-        """Return a wide candidate set plus the graph slice touched by the query."""
+    async def recall(self, query: str, *, top_k: int, scope: RetrievalScope) -> Recall:
+        """Return a wide candidate set plus the graph slice touched by the query.
+
+        ``scope`` is **required and has no default**: an unscoped recall is a
+        cross-tenant read, and a defaulted parameter is precisely how that gets forgotten
+        at a call site. Implementations must restrict the rows they consider to
+        :meth:`~aegis.retrieval.types.RetrievalScope.visible_tenant_values`.
+        """
         ...
 
 
@@ -81,9 +87,9 @@ class MultiListBackend(Protocol):
     """
 
     async def recall_ranked(
-        self, query: str, *, top_k: int, persona: str | None = None
+        self, query: str, *, top_k: int, scope: RetrievalScope
     ) -> RankedRecall:
-        """Return per-signal ranked lists plus the touched graph slice."""
+        """Return per-signal ranked lists plus the touched graph slice, within ``scope``."""
         ...
 
 
@@ -101,12 +107,15 @@ class KeywordBackend(Protocol):
     """
 
     async def keyword_recall(
-        self, query: str, *, top_k: int, persona: str | None = None
+        self, query: str, *, top_k: int, scope: RetrievalScope
     ) -> Sequence[Candidate]:
-        """Return up to ``top_k`` corpus-wide keyword matches, best first.
+        """Return up to ``top_k`` corpus-wide keyword matches within ``scope``, best first.
 
-        Implementations rank over the entire corpus (not a pre-filtered pool) and return
-        only genuine matches, so an empty list honestly means "no keyword hit".
+        Implementations rank over the entire corpus *visible to ``scope``* (not a
+        pre-filtered pool, and not another tenant's rows) and return only genuine
+        matches, so an empty list honestly means "no keyword hit". The tenant predicate
+        belongs on the same row as the keyword match — a keyword arm that skips it
+        re-opens the leak the vector arm just closed.
         """
         ...
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 from aegis.retrieval.protocols import GraphBackend
-from aegis.retrieval.types import GraphEdge, GraphNode
+from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 
 
 class _GraphfulBackend:
@@ -28,7 +28,7 @@ class _GraphfulBackend:
 class _GraphlessBackend:
     """A backend with no graph at all (the databaseless lite retriever)."""
 
-    async def recall(self, query: str, *, top_k: int, persona: str | None = None):
+    async def recall(self, query: str, *, top_k: int, scope: RetrievalScope):
         raise NotImplementedError
 
 

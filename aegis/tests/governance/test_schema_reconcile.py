@@ -10,9 +10,11 @@ must never break a live call. The row vanished, per-tenant spend attribution sto
 and the USD caps that are computed by summing those rows stopped binding, with nothing
 anywhere saying so.
 
-The unit suite has no Postgres, so the two halves are pinned separately: the *plan*
-(pure, database-free) and the *DDL actually emitted* (recorded against a fake
-PostgreSQL connection). SQLite is asserted untouched.
+Three halves, pinned separately because they fail in different ways: the *plan* (pure,
+database-free), the *DDL actually emitted* for a database that has drifted (recorded
+against a fake PostgreSQL connection, since manufacturing drift means lying about the
+catalog), and the *no-op* against the real, undrifted cluster the suite runs on — which
+is the case every startup takes and the one a fake cannot vouch for.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import Column, Float, Integer, MetaData, String, Table
-from sqlalchemy.ext.asyncio import create_async_engine
 
 import aegis.governance.models  # noqa: F401 - registers the governance tables
 from aegis.data import AegisBase
@@ -197,25 +198,28 @@ async def test_an_index_declared_on_a_newly_added_column_is_created_with_it():
     assert any("CREATE INDEX" in s for s in conn.statements)
 
 
-# ── SQLite is untouched ─────────────────────────────────────────────────────
+# ── an undrifted database is left alone ─────────────────────────────────────
 
 
-async def test_reconcile_is_a_clean_noop_on_sqlite(tmp_path):
-    """The test database recreates its schema every run — there is no drift to fix."""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'reconcile.db'}")
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(AegisBase.metadata.create_all)
-            assert await reconcile_additive_columns(conn, [AegisBase.metadata]) == []
-    finally:
-        await engine.dispose()
+async def test_reconcile_is_a_clean_noop_on_a_freshly_created_schema(pg_owner_engine):
+    """Startup's own path: a database whose ``create_all`` just ran needs no ALTER.
+
+    Run against the real cluster (over the owning role, since reconciliation is DDL),
+    so the ``information_schema`` query, the type comparison and the emptiness of the
+    plan are all the genuine article. The previous version of this test asked the same
+    question of a throwaway SQLite file, where ``information_schema`` does not exist and
+    the function returned at the dialect check without looking at anything — it could not
+    have caught a reconciler that mis-read the catalog, because it never let one read it.
+    """
+    async with pg_owner_engine.begin() as conn:
+        assert await reconcile_additive_columns(conn, [AegisBase.metadata]) == []
 
 
 async def test_reconcile_returns_immediately_on_a_non_postgres_dialect():
     """The dialect check happens before any information_schema query is attempted."""
 
     class _Exploding:
-        dialect = SimpleNamespace(name="sqlite")
+        dialect = SimpleNamespace(name="mysql")
 
         async def execute(self, *args, **kwargs):  # noqa: ANN002, ANN003
             raise AssertionError("no SQL may be emitted on a non-Postgres dialect")

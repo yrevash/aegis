@@ -1,7 +1,12 @@
-"""Recall READ-path tests (SQLite): ranking, valid-only, dedup, isolation, skills.
+"""Recall READ-path tests: ranking, valid-only, dedup, subject isolation, skills.
 
-All isolation is proven with **RLS off** (SQLite) — the app-level ``WHERE subject_id`` is
-the sole isolator (``docs/architecture/memory-spec.md`` BLOCKER 2).
+Subject isolation is an **app-level** control and stays one here: ``subject_id`` is an
+opaque host identifier with no column in any policy, so the ``WHERE subject_id`` predicate
+is the sole isolator (``docs/architecture/memory-spec.md`` BLOCKER 2). The tenant policy
+underneath is real on this fixture, but it is a different axis and does not stand in for
+this one.
+
+Rows are written parent-first: ``memory_message.session_id`` is a live foreign key here.
 """
 
 from __future__ import annotations
@@ -14,6 +19,8 @@ from sqlalchemy import select
 from aegis.memory.config import MemoryConfig
 from aegis.memory.recall import recall
 from aegis.memory.stores import MemoryFact, MemoryMessage, MemorySession
+
+from .._seed import add_in_fk_order
 
 pytestmark = pytest.mark.asyncio
 
@@ -83,13 +90,16 @@ async def test_facts_ranked_and_valid_only(db):
 async def test_episodic_dedup_vs_raw_window(db):
     cfg = MemoryConfig(raw_window_turns=2)
     async with db() as s:
-        s.add(MemorySession(id="sess-1", subject_id="user:1"))
-        # turn 0 is OLD but a strong vector match → should surface via episodic recall.
-        s.add(_msg("user:1", "sess-1", 0, "old but relevant refund note", [1.0, 0.0, 0.0, 0.0]))
-        s.add(_msg("user:1", "sess-1", 1, "chit chat one", [0.0, 1.0, 0.0, 0.0]))
-        s.add(_msg("user:1", "sess-1", 2, "chit chat two", [0.0, 1.0, 0.0, 0.0]))
-        # turn 3 is recent (in the 2-turn raw window) AND a vector match → must be deduped.
-        s.add(_msg("user:1", "sess-1", 3, "recent relevant refund note", [1.0, 0.0, 0.0, 0.0]))
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-1", subject_id="user:1"),
+            # turn 0 is OLD but a strong vector match → should surface via episodic recall.
+            _msg("user:1", "sess-1", 0, "old but relevant refund note", [1.0, 0.0, 0.0, 0.0]),
+            _msg("user:1", "sess-1", 1, "chit chat one", [0.0, 1.0, 0.0, 0.0]),
+            _msg("user:1", "sess-1", 2, "chit chat two", [0.0, 1.0, 0.0, 0.0]),
+            # turn 3 is recent (in the 2-turn raw window) AND a match → must be deduped.
+            _msg("user:1", "sess-1", 3, "recent relevant refund note", [1.0, 0.0, 0.0, 0.0]),
+        )
         await s.commit()
         ids = {
             m.turn_index: m.id
@@ -165,11 +175,14 @@ async def test_recall_bumps_access_count_durably(db):
     """
     cfg = MemoryConfig(raw_window_turns=1)
     async with db() as s:
-        s.add(MemorySession(id="sess-1", subject_id="user:1"))
-        s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0]))
-        # turn 0 is OLD (outside the 1-turn window) yet a strong vector match → recalled.
-        s.add(_msg("user:1", "sess-1", 0, "old relevant refund note", [1.0, 0.0, 0.0, 0.0]))
-        s.add(_msg("user:1", "sess-1", 1, "recent chit chat", [0.0, 1.0, 0.0, 0.0]))
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-1", subject_id="user:1"),
+            _fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0]),
+            # turn 0 is OLD (outside the 1-turn window) yet a strong match → recalled.
+            _msg("user:1", "sess-1", 0, "old relevant refund note", [1.0, 0.0, 0.0, 0.0]),
+            _msg("user:1", "sess-1", 1, "recent chit chat", [0.0, 1.0, 0.0, 0.0]),
+        )
         await s.commit()
 
     async with db() as s:
@@ -303,19 +316,20 @@ async def test_episodic_recency_signal_reaches_the_output(db):
     """
     cfg = MemoryConfig(raw_window_turns=1, n_epi=4)
     async with db() as s:
-        s.add(MemorySession(id="sess-1", subject_id="user:1"))
-        # turn 0 is just outside the 1-turn window and carries NO embedding, so the
-        # vector list can never surface it — only the recency list can.
-        s.add(
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-1", subject_id="user:1"),
+            # turn 0 is just outside the 1-turn window and carries NO embedding, so the
+            # vector list can never surface it — only the recency list can.
             MemoryMessage(
                 subject_id="user:1",
                 session_id="sess-1",
                 turn_index=0,
                 role="user",
                 content="my order number is 4417",
-            )
+            ),
+            _msg("user:1", "sess-1", 1, "recent chit chat", [0.0, 1.0, 0.0, 0.0]),
         )
-        s.add(_msg("user:1", "sess-1", 1, "recent chit chat", [0.0, 1.0, 0.0, 0.0]))
         await s.commit()
         ids = {
             m.turn_index: m.id

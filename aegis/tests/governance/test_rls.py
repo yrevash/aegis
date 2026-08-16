@@ -1,38 +1,78 @@
-"""RLS helpers are Postgres-only and cleanly no-op on SQLite.
+"""RLS helpers are Postgres-only, cover every tenant-scoped table, and say when they don't.
 
-The unit suite runs with no Postgres, so ``set_tenant_scope`` and ``bootstrap_rls``
-must be safe no-ops on the aiosqlite engine (their real effect is exercised only on
-Postgres). This pins that contract so the offline path never errors.
+Three things are pinned here:
+
+1. Both helpers are clean no-ops on a bind whose dialect is not PostgreSQL — not merely
+   "they do not raise", but "they emit no SQL at all", which is the stronger claim the
+   source's ``if bind.dialect.name != "postgresql": return`` guards actually make.
+2. The Postgres DDL ``bootstrap_rls`` emits — the whole security control — recorded
+   against a fake engine that also answers the catalog query the bootstrap now plans
+   from, so the fake exercises the real planning path rather than a shortcut.
+3. The coverage diagnostics. ``_plan_rls``/``_unprotected`` are pure, so the branch that
+   reports an unprotected tenant-scoped table is tested by *making it fire*, log record
+   and all — a diagnostic nobody has watched fire is a diagnostic that does not work.
+
+A live-Postgres test of the policies' runtime behaviour is a separate, database-backed
+concern (phase 1.4); what is unit-testable without a server is pinned here.
 """
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+import pytest
 
 from aegis.governance import bootstrap_rls, set_tenant_scope
+from aegis.governance.rls import (
+    _TENANT_SCOPED_TABLES,
+    _LiveTable,
+    _plan_rls,
+    _report_plan,
+    _unprotected,
+)
+
+#: The dialect these two tests stand a non-Postgres bind up as. Any non-``postgresql``
+#: name exercises the same guard; ``mysql`` is used because it is a real SQLAlchemy
+#: dialect name and because the suite no longer has — and must never regrow — a SQLite
+#: dependency just to prove that a guard returns early.
+_NON_POSTGRES_DIALECT = "mysql"
 
 
-async def test_set_tenant_scope_is_a_noop_on_sqlite(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rls.db'}")
-    try:
-        maker = async_sessionmaker(engine, expire_on_commit=False)
-        async with maker() as session:
-            # Neither a scoped nor an unscoped call raises on SQLite.
-            await set_tenant_scope(session, 7)
-            await set_tenant_scope(session, None)
-    finally:
-        await engine.dispose()
+class _ExplodingSession:
+    """A session whose bind is not PostgreSQL and which refuses to execute anything.
+
+    The old version of these tests opened a real aiosqlite engine and asserted only that
+    the call did not raise — which a helper that quietly issued a ``SET`` would also have
+    satisfied. Making ``execute`` itself the failure is both stricter and cheaper.
+    """
+
+    def __init__(self, dialect: str = _NON_POSTGRES_DIALECT) -> None:
+        self._bind = SimpleNamespace(dialect=SimpleNamespace(name=dialect))
+
+    def get_bind(self) -> SimpleNamespace:
+        return self._bind
+
+    async def execute(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise AssertionError("no SQL may be emitted on a non-Postgres bind")
 
 
-async def test_bootstrap_rls_is_a_noop_on_sqlite(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rls2.db'}")
-    try:
-        # No policy DDL is emitted on a non-Postgres dialect; it simply returns.
-        await bootstrap_rls(engine)
-    finally:
-        await engine.dispose()
+async def test_set_tenant_scope_emits_nothing_on_a_non_postgres_bind():
+    session = _ExplodingSession()
+    # Neither a scoped nor an unscoped call touches the connection.
+    await set_tenant_scope(session, 7)
+    await set_tenant_scope(session, None)
+
+
+async def test_bootstrap_rls_is_a_noop_on_a_non_postgres_engine():
+    class _ExplodingEngine:
+        dialect = SimpleNamespace(name=_NON_POSTGRES_DIALECT)
+
+        def begin(self):  # noqa: ANN201
+            raise AssertionError("no connection may be opened on a non-Postgres engine")
+
+    # No policy DDL is emitted on a non-Postgres dialect; it simply returns.
+    assert await bootstrap_rls(_ExplodingEngine()) == []
 
 
 # ── the Postgres DDL itself (recorded against a fake postgresql engine) ──
@@ -44,23 +84,59 @@ async def test_bootstrap_rls_is_a_noop_on_sqlite(tmp_path):
 # the very same engine.
 
 
-class _RecordingConn:
-    """Captures the SQL text executed inside ``engine.begin()``."""
+def _catalog_row(
+    name: str,
+    *,
+    tenant_type: str | None = "integer",
+    row_security: bool = False,
+    force: bool = False,
+    has_policy: bool = False,
+) -> tuple:
+    """One row shaped like ``_LIVE_TABLES_SQL`` returns it."""
+    return (name, tenant_type, row_security, force, has_policy)
 
-    def __init__(self, statements: list[str]) -> None:
+
+class _RecordingConn:
+    """Captures executed SQL and answers the catalog query from a canned schema.
+
+    The catalog answer flips to "fully protected" once the DDL has run, so the
+    bootstrap's own read-back verification passes exactly when the DDL really was
+    emitted — the fake cannot make a broken bootstrap look healthy.
+    """
+
+    def __init__(self, statements: list[str], schema: list[tuple]) -> None:
         self._statements = statements
+        self._schema = schema
 
     async def execute(self, clause, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
-        self._statements.append(str(clause))
+        sql = str(clause)
+        if "pg_class" in sql:
+            done = {
+                s.split('"')[1]
+                for s in self._statements
+                if s.startswith("CREATE POLICY tenant_isolation")
+            }
+            return [
+                _catalog_row(
+                    name,
+                    tenant_type=tenant_type,
+                    row_security=row_security or name in done,
+                    force=force or name in done,
+                    has_policy=has_policy or name in done,
+                )
+                for name, tenant_type, row_security, force, has_policy in self._schema
+            ]
+        self._statements.append(sql)
         return None
 
 
 class _FakeBegin:
-    def __init__(self, statements: list[str]) -> None:
+    def __init__(self, statements: list[str], schema: list[tuple]) -> None:
         self._statements = statements
+        self._schema = schema
 
     async def __aenter__(self) -> _RecordingConn:
-        return _RecordingConn(self._statements)
+        return _RecordingConn(self._statements, self._schema)
 
     async def __aexit__(self, *exc) -> bool:  # noqa: ANN002
         return False
@@ -69,12 +145,15 @@ class _FakeBegin:
 class _FakePostgresEngine:
     """Just enough of an AsyncEngine for ``bootstrap_rls``: a dialect and ``begin()``."""
 
-    def __init__(self) -> None:
+    def __init__(self, schema: list[tuple] | None = None) -> None:
         self.statements: list[str] = []
+        self.schema = schema if schema is not None else [
+            _catalog_row(name) for name in _TENANT_SCOPED_TABLES
+        ]
         self.dialect = SimpleNamespace(name="postgresql")
 
     def begin(self) -> _FakeBegin:
-        return _FakeBegin(self.statements)
+        return _FakeBegin(self.statements, self.schema)
 
 
 async def _bootstrap_statements() -> list[str]:
@@ -83,30 +162,223 @@ async def _bootstrap_statements() -> list[str]:
     return engine.statements
 
 
+async def test_every_registered_tenant_scoped_table_is_covered():
+    """The registry is the contract: each of its tables must get all four statements."""
+    engine = _FakePostgresEngine()
+    protected = await bootstrap_rls(engine)
+    assert sorted(protected) == sorted(_TENANT_SCOPED_TABLES)
+    for table in _TENANT_SCOPED_TABLES:
+        assert f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY' in engine.statements
+        assert f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY' in engine.statements
+        assert f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"' in engine.statements
+
+
+async def test_registry_covers_the_governance_memory_ops_and_host_tables():
+    """A rename or an accidental deletion in the registry is a silent isolation loss."""
+    assert set(_TENANT_SCOPED_TABLES) == {
+        # aegis.governance.models
+        "audit_log",
+        "budgets",
+        "usage_ledger",
+        "users",
+        # aegis.memory.stores
+        "memory_consolidation_job",
+        "memory_fact",
+        "memory_message",
+        "memory_profile",
+        "memory_session",
+        "memory_write_log",
+        # aegis.ops.models
+        "eval_results",
+        "prompt_versions",
+        # host-owned
+        "approvals",
+    }
+    # ``tenants`` is keyed by ``id`` and ``chunks`` carries no tenant column, so a
+    # policy on either would not compile — they are correctly absent.
+    assert "tenants" not in _TENANT_SCOPED_TABLES
+    assert "chunks" not in _TENANT_SCOPED_TABLES
+
+
 async def test_bootstrap_forces_rls_on_every_tenant_scoped_table():
     """ENABLE alone leaves the owner exempt; FORCE is what makes the policy real."""
     statements = await _bootstrap_statements()
-    for table in ("users", "usage_ledger", "approvals"):
-        assert f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY" in statements
-        assert f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY" in statements
+    for table in _TENANT_SCOPED_TABLES:
+        assert f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY' in statements
+        assert f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY' in statements
 
 
 async def test_force_is_issued_after_enable_for_each_table():
     statements = await _bootstrap_statements()
-    for table in ("users", "usage_ledger", "approvals"):
-        enable = statements.index(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
-        force = statements.index(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+    for table in _TENANT_SCOPED_TABLES:
+        enable = statements.index(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY')
+        force = statements.index(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY')
         assert enable < force
 
 
 async def test_policy_is_recreated_idempotently_with_a_safe_predicate():
     statements = await _bootstrap_statements()
     policies = [s for s in statements if s.startswith("CREATE POLICY tenant_isolation")]
-    assert len(policies) == 3
+    assert len(policies) == len(_TENANT_SCOPED_TABLES)
     for policy in policies:
         # A bound numeric scope restricts rows to that tenant …
         assert "tenant_id = substring(current_setting('app.tenant_id', true)" in policy
         # … and the predicate can never raise on a non-numeric GUC (no bare ''::int).
         assert "NULLIF(current_setting('app.tenant_id', true), '')::int" not in policy
         assert "IS NULL" in policy
-    assert sum(s.startswith("DROP POLICY IF EXISTS tenant_isolation") for s in statements) == 3
+    drops = sum(s.startswith("DROP POLICY IF EXISTS tenant_isolation") for s in statements)
+    assert drops == len(_TENANT_SCOPED_TABLES)
+
+
+async def test_rerunning_the_bootstrap_emits_the_identical_statements():
+    """It runs on every startup, so the second run must be the same no-op DDL."""
+    first = await _bootstrap_statements()
+    second = await _bootstrap_statements()
+    assert first == second
+
+
+# ── the coverage diagnostics ──
+#
+# The point of planning from the catalog is to notice a tenant-scoped table nobody
+# registered. That branch is only worth having if it fires, so each case below drives it.
+
+
+def test_plan_protects_only_registered_integer_tenant_tables():
+    live = [
+        _LiveTable("users", "integer", False, False, False),
+        _LiveTable("tenants", None, False, False, False),
+    ]
+    plan = _plan_rls(live, registered=("users",))
+    assert plan.protect == ("users",)
+    assert plan.unregistered == ()
+    assert plan.unsupported == ()
+    assert plan.stale == ()
+    assert plan.absent == ()
+
+
+def test_plan_reports_a_tenant_scoped_table_nobody_registered():
+    live = [
+        _LiveTable("users", "integer", False, False, False),
+        _LiveTable("shadow_notes", "bigint", False, False, False),
+    ]
+    plan = _plan_rls(live, registered=("users",))
+    # It is reported, and deliberately NOT quietly protected — see _plan_rls.
+    assert plan.unregistered == ("shadow_notes",)
+    assert plan.protect == ("users",)
+
+
+def test_plan_reports_a_non_integer_tenant_column_instead_of_emitting_bad_ddl():
+    live = [_LiveTable("legacy_docs", "uuid", False, False, False)]
+    plan = _plan_rls(live, registered=("legacy_docs",))
+    assert plan.unsupported == (("legacy_docs", "uuid"),)
+    assert plan.protect == ()
+
+
+def test_plan_reports_a_registry_entry_whose_tenant_column_is_gone():
+    live = [_LiveTable("budgets", None, False, False, False)]
+    plan = _plan_rls(live, registered=("budgets",))
+    assert plan.stale == ("budgets",)
+    assert plan.protect == ()
+
+
+def test_plan_skips_registered_tables_this_database_does_not_have():
+    """A host that installs only some aegis modules must still boot."""
+    live = [_LiveTable("users", "integer", False, False, False)]
+    plan = _plan_rls(live, registered=("users", "memory_fact"))
+    assert plan.protect == ("users",)
+    assert plan.absent == ("memory_fact",)
+
+
+def test_unprotected_flags_a_policy_that_exists_but_is_not_forced():
+    """ENABLE + policy without FORCE is the exact shape that fooled everyone before."""
+    live = [
+        _LiveTable("users", "integer", True, True, True),
+        _LiveTable("approvals", "integer", True, False, True),
+        _LiveTable("budgets", "integer", True, True, False),
+    ]
+    assert _unprotected(live, ("users", "approvals", "budgets")) == (
+        "approvals",
+        "budgets",
+    )
+
+
+def test_unprotected_is_empty_when_every_table_is_fully_covered():
+    live = [_LiveTable("users", "integer", True, True, True)]
+    assert _unprotected(live, ("users",)) == ()
+
+
+@pytest.mark.parametrize(
+    ("plan_kwargs", "expected_level", "expected_fragment"),
+    [
+        ({"unregistered": ("shadow_notes",)}, logging.WARNING, "not in"),
+        ({"unsupported": (("legacy_docs", "uuid"),)}, logging.WARNING, "legacy_docs (uuid)"),
+        ({"stale": ("budgets",)}, logging.WARNING, "stale"),
+        ({"absent": ("memory_fact",)}, logging.INFO, "not in this database"),
+    ],
+)
+def test_report_plan_actually_logs_each_gap(
+    caplog, plan_kwargs, expected_level, expected_fragment
+):
+    """Drive every reporting branch — a warning path that cannot fire is not a warning."""
+    from aegis.governance.rls import _RlsPlan
+
+    empty = {
+        "protect": (),
+        "unregistered": (),
+        "unsupported": (),
+        "stale": (),
+        "absent": (),
+    }
+    with caplog.at_level(logging.INFO, logger="aegis.governance.rls"):
+        _report_plan(_RlsPlan(**{**empty, **plan_kwargs}))
+    records = [r for r in caplog.records if r.name == "aegis.governance.rls"]
+    assert len(records) == 1
+    assert records[0].levelno == expected_level
+    assert expected_fragment in records[0].getMessage()
+
+
+def test_report_plan_is_silent_when_coverage_is_complete(caplog):
+    """The healthy boot must not log, or the gap warnings become background noise."""
+    from aegis.governance.rls import _RlsPlan
+
+    plan = _RlsPlan(
+        protect=("users",), unregistered=(), unsupported=(), stale=(), absent=()
+    )
+    with caplog.at_level(logging.DEBUG, logger="aegis.governance.rls"):
+        _report_plan(plan)
+    assert [r for r in caplog.records if r.name == "aegis.governance.rls"] == []
+
+
+async def test_bootstrap_reports_a_shortfall_it_reads_back_from_the_catalog(caplog):
+    """If the DDL does not take, the read-back says so instead of returning quietly."""
+
+    class _DeafConn(_RecordingConn):
+        """Records the DDL but reports the catalog as permanently unprotected."""
+
+        async def execute(self, clause, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+            sql = str(clause)
+            if "pg_class" in sql:
+                return [_catalog_row(name) for name, *_ in self._schema]
+            self._statements.append(sql)
+            return None
+
+    class _DeafEngine(_FakePostgresEngine):
+        def begin(self):  # noqa: ANN201
+            engine = self
+
+            class _Begin:
+                async def __aenter__(self) -> _DeafConn:
+                    return _DeafConn(engine.statements, engine.schema)
+
+                async def __aexit__(self, *exc) -> bool:  # noqa: ANN002
+                    return False
+
+            return _Begin()
+
+    engine = _DeafEngine(schema=[_catalog_row("users")])
+    with caplog.at_level(logging.ERROR, logger="aegis.governance.rls"):
+        assert await bootstrap_rls(engine) == ["users"]
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "users" in errors[0].getMessage()
+    assert "FORCE" in errors[0].getMessage()

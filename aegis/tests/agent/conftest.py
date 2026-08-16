@@ -20,7 +20,7 @@ from aegis.core.types import GuardResult, GuardVerdict, RiskLevel
 from aegis.gateway.types import LLMResult, ToolCallResult, Usage
 from aegis.ml.types import MLExplainResponse, ShapFeature
 from aegis.retrieval.models import GraphDelta, RetrievalResult, Source
-from aegis.retrieval.types import GraphEdge, GraphNode
+from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 
 
 class _Outcome:
@@ -115,7 +115,7 @@ def build_fake_deps(
     ) -> GuardResult:  # noqa: ARG001 - contexts accepted for the grounding-aware signature
         return GuardResult(verdict=GuardVerdict.PASS, reason="clean", text=text)
 
-    async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:
+    async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return RetrievalResult(
             answer_context="Spotlighted context about request R1.",
             sources=[Source(id="kb-1", text="Refund policy", score=0.9)],

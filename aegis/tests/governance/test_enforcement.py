@@ -1,8 +1,18 @@
 """Budget/rate enforcement, the usage ledger, and the admin rollups.
 
-These exercise ``aegis.governance.enforcement`` directly against the in-memory
-aiosqlite database bound by the ``db`` fixture, so the budget reads, ledger writes,
-role updates and admin queries all round-trip with no host and no network.
+These exercise ``aegis.governance.enforcement`` directly against the private PostgreSQL
+database bound by the ``db`` fixture, so the budget reads, ledger writes, role updates
+and admin queries all round-trip with no host and no network.
+
+**Every budget row here carries an owning ``tenant_id``, and that is load-bearing.**
+The reads under test bind the tenant scope (``_set_tenant_scope``), so the
+``tenant_isolation`` policy restricts ``budgets`` to rows whose ``tenant_id`` equals it —
+and ``NULL = 1`` is NULL, not true, so an unowned cap is invisible to the tenant it was
+meant to cap. On SQLite that policy did nothing, so tests seeding ``Budget(...)`` with no
+owner still saw their cap; on PostgreSQL those tests were passing *because the cap had
+vanished*, which is the opposite of what they claim to prove. ``tenant_id`` is exactly
+what the model documents it to be: ``scope_id`` for a tenant cap, the target user's tenant
+for a user cap.
 """
 
 from __future__ import annotations
@@ -34,21 +44,16 @@ from aegis.governance import (
     user_tenant_id,
 )
 
-
-async def _seed(db, *rows):
-    async with db() as session:
-        for row in rows:
-            session.add(row)
-        await session.commit()
-
+from .._seed import ensure_tenants, ensure_users, seed
 
 # ── enforcement ──────────────────────────────────────────────────────────────
 
 
 async def test_over_token_budget_raises(db):
-    await _seed(
+    await seed(
         db,
         Budget(
+            tenant_id=1,
             scope_type=BudgetScope.TENANT,
             scope_id=1,
             window=BudgetWindow.DAY,
@@ -65,10 +70,10 @@ async def test_over_token_budget_raises(db):
 
 async def test_user_cap_binds_before_tenant(db):
     # Both caps tripped; the user cap is checked first and attributed to the user.
-    await _seed(
+    await seed(
         db,
-        Budget(scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
-        Budget(scope_type=BudgetScope.USER, scope_id=2, token_cap=10),
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
+        Budget(tenant_id=1, scope_type=BudgetScope.USER, scope_id=2, token_cap=10),
         UsageLedger(tenant_id=1, user_id=2, prompt_tokens=20, completion_tokens=0),
     )
     with pytest.raises(BudgetExceededError) as ei:
@@ -77,15 +82,20 @@ async def test_user_cap_binds_before_tenant(db):
 
 
 async def test_under_budget_passes(db):
-    await _seed(db, Budget(scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100_000))
+    # The owner stamp matters even here: without it the cap is hidden by the tenant
+    # policy and this test would pass by proving nothing at all.
+    await seed(
+        db,
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100_000),
+    )
     # No breach → returns cleanly.
     await enforce_governance(tenant_id=1, user_id=2)
 
 
 async def test_rpm_cap_raises_on_recent_calls(db):
-    await _seed(
+    await seed(
         db,
-        Budget(scope_type=BudgetScope.TENANT, scope_id=1, rpm=1),
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, rpm=1),
         UsageLedger(tenant_id=1, prompt_tokens=1, completion_tokens=1),
     )
     with pytest.raises(BudgetExceededError) as ei:
@@ -99,6 +109,9 @@ async def test_ungoverned_call_is_a_noop(db):
 
 
 async def test_record_usage_writes_ledger_row(db):
+    # The ledger's tenant/user columns are real foreign keys: an unattributable spend row
+    # is exactly what the ledger exists to make impossible.
+    await ensure_users(db, u2=1)
     await record_usage(
         tenant_id=1,
         user_id=2,
@@ -122,10 +135,12 @@ async def test_record_usage_writes_ledger_row(db):
 
 
 async def test_effective_limits_clamp_user_inward_to_tenant(db):
-    await _seed(
+    await seed(
         db,
-        Budget(scope_type=BudgetScope.TENANT, scope_id=1, token_cap=1000, rpm=100),
-        Budget(scope_type=BudgetScope.USER, scope_id=2, token_cap=10),
+        Budget(
+            tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=1000, rpm=100
+        ),
+        Budget(tenant_id=1, scope_type=BudgetScope.USER, scope_id=2, token_cap=10),
     )
     limits = await effective_limits(1, 2)
     # User cap (10) binds over the looser tenant cap (1000); rpm only set at tenant.
@@ -142,6 +157,7 @@ async def test_effective_limits_unscoped_is_uncapped(db):
 
 
 async def test_upsert_budget_is_idempotent_on_the_natural_key(db):
+    await ensure_tenants(db, 1)
     first = await upsert_budget(scope_type="tenant", scope_id=1, token_cap=100, tenant_id=1)
     second = await upsert_budget(scope_type="tenant", scope_id=1, token_cap=250, tenant_id=1)
     assert first.id == second.id  # re-posting the same scope+window updates in place
@@ -199,9 +215,7 @@ async def test_platform_admin_demotable_when_another_remains(db):
 
 
 async def test_update_user_role_scoped_to_tenant_rejects_outsider(db):
-    async with db() as session:
-        session.add(User(username="u", role=Role.CLIENT, tenant_id=5))
-        await session.commit()
+    await seed(db, User(username="u", role=Role.CLIENT, tenant_id=5))
     # A tenant-admin caller scoped to tenant 9 cannot touch a tenant-5 user.
     assert await update_user_role(1, Role.DEVOPS, tenant_scope=9) is None
     # …but the owning tenant can.
@@ -219,7 +233,21 @@ async def test_update_user_role_scoped_to_tenant_rejects_outsider(db):
 
 @pytest.fixture
 def scope_spy(monkeypatch):
-    """Record every tenant scope bound by the enforcement data layer."""
+    """Record the tenant scopes the enforcement layer binds, and bind none of them.
+
+    Two effects, both deliberate and both relied on below. It **records** the scope, which
+    is what the "…binds_the_tenant_scope" tests assert on. It also **replaces** the real
+    binder, so no ``app.tenant_id`` GUC is set and the ``tenant_isolation`` policy takes
+    its documented fail-open branch — every row is visible. That is the exact posture of a
+    host that injects its own ``set_tenant_scope`` (a supported seam of
+    :func:`configure_governance`) or of a deployment whose serving role turns out to be
+    ``SUPERUSER``/``BYPASSRLS`` — the condition ``audit_rls_enforcement`` exists to *warn*
+    about, not to prevent. It is where the application-level guards below are the only
+    thing left, which is why they are tested here rather than assumed.
+
+    Returns:
+        The list of tenant scopes the code under test asked to bind.
+    """
     seen: list[int | None] = []
 
     async def _spy(session, tenant_id):  # noqa: ANN001
@@ -229,7 +257,16 @@ def scope_spy(monkeypatch):
     return seen
 
 
-async def test_upsert_budget_refuses_a_cross_tenant_overwrite(db):
+async def test_upsert_budget_refuses_a_cross_tenant_overwrite(db, scope_spy):
+    """The app-level guard refuses the takeover when RLS is not the one stopping it.
+
+    ``scope_spy`` leaves the tenant scope unbound (see its docstring), which is the only
+    posture in which ``upsert_budget``'s natural-key lookup can *see* another tenant's
+    row — and therefore the only posture in which this guard can fire at all. With a scope
+    bound, the row is invisible and PostgreSQL stops the takeover first; that path is
+    :func:`test_rls_stops_the_takeover_before_the_app_level_guard_can` below.
+    """
+    await ensure_tenants(db, 1, 2)
     owned = await upsert_budget(
         scope_type="user", scope_id=42, token_cap=100, tenant_id=1
     )
@@ -240,26 +277,92 @@ async def test_upsert_budget_refuses_a_cross_tenant_overwrite(db):
     rows = await list_budgets(tenant_id=1)
     assert [(r.id, r.token_cap) for r in rows] == [(owned.id, 100)]
     assert await list_budgets(tenant_id=2) == []
+    # The refusal really did come from the guard, not from a scope that got bound anyway.
+    assert scope_spy == [1, 2, 1, 2]
+
+
+async def test_rls_stops_the_takeover_before_the_app_level_guard_can(db, pg_owner_engine):
+    """With a scope bound, tenant 2 cannot reach tenant 1's cap — and never could.
+
+    This is what the SQLite fixture could not express, and it changes the outcome rather
+    than merely adding a layer. Under the live ``tenant_isolation`` policy, tenant 2's
+    natural-key lookup is filtered to tenant 2's own rows, so ``existing`` is ``None``,
+    ``CrossTenantBudgetError`` is unreachable, and the write lands as a **new row**.
+
+    The isolation the test above cares about holds, and holds harder: tenant 1's cap is
+    not merely refused to tenant 2, it is invisible to it. What does not hold is the
+    natural key. The two assertions are separated below so the security property and the
+    defect are not confused for one another.
+    """
+    await ensure_tenants(db, 1, 2)
+    owned = await upsert_budget(scope_type="user", scope_id=42, token_cap=100, tenant_id=1)
+    written = await upsert_budget(
+        scope_type="user", scope_id=42, token_cap=999_999, tenant_id=2
+    )
+
+    # SECURITY: tenant 1's row is byte-for-byte untouched, read back over the
+    # RLS-exempt owner connection so this is not itself filtered into looking clean.
+    async with pg_owner_engine.connect() as conn:
+        stored = {
+            row.id: (row.tenant_id, row.token_cap)
+            for row in (
+                await conn.execute(
+                    select(
+                        Budget.__table__.c.id,
+                        Budget.__table__.c.tenant_id,
+                        Budget.__table__.c.token_cap,
+                    )
+                )
+            ).all()
+        }
+    assert stored[owned.id] == (1, 100)
+
+    # KNOWN DEFECT, pinned here so it cannot get quietly worse. ``upsert_budget``
+    # documents that it keeps the lookup on the *full* natural key precisely so a
+    # conflict is refused rather than duplicated — but RLS narrows that lookup to the
+    # caller's tenant behind its back, so the duplicate it set out to avoid is exactly
+    # what it writes. Each tenant still reads only its own row, but the platform-admin
+    # view (unbound scope) sees both and ``_budgets_for(...).first()`` would pick between
+    # them arbitrarily; there is no unique constraint on ``(scope_type, scope_id,
+    # window)`` to catch it. The fix belongs in ``aegis.governance.enforcement``; when it
+    # lands, this becomes ``== 1`` and the assertion above stays as it is.
+    assert written.id != owned.id
+    assert len(await list_budgets(scope_type="user", scope_id=42)) == 2
 
 
 async def test_upsert_budget_still_updates_in_place_for_the_owning_tenant(db):
+    await ensure_tenants(db, 1)
     first = await upsert_budget(scope_type="user", scope_id=42, token_cap=100, tenant_id=1)
     second = await upsert_budget(scope_type="user", scope_id=42, token_cap=250, tenant_id=1)
     assert first.id == second.id and second.token_cap == 250
     assert len(await list_budgets(tenant_id=1)) == 1
 
 
-async def test_upsert_budget_may_claim_an_unowned_row(db):
-    await _seed(
+async def test_upsert_budget_may_claim_an_unowned_row(db, scope_spy):
+    """An ownerless cap is adopted in place — when the caller can see it at all.
+
+    ``scope_spy`` leaves the scope unbound on purpose. A row with ``tenant_id IS NULL``
+    fails the policy predicate (``NULL = 3`` is NULL, not true), so under a bound scope
+    tenant 3 does not claim this row, it silently writes a second one alongside it — the
+    same natural-key duplication pinned in
+    :func:`test_rls_stops_the_takeover_before_the_app_level_guard_can`. Asserting the
+    *claim* therefore means asserting it where claiming is possible; ``== [row.id]``
+    below is checked against every budget in the database, not just tenant 3's, so a
+    shadow row would fail it.
+    """
+    await ensure_tenants(db, 3)
+    await seed(
         db,
         Budget(scope_type=BudgetScope.USER, scope_id=7, window=BudgetWindow.DAY, token_cap=5),
     )
     row = await upsert_budget(scope_type="user", scope_id=7, token_cap=50, tenant_id=3)
     assert row.token_cap == 50
+    assert [r.id for r in await list_budgets()] == [row.id]
     assert [r.id for r in await list_budgets(tenant_id=3)] == [row.id]
 
 
 async def test_platform_admin_may_overwrite_and_does_not_erase_the_owner_stamp(db):
+    await ensure_tenants(db, 1)
     owned = await upsert_budget(scope_type="user", scope_id=42, token_cap=100, tenant_id=1)
     updated = await upsert_budget(scope_type="user", scope_id=42, token_cap=300, tenant_id=None)
     assert updated.id == owned.id and updated.token_cap == 300
@@ -268,18 +371,19 @@ async def test_platform_admin_may_overwrite_and_does_not_erase_the_owner_stamp(d
 
 
 async def test_upsert_budget_binds_the_tenant_scope(db, scope_spy):
+    await ensure_tenants(db, 1)
     await upsert_budget(scope_type="tenant", scope_id=1, token_cap=10, tenant_id=1)
     assert scope_spy == [1]
 
 
 async def test_user_tenant_id_binds_the_tenant_scope(db, scope_spy):
-    await _seed(db, User(username="alice", role=Role.CLIENT, tenant_id=1))
+    await seed(db, User(username="alice", role=Role.CLIENT, tenant_id=1))
     assert await user_tenant_id(1, tenant_scope=1) == 1
     assert scope_spy == [1]
 
 
 async def test_user_tenant_id_hides_a_user_outside_the_caller_tenant(db):
-    await _seed(db, User(username="alice", role=Role.CLIENT, tenant_id=1))
+    await seed(db, User(username="alice", role=Role.CLIENT, tenant_id=1))
     # A tenant-2 admin must not be able to resolve (and then cap) a tenant-1 user.
     assert await user_tenant_id(1, tenant_scope=2) is None
     # A platform-admin caller (the back-compatible default) still resolves any user.

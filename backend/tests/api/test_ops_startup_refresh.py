@@ -9,11 +9,8 @@ harness reads on the hot path. The ML warm-up is stubbed so the test stays fast/
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.adapter import DEFAULT_PERSONA_ID
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.main import app, lifespan
 from app.ops import registry
 
@@ -22,16 +19,8 @@ pytestmark = pytest.mark.asyncio
 PK = DEFAULT_PERSONA_ID
 ACTIVE_PROMPT = "You are the promoted, live system prompt."
 
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'startup.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    registry.clear_cache()
-    yield get_sessionmaker()
-    registry.clear_cache()
-    await engine.dispose()
+# ``db`` is the shared scratch-PostgreSQL fixture from ``tests/conftest.py``; it already
+# binds the engines and clears the active-prompt cache around each test.
 
 
 async def test_lifespan_warms_active_prompt_cache(db, monkeypatch):

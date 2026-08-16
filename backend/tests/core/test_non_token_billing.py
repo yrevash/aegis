@@ -2,9 +2,9 @@
 
 This is the whole chain, with nothing stubbed between the ends — the gateway's
 ``transcribe`` → this platform's injected ``_GovernanceHook`` → ``record_usage``
-→ a ``UsageLedger`` row — against the in-memory aiosqlite database bound by the
-``db`` fixture. Only ``litellm`` is faked, because the gateway credential is a
-placeholder and no network call is possible here.
+→ a ``UsageLedger`` row — against the real PostgreSQL database bound by the ``db``
+fixture. Only ``litellm`` is faked, because the gateway credential is a placeholder and
+no network call is possible here.
 
 Whisper bills per minute of audio. Before non-token units existed, this row would
 have been ``prompt_tokens=0`` → ``$0.00``, so a tenant with a USD cap could
@@ -18,15 +18,25 @@ from types import SimpleNamespace
 
 import aegis.gateway.llm as llm_mod
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
 
+from app.api.schemas import Role
 from app.core.governance import (
     GovernanceContext,
     reset_governance_context,
     set_governance_context,
 )
 from app.core.llm import BudgetExceededError, transcribe
-from app.data import Budget, BudgetScope, BudgetWindow, UsageLedger, get_sessionmaker
+from app.data import (
+    Budget,
+    BudgetScope,
+    BudgetWindow,
+    Tenant,
+    UsageLedger,
+    User,
+    get_sessionmaker,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,6 +88,30 @@ async def _seed(*rows):
         await session.commit()
 
 
+@pytest_asyncio.fixture
+async def principals(db):
+    """Seed the tenant and user the transcriptions below are attributed to.
+
+    PostgreSQL enforces ``usage_ledger.tenant_id → tenants.id`` and
+    ``usage_ledger.user_id → users.id``; SQLite, where this file used to run, does not
+    enforce foreign keys at all by default. So the ledger row this test exists to prove
+    was previously written against a tenant that did not exist — the row was real, the
+    attribution it claimed was not.
+
+    Returns:
+        The session factory from ``db``, so a test needs only this fixture.
+    """
+    async with get_sessionmaker()() as session:
+        session.add_all(
+            [
+                Tenant(id=1, name="Tenant One"),
+                User(id=2, username="member", role=Role.CLIENT, tenant_id=1),
+            ]
+        )
+        await session.commit()
+    return db
+
+
 async def _ledger_rows(tenant_id=1):
     async with get_sessionmaker()() as session:
         return (
@@ -88,10 +122,12 @@ async def _ledger_rows(tenant_id=1):
 
 
 async def test_transcription_with_a_known_duration_ledgers_a_non_zero_cost(
-    fake_litellm, db, audio_file
+    fake_litellm, principals, audio_file
 ):
     """A 2-minute clip writes one ledger row priced from its audio minutes."""
-    await _seed(Budget(scope_type=BudgetScope.TENANT, scope_id=1, usd_cap=100.0))
+    await _seed(
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, usd_cap=100.0)
+    )
 
     tok = set_governance_context(GovernanceContext(tenant_id=1, user_id=2))
     try:
@@ -113,11 +149,12 @@ async def test_transcription_with_a_known_duration_ledgers_a_non_zero_cost(
 
 
 async def test_a_usd_capped_tenant_cannot_transcribe_without_limit(
-    fake_litellm, db, audio_file
+    fake_litellm, principals, audio_file
 ):
     """Audio spend accumulates against the USD cap and then refuses the next call."""
     await _seed(
         Budget(
+            tenant_id=1,
             scope_type=BudgetScope.TENANT,
             scope_id=1,
             window=BudgetWindow.DAY,

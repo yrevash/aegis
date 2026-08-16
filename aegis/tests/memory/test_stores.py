@@ -1,4 +1,9 @@
-"""Schema tests: the memory tables materialise + round-trip on SQLite (aegis.data base)."""
+"""Schema tests: the memory tables materialise + round-trip on PostgreSQL (aegis.data).
+
+The round-trips are written parent-first because the foreign keys are live here:
+``memory_message.session_id`` and ``memory_consolidation_job.session_id`` both point at a
+``memory_session`` row that has to exist.
+"""
 
 from __future__ import annotations
 
@@ -16,13 +21,16 @@ from aegis.memory.stores import (
     WriteOp,
 )
 
+from .._seed import add_in_fk_order
+
 pytestmark = pytest.mark.asyncio
 
 
 async def test_session_message_vector_roundtrip(db):
     async with db() as s:
-        s.add(MemorySession(id="sess-1", subject_id="user:1", persona="ops"))
-        s.add(
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-1", subject_id="user:1", persona="ops"),
             MemoryMessage(
                 subject_id="user:1",
                 session_id="sess-1",
@@ -30,9 +38,9 @@ async def test_session_message_vector_roundtrip(db):
                 role="user",
                 origin=MemoryOrigin.USER,
                 content="hello",
-                embedding=[0.1, 0.2, 0.3],  # VectorColumn → JSON on SQLite
+                embedding=[0.1, 0.2, 0.3],  # VectorColumn → jsonb on PostgreSQL
                 embedding_dim=3,
-            )
+            ),
         )
         await s.commit()
     async with db() as s:
@@ -74,8 +82,11 @@ async def test_bitemporal_fact_and_writelog(db):
 
 async def test_consolidation_job_enqueue(db):
     async with db() as s:
-        s.add(MemorySession(id="sess-2", subject_id="user:2"))
-        s.add(MemoryConsolidationJob(subject_id="user:2", session_id="sess-2"))
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-2", subject_id="user:2"),
+            MemoryConsolidationJob(subject_id="user:2", session_id="sess-2"),
+        )
         await s.commit()
     async with db() as s:
         job = (await s.execute(select(MemoryConsolidationJob))).scalar_one()

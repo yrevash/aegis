@@ -13,8 +13,8 @@ Three graph-level properties, each load-bearing:
    follow-up turn ("what is *its* licence?") resolves against what was actually said.
    ``state["messages"]`` cannot serve this — it is a per-planning-round scratch buffer
    written by ``plan``, which runs *after* ``retrieve``, so it is empty there. This is
-   driven through the REAL memory layer over SQLite and the REAL ``rewrite_query``, so a
-   regression anywhere on that chain fails the test.
+   driven through the REAL memory layer over the real PostgreSQL store and the REAL
+   ``rewrite_query``, so a regression anywhere on that chain fails the test.
 
 (The ``query_vec`` surfacing property is exercised in ``aegis.retrieval``'s own tests.)
 """
@@ -27,14 +27,14 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from aegis.agent import run_agent
-from aegis.data import AegisBase
 from aegis.gateway.types import LLMResult, Usage
 from aegis.memory.config import MemoryConfig
 from aegis.memory.stores import MemoryMessage, MemorySession
 from aegis.memory.working import assemble_working_memory
+from tests._seed import add_in_fk_order
 from tests.memory._spec import FAKE_SPEC
 
 _MONEY_SHOT = ["run_started", "retrieval", "token", "run_finished"]
@@ -168,7 +168,7 @@ _TURNS = [
 
 
 class _StoreBackedMemory:
-    """MemoryDeps backed by the REAL memory layer over SQLite (nothing faked between)."""
+    """MemoryDeps backed by the REAL memory layer over PostgreSQL (nothing faked)."""
 
     def __init__(self, sessionmaker) -> None:  # noqa: ANN001
         self._sessionmaker = sessionmaker
@@ -192,16 +192,24 @@ class _StoreBackedMemory:
 
 
 @pytest_asyncio.fixture
-async def memory_db(tmp_path):
-    """A SQLite memory store already holding the two-turn Neo4j conversation."""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'agent-mem.db'}")
-    async with engine.begin() as conn:
-        await conn.run_sync(AegisBase.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as s:
-        s.add(MemorySession(id="sess-neo4j", subject_id="user:1"))
-        for turn_index, (role, content) in enumerate(_TURNS):
-            s.add(
+async def memory_db(pg_sessionmaker: async_sessionmaker) -> async_sessionmaker:
+    """This test's PostgreSQL store, already holding the two-turn Neo4j conversation.
+
+    The session row is written before its messages: ``memory_message.session_id`` is a
+    real foreign key on the cluster, and the unit of work orders inserts by mapper sort
+    key, which puts the child first.
+
+    Args:
+        pg_sessionmaker: The unprivileged sessionmaker over this test's scratch database.
+
+    Returns:
+        The sessionmaker, with the conversation already committed.
+    """
+    async with pg_sessionmaker() as s:
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-neo4j", subject_id="user:1"),
+            *(
                 MemoryMessage(
                     subject_id="user:1",
                     session_id="sess-neo4j",
@@ -209,10 +217,11 @@ async def memory_db(tmp_path):
                     role=role,
                     content=content,
                 )
-            )
+                for turn_index, (role, content) in enumerate(_TURNS)
+            ),
+        )
         await s.commit()
-    yield maker
-    await engine.dispose()
+    return pg_sessionmaker
 
 
 def _instrument(deps, histories: list[str], queries: list[str]) -> None:
@@ -248,9 +257,9 @@ def _instrument(deps, histories: list[str], queries: list[str]) -> None:
             model="fake-cheap",
         )
 
-    async def wrapped_retrieve(query, *, persona=None):  # noqa: ANN001
+    async def wrapped_retrieve(query, *, scope):  # noqa: ANN001
         queries.append(query)
-        return await retrieve(query, persona=persona)
+        return await retrieve(query, scope=scope)
 
     deps.complete = wrapped_complete
     deps.retrieve = wrapped_retrieve

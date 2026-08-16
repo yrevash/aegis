@@ -34,6 +34,7 @@ from aegis.memory.stores import (
     WriteOp,
 )
 
+from .._seed import add_in_fk_order
 from ._spec import FACT_EXTRACTION_PROMPT
 
 pytestmark = pytest.mark.asyncio
@@ -105,8 +106,14 @@ def _fact(**kw):
 
 
 async def _seed_session(s, *, subject="user:1", session_id="sess-1", summary=None):
-    s.add(MemorySession(id=session_id, subject_id=subject, summary=summary))
-    s.add(
+    """Persist one session and its opening turn, session first.
+
+    ``memory_message.session_id`` is a real foreign key, so the parent must be flushed
+    before the child; the mappers carry no ``relationship``, so nothing infers that.
+    """
+    await add_in_fk_order(
+        s,
+        MemorySession(id=session_id, subject_id=subject, summary=summary),
         MemoryMessage(
             subject_id=subject,
             session_id=session_id,
@@ -114,9 +121,8 @@ async def _seed_session(s, *, subject="user:1", session_id="sess-1", summary=Non
             role="user",
             origin=MemoryOrigin.USER,
             content="Please contact me differently from now on.",
-        )
+        ),
     )
-    await s.flush()
 
 
 # --------------------------------------------------------------------------- tests

@@ -2,8 +2,11 @@
 
 Memory is not per-agent scratch — it is durable, subject-scoped, and shared. Two
 independent agent runs (separate DB sessions) over the SAME subject read/write the SAME
-facts, while a different subject/tenant sees nothing. Proven with RLS off (SQLite): the
-app-level ``WHERE subject_id`` (+ ``tenant_id``) is the sole isolator.
+facts, while a different subject/tenant sees nothing. The isolator under test is the
+app-level ``WHERE subject_id`` (+ ``tenant_id``): ``subject_id`` is an opaque host
+identifier that no RLS policy can key on, so it has to hold on its own. (The tenant
+policy is live on this fixture, but it is a second, coarser axis — it would not catch a
+subject leak inside one tenant, which is the leak these tests are about.)
 """
 
 from __future__ import annotations

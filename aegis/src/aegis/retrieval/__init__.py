@@ -4,17 +4,19 @@ Structure-aware chunking → dedup → poisoning validation → hybrid recall (v
 graph, plus a hand-rolled BM25 arm when the backend can search its corpus by keyword —
 otherwise BM25 is a labelled re-ranking pass, never a claimed recall arm) → Reciprocal
 Rank Fusion → LLM-as-reranker → spotlighted assembly, with a two-tier semantic cache,
-an agentic Self-RAG loop, and honest provenance/citations. LLM-agnostic (inject a completer + embedder); heavy deps
+an agentic Self-RAG loop, and honest provenance/citations. LLM-agnostic (inject a
+completer + embedder); heavy deps
 (lightrag/neo4j/redis/chromadb/asyncpg) are lazy-imported, so `import aegis.retrieval`
 never requires them — see `aegis[retrieval]` and `tests/retrieval/test_isolation.py`.
 
 Typical lifecycle::
 
-    from aegis.retrieval import RetrievalConfig, build_default_retriever
+    from aegis.retrieval import RetrievalConfig, RetrievalScope, build_default_retriever
 
     retriever = build_default_retriever(complete=my_complete, embed=my_embed)
-    report = await retriever.ingest(["some document text", ...])
-    result = await retriever.retrieve("a question about the corpus")
+    scope = RetrievalScope(tenant_id=7, persona="ops")   # required, never defaulted
+    report = await retriever.ingest(["some document text", ...], scope=scope)
+    result = await retriever.retrieve("a question about the corpus", scope=scope)
     result.answer_context   # spotlighted, rerank-ordered context for the generator
     result.sources          # citation-grade sources
     result.provenance       # origins + fusion method (+ cache lineage on a hit)
@@ -49,10 +51,18 @@ from aegis.retrieval.pipeline import (
     Retriever,
     build_default_retriever,
 )
-from aegis.retrieval.types import FusionMethod, GraphEdge, GraphNode, RetrievalOrigin
+from aegis.retrieval.types import (
+    TENANT_METADATA_KEY,
+    FusionMethod,
+    GraphEdge,
+    GraphNode,
+    RetrievalOrigin,
+    RetrievalScope,
+)
 
 __all__ = [
     "EMBED_DIM",
+    "TENANT_METADATA_KEY",
     "AgenticReport",
     "ArmReport",
     "CacheProvenance",
@@ -71,6 +81,7 @@ __all__ = [
     "RetrievalObservability",
     "RetrievalOrigin",
     "RetrievalResult",
+    "RetrievalScope",
     "Retriever",
     "RewriteReport",
     "Source",

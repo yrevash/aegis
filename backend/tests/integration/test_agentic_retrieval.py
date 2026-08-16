@@ -21,6 +21,7 @@ import dataclasses
 import json
 from uuid import uuid4
 
+from aegis.retrieval.types import RetrievalScope
 from tests.conftest import build_fake_deps
 
 from app.agent import build_agent
@@ -135,7 +136,7 @@ async def test_insufficient_first_round_triggers_second_retrieval():
     base = build_fake_deps()
     retrieve_calls: list[str] = []
 
-    async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:
+    async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         retrieve_calls.append(query)
         # Distinct sources per round so a genuine MERGE is observable. Round 2 scores
         # higher so it survives the first-round-capped dedupe (proving the union ran).
@@ -201,7 +202,7 @@ async def test_query_rewrite_changes_retrieval_query():
     retrieve_calls: list[str] = []
     rewritten = "standalone: how the refund policy handles overdue requests"
 
-    async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:
+    async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         retrieve_calls.append(query)
         return _result("policy context", "kb-1")
 
@@ -245,7 +246,7 @@ async def test_answer_cache_serves_second_run_without_generation():
     generation_calls = {"n": 0}
     cache = AnswerCache(InMemoryRedis(), ttl_seconds=60, similarity_threshold=0.9)
 
-    async def retrieve(query: str, *, persona: str | None = None) -> RetrievalResult:
+    async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return _result("policy context", "kb-1", with_vec=True)
 
     async def complete(role, messages, *, tools=None, temperature=0.0, response_format=None):  # noqa: ANN001

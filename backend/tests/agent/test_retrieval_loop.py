@@ -11,8 +11,12 @@ from app.agent.retrieval_loop import (
     agentic_retrieve,
     assess_sufficiency,
 )
+from app.retrieval import RetrievalScope
 from app.retrieval.models import RetrievalResult, Source
 from app.retrieval.query_rewrite import CallUsage, RewriteResult
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 # Per-call usage every fake judge/rewrite response reports, so accrual is observable.
 _USAGE = SimpleNamespace(prompt_tokens=5, completion_tokens=3, cost_usd=0.0001)
@@ -42,7 +46,7 @@ class MappedRetrieve:
         self._mapping = mapping
         self.calls: list[str] = []
 
-    async def __call__(self, query, *, persona=None):
+    async def __call__(self, query, *, scope):
         self.calls.append(query)
         return self._mapping[query]
 
@@ -99,7 +103,7 @@ async def test_loop_stops_on_first_round_sufficiency():
     retrieve = MappedRetrieve({"start": r1})
     complete = QueuedComplete('{"sufficient": true, "reason": "ok", "followup_query": null}')
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete)
+    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, scope=_SCOPE)
 
     assert out.used_rounds == 1
     assert len(out.rounds) == 1
@@ -116,7 +120,8 @@ async def test_loop_respects_max_rounds():
         '{"sufficient": false, "reason": "need more", "followup_query": "more"}'
     )
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2)
+    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2,
+        scope=_SCOPE)
 
     assert out.used_rounds == 2
     assert len(out.rounds) == 2
@@ -149,7 +154,8 @@ async def test_loop_merges_and_dedupes_sources_across_rounds():
         '{"sufficient": true, "reason": "now enough", "followup_query": null}',
     )
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2)
+    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2,
+        scope=_SCOPE)
 
     merged = out.result.sources
     by_id = {s.id: s for s in merged}
@@ -178,7 +184,8 @@ async def test_loop_uses_fallback_followup_when_judge_gives_none():
         '{"sufficient": true, "reason": "enough", "followup_query": null}',
     )
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2)
+    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2,
+        scope=_SCOPE)
 
     assert retrieve.calls == ["start", fallback_q]
     assert out.used_rounds == 2
@@ -200,7 +207,7 @@ async def test_loop_usage_sums_rewrite_and_judge_calls():
         )
 
     out = await agentic_retrieve(
-        "start", retrieve_fn=retrieve, complete=complete, rewrite_fn=rewrite_fn
+        "start", retrieve_fn=retrieve, complete=complete, rewrite_fn=rewrite_fn, scope=_SCOPE
     )
 
     # Retrieval used the rewritten query, and usage = rewrite(7/4) + judge(5/3).

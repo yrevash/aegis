@@ -252,7 +252,8 @@ class _RedisVLBackend:
             dtype="float32",
         )
 
-        # Fail loud if Redis-Stack/RediSearch is unreachable — parity with the vector store/Postgres.
+        # Fail loud if Redis-Stack/RediSearch is unreachable — parity with the
+        # vector store and Postgres.
         self._cache = SemanticCache(
             name=name,
             distance_threshold=distance_threshold,

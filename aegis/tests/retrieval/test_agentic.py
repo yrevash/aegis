@@ -23,7 +23,10 @@ from aegis.retrieval.models import (
 )
 from aegis.retrieval.query_rewrite import CallUsage, RewriteResult, rewrite_query
 from aegis.retrieval.spotlight import DATAMARK_TOKEN
-from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalOrigin
+from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalOrigin, RetrievalScope
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 # Per-call usage every fake judge/rewrite response reports, so accrual is observable.
 _USAGE = SimpleNamespace(prompt_tokens=5, completion_tokens=3, cost_usd=0.0001)
@@ -52,9 +55,11 @@ class MappedRetrieve:
     def __init__(self, mapping: dict[str, RetrievalResult]):
         self._mapping = mapping
         self.calls: list[str] = []
+        self.scopes: list[RetrievalScope] = []
 
-    async def __call__(self, query, *, persona=None):
+    async def __call__(self, query, *, scope):
         self.calls.append(query)
+        self.scopes.append(scope)
         return self._mapping[query]
 
 
@@ -110,7 +115,7 @@ async def test_loop_stops_on_first_round_sufficiency():
     retrieve = MappedRetrieve({"start": r1})
     complete = QueuedComplete('{"sufficient": true, "reason": "ok", "followup_query": null}')
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete)
+    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, scope=_SCOPE)
 
     assert out.used_rounds == 1
     assert len(out.rounds) == 1
@@ -127,7 +132,9 @@ async def test_loop_respects_max_rounds():
         '{"sufficient": false, "reason": "need more", "followup_query": "more"}'
     )
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2)
+    out = await agentic_retrieve(
+        "start", retrieve_fn=retrieve, complete=complete, max_rounds=2, scope=_SCOPE
+    )
 
     assert out.used_rounds == 2
     assert len(out.rounds) == 2
@@ -160,7 +167,9 @@ async def test_loop_merges_and_dedupes_sources_across_rounds():
         '{"sufficient": true, "reason": "now enough", "followup_query": null}',
     )
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2)
+    out = await agentic_retrieve(
+        "start", retrieve_fn=retrieve, complete=complete, max_rounds=2, scope=_SCOPE
+    )
 
     merged = out.result.sources
     by_id = {s.id: s for s in merged}
@@ -189,7 +198,9 @@ async def test_loop_uses_fallback_followup_when_judge_gives_none():
         '{"sufficient": true, "reason": "enough", "followup_query": null}',
     )
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, max_rounds=2)
+    out = await agentic_retrieve(
+        "start", retrieve_fn=retrieve, complete=complete, max_rounds=2, scope=_SCOPE
+    )
 
     assert retrieve.calls == ["start", fallback_q]
     assert out.used_rounds == 2
@@ -211,7 +222,7 @@ async def test_loop_usage_sums_rewrite_and_judge_calls():
         )
 
     out = await agentic_retrieve(
-        "start", retrieve_fn=retrieve, complete=complete, rewrite_fn=rewrite_fn
+        "start", retrieve_fn=retrieve, complete=complete, rewrite_fn=rewrite_fn, scope=_SCOPE
     )
 
     # Retrieval used the rewritten query, and usage = rewrite(7/4) + judge(5/3).
@@ -275,6 +286,7 @@ async def test_rewrite_resolves_a_pronoun_against_the_conversation_history():
         complete=judge,
         rewrite_fn=rewrite_fn,
         history=history,
+        scope=_SCOPE,
     )
 
     # The conversation really reached the rewrite prompt…
@@ -299,7 +311,7 @@ async def test_rewrite_without_history_is_an_honest_no_op():
         return await rewrite_query(q, history=history, complete=rewriter)
 
     out = await agentic_retrieve(
-        unresolved, retrieve_fn=retrieve, complete=judge, rewrite_fn=rewrite_fn
+        unresolved, retrieve_fn=retrieve, complete=judge, rewrite_fn=rewrite_fn, scope=_SCOPE
     )
 
     assert "(no prior conversation)" in rewriter.prompts[0]
@@ -328,7 +340,7 @@ async def test_round_two_is_not_truncated_away_by_round_ones_size():
         '{"sufficient": true, "reason": "now enough", "followup_query": null}',
     )
 
-    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete)
+    out = await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, scope=_SCOPE)
 
     ids = [s.id for s in out.result.sources]
     assert len(ids) == 6  # cap = max(2, 6), not round 1's 2
@@ -395,7 +407,7 @@ async def _two_round_merge(*, spotlighted: bool):
         '{"sufficient": false, "reason": "need more", "followup_query": "q2"}',
         '{"sufficient": true, "reason": "now enough", "followup_query": null}',
     )
-    return await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete)
+    return await agentic_retrieve("start", retrieve_fn=retrieve, complete=complete, scope=_SCOPE)
 
 
 async def test_merge_keeps_round_twos_provenance_arms_and_graph_delta():
@@ -429,3 +441,26 @@ async def test_merge_respects_the_spotlight_choice_of_the_pipeline():
     on = await _two_round_merge(spotlighted=True)
     assert DATAMARK_TOKEN in on.result.answer_context
     assert on.result.observability.spotlight_applied is True
+
+
+async def test_every_round_retrieves_inside_the_same_scope():
+    """The loop reformulates the query; it must never reformulate the tenant boundary.
+
+    A follow-up round that lost (or widened) the scope would pull another tenant's
+    passages into the merged result — the merge is exactly where that would become
+    invisible, since the caller sees one ``RetrievalResult``.
+    """
+    scope = RetrievalScope(tenant_id=99, persona="ops", corpus_version=4)
+    r1 = _result([Source(id="a", text="alpha", score=0.5)], num_candidates=3)
+    r2 = _result([Source(id="b", text="beta", score=0.5)], num_candidates=4)
+    retrieve = MappedRetrieve({"start": r1, "more": r2})
+    complete = QueuedComplete(
+        '{"sufficient": false, "reason": "need more", "followup_query": "more"}'
+    )
+
+    out = await agentic_retrieve(
+        "start", retrieve_fn=retrieve, complete=complete, max_rounds=2, scope=scope
+    )
+
+    assert out.used_rounds == 2  # the loop really did take a second round
+    assert retrieve.scopes == [scope, scope]

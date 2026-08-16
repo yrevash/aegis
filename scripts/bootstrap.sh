@@ -64,3 +64,6 @@ echo "  1) put your key in backend/.env  (GENAILAB_API_KEY=...)"
 echo "  2) ./scripts/preflight.sh"
 echo "  3) ./scripts/start.sh lite"
 echo
+echo "  Full mode (Postgres) also needs the serving role, or tenant RLS is bypassed:"
+echo "     ./scripts/db-roles.sh          # creates aegis_app, repoints backend/.env"
+echo

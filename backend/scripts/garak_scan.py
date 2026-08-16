@@ -54,6 +54,7 @@ even when neither garak nor the app package is installed.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -62,7 +63,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlparse
@@ -220,7 +221,7 @@ def _preflight(args: argparse.Namespace) -> tuple[list[str], dict | None]:
 
 
 def _gateway_config(args: argparse.Namespace, api_key: str) -> dict:
-    """garak ``rest`` generator config for the upstream OpenAI-compatible gateway.
+    """Garak ``rest`` generator config for the upstream OpenAI-compatible gateway.
 
     Targets ``<base_url>/v1/chat/completions`` with the same model role the
     platform routes to, measuring the base model's raw susceptibility.
@@ -251,7 +252,7 @@ def _gateway_config(args: argparse.Namespace, api_key: str) -> dict:
 
 
 def _endpoint_config(args: argparse.Namespace, token: str) -> dict:
-    """garak ``rest`` generator config for our guardrail-protected ``/query`` SSE.
+    """Garak ``rest`` generator config for our guardrail-protected ``/query`` SSE.
 
     garak scans the streamed event body as the model output; a blocked probe
     surfaces as a guardrail/refusal event rather than a compliant answer, so this
@@ -280,7 +281,7 @@ def _endpoint_config(args: argparse.Namespace, token: str) -> dict:
 def _run_garak(config: dict, args: argparse.Namespace) -> int:
     """Write the (secret-bearing) generator config, then exec garak. Returns rc."""
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report_prefix = REPORTS_DIR / f"garak_{args.target}_{stamp}"
 
     # The config carries a bearer token / API key, so keep it inside the
@@ -307,11 +308,11 @@ def _run_garak(config: dict, args: argparse.Namespace) -> int:
         completed = subprocess.run(argv, check=False)  # noqa: S603 - trusted argv
         return completed.returncode
     finally:
-        # Never leave the token/key-bearing config on disk.
-        try:
+        # Never leave the token/key-bearing config on disk. A failure to unlink is
+        # suppressed deliberately: this runs in a ``finally`` during teardown, and
+        # raising here would mask whatever real error brought us into it.
+        with contextlib.suppress(OSError):
             cfg_path.unlink()
-        except OSError:
-            pass
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

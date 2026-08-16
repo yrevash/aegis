@@ -1,6 +1,7 @@
 """`/ops/*` endpoint wiring — the LLM-Ops control surface over the ASGI app (offline).
 
-Drives the real FastAPI routes with the shared TestClient + aiosqlite fixtures. The one
+Drives the real FastAPI routes with the shared TestClient + scratch-PostgreSQL
+fixtures. The one
 external dependency — ``app.core.llm.complete`` — is monkeypatched to a fake gateway that
 serves all three callers of the loop (the diagnose optimizer, the release generation, and
 the judge) with parseable JSON, so the whole surface runs with no network.

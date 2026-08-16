@@ -40,7 +40,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from .corpus import SEED_CASES
-from .harness import build_eval_retriever
+from .harness import EVAL_SCOPE, build_eval_retriever
 from .metrics import MetricConfig, aggregate, score_case
 
 #: A chat-completion callable (shape of a gateway ``complete``). When ``None`` (the
@@ -343,7 +343,7 @@ async def run_regression_gate(
     scores = []
     for case in SEED_CASES:
         retriever = build_eval_retriever()  # fresh cache per case (no cross-case hits)
-        result = await retriever.retrieve(case.query)
+        result = await retriever.retrieve(case.query, scope=EVAL_SCOPE)
         score = score_case(case, result, precision_k=1)
         scores.append(score)
         metric_results = [

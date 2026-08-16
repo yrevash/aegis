@@ -12,12 +12,15 @@ Each test here FAILS on the pre-fix code and passes after the fix:
 - M1 — ``GET /admin/budgets`` was unscoped.
 - M2 — ``GET /metrics`` was system-wide to any admin.
 
-RLS is the enforced boundary on Postgres; on the SQLite test DB these exercise the
-belt-and-suspenders app-level scoping that backs it.
+The suite runs on a real PostgreSQL served by a ``NOSUPERUSER NOBYPASSRLS`` role, so the
+``tenant_isolation`` row-security policies are enforced underneath the belt-and-suspenders
+app-level scoping these tests drive through the HTTP surface. On the former SQLite binding
+only the app-level half was ever exercised.
 """
 
 from __future__ import annotations
 
+import pgsupport
 import pytest
 
 from app.api.schemas import RiskLevel, Role
@@ -43,13 +46,12 @@ def _headers(role: str, *, tenant_id=None, user_id=None, username="admin") -> di
 
 async def _seed_two_tenants() -> None:
     async with get_sessionmaker()() as session:
-        session.add_all(
-            [
-                Tenant(id=1, name="Tenant A"),
-                Tenant(id=2, name="Tenant B"),
-                User(id=11, username="a-user", role=Role.CLIENT, tenant_id=1),
-                User(id=22, username="b-user", role=Role.CLIENT, tenant_id=2),
-            ]
+        await pgsupport.seed(
+            session,
+            Tenant(id=1, name="Tenant A"),
+            Tenant(id=2, name="Tenant B"),
+            User(id=11, username="a-user", role=Role.CLIENT, tenant_id=1),
+            User(id=22, username="b-user", role=Role.CLIENT, tenant_id=2),
         )
         await session.commit()
 
@@ -132,6 +134,11 @@ async def test_unknown_approval_still_idempotent_noop(client, db):
 
 
 async def test_audit_is_tenant_scoped(client, db):
+    # ``audit_log.tenant_id`` is a foreign key to ``tenants.id``, so the two tenants whose
+    # actions are recorded below have to exist. They always did in intent — SQLite simply
+    # never enforced the constraint, so the trail used to be attributed to tenants that
+    # were not in the database.
+    await _seed_two_tenants()
     await record_audit(
         action="tool.a", actor="a", model=None, trace_id=None, payload={}, tenant_id=1
     )

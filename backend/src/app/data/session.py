@@ -1,9 +1,32 @@
-"""Async engine, session factory and bootstrap for the Postgres store.
+"""Async engines, session factory and bootstrap for the Postgres store.
 
-The engine and session factory are created lazily and cached so that merely
-importing this module never opens a connection or requires the ``asyncpg`` driver
-to be installed — important because the unit tests run against an in-memory
-SQLite database (via :func:`configure_engine`) with no Postgres present.
+There are **two** engines, and the difference between them is a security boundary:
+
+- :func:`get_engine` — the **serving** engine, built from ``POSTGRES_DSN``. Every
+  request runs here, as a role that has neither ``SUPERUSER`` nor ``BYPASSRLS`` and so
+  is genuinely subject to the ``tenant_isolation`` policies.
+- :func:`get_admin_engine` — the **owner/DDL** engine, built from
+  ``POSTGRES_ADMIN_DSN``. ``create_all``, the additive schema reconciler, the RLS
+  bootstrap and the serving-role grants run here, and only here. Those steps must
+  bypass RLS (they own the tables); putting them on a separate connection is what makes
+  bypass a property of the *connection* rather than a rule request code is trusted to
+  remember.
+
+Why the split had to exist at all: Postgres skips row security **entirely** for a
+superuser or a ``BYPASSRLS`` role, and ``FORCE ROW LEVEL SECURITY`` only removes the
+table *owner's* exemption. Serving requests as ``postgres`` therefore left every policy
+installed, visible in ``pg_policies``, and enforced against nobody.
+:func:`verify_rls_enforcement` is the boot-time check that says so out loud when it
+happens again.
+
+With no ``POSTGRES_ADMIN_DSN`` set, the admin engine falls back to the serving DSN and a
+single-DSN developer install behaves exactly as before — reported, never assumed (see
+:func:`verify_rls_enforcement`).
+
+The engines and session factory are created lazily and cached so that merely importing
+this module never opens a connection or requires the ``asyncpg`` driver to be installed
+— important because the unit tests run against an in-memory SQLite database (via
+:func:`configure_engine`) with no Postgres present.
 
 Verified against: SQLAlchemy 2.0.x asyncio API (``create_async_engine`` +
 ``async_sessionmaker``), August 2026.
@@ -15,16 +38,24 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
+# ``set_tenant_scope`` now lives in ``aegis.governance.rls`` (the RLS seam); it is
+# re-exported here under its historical name so ``app.data.governance`` / the
+# orchestrator are unchanged, as is ``RlsBypassError`` so a host can catch it by name.
+from aegis.governance.rls import (
+    RlsBypassError,  # noqa: F401 - re-exported for importers
+    RlsEnforcement,
+    audit_rls_enforcement,
+    grant_serving_role,
+    report_rls_enforcement,
+    set_tenant_scope,  # noqa: F401 - re-exported for importers
+)
 from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
-
-# ``set_tenant_scope`` now lives in ``aegis.governance.rls`` (the RLS seam); re-export it
-# under its historical name so ``app.data.governance`` / the orchestrator are unchanged.
-from aegis.governance.rls import set_tenant_scope  # noqa: F401 - re-exported for importers
 from aegis.governance.schema import (
     SchemaDriftError,  # noqa: F401 - re-exported so a host can catch it by name
     reconcile_additive_columns,
 )
-from sqlalchemy import text
+from sqlalchemy import make_url, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -39,6 +70,7 @@ from .models import Base
 logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
+_admin_engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
@@ -119,11 +151,36 @@ def to_asyncpg_dsn(dsn: str) -> str:
 
 
 def get_engine() -> AsyncEngine:
-    """Return the process-wide async engine, creating it on first use."""
+    """Return the process-wide **serving** engine, creating it on first use.
+
+    Built from ``POSTGRES_DSN``, which must name a role with neither ``SUPERUSER`` nor
+    ``BYPASSRLS`` so the tenant RLS policies actually apply to it. Every request-path
+    session comes from here; DDL does not (see :func:`get_admin_engine`).
+    """
     global _engine
     if _engine is None:
         _engine = create_async_engine(to_asyncpg_dsn(get_settings().postgres_dsn))
     return _engine
+
+
+def get_admin_engine() -> AsyncEngine:
+    """Return the process-wide **owner/DDL** engine, creating it on first use.
+
+    Built from ``POSTGRES_ADMIN_DSN`` when set, and from ``POSTGRES_DSN`` when it is
+    not — see :attr:`app.config.Settings.admin_dsn` for why that fallback is safe to
+    keep and why it is never silent. This is the only engine that should run
+    ``create_all``, :func:`aegis.governance.schema.reconcile_additive_columns`,
+    :func:`bootstrap_rls` or :func:`aegis.governance.rls.grant_serving_role`: all four
+    need privileges the serving role must not have.
+
+    Returns:
+        The owner engine. It is a *separate* engine (and connection pool) from
+        :func:`get_engine` whenever the two DSNs differ, which is the point.
+    """
+    global _admin_engine
+    if _admin_engine is None:
+        _admin_engine = create_async_engine(to_asyncpg_dsn(get_settings().admin_dsn))
+    return _admin_engine
 
 
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
@@ -136,14 +193,25 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return _sessionmaker
 
 
-def configure_engine(engine: AsyncEngine) -> None:
+def configure_engine(
+    engine: AsyncEngine, *, admin_engine: AsyncEngine | None = None
+) -> None:
     """Install a pre-built engine (used by tests to bind an in-memory SQLite DB).
+
+    The admin/DDL engine defaults to the same object, because the caller that binds a
+    single engine wants one database: on SQLite there are no roles and nothing to
+    bypass, and a test that bound a serving engine only would otherwise have
+    ``bootstrap`` quietly create its tables in a *different* database (the configured
+    Postgres one) — the kind of split-brain that turns a green suite into a lie.
 
     Args:
         engine: An ``AsyncEngine`` to use for all subsequent sessions.
+        admin_engine: The engine to run DDL on. Defaults to ``engine``; pass a distinct
+            one only to exercise the owner/serving split itself.
     """
-    global _engine, _sessionmaker
+    global _engine, _admin_engine, _sessionmaker
     _engine = engine
+    _admin_engine = admin_engine or engine
     _sessionmaker = async_sessionmaker(
         engine, expire_on_commit=False, class_=AsyncSession
     )
@@ -163,9 +231,11 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 async def bootstrap_rls(engine: AsyncEngine | None = None) -> None:
     """Enable Row-Level Security + a per-tenant policy on the tenant-scoped tables.
 
-    Delegates to :func:`aegis.governance.rls.bootstrap_rls` (the RLS policy on
-    ``users`` / ``usage_ledger`` / ``approvals``). Postgres-only and idempotent; a
-    no-op on other dialects.
+    Delegates to :func:`aegis.governance.rls.bootstrap_rls`, which installs the policy
+    on every table registered in its ``_TENANT_SCOPED_TABLES`` — the governance tables,
+    the six memory tables, the two LLM-Ops tables and this host's ``approvals`` inbox —
+    and logs any live table with a ``tenant_id`` column that the registry has missed.
+    Postgres-only and idempotent; a no-op on other dialects.
 
     Note the policy's unset-scope behaviour, because it is the opposite of what this
     docstring used to claim: an unset, empty or non-numeric ``app.tenant_id`` makes the
@@ -176,9 +246,96 @@ async def bootstrap_rls(engine: AsyncEngine | None = None) -> None:
     :mod:`aegis.governance.rls` for the full reasoning.
 
     Args:
-        engine: Engine to configure; defaults to the process-wide engine.
+        engine: Engine to configure; defaults to the process-wide **owner/DDL** engine,
+            since ``ALTER TABLE``/``CREATE POLICY`` require ownership of the tables and
+            the serving role deliberately owns nothing.
     """
-    await _aegis_bootstrap_rls(engine or get_engine())
+    await _aegis_bootstrap_rls(engine or get_admin_engine())
+
+
+def serving_role_name() -> str | None:
+    """Return the role in ``POSTGRES_DSN``, or ``None`` when there is no split.
+
+    ``None`` means "nothing to grant to": either the DSN carries no username (SQLite in
+    tests), or the serving and owner DSNs name the same role, in which case that role
+    owns the tables and already holds every privilege. It is *not* a healthy state —
+    it is the state :func:`verify_rls_enforcement` reports on — but it is not a grant
+    problem.
+
+    Returns:
+        The serving role's name when it differs from the owner's, else ``None``.
+    """
+    settings = get_settings()
+    serving = make_url(settings.postgres_dsn).username
+    owner = make_url(settings.admin_dsn).username
+    if not serving or serving == owner:
+        return None
+    return serving
+
+
+async def verify_rls_enforcement(*, fatal: bool | None = None) -> RlsEnforcement | None:
+    """Check at boot that the serving role is actually subject to the RLS policies.
+
+    Asks the database (:func:`aegis.governance.rls.audit_rls_enforcement`) whether
+    ``current_user`` on the **serving** engine holds ``SUPERUSER`` or ``BYPASSRLS``. If
+    it does, Postgres skips row security for it and all thirteen ``tenant_isolation``
+    policies are decorative — the exact condition this platform shipped with, and the
+    reason this check exists rather than a comment saying "remember not to".
+
+    **Why it is fatal outside dev.** ``fatal`` defaults to "not a dev environment",
+    mirroring :meth:`app.config.Settings.ensure_secure_secrets`: a developer pointed at
+    a local database as ``postgres`` gets a loud ERROR and keeps working, while a real
+    deployment refuses to boot rather than serve tenants with its isolation control
+    silently off. The asymmetry is deliberate — a check that blocks the dev loop gets
+    disabled, and a warning that a production deployment scrolls past protects nobody.
+
+    Only *connection* failures are caught here, and only to distinguish them from the
+    verdict: an unreachable database is a fact about the network, and the platform is
+    documented to start without one (lite mode). The bypass verdict itself is never
+    inside a ``try`` — the previous diagnostic in this area was wrapped in a broad
+    ``except`` and could not fire, which is why it never reported the thing it existed
+    to catch.
+
+    Args:
+        fatal: Override the environment-derived posture. ``True`` raises on a bypassing
+            role, ``False`` only logs; ``None`` (the default) means "fatal unless
+            ``APP_ENV`` is dev".
+
+    Returns:
+        The :class:`~aegis.governance.rls.RlsEnforcement` verdict, or ``None`` when the
+        probe could not be run (non-Postgres dialect, or the database was unreachable).
+
+    Raises:
+        RlsBypassError: When the check is fatal and the serving role bypasses RLS.
+    """
+    settings = get_settings()
+    engine = get_engine()
+    if engine.dialect.name != "postgresql":
+        return None
+    try:
+        enforcement = await audit_rls_enforcement(engine)
+    except (SQLAlchemyError, OSError):
+        # Unreachable/unauthenticated database. Deliberately narrow: this branch must
+        # never be able to swallow the bypass verdict, which is produced *after* it.
+        logger.warning(
+            "Could not verify RLS enforcement: the serving database is unreachable. "
+            "Tenant isolation is UNVERIFIED for this boot.",
+            exc_info=True,
+        )
+        return None
+    if serving_role_name() is None:
+        logger.warning(
+            "No owner/serving role split: POSTGRES_ADMIN_DSN is unset or names the same "
+            "role as POSTGRES_DSN, so DDL and request serving share one connection (%s). "
+            "The split is what keeps RLS bypass out of the request path — run "
+            "scripts/db-roles.sh (or scripts\\db-roles.ps1); see "
+            "docs/operations/runbook.md § Database roles.",
+            enforcement.role or "unknown role",
+        )
+    if fatal is None:
+        fatal = not settings.is_dev
+    report_rls_enforcement(enforcement, fatal=fatal)
+    return enforcement
 
 
 async def _align_timestamp_columns(
@@ -258,17 +415,26 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     2. :func:`_align_timestamp_columns` — convert any timestamp column left naive by
        an earlier bootstrap to ``timestamptz``.
 
-    Then the tenant Row-Level Security policies are installed (a no-op elsewhere).
+    Then the serving role is granted DML on whatever ``create_all`` just made
+    (:func:`aegis.governance.rls.grant_serving_role`), and the tenant Row-Level Security
+    policies are installed (both no-ops elsewhere). The grant belongs here for the same
+    reason step 1 does: a table added on this boot is a table the serving role has no
+    privileges on, and that failure would otherwise surface as a ``permission denied``
+    500 inside a request instead of at startup.
+
+    **This runs on the owner/DDL engine**, not the serving one — every step above needs
+    ownership, and the serving role deliberately has none of it.
 
     Args:
-        engine: Engine to bootstrap; defaults to the process-wide engine.
+        engine: Engine to bootstrap; defaults to the process-wide **owner/DDL** engine
+            (:func:`get_admin_engine`).
 
     Raises:
         SchemaDriftError: If a live table is missing a column that cannot be added
             additively. This is deliberately fatal — see
             :func:`aegis.governance.schema.reconcile_additive_columns`.
     """
-    engine = engine or get_engine()
+    engine = engine or get_admin_engine()
     # Import the memory + governance models so their tables register on the aegis data
     # metadata before create_all. They live in ``aegis.memory.stores`` /
     # ``aegis.governance.models`` (re-exported by the ``app.memory.stores`` /
@@ -286,4 +452,7 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
         await conn.run_sync(AegisBase.metadata.create_all)
         await reconcile_additive_columns(conn, metadatas)
         await _align_timestamp_columns(conn, metadatas)
+    serving_role = serving_role_name()
+    if serving_role is not None:
+        await grant_serving_role(engine, serving_role)
     await bootstrap_rls(engine)

@@ -3,8 +3,13 @@
 Whisper bills per minute of audio and a vision call may be billed per image, so a
 ledger that only knows ``prompt_tokens``/``completion_tokens`` would write
 ``$0.00`` for every such call — and a tenant with a USD cap could transcribe
-without limit. These run against the in-memory aiosqlite database bound by the
+without limit. These run against the private PostgreSQL database bound by the
 ``db`` fixture: no host, no network.
+
+Ledger rows name a real tenant and a real user (both are foreign keys), and every budget
+carries its owning ``tenant_id`` — without it the tenant policy hides the cap from the
+tenant it caps, and a "the cap bites" test passes only because there is nothing left to
+bite. See the module docstring of ``test_enforcement.py``.
 """
 
 from __future__ import annotations
@@ -23,12 +28,7 @@ from aegis.governance import (
     usage_rollup,
 )
 
-
-async def _seed(db, *rows):
-    async with db() as session:
-        for row in rows:
-            session.add(row)
-        await session.commit()
+from .._seed import ensure_users, seed
 
 
 async def _rows(db, tenant_id=1):
@@ -42,6 +42,7 @@ async def _rows(db, tenant_id=1):
 
 async def test_record_usage_persists_audio_seconds(db):
     """A 2-minute transcription is a real, attributable row — not a $0.00 blank."""
+    await ensure_users(db, u2=1)
     await record_usage(
         tenant_id=1,
         user_id=2,
@@ -60,6 +61,7 @@ async def test_record_usage_persists_audio_seconds(db):
 
 
 async def test_record_usage_persists_image_counts(db):
+    await ensure_users(db, u2=1)
     await record_usage(
         tenant_id=1,
         user_id=2,
@@ -77,6 +79,7 @@ async def test_record_usage_persists_image_counts(db):
 
 async def test_token_only_record_usage_is_unchanged(db):
     """Existing call sites pass no units and must behave exactly as before."""
+    await ensure_users(db, u2=1)
     await record_usage(
         tenant_id=1,
         user_id=2,
@@ -97,9 +100,10 @@ async def test_a_usd_cap_bites_on_audio_only_spend(db):
     The row carries zero tokens, so only the USD cap can see it — and it does,
     because the ledgered cost is the audio charge rather than a token product.
     """
-    await _seed(
+    await seed(
         db,
         Budget(
+            tenant_id=1,
             scope_type=BudgetScope.TENANT,
             scope_id=1,
             window=BudgetWindow.DAY,
@@ -121,9 +125,9 @@ async def test_a_usd_cap_bites_on_audio_only_spend(db):
 
 async def test_a_token_cap_ignores_audio_seconds(db):
     """An audio minute is not a token — the token cap must not pretend otherwise."""
-    await _seed(
+    await seed(
         db,
-        Budget(scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
+        Budget(tenant_id=1, scope_type=BudgetScope.TENANT, scope_id=1, token_cap=100),
         UsageLedger(tenant_id=1, prompt_tokens=0, audio_seconds=99_999.0, cost_usd=10.0),
     )
     # No token cap breach: the tenant has consumed zero tokens.
@@ -132,7 +136,7 @@ async def test_a_token_cap_ignores_audio_seconds(db):
 
 async def test_usage_rollup_includes_audio_spend(db):
     """The dashboard's cost total sees per-minute spend like any other spend."""
-    await _seed(
+    await seed(
         db,
         UsageLedger(
             tenant_id=1, model="genailab-maas-whisper", audio_seconds=60.0, cost_usd=0.006

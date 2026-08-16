@@ -15,9 +15,12 @@ from types import SimpleNamespace
 
 from app.retrieval.lightrag_backend import LightRAGBackend
 from app.retrieval.models import Chunk
-from app.retrieval.pipeline import RetrievalConfig, Retriever
+from app.retrieval.pipeline import RetrievalConfig, RetrievalScope, Retriever
 
 from .conftest import FakeRedis, RecordingComplete, SequenceEmbed
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 
 class FakeGraphStore:
@@ -137,7 +140,8 @@ async def test_ingest_report_carries_real_counts_through_pipeline():
     )
 
     report = await retriever.ingest(
-        [{"id": "kb", "text": "The Amazon river discharges more water than any other river."}]
+        [{"id": "kb", "text": "The Amazon river discharges more water than any other river."}],
+        scope=_SCOPE,
     )
 
     assert report.chunks_written >= 1

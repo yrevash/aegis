@@ -1,4 +1,4 @@
-"""Durable park + async-resume tests for the orchestrator (fakes + SQLite only).
+"""Durable park + async-resume tests for the orchestrator (faked services, real database).
 
 These prove the production HITL path: a gated run parks (worker returns) as a
 persisted PENDING row + checkpoint, an admin resolves it out-of-band through the

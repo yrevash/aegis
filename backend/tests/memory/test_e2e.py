@@ -1,6 +1,7 @@
 """End-to-end memory tests — the full write→consolidate→recall loop + the read API.
 
-Two halves, both offline (a SQLite DB + scripted fake ``complete``/``embed``; no network):
+Two halves, both offline (the shared PostgreSQL ``db`` fixture + scripted fake
+``complete``/``embed``; no network):
 
 1. **Multi-turn loop** (module functions directly, per ``docs/architecture/memory-spec.md`` §D):
 turn 1
@@ -22,14 +23,11 @@ import json
 from dataclasses import dataclass
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapter.memory_spec import FACT_EXTRACTION_PROMPT
 from app.core.security import MEMBER, PLATFORM_ADMIN, TENANT_ADMIN, create_access_token
 from app.data import AuditLog, get_sessionmaker
-from app.data.session import bootstrap, configure_engine
 from app.memory.config import MemoryConfig
 from app.memory.consolidate import enqueue_consolidation, sweep_pending
 from app.memory.stores import (
@@ -94,16 +92,6 @@ class FakeEmbed:
 # --------------------------------------------------------------------------- fixtures
 
 
-@pytest_asyncio.fixture
-async def mem_db(tmp_path) -> async_sessionmaker:
-    """A dedicated SQLite memory DB (own file) for the module-level loop test."""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'e2e.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
-
-
 async def _add_turn(session, *, subject, session_id, turn, user_text, assistant_text):
     """Persist one raw (user, assistant) turn pair, reusing the query embedding."""
     session.add(
@@ -133,7 +121,7 @@ async def _add_turn(session, *, subject, session_id, turn, user_text, assistant_
 # --------------------------------------------------------------------------- the loop
 
 
-async def test_multi_turn_write_consolidate_recall(mem_db):
+async def test_multi_turn_write_consolidate_recall(db):
     """Turn 1 learns a durable fact via the queue; turn 2 recalls it into working memory."""
     cfg = MemoryConfig()
     subject, session_id = "user:1", "sess-e2e"
@@ -158,8 +146,14 @@ async def test_multi_turn_write_consolidate_recall(mem_db):
     fake_embed = FakeEmbed()
 
     # ── Turn 1: persist the raw turns and ENQUEUE a durable consolidation job ────────
-    async with mem_db() as s:
+    async with db() as s:
         s.add(MemorySession(id=session_id, subject_id=subject))
+        # Flush the parent before its children: ``memory_message`` and
+        # ``memory_consolidation_job`` carry a real FK to ``memory_session``, and
+        # nothing declares an ORM relationship to order the INSERTs — so the write
+        # path flushes the session first (see ``app.agent.deps``). SQLite never
+        # enforced the constraint, so this ordering used not to matter here.
+        await s.flush()
         await _add_turn(
             s,
             subject=subject,
@@ -172,7 +166,7 @@ async def test_multi_turn_write_consolidate_recall(mem_db):
         await enqueue_consolidation(s, subject_id=subject, session_id=session_id)
 
     # A durable PENDING job now exists — the honest backstop (not a lost bg task).
-    async with mem_db() as s:
+    async with db() as s:
         pending = (
             await s.execute(
                 select(func.count())
@@ -183,14 +177,14 @@ async def test_multi_turn_write_consolidate_recall(mem_db):
         assert pending == 1
 
     # ── Drain the durable queue → consolidation distils the bitemporal fact ──────────
-    async with mem_db() as s:
+    async with db() as s:
         processed = await sweep_pending(
             s, config=cfg, complete=fake_complete, embed=fake_embed, limit=10
         )
         assert processed == 1
 
     # The fact was LEARNED in turn 1: exactly one currently-valid fact, and the job DONE.
-    async with mem_db() as s:
+    async with db() as s:
         facts = (
             await s.execute(
                 select(MemoryFact).where(
@@ -217,7 +211,7 @@ async def test_multi_turn_write_consolidate_recall(mem_db):
         learned_id = learned.id
 
     # ── Turn 2: a new query recalls that durable fact into the working-memory block ──
-    async with mem_db() as s:
+    async with db() as s:
         await _add_turn(
             s,
             subject=subject,
@@ -376,6 +370,7 @@ async def test_forget_hard_erases_and_audits(client, db):
     # Seed a session + message for subject A so erasure spans every tier.
     async with get_sessionmaker()() as s:
         s.add(MemorySession(id="s-a", subject_id="user:11", tenant_id=1))
+        await s.flush()
         s.add(
             MemoryMessage(
                 subject_id="user:11",

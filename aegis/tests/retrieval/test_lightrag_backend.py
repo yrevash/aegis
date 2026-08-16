@@ -13,11 +13,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from types import SimpleNamespace
 
+import pytest
+
 from aegis.retrieval.lightrag_backend import LightRAGBackend
 from aegis.retrieval.models import Chunk
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
+from aegis.retrieval.types import RetrievalScope
 
 from .conftest import FakeRedis, RecordingComplete, SequenceEmbed
+
+#: The unscoped (no tenant) partition these tests run under.
+_SCOPE = RetrievalScope(tenant_id=None)
 
 
 class FakeGraphStore:
@@ -53,7 +59,13 @@ class FakeRag:
         ids: Sequence[str] | None = None,
         file_paths: Sequence[str] | None = None,
     ) -> None:
-        self.inserts.append({"texts": list(texts), "ids": list(ids or [])})
+        self.inserts.append(
+            {
+                "texts": list(texts),
+                "ids": list(ids or []),
+                "file_paths": list(file_paths or []),
+            }
+        )
         if self.chunk_entity_relation_graph is None:
             return
         graph = self.chunk_entity_relation_graph
@@ -122,6 +134,87 @@ async def test_ingest_empty_is_noop_zero():
     assert not rag.inserts  # nothing inserted for an empty batch
 
 
+class QueryingRag(FakeRag):
+    """A fake LightRAG that answers ``aquery`` with canned chunk rows.
+
+    Mirrors the shape recent LightRAG returns for ``only_need_context=True``: a
+    ``QueryContextResult`` carrying ``.context`` plus ``.raw_data["data"]["chunks"]``,
+    each chunk with the ``file_path`` the backend wrote at ingest.
+    """
+
+    def __init__(self, chunks: list[dict]) -> None:
+        super().__init__()
+        self._chunks = chunks
+
+    async def aquery(self, query: str, param: object = None) -> object:
+        return SimpleNamespace(
+            context="blended context",
+            raw_data={"data": {"chunks": self._chunks}},
+        )
+
+
+async def test_ingest_tags_the_owning_tenant_into_the_stored_file_path():
+    """LightRAG round-trips ``file_path`` and nothing else, so the tenant rides in it."""
+    rag = FakeRag(graph=FakeGraphStore())
+    backend = _backend(rag)
+    await backend.ingest_chunks(
+        [
+            Chunk(
+                id="c0",
+                doc_id="d",
+                ordinal=0,
+                text="t",
+                metadata={"source": "handbook.md", "tenant_id": "t7"},
+            ),
+            Chunk(id="c1", doc_id="d", ordinal=1, text="t", metadata={"source": "public.md"}),
+        ]
+    )
+    assert rag.inserts[0]["file_paths"] == ["t7::handbook.md", "public.md"]
+
+
+async def test_recall_drops_another_tenants_rows_and_restores_the_clean_source():
+    rag = QueryingRag(
+        [
+            {"id": "a", "content": "acme secret", "file_path": "t1::acme.md"},
+            {"id": "b", "content": "globex secret", "file_path": "t2::globex.md"},
+            {"id": "s", "content": "shared handbook", "file_path": "handbook.md"},
+        ]
+    )
+    recall = await _backend(rag).recall("q", top_k=5, scope=RetrievalScope(tenant_id=1))
+
+    assert [c.id for c in recall.candidates] == ["a", "s"]
+    # The tag is stripped back off, so citations read exactly as they did before.
+    assert [c.metadata["file_path"] for c in recall.candidates] == ["acme.md", "handbook.md"]
+
+
+async def test_unscoped_recall_sees_only_untagged_rows():
+    """A null tenant reads the shared corpus, never every tenant's."""
+    rag = QueryingRag(
+        [
+            {"id": "a", "content": "acme secret", "file_path": "t1::acme.md"},
+            {"id": "s", "content": "shared handbook", "file_path": "handbook.md"},
+        ]
+    )
+    recall = await _backend(rag).recall("q", top_k=5, scope=_SCOPE)
+    assert [c.id for c in recall.candidates] == ["s"]
+
+
+async def test_unattributable_blended_context_is_refused_for_a_tenant():
+    """A row with no per-chunk path cannot be shown to belong to this tenant → fail loud.
+
+    Dropping it silently would hide a store that cannot be scoped; serving it is the
+    leak. Only the tenant-scoped case raises — an unscoped run has no boundary to cross.
+    """
+    rag = QueryingRag([])  # no structured chunks → LightRAG's whole-context fallback
+    backend = _backend(rag)
+
+    with pytest.raises(RuntimeError, match="unattributable"):
+        await backend.recall("q", top_k=5, scope=RetrievalScope(tenant_id=1))
+
+    unscoped = await backend.recall("q", top_k=5, scope=_SCOPE)
+    assert [c.id for c in unscoped.candidates] == ["context"]
+
+
 async def test_ingest_report_carries_real_counts_through_pipeline():
     # End-to-end: the measured counts reach IngestReport instead of a hardcoded zero.
     from aegis.retrieval.cache import SemanticCache
@@ -137,7 +230,8 @@ async def test_ingest_report_carries_real_counts_through_pipeline():
     )
 
     report = await retriever.ingest(
-        [{"id": "kb", "text": "The Amazon river discharges more water than any other river."}]
+        [{"id": "kb", "text": "The Amazon river discharges more water than any other river."}],
+        scope=_SCOPE,
     )
 
     assert report.chunks_written >= 1

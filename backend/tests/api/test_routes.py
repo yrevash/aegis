@@ -1,7 +1,8 @@
-"""Endpoint + RBAC tests for the API surface (fakes only, no live infra).
+"""Endpoint + RBAC tests for the API surface (faked services, real database).
 
 The agent capabilities and ML predictor are overridden with fakes; the audit log
-runs against an in-memory aiosqlite database bound by the ``db`` fixture.
+runs against the scratch PostgreSQL database bound by the ``db`` fixture, served by a
+``NOSUPERUSER NOBYPASSRLS`` role so the tenant policies genuinely apply.
 """
 
 from __future__ import annotations

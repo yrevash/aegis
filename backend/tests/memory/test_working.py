@@ -2,7 +2,7 @@
 
 These exercise the pure :func:`build_working_text` (no DB) so the budget/ordering logic
 is verified deterministically, plus one end-to-end pass through
-:func:`assemble_working_memory` over SQLite.
+:func:`assemble_working_memory` over the real PostgreSQL database.
 """
 
 from __future__ import annotations
@@ -10,10 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.memory.config import MemoryConfig
 from app.memory.recall import RecallBundle
 from app.memory.scoring import RecallCandidate
@@ -146,21 +143,18 @@ def test_budget_forces_eviction_of_raw_turns():
     assert len(assembled.recalled_message_ids) < len(raw_turns)
 
 
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mem.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    yield get_sessionmaker()
-    await engine.dispose()
-
-
 @pytest.mark.asyncio
 async def test_assemble_end_to_end(db):
     """Full recall → assemble path returns a budgeted block with recorded ids."""
     cfg = MemoryConfig()
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1", summary="Prior billing dispute."))
+        # Flush the parent before its children: ``memory_message`` and
+        # ``memory_consolidation_job`` carry a real FK to ``memory_session``, and
+        # nothing declares an ORM relationship to order the INSERTs — so the write
+        # path flushes the session first (see ``app.agent.deps``). SQLite never
+        # enforced the constraint, so this ordering used not to matter here.
+        await s.flush()
         s.add(
             MemoryMessage(
                 subject_id="user:1",

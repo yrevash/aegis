@@ -13,14 +13,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapter import DEFAULT_PERSONA_ID
 from app.core.models import ModelRole
 from app.data.models import EvalResult, PromptStatus, PromptVersion
-from app.data.session import bootstrap, configure_engine, get_sessionmaker
 from app.ops import diagnose as diag
 from app.ops import registry
 
@@ -28,16 +25,8 @@ pytestmark = pytest.mark.asyncio
 
 PK = DEFAULT_PERSONA_ID
 
-
-@pytest_asyncio.fixture
-async def db(tmp_path) -> async_sessionmaker:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'diag.db'}")
-    configure_engine(engine)
-    await bootstrap(engine)
-    registry.clear_cache()
-    yield get_sessionmaker()
-    registry.clear_cache()
-    await engine.dispose()
+# ``db`` is the shared scratch-PostgreSQL fixture from ``tests/conftest.py``; it already
+# binds the engines and clears the active-prompt cache around each test.
 
 
 @dataclass

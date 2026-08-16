@@ -19,14 +19,13 @@ import warnings
 
 import numpy as np
 
-from app.ml import train
 # Import the HOST artifact path from ``app.ml``, never from ``app.ml.model``.
 # ``app.ml.model`` is a thin shim that re-exports ``aegis.ml.model``'s constant,
 # which resolves INSIDE the installed aegis package. Training through that path
 # wrote the artifact to the library directory while ``app.ml.get_model()`` loads
 # from the host directory — so training appeared to succeed and the endpoints
 # still answered 503, with the two paths differing by a directory nobody looks at.
-from app.ml import DEFAULT_ARTIFACT_PATH
+from app.ml import DEFAULT_ARTIFACT_PATH, train
 from app.ml.spec import resolve_spec
 
 

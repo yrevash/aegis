@@ -59,7 +59,9 @@ from aegis.core.types import GuardStage, GuardVerdict, RiskLevel, RunStatus
 from aegis.ml.types import MLExplainResponse
 from aegis.observability import SpanKind, semconv, set_span_attributes, span
 from aegis.retrieval.agentic import agentic_retrieve
+from aegis.retrieval.corpus import corpus_version
 from aegis.retrieval.query_rewrite import CallUsage, rewrite_query
+from aegis.retrieval.types import RetrievalScope
 
 from . import events
 from .deps import (
@@ -360,15 +362,47 @@ def build_agent(
         """Return the persona id for ``state`` (falling back to the configured default)."""
         return state.get("persona") or config.default_persona_id
 
+    def _retrieval_scope(state: AgentState) -> RetrievalScope:
+        """Build the retrieval scope for ``state`` from the request's tenant + persona.
+
+        This is the single place the graph turns "who is asking" into the value object
+        the retrieval path requires. The tenant comes from the same
+        ``deps.current_tenant_id()`` the answer cache has always used — the isolation was
+        already available here; it just was not being passed on.
+        """
+        tenant = deps.current_tenant_id()
+        return RetrievalScope(
+            tenant_id=tenant,
+            persona=state.get("persona"),
+            corpus_version=corpus_version(tenant),
+        )
+
     def _cache_scope(state: AgentState) -> str:
-        """Build the answer-cache partition key from tenant + persona + routed role.
+        """Build the answer-cache partition key from tenant + persona + role + corpus.
 
         Folding tenant, persona and specialist role into one opaque scope guarantees a
         cached answer can never be served across tenants/personas/roles (a correctness +
         isolation requirement, not an optimisation).
+
+        Two deliberate differences from the *retrieval* cache's
+        :meth:`~aegis.retrieval.types.RetrievalScope.partition_key`, rather than
+        accidental drift:
+
+        * The routed specialist role is in **this** key only. Two specialists asked the
+          same question produce different *answers* from the same retrieved passages, so
+          the role partitions answers and would only fragment retrieval pointlessly.
+        * This key is a readable colon-joined string because it is the host's opaque
+          scope argument, not a Redis key segment; the retrieval cache digests its
+          partition because a persona would otherwise put arbitrary bytes into a key.
+
+        Everything that must match — the tenant and the corpus version — is derived from
+        the same sources, so an ingest invalidates both caches for that tenant together.
         """
         tenant = deps.current_tenant_id()
-        return f"{tenant}:{state.get('persona', '')}:{state.get('agent_role', '')}"
+        return (
+            f"{tenant}:{state.get('persona', '')}:{state.get('agent_role', '')}"
+            f":c{corpus_version(tenant)}"
+        )
 
     async def guard_input(state: AgentState) -> dict[str, Any]:
         """Input rail: block/redact before anything reaches the model."""
@@ -519,6 +553,9 @@ def build_agent(
         """
         writer = get_stream_writer()
         writer(events.retrieval("started"))
+        # The tenant boundary for every retrieval this node performs, built once so the
+        # single-shot, rewrite and agentic branches provably share one scope.
+        scope = _retrieval_scope(state)
         # Rewriter history: prefer the REAL conversation transcript recalled by
         # ``recall_memory`` (the node immediately upstream). ``messages`` is only a
         # per-planning-round scratch buffer written by ``plan`` — which runs after this
@@ -543,7 +580,7 @@ def build_agent(
                 rewrite_fn=rewrite_fn,
                 history=history,
                 max_rounds=config.agentic_retrieval_max_rounds,
-                persona=state.get("persona"),
+                scope=scope,
             )
             result = agentic.result
             rounds = [
@@ -562,12 +599,12 @@ def build_agent(
                 state["query"], history=history, complete=deps.complete
             )
             rewritten_query = rw.rewritten if rw.changed else state["query"]
-            result = await deps.retrieve(rewritten_query, persona=state.get("persona"))
+            result = await deps.retrieve(rewritten_query, scope=scope)
             rounds = []
             retrieval_usage = rw.usage
         else:
             rewritten_query = state["query"]
-            result = await deps.retrieve(state["query"], persona=state.get("persona"))
+            result = await deps.retrieve(state["query"], scope=scope)
             rounds = []
             retrieval_usage = CallUsage()  # no internal model call on the plain path
         # Stamp the RETRIEVER node span (opened by ``_timed``) with the query and the

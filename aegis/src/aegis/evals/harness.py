@@ -23,6 +23,7 @@ from aegis.gateway import LLMResult, Usage
 from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.memory import InMemoryKnowledgeBackend, InMemoryRedis, _local_embed
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
+from aegis.retrieval.types import RetrievalScope
 
 from .corpus import SEED_CASES, EvalCase, corpus_chunks
 from .judge import JudgeSummary, JudgeVerdict, judge_answer, summarize_verdicts
@@ -261,6 +262,16 @@ async def _fake_embed(texts: list[str]) -> list[list[float]]:
     return [_local_embed(text) for text in texts]
 
 
+#: The scope every offline eval retrieval runs under.
+#:
+#: The eval corpus belongs to no tenant — it is fixture knowledge bundled with the
+#: harness — so the honest scope is the shared/unscoped one. It is written out as a
+#: named constant rather than passed inline at each call site so that "the evals are
+#: deliberately unscoped" is a stated fact one can grep for, not an omission that looks
+#: like the bug this parameter exists to prevent.
+EVAL_SCOPE = RetrievalScope(tenant_id=None)
+
+
 def build_eval_retriever() -> Retriever:
     """Build the offline hybrid retriever over the seed corpus.
 
@@ -313,7 +324,7 @@ async def evaluate(
     for case in cases:
         # A fresh cache per case so an earlier query can never semantic-hit a later one.
         retriever = build_eval_retriever()
-        result = await retriever.retrieve(case.query)
+        result = await retriever.retrieve(case.query, scope=EVAL_SCOPE)
         scores.append(score_case(case, result, precision_k=thresholds.precision_k))
         if complete is not None:
             # Model-graded pass. The judge must grade a *generated answer* against the

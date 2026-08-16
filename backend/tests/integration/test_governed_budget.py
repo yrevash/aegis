@@ -16,6 +16,7 @@ import sys
 from types import SimpleNamespace
 
 import aegis.gateway.llm as llm_mod
+import pgsupport
 import pytest
 from sqlalchemy import select
 
@@ -39,26 +40,33 @@ pytestmark = pytest.mark.asyncio
 async def _seed_over_budget_tenant() -> None:
     """Seed tenant 1 with a user, a day token cap of 100, and 150 tokens already spent."""
     async with get_sessionmaker()() as session:
-        session.add_all(
-            [
-                Tenant(id=1, name="Acme"),
-                User(
-                    id=11,
-                    username="alice",
-                    tenant_id=1,
-                    password_hash=hash_password("secret"),
-                    is_active=True,
-                ),
-                Budget(
-                    scope_type=BudgetScope.TENANT,
-                    scope_id=1,
-                    window=BudgetWindow.DAY,
-                    token_cap=100,
-                ),
-                UsageLedger(
-                    tenant_id=1, user_id=11, prompt_tokens=100, completion_tokens=50
-                ),
-            ]
+        await pgsupport.seed(
+            session,
+            Tenant(id=1, name="Acme"),
+            User(
+                id=11,
+                username="alice",
+                tenant_id=1,
+                password_hash=hash_password("secret"),
+                is_active=True,
+            ),
+            # ``tenant_id`` is the owner stamp RLS filters on, and for a tenant-scoped
+            # cap it equals ``scope_id`` — which is exactly what the production writer
+            # (``governance.enforcement.upsert_budget``) records. Leaving it NULL used to
+            # be survivable only because RLS was inert on SQLite: under the real
+            # ``tenant_isolation`` policy a NULL-owner row is invisible to a session
+            # scoped to tenant 1, so the cap would silently fail to bind and this test
+            # would prove the opposite of what it claims.
+            Budget(
+                tenant_id=1,
+                scope_type=BudgetScope.TENANT,
+                scope_id=1,
+                window=BudgetWindow.DAY,
+                token_cap=100,
+            ),
+            UsageLedger(
+                tenant_id=1, user_id=11, prompt_tokens=100, completion_tokens=50
+            ),
         )
         await session.commit()
 
