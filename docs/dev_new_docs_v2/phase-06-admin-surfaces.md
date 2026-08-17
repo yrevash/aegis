@@ -208,3 +208,34 @@ mirrors, with a test per report proving a tenant-admin's CSV contains only its o
 
 **One day is one day.** 6.1 and 6.2 are firm. 6.3 and 6.4 are the estimates at risk, and they
 are the two the cut order already names as droppable.
+
+---
+
+## Blocker found 2026-08-17 — read before starting this phase
+
+Two findings from `plans/06-dashboards-control.md`, both verified in source, change what this
+phase can ship.
+
+**6.2 as written is not shippable.** It moves approval ownership to the tenant admin — but
+**there is no approvals inbox screen**. `ApprovalCard` is mounted only inside `SimulationView`
+and `MoneyShotConsole`. Moving ownership to a screen that does not exist relocates the
+capability into nowhere. The inbox screen is a prerequisite, not a follow-up.
+
+**The tenant admin has no portal at all.** `ROLES` carries four coarse values and
+`LoginResponse` never sends `fine_role`, so **the browser cannot distinguish platform admin
+from tenant admin.** Every per-tenant control this phase and `plans/06` describe depends on
+that distinction reaching the client. `fine_role` on the wire is the smallest change that
+unblocks the most rows.
+
+**And the client cannot reach the console.** `ROLE_SECTIONS.client` is
+`['dashboard', 'savings', 'forecast', 'risk', 'simulation']` — no `console` entry. The role the
+product exists for cannot ask a question. This is a one-line fix with a larger implication:
+nothing tests that every role can reach the surfaces it is supposed to have.
+
+**Prerequisite ordering for this phase:** console on the client and admin portals → `fine_role`
+on the wire → the approvals inbox screen → then everything 6.1–6.4 already describes.
+
+**Also required, and currently absent:** a two-tenant seed. Measured against live `taif`,
+`users`, `tenants`, `budgets`, `prompt_versions` and `usage_ledger` all hold **zero rows**;
+every login today falls back to `_DEMO_USERS`. Nothing "per-tenant" has ever run with a real
+tenant, so none of the isolation these screens display has been exercised end to end.

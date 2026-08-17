@@ -233,6 +233,30 @@ us a document — stalls for a minute with no explanation.
 machine running Postgres, Neo4j and Memurai, that is worth measuring rather than assuming;
 the task includes doing so.
 
+### D4b — `chunks` needs `tenant_id` BEFORE the BM25 arm lands
+
+**Verified against the live database, 2026-08-17.** `chunks` columns are
+`id, embedding, meta, doc_id, persona, content`. **There is no `tenant_id`.**
+
+It is therefore not one of the 13 tenant-scoped tables Phase 1 registered, and it carries no
+RLS policy — its isolation today is the vector-store namespace plus the `meta` payload.
+
+**Why this blocks D5:** the corpus-wide keyword arm queries `chunks` directly through Postgres
+FTS. With no `tenant_id` column there is no predicate to filter on, so a lexical hit could
+return another tenant's passage — **re-opening precisely the leak Phase 1 closed**, through a
+path Phase 1 never covered because the arm did not exist yet.
+
+**The work, and it is not optional:**
+
+- Add `tenant_id` to `chunks`, backfilled from the owning document.
+- Register it in `_TENANT_SCOPED_TABLES` so the boot-time catalog read-back covers it.
+- The FTS query carries the tenant predicate on the same row — which was the argument for
+  Postgres FTS in D5 in the first place.
+- Extend the live isolation test to assert a lexical hit cannot cross tenants.
+
+**Sequencing: this lands in the same change as D5, or D5 does not land.** Shipping the keyword
+arm first and the column second means shipping a known cross-tenant path.
+
 ### D5 — Connect the corpus-wide BM25 arm
 
 Implement `keyword_recall` on `LightRAGBackend`, backed by **Postgres full-text search**.
