@@ -100,6 +100,42 @@ model-call cost. Adding document identity and date takes Context@5 from **33.3% 
 
 This is the section to argue with. Nothing here is "because the laptop is small."
 
+### One rule that decides most of this
+
+**Ingest is cheap. Queries are not.**
+
+| | Ingest-time | Query-time |
+|---|---|---|
+| Happens | Once per document, in a worker | Every question |
+| Who waits | Nobody | A person |
+| Budget | Hours are fine | Sub-second |
+
+The user's ruling: *"chunking is one time thing… if it takes an hour more but quality improves
+then it's ok."* So we buy quality at ingest and we measure latency at query time.
+
+That is the whole framework. It settles TableFormer (ACCURATE), and it is why the reranker —
+which sits on the query clock — is the one place we benchmark rather than assume.
+
+### What we are deliberately NOT adding
+
+The evidence is unusually clear that the wins come from **having three components**, not from
+elaborating around them:
+
+- **RAGSmith:** exhaustive optimisation of the entire advanced-RAG space buys **+3.8% average.**
+- **T2-RAGBench:** reranking is worth **~5.5×** what per-chunk LLM enrichment is worth.
+- Semantic, proposition and LLM-driven chunking all **lose** to structural chunking.
+
+So: no document expansion, no hypothetical-question generation, no per-chunk summaries, no
+local enrichment models, no second embedding field. Each is a real technique with a real
+paper; none of them beats simply connecting BM25 and turning on the reranker, and every one
+adds a moving part that can fail on stage.
+
+The one local model we take is the reranker (~250M, query clock, benchmarked). Nothing else
+runs locally.
+
+**Future scope, written down so it is a decision and not an oversight:** doc2query expansion,
+HyPE, contextual retrieval (+2.2pp on top of hybrid), late chunking. All revisit after 30 Aug.
+
 ### D1 — Docling, standard pipeline (layout + TableFormer). Not the VLM pipeline.
 
 **Measured on a 16 GB M3, same RAM budget as the target:**
@@ -168,6 +204,24 @@ visible, not silent. **What would be better:** a per-page text-cell-density heur
 enables OCR only for pages below a threshold — maybe half a day, and it is on the more-time
 list rather than in the plan.
 
+### D3b — TableFormer stays on `ACCURATE` (the default)
+
+**Changed 2026-08-17.** An earlier draft set `FAST`, inherited from a Docling CPU-guidance
+note without asking which clock the cost lands on.
+
+**Reason:** it lands on the ingest clock, which is the cheap one. Tables are where enterprise
+PDF retrieval is won or lost — a mis-parsed table is a wrong answer with a confident citation,
+and it is not recoverable downstream by any amount of reranking.
+
+**Cost:** ACCURATE is roughly +0.8 s per table over FAST. On a 40-table document that is ~30
+seconds, once, in a background worker.
+
+**The user's ruling, which settles it:** *"we need accuracy not trying to be fast — retrieval
+needs to be optimised, chunking takes some time it's ok."*
+
+**When FAST would be right:** interactive parsing where a person waits for the result, or a
+corpus large enough that ingest wall-clock becomes the binding constraint. Neither is us.
+
 ### D4 — Warm the converter at startup
 
 Cold start is **50–120 seconds**, documented nowhere in Docling's own docs.
@@ -195,21 +249,26 @@ After Phase 1, any retrieval path that cannot express tenant scope is a liabilit
 better:** a real BM25 index, or Postgres 17's improvements, or `bm25s` — all rejected here on
 the tenant-isolation and dependency grounds, and all listed under more-time.
 
-### D6 — Add the local ONNX cross-encoder reranker
+### D6 — Add a local ONNX cross-encoder reranker (~250M, API fallback)
 
 `fastembed` `TextCrossEncoder`, ONNX, no torch.
 
 **Reason:** +12.1 pp recall@5, +17.2 pp MRR@3. Second-highest-value change available, and it
-removes a **per-query model call** from the hot path — which matters with $100 of credit.
+removes a per-query model call — which matters against $100 of credit.
 
-**Trade-off, and it is a real one:** this is the first local model weight in the serving path.
-It must be pre-downloaded, it adds ~130 MB to the install, and it introduces a class of
-failure (missing/corrupt weights) that an API call does not have. It must fail loudly to the
-API reranker rather than silently to no reranking.
+**Why local is now allowed:** `reranker.py` is locked to API-only because *"the deploy target
+is a 16 GB, no-GPU machine."* That premise expired — a ~250M ONNX cross-encoder is ~250 MB and
+needs no GPU. It is the **only** local model we adopt.
 
-**Open question I cannot settle without measurement:** the research recommends benchmarking
-tiny (33M) against turbo and bge-base rather than locking to the smallest. The task includes
-that benchmark; I am not pre-committing to a model.
+**Size ceiling and why:** the reranker is on the **query** clock. ~250M over 20 passages is
+roughly 150–400 ms on CPU, which a person does not notice. Larger models exist and score
+better; they are not worth an extra second per question. **Benchmark the chosen model's real
+latency before shipping it** — this is the one number in the phase we measure rather than
+assume.
+
+**Fallback:** the existing API reranker, on a **loud** failure. Never silently to no
+reranking — a retrieval stage that quietly stops running is exactly the class of defect Phase
+1 and 2 spent their time removing.
 
 ### D7 — Enrich the chunk prefix: document title · type · date · heading path
 
@@ -345,7 +404,7 @@ and its error bar, not the library that printed it.
 | 3.6 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
 | 3.7 | **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap |
 | 3.8 | **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest |
-| 3.9 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list |
+| 3.9 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b |
 | 3.10 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
 | 3.11 | Verbatim citation verification | 0.15 | ~40 lines, reuses 3.10's primitive |
 | 3.12 | Live ingest log (SSE) | 0.5 | The tenant watches their document being read |
