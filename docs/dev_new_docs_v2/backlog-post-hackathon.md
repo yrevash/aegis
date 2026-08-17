@@ -297,3 +297,40 @@ A test process killed with SIGKILL/SIGINT leaves its `aegis_tmpl_*` database and
 The role cannot be dropped until its databases are — drop the database first, then the role.
 No auto-sweeper was added deliberately, because it would clobber a concurrently running
 suite. Worth a `scripts/` helper that sweeps only objects older than a few hours.
+
+---
+
+## Live defects found while planning the job substrate (2026-08-17)
+
+Verified in source, not inferred. All three are pre-existing.
+
+### Background jobs spend money outside budget enforcement
+
+The memory sweeper binds the **live** `complete` and the real embedding function
+(`backend/src/app/main.py:99-112`) and runs a batch every 60 seconds. `enforce_governance`
+does not appear anywhere on that path — it lives on the request path only.
+
+So a background job makes real, billed model calls that no budget can stop. With ~$100 of
+total gateway credit before a final, a stuck or looping sweeper is a live financial risk, not
+a theoretical one.
+
+**Fix:** every model-calling job carries the enqueuer's governance context and spends through
+the same enforcer, with `BudgetExceededError` as a first-class job outcome. Costs a payload
+field and a `with` block.
+
+### A killed worker strands its job in RUNNING forever
+
+`memory_consolidation_job` is claimed with a guarded `PENDING → RUNNING` update
+(`consolidate.py:983-1005`) and has **no lease, no heartbeat, no `claimed_at`, and no reaper**.
+A worker killed mid-job leaves the row `RUNNING` permanently — matched by no sweeper and
+retried by nothing. This is the same shape as the `RESUMING` hazard Phase 1 fixed in approvals.
+
+`attempts` is incremented at `consolidate.py:1005` and **read nowhere**, so a poison job that
+crashes the worker every time is invisible.
+
+**Fix:** claim + lease + reaper, and consult `attempts` to dead-letter a job that keeps failing.
+
+### `/readyz` is documented and does not exist
+
+Referenced in three docstrings; no route implements it. There is also no Neo4j probe in the
+health path, and `latency_summary` is a per-process RAM deque that resets on restart.
