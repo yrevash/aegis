@@ -1,6 +1,36 @@
 # Phase 4 — Ingestion and retrieval, rebuilt on evidence
 
-**Status: awaiting approval. Nothing here is implemented.**
+**Status: approved 2026-08-18. Nothing here is implemented yet.**
+
+> ## Amendments of 2026-08-18 — read before the body
+>
+> Phase 3 **landed** between this document being written and being approved, and four things
+> below are now stale or incomplete. This block is the authority where it disagrees with the
+> body.
+>
+> **A. The substrate exists.** §2.6 ("there is nowhere durable to run an ingest") is obsolete.
+> Temporal, the six ingest stages (`parse → chunk → enrich → embed → index → graph`), per-queue
+> concurrency, stage-level resume, the reconciler and debounced re-index all shipped. **This
+> phase supplies stage handlers; it builds no orchestration.**
+>
+> **B. `documents` already exists** (`aegis/src/aegis/jobs/models.py`) with `tenant_id`,
+> `content_sha256`, `status`, `completed_stage`, `workflow_id`, `page_count`, `chunk_count` and
+> `UNIQUE (tenant_id, content_sha256)`. Task 4.5 shrinks to the upload route plus wiring; it
+> does **not** create the table. Task 4.13 similarly reduces to supplying a handler.
+>
+> **C. `chunks.doc_id` and `documents.id` do not join** — `String(255)` against `BIGINT`. Not
+> noted anywhere in the body. Fixed as part of D4b; see the revised DDL there.
+>
+> **D. RLS on `chunks` protects the keyword arm only.** Embeddings are not searched in
+> Postgres. `VectorColumn` is a JSON column of record, and ANN runs on Chroma against **one
+> shared collection** (`_LITE_COLLECTION = "aegis_lite_chunks"`) scoped by a metadata `where`
+> filter. Adding `tenant_id` to `chunks` therefore fixes **one of three arms**. See the new
+> **D4c**, which is a second blocker.
+>
+> Also recorded: **this Postgres has no `pgvector`** (`plpgsql` only). Nothing in this phase
+> depends on it, but no task may assume a native vector column exists.
+>
+> Revised total: **~4 days**, down from 5.15, because the substrate absorbed the queue work.
 
 **Depends on Phase 3.** Ingestion is the primary consumer of the job substrate
 ([`phase-03-platform-spine.md`](phase-03-platform-spine.md) §3.1–3.4) and of `run_events`
@@ -313,7 +343,31 @@ FTS. With no `tenant_id` column there is no predicate to filter on, so a lexical
 return another tenant's passage — **re-opening precisely the leak Phase 1 closed**, through a
 path Phase 1 never covered because the arm did not exist yet.
 
-**The work, and it is not optional:**
+**The work, and it is not optional. Revised DDL — the join is repaired in the same change:**
+
+```sql
+ALTER TABLE chunks
+  ADD COLUMN document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  ADD COLUMN tenant_id   INT    NOT NULL REFERENCES tenants(id);
+CREATE INDEX ON chunks (tenant_id, document_id);
+```
+
+`doc_id String(255)` does not join to `documents.id BIGINT`, so today there is no way to get
+from a chunk to the document that produced it — which breaks the tenant backfill, citation
+provenance and re-index alike. Repair it here or every later task works around it.
+
+**`tenant_id` is denormalised onto `chunks` deliberately**, even though it is reachable through
+`documents`. An RLS policy that has to *join* to find the tenant is paid on every row of every
+query, and — more importantly — it would make the **join** the boundary rather than the row.
+That is precisely the mistake Phase 3 found on partitions: a parent's policy does not protect
+what is reached another way. The policy predicate must sit on the row it protects.
+
+`ON DELETE CASCADE` because re-ingest otherwise orphans chunks that still answer queries.
+
+**Proven, not assumed** (scratch PostgreSQL, `NOSUPERUSER NOBYPASSRLS` role, both tenants
+holding a chunk containing "Clause 7.3.2"): with the policy in place, `WHERE tenant_id = 2`,
+an unfiltered `SELECT *`, a `JOIN` through `documents`, and a bare `COUNT(*)` **all** return
+only the caller's own row. Not even the count leaks.
 
 - Add `tenant_id` to `chunks`, backfilled from the owning document.
 - Register it in the tenant-scoped table catalogue so the boot-time catalog read-back covers
@@ -326,6 +380,78 @@ path Phase 1 never covered because the arm did not exist yet.
 **Sequencing: task 4.6 lands in the same change as task 4.7, or 4.7 does not land.** Shipping
 the keyword arm first and the column second means shipping a known cross-tenant path, and
 "we'll add the column next" is exactly how it stays shipped.
+
+### D4c — 🚧 **BLOCKER** — one Chroma collection per tenant, not one shared collection
+
+**D4b protects the keyword arm. It does not protect the dense arm, which is the primary one.**
+
+Embeddings are not searched in Postgres. `VectorColumn` is *"the durable source-of-record
+embedding … **not** a search index"*, and ANN runs on `ChromaVectorStore`. Today every tenant's
+vectors live in **one shared collection**:
+
+```python
+# aegis/src/aegis/retrieval/memory.py:67
+_LITE_COLLECTION = "aegis_lite_chunks"
+```
+
+Isolation is a metadata `where` filter the caller passes. The store handles the subtle part
+already and deserves credit for it — Chroma silently *drops* a `None` metadata value, which
+would make a null tenant match "any tenant", so `None` is stored as an explicit sentinel. That
+is a real leak class, already closed.
+
+**But the shape is still fail-open.** A caller that forgets the filter, or builds it from a
+tenant id that arrives `None`, gets **every tenant's chunks** and no error. Compare Postgres,
+where forgetting the predicate returns nothing extra because the database applies the policy
+itself. One arm is enforced by the engine; the other is enforced by remembering.
+
+**The fix, and it is the standard multi-tenant vector pattern** (Pinecone namespaces, Qdrant
+collections, Milvus partitions): **collection per tenant**, `aegis_chunks_t{tenant_id}`,
+derived from the bound tenant — never passed in by a caller.
+
+Then a forgotten scope resolves to *no collection* and returns **nothing**, instead of
+resolving to *no filter* and returning **everything**. Same failure, opposite direction, and
+the safe direction is the one where a bug is visible.
+
+**Trade-off, honestly:** many small collections cost a little more memory than one large one,
+and a cross-tenant platform query becomes a fan-out. Neither matters at two tenants, and
+neither is a reason to prefer a fail-open boundary.
+
+**Tests required:**
+
+- Two tenants, the same query text, disjoint results — asserted on **content**, not counts.
+- A retrieval call whose tenant does not resolve returns nothing and **raises**; it must not
+  fall back to an unscoped search.
+- The live isolation sweep covers the dense arm as well as the FTS arm, so "chunks are
+  isolated" means all of it.
+
+**Sequencing: D4c ships with D4b.** Fixing the lexical arm while the dense arm stays shared
+would leave the *primary* retrieval path as the weak one, and the phase would read as solved.
+
+---
+
+### D-parse — a parse quality gate, because bad parses do not raise
+
+Docling fails **silently** on multi-column layouts
+([#2067](https://github.com/docling-project/docling/issues/2067)): no exception, just scrambled
+reading order that chunks, embeds and indexes exactly like good text. The same silence applies
+to D2's half-configured heading hierarchy, which yields a plausible-looking `{1: 16, 2: 4}`.
+
+You cannot prevent this. You detect it, at parse time, and record it on the document:
+
+| Signal | What it catches |
+|---|---|
+| **Heading-level histogram** | Everything at level 1 across a long structured document — D2's silent partial failure |
+| **Text-layer cross-check** | Independently extract the raw text layer and compare *ordering* against Docling's output. Column interleaving scrambles order while keeping token overlap high, so ordering is the signal, not overlap |
+| **Fragment rate** | Chunks ending mid-clause spike when columns interleave |
+
+Store `parse_confidence` on the `documents` row, **surface it in the ingest log (4.12)**, and do
+not silently publish a low-confidence parse. Trusting a parser blindly is the thing production
+ingestion pipelines do not do.
+
+**Test required:** a deliberately multi-column fixture parses to a *low* confidence — a gate
+that never fires is not a gate.
+
+---
 
 ### D5 — Connect the corpus-wide BM25 arm
 
@@ -494,8 +620,10 @@ and its error bar, not the library that printed it.
 | 4.2 | Text-layer probe + header/footer/page-number stripping | 0.25 | Running headers otherwise trip our Jaccard dedup and look like a bug on stage |
 | 4.3 | `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | The chunker survives intact |
 | 4.4 | Enriched prefix: title · type · date · heading path | 0.15 | Highest quality-per-hour in the phase |
-| 4.5 | `documents` table, upload route, **`ingest_document` workflow on Temporal (P3)** | 0.75 | No queue machinery here — Phase 3 owns orchestration; the stages are activities |
-| 4.6 | 🚧 **`chunks.tenant_id`** + RLS + isolation test | 0.25 | **Blocker for 4.7.** See D4b — it ships in the same change or 4.7 does not ship |
+| 4.5 | Upload route + **stage handlers on the P3 workflow** | 0.4 | `documents` already exists (P3). No queue machinery — the stages are activities |
+| 4.6 | 🚧 **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change |
+| 4.6b | 🚧 **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm is fail-open today; ships with 4.6 |
+| 4.6c | **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out |
 | 4.7 | **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. Gated on 4.6 |
 | 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
 | 4.9 | **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest |
@@ -503,10 +631,11 @@ and its error bar, not the library that printed it.
 | 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
 | 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
 | 4.12b | **Graph construction visible in the ingest log** | 0.25 | Entities and relations as they are extracted — the user asked to see the KG being built, not just its result |
-| 4.13 | Scheduled re-index on the P3 scheduler | 0.25 | Direct requirement — see the task |
+| 4.13 | Re-index handler on the P3 scheduler | 0.1 | Schedule + debounce already shipped in P3; this supplies the handler |
 | 4.14 | Verbatim citation verification | 0.15 | ~40 lines, reuses 4.11's primitive |
 
-**Total: 5.15 days.** That is honest rather than padded — see the cut order.
+**Total: ~5.0 days** after the P3 credit (−0.35 on 4.5, −0.15 on 4.13) and the three
+additions above (+0.9). Honest rather than padded — see the cut order.
 
 Three of these have detail that does not fit a table row.
 
@@ -654,6 +783,14 @@ into evidence.
 - [ ] `chunks.tenant_id` exists, is registered in the tenant-scoped catalogue, carries an RLS
       policy, and the live isolation test asserts **a lexical hit cannot cross tenants**. This
       is merged in the same change as `keyword_recall`, or neither is merged.
+- [ ] `chunks.document_id` is a real foreign key to `documents.id` with `ON DELETE CASCADE`,
+      and deleting a document removes its chunks — asserted, not assumed.
+- [ ] **Each tenant's vectors live in their own collection.** Two tenants issuing the same
+      query get disjoint results asserted on *content*; a retrieval whose tenant does not
+      resolve returns nothing **and raises**, rather than falling back to an unscoped search.
+      Merged with the `chunks.tenant_id` change, or neither is merged.
+- [ ] A deliberately multi-column fixture parses to a **low `parse_confidence`**, and that
+      figure is visible in the ingest log. A gate that never fires is not a gate.
 - [ ] `LightRAGBackend.keyword_recall` searches the **whole tenant corpus**, not the dense
       pool — proved by a query whose answer dense retrieval alone does not return.
 - [ ] Heading levels come back as a real tree, not `{1: N}` — asserted on the golden fixture.

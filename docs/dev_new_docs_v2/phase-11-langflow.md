@@ -1,5 +1,11 @@
 # Phase 11 — Langflow as the tenant-facing flow builder
 
+> **STATUS: FUTURE SCOPE. Nothing here is to be implemented.** Parked 2026-08-18 by Yash's
+> decision: the no-code environment is a later conversation, not hackathon work. The plan below
+> stays because the research behind it was expensive and its findings do not expire — in
+> particular that Langflow's component governance does not exist in any release we can pin.
+> **Do not start any L-task, and do not let another phase quietly take a dependency on one.**
+
 > **Source of every claim here:** `research/langflow-and-observability.md`. That document marks
 > each fact `[MEASURED]` (run on a machine), `[SOURCE-1.11.3]` (read in the released code),
 > `[SOURCE-main]` (read on the unreleased branch) or `[DOC]` (vendor documentation). This plan
