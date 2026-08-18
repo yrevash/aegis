@@ -34,6 +34,17 @@ this sweep automatically, and forgetting one fails
   documented on ``_TENANT_ISOLATION_PREDICATE`` — see
   :func:`test_an_unbound_scope_is_deliberately_fail_open_pending_security_definer_login`.
 
+Two proofs are about tables the registry cannot cover by name alone:
+
+* ``run_events`` is partitioned by month, so its partitions are governed through their
+  parent rather than by a registry line. A partition **named directly** must still be
+  filtered — it is not, without a policy of its own, and that was measured before it was
+  fixed:
+  :func:`test_a_partition_read_directly_is_still_scoped_to_one_tenant`.
+* ``settings`` holds the platform baseline as a NULL-tenant row, which every tenant must
+  be able to read and none may write:
+  :func:`test_a_tenant_reads_the_platform_settings_baseline_but_cannot_write_one`.
+
 If no PostgreSQL is reachable the database tests skip with a message naming precisely
 what was *not* verified; setting ``AEGIS_REQUIRE_PG_TESTS=1`` turns that skip into a
 failure so CI can demand the evidence rather than accept a green-looking skip.
@@ -60,6 +71,13 @@ from datetime import UTC, datetime
 import aegis.governance.models  # noqa: F401 - registration side-effect only
 import aegis.jobs.models  # noqa: F401 - registration side-effect only
 import aegis.ops.models  # noqa: F401 - registration side-effect only
+
+# ``aegis.runs.models`` also registers, through ``aegis.runs.__init__``, the
+# ``after_create`` hook that gives the partitioned ``run_events`` its monthly
+# partitions — without which the scratch schema would hold a table that rejects every
+# write, and the sweep below would fail at its seed rather than at an assertion.
+import aegis.runs.models  # noqa: F401 - registration side-effect only
+import aegis.settings.models  # noqa: F401 - registration side-effect only
 import pytest
 from aegis.data import AegisBase
 from aegis.governance.rls import (
@@ -77,6 +95,7 @@ from aegis.retrieval.memory import (
 )
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.types import RetrievalScope
+from aegis.runs.partitions import partition_name_for
 from sqlalchemy import Integer, Table, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, async_sessionmaker, create_async_engine
@@ -270,11 +289,30 @@ def _synthetic_value(column, tag: str) -> object:  # noqa: ANN001 - sqlalchemy C
         value = f"{tag}-{column.name}"
         length = getattr(column.type, "length", None)
         return value[:length] if length else value
+    if python_type is dict:
+        # ``settings.value`` is the first NOT NULL JSON column with no default — a
+        # setting with no value is not a setting — so the sweep has to invent one.
+        # (``JSON.python_type`` is ``dict``; the ``NotImplementedError`` branch above
+        # catches the types that decline to name one at all.)
+        return {}
     raise AssertionError(
         f"{column.table.name}.{column.name} has type {column.type!r}, which the live "
         "RLS sweep does not know how to populate. Extend _synthetic_value — do not "
         "drop the table from the sweep."
     )
+
+
+#: Columns whose legal value depends on **another column of the same row**, which a
+#: per-column generator cannot know about.
+#:
+#: ``settings.scope`` is the only one so far, and it is not an oddity: the whole point of
+#: that column is to agree with which of ``tenant_id``/``user_id`` are set, and the table
+#: carries check constraints saying so. The sweep stamps a tenant on every row, so the
+#: only scope those rows can legally carry is ``tenant`` — the generator's default of
+#: "first enum value" would be ``platform``, which the database would (correctly) refuse.
+_DEPENDENT_COLUMNS: dict[tuple[str, str], object] = {
+    ("settings", "scope"): "tenant",
+}
 
 
 def _row_values(
@@ -305,6 +343,10 @@ def _row_values(
             continue
         if column.name == _TENANT_COLUMN:
             row[column.name] = tenant_id
+            continue
+        dependent = _DEPENDENT_COLUMNS.get((table.name, column.name))
+        if dependent is not None:
+            row[column.name] = dependent
             continue
         key = next(iter(column.foreign_keys), None)
         if key is not None:
@@ -581,19 +623,67 @@ async def test_the_reading_role_is_neither_superuser_nor_bypassrls(scratch: _Scr
     assert bypass is False, f"{name} has BYPASSRLS and bypasses every RLS policy"
 
 
+async def _live_partitions(scratch: _Scratch) -> dict[str, str]:
+    """Return every live partition in the scratch schema, mapped to its parent.
+
+    Read from the catalog rather than computed from the calendar: the point of asking is
+    to find out what really exists, and ``run_events``' partitions are created by a
+    ``create_all`` hook whose month is whatever month the suite is run in.
+
+    Args:
+        scratch: The provisioned scratch handle.
+
+    Returns:
+        ``{partition name: top-level parent name}``.
+    """
+    engine = create_async_engine(scratch.owner_dsn)
+    try:
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT c.relname, pg_partition_root(c.oid)::regclass::text "
+                        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = current_schema() AND c.relispartition"
+                    )
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+    return {name: parent for name, parent in rows}
+
+
 async def test_bootstrap_protects_every_registered_table_in_the_live_schema(scratch: _Scratch):
-    """``bootstrap_rls`` must have installed an enabled, FORCEd policy on all thirteen.
+    """``bootstrap_rls`` must have installed an enabled, FORCEd policy on every one.
 
     Read back from ``pg_class``/``pg_policy`` on the real database rather than from the
     statements the function claims to have emitted. FORCE is checked separately from
     ENABLE because ENABLE alone exempts the table owner, which is the shape that made
     the previous policies decorative.
+
+    The expected set is the registry **plus the live partitions of registered tables**.
+    That is a strengthening, not a loophole: ``run_events`` is partitioned by month, so
+    its partitions cannot be registry entries — their names are a function of the
+    calendar — and PostgreSQL applies a parent's policies only to rows reached *through*
+    the parent, so a partition without its own policy is readable in full by naming it
+    directly. :func:`test_a_partition_read_directly_is_still_scoped_to_one_tenant` is the
+    behavioural half of this.
     """
-    expected = {table.name for table in _registered_tables()}
-    assert expected == set(_TENANT_SCOPED_TABLES), (
+    registered = {table.name for table in _registered_tables()}
+    assert registered == set(_TENANT_SCOPED_TABLES), (
         "a registered tenant-scoped table is missing from the host schema, so the sweep "
-        f"below would silently not cover it: {set(_TENANT_SCOPED_TABLES) - expected}"
+        f"below would silently not cover it: {set(_TENANT_SCOPED_TABLES) - registered}"
     )
+    partitions = {
+        name for name, parent in (await _live_partitions(scratch)).items()
+        if parent in registered
+    }
+    assert partitions, (
+        "no partition of a registered table exists in the scratch schema, so this test "
+        "and the direct-read one below prove nothing — run_events should have been "
+        "created with the current and next month's partitions"
+    )
+    expected = registered | partitions
     assert set(scratch.protected) == expected
 
     engine = create_async_engine(scratch.owner_dsn)
@@ -632,7 +722,15 @@ async def test_no_live_table_carries_a_tenant_column_without_being_registered(
     not a control. This asserts it against the live catalog instead, so the next time a
     model grows a ``tenant_id`` column the suite says so before a tenant reads another
     tenant's rows.
+
+    A **partition** of a registered table is exempt from the registry and only from the
+    registry: it is governed through its parent (``_plan_rls``), it is asserted to carry
+    its own policy by the test above, and its filtering is proved directly by
+    :func:`test_a_partition_read_directly_is_still_scoped_to_one_tenant`. A partition of
+    an *un*registered table is not exempt — the parent would be named here, once, rather
+    than once per month of history.
     """
+    partitions = await _live_partitions(scratch)
     engine = create_async_engine(scratch.owner_dsn)
     try:
         async with engine.connect() as conn:
@@ -653,7 +751,10 @@ async def test_no_live_table_carries_a_tenant_column_without_being_registered(
     finally:
         await engine.dispose()
 
-    unregistered = set(live) - set(_TENANT_SCOPED_TABLES)
+    governed = set(_TENANT_SCOPED_TABLES) | {
+        name for name, parent in partitions.items() if parent in _TENANT_SCOPED_TABLES
+    }
+    unregistered = set(live) - governed
     assert not unregistered, (
         f"live table(s) {sorted(unregistered)} carry a '{_TENANT_COLUMN}' column but are "
         "not in aegis.governance.rls._TENANT_SCOPED_TABLES, so they got no policy and a "
@@ -748,6 +849,118 @@ async def test_a_bound_scope_cannot_write_a_row_stamped_for_another_tenant(scrat
                     f"tenant {_TENANT_A} failed for the wrong reason: {caught.value}"
                 )
                 await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+async def test_a_partition_read_directly_is_still_scoped_to_one_tenant(scratch: _Scratch):
+    """Naming a partition directly must not escape the parent's isolation.
+
+    This is not a hypothetical. Verified against this cluster while the design was being
+    written: with the policy on ``run_events`` alone, a scoped connection selecting from
+    ``run_events`` saw one tenant's row and the *same connection* selecting from
+    ``run_events_2026_08`` saw both. PostgreSQL applies a parent's policies to rows
+    reached through the parent; a partition queried by name is filtered by its own
+    policies and by nothing else, and the serving role has ``SELECT`` on every table in
+    the schema.
+
+    So the partition machinery installs the policy on each partition as it creates it,
+    and this is the test that would fail if it stopped.
+    """
+    partition = partition_name_for(datetime.now(UTC))
+
+    owner = create_async_engine(scratch.owner_dsn)
+    try:
+        async with owner.connect() as conn:
+            both = (
+                await conn.execute(
+                    text(f'SELECT {_TENANT_COLUMN} FROM "{partition}" ORDER BY 1')
+                )
+            ).scalars().all()
+    finally:
+        await owner.dispose()
+    assert both == [_TENANT_A, _TENANT_B], (
+        f"{partition} holds {both}; the seeded run_events rows did not land in this "
+        "month's partition, so the assertion below would prove nothing"
+    )
+
+    engine = _app_engine(scratch)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        for tenant_id in (_TENANT_A, _TENANT_B):
+            async with maker() as session:
+                await set_tenant_scope(session, tenant_id)
+                visible = (
+                    await session.execute(
+                        text(f'SELECT {_TENANT_COLUMN} FROM "{partition}"')
+                    )
+                ).scalars().all()
+                await session.rollback()
+            assert visible == [tenant_id], (
+                f"{partition}: scoped to tenant {tenant_id} but saw {visible} — the "
+                "partition carries no policy of its own, so it leaks every tenant's "
+                "events to anyone who names it instead of run_events"
+            )
+    finally:
+        await engine.dispose()
+
+
+async def test_a_tenant_reads_the_platform_settings_baseline_but_cannot_write_one(
+    scratch: _Scratch,
+):
+    """``settings`` widens the read to the NULL-tenant row, and only the read.
+
+    The platform default has to be visible under a bound tenant scope: it is the floor
+    every ``tighten_only`` key is resolved against, and a resolver that could not see it
+    would compute a value **weaker than the platform's own choice** while every catalog
+    check still read healthy.
+
+    The write half must stay shut, and that is not automatic — a policy with no explicit
+    ``WITH CHECK`` reuses its ``USING`` clause for writes, so widening the read would
+    otherwise let any tenant forge a platform default by inserting a NULL-tenant row.
+    Both halves are asserted here because only the pair is safe.
+    """
+    owner = create_async_engine(scratch.owner_dsn)
+    try:
+        async with owner.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO settings (scope, tenant_id, user_id, key, value) "
+                    "VALUES ('platform', NULL, NULL, 'agent.mode', '\"fast\"'::jsonb) "
+                    "ON CONFLICT DO NOTHING"
+                )
+            )
+    finally:
+        await owner.dispose()
+
+    engine = _app_engine(scratch)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as session:
+            await set_tenant_scope(session, _TENANT_A)
+            visible = (
+                await session.execute(
+                    text("SELECT key FROM settings WHERE scope = 'platform'")
+                )
+            ).scalars().all()
+            assert visible == ["agent.mode"], (
+                "tenant A cannot see the platform settings baseline, so every "
+                "tighten_only key would resolve against the compiled-in default and "
+                f"silently ignore the platform's own choice: saw {visible}"
+            )
+
+            with pytest.raises(SQLAlchemyError) as caught:
+                await session.execute(
+                    text(
+                        "INSERT INTO settings (scope, tenant_id, user_id, key, value) "
+                        "VALUES ('platform', NULL, NULL, 'agent.model', '\"forged\"'::jsonb)"
+                    )
+                )
+            assert "row-level security" in str(caught.value), (
+                "a tenant-scoped connection was able to write a platform-scoped setting "
+                f"— it could forge any platform default: {caught.value}"
+            )
+            await session.rollback()
     finally:
         await engine.dispose()
 

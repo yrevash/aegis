@@ -55,6 +55,11 @@ Every autonomous action is uncertainty-bounded (conformal prediction), explainab
 # the current web app) and the legacy Vite dev server (:5173, the old frontend).
 # Without the :3000 entries the browser probe fails CORS and the web app silently
 # falls back to its offline mock fixtures.
+#: How long shutdown waits for the Temporal worker to drain in-flight activities before
+#: cancelling it. Generous enough for a record-layer write to commit, short enough that a
+#: wedged activity cannot hold the process open indefinitely.
+_WORKER_DRAIN_SECONDS = 10.0
+
 _CORS_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -234,6 +239,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         _supervise(memory_sweeper_task, "memory-consolidation-sweeper")
 
+    # The durable job substrate (§3.2): the Temporal worker, as an asyncio task in this
+    # process — the in-process launch mode, identical in code path to
+    # ``python -m app.jobs.worker``. Gated on the real stores because every activity
+    # writes to the record tables, and supervised like the sweepers: a worker that cannot
+    # reach Temporal must show up as an ERROR in the log, not as a substrate that looks
+    # present and silently runs nothing. The API keeps serving either way.
+    worker_task: asyncio.Task[None] | None = None
+    if settings.stores_enabled and settings.temporal_worker_inprocess:
+        from app.jobs.worker import start_worker_task
+
+        worker_task = start_worker_task(sweeper_stop)
+        _supervise(worker_task, "temporal-worker")
+
     # Warm the ML spine off the hot path: load the artifact (or train it from the
     # real domain frame if absent) in a worker thread so the first live query never
     # pays the fit cost. Best-effort — a failure here never blocks the API.
@@ -250,12 +268,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         warm_task.cancel()
-        if sweeper_task is not None or memory_sweeper_task is not None:
+        if (
+            sweeper_task is not None
+            or memory_sweeper_task is not None
+            or worker_task is not None
+        ):
             sweeper_stop.set()
         if sweeper_task is not None:
             sweeper_task.cancel()
         if memory_sweeper_task is not None:
             memory_sweeper_task.cancel()
+        if worker_task is not None:
+            # Not cancelled outright: ``run_workers`` reacts to the stop event with a
+            # graceful ``Worker.shutdown``, which lets an in-flight activity finish its
+            # transaction rather than having it torn out mid-stage. Bounded, and via
+            # ``asyncio.wait`` rather than ``await``, for two reasons — a wedged activity
+            # must not hang shutdown forever, and a worker that already died must not
+            # re-raise its exception out of the lifespan's ``finally`` (the supervisor
+            # callback has already logged it).
+            finished, _ = await asyncio.wait({worker_task}, timeout=_WORKER_DRAIN_SECONDS)
+            if not finished:
+                logger.warning(
+                    "Temporal worker did not drain within %.0fs; cancelling.",
+                    _WORKER_DRAIN_SECONDS,
+                )
+                worker_task.cancel()
 
 
 def create_app() -> FastAPI:

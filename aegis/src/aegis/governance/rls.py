@@ -7,7 +7,11 @@ without a database):
   bootstrapped RLS policies engage for the request.
 - :data:`_TENANT_SCOPED_TABLES` — the **one** registry of tables that carry a
   ``tenant_id`` column and must therefore be governed by a policy. A new tenant-scoped
-  table is registered by adding one line there and nowhere else.
+  table is registered by adding one line there and nowhere else. A *partition* of a
+  registered table is the single exception: it is governed through its parent, because
+  its name is a function of the calendar rather than of the schema.
+- :func:`tenant_policy_statements` — the policy DDL as data, so the bootstrap and the
+  monthly ``run_events`` partitions install the identical thing.
 - :func:`bootstrap_rls` — enable **and force** RLS, install the ``tenant_isolation``
   policy on every registered table the live schema actually has, and then read the
   catalog back to *report* every tenant-scoped table it could not protect. The policy
@@ -62,6 +66,7 @@ __all__ = [
     "grant_serving_role",
     "report_rls_enforcement",
     "set_tenant_scope",
+    "tenant_policy_statements",
 ]
 
 logger = logging.getLogger(__name__)
@@ -119,9 +124,45 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     # aegis.jobs.models — the durable job substrate's system of record
     "documents",
     "job_runs",
+    # aegis.runs.models — the durable, replayable per-run record. ``run_events`` is
+    # PARTITIONED BY RANGE (ts); its monthly partitions are not registered here (their
+    # names are a function of the calendar) and are covered by the partition rule in
+    # :func:`_plan_rls` instead.
+    "run_events",
+    "runs",
+    # aegis.settings.models — the per-tenant settings catalogue. Listed in
+    # :data:`_PLATFORM_BASELINE_TABLES` as well: a NULL-tenant row here is the platform
+    # baseline every tenant is entitled to *read*, and none may write.
+    "settings",
     # host-owned (app.data.models) — the durable agent approvals inbox
     "approvals",
 )
+
+#: Tables where a row with a NULL ``tenant_id`` is a **platform baseline every tenant
+#: must be able to read**, rather than a platform-private record.
+#:
+#: The distinction is real and it decides a policy predicate. For ``job_runs`` a
+#: NULL-tenant row is a platform-level job that no tenant should see, so the standard
+#: predicate — under which ``NULL = <scope>`` is NULL, i.e. not visible — is exactly
+#: right. For ``settings`` the same predicate would be a correctness bug: the platform
+#: default *is* a NULL-tenant row, and a resolver that could not see it would compute a
+#: value **weaker than the platform's own choice** while looking healthy. That is the
+#: precise failure mode :data:`aegis.settings.spec.MergeRule.TIGHTEN_ONLY` exists to
+#: make impossible, so it may not be reintroduced by the visibility layer.
+#:
+#: The read is widened; the write is **not**. A table listed here gets a policy with an
+#: explicit ``WITH CHECK`` carrying the *unwidened* predicate, so a tenant-scoped
+#: request can read the baseline row and is refused when it tries to write one — without
+#: the explicit check, Postgres would reuse the widened ``USING`` clause for writes and
+#: any tenant could forge a platform default by inserting a NULL-tenant row.
+_PLATFORM_BASELINE_TABLES: frozenset[str] = frozenset({"settings"})
+
+#: A relation name this module is willing to interpolate into DDL. Names reach the DDL
+#: builders from :data:`_TENANT_SCOPED_TABLES` and from the live catalog, never from a
+#: request — but ``CREATE POLICY`` takes no bind parameter for its target, so the name is
+#: interpolated, and anything interpolated is validated rather than trusted. Deliberately
+#: narrower than Postgres allows: a name that would need escaping is refused, not escaped.
+_SAFE_RELATION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
 
 
 async def set_tenant_scope(session: AsyncSession, tenant_id: int | None) -> None:
@@ -201,6 +242,75 @@ _TENANT_ISOLATION_PREDICATE = (
     "from '^[0-9]+$')::int)"
 )
 
+#: The read predicate for a :data:`_PLATFORM_BASELINE_TABLES` table: the standard one,
+#: widened by the NULL-tenant baseline row. Used for ``USING`` only — see that registry
+#: for why the ``WITH CHECK`` half stays unwidened.
+_PLATFORM_BASELINE_PREDICATE = (
+    f"({_TENANT_ISOLATION_PREDICATE} OR {_TENANT_COLUMN} IS NULL)"
+)
+
+
+def tenant_policy_statements(table: str, *, policy_for: str | None = None) -> tuple[str, ...]:
+    """Return the DDL that puts one table under the ``tenant_isolation`` policy.
+
+    Pure and synchronous **so there is one definition of "governed" rather than two**.
+    :func:`bootstrap_rls` executes these against every registered table; the monthly
+    partitions of ``run_events`` are created outside a bootstrap (at ``create_all``
+    time, and again whenever the retention job rolls the next month forward) and execute
+    the same statements for themselves — see :mod:`aegis.runs.partitions`. A partition
+    needs its own copy because Postgres applies the *parent's* policies only to rows
+    reached *through* the parent: a query naming ``run_events_2026_08`` directly is
+    filtered by that partition's own policies and by nothing else, which was verified
+    against a live cluster before this function existed.
+
+    The statements are idempotent — ``ENABLE``/``FORCE`` on an already-enabled table are
+    no-ops and the policy is dropped with ``IF EXISTS`` before being recreated — because
+    both callers run on every boot.
+
+    Args:
+        table: The relation to govern — for a partition, the partition's own name.
+            Validated against :data:`_SAFE_RELATION_NAME` rather than escaped, because it
+            is interpolated into DDL that takes no bind parameters.
+        policy_for: The table whose *flavour* of policy to install, when that is not
+            ``table`` itself. A partition inherits its parent's flavour: which predicate
+            a relation gets is a property of what its rows mean, and a partition's rows
+            mean whatever its parent's do.
+
+    Returns:
+        The ordered ``ALTER TABLE``/``CREATE POLICY`` statements, ready to execute on a
+        PostgreSQL connection.
+
+    Raises:
+        ValueError: If ``table`` is not a plain, unquoted SQL identifier.
+    """
+    if not _SAFE_RELATION_NAME.match(table):
+        raise ValueError(
+            f"refusing to build RLS DDL for {table!r}: not a plain SQL identifier"
+        )
+    if (policy_for or table) in _PLATFORM_BASELINE_TABLES:
+        # Read widened to the platform baseline row, write deliberately not — a tenant
+        # that could write a NULL-tenant row could forge a platform default.
+        policy = (
+            f"CREATE POLICY {_POLICY_NAME} ON \"{table}\" "
+            f"USING {_PLATFORM_BASELINE_PREDICATE} "
+            f"WITH CHECK {_TENANT_ISOLATION_PREDICATE}"
+        )
+    else:
+        # No explicit WITH CHECK: Postgres reuses USING for writes, so an INSERT/UPDATE
+        # stamping another tenant is rejected rather than merely hidden afterwards.
+        policy = (
+            f"CREATE POLICY {_POLICY_NAME} ON \"{table}\" "
+            f"USING {_TENANT_ISOLATION_PREDICATE}"
+        )
+    return (
+        f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY',
+        # Without this the owner — i.e. the application's own role whenever no
+        # owner/serving split is configured — bypasses every policy below.
+        f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY',
+        f'DROP POLICY IF EXISTS {_POLICY_NAME} ON "{table}"',
+        policy,
+    )
+
 
 #: Reads every base table in the connection's current schema, together with the three
 #: facts that decide whether it is governed: the type of its ``tenant_id`` column (NULL
@@ -227,7 +337,10 @@ SELECT c.relname AS table_name,
        EXISTS (
            SELECT 1 FROM pg_policy p
             WHERE p.polrelid = c.oid AND p.polname = :policy
-       ) AS has_policy
+       ) AS has_policy,
+       CASE WHEN c.relispartition
+            THEN pg_partition_root(c.oid)::regclass::text
+       END AS partition_root
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE n.nspname = current_schema()
@@ -250,6 +363,11 @@ class _LiveTable:
             role the application serves as whenever no owner/serving split is
             configured, and remains the DDL role's exemption even when one is.
         has_policy: Whether this module's :data:`_POLICY_NAME` policy exists on it.
+        partition_root: The name of the top-level partitioned table this relation is a
+            partition of, or ``None`` when it is not a partition. Tracked because a
+            partition is **not** a separately registerable table — its name is a
+            function of the calendar — and yet it needs a policy of its own; see
+            :func:`_plan_rls`.
     """
 
     name: str
@@ -257,6 +375,12 @@ class _LiveTable:
     row_security: bool
     force_row_security: bool
     has_policy: bool
+    partition_root: str | None = None
+
+    @property
+    def is_partition(self) -> bool:
+        """Whether this relation is a partition of another table."""
+        return self.partition_root is not None
 
     @property
     def is_tenant_scoped(self) -> bool:
@@ -280,7 +404,8 @@ class _RlsPlan:
 
     Attributes:
         protect: Registered tables, present in the live schema with an integer
-            ``tenant_id`` — the tables that get the DDL.
+            ``tenant_id`` — the tables that get the DDL — plus every live partition of
+            one of them, which is registered through its parent (see the body).
         unregistered: Live tables with a usable ``tenant_id`` column that no one added
             to :data:`_TENANT_SCOPED_TABLES`. **Uncovered**, and the reason this plan
             is computed rather than assumed.
@@ -330,11 +455,23 @@ def _plan_rls(
         if not table.is_tenant_scoped:
             # Only interesting when the registry claims otherwise — a renamed or
             # dropped column would otherwise leave a dead entry nobody notices.
-            if name in wanted:
+            if name in wanted and not table.is_partition:
                 stale.append(name)
             continue
         if not table.is_protectable:
             unsupported.append((name, str(table.tenant_type)))
+            continue
+        if table.is_partition:
+            # A partition is governed by its parent's registration, never its own: its
+            # name is a function of the calendar, so requiring a registry line per month
+            # would guarantee the registry falls behind the schema. It still gets the
+            # DDL, because Postgres applies the parent's policies only to rows reached
+            # *through* the parent — a query naming the partition directly is filtered
+            # by the partition's own policies and by nothing else. A partition of an
+            # *unregistered* parent is not reported here: the parent is, once, with the
+            # one-line fix, instead of once per month of history.
+            if table.partition_root in wanted:
+                protect.append(name)
             continue
         if name not in wanted:
             unregistered.append(name)
@@ -395,6 +532,7 @@ async def _live_tables(conn: Any) -> list[_LiveTable]:  # noqa: ANN401 - AsyncCo
             row_security=bool(row[2]),
             force_row_security=bool(row[3]),
             has_policy=bool(row[4]),
+            partition_root=row[5],
         )
         for row in result
     ]
@@ -472,9 +610,18 @@ async def bootstrap_rls(engine: AsyncEngine) -> list[str]:
        (:data:`_TENANT_ISOLATION_PREDICATE`), matching a row's ``tenant_id`` against
        the ``app.tenant_id`` GUC bound per request by :func:`set_tenant_scope`.
 
-    The policy is created without an explicit ``WITH CHECK``, so Postgres reuses the
-    ``USING`` predicate for writes: under a bound tenant scope an INSERT/UPDATE that
-    would stamp a *different* tenant is rejected by the database, not merely hidden.
+    The DDL is built by :func:`tenant_policy_statements`, which the partition machinery
+    in :mod:`aegis.runs.partitions` also calls — one definition of "governed", not two.
+
+    For all but the :data:`_PLATFORM_BASELINE_TABLES` the policy is created without an
+    explicit ``WITH CHECK``, so Postgres reuses the ``USING`` predicate for writes: under
+    a bound tenant scope an INSERT/UPDATE that would stamp a *different* tenant is
+    rejected by the database, not merely hidden. A baseline table widens the read to the
+    NULL-tenant row and pins the write with an explicit, unwidened ``WITH CHECK``.
+
+    Live **partitions** of a registered table are protected too, under the parent's
+    flavour of the policy. They are deliberately not registry entries: their names are a
+    function of the calendar. See :func:`_plan_rls`.
 
     Coverage is then **measured, not assumed**. The catalog is read once before the DDL
     to plan it and report the tables that cannot be covered (:func:`_report_plan`), and
@@ -497,29 +644,20 @@ async def bootstrap_rls(engine: AsyncEngine) -> list[str]:
     if engine.dialect.name != "postgresql":
         return []
     async with engine.begin() as conn:
-        plan = _plan_rls(await _live_tables(conn))
+        live = await _live_tables(conn)
+        plan = _plan_rls(live)
         _report_plan(plan)
+        # A partition takes its parent's flavour of policy; every other table is its own
+        # flavour. Built from the same catalog read that produced the plan, so the two
+        # cannot disagree about what a relation is.
+        roots = {table.name: table.partition_root or table.name for table in live}
         for table in plan.protect:
             # Identifiers come from our own registry, filtered through the catalog —
-            # never from user input. Quoted to match the DDL the schema reconciler
-            # emits, so a table name is rendered one way across this package.
-            await conn.execute(
-                text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY')
-            )
-            # Without this the owner — i.e. the application's own role — bypasses
-            # every policy below.
-            await conn.execute(
-                text(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY')
-            )
-            await conn.execute(
-                text(f'DROP POLICY IF EXISTS {_POLICY_NAME} ON "{table}"')
-            )
-            await conn.execute(
-                text(
-                    f'CREATE POLICY {_POLICY_NAME} ON "{table}" USING '
-                    f"{_TENANT_ISOLATION_PREDICATE}"
-                )
-            )
+            # never from user input, and validated again inside the DDL builder.
+            for statement in tenant_policy_statements(
+                table, policy_for=roots.get(table, table)
+            ):
+                await conn.execute(text(statement))
         shortfall = _unprotected(await _live_tables(conn), plan.protect)
     if shortfall:
         logger.error(

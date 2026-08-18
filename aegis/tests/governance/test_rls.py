@@ -30,6 +30,7 @@ from aegis.governance.rls import (
     _plan_rls,
     _report_plan,
     _unprotected,
+    tenant_policy_statements,
 )
 
 #: The dialect these two tests stand a non-Postgres bind up as. Any non-``postgresql``
@@ -91,9 +92,16 @@ def _catalog_row(
     row_security: bool = False,
     force: bool = False,
     has_policy: bool = False,
+    partition_root: str | None = None,
 ) -> tuple:
-    """One row shaped like ``_LIVE_TABLES_SQL`` returns it."""
-    return (name, tenant_type, row_security, force, has_policy)
+    """One row shaped like ``_LIVE_TABLES_SQL`` returns it.
+
+    The trailing ``partition_root`` column arrived with ``run_events``: a partition is
+    governed through its parent, so the planner has to be able to tell one from a table
+    nobody registered. ``None`` means "not a partition", which is what the catalog
+    returns for every relation that is not one.
+    """
+    return (name, tenant_type, row_security, force, has_policy, partition_root)
 
 
 class _RecordingConn:
@@ -123,8 +131,16 @@ class _RecordingConn:
                     row_security=row_security or name in done,
                     force=force or name in done,
                     has_policy=has_policy or name in done,
+                    partition_root=partition_root,
                 )
-                for name, tenant_type, row_security, force, has_policy in self._schema
+                for (
+                    name,
+                    tenant_type,
+                    row_security,
+                    force,
+                    has_policy,
+                    partition_root,
+                ) in self._schema
             ]
         self._statements.append(sql)
         return None
@@ -194,6 +210,11 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         # aegis.jobs.models
         "documents",
         "job_runs",
+        # aegis.runs.models
+        "run_events",
+        "runs",
+        # aegis.settings.models
+        "settings",
         # host-owned
         "approvals",
     }
@@ -290,6 +311,73 @@ def test_plan_skips_registered_tables_this_database_does_not_have():
     plan = _plan_rls(live, registered=("users", "memory_fact"))
     assert plan.protect == ("users",)
     assert plan.absent == ("memory_fact",)
+
+
+# ── partitions, and the tables whose NULL-tenant row is a baseline ────────────
+#
+# Two shapes the registry cannot express by name. A partition's name is a function of
+# the calendar, so it is governed through its parent; and ``settings`` holds the platform
+# baseline as a NULL-tenant row that every tenant must read and none may write.
+
+
+def test_a_partition_of_a_registered_table_is_protected_without_its_own_registry_line():
+    """Its name is a function of the calendar, so a registry line per month would rot.
+
+    It still needs the DDL: PostgreSQL applies a parent's policies only to rows reached
+    *through* the parent, so a partition queried by name is filtered by its own policies
+    and by nothing else.
+    """
+    live = [
+        _LiveTable("run_events", "integer", False, False, False),
+        _LiveTable("run_events_2026_08", "integer", False, False, False, "run_events"),
+    ]
+    plan = _plan_rls(live, registered=("run_events",))
+    assert plan.protect == ("run_events", "run_events_2026_08")
+    assert plan.unregistered == ()
+
+
+def test_a_partition_of_an_unregistered_table_is_reported_once_through_its_parent():
+    """One line naming the fix beats one line per month of history."""
+    live = [
+        _LiveTable("shadow_events", "integer", False, False, False),
+        _LiveTable("shadow_events_2026_08", "integer", False, False, False, "shadow_events"),
+    ]
+    plan = _plan_rls(live, registered=())
+    assert plan.unregistered == ("shadow_events",)
+    assert plan.protect == ()
+
+
+def test_a_baseline_table_widens_the_read_and_pins_the_write():
+    """Without the explicit WITH CHECK, any tenant could forge a platform default.
+
+    Postgres reuses ``USING`` for writes when no ``WITH CHECK`` is given, so widening the
+    read to the NULL-tenant baseline row would widen the write to it as well.
+    """
+    statements = tenant_policy_statements("settings")
+    policy = statements[-1]
+    using, check = policy.split(" WITH CHECK ")
+    assert "OR tenant_id IS NULL" in using
+    assert "OR tenant_id IS NULL" not in check
+
+
+def test_an_ordinary_table_gets_no_with_check_so_postgres_reuses_using():
+    statements = tenant_policy_statements("job_runs")
+    assert "WITH CHECK" not in statements[-1]
+    assert statements[-1].endswith("::int)")
+
+
+def test_a_partition_takes_its_parents_flavour_of_policy():
+    """What a relation's rows *mean* is a property of its parent, not of its name."""
+    partition = tenant_policy_statements("settings_2026_08", policy_for="settings")
+    assert "WITH CHECK" in partition[-1]
+    orphan = tenant_policy_statements("settings_2026_08")
+    assert "WITH CHECK" not in orphan[-1]
+
+
+def test_the_policy_builder_refuses_a_name_it_would_have_to_escape():
+    """Names reach the DDL from the registry and the catalog, and are still validated."""
+    with pytest.raises(ValueError, match="not a plain SQL identifier"):
+        tenant_policy_statements('run_events"; DROP TABLE users; --')
 
 
 def test_unprotected_flags_a_policy_that_exists_but_is_not_forced():

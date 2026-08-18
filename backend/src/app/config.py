@@ -106,6 +106,25 @@ class Settings(BaseSettings):
     # Max PENDING consolidation jobs drained per sweep pass.
     memory_sweeper_batch: int = Field(default=10)
 
+    # ── Durable job substrate (Temporal; docs/dev_new_docs_v2/phase-03) ──────
+    # Temporal orchestrates execution (retries, timers, resumability, cancellation);
+    # our own ``job_runs``/``documents`` tables stay the system of record. The address
+    # is the dev server's default; a deployment points it at its own cluster.
+    temporal_address: str = Field(default="localhost:7233")
+    temporal_namespace: str = Field(default="default")
+    # Which task queues this process's worker polls. Comma-separated, and validated
+    # against ``aegis.jobs.TASK_QUEUES`` by :func:`app.jobs.worker.configured_queues` —
+    # a typo here would otherwise start a worker that polls a queue nothing schedules
+    # onto while the real queue goes unserved, and no error would be raised anywhere.
+    # Empty (the default) means "every declared queue", which is the single-box demo
+    # posture; a scale-out deployment runs one process per queue.
+    temporal_task_queues: str = Field(default="")
+    # Run the worker in-process, as an asyncio task in the API's lifespan. That is what
+    # runs on demo day (one process, no extra service to babysit); the identical code
+    # path is also launchable standalone as ``python -m app.jobs.worker``. Gated on the
+    # real stores, because an activity with no database has nothing to write.
+    temporal_worker_inprocess: bool = Field(default=True)
+
     # ── Guardrails engine (one policy, two front doors; docs/security/overview.md §3) ──
     # Two front doors enforce the same policy: the fast, offline-testable
     # programmatic rails (``app.guardrails.check_input``/``check_output``,
