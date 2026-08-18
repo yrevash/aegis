@@ -641,6 +641,34 @@ After Phase 1, any retrieval path that cannot express tenant scope is a liabilit
 better:** a real BM25 index, or Postgres 17's improvements, or `bm25s` — all rejected here on
 the tenant-isolation and dependency grounds, and all listed under more-time.
 
+**[LANDED] 2026-08-18, task 4.7 — with two corrections measured on the cluster.**
+
+*`plainto_tsquery` AND-s its terms, and that would have lost the query the arm exists for.*
+"what does clause 7.3.2 say?" parses to `'claus' & '7.3.2' & 'say'`, which matches only a
+passage containing all three — so the passage carrying the identifier is exactly what the
+default query builder drops. BM25 is disjunctive, and the arm replacing it has to be too:
+the connective is rewritten to `|` on `plainto_tsquery`'s **output**, which is already
+normalised and stripped of operators, so no user text is interpolated into SQL.
+
+*`ts_rank_cd` ranks this query class backwards.* Measured on both passages: for
+"what does clause 7.3.2 say about refunds?", a decoy repeating the common word "clause"
+four times scores **0.161** against the answer's **0.137** — cover-density rank is
+proportional to the number of covers, so repetition beats coverage. `ts_rank` saturates
+repeated occurrences (BM25's `k1`) and scores the answer **0.0144** against the decoy's
+**0.0060**. The arm uses `ts_rank` with normalisation flag `1` (divide by
+`1 + log(length)`, BM25's `b`). What is still missing versus Okapi BM25 is **IDF** — the
+docstring says so rather than implying otherwise.
+
+One thing D5 does not say and should: the arm has **two** boundaries, not one. The `WHERE
+tenant_id` predicate is D5's, and because the host injects the *serving* session factory
+(`app.retrieval.pipeline._chunk_session`) the arm also binds the tenant GUC and runs under
+the `tenant_isolation` policy. Both are proved separately in
+`aegis/tests/retrieval/test_keyword_recall.py`, because a single test over an unprivileged
+role would keep passing with the predicate deleted.
+
+The write side of `chunks` is still task 4.5's: nothing populates the table yet, so this
+change ships the read arm complete and the corpus it reads arrives with the stage handlers.
+
 ### D6 — Add a local ONNX cross-encoder reranker (~250M, API fallback)
 
 `fastembed` `TextCrossEncoder`, ONNX, no torch.
@@ -796,7 +824,7 @@ and its error bar, not the library that printed it.
 | 4.6 | ✅ **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change. **Landed 2026-08-18** |
 | 4.6b | ✅ **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm was fail-open; shipped with 4.6. **Landed 2026-08-18** |
 | 4.6c | **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out |
-| 4.7 | **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. Gated on 4.6 |
+| 4.7 | ✅ **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. D5 — **Landed 2026-08-18**; two corrections, see D5 |
 | 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
 | 4.9 | **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest |
 | 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b |

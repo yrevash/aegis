@@ -15,8 +15,10 @@ from dataclasses import replace
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.protocols import GraphBackend
 from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.data import session
 
 from . import gateway
 from .cache import SemanticCache
@@ -48,6 +50,29 @@ def _config_from_settings(settings: Settings) -> RetrievalConfig:
     )
 
 
+def _chunk_session() -> AsyncSession:
+    """Open a session for the keyword arm's corpus-wide read of ``chunks``.
+
+    Deliberately the platform's **serving** session factory rather than an engine the
+    retrieval package builds for itself. Two things follow from that, and both matter:
+    the lexical arm shares the request path's connection pool instead of opening a
+    second one, and it connects as the serving role — which carries neither ``SUPERUSER``
+    nor ``BYPASSRLS``, so the ``tenant_isolation`` policy on ``chunks`` genuinely applies
+    to it. The arm binds the tenant scope itself before reading (see
+    :meth:`aegis.retrieval.lightrag_backend.LightRAGBackend.keyword_recall`), so the
+    database enforces the same boundary the query's ``WHERE`` clause asks for.
+
+    Resolved on every call rather than captured at build time, because the retriever is
+    a process-wide singleton and the session factory is not: a test (or a re-bootstrap)
+    that installs a different engine must not leave this arm reading the old one.
+
+    Returns:
+        A new :class:`~sqlalchemy.ext.asyncio.AsyncSession`, used as an async context
+        manager by the caller.
+    """
+    return session.get_sessionmaker()()
+
+
 def build_default_retriever(settings: Settings | None = None) -> Retriever:
     """Construct the production `Retriever` from settings (real backend + Redis cache).
 
@@ -62,7 +87,9 @@ def build_default_retriever(settings: Settings | None = None) -> Retriever:
     config = _config_from_settings(settings)
     complete = gateway.default_complete()
     embed = gateway.default_embed()
-    backend = LightRAGBackend(complete, embed, config=config)
+    backend = LightRAGBackend(
+        complete, embed, config=config, session_factory=_chunk_session
+    )
     cache = SemanticCache.from_url(
         settings.redis_url,
         ttl_seconds=config.cache_ttl_seconds,

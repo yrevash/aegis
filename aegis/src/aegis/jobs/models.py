@@ -56,8 +56,17 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from sqlalchemy import (
+    Computed,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 # Registration side-effect, and deliberately not a lazy import: the foreign keys below
@@ -253,6 +262,17 @@ class Chunk(AegisBase):
     The composite index leads on ``tenant_id`` because every read is tenant-scoped first
     and document-scoped second — the RLS predicate is on ``tenant_id``, so an index that
     led with ``document_id`` could not serve it.
+
+    ``search_vector`` is what makes the lexical arm corpus-wide. It is a **generated**
+    ``tsvector``, not a column a writer fills: derived by the database from ``content``
+    on every insert and update, it cannot drift out of step with the text it indexes the
+    way a second search system — a separate BM25 index, kept in sync by application code
+    — can and eventually does. That, and not ranking quality, is why the phase chose
+    PostgreSQL full-text search: the keyword predicate and the tenant predicate end up on
+    **the same row**, so the tenant filter is a ``WHERE`` clause rather than a second
+    store to remember to scope. Ranking is read honestly at the query site — see
+    :meth:`aegis.retrieval.lightrag_backend.LightRAGBackend.keyword_recall`, which says
+    plainly that ``ts_rank_cd`` is not Okapi BM25.
     """
 
     __tablename__ = "chunks"
@@ -281,5 +301,24 @@ class Chunk(AegisBase):
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(VectorColumn(EMBED_DIM))
     meta: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
+    # PostgreSQL computes this from ``content``; no writer may set it, and a rewrite of
+    # ``content`` rewrites it in the same statement. The text search configuration is
+    # named explicitly (``'english'`` rather than the one-argument form) for two reasons:
+    # ``to_tsvector(regconfig, text)`` is IMMUTABLE, which a generated column requires,
+    # and the one-argument form would make every stored vector depend on the *server's*
+    # ``default_text_search_config`` — a setting outside this schema, whose change would
+    # silently leave the index stemming differently from the queries run against it.
+    # :data:`aegis.retrieval.lightrag_backend._FTS_CONFIG` is the query side of this pair
+    # and must name the same configuration.
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english', content)", persisted=True)
+    )
 
-    __table_args__ = (Index("ix_chunks_tenant_document", "tenant_id", "document_id"),)
+    __table_args__ = (
+        Index("ix_chunks_tenant_document", "tenant_id", "document_id"),
+        # GIN rather than GiST: this index is read on every query and written only at
+        # ingest, which is exactly the trade GIN makes (slower to build, substantially
+        # faster to search, and lossless — a GiST text-search index returns candidates
+        # that must be rechecked against the row).
+        Index("ix_chunks_search_vector", "search_vector", postgresql_using="gin"),
+    )

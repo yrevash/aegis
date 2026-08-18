@@ -34,6 +34,14 @@ this sweep automatically, and forgetting one fails
   documented on ``_TENANT_ISOLATION_PREDICATE`` — see
   :func:`test_an_unbound_scope_is_deliberately_fail_open_pending_security_definer_login`.
 
+``chunks`` gets a second pass of its own, because it is read by *code* and not only by
+the sweep: the corpus-wide keyword arm queries it through PostgreSQL full-text search, so
+:func:`test_a_lexical_hit_on_chunks_cannot_cross_tenants` proves the database filters a
+full-text statement and
+:func:`test_the_real_keyword_arm_cannot_read_another_tenants_passage` proves the shipping
+retrieval method is filtered too — the first is a fact about the policy, the second a
+fact about the path an answer actually travels.
+
 Two proofs are about tables the registry cannot cover by name alone:
 
 * ``run_events`` is partitioned by month, so its partitions are governed through their
@@ -1148,6 +1156,55 @@ async def test_a_lexical_hit_on_chunks_cannot_cross_tenants(
             assert visible == [_CHUNK_TEXT[tenant_id]], (
                 f"a lexical search under tenant {tenant_id} returned {visible} — the "
                 "keyword arm can read another tenant's passage"
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _never_called(*args: object, **kwargs: object) -> object:
+    """Stand in for the backend's ``complete``/``embed``, which this arm never calls.
+
+    The lexical arm is the one part of :class:`LightRAGBackend` that talks to PostgreSQL
+    instead of to LightRAG: it neither embeds the query nor prompts a model. Raising
+    rather than returning a plausible value is the point — if either of them is ever
+    reached from ``keyword_recall``, this test says so instead of quietly passing while
+    the arm does something other than what it claims.
+    """
+    raise AssertionError(
+        "the keyword arm called the model gateway; it is a SQL query and must not"
+    )
+
+
+async def test_the_real_keyword_arm_cannot_read_another_tenants_passage(
+    scratch: _Scratch, clause_chunks: dict[int, int]
+):
+    """The same proof as above, made against the shipping code rather than a hand query.
+
+    The test above asserts that *a* full-text statement is filtered by the policy. This
+    one runs :meth:`aegis.retrieval.lightrag_backend.LightRAGBackend.keyword_recall` —
+    the actual corpus-wide arm the pipeline fuses into every answer — over a connection
+    made as the ``NOSUPERUSER NOBYPASSRLS`` role, which is the shape production runs in
+    (``app.retrieval.pipeline`` injects the serving session factory for exactly this
+    reason). The distinction matters: a hand-written query proves the database is
+    isolated, and only the real method proves the *retrieval path* is.
+
+    Asserted on content, and in both directions, so a policy hard-coded to one tenant
+    would still fail.
+    """
+    from aegis.retrieval.lightrag_backend import LightRAGBackend
+
+    engine = _app_engine(scratch)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    backend = LightRAGBackend(_never_called, _never_called, session_factory=maker)
+    try:
+        for tenant_id in (_TENANT_A, _TENANT_B):
+            hits = await backend.keyword_recall(
+                _CLAUSE_QUERY, top_k=50, scope=RetrievalScope(tenant_id=tenant_id)
+            )
+            texts = [candidate.text for candidate in hits]
+            assert texts == [_CHUNK_TEXT[tenant_id]], (
+                f"the keyword arm under tenant {tenant_id} returned {texts} — it can "
+                "read another tenant's passage, or it can no longer read its own"
             )
     finally:
         await engine.dispose()

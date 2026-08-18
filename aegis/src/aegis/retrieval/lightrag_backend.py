@@ -29,15 +29,25 @@ it assumes a single writing process. At Aegis's corpus scale that is a good trad
 "zero servers"; at very large scale the fix is to point ``vector_storage`` at a real
 service again, which is a one-line change here.
 
-Everything that touches the `lightrag`, `neo4j`, or `redis` packages is imported lazily
-inside methods, so this module (and the whole `aegis.retrieval` package) imports cleanly
-with no LightRAG install and no live stores.
+**The lexical arm deliberately does not go through LightRAG.** :meth:`
+LightRAGBackend.keyword_recall` queries the ``chunks`` table directly with PostgreSQL
+full-text search, because LightRAG exposes no per-query metadata predicate to push a
+tenant down into — the same limitation :meth:`LightRAGBackend._context` documents, where
+foreign rows can only be discarded on the way *out*. A keyword arm built that way would
+have to fetch another tenant's passages in order to drop them. Reading the corpus table
+itself puts the tenant filter and the keyword match on one row and one ``WHERE`` clause,
+which is the property D5 chose Postgres FTS for.
+
+Everything that touches the `lightrag`, `neo4j`, `redis` or `sqlalchemy` packages is
+imported lazily inside methods, so this module (and the whole `aegis.retrieval` package)
+imports cleanly with no LightRAG install, no `aegis[data]` extra and no live stores.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from aegis.core.models import ModelRole
@@ -50,7 +60,18 @@ from aegis.retrieval.types import (
     GraphNode,
     RetrievalOrigin,
     RetrievalScope,
+    tenant_metadata_value,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, keeps sqlalchemy out of the import
+    from collections.abc import Callable
+    from contextlib import AbstractAsyncContextManager
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    #: Anything that opens a session when called — ``async_sessionmaker`` satisfies it,
+    #: and so does a one-line lambda over a host's own request-path session factory.
+    SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 #: Dimension of `text-embedding-3-large` (the default embedding model this backend
 #: targets). Independent of :attr:`~aegis.retrieval.pipeline.RetrievalConfig.embed_dim`
@@ -79,6 +100,56 @@ _TENANT_TAG_SEP = "::"
 #: between "owned by the shared corpus" and "we cannot tell", which must not be conflated
 #: when the answer is about to cross a tenant boundary.
 _ATTRIBUTED_KEY = "tenant_attributed"
+
+#: The PostgreSQL text search configuration both halves of the lexical arm use. It is
+#: the query-side twin of the ``to_tsvector('english', content)`` expression that
+#: generates :attr:`aegis.jobs.models.Chunk.search_vector`: parse a query under one
+#: configuration and index the corpus under another and the two stem differently, which
+#: does not raise — it silently matches less.
+_FTS_CONFIG = "english"
+
+#: The query, turned into a ``tsquery`` whose terms are OR-ed rather than AND-ed.
+#:
+#: ``plainto_tsquery`` AND-s every term, so "what does clause 7.3.2 cap?" would only
+#: match a passage containing *all* of those words — which is precisely the passage this
+#: arm exists to find and precisely the constraint that would lose it. BM25, the ranker
+#: this replaces, is disjunctive: a document matching one rare term scores, and ranking
+#: (not matching) is what separates it from a document matching one common one. Rewriting
+#: the connective preserves that, and it is done on ``plainto_tsquery``'s **output** —
+#: already normalised, stemmed and stripped of operators — so no user text is ever
+#: interpolated into SQL. ``plainto_tsquery`` emits ``&`` and nothing else (no ``!``, no
+#: ``<->``), so the rewrite has exactly one thing to change.
+_TSQUERY_SQL = f"replace(plainto_tsquery('{_FTS_CONFIG}', :query)::text, '&', '|')::tsquery"
+
+#: PostgreSQL's length-normalisation flag: divide the rank by ``1 + log(length)`` of the
+#: matched ``tsvector``. It is the closest thing the built-in rankers have to BM25's
+#: length normalisation (``b``), and without it a long passage outranks a short one for
+#: having more room to hold the query's words rather than for being a better answer.
+_RANK_NORMALISATION = 1
+
+#: Corpus-wide lexical recall over one tenant's chunks.
+#:
+#: The tenant predicate and the full-text predicate sit on the same row of the same
+#: table, which is the whole argument for Postgres FTS over a second BM25 index (D5): the
+#: filter is a ``WHERE`` clause, not another system to keep in sync. The ``documents``
+#: join is a ``LEFT`` join on purpose — a citation with no filename is worse than useless
+#: but a *lost hit* is worse still, so provenance degrades before recall does.
+_KEYWORD_SQL = f"""
+    SELECT c.id,
+           c.content,
+           c.tenant_id,
+           c.document_id,
+           c.meta,
+           d.filename,
+           ts_rank(c.search_vector, {_TSQUERY_SQL}, {_RANK_NORMALISATION})
+               AS lexical_rank
+      FROM chunks AS c
+      LEFT JOIN documents AS d ON d.id = c.document_id
+     WHERE c.tenant_id = :tenant
+       AND c.search_vector @@ {_TSQUERY_SQL}
+     ORDER BY lexical_rank DESC, c.id
+     LIMIT :limit
+"""
 
 _ENTITY_TYPES: tuple[str, ...] = (
     "organization",
@@ -139,6 +210,7 @@ class LightRAGBackend:
         config: object | None = None,
         working_dir: str = "rag_storage",
         extract_role: ModelRole = ModelRole.CHEAP,
+        session_factory: SessionFactory | None = None,
     ) -> None:
         """Initialise the backend (does not connect until `_ensure()` runs).
 
@@ -149,6 +221,13 @@ class LightRAGBackend:
                 to a fresh `~aegis.retrieval.pipeline.RetrievalConfig()`.
             working_dir: Portable relative directory for LightRAG's local bookkeeping.
             extract_role: Model role used for LightRAG's extraction LLM calls.
+            session_factory: Opens the sessions :meth:`keyword_recall` reads ``chunks``
+                over. A host that already has a pooled, **unprivileged** serving engine
+                should inject it: reusing that connection means the RLS policy on
+                ``chunks`` applies to the lexical arm as well, so the tenant predicate
+                below is the second line of defence rather than the only one. Left
+                unset, the backend builds its own engine from ``config.postgres_dsn``
+                on first use.
         """
         self._complete = complete
         self._embed = embed
@@ -160,6 +239,7 @@ class LightRAGBackend:
         self._working_dir = working_dir
         self._extract_role = extract_role
         self._rag: object | None = None
+        self._session_factory = session_factory
 
     def _build_llm_func(self) -> object:
         """Return an async callable matching LightRAG's `llm_model_func` signature."""
@@ -328,6 +408,103 @@ class LightRAGBackend:
             lists=[vector_list, graph_list], nodes=graph.nodes, edges=graph.edges
         )
 
+    def _sessions(self) -> SessionFactory:
+        """Return the session factory the lexical arm reads ``chunks`` over.
+
+        Built from ``config.postgres_dsn`` on first use when the host injected nothing,
+        and cached: one engine (and one connection pool) per backend instance, with the
+        same lifetime as the LightRAG instance beside it. The import is local because
+        ``aegis.retrieval`` must stay importable without the ``aegis[data]`` extra — the
+        guard in ``tests/retrieval/test_isolation.py`` is what holds that to it.
+
+        Returns:
+            A callable that opens an :class:`~sqlalchemy.ext.asyncio.AsyncSession`.
+        """
+        if self._session_factory is None:
+            from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+            engine = create_async_engine(_asyncpg_dsn(self._config.postgres_dsn))
+            self._session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        return self._session_factory
+
+    async def keyword_recall(
+        self, query: str, *, top_k: int, scope: RetrievalScope
+    ) -> list[Candidate]:
+        """Search the tenant's **whole corpus** by keyword, via PostgreSQL FTS.
+
+        This is :class:`~aegis.retrieval.protocols.KeywordBackend`, and implementing it
+        is what turns the pipeline's BM25 pass from a re-ranking of the ~20 candidates
+        the dense arms already found into a genuine third recall arm. The distinction is
+        not cosmetic: an exact identifier — a clause number, a case number, a part number
+        — is what dense embeddings are worst at, and a pass that can only reorder what
+        the dense arms returned can never surface the passage they missed.
+
+        **Honestly, what the ranking is.** ``ts_rank`` is **not** Okapi BM25. It shares
+        two of BM25's three ideas — repeated occurrences of one term saturate rather than
+        accumulate (BM25's ``k1``), and :data:`_RANK_NORMALISATION` divides by document
+        length (BM25's ``b``) — and it is missing the third and most important one, IDF.
+        Nothing here weights a rare identifier above a common word; a passage ranks above
+        another because it covers more of the query's terms, not because the terms it
+        covers are rarer. **What would be better** is a real BM25 index, rejected in D5 on
+        tenant-isolation and dependency grounds, and listed there under more-time.
+
+        That gap matters less than it sounds, for a specific reason: RRF fuses the arms on
+        **rank**, not on score. Two rankers that agree on an ordering fuse identically
+        however differently they number it, so what this arm owes the pipeline is a
+        sensible order, not a calibrated score. What the missing IDF does cost is ordering
+        quality *within* this arm.
+
+        ``ts_rank`` rather than ``ts_rank_cd``, and that choice was measured rather than
+        assumed. ``ts_rank_cd`` is proportional to the number of covers, so on this
+        query class a passage repeating one common query word ("clause", four times)
+        outranks the passage that actually carries the identifier — the exact failure the
+        arm exists to fix. ``ts_rank``'s saturation puts the identifier first.
+
+        The scope resolves to exactly one tenant. ``chunks.tenant_id`` is ``NOT NULL``
+        (see :class:`aegis.jobs.models.Chunk`), so the shared, tenant-less corpus owns no
+        rows in this table and an unscoped request has nothing here to read — it returns
+        empty rather than widening to everyone's rows. A scope that cannot be resolved at
+        all raises, via :meth:`~aegis.retrieval.types.RetrievalScope.resolved_tenant_id`.
+
+        A database that is unreachable raises rather than returning ``[]``: an empty list
+        from this method means "no passage matched", and a retrieval arm that quietly
+        stops running while still reporting itself as having run is the defect class this
+        pipeline's provenance exists to prevent.
+
+        Args:
+            query: The user query.
+            top_k: Maximum number of matches to return.
+            scope: The request's retrieval scope.
+
+        Returns:
+            Up to ``top_k`` matching chunks as candidates, best first; empty when the
+            query has no searchable terms or nothing in the tenant's corpus matches.
+        """
+        tenant_id = scope.resolved_tenant_id()
+        if tenant_id is None or top_k <= 0:
+            return []
+
+        from sqlalchemy import text
+
+        from aegis.governance.rls import set_tenant_scope
+
+        async with self._sessions()() as session:
+            # Bind the tenant GUC on this session before reading: it makes the
+            # ``tenant_isolation`` policy engage for this transaction, so on a serving
+            # role the database enforces the boundary the WHERE clause below asks for.
+            # Both are kept — the predicate is what an engine-less deployment relies on,
+            # the policy is what a mistake in the predicate runs into.
+            await set_tenant_scope(session, tenant_id)
+            rows = (
+                await session.execute(
+                    text(_KEYWORD_SQL),
+                    {"query": query, "tenant": tenant_id, "limit": top_k},
+                )
+            ).mappings().all()
+            await session.rollback()
+
+        return [_keyword_candidate(row) for row in rows]
+
     async def knowledge_graph(
         self, *, max_nodes: int = 500
     ) -> tuple[list[GraphNode], list[GraphEdge]] | None:
@@ -495,6 +672,68 @@ def _delta(before: int | None, after: int | None) -> int | None:
     if before is None:
         return after
     return max(0, after - before)
+
+
+def _asyncpg_dsn(dsn: str) -> str:
+    """Return ``dsn`` with an async driver, so SQLAlchemy can open it from async code.
+
+    The store settings are written once, in one form (``postgresql://…``), and read by
+    both LightRAG's own synchronous storages and the async engine the lexical arm needs.
+    Rewriting the scheme here rather than asking a host to configure the DSN twice keeps
+    those two from drifting apart.
+
+    Args:
+        dsn: The configured PostgreSQL DSN.
+
+    Returns:
+        The same DSN carrying the ``asyncpg`` driver; a DSN that already names a driver
+        is returned untouched, so an explicit choice is never overridden.
+    """
+    if dsn.startswith("postgresql+"):
+        return dsn
+    if dsn.startswith("postgresql://"):
+        return dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if dsn.startswith("postgres://"):
+        return dsn.replace("postgres://", "postgresql+asyncpg://", 1)
+    return dsn
+
+
+def _keyword_candidate(row: object) -> Candidate:
+    """Turn one ``chunks`` row from the FTS query into a rerankable candidate.
+
+    The metadata is deliberately the *same shape* the vector/graph arms produce (see
+    :func:`_candidates_from_payload`), so a fused list is uniform whichever arm recalled
+    a given passage. :data:`_ATTRIBUTED_KEY` is ``True`` because ownership here is not
+    inferred from a path this module wrote and parsed back: it is the row's own
+    ``NOT NULL`` column, and it was the query's predicate.
+
+    The ``ts_rank`` value is carried in the metadata rather than in ``Candidate.score``.
+    That field is filled by the reranker on a scale comparable across arms; a text-search
+    rank is not on that scale, and putting it there would make the two look
+    interchangeable in a sorted list.
+
+    Args:
+        row: A mapping row from :data:`_KEYWORD_SQL`.
+
+    Returns:
+        The candidate, carrying its source path, its owning tenant and the rank that
+        selected it.
+    """
+    meta = row["meta"] if isinstance(row["meta"], dict) else {}
+    return Candidate(
+        id=str(row["id"]),
+        text=str(row["content"]),
+        metadata={
+            # The chunk's own recorded source if the ingest wrote one, else the
+            # document's filename. Never a synthesised path: a citation that points at
+            # something invented is worse than one that points at nothing.
+            "file_path": meta.get("source") or row["filename"],
+            "document_id": row["document_id"],
+            TENANT_METADATA_KEY: tenant_metadata_value(row["tenant_id"]),
+            _ATTRIBUTED_KEY: True,
+            "ts_rank": float(row["lexical_rank"]),
+        },
+    )
 
 
 def _tag_file_path(source: str, tenant_value: str | None) -> str:
