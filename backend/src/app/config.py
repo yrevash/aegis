@@ -124,6 +124,31 @@ class Settings(BaseSettings):
     # path is also launchable standalone as ``python -m app.jobs.worker``. Gated on the
     # real stores, because an activity with no database has nothing to write.
     temporal_worker_inprocess: bool = Field(default=True)
+    # ── Reconciliation (§3.3) ────────────────────────────────────────────────
+    # How often the reconciler's Temporal Schedule sweeps for open job rows whose
+    # workflow no longer exists. A Schedule and not a ``next_run_at`` column: see
+    # :mod:`app.jobs.schedules`.
+    temporal_reconcile_interval_seconds: int = Field(default=300)
+    # How long a row may sit RUNNING before the sweep questions it. Comfortably longer
+    # than the slowest stage's own timeout (``parse``: 1800s), because a sweep that
+    # questioned a job still inside its legitimate attempt window would fight the
+    # pipeline it exists to protect.
+    temporal_reconcile_stale_after_seconds: int = Field(default=3600)
+    # Most rows examined per sweep. Bounded because each row costs one RPC to the
+    # orchestrator, and an unbounded sweep after an outage would be a thundering herd
+    # against the server that is already struggling.
+    temporal_reconcile_batch: int = Field(default=50)
+    # ── Re-index debounce and cadence (§3.5) ─────────────────────────────────
+    # How long a tenant's re-index window stays open for more requests. Every request
+    # resets it, which is what folds a burst of uploads into one re-index.
+    temporal_reindex_debounce_seconds: int = Field(default=30)
+    # How far that window may be pushed out in total. Without a ceiling, a tenant
+    # uploading steadily would reset the timer forever and never be re-indexed at all.
+    temporal_reindex_max_wait_seconds: int = Field(default=600)
+    # The re-index cadence, per tenant, when a schedule is created for one. Daily by
+    # default: the debounce covers freshness after real changes, so this is the floor
+    # that catches drift nothing signalled.
+    temporal_reindex_interval_seconds: int = Field(default=86_400)
 
     # ── Guardrails engine (one policy, two front doors; docs/security/overview.md §3) ──
     # Two front doors enforce the same policy: the fast, offline-testable

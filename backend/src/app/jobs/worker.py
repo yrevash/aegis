@@ -40,7 +40,18 @@ from temporalio.worker import Worker
 from app.config import get_settings
 from app.jobs.activities import ALL_ACTIVITIES
 from app.jobs.client import get_temporal_client
-from app.jobs.flows import IngestWorkflow
+from app.jobs.flows import (
+    IngestWorkflow,
+    ReconcileWorkflow,
+    ReindexCadenceWorkflow,
+    ReindexWorkflow,
+)
+from app.jobs.reconcile import RECONCILE_ACTIVITIES
+from app.jobs.reindex import REINDEX_ACTIVITIES
+from app.jobs.schedules import (
+    ensure_platform_schedules,
+    ensure_tenant_reindex_schedules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +64,21 @@ __all__ = [
 
 #: Every workflow this platform runs. Registered only on the queue whose
 #: :attr:`aegis.jobs.QueueSpec.runs_workflows` is true.
-_WORKFLOWS = (IngestWorkflow,)
+_WORKFLOWS = (
+    IngestWorkflow,
+    ReconcileWorkflow,
+    ReindexWorkflow,
+    ReindexCadenceWorkflow,
+)
+
+#: Every activity a worker registers, from all three implementation modules.
+#:
+#: Composed here rather than in one of them because the alternative is an import cycle:
+#: :mod:`app.jobs.reconcile` and :mod:`app.jobs.reindex` both build on
+#: :mod:`app.jobs.activities`, so that module cannot in turn import them. The composition
+#: is a tuple splat and not a loop precisely so that a module whose activities were left
+#: out is visible here as a missing name rather than as work nothing ever picks up.
+_ACTIVITIES = (*ALL_ACTIVITIES, *RECONCILE_ACTIVITIES, *REINDEX_ACTIVITIES)
 
 
 def configured_queues() -> tuple[QueueSpec, ...]:
@@ -100,7 +125,7 @@ def build_workers(client: Client, queues: tuple[QueueSpec, ...] | None = None) -
             Worker(
                 client,
                 task_queue=spec.name,
-                activities=list(ALL_ACTIVITIES),
+                activities=list(_ACTIVITIES),
                 workflows=list(_WORKFLOWS) if spec.runs_workflows else [],
                 max_concurrent_activities=spec.max_concurrent_activities,
             )
@@ -163,6 +188,23 @@ def _report_unhandled_stages() -> None:
         )
 
 
+def _report_unregistered_reindex() -> None:
+    """Say at startup if nothing can perform a re-index.
+
+    The same reasoning as :func:`_report_unhandled_stages`, for the other registry: a
+    re-index with no handler fails its activity — correctly, because recording a
+    ``succeeded`` run for work that never happened would misreport the tenant's index as
+    fresh — but the first time anyone learns that is a cadence tick hours later. A line at
+    boot turns it into something an operator sees before the schedule does.
+    """
+    from app.jobs.reindex import reindex_handler  # noqa: PLC0415 - local
+
+    try:
+        reindex_handler()
+    except LookupError as exc:
+        logger.warning("%s", exc)
+
+
 async def run_workers(stop: asyncio.Event | None = None) -> None:
     """Run every configured worker until ``stop`` is set or the task is cancelled.
 
@@ -181,13 +223,22 @@ async def run_workers(stop: asyncio.Event | None = None) -> None:
     """
     _wire_session_factory()
     _report_unhandled_stages()
-    client = await get_temporal_client()
-    workers = build_workers(client)
-    if not workers:
+    _report_unregistered_reindex()
+    queues = configured_queues()
+    if not queues:
         raise RuntimeError(
             "no task queues configured, so this worker would poll nothing and every "
             "job submitted to it would sit unclaimed forever; check TEMPORAL_TASK_QUEUES"
         )
+    client = await get_temporal_client()
+    if any(spec.runs_workflows for spec in queues):
+        # Only the process that can actually execute them declares them. A worker pinned
+        # to the CPU queue creating the reconciler's schedule would be declaring recurring
+        # work it cannot run, and the schedule would fire into a queue this process does
+        # not serve.
+        await ensure_platform_schedules(client)
+        await ensure_tenant_reindex_schedules(client)
+    workers = build_workers(client, queues)
     async with asyncio.TaskGroup() as group:
         for worker in workers:
             group.create_task(worker.run())

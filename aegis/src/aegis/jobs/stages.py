@@ -450,6 +450,16 @@ class StageHandler(Protocol):
     A handler that also writes rows of its own (chunks, embeddings) must write them on
     the session it is given, for the same reason: a second session is a second
     transaction, and a second transaction is where the stage commit rule dies.
+
+    Those writes must be **delete-then-insert within the transaction, or an upsert —
+    never a bare insert.** The substrate guarantees that a handler is invoked at most once
+    per committed stage (it locks the document row and commits the ``completed_stage``
+    bump in the same transaction as the handler's work), so a bare insert is safe against
+    *replay*. It is not safe against the case that guarantee cannot cover: an attempt that
+    wrote its chunks and then failed at the last statement rolls back — but an attempt
+    that wrote them, was retried for an unrelated reason, and succeeded on the second pass
+    would leave the first pass's rows behind if anything committed between the two. Making
+    the write idempotent in SQL costs one clause and removes the question entirely.
     """
 
     async def __call__(

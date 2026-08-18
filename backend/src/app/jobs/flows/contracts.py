@@ -26,11 +26,22 @@ from aegis.jobs.scope import ActivityInput
 
 __all__ = [
     "FINISH_INGEST",
+    "RECONCILE_STALE_RUNS",
+    "REQUEST_REINDEX",
+    "RUN_REINDEX",
     "RUN_STAGE",
     "START_INGEST",
     "FinishInput",
     "IngestParams",
     "IngestResult",
+    "ReconcileParams",
+    "ReconcileReport",
+    "ReindexCadenceParams",
+    "ReindexInput",
+    "ReindexParams",
+    "ReindexRequest",
+    "ReindexResult",
+    "ReindexTickInput",
     "StageInput",
     "StageOutcome",
     "StartOutcome",
@@ -45,6 +56,9 @@ __all__ = [
 START_INGEST = "aegis_start_ingest"
 RUN_STAGE = "aegis_run_stage"
 FINISH_INGEST = "aegis_finish_ingest"
+RECONCILE_STALE_RUNS = "aegis_reconcile_stale_runs"
+RUN_REINDEX = "aegis_run_reindex"
+REQUEST_REINDEX = "aegis_request_reindex"
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,3 +170,144 @@ class IngestResult:
 
     document_id: int
     stages_run: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileParams(ActivityInput):
+    """The reconciler sweep's argument.
+
+    An :class:`~aegis.jobs.scope.ActivityInput` with ``tenant_id=None``: the sweep reads
+    *every* tenant's open rows, which is why the activity implementing it is the one
+    place in this package that declares ``allow_platform_scope=True``. Spelling the
+    ``None`` out on a typed argument rather than leaving it implicit is the whole point of
+    that flag — see :func:`aegis.jobs.scope.tenant_activity`.
+
+    Attributes:
+        tenant_id: Always ``None``. Present because every activity argument carries it.
+        workflow_id: The reconciler's own execution id, so its log lines join to the
+            orchestrator's history like any other run's.
+        stale_after_seconds: How old an open row must be before it is examined. Not zero:
+            a row is legitimately ``RUNNING`` for as long as its work takes, and a sweep
+            that questioned a job the instant it started would fight the pipeline it is
+            supposed to protect.
+        limit: Most rows examined in one sweep. Bounded because each row costs an RPC to
+            the orchestrator, and an unbounded sweep after an outage would be a thundering
+            herd against the server that is already struggling.
+    """
+
+    stale_after_seconds: int
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileReport:
+    """What one reconciliation sweep found and did.
+
+    Counts rather than rows: this is what the schedule's history shows an operator, and a
+    sweep that returned every row it looked at would put tenant data into the
+    orchestrator's history, which is not a store this platform treats as governed.
+
+    Attributes:
+        examined: Open rows older than the threshold that were checked.
+        left: Rows whose workflow really is still running, so nothing was done.
+        failed: Rows closed as ``FAILED`` with a reason on the row.
+        cancelled: Rows closed as ``CANCELLED`` because the execution was cancelled.
+        restarted: Rows whose workflow was re-started to finish the work and close the
+            row. They are left in ``RECONCILING`` until the new execution claims them.
+    """
+
+    examined: int
+    left: int
+    failed: int
+    cancelled: int
+    restarted: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexRequest:
+    """One re-index request, as it arrives at the debounce window.
+
+    Attributes:
+        tenant_id: Whose corpus to re-index. Also the per-tenant workflow id's key, which
+            is what makes the debounce per tenant rather than global — one tenant's upload
+            burst must never delay another tenant's re-index.
+        reason: Why it was asked for ("document 41 ingested", "settings changed"). Kept
+            because ten folded requests with ten different reasons is the evidence that
+            the fold happened, and a bare count is not.
+    """
+
+    tenant_id: int | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexParams:
+    """The debounced re-index workflow's own argument.
+
+    Attributes:
+        tenant_id: The tenant whose corpus this execution re-indexes.
+        debounce_seconds: How long the workflow waits for another request before it runs.
+            Every request that arrives resets it, which is what folds a burst into one
+            run — see :class:`app.jobs.flows.reindex.ReindexWorkflow`.
+        max_wait_seconds: A ceiling on the folding, because an unlucky tenant uploading
+            one document every few seconds would otherwise push the deadline out forever
+            and never be re-indexed at all. Debounce without this is a starvation bug.
+    """
+
+    tenant_id: int | None
+    debounce_seconds: int
+    max_wait_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexInput(ActivityInput):
+    """The re-index activity's argument — the folded window, as one unit of work.
+
+    Attributes:
+        folded: How many requests this run stands for. One is an ordinary re-index; ten
+            is the debounce having done its job.
+        reasons: The reasons those requests carried, in arrival order.
+    """
+
+    folded: int
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexCadenceParams:
+    """The cadence workflow's argument: which tenant's schedule just fired.
+
+    Attributes:
+        tenant_id: The tenant whose schedule this is. One schedule per tenant, because
+            "every tenant, hourly" in a single run would make the slowest tenant's corpus
+            the cadence for everyone else's.
+    """
+
+    tenant_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexTickInput(ActivityInput):
+    """One cadence tick, on its way to the debounce window.
+
+    Attributes:
+        reason: What to record against the run this tick folds into.
+    """
+
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexResult:
+    """What one debounced re-index execution did.
+
+    Attributes:
+        tenant_id: The tenant re-indexed.
+        folded: How many requests the single run stands for.
+        job_run_id: The ``job_runs`` row recording it, so the run is visible to the
+            console with the orchestrator switched off.
+    """
+
+    tenant_id: int | None
+    folded: int
+    job_run_id: int

@@ -23,9 +23,13 @@ records its completion, and then run again. Both writing activities here are key
 
 * the ``completed_stage`` bump is ``UPDATE ... WHERE completed_stage IS DISTINCT FROM
   :stage``, so a replay updates zero rows instead of double-counting;
-* the ``job_runs`` insert is ``ON CONFLICT (workflow_id) DO NOTHING``, because
+* the ``job_runs`` insert is ``ON CONFLICT (workflow_id) DO UPDATE``, because
   ``workflow_id`` is unique precisely so that two rows claiming one execution is a state
-  the database refuses to hold.
+  the database refuses to hold. ``DO NOTHING`` was wrong here: a reconciler restart left
+  the row reading ``RECONCILING`` for the whole of the run that was by then genuinely
+  under way. The conflict path re-opens ``run_id``/``status`` and clears
+  ``error``/``finished_at``, but deliberately does not re-stamp ``started_at`` — the
+  execution began when it began.
 
 The guard is in the ``WHERE`` clause rather than in a Python ``if``, and that is not
 style: a read-then-write with the decision in Python is the SELECT-then-guarded-UPDATE
@@ -150,7 +154,9 @@ async def _run_with_heartbeat(work: Awaitable[Any], interval_seconds: float) -> 
     return task.result()
 
 
-async def _load_document(session: AsyncSession, document_id: int) -> Document:
+async def _load_document(
+    session: AsyncSession, document_id: int, *, lock: bool = False
+) -> Document:
     """Load a document through the caller's tenant scope, or fail non-retryably.
 
     The read is a plain primary-key select with **no** ``WHERE tenant_id = ...``: the
@@ -162,6 +168,13 @@ async def _load_document(session: AsyncSession, document_id: int) -> Document:
     Args:
         session: The scoped session supplied by ``@tenant_activity``.
         document_id: The document to load.
+        lock: Take a ``FOR UPDATE`` row lock. :func:`run_stage` sets it, because the
+            "has this stage already committed?" decision it makes next is a *read* that
+            a second concurrent attempt would make identically — and two attempts of one
+            stage running the handler twice is the double-billing this substrate exists
+            to prevent. The lock is what turns that Python comparison from a race into a
+            serialisation point; readers are unaffected, since ``FOR UPDATE`` blocks only
+            other writers of the same row.
 
     Returns:
         The document row.
@@ -172,9 +185,10 @@ async def _load_document(session: AsyncSession, document_id: int) -> Document:
             neither is fixed by trying again — retrying would burn the stage's whole
             attempt budget rediscovering the same absence.
     """
-    document = (
-        await session.execute(select(Document).where(Document.id == document_id))
-    ).scalar_one_or_none()
+    statement = select(Document).where(Document.id == document_id)
+    if lock:
+        statement = statement.with_for_update()
+    document = (await session.execute(statement)).scalar_one_or_none()
     if document is None:
         raise ApplicationError(
             f"document {document_id} is not visible under this tenant scope: it does not "
@@ -196,9 +210,24 @@ async def start_ingest(
     argument type; its ``stage`` field carries the *job type* here, which keeps one shape
     on the wire for every activity in this module.
 
-    The insert is ``ON CONFLICT (workflow_id) DO NOTHING`` and the document update is
-    guarded, so calling this twice for one workflow — which a replay does — produces one
-    job row and one claim.
+    The write is an **upsert on ``workflow_id``**, never a bare insert, and the columns it
+    updates on conflict are exactly the ones that make a *re-claim* honest:
+
+    * ``run_id`` — the orchestrator's new attempt id, so a support engineer taking
+      ``(workflow_id, run_id)`` to the UI lands on the execution that is actually running;
+    * ``status`` back to ``RUNNING`` — this is the path the reconciler's restart takes,
+      and a row it left in ``RECONCILING`` must not stay there once a real execution has
+      picked the work back up;
+    * ``error`` and ``finished_at`` cleared — a row that has been re-opened is not a row
+      that finished, and leaving a stale terminal timestamp on it would make every
+      duration this platform reports wrong for that job.
+
+    ``started_at`` is deliberately **not** re-stamped: it is when this job first began,
+    which is the number a queue-wait or total-duration figure is measured from.
+
+    Because those updates are computed from the argument and the orchestrator's context
+    rather than accumulated, a replay writes the same values it wrote before — so calling
+    this twice for one execution produces one job row and one claim.
 
     Args:
         inp: The tenant, workflow id, document and job type.
@@ -213,20 +242,28 @@ async def start_ingest(
     """
     document = await _load_document(session, inp.document_id)
     now = _now()
+    claim = pg_insert(JobRun).values(
+        tenant_id=inp.tenant_id,
+        job_type=inp.stage,
+        workflow_id=inp.workflow_id,
+        run_id=_run_id(),
+        status=JobStatus.RUNNING,
+        completed_stage=document.completed_stage,
+        payload={"document_id": inp.document_id},
+        result={},
+        started_at=now,
+    )
     await session.execute(
-        pg_insert(JobRun)
-        .values(
-            tenant_id=inp.tenant_id,
-            job_type=inp.stage,
-            workflow_id=inp.workflow_id,
-            run_id=_run_id(),
-            status=JobStatus.RUNNING,
-            completed_stage=document.completed_stage,
-            payload={"document_id": inp.document_id},
-            result={},
-            started_at=now,
+        claim.on_conflict_do_update(
+            index_elements=["workflow_id"],
+            set_={
+                "run_id": claim.excluded.run_id,
+                "status": claim.excluded.status,
+                "completed_stage": claim.excluded.completed_stage,
+                "error": None,
+                "finished_at": None,
+            },
         )
-        .on_conflict_do_nothing(index_elements=["workflow_id"])
     )
     job_run_id = (
         await session.execute(
@@ -284,10 +321,12 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
 
     1. validate the stage name against :data:`aegis.jobs.INGEST_STAGES` — an unknown name
        would be written to ``completed_stage`` and break every future resume of the row;
-    2. load the document *through the tenant scope*, so another tenant's document is
-       simply not there;
+    2. load the document *through the tenant scope* and **lock its row**, so another
+       tenant's document is simply not there and a second concurrent attempt of this same
+       stage waits rather than racing;
     3. return early if this stage already committed — the idempotency short-circuit that
-       makes a replay free;
+       makes a replay free, and which the lock in step 2 is what makes safe: without it,
+       two attempts would both read "not yet done" and both run the handler;
     4. run the registered handler, which does its own writes on this same session;
     5. apply the handler's column updates **and** the ``completed_stage`` bump in one
        guarded ``UPDATE``.
@@ -316,7 +355,7 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
         raise ApplicationError(
             str(exc), type="UnknownStage", non_retryable=True
         ) from exc
-    document = await _load_document(session, inp.document_id)
+    document = await _load_document(session, inp.document_id, lock=True)
     if document.completed_stage == inp.stage:
         logger.info(
             "stage %s already committed for document %s (workflow %s) — replay, no-op",
@@ -367,8 +406,16 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
 
     This exists so a finished run is finished **in our tables**, not only in the
     orchestrator's history. A row left in ``RUNNING`` with no live execution behind it is
-    exactly the silent-stranding failure this substrate replaces, and the reconciler
-    (task 3.3) is the backstop for the case where even this activity never gets to run.
+    exactly the silent-stranding failure this substrate replaces, and
+    :mod:`app.jobs.reconcile` is the backstop for the case where even this activity never
+    gets to run.
+
+    Both writes are guarded ``WHERE status IS DISTINCT FROM :status``, which is what makes
+    a replay a no-op rather than a second close-out. Without the guard the second call
+    would re-stamp ``finished_at`` with a later instant, and every duration this platform
+    reports for that job would silently include the replay gap — the "double count" the
+    guarded-update rule exists to prevent, in the one column where it would never look
+    like an error.
 
     Args:
         inp: The tenant, workflow id, document, terminal status and failure reason.
@@ -395,12 +442,18 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
     now = _now()
     await session.execute(
         update(Document)
-        .where(Document.id == inp.document_id)
+        .where(
+            Document.id == inp.document_id,
+            Document.status.is_distinct_from(status),
+        )
         .values(status=status, error=inp.error)
     )
     await session.execute(
         update(JobRun)
-        .where(JobRun.workflow_id == inp.workflow_id)
+        .where(
+            JobRun.workflow_id == inp.workflow_id,
+            JobRun.status.is_distinct_from(status),
+        )
         .values(status=status, error=inp.error, finished_at=now)
     )
 

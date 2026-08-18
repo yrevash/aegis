@@ -22,6 +22,8 @@ What is proved here, and why each one is the failure it is:
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from aegis.jobs import Document, JobRun, JobStatus
 from aegis.jobs.stages import INGEST_STAGES, register_stage_handler
@@ -385,3 +387,119 @@ async def test_finishing_a_run_records_its_terminal_state_on_both_rows(
         ).scalar_one()
     assert job.status is JobStatus.FAILED
     assert job.finished_at is not None
+
+
+async def test_two_concurrent_attempts_of_one_stage_run_the_handler_once(
+    wired_jobs, stage_log
+):
+    """The idempotency short-circuit must be a lock, not a read-then-decide.
+
+    A hard-killed worker is not the only way one stage gets two attempts: a heartbeat
+    timeout can start the retry while the original attempt is still alive on a machine
+    that merely went quiet. Both would read ``completed_stage`` before either wrote it, so
+    a Python comparison alone lets both run the handler — and for ``embed`` that is the
+    provider's bill, paid twice, with nothing in any log to say why.
+    """
+    await seed_tenants(wired_jobs, TENANT_A)
+    document_id = await seed_document(wired_jobs, TENANT_A, sha=_SHA_A)
+    # A delay long enough that a second attempt reading before the first commits is a
+    # certainty rather than a race the test might lose.
+    register_recording_handlers(stage_log, delays={"parse": 0.5})
+    argument = StageInput(
+        tenant_id=TENANT_A,
+        workflow_id="ingest:7:1",
+        document_id=document_id,
+        stage="parse",
+    )
+
+    first, second = await asyncio.gather(run_stage(argument), run_stage(argument))
+
+    assert sorted([first.committed, second.committed]) == [False, True]
+    assert stage_log.stages() == ["parse"], (
+        "both attempts ran the handler: the 'already committed?' check is a read-then-"
+        f"decide race rather than a serialisation point. Handlers ran: {stage_log.stages()}"
+    )
+    document = await _document(wired_jobs, document_id)
+    assert document.completed_stage == "parse"
+    assert document.page_count == 11
+
+
+async def test_finishing_a_run_twice_does_not_move_its_finished_at(wired_jobs, stage_log):
+    """A replayed close-out must be a no-op, not a second close-out.
+
+    ``finished_at`` is the one column where a double write never looks like an error: the
+    row still says ``failed``, the reason is still right, and only the duration is quietly
+    wrong by however long the replay took.
+    """
+    await seed_tenants(wired_jobs, TENANT_A)
+    document_id = await seed_document(wired_jobs, TENANT_A, sha=_SHA_A)
+    argument = StageInput(
+        tenant_id=TENANT_A,
+        workflow_id="ingest:7:1",
+        document_id=document_id,
+        stage="ingest",
+    )
+    await start_ingest(argument)
+    finish = FinishInput(
+        tenant_id=TENANT_A,
+        workflow_id="ingest:7:1",
+        document_id=document_id,
+        status="succeeded",
+    )
+
+    await finish_ingest(finish)
+    async with wired_jobs() as session:
+        first = (
+            await session.execute(select(JobRun).where(JobRun.workflow_id == "ingest:7:1"))
+        ).scalar_one()
+        first_finished_at = first.finished_at
+    await finish_ingest(finish)
+
+    async with wired_jobs() as session:
+        second = (
+            await session.execute(select(JobRun).where(JobRun.workflow_id == "ingest:7:1"))
+        ).scalar_one()
+    assert second.status is JobStatus.SUCCEEDED
+    assert second.finished_at == first_finished_at
+
+
+async def test_claiming_a_reconciled_run_re_opens_its_row(wired_jobs, stage_log):
+    """The reconciler's restart path, from the claiming end.
+
+    The reconciler marks a row ``RECONCILING`` and starts a fresh execution under the same
+    workflow id. If the claim were an insert that did nothing on conflict, that row would
+    stay ``RECONCILING`` for the whole of the run that is now genuinely under way — a
+    status nothing else sweeps and no tenant can interpret.
+    """
+    await seed_tenants(wired_jobs, TENANT_A)
+    document_id = await seed_document(wired_jobs, TENANT_A, sha=_SHA_A)
+    argument = StageInput(
+        tenant_id=TENANT_A,
+        workflow_id="ingest:7:1",
+        document_id=document_id,
+        stage="ingest",
+    )
+    await start_ingest(argument)
+    await finish_ingest(
+        FinishInput(
+            tenant_id=TENANT_A,
+            workflow_id="ingest:7:1",
+            document_id=document_id,
+            status="failed",
+            error="the orchestrator lost this workflow",
+        )
+    )
+
+    outcome = await start_ingest(argument)
+
+    async with wired_jobs() as session:
+        row = (
+            await session.execute(select(JobRun).where(JobRun.workflow_id == "ingest:7:1"))
+        ).scalar_one()
+    assert row.id == outcome.job_run_id
+    assert row.status is JobStatus.RUNNING
+    assert row.error is None
+    assert row.finished_at is None, (
+        "the re-opened run still carries the previous attempt's end time, so its duration "
+        "is a number about a run that is not this one"
+    )
