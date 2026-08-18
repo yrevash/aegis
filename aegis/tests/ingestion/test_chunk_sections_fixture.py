@@ -16,10 +16,8 @@ from datetime import date
 
 import pytest
 
-from aegis.ingestion import BlockKind, ParsedDocument, parse_pdf
+from aegis.ingestion import BlockKind, ParsedDocument
 from aegis.retrieval.chunker import DocumentContext, chunk_prefix, chunk_sections
-
-from .conftest import fixture_pdf
 
 pytest.importorskip("docling", reason="the 'ingestion' extra is not installed")
 
@@ -28,9 +26,9 @@ _NON_BODY = {BlockKind.HEADING, BlockKind.PAGE_HEADER, BlockKind.PAGE_FOOTER}
 
 
 @pytest.fixture(scope="module")
-def transformer() -> ParsedDocument:
+def transformer(parsed_transformer) -> ParsedDocument:
     """One real 15-page single-column parse, reused across this module."""
-    return parse_pdf(fixture_pdf("transformer-single-column.pdf"))
+    return parsed_transformer
 
 
 @pytest.fixture(scope="module")

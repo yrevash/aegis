@@ -9,7 +9,8 @@ Stage        Queue           What it does
 ===========  ==============  ==========================================================
 ``parse``    ``aegis-cpu``   Docling reads the stored bytes into a structured tree, and
                              the tree is written beside them as the parse artifact.
-                             Returns ``page_count`` and the derived ``title``.
+                             Returns ``page_count``, the derived ``title`` and the
+                             D-parse ``parse_confidence``.
 ``chunk``    ``aegis-...``   Packs the parsed sections into ``chunks`` rows, with the
                              D7 prefix, the page/bbox spans and the tenant on every row.
                              Returns ``chunk_count``.
@@ -58,6 +59,7 @@ from typing import Any
 
 from aegis.ingestion import ParsedDocument, parse_pdf
 from aegis.ingestion.blocks import BlockKind
+from aegis.ingestion.quality import LOW_CONFIDENCE
 from aegis.jobs.models import Chunk, Document
 from aegis.jobs.stages import INGEST_STAGES, register_stage_handler
 from aegis.retrieval.chunker import DocumentContext, SectionChunk, chunk_sections
@@ -396,6 +398,16 @@ async def parse_stage(
     the structure costs 0.4–3.2 seconds a page. That artifact — not a re-parse — is what
     the next stage reads.
 
+    **A low-confidence parse is flagged, not blocked**, and that is a decision rather than
+    an omission. ``parse_confidence`` (D-parse; :mod:`aegis.ingestion.quality`) is written
+    to the row and logged at WARNING with the reasons behind it, and the ingest continues.
+    Raising here would fail the activity, and the orchestrator would then re-parse a
+    126-page document twice more to reach the same verdict — while the check itself is a
+    *disagreement* detector that has a known false-positive mode on PDFs whose content
+    stream is emitted out of visual order. Refusing a document on a signal that cannot say
+    which of two readings is wrong would be a gate that blocks legitimate work, which is
+    its own failure. So the tenant gets the document *and* the warning.
+
     Args:
         session: The scoped session, inside this stage's transaction.
         tenant_id: The tenant the substrate bound the scope to.
@@ -403,7 +415,8 @@ async def parse_stage(
         stage: The stage name (``"parse"``).
 
     Returns:
-        ``page_count`` and ``title``, applied by the substrate with the stage bump.
+        ``page_count``, ``title`` and ``parse_confidence``, applied by the substrate with
+        the stage bump.
 
     Raises:
         ApplicationError: Non-retryable, when the document is not visible or its bytes
@@ -436,19 +449,35 @@ async def parse_stage(
         sha256=document.content_sha256,
         payload=dumps_parsed(parsed),
     )
+    quality = parsed.quality
     logger.info(
-        "parsed document %s: %d page(s), %d block(s), %d table(s), OCR %s (%s) in %.1fs",
+        "parsed document %s: %d page(s), %d block(s), %d table(s), OCR %s (%s), "
+        "parse confidence %s in %.1fs",
         document_id,
         parsed.page_count,
         len(parsed.blocks),
         parsed.table_count,
         "on" if parsed.ocr.enabled else "off",
         parsed.ocr.reason,
+        "not scored" if quality is None else f"{quality.confidence:.2f}",
         parsed.parse_seconds,
     )
+    if quality is not None and quality.is_low:
+        # The one line that makes a silent bad parse audible. It names every signal, not
+        # only the score, because "0.57" tells a person nothing they can act on and
+        # "reading order DISAGREES with the raw text layer" tells them what to look at.
+        logger.warning(
+            "document %s parsed at LOW confidence %.2f (below %.2f) — indexed and "
+            "searchable, but its reading order is suspect: %s",
+            document_id,
+            quality.confidence,
+            LOW_CONFIDENCE,
+            "; ".join(quality.reasons),
+        )
     return {
         "page_count": parsed.page_count,
         "title": _derive_title(parsed, document.filename),
+        "parse_confidence": None if quality is None else quality.confidence,
     }
 
 

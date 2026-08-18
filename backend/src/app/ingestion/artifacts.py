@@ -39,13 +39,18 @@ from aegis.ingestion.blocks import (
     ParsedPage,
 )
 from aegis.ingestion.probe import OcrDecision, TextLayerProbe
+from aegis.ingestion.quality import ParseQuality
 
 __all__ = ["ARTIFACT_VERSION", "ArtifactVersionError", "dumps_parsed", "loads_parsed"]
 
 #: The artifact schema version. Bump it whenever a field is added, removed or reinterpreted
 #: — a reader that cannot make sense of an artifact must say so rather than fill in a
 #: default and produce chunks whose provenance is quietly wrong.
-ARTIFACT_VERSION = 1
+#:
+#: ``2`` added the D-parse quality verdict (task 4.6c). An artifact written at version 1
+#: carries no verdict, and a version-1 reader handed a version-2 artifact would silently
+#: drop one — so the bump is what turns both into a re-parse a person asks for.
+ARTIFACT_VERSION = 2
 
 
 class ArtifactVersionError(ValueError):
@@ -89,11 +94,28 @@ def dumps_parsed(document: ParsedDocument) -> str:
         The artifact, as a JSON string.
     """
     probe = document.ocr.probe
+    quality = document.quality
     payload: dict[str, Any] = {
         "version": ARTIFACT_VERSION,
         "source_name": document.source_name,
         "parse_seconds": document.parse_seconds,
         "parser": document.parser,
+        # The verdict travels with the tree rather than being recomputed: the raw text
+        # layer it was measured against is the *upload's* bytes, which the chunk stage
+        # has no reason to open again, and a score recomputed from the artifact alone
+        # would be a different measurement wearing the same name.
+        "quality": None
+        if quality is None
+        else {
+            "confidence": quality.confidence,
+            "ordering": quality.ordering,
+            "ordering_pages": quality.ordering_pages,
+            "ordering_anchors": quality.ordering_anchors,
+            "fragments": quality.fragments,
+            "fragment_rate": quality.fragment_rate,
+            "flat_headings": quality.flat_headings,
+            "reasons": list(quality.reasons),
+        },
         "ocr": {
             "enabled": document.ocr.enabled,
             "reason": document.ocr.reason,
@@ -210,6 +232,23 @@ def loads_parsed(payload: str) -> ParsedDocument:
         )
         for run in raw["removed_furniture"]
     )
+    quality_raw = raw["quality"]
+    quality = (
+        None
+        if quality_raw is None
+        else ParseQuality(
+            confidence=float(quality_raw["confidence"]),
+            ordering=None
+            if quality_raw["ordering"] is None
+            else float(quality_raw["ordering"]),
+            ordering_pages=int(quality_raw["ordering_pages"]),
+            ordering_anchors=int(quality_raw["ordering_anchors"]),
+            fragments=float(quality_raw["fragments"]),
+            fragment_rate=float(quality_raw["fragment_rate"]),
+            flat_headings=bool(quality_raw["flat_headings"]),
+            reasons=tuple(quality_raw["reasons"]),
+        )
+    )
     return ParsedDocument(
         source_name=raw["source_name"],
         pages=pages,
@@ -218,4 +257,5 @@ def loads_parsed(payload: str) -> ParsedDocument:
         removed_furniture=furniture,
         parse_seconds=float(raw["parse_seconds"]),
         parser=raw["parser"],
+        quality=quality,
     )

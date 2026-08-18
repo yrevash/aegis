@@ -38,6 +38,12 @@ would silently take away. ACCURATE costs roughly +0.8 s per table over FAST, and
 lands on the ingest clock — the cheap one. A mis-parsed table is a wrong answer with a
 confident citation, and no amount of reranking recovers it.
 
+**D-parse — every parse is scored, because a bad one does not raise.** Docling reports
+success on a document whose reading order it scrambled, so :func:`parse_pdf` cross-checks
+its own output against an independent reading of the raw text layer and records a
+``parse_confidence`` on the result. See :mod:`aegis.ingestion.quality` for the three
+signals, and for why a low score flags the document rather than failing the stage.
+
 **D4 — the converter is warmed at startup, not on first request.** Cold start is
 seconds of model loading that would otherwise be paid by the first upload of the day,
 which on demo day is a jury handing us a document. :func:`warm_converter` exists for the
@@ -84,6 +90,7 @@ import os
 import re
 import threading
 import time
+from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -96,8 +103,10 @@ from aegis.ingestion.probe import (
     MIN_TEXT_PAGE_RATIO,
     OcrDecision,
     decide_ocr,
+    probe_page_text,
     probe_text_layer,
 )
+from aegis.ingestion.quality import LOW_CONFIDENCE, assess_parse
 
 logger = logging.getLogger(__name__)
 
@@ -498,6 +507,7 @@ def parse_pdf(
     ocr: bool | None = None,
     min_text_page_ratio: float = MIN_TEXT_PAGE_RATIO,
     strip_furniture: bool = True,
+    score_quality: bool = True,
 ) -> ParsedDocument:
     """Parse a PDF into blocks that carry their page and bounding box.
 
@@ -508,9 +518,14 @@ def parse_pdf(
         min_text_page_ratio: Fraction of pages that must carry a text layer for OCR to
             stay off.
         strip_furniture: Remove running headers, footers and page numbers (task 4.2).
+        score_quality: Run the D-parse quality gate and record its verdict. Off only for
+            a caller that has already read the text layer and wants the parse alone; the
+            production path never turns it off, because a parse nobody scored is a parse
+            nobody can tell is wrong.
 
     Returns:
-        The parsed document, with the OCR decision and anything stripped recorded on it.
+        The parsed document, with the OCR decision, anything stripped, and the quality
+        gate's verdict recorded on it.
 
     Raises:
         ParseError: If Docling reports the conversion as failed.
@@ -563,7 +578,7 @@ def parse_pdf(
     removed: tuple[Any, ...] = ()
     if strip_furniture:
         blocks, removed = strip_running_furniture(blocks, pages)
-    return ParsedDocument(
+    parsed = ParsedDocument(
         source_name=path.name,
         pages=pages,
         blocks=blocks,
@@ -572,3 +587,20 @@ def parse_pdf(
         parse_seconds=parse_seconds,
         parser=parser_version(),
     )
+    if not score_quality:
+        return parsed
+    # Scored on the blocks that are actually kept, after furniture stripping — the score
+    # has to describe the tree the artifact carries and the chunker will read, not an
+    # intermediate one. (Stripping is safe for the cross-check either way: text that
+    # exists in only one of the two readings is never an anchor, so a removed running
+    # header drops out of the comparison rather than counting against it.)
+    quality = assess_parse(parsed, probe_page_text(path))
+    if quality.is_low:
+        logger.warning(
+            "low parse confidence %.2f for %s (below %.2f) — %s",
+            quality.confidence,
+            path.name,
+            LOW_CONFIDENCE,
+            "; ".join(quality.reasons),
+        )
+    return replace(parsed, quality=quality)

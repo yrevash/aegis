@@ -86,8 +86,19 @@ __all__ = [
 #: upload (see the correction under D7): nothing in the bytes states them, so a stage that
 #: could write them could only ever be writing a guess, and a guessed document date is
 #: indistinguishable from a real one once it is embedded into every chunk's prefix.
+#:
+#: ``parse_confidence`` is here for the same reason ``title`` is — it is measured by the
+#: parse, against the bytes, and nothing else in the system is in a position to know it.
 _HANDLER_WRITABLE_COLUMNS = frozenset(
-    {"page_count", "chunk_count", "mime_type", "filename", "size_bytes", "title"}
+    {
+        "page_count",
+        "chunk_count",
+        "mime_type",
+        "filename",
+        "size_bytes",
+        "title",
+        "parse_confidence",
+    }
 )
 
 

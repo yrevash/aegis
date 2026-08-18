@@ -112,6 +112,10 @@ def main() -> int:
         print(f"   peak RSS       {peak_rss_mb():.0f} MB")
         print(f"   ocr            {document.ocr.reason}")
         print(f"   headings       {document.heading_histogram}")
+        if document.quality is not None:
+            print(f"   confidence     {document.quality.confidence:.3f}")
+            for reason in document.quality.reasons:
+                print(f"                  {reason}")
         print(f"   tables         {document.table_count}")
         print(f"   blocks         {len(document.blocks)}")
         with_box = sum(1 for block in document.blocks if block.bbox is not None)

@@ -9,6 +9,7 @@ from aegis.ingestion import (
     TextLayerProbe,
     TextLayerProbeError,
     decide_ocr,
+    probe_page_text,
     probe_text_layer,
 )
 
@@ -77,3 +78,27 @@ def test_the_probe_reads_a_real_born_digital_pdf():
     assert probe.page_count == 16
     assert probe.pages_with_text == 16
     assert decide_ocr(probe).enabled is False
+
+
+def test_the_raw_text_layer_comes_back_page_by_page_in_page_order():
+    """The independent reading the D-parse ordering cross-check compares against.
+
+    Asserted on the real fixture rather than a synthetic one because what matters is that
+    PDFium's own reading of a two-column page arrives in *some* definite order that the
+    cross-check can disagree with — a per-page slice, not one blob.
+    """
+    pytest.importorskip("pypdfium2", reason="the 'ingestion' extra is not installed")
+
+    pages = probe_page_text(fixture_pdf("bert-two-column.pdf"))
+
+    assert len(pages) == 16
+    assert all(isinstance(page, str) for page in pages)
+    assert "BERT" in pages[0], "page 1 of the BERT paper does not mention BERT"
+    assert all(len(page) > 64 for page in pages), "every page of this fixture has text"
+
+
+def test_the_text_layer_extractor_refuses_a_file_it_cannot_open(tmp_path):
+    pytest.importorskip("pypdfium2", reason="the 'ingestion' extra is not installed")
+
+    with pytest.raises(TextLayerProbeError):
+        probe_page_text(tmp_path / "not-a-file.pdf")

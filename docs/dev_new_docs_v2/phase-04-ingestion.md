@@ -656,6 +656,73 @@ ingestion pipelines do not do.
 **Test required:** a deliberately multi-column fixture parses to a *low* confidence — a gate
 that never fires is not a gate.
 
+> **[LANDED] 2026-08-19, task 4.6c — and the fixture this gate was written around does not
+> fail.** `aegis/src/aegis/ingestion/quality.py` implements the three signals;
+> `parse_pdf` scores every parse; `documents.parse_confidence` carries the number.
+> Four corrections, each measured on `docling==2.120.3` and reproducible from
+> `aegis/tests/ingestion/test_parse_confidence.py`.
+>
+> **1. `bert-two-column.pdf` parses *correctly*.** The README calls it "the fixture the
+> D-parse quality gate must score low". It does not: its per-page reading order agrees
+> with the raw text layer at **tau 0.997** over 2443 anchor tokens on all 16 pages,
+> against the single-column control's 1.000. Docling 2.120.3's reading order is a
+> rule-based geometric predictor over layout boxes
+> (`docling_ibm_models.reading_order`) and on this document it gets the columns right.
+> **All four fixtures score high** — 0.912 (IRS, 126p), 0.919 (census, 67p), 0.997
+> (BERT), 1.000 (transformer). Making the gate fire on BERT would have meant tuning a
+> threshold until it flagged a correctly parsed document, which is the same defect as a
+> gate that never fires, pointed the other way.
+>
+> **So the gate is proved against the failure rather than against the fixture.** The
+> test takes the *real* parse of the *real* two-column paper and re-orders its blocks
+> by position alone — top to bottom, left to right, columns not detected — which is
+> exactly what a layout model that missed the column split produces. Every block, box
+> and word is genuine; only the order is the failure's. That yields a **stronger**
+> control than the README's, because the identical operation is applied to all four:
+>
+> | fixture | Docling's order | read across the columns |
+> |---|---|---|
+> | `transformer-single-column.pdf` | 1.000 | 1.000 — **unchanged** |
+> | `bert-two-column.pdf` | 0.997 | **0.565 — low** |
+> | `census-income-tables.pdf` | 0.919 | **0.724 — low** |
+> | `irs-1040-instructions-tables.pdf` | 0.912 | **0.452 — low** |
+>
+> Top-to-bottom-ignoring-columns *is* the reading order of a single-column page, so the
+> operation costs the control nothing and sinks all three multi-column documents. A low
+> score is therefore attributable to **layout**, which is what the control existed to
+> establish.
+>
+> **2. The cross-check has to be per page, or it measures almost nothing.** Reading
+> order is scrambled *within* a page and never across pages, so a document-wide Kendall
+> tau is dominated by the cross-page pairs that cannot invert. The scrambled BERT parse
+> scores **0.967 document-wide against 0.565 per page** — the difference between a gate
+> and a decoration. The aggregate is the anchor-count-weighted mean of per-page taus.
+>
+> **3. The score is the *minimum* of the three signals, not their average.** They detect
+> disjoint failures, so an average lets a perfect ordering score hide a heading tree that
+> is entirely flat. `LOW_CONFIDENCE = 0.75`, placed at the lower end of the measured gap
+> (0.724–0.912) rather than its middle: 0.912 is the lowest four correct documents
+> happened to produce, not a floor for correct parses in general, while 0.724 comes from
+> a scramble whose severity is ours to choose.
+>
+> **4. A low score flags, it does not block** — the decision this row's "do not silently
+> publish" left open. The check measures *disagreement between two readings* and cannot
+> say which one is wrong; a PDF whose content stream is emitted out of visual order makes
+> PDFium the wrong one, and blocking would then reject a correctly parsed document. It
+> would also fail the most expensive stage in the pipeline, so the orchestrator would
+> re-parse 126 pages twice more to reach the same verdict, and it would hand the tenant a
+> refusal with no action attached to it. Instead: the value is on the `documents` row,
+> the reasons are on the parse artifact (`ARTIFACT_VERSION` 2), and `parse_stage` logs a
+> **WARNING** naming every signal when the score is low. Not blocked is not silent.
+>
+> **One calibration the two small papers alone would have got wrong.** The fragment
+> floor sits at 0.25 only because `census-income-tables.pdf` — a *correct* parse —
+> measures **0.221**. Real prose ends without a full stop far more often than a first
+> guess suggests (0.029, 0.094, 0.119, 0.221 across the four fixtures), and a floor drawn
+> from the two 15-page papers would have penalised correct parses of the other two. This
+> is the reason the slow fixtures are worth their ten minutes even though they stay
+> gated behind `AEGIS_DOCLING_SLOW_FIXTURES=1`.
+
 ---
 
 ### D5 — Connect the corpus-wide BM25 arm
@@ -935,7 +1002,7 @@ and its error bar, not the library that printed it.
 | 4.5 | ✅ Upload route + **stage handlers on the P3 workflow**, **and `documents.title`/`doc_type`/`doc_date`** | 0.55 | `documents` already exists (P3). No queue machinery — the stages are activities. **Owns the three prefix fields D7 wrongly assumed existed** — see the correction under D7. **Landed 2026-08-18**; four corrections, see §4.5 |
 | 4.6 | ✅ **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change. **Landed 2026-08-18** |
 | 4.6b | ✅ **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm was fail-open; shipped with 4.6. **Landed 2026-08-18** |
-| 4.6c | **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out |
+| 4.6c | ✅ **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out. **Landed 2026-08-19** — and `bert-two-column.pdf` turns out to parse *correctly* on 2.120.3, so the gate is proved against the failure rather than against the fixture. Four corrections, see D-parse |
 | 4.7 | ✅ **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. D5 — **Landed 2026-08-18**; two corrections, see D5 |
 | 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
 | 4.9 | ✅ **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest. **Landed 2026-08-19.** `fastembed==0.8.0` in the `retrieval` extra (no torch); `jinaai/jina-reranker-v1-tiny-en` (33M, 134 MB). The API reranker is now the **loud** fallback. **D6's latency estimate was wrong by 4x** — measured 1.44 s p50 over 20 x 400-word chunks, not 150–400 ms; see the correction under D6 |

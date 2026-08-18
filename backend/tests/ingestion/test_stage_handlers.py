@@ -13,7 +13,7 @@ stage-runner activity, and then found by the real corpus-wide keyword arm over t
 scratch cluster's ``NOSUPERUSER NOBYPASSRLS`` role — so the ``tenant_isolation`` policy
 applies to the search that finds it and to the search that must not.
 
-Three properties beyond "it works", each of which fails silently if it is not asserted:
+Four properties beyond "it works", each of which fails silently if it is not asserted:
 
 * **The stage handler is idempotent.** Running ``chunk`` twice must leave exactly one set
   of chunks. The substrate's own guarantee covers replay; it does not cover an attempt
@@ -25,6 +25,11 @@ Three properties beyond "it works", each of which fails silently if it is not as
   ``content`` is what PostgreSQL generates ``search_vector`` from.
 * **A document's chunks are one tenant's.** Asserted by having the other tenant search
   for a phrase that is unambiguously in the first tenant's document.
+* **The parse was scored, and the score reached the row.** D-parse's ``parse_confidence``
+  is written by the ``parse`` stage and applied by the substrate through the handler
+  allow-list. A column nobody writes is worse than no column: it reads as "not parsed
+  yet" for ever. The gate's own ability to *fail* is proved in the ``aegis`` suite
+  (``tests/ingestion/test_parse_confidence.py``); what is proved here is the wiring.
 
 The two large fixtures (67 and 126 pages) are minutes of parsing each and are not used
 here; ``AEGIS_DOCLING_SLOW_FIXTURES=1`` in the ``aegis`` suite is where they live.
@@ -197,6 +202,14 @@ async def test_an_uploaded_pdf_becomes_chunks_that_keyword_search_finds(
     document = await _document(document_id, tenant_id=_TENANT_A)
     assert document.completed_stage == "enrich"
     assert document.page_count == 15, "the fixture is 15 pages; the parse said otherwise"
+    # D-parse: the quality gate's verdict, on the row, through the real parse stage. This
+    # fixture is the single-column control, so it must land high — a low score here would
+    # mean the gate fires on a document Docling reads correctly.
+    assert document.parse_confidence is not None, (
+        "the parse stage recorded no confidence at all; a document nobody scored is a "
+        "document nobody can tell was read in the wrong order"
+    )
+    assert document.parse_confidence >= 0.9, document.parse_confidence
     assert document.chunk_count and document.chunk_count > 0
     assert document.title, "the parse recorded no title at all"
     # Supplied by the uploader, and carried unchanged — never inferred from created_at.

@@ -37,8 +37,16 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from aegis.ingestion.probe import OcrDecision
+
+if TYPE_CHECKING:
+    # Type-checking only, and deliberately: :mod:`aegis.ingestion.quality` reads these
+    # dataclasses to score a parse, so importing it here at runtime would be a cycle.
+    # ``from __future__ import annotations`` keeps the annotation a string, which is all
+    # a dataclass field needs.
+    from aegis.ingestion.quality import ParseQuality
 
 __all__ = [
     "BBox",
@@ -215,6 +223,10 @@ class ParsedDocument:
         parser: Name and version of the parser that produced this, recorded because a
             re-parse under a different version is a different result and the ``chunks``
             it produced are not interchangeable.
+        quality: The D-parse quality gate's verdict — see
+            :mod:`aegis.ingestion.quality`. ``None`` on a document assembled by hand or
+            by a test, which is why it is nullable rather than defaulted to a confident
+            score nobody measured.
     """
 
     source_name: str
@@ -224,6 +236,7 @@ class ParsedDocument:
     removed_furniture: tuple[FurnitureRun, ...] = ()
     parse_seconds: float = 0.0
     parser: str = ""
+    quality: ParseQuality | None = None
 
     @property
     def page_count(self) -> int:

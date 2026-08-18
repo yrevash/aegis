@@ -24,6 +24,7 @@ from aegis.ingestion.blocks import (
     ParsedPage,
 )
 from aegis.ingestion.probe import OcrDecision, TextLayerProbe
+from aegis.ingestion.quality import ParseQuality
 
 from app.ingestion.artifacts import (
     ARTIFACT_VERSION,
@@ -70,6 +71,16 @@ def _document() -> ParsedDocument:
         ),
         parse_seconds=8.25,
         parser="docling 2.120.3",
+        quality=ParseQuality(
+            confidence=0.5649,
+            ordering=0.5649,
+            ordering_pages=2,
+            ordering_anchors=311,
+            fragments=1.0,
+            fragment_rate=0.094,
+            flat_headings=False,
+            reasons=("reading order DISAGREES with the raw text layer",),
+        ),
     )
 
 
@@ -92,6 +103,24 @@ def test_a_parsed_document_survives_the_round_trip_field_for_field() -> None:
     assert restored.ocr.probe is not None
     assert restored.ocr.probe.page_chars == (1800, 0)
     assert restored.removed_furniture[0].pages == (1, 2)
+    # D-parse: the verdict travels with the tree. A codec that dropped it would leave the
+    # ingest log with a document nobody could see was read in the wrong order.
+    assert restored.quality is not None
+    assert restored.quality.confidence == 0.5649
+    assert restored.quality.is_low
+    assert restored.quality.reasons == (
+        "reading order DISAGREES with the raw text layer",
+    )
+
+
+def test_a_document_that_was_never_scored_round_trips_as_unscored() -> None:
+    """``None`` is a real value here — a hand-built document has no verdict — and a codec
+    that turned it into a confident 1.0 would invent a measurement nobody took."""
+    from dataclasses import replace  # noqa: PLC0415 - one line, one test
+
+    restored = loads_parsed(dumps_parsed(replace(_document(), quality=None)))
+
+    assert restored.quality is None
 
 
 def test_an_artifact_from_another_version_is_refused_rather_than_guessed_at() -> None:

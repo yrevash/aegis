@@ -19,9 +19,9 @@ pytest.importorskip("docling", reason="the 'ingestion' extra is not installed")
 
 
 @pytest.fixture(scope="module")
-def bert() -> ParsedDocument:
+def bert(parsed_bert) -> ParsedDocument:
     """One real 16-page two-column parse, reused (a parse costs seconds, not ms)."""
-    return parse_pdf(fixture_pdf("bert-two-column.pdf"))
+    return parsed_bert
 
 
 def test_the_pipeline_carries_both_d2_switches_and_accurate_tables():

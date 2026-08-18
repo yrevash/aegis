@@ -223,6 +223,15 @@ class Document(AegisBase):
     is when somebody uploaded the file; using it would stamp every chunk of a 2019 contract
     with 2026 and would do so invisibly, because a plausible date looks exactly like a
     correct one.
+
+    ``parse_confidence`` is the D-parse quality gate's verdict on the parse
+    (:mod:`aegis.ingestion.quality`), written by the parse stage. It exists because a
+    parser that reads a document in the wrong order does not raise — it produces text that
+    chunks, embeds and answers questions exactly like correct text, and this column is the
+    only place anything downstream can find out. It is nullable for the same reason
+    ``page_count`` is: ``NULL`` means "not parsed yet", where ``0.0`` would mean "parsed,
+    and worthless". A low value **flags** the document rather than blocking it; see that
+    module for why blocking a parse this check disagrees with would be the worse failure.
     """
 
     __tablename__ = "documents"
@@ -246,6 +255,9 @@ class Document(AegisBase):
     workflow_id: Mapped[str | None] = mapped_column(String(255), index=True, default=None)
     page_count: Mapped[int | None] = mapped_column(default=None)
     chunk_count: Mapped[int | None] = mapped_column(default=None)
+    # D-parse. A plain float, not a numeric: it is a score in [0, 1] that a human reads to
+    # two decimal places, never money and never summed.
+    parse_confidence: Mapped[float | None] = mapped_column(default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 

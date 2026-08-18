@@ -47,6 +47,7 @@ __all__ = [
     "TextLayerProbe",
     "TextLayerProbeError",
     "decide_ocr",
+    "probe_page_text",
     "probe_text_layer",
 ]
 
@@ -168,6 +169,63 @@ def probe_text_layer(source: Path | str) -> TextLayerProbe:
     finally:
         document.close()
     return TextLayerProbe(page_chars=tuple(counts))
+
+
+def probe_page_text(source: Path | str) -> tuple[str, ...]:
+    """Extract each page's embedded text layer, in the order the PDF stores it.
+
+    This is the **independent** reading of the document that
+    :func:`aegis.ingestion.quality.assess_parse` cross-checks Docling's block order
+    against (D-parse). Independent is the operative word, and it is a property of *how*
+    each order is arrived at rather than a claim about which tool is better: PDFium
+    returns text in content-stream order — the order the producing application emitted
+    it — while Docling's reading order comes from a rule-based geometric predictor over
+    the bounding boxes its layout model found (``docling_ibm_models.reading_order``).
+    Two different mechanisms over the same bytes, so when they disagree about *order*,
+    at least one of them is wrong about the document.
+
+    Neither is authoritative. A content stream can itself be emitted out of visual order
+    — that is what makes this a flag rather than a veto; see
+    :mod:`aegis.ingestion.quality`.
+
+    Separate from :func:`probe_text_layer` rather than folded into it, because the text
+    is wanted for exactly one purpose and is not wanted on the parse artifact: a
+    126-page document's text layer is megabytes that the ``chunk`` stage has no use for.
+    The second pass costs about the same as the first (~0.4 s on 126 pages, against a
+    361 s parse), which is the honest price of not persisting it.
+
+    Args:
+        source: Path to the PDF.
+
+    Returns:
+        One string per page, in page order.
+
+    Raises:
+        TextLayerProbeError: If the file cannot be opened or read as a PDF.
+    """
+    pdfium = require(INGESTION_EXTRA, "pypdfium2")
+    path = Path(source)
+    texts: list[str] = []
+    try:
+        document = pdfium.PdfDocument(path)
+    except Exception as exc:  # noqa: BLE001 - pdfium raises several unrelated types
+        raise TextLayerProbeError(
+            f"cannot open {path.name} to read its text layer: {exc}"
+        ) from exc
+    try:
+        for index in range(len(document)):
+            page = document[index]
+            textpage = page.get_textpage()
+            try:
+                texts.append(textpage.get_text_range())
+            finally:
+                textpage.close()
+                page.close()
+    except Exception as exc:  # noqa: BLE001 - a damaged page object raises from pdfium
+        raise TextLayerProbeError(f"cannot read the text layer of {path.name}: {exc}") from exc
+    finally:
+        document.close()
+    return tuple(texts)
 
 
 def decide_ocr(probe: TextLayerProbe, *, min_ratio: float = MIN_TEXT_PAGE_RATIO) -> OcrDecision:
