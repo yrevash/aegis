@@ -770,8 +770,8 @@ on an unfamiliar corpus before 30 August.**
 4. **Local reranker benchmark** — ship the 33M default rather than comparing three
 5. **The nightly graph rebuild in 4.13** — keep the corpus re-index schedule, drop the second
 
-**Never cut:** page provenance, `chunks.tenant_id` (4.6), the BM25 arm, stage-level job
-progress, and the gold set. The first two are correctness; the last three are what turn claims
+**Never cut:** page provenance, `chunks.tenant_id` (4.6), **the per-tenant vector collection
+(4.6b)**, the BM25 arm, stage-level job progress, and the gold set. The first two are correctness; the last three are what turn claims
 into evidence.
 
 ---
