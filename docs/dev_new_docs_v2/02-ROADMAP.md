@@ -18,7 +18,7 @@ possible.
 |---|---|---|---|
 | **1** | Tenant isolation | ✅ **DONE** `d1822c0` | — |
 | **2** | ML out of graph, fiction deleted | ✅ **DONE** `7e21890` | — |
-| **3** | **Platform spine** | Job substrate · durable `run_events` · settings catalogue · two-tenant seed · `fine_role` on the wire · client console · `py.typed` + doc fixes | Everything below needs at least one of these. Nothing per-tenant has ever run with a real tenant. |
+| **3** | **Platform spine** | **Temporal** orchestration + tenant-scoped record tables · durable `run_events` · settings catalogue · two-tenant seed · `fine_role` on the wire · client console · `py.typed` + doc fixes | Everything below needs at least one of these. Nothing per-tenant has ever run with a real tenant. |
 | **4** | **Ingestion** | Docling → structure → enriched chunks · `chunks.tenant_id` · corpus-wide BM25 · local reranker · gold set + ablation | Needs jobs (P3). Ingestion is the capability that does not exist and 30 Aug requires. |
 | **5** | **Multi-agent** | Depth classifier · real concurrent sub-agents · `agent_id` on every event · Tavily · `TOOL_RESULT` rail | Needs `run_events` (P3) for per-agent logs. |
 | **6** | **Console** | Chat sessions · composer (mode · model · tools) · result tabs · live agent panel · budget pill · memory panel | Needs P4 and P5 to have something real to show. |

@@ -150,218 +150,198 @@ minimum thing that passes a test:
 
 ---
 
-## Build vs buy — settled, and why
+---
 
-24 frameworks were surveyed after the first draft of this phase was challenged for having
-compared only seven. Full report: [`research/job-framework-survey.md`](research/job-framework-survey.md).
+## Build vs buy — decided: Temporal orchestrates, Postgres records
 
-**The decision stands. The original reasoning did not**, and two of its three arguments were
-wrong in the over-conservative direction this project keeps correcting:
+24 frameworks surveyed. Full report:
+[`research/job-framework-survey.md`](research/job-framework-survey.md).
 
-- **The pgmq rejection was factually wrong.** It ships a SQL-only install — one
-  `psql -f pgmq.sql`, no compiler, no `CREATE EXTENSION`. Right conclusion, wrong reason.
-- **"No new infrastructure on Windows" is not the argument.** Measured: Temporal is a **42.2 MB
-  zip, zero dependencies, 123 MB RSS, ready in 0.2 s**, +3 packages against Aegis's 243-package
-  graph with no conflicts. NATS is one `.exe` with Windows-service support. Install cost was
-  never the binding constraint.
+**Decision: adopt Temporal for execution, keep our own tenant-scoped tables as the system of
+record.** An earlier draft of this phase rejected Temporal. That rejection was an architecture
+error and is corrected here.
 
-### The one criterion that decided it
-
-`aegis/src/aegis/governance/rls.py:327` classifies a table with **no tenant column** as *not
-tenant-scoped* and `continue`s past it **before any gap is recorded**.
-
-So a queue whose tables carry no `tenant_id` is not merely unprotected — it is **invisible to
-the diagnostic built to catch exactly that**. Verified by grep in a throwaway venv: procrastinate
-0 tenant hits (4 tables, 39 migrations), pgqueuer 0, DBOS 0, SAQ 0. No library ships a column for
-someone else's tenancy model, and adding one means forking a schema we do not own.
-
-That is the same failure class as "RLS is inert under a superuser": the check reads healthy while
-the thing it protects is off.
-
-### Temporal, measured and then declined
-
-The strongest candidate, and the test was run rather than argued: a 5-activity workflow named
-after our stages, worker **hard-killed mid-run**, restarted in a new process. `parse`, `chunk`
-and `embed` did **not** re-run; only the in-flight `index` replayed, then `graph` finished. That
-is this phase's hardest definition-of-done item and Phase 4's resumability requirement, with
-zero substrate code.
-
-Declined on architecture, not cost. **Workflow state lives inside Temporal, not inside
-Postgres**, which means:
+### Verified, not assumed
 
 | | |
 |---|---|
-| No row for RLS to protect | Phase 1 made tenant isolation provable; Temporal has namespaces, not `tenant_id` |
-| Nothing to join to `budgets` | Phase 9 needs budget context on every model-calling job |
-| Invisible to the admin DB page | The requirement is "view the full db", and half the platform's work would not be in it |
-| No row for the tenant's live log | Ingest progress must be tenant-scoped and queryable |
+| Licence | **MIT** — server, Python SDK and CLI all three (GitHub API, 2026-08-18) |
+| Windows install | one **42.2 MB** zip, no installer, no runtime dependencies |
+| Dev server | **0.2 s** to accepting connections, **123 MB** RSS (155 MB after a run) |
+| Python SDK | `temporalio` win_amd64 wheel exists; **+3 packages**, zero conflicts against Aegis's 243-package graph |
+| Resumability | **Measured**: worker hard-killed mid-run; `parse`/`chunk`/`embed` did **not** re-run, only the in-flight activity replayed |
+| Server maturity | 22.4k stars, used in production by companies operating far past our scale |
 
-**And it does not replace the `jobs` table** — admission control, budget pre-authorisation,
-cancellation and the tenant-visible log all still need tenant-scoped rows. Adopting it means
-operating **two** substrates, which breaks the one-mechanism rule and splits every question
-("what is queued? what did it cost? who owns it?") across two systems.
+### The error the earlier draft made
 
-Stated plainly: **if Aegis were single-tenant, Temporal beats this phase and the recommendation
-would be to use it.** Multi-tenancy decides it.
+It assumed Temporal *replaces* our tables and concluded that job state would sit outside RLS.
+**Temporal is not a database, and its own documentation says not to use it as one.** The standard
+pattern — the one every multi-tenant adopter uses — is:
 
-**Therefore §3.2b exists.** The stage machine is designed as the *portable subset*, so a future
-Temporal adoption is a driver swap rather than a rewrite.
+> **Temporal owns execution state. Postgres owns business state.**
+
+```
+documents      (tenant_id, status, completed_stage, workflow_id)   ← ours · RLS · joinable
+ingest_runs    (tenant_id, workflow_id, cost_usd, started_at)      ← ours · joins to budgets
+      │
+      └── workflow_id ─▶ Temporal: retries · timers · resumability · cancellation
+```
+
+The workflow id encodes the tenant (`ingest:{tenant_id}:{document_id}`), activities run with
+`set_tenant_scope` bound and write to **our** tables, and Temporal stores only the execution
+record. Every objection the earlier draft raised dissolves: RLS protects our rows, the console
+joins them to `budgets`, the admin DB page sees them, and the tenant's live log reads
+`completed_stage` off a tenant-scoped row.
+
+Temporal can also use **the same Postgres server** for its own persistence, so this is one
+database server with two schemas, not two databases.
+
+### What survives as a real cost
+
+- **Two places to look for "what happened".** Our `run_events` carries the business narrative;
+  Temporal's Web UI carries execution detail. Arguably a feature — that UI is a free replay
+  surface this phase would otherwise hand-build.
+- **The workflow sandbox re-imports the defining module.** A module doing side-effectful work at
+  import fails validation. Workflow definitions live in import-safe modules; this is a real
+  ergonomic tax on a codebase that does side-effectful imports, and §3.0 exists to hit it early.
+- **One more process on the demo box**, at 123 MB.
+- **No `win_arm64` wheel** — only matters if the laptop is ARM. Confirm this.
+
+### What was rejected, and on what grounds
+
+| Candidate | Failed on |
+|---|---|
+| procrastinate, pgqueuer, DBOS, SAQ, pgmq | **Zero `tenant_id` columns.** `rls.py:327` classifies a table with no tenant column as *not tenant-scoped* and continues **before recording a gap** — so their tables would be invisible to the very diagnostic built to catch that |
+| Celery | Its own FAQ still says Windows is unsupported |
+| APScheduler 4.0 | Still **alpha** (`4.0.0a6`); 3.x jobstores are not multi-scheduler safe |
+| RabbitMQ | Needs Erlang; and a broker cannot commit a job with the data it touches |
+| Redis Streams via Memurai | Job state in Redis, business data in Postgres — they can never commit together |
+| `pg_cron` | Schedules SQL, not Python |
+| Restate | **No Windows artefact of any kind** |
+| Hatchet | Docker-only |
+| Windmill | Windows binary is enterprise-only |
+| Dagster, Prefect | Data-asset orchestrators — wrong tool for jobs |
+
+**Temporal is the only candidate that lost on architecture rather than cost — and re-examining
+that architecture is what reversed the decision.**
 
 ---
 
 ## Tasks
 
-### 3.1 — The `jobs` table and the claim (1.0d)
+| # | Task | Days |
+|---|---|---|
+| 3.0 | Temporal spike on the real Windows box | 0.25 |
+| 3.1 | The record tables — `documents`, `job_runs`, tenant-scoped and RLS-registered | 0.75 |
+| 3.2 | Temporal wiring — worker bootstrap, tenant-scoped activities, the stage contract | 1.0 |
+| 3.3 | Idempotent activities and the reconciler | 0.5 |
+| 3.4 | Admission control, budget pre-authorisation, cancellation | 0.5 |
+| 3.5 | Temporal Schedules — re-index cadence with debounce | 0.25 |
+| 3.6 | `run_events` and the `runs` header | 0.75 |
+| 3.7 | The settings catalogue | 1.0 |
+| 3.8 | The two-tenant seed | 0.5 |
+| 3.9 | `fine_role` on the wire | 0.25 |
+| 3.10 | The client console + route-coverage test | 0.25 |
+| 3.11 | `py.typed` and the four documentation lies | 0.25 |
 
-One table. Claim with a **single statement**:
+**Total: 6.0 days** — up from 5.25, because the tables and the reconciler are real work even
+though lease/reaper/fencing/scheduler are now Temporal's problem. The trade is **~2.5 days of the
+most bug-prone code in the phase** for ~0.75 days of integration.
 
-```sql
-UPDATE jobs
-   SET status='running',
-       lease_until = now() + make_interval(secs => $2),
-       attempts = attempts + 1,
-       worker_id = $3
-  FROM (SELECT id FROM jobs
-         WHERE status='pending' AND run_after <= now()
-         ORDER BY priority DESC, run_after
-           FOR UPDATE SKIP LOCKED
-         LIMIT $1) AS c
- WHERE jobs.id = c.id
-RETURNING jobs.*;
-```
+### 3.0 — The spike, on the actual Windows box (0.25d)
 
-Measured in the research: **20,877 claims/s** single, **128,085/s** batched, zero duplicate
-claims across every configuration, on a partial index. The workload is tens of LLM-bound jobs
-per minute.
+Everything measured so far was on macOS. Before anything is built on it:
 
-**Do not copy `consolidate.py`'s shape.** SELECT-then-UPDATE is N+1 round trips and N−1 losers.
+- Temporal dev server running **alongside** Postgres, Neo4j Desktop and Memurai. Record total RSS.
+- **Hit the sandbox import trap deliberately.** Define a workflow in a module that imports
+  something side-effectful and confirm it fails; then confirm the import-safe layout works. This
+  is the known ergonomic tax and it should cost an hour now, not a day in Phase 4.
+- One ingestion-shaped workflow writing to a tenant-scoped table, killed mid-run, resumed.
+- **Confirm the laptop is x64, not ARM** — there is no `win_arm64` wheel.
 
-Columns the substrate needs, and why each: `idempotency_key` (unique — a re-enqueue must not
-double-charge) · `priority` · `run_after` (backoff and scheduling in one column) · `attempts` ·
-`max_attempts` · `lease_until` · `worker_id` · `tenant_id` (RLS) · `payload` · `result` ·
-`error` · `cancel_requested`.
+If the spike fails, the fallback is the hand-rolled substrate the earlier draft specified. It is
+written down in git history and remains buildable.
 
-**Register `jobs` in `_TENANT_SCOPED_TABLES`** or the boot-time catalog read-back reports it as
-an unprotected tenant-scoped table.
+### 3.1 — The record tables (0.75d)
 
-### 3.2 — Lease, reaper, retry, dead-letter (0.75d)
+**These are ours and they are the system of record.** Temporal never becomes the place you look
+to answer "what does this tenant have".
 
-**SKIP LOCKED is the claim, not the substrate.** It stops two *live* workers taking a row; it
-does nothing about a worker that dies holding one.
+| Table | Carries |
+|---|---|
+| `documents` | `tenant_id`, `status`, `completed_stage`, `workflow_id`, source metadata |
+| `job_runs` | `tenant_id`, `workflow_id`, `job_type`, `cost_usd`, timings, `error` |
 
-- **Reaper**: a periodic sweep returning `running` rows whose `lease_until` has passed to
-  `pending`, incrementing nothing (the claim already counted the attempt).
-- **Heartbeat**: a long job extends its own lease. A job that cannot heartbeat is a job the
-  reaper will correctly reclaim.
-- **Retry**: jittered exponential backoff written into `run_after`. Jitter matters — without it
-  N failures retry simultaneously against a recovering dependency.
-- **Dead-letter is a status, not a table.** One place to look.
-- **Consult `attempts`.** A job at `max_attempts` goes to `dead` with its last error. The
-  current code increments a counter nothing reads, which is why a poison job is invisible today.
+**Both registered in `_TENANT_SCOPED_TABLES`**, both with an RLS policy, both covered by the
+live isolation test from Phase 1. The `workflow_id` column is the only link to Temporal, and it
+is a string — no foreign key into a system we do not own.
 
-**Fix `memory_consolidation_job` in the same change** — migrate it onto the substrate rather
-than leaving a second, weaker job system beside the new one.
+`job_runs` is what the pipeline-health page (Phase 7) and the tenant's live log read. It is also
+what joins to `budgets` for Phase 9.
 
-### 3.2b — The stage machine (0.75d) — **the biggest gap in the first draft**
+### 3.2 — Temporal wiring (1.0d)
 
-The first draft said "stage progress is on the row" and never defined the mechanism. Every
-surveyed framework has one; this is what makes a job *resumable* rather than merely *retried*.
+**Worker bootstrap.** One worker process type, launched in-process for the demo and standalone
+via `python -m aegis.jobs.worker`. Temporal handles the pool; we handle the wiring.
 
-**A job type declares its stages as an ordered tuple:**
+**Tenant scope on every activity.** The workflow id is `{job_type}:{tenant_id}:{entity_id}`, and
+**every activity opens its session with `set_tenant_scope` bound from the workflow argument** —
+not from ambient context, which does not survive a replay in a new process.
+
+> This is the single most important rule in the integration. An activity that forgets the scope
+> is an activity running unscoped on the serving engine, and Phase 1 exists to make that
+> impossible to do accidentally. Make it structural: one decorator that binds scope and refuses
+> to run without a tenant argument.
+
+**The stage contract.** A job type declares its stages as an ordered tuple:
 
 ```python
 INGEST_STAGES = ("parse", "chunk", "enrich", "embed", "index", "graph")
 ```
 
-The row carries `completed_stage`. A retry resumes at the first stage **after** it — so a
-failure in `graph` does not re-parse 200 pages, which at ~1.1 s/page is a four-minute penalty
-for a ten-second bug.
+Each stage is one Temporal activity. The activity writes its output **and** bumps
+`documents.completed_stage` in **one transaction**. Temporal gives resumability across stages;
+that single transaction is what makes each stage individually correct.
 
-**Three rules that make it correct rather than decorative:**
+**Task queues carry the concurrency policy.** A `docling-parse` queue with a worker configured
+for one concurrent activity is how CPU-bound parses serialise, while an `embed` queue runs many.
+This is the "two separate numbers" requirement, and Temporal expresses it natively.
 
-- **A stage is committed with its own output.** The `completed_stage` bump and whatever that
-  stage produced are one transaction. A stage that "finished" but whose output was rolled back
-  is the bug this design exists to prevent.
-- **Stages are declared, not inferred.** The tuple is the contract; the health page and the
-  console read it, so a new stage appears in the UI by declaration.
-- **Design it as the portable subset.** Stage names, order, and "resume after the last committed
-  stage" are exactly what a durable-execution engine gives. Keeping the shape compatible means
-  swapping the driver later, not rewriting the pipeline.
+### 3.3 — Idempotent activities and the reconciler (0.5d)
 
-### 3.2c — `lease_epoch`, the fencing token (0.25d)
+**The one genuinely new problem this architecture introduces.** An activity can commit to
+Postgres and then die before Temporal records its completion — so on replay it runs again.
 
-`worker_id` + `lease_until` tell you *when* a lease expired. They do not tell you **who is
-allowed to write the result.**
+**Therefore every activity must be idempotent**, keyed on `(workflow_id, stage)`. Writing chunk
+rows for a document that already has them is an upsert, not an insert. This is Temporal's
+standard requirement and it is well-understood, but it must be stated as a rule rather than
+discovered per activity.
 
-The window: worker A's lease expires, the reaper requeues, worker B claims and starts — then
-worker A wakes from a slow network call and writes its result. Two workers, one job, last write
-wins.
+**The reconciler** covers the opposite skew: a `documents` row stuck in a stage whose workflow no
+longer exists (server wiped, workflow terminated externally). A periodic sweep asks Temporal for
+the workflow's status and either resumes, fails the row with a reason, or leaves it alone. It is
+small, and without it a stuck row is invisible — the same silence the reaper existed to break.
 
-**The fix:** an integer `lease_epoch` incremented on every claim. Every write carries the epoch
-it was claimed under, and `WHERE lease_epoch = $n` makes a stale writer's update affect zero
-rows. It then logs and exits rather than pretending it succeeded.
+### 3.4 — Admission control, budget pre-auth, cancellation (0.5d)
 
-**No test that does not kill a process will find this**, which is exactly why it is a named task
-rather than something to notice later.
+**Still ours, because these are tenant policy, not execution mechanics.**
 
-### 3.3 — Idempotency, priority, admission, cancellation (0.5d)
+- **Admission control** — a per-tenant cap on in-flight workflows, enforced before starting one,
+  returning a **visible 429**. Invisible backpressure is the same defect as a silent fallback.
+- **Budget pre-authorisation** — estimated cost checked against the tenant's remaining budget
+  *before* the workflow starts. Phase 9 hardens the per-call path; this is the gate at the door.
+- **Cancellation** — a Temporal cancellation signal, surfaced as a button. Our `job_runs` row
+  records who cancelled and when; Temporal stops the work.
 
-- **Idempotency key** unique per tenant. Re-enqueueing the same logical work is a no-op that
-  returns the existing job.
-- **Priority** as an integer, ordered before `run_after`.
-- **Admission control**: a per-tenant cap on queued jobs, returning a visible **429**.
-  Backpressure that is invisible is the same defect as a silent fallback.
-- **Cooperative cancellation**: `cancel_requested` is a flag the job body checks at its own
-  safe points. A user closing a tab should stop the spend.
+### 3.5 — Temporal Schedules, with debounce (0.25d)
 
-### 3.4 — The worker, and how it runs on Windows (0.5d)
+Re-indexing on a cadence is a **Temporal Schedule**, not a table we maintain.
 
-**One implementation, two launch modes:**
-
-1. An in-process asyncio task inside the API — what the two existing sweepers already do, and
-   what runs on demo day.
-2. `python -m aegis.jobs.worker` standalone.
-
-Identical code path. **The database is the only coordination**, so N workers in M processes is
-safe by construction with no leader election, ever. NSSM documented for the always-on case.
-
-**Wakeup:** `LISTEN/NOTIFY` with a **polling floor**. The floor is what survives a dropped
-notification — a queue that only wakes on notify silently stalls.
-
-**The tenancy trap, non-negotiable.** Claim runs **unscoped on the admin engine**; the job body
-runs with `set_tenant_scope` on the **serving engine**. A worker that claims with a tenant bound
-sees an empty queue.
-
-### 3.4b — The worker registry and an `UNLOGGED` history table (0.25d)
-
-Phase 7's pipeline-health page has a question it currently cannot answer from outside a process:
-**is a worker alive?**
-
-- **`workers` registry** — a row per worker with `last_heartbeat`. The health page reads it; the
-  reaper uses it to distinguish "lease expired because the job is slow" from "lease expired
-  because the process is gone".
-- **`job_history`, `UNLOGGED`** — the completed-job archive. `UNLOGGED` because it is a
-  diagnostic: losing it on an unclean shutdown costs nothing, and it keeps the hot `jobs` table
-  small without a second durable write on every completion.
-
-### 3.5 — The scheduler (0.5d)
-
-A `job_schedules` table plus a materialiser step inside the worker loop, claimed with the same
-primitive and **idempotency-keyed on `sched:{id}:{fire_time}`** — so two workers materialising
-the same tick produce one job.
-
-**Not APScheduler** — 4.0 is still pre-release as of Aug 2026 and its own docs say not to use it
-in production; 3.x jobstores are not multi-scheduler safe. **Not `pg_cron`** — needs
-`shared_preload_libraries` and an `nmake` build on Windows, and it schedules SQL, not Python.
-**Not Windows Task Scheduler** — a second place where work is defined, and it swallows errors.
-
-**DB clock only, never the worker's.** A worker with a skewed clock must not fire early.
-
-**Debounce is not idempotency, and the re-indexing requirement needs the former.** Idempotency
-says "this exact work is already queued, return it". Debounce says "work of this kind is already
-queued for this tenant; collapse this request into it and push the run time out". Ten documents
-uploaded in a minute should produce **one** re-index, not ten — and an idempotency key cannot
-express that, because each upload is legitimately different work.
+**Debounce is ours and is not the same as idempotency.** Idempotency says "this exact work is
+queued, return it". Debounce says "work of this kind is already pending for this tenant; fold
+this request in and push the run time out". Ten documents uploaded in a minute produce **one**
+re-index. Temporal expresses this with a workflow id per tenant plus
+`WorkflowIDReusePolicy`, so the second start joins the first rather than queueing behind it.
 
 ### 3.6 — `run_events` and the `runs` header (0.75d)
 
@@ -437,32 +417,20 @@ hitting `AttributeError` on line one.
 
 ## Definition of done
 
-- [ ] `jobs` claim is a single statement, registered in `_TENANT_SCOPED_TABLES`, with an RLS
-      policy verified by the live isolation test.
-- [ ] A killed worker's job is reclaimed by the reaper and retried — **tested by actually
-      killing a worker mid-job**, not by asserting the code path exists.
-- [ ] A job at `max_attempts` lands in `dead` with its last error preserved.
-- [ ] Re-enqueueing the same idempotency key returns the existing job and does not duplicate
-      work.
-- [ ] `memory_consolidation_job` runs on the substrate; the old claim path is deleted.
-- [ ] A job that fails at stage 4 of 6 resumes at stage 5 — **verified by killing the process at
-      stage 4**, not by asserting the code path.
-- [ ] A worker whose lease expired **cannot** write its result: the stale write affects zero rows
-      and the worker logs and exits.
-- [ ] A job type with `concurrency=1` never runs twice at once, even with a worker configured for
-      8 slots.
-- [ ] Ten re-index requests inside the debounce window produce **one** job.
-- [ ] The health endpoint reports a worker as gone within one heartbeat interval of killing it.
-- [ ] Two workers in two processes never run the same job — concurrency test, N workers, M jobs,
-      every job runs exactly once.
-- [ ] A schedule fires once per tick with two workers running.
+- [ ] Temporal dev server runs on the Windows box alongside Postgres, Neo4j and Memurai; total RSS recorded.
+- [ ] A workflow killed mid-run resumes **without re-running completed stages** — verified by killing the process, not by asserting a code path.
+- [ ] An activity **cannot** run without a tenant argument — the decorator refuses, and there is a test proving it.
+- [ ] Two tenants' workflows write to `documents`/`job_runs` and each sees only its own — the Phase 1 live isolation test, extended to both new tables.
+- [ ] Every activity is idempotent: running it twice for the same `(workflow_id, stage)` produces one result, tested by invoking it twice.
+- [ ] A `documents` row whose workflow no longer exists is reconciled — resumed or failed with a reason, never left stuck.
+- [ ] A CPU-bound parse queue with one slot never runs two parses at once.
+- [ ] Ten re-index requests inside the debounce window produce **one** run.
+- [ ] Exceeding a tenant's admission cap returns a visible **429**, not a silent queue.
 - [ ] `run_events` is partitioned by month; the `runs` header rebuilds from events in a test.
-- [ ] `resolve()` returns `(value, source)`; a tenant cannot set a value weaker than the platform
-      default for a `tighten_only` key — tested.
+- [ ] `resolve()` returns `(value, source)`; a tenant cannot set a value weaker than the platform default for a `tighten_only` key.
 - [ ] The bijection test covers the settings catalogue.
 - [ ] `python -m app.seed` produces two tenants; `_DEMO_USERS` is gone.
-- [ ] `fine_role` reaches the browser.
-- [ ] The route-coverage test passes.
+- [ ] `fine_role` reaches the browser; the route-coverage test passes.
 - [ ] `aegis.core.require` is what the README says; the adapter says eight everywhere.
 - [ ] Full suites green, ruff clean, `next build` green.
 
@@ -476,14 +444,25 @@ That is the first time the platform demonstrably has tenants at all.
 
 ## Risks
 
-**The substrate is easy to build weakly.** A claim without a lease looks correct in every test
-that does not kill a process. The definition of done requires actually killing one.
+**The sandbox import trap is the most likely thing to cost a day.** Aegis has modules that do
+side-effectful work at import, and the workflow sandbox re-imports the defining module. §3.0
+exists to hit this in the first hour rather than in Phase 4.
+
+**Dual-write skew is real and must be designed for, not discovered.** An activity can commit to
+Postgres and die before Temporal records completion. Idempotent activities keyed on
+`(workflow_id, stage)` are the answer, and §3.3's reconciler covers the opposite skew. An
+activity written non-idempotently will look correct until the first crash.
+
+**Temporal is now a second thing that must be up on stage.** Measured at 123 MB and 0.2 s
+startup, so the cost is small — but the demo runbook needs a start step and preflight needs a
+probe.
+
+**`win_arm64` has no wheel.** Confirm the laptop is x64 in §3.0. If it is ARM, the fallback is the
+hand-rolled substrate specified in the earlier draft of this file, which remains in git history.
+
+**Scope binding is the one place a mistake is silent.** An activity that forgets
+`set_tenant_scope` runs unscoped on the serving engine. Make it structural — a decorator that
+refuses to run without a tenant argument — rather than a convention every activity must remember.
 
 **`run_events` partitioning is irreversible.** Get it right at creation; there is no migration
 tool.
-
-**Deleting `_DEMO_USERS` breaks every existing demo path** until the seed runs. Land both in the
-same change and update the runbook in the same commit.
-
-**The settings catalogue can sprawl.** Every key is a UI control and a test. Start with the keys
-phases 6 and 7 actually need, not every knob that could exist.

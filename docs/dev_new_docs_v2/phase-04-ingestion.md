@@ -494,7 +494,7 @@ and its error bar, not the library that printed it.
 | 4.2 | Text-layer probe + header/footer/page-number stripping | 0.25 | Running headers otherwise trip our Jaccard dedup and look like a bug on stage |
 | 4.3 | `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | The chunker survives intact |
 | 4.4 | Enriched prefix: title · type · date · heading path | 0.15 | Highest quality-per-hour in the phase |
-| 4.5 | `documents` table, upload route, **`ingest_document` job on the P3 substrate** | 0.75 | No queue machinery here — Phase 3 §3.1–3.4 owns it |
+| 4.5 | `documents` table, upload route, **`ingest_document` workflow on Temporal (P3)** | 0.75 | No queue machinery here — Phase 3 owns orchestration; the stages are activities |
 | 4.6 | 🚧 **`chunks.tenant_id`** + RLS + isolation test | 0.25 | **Blocker for 4.7.** See D4b — it ships in the same change or 4.7 does not ship |
 | 4.7 | **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. Gated on 4.6 |
 | 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
