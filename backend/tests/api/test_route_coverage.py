@@ -447,7 +447,9 @@ def _console_sections() -> set[str]:
     text = _PORTAL_TS.read_text()
     return {
         match.group(1)
-        for match in re.finditer(r"^  (\w+): \{(?:(?!^  \w+: \{).)*?console: true", text, re.S | re.M)
+        for match in re.finditer(
+            r"^  (\w+): \{(?:(?!^  \w+: \{).)*?console: true", text, re.S | re.M
+        )
     }
 
 
@@ -517,7 +519,10 @@ UNREACHABLE_BY_DESIGN: dict[tuple[str, str], str] = {
     # gets `GET /forecast/budget` (the same projection burned down against the
     # configured cap) and a client gets `GET /forecast/domain`. The un-burned-down
     # series is the top panel phase 7 adds for the platform admin.
-    ("GET", "/forecast/usage"): "phase 7 — UI serves /forecast/budget (same series, burned down against the cap)",
+    ("GET", "/forecast/usage"): (
+        "phase 7 — the UI serves /forecast/budget: the same series, burned down "
+        "against the configured cap"
+    ),
 }
 
 
