@@ -48,6 +48,13 @@ Add a three-tier tenancy hierarchy and enforce it at identity, data, and spend:
 The demo principals still log in (mapped to `platform_admin`, ungoverned) for
 back-compat, so the offline/no-seed path is unchanged.
 
+> **Amended 2026-08-18 (§3.8).** The no-seed path is gone. `_DEMO_USERS` was deleted and
+> the same five principals are now real `users` rows written by `python -m app.seed`,
+> alongside two tenants with their own admins, users, budgets and documents. A login
+> against an empty `users` table answers **503** naming that command; it no longer
+> invents a `platform_admin`. Keeping the fallback is what left this decision's tenancy
+> untested end to end — zero tenants and zero budgets existed until the seed did.
+
 ## Consequences
 
 - **+** A real tenant boundary at identity, data, and spend — per-customer attribution

@@ -102,20 +102,22 @@ async def test_fine_role_on_the_wire_matches_the_token_it_was_issued_with(
     assert claims.coarse_role == body["role"]
 
 
-async def test_login_of_a_non_admin_carries_its_own_role_as_the_tier(client, db):
+async def test_login_of_a_non_admin_carries_its_own_role_as_the_tier(
+    client, db, platform_principals
+):
     """A non-admin has no sub-tier: its fine role is its own coarse role.
 
     Asserted so the field is never mistaken for admin-only and left unset (or set
     to an admin tier) for the roles that make up most of the userbase.
     """
     login = await client.post(
-        "/auth/login", json={"username": "client", "password": "demo"}
+        "/auth/login", json={"username": "client", "password": platform_principals}
     )
     assert login.status_code == 200
     assert login.json()["fine_role"] == "client"
 
     devops = await client.post(
-        "/auth/login", json={"username": "devops", "password": "demo"}
+        "/auth/login", json={"username": "devops", "password": platform_principals}
     )
     assert devops.status_code == 200
     assert devops.json()["fine_role"] == "devops"

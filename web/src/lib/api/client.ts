@@ -95,9 +95,40 @@ async function request<T>(
  * Authenticate and receive a JWT + role + tenant. The backend is the sole
  * authority on which portal a user lands in — the role travels in the response,
  * never derived client-side from the username.
+ *
+ * **Why this does not use `request`.** That helper discards the response body, and for
+ * this route the body is the difference between two unrelated failures: a wrong password
+ * (401) and a backend nobody has seeded (503, whose `detail` says to run
+ * `python -m app.seed`). Collapsing the second into "check your credentials" would send
+ * an operator hunting for a typo that does not exist — the same class of misdirection the
+ * deleted `_DEMO_USERS` fallback caused by inventing an admin instead of saying the
+ * database was empty.
  */
 export async function login(body: LoginRequest): Promise<LoginResponse> {
-  return request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify(body) }, null)
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const detail = await res
+      .json()
+      .then((b: { detail?: string }) => b.detail)
+      .catch(() => undefined)
+    throw new LoginError(res.status, detail ?? `Sign-in failed (${res.status}).`)
+  }
+  return (await res.json()) as LoginResponse
+}
+
+/** A failed `POST /auth/login`, carrying the status and the server's own reason. */
+export class LoginError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'LoginError'
+  }
 }
 
 /** Fetch the current context graph for the viz. */

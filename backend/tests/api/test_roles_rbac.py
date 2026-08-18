@@ -55,7 +55,7 @@ async def test_health_is_public_and_reports_identity(client):
     assert body["product"] and body["version"]
 
 
-# ── Demo logins mint a correct four-valued-role JWT ──────────────────────────
+# ── Seeded logins mint a correct four-valued-role JWT ────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -68,9 +68,13 @@ async def test_health_is_public_and_reports_identity(client):
         ("client", "client"),
     ],
 )
-async def test_demo_login_maps_username_to_role(client, db, username, expected_role):
+async def test_seeded_login_maps_username_to_role(
+    client, db, platform_principals, username, expected_role
+):
+    # The role comes from the seeded ``users`` row, not from a table in the login
+    # handler: ``_DEMO_USERS`` was deleted in §3.8.
     resp = await client.post(
-        "/auth/login", json={"username": username, "password": "demo"}
+        "/auth/login", json={"username": username, "password": platform_principals}
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -80,7 +84,7 @@ async def test_demo_login_maps_username_to_role(client, db, username, expected_r
     assert claims.coarse_role == expected_role
 
 
-async def test_demo_login_rejects_wrong_password(client, db):
+async def test_seeded_login_rejects_wrong_password(client, db, platform_principals):
     bad = await client.post(
         "/auth/login", json={"username": "devops", "password": "nope"}
     )

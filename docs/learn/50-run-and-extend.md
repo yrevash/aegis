@@ -185,8 +185,15 @@ npm run dev                                     # → http://localhost:3000
 
 ### Logging in
 
-Open <http://localhost:3000>. In development, five demo principals exist, all with the
-password **`demo`** (`_DEMO_USERS` in `backend/src/app/api/routes.py`):
+Seed the accounts first — there is no fallback login table, so an empty database has
+nobody to log in as (it answers 503 and names this command):
+
+```bash
+cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m app.seed
+```
+
+Open <http://localhost:3000>. The seed's five platform-staff principals all use the
+password **`demo`** (override with `AEGIS_SEED_PASSWORD` before seeding):
 
 | Username | Role → portal | Persona |
 |---|---|---|
@@ -195,12 +202,11 @@ password **`demo`** (`_DEMO_USERS` in `backend/src/app/api/routes.py`):
 | `devops` | `devops` → `/app/devops/dashboard` | `operations_lead` |
 | `client` | `client` → `/app/client/console` | `client` |
 
-The demo table is dev-only: it is skipped entirely when `APP_ENV != dev`, and a real
-`users` row always wins for that username. A real deployment seeds `users` with
-Argon2id-hashed passwords, a coarse role and a `tenant_id`, so login yields a
-tenant-scoped JWT and every run is governed. Admins reassign roles through
-`POST /admin/users/{id}/role`, which is guarded against demoting the last platform-admin
-into a lockout.
+They carry no `tenant_id`, so their runs are ungoverned. The seed's two tenants —
+`northwind.*` and `vertex.*`, same password — do carry one, so those logins yield a
+tenant-scoped JWT and every run is governed by that tenant's budget and RLS scope. Admins
+reassign roles through `POST /admin/users/{id}/role`, which is guarded against demoting
+the last platform-admin into a lockout.
 
 ### What listens where
 

@@ -235,7 +235,23 @@ The backend enables CORS for `http://localhost:3000` out of the box.
 
 ---
 
-## Demo logins
+## Seeding the accounts
+
+**Nobody can log in until the database is seeded.** There is no fallback login table
+any more (`_DEMO_USERS` was deleted in §3.8): an account exists only if a `users` row
+exists, and a login attempted against an empty table answers **503** naming this command
+rather than pretending the password was wrong.
+
+```bash
+cd backend
+PYTHONPATH=src:../aegis/src .venv/bin/python -m app.seed
+```
+
+It is idempotent — run it as often as you like; it creates what is missing, touches
+nothing that already exists, and prints what it did. Accounts it creates use the password
+`demo` unless `AEGIS_SEED_PASSWORD` is set.
+
+**Platform staff** (no `tenant_id`, so their runs are ungoverned):
 
 | Username | Password | Coarse role | Persona           | Portal           |
 |----------|----------|-------------|-------------------|------------------|
@@ -246,20 +262,20 @@ The backend enables CORS for `http://localhost:3000` out of the box.
 | `client` | `demo`   | `client`    | `client`          | `/app/client/…`  |
 
 Every operational role (`admin` / `ai_team` / `devops`) maps to the full
-`operations_lead` persona; `client` gets the self-scoped `client` persona.
+`operations_lead` persona; `client` gets the self-scoped `client` persona. `admin` has no
+tenant, which is what makes it the `platform_admin` tier.
 
-These are a **dev-only fallback** (`_DEMO_USERS` in `backend/src/app/api/routes.py`),
-consulted **only** when `APP_ENV=dev` *and* the username is not a real `users` row —
-so a seeded account is never overridden, and a wrong password for an existing user
-never falls through to the demo table. In any non-dev environment the demo table is
-disabled entirely. Being platform-scoped (no `tenant_id`), their runs are **ungoverned**.
+**Two tenants**, each with a tenant admin, two users, a daily budget and three documents:
 
-The demo principals mint **signed JWTs** and map to the `platform_admin` tier
-(global, un-tenanted) for back-compat. A real deployment seeds the `users` table with
-Argon2-hashed passwords and a `tenant_id`, so login yields a **tenant-scoped** JWT and
-runs are governed (budget + RLS). Tenant/user/budget management is under `/admin/*`
-(platform-admin: tenants; tenant-admin: own users/budgets/usage). See ADR 0008 and
-`backend/src/app/api/routes.py`.
+| Tenant | Tenant admin | Users |
+|---|---|---|
+| Northwind Trading | `northwind.admin` | `northwind.analyst`, `northwind.client` |
+| Vertex Logistics  | `vertex.admin`    | `vertex.analyst`, `vertex.client`       |
+
+A tenant admin's login yields a **tenant-scoped** JWT, so its runs are governed (budget +
+RLS) and the per-tenant screens have something to render. Tenant/user/budget management is
+under `/admin/*` (platform-admin: tenants; tenant-admin: own users/budgets/usage). See ADR
+0008, `backend/src/app/seed.py` and `backend/src/app/api/routes.py`.
 
 The **async approvals inbox** (durable HITL, ADR 0005): a gated run persists a `PENDING`
 row; an admin lists it at `GET /approvals` and resolves it out-of-band at

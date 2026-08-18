@@ -8,6 +8,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 
 import { Button } from '@/components/primitives/button'
 import { Input } from '@/components/primitives/input'
+import { LoginError } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { homePathFor, type Role } from '@/lib/portal'
 
@@ -19,9 +20,11 @@ import { homePathFor, type Role } from '@/lib/portal'
  */
 
 /**
- * Quick-in identities. Each is a real account the backend seeds for its role
- * (`_DEMO_USERS` in `backend/src/app/api/routes.py`, password `demo`), so these
- * buttons issue an ordinary `POST /auth/login` like the form does.
+ * Quick-in identities. Each is a real `users` row written by `python -m app.seed`
+ * (`backend/src/app/seed.py`, password `demo` unless `AEGIS_SEED_PASSWORD` says
+ * otherwise), so these buttons issue an ordinary `POST /auth/login` like the form does.
+ * An unseeded backend answers 503 and says to run the seed — there is no fallback
+ * login table behind these names.
  */
 const QUICK_IN: { role: Role; label: string; username: string }[] = [
   { role: 'admin', label: 'Enter as Admin', username: 'admin' },
@@ -29,6 +32,20 @@ const QUICK_IN: { role: Role; label: string; username: string }[] = [
   { role: 'devops', label: 'Enter as DevOps', username: 'devops' },
   { role: 'client', label: 'Enter as Client', username: 'client' },
 ]
+
+/**
+ * Turn a failed sign-in into the message the operator needs.
+ *
+ * A 401 really is "check your credentials". Anything else is not: a 503 means the backend
+ * could not check them at all — most often because nobody has run `python -m app.seed`, so
+ * the `users` table is empty — and the server says so in its own words. Showing the
+ * credential message for that would send the operator hunting for a typo that does not
+ * exist.
+ */
+function signInMessage(err: unknown): string {
+  if (err instanceof LoginError && err.status !== 401) return err.message
+  return 'Sign-in failed. Check your credentials and try again.'
+}
 
 export default function LoginPage() {
   const { signIn, session, hydrated } = useAuth()
@@ -50,8 +67,8 @@ export default function LoginPage() {
     try {
       const s = await signIn(username || 'analyst', password)
       router.replace(homePathFor(s.role))
-    } catch {
-      setError('Sign-in failed. Check your credentials and try again.')
+    } catch (err) {
+      setError(signInMessage(err))
       setBusy(false)
     }
   }
@@ -62,8 +79,8 @@ export default function LoginPage() {
     setError(null)
     void signIn(name, 'demo')
       .then((s) => router.replace(homePathFor(s.role)))
-      .catch(() => {
-        setError('Sign-in failed. Check your credentials and try again.')
+      .catch((err: unknown) => {
+        setError(signInMessage(err))
         setBusy(false)
       })
   }

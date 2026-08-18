@@ -15,6 +15,7 @@ governance / security / latency / red-team). These tests assert:
 from __future__ import annotations
 
 import pytest
+from tests.conftest import login_as
 
 from app.api.schemas import Role
 from app.core.security import PLATFORM_ADMIN, TENANT_ADMIN, create_access_token
@@ -29,12 +30,6 @@ def _headers(role: str, *, tenant_id=None, user_id=None, username="u") -> dict[s
         user_id=user_id, username=username, role=role, tenant_id=tenant_id
     )
     return {"Authorization": f"Bearer {token}"}
-
-
-async def _login(client, username: str) -> dict[str, str]:
-    """Log in as a demo principal (password ``demo``) and return an auth header."""
-    resp = await client.post("/auth/login", json={"username": username, "password": "demo"})
-    return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
 # ── MLOps · model card ───────────────────────────────────────────────────────
@@ -72,7 +67,7 @@ def no_ml_artifact(monkeypatch, tmp_path):
 
 
 async def test_model_card_returns_measured_shape(client, db, fitted_spine):
-    r = await client.get("/ml/model-card", headers=await _login(client, "ai"))
+    r = await client.get("/ml/model-card", headers=await login_as(client, "ai"))
     assert r.status_code == 200
     body = r.json()
     assert body["task"] == "regression"
@@ -90,7 +85,7 @@ async def test_model_card_is_503_when_no_model_has_been_trained(
     imported, and on the built-in **noise synthesiser** if it did not — and return a
     fully-populated card for it. The card looked identical either way.
     """
-    r = await client.get("/ml/model-card", headers=await _login(client, "ai"))
+    r = await client.get("/ml/model-card", headers=await login_as(client, "ai"))
 
     assert r.status_code == 503
     assert "python -m app.ml" in r.json()["detail"]
@@ -125,7 +120,7 @@ async def test_ml_explain_runs_the_fit_off_the_event_loop(client, db, admin_head
 
 
 async def test_model_card_rejects_client_role(client, db):
-    r = await client.get("/ml/model-card", headers=await _login(client, "client"))
+    r = await client.get("/ml/model-card", headers=await login_as(client, "client"))
     assert r.status_code == 403
 
 
@@ -133,7 +128,7 @@ async def test_model_card_rejects_client_role(client, db):
 
 
 async def test_evals_report_returns_gate_rollup(client, db):
-    r = await client.get("/evals/report", headers=await _login(client, "ai"))
+    r = await client.get("/evals/report", headers=await login_as(client, "ai"))
     assert r.status_code == 200
     body = r.json()
     assert isinstance(body["passed"], bool)
@@ -145,7 +140,7 @@ async def test_evals_report_returns_gate_rollup(client, db):
 
 async def test_evals_report_rejects_devops_role(client, db):
     # evals is admin/ai_team only — a devops principal is refused.
-    r = await client.get("/evals/report", headers=await _login(client, "devops"))
+    r = await client.get("/evals/report", headers=await login_as(client, "devops"))
     assert r.status_code == 403
 
 
@@ -153,7 +148,7 @@ async def test_evals_report_rejects_devops_role(client, db):
 
 
 async def test_ops_params_returns_knobs(client, db):
-    r = await client.get("/ops/params", headers=await _login(client, "admin"))
+    r = await client.get("/ops/params", headers=await login_as(client, "admin"))
     assert r.status_code == 200
     body = r.json()
     assert body["auto_promote_ceiling"] == "low"
@@ -166,7 +161,7 @@ async def test_ops_params_returns_knobs(client, db):
 
 async def test_gateway_optimization_shape_and_honest_zeros(client, db):
     # require_auth: any authenticated principal (incl. client) may read efficiency figures.
-    r = await client.get("/gateway/optimization", headers=await _login(client, "client"))
+    r = await client.get("/gateway/optimization", headers=await login_as(client, "client"))
     assert r.status_code == 200
     body = r.json()
     assert set(body) == {"summary", "config"}
@@ -185,7 +180,7 @@ async def test_gateway_optimization_requires_auth(client, db):
 
 
 async def test_harness_config_shape(client, db):
-    r = await client.get("/harness/config", headers=await _login(client, "ai"))
+    r = await client.get("/harness/config", headers=await login_as(client, "ai"))
     assert r.status_code == 200
     body = r.json()
     assert body["knobs"] and body["effective"]
@@ -194,7 +189,7 @@ async def test_harness_config_shape(client, db):
 
 
 async def test_harness_config_rejects_client_role(client, db):
-    r = await client.get("/harness/config", headers=await _login(client, "client"))
+    r = await client.get("/harness/config", headers=await login_as(client, "client"))
     assert r.status_code == 403
 
 
@@ -202,7 +197,7 @@ async def test_harness_config_rejects_client_role(client, db):
 
 
 async def test_security_posture_shape_and_status_vocab(client, db):
-    r = await client.get("/security/posture", headers=await _login(client, "devops"))
+    r = await client.get("/security/posture", headers=await login_as(client, "devops"))
     assert r.status_code == 200
     body = r.json()
     assert body["entries"], "one posture entry per major threat"
@@ -213,7 +208,7 @@ async def test_security_posture_shape_and_status_vocab(client, db):
 
 
 async def test_security_posture_rejects_client_role(client, db):
-    r = await client.get("/security/posture", headers=await _login(client, "client"))
+    r = await client.get("/security/posture", headers=await login_as(client, "client"))
     assert r.status_code == 403
 
 
@@ -226,7 +221,7 @@ async def test_latency_reports_honest_empty_state(client, db):
     from aegis.observability import reset_latency_window
 
     reset_latency_window()
-    r = await client.get("/latency", headers=await _login(client, "devops"))
+    r = await client.get("/latency", headers=await login_as(client, "devops"))
     assert r.status_code == 200
     body = r.json()
     assert body["empty"] is True
@@ -238,7 +233,7 @@ async def test_latency_reports_honest_empty_state(client, db):
 
 
 async def test_redteam_run_reports_block_rate(client, db):
-    r = await client.post("/redteam/run", headers=await _login(client, "admin"))
+    r = await client.post("/redteam/run", headers=await login_as(client, "admin"))
     assert r.status_code == 200
     body = r.json()
     assert body["overall"]["attacksTotal"] > 0
@@ -250,7 +245,7 @@ async def test_redteam_run_reports_block_rate(client, db):
 
 
 async def test_redteam_run_rejects_client_role(client, db):
-    r = await client.post("/redteam/run", headers=await _login(client, "client"))
+    r = await client.post("/redteam/run", headers=await login_as(client, "client"))
     assert r.status_code == 403
 
 
@@ -302,7 +297,7 @@ async def test_governance_dashboard_cross_tenant_is_forbidden(client, db):
 
 
 async def test_governance_dashboard_rejects_non_admin(client, db):
-    r = await client.get("/governance/dashboard", headers=await _login(client, "client"))
+    r = await client.get("/governance/dashboard", headers=await login_as(client, "client"))
     assert r.status_code == 403
 
 

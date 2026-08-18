@@ -55,8 +55,11 @@ cd web && npm run dev
 .\scripts\start.ps1 -Mode full
 ```
 
-Then open **http://localhost:3000**. Demo logins: `admin` / `ai` / `devops` /
-`client`, password `demo`.
+Then open **http://localhost:3000**. Seed the accounts first — `cd backend &&
+PYTHONPATH=src:../aegis/src .venv/bin/python -m app.seed` — there is no fallback login
+table, so an unseeded backend answers 503 and says exactly that. Logins:
+`admin` / `ai` / `devops` / `client` (platform staff) and `northwind.admin` /
+`vertex.admin` (the two seeded tenants), password `demo`.
 
 Three run modes, so a demo never depends on infrastructure being healthy:
 

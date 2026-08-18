@@ -19,6 +19,7 @@ from aegis.governance.models import (
     Tenant,
     UsageLedger,
 )
+from tests.conftest import login_as
 
 from app.core.security import PLATFORM_ADMIN, TENANT_ADMIN, create_access_token
 
@@ -31,12 +32,6 @@ def _headers(role: str, *, tenant_id=None, user_id=None, username="u") -> dict[s
         user_id=user_id, username=username, role=role, tenant_id=tenant_id
     )
     return {"Authorization": f"Bearer {token}"}
-
-
-async def _login(client, username: str) -> dict[str, str]:
-    """Log in as a demo principal (password ``demo``) and return an auth header."""
-    resp = await client.post("/auth/login", json={"username": username, "password": "demo"})
-    return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
 async def _seed_history(sessionmaker, tenant_id: int, days: int) -> None:
@@ -85,7 +80,7 @@ async def _seed_history(sessionmaker, tenant_id: int, days: int) -> None:
 
 
 async def test_an_empty_ledger_refuses_with_the_arithmetic_not_an_error(client, db):
-    r = await client.get("/forecast/usage", headers=await _login(client, "admin"))
+    r = await client.get("/forecast/usage", headers=await login_as(client, "admin"))
     assert r.status_code == 200, "a refusal is a result, not an HTTP failure"
     body = r.json()
     assert body["available"] is False
@@ -111,12 +106,12 @@ async def test_a_tenant_with_a_little_history_is_told_how_much_it_needs(client, 
 
 
 async def test_usage_forecast_rejects_a_non_admin_role(client, db):
-    r = await client.get("/forecast/usage", headers=await _login(client, "client"))
+    r = await client.get("/forecast/usage", headers=await login_as(client, "client"))
     assert r.status_code == 403
 
 
 async def test_budget_forecast_rejects_a_non_admin_role(client, db):
-    r = await client.get("/forecast/budget", headers=await _login(client, "client"))
+    r = await client.get("/forecast/budget", headers=await login_as(client, "client"))
     assert r.status_code == 403
 
 
@@ -134,7 +129,7 @@ async def test_a_tenant_admin_cannot_forecast_another_tenants_spend(client, db):
 
 
 async def test_an_unknown_metric_or_window_is_rejected(client, db):
-    headers = await _login(client, "admin")
+    headers = await login_as(client, "admin")
     assert (await client.get("/forecast/usage?metric=vibes", headers=headers)).status_code == 400
     assert (await client.get("/forecast/budget?window=year", headers=headers)).status_code == 400
 
@@ -214,7 +209,7 @@ async def test_the_budget_route_projects_the_burn_down_against_a_real_cap(client
 
 
 async def test_the_domain_forecast_reads_through_the_adapter_seam(client, db):
-    r = await client.get("/forecast/domain?horizon=7", headers=await _login(client, "client"))
+    r = await client.get("/forecast/domain?horizon=7", headers=await login_as(client, "client"))
     assert r.status_code == 200
     body = r.json()
     assert body["available"] is True, body.get("refusal")

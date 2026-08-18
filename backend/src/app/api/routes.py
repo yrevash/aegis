@@ -28,6 +28,7 @@ from aegis.ml import MLModelUnavailableError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.exc import SQLAlchemyError
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from app.adapter import DEFAULT_PERSONA_ID, get_persona
@@ -203,19 +204,18 @@ class AuthContext:
     user_id: int | None = None
 
 
-# username → (password, coarse role). Demo credentials are a **dev-only** convenience
-# for the offline money-shot demo — one login per real role (password ``demo``): they
-# are consulted only when ``app_env == "dev"`` AND the username is not a real ``users``
-# row, and never on a wrong password for an existing account. They are platform-scoped
-# (no tenant), so their runs are ungoverned. In any non-dev environment the demo table
-# is disabled entirely (C2).
-_DEMO_USERS: dict[str, tuple[str, Role]] = {
-    "admin": ("demo", Role.ADMIN),
-    "ai": ("demo", Role.AI_TEAM),
-    "aiteam": ("demo", Role.AI_TEAM),
-    "devops": ("demo", Role.DEVOPS),
-    "client": ("demo", Role.CLIENT),
-}
+#: What to tell an operator whose ``users`` table is empty (§3.8).
+#:
+#: This replaced a hardcoded ``_DEMO_USERS`` table that minted an un-tenanted
+#: ``platform_admin`` whenever the database had no matching row. It made the platform
+#: *look* usable with zero tenants, zero users and zero budgets — which is precisely how
+#: this deployment reached 2026-08 with every per-tenant control, every RLS policy and
+#: every budget cap unexercised. An empty identity store is now a state the login surface
+#: reports and names the fix for, never one it papers over.
+_SEED_HINT = (
+    "No user accounts exist. Run `python -m app.seed` to create the tenants, their "
+    "users and their budgets, then sign in with a seeded account."
+)
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -230,58 +230,66 @@ def _persona_for(role: Role) -> str:
 
 
 async def _authenticate(username: str, password: str) -> AuthContext | None:
-    """Return the principal for valid credentials, else ``None`` (C2).
+    """Return the principal for valid credentials, else ``None`` (C2, §3.8).
 
-    Authenticates against the ``users`` table first (hashed-password verification).
-    The built-in demo principals are a **dev-only** fallback: they are consulted
-    only when ``app_env == "dev"`` AND the username is not a real ``users`` row, so
-    a real account is never overridden and a wrong password for an existing user is
-    always rejected (it never falls through to the demo table). In any non-dev
-    environment the demo table is disabled entirely.
+    The ``users`` table is the **only** authority: the row's Argon2 hash is verified and
+    an inactive account, an unknown username or a wrong password all resolve to ``None``
+    (a 401). There is no fallback table any more — see :data:`_SEED_HINT` for what the
+    deleted one cost.
+
+    The two states that are *not* a credential failure are raised rather than collapsed
+    into one:
+
+    * **The identity store is empty.** Nobody can log in until it is seeded, and a 401
+      would blame the operator's typing for a deployment that was never provisioned.
+    * **The identity store is unreachable.** The credentials were never checked, so
+      claiming they were wrong is a lie; the login surface fails closed and says why.
+
+    Raises:
+        HTTPException: 503 when the credentials could not be checked at all — an
+            unreachable database, or a ``users`` table with no rows in it.
     """
-    real_user_exists = False
+    from sqlalchemy import func, select  # noqa: PLC0415 - keeps SQLAlchemy off imports
+
+    from app.data import User, get_sessionmaker  # noqa: PLC0415 - DB is optional at boot
+
     try:
-        from sqlalchemy import select
-
-        from app.data import User, get_sessionmaker
-
         async with get_sessionmaker()() as session:
             row = (
                 await session.execute(select(User).where(User.username == username))
             ).scalars().first()
-        if row is not None:
-            # A real account exists: it is the ONLY authority for this username.
-            real_user_exists = True
-            if row.is_active and verify_password(password, row.password_hash):
-                return AuthContext(
-                    username=row.username,
-                    role=row.role,
-                    persona=_persona_for(row.role),
-                    fine_role=principal_role(row.role, row.tenant_id),
-                    tenant_id=row.tenant_id,
-                    user_id=row.id,
-                )
-            # Inactive or wrong password → reject; never consult the demo table.
-            return None
-    except Exception:  # noqa: BLE001 - DB optional; dev may fall back to demo principals
-        logger.debug("Users-table auth lookup failed.", exc_info=True)
-
-    # No real row for this username (or the DB was unreachable). The demo backdoor
-    # is dev-only and closed everywhere else.
-    if real_user_exists or not get_settings().is_dev:
+            if row is None:
+                provisioned = (
+                    await session.execute(select(func.count()).select_from(User))
+                ).scalar_one()
+    except (SQLAlchemyError, OSError) as exc:
+        logger.error(  # noqa: TRY400 - the traceback is carried by exc_info
+            "Login cannot be verified: the identity store is unreachable.", exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Sign-in is unavailable: the user database could not be reached, so "
+                "these credentials were never checked."
+            ),
+        ) from exc
+    if row is None:
+        if not provisioned:
+            logger.error("Login attempted against an empty users table. %s", _SEED_HINT)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_SEED_HINT
+            )
         return None
-    record = _DEMO_USERS.get(username)
-    if record is None or record[0] != password:
-        return None
-    _, role = record
-    return AuthContext(
-        username=username,
-        role=role,
-        persona=_persona_for(role),
-        fine_role=principal_role(role, None),
-        tenant_id=None,
-        user_id=None,
-    )
+    if row.is_active and verify_password(password, row.password_hash):
+        return AuthContext(
+            username=row.username,
+            role=row.role,
+            persona=_persona_for(row.role),
+            fine_role=principal_role(row.role, row.tenant_id),
+            tenant_id=row.tenant_id,
+            user_id=row.id,
+        )
+    return None
 
 
 def _mint_token(ctx: AuthContext) -> str:

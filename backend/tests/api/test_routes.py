@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import select
+from tests.conftest import login_as
 
 from app.api import routes as api_routes
 from app.data import AuditLog, get_sessionmaker
@@ -17,8 +18,10 @@ from app.main import app
 pytestmark = pytest.mark.asyncio
 
 
-async def test_login_success_and_failure(client, db):
-    ok = await client.post("/auth/login", json={"username": "admin", "password": "demo"})
+async def test_login_success_and_failure(client, db, platform_principals):
+    ok = await client.post(
+        "/auth/login", json={"username": "admin", "password": platform_principals}
+    )
     assert ok.status_code == 200
     body = ok.json()
     assert body["role"] == "admin"
@@ -155,8 +158,7 @@ async def test_audit_returns_rows_admin(client, db, admin_headers):
 async def test_audit_reachable_by_devops(client, db):
     # FIX 1 reachability: devops legitimately needs the audit trail (the DevOps portal's
     # Audit tab), so /audit is now open to admin OR devops — no more 403 dead tab.
-    login = await client.post("/auth/login", json={"username": "devops", "password": "demo"})
-    devops_h = {"Authorization": f"Bearer {login.json()['token']}"}
+    devops_h = await login_as(client, "devops")
     assert (await client.get("/audit", headers=devops_h)).status_code == 200
 
 
@@ -170,9 +172,11 @@ async def test_audit_requires_auth(client, db):
     assert (await client.get("/audit")).status_code == 401
 
 
-async def test_audit_limit_is_clamped(client, db, admin_headers):
+async def test_audit_limit_is_clamped(client, db, admin_headers, platform_principals):
     # A couple more auditable events so there is something to limit.
-    await client.post("/auth/login", json={"username": "admin", "password": "demo"})
+    await client.post(
+        "/auth/login", json={"username": "admin", "password": platform_principals}
+    )
     resp = await client.get("/audit?limit=1", headers=admin_headers)
     assert resp.status_code == 200
     assert len(resp.json()["rows"]) == 1

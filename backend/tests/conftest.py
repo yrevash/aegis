@@ -427,22 +427,60 @@ async def client():
     app.dependency_overrides.clear()
 
 
+async def login_as(client, username: str) -> dict[str, str]:
+    """Provision one seeded platform account, log in as it, return an auth header.
+
+    The hardcoded ``_DEMO_USERS`` login table was deleted in §3.8, so an account only
+    exists if a row exists. Every fixture and test that authenticates therefore writes
+    the row first — through :mod:`app.seed`, the same code ``python -m app.seed`` runs,
+    rather than a test-local imitation of it that could drift from what an operator
+    actually gets.
+
+    One principal is provisioned rather than all five because an Argon2 hash costs ~30ms
+    and the whole suite pays it: the tests that need the other roles ask for the
+    :func:`platform_principals` fixture.
+
+    Args:
+        client: The httpx client bound to the ASGI app.
+        username: A username from :data:`app.seed.PLATFORM_PRINCIPALS`.
+
+    Returns:
+        The ``Authorization`` header for the freshly minted token.
+    """
+    from app.seed import SeedSummary, ensure_principal, platform_principal, seed_password
+
+    await ensure_principal(platform_principal(username), SeedSummary())
+    resp = await client.post(
+        "/auth/login", json={"username": username, "password": seed_password()}
+    )
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['token']}"}
+
+
+@pytest_asyncio.fixture
+async def platform_principals(db):
+    """Seed all five un-tenanted platform accounts (``app.seed``'s staff half).
+
+    For the tests that log in as more than one role, or as a role no ``*_headers``
+    fixture covers. Returns the password they were created with, so a test never
+    hardcodes a credential the seed alone decides.
+    """
+    from app.seed import seed_password, seed_platform_principals
+
+    await seed_platform_principals()
+    return seed_password()
+
+
 @pytest_asyncio.fixture
 async def admin_headers(client, db):
-    """Log in as the demo admin (password ``demo``) and return an auth header."""
-    resp = await client.post(
-        "/auth/login", json={"username": "admin", "password": "demo"}
-    )
-    return {"Authorization": f"Bearer {resp.json()['token']}"}
+    """Log in as the seeded platform admin and return an auth header."""
+    return await login_as(client, "admin")
 
 
 @pytest_asyncio.fixture
 async def user_headers(client, db):
-    """Log in as the demo client (the end-user role) and return an auth header."""
-    resp = await client.post(
-        "/auth/login", json={"username": "client", "password": "demo"}
-    )
-    return {"Authorization": f"Bearer {resp.json()['token']}"}
+    """Log in as the seeded platform client (the end-user role) and return a header."""
+    return await login_as(client, "client")
 
 
 @pytest.fixture

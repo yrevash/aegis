@@ -12,6 +12,7 @@ from importlib import metadata
 
 import pytest
 from pydantic import ValidationError
+from tests.conftest import login_as
 
 import app.platform.patches as patch_check_mod
 from app.api.schemas import RiskEntry, risk_band
@@ -83,12 +84,10 @@ async def test_stack_shape_and_real_versions(client, db):
 
 async def test_stack_devops_allowed_client_forbidden_unauth_401(client, db):
     # devops coarse role is allowed; client is not; no token is 401.
-    devops = await client.post("/auth/login", json={"username": "devops", "password": "demo"})
-    devops_h = {"Authorization": f"Bearer {devops.json()['token']}"}
+    devops_h = await login_as(client, "devops")
     assert (await client.get("/stack", headers=devops_h)).status_code == 200
 
-    clientlogin = await client.post("/auth/login", json={"username": "client", "password": "demo"})
-    client_h = {"Authorization": f"Bearer {clientlogin.json()['token']}"}
+    client_h = await login_as(client, "client")
     assert (await client.get("/stack", headers=client_h)).status_code == 403
 
     assert (await client.get("/stack")).status_code == 401
@@ -233,12 +232,10 @@ async def test_patch_check_authz(client, db, monkeypatch):
     patch_check_mod.reset_cache()
     monkeypatch.setattr(patch_check_mod, "_fetch_latest", lambda name: None)
 
-    devops = await client.post("/auth/login", json={"username": "devops", "password": "demo"})
-    devops_h = {"Authorization": f"Bearer {devops.json()['token']}"}
+    devops_h = await login_as(client, "devops")
     assert (await client.post("/stack/patch-check", json={}, headers=devops_h)).status_code == 200
 
-    clientlogin = await client.post("/auth/login", json={"username": "client", "password": "demo"})
-    client_h = {"Authorization": f"Bearer {clientlogin.json()['token']}"}
+    client_h = await login_as(client, "client")
     assert (await client.post("/stack/patch-check", json={}, headers=client_h)).status_code == 403
 
     assert (await client.post("/stack/patch-check", json={})).status_code == 401
@@ -330,13 +327,11 @@ async def test_risk_entry_rejects_a_control_that_adds_risk():
 
 
 async def test_risk_map_authz(client, db):
-    clientlogin = await client.post("/auth/login", json={"username": "client", "password": "demo"})
-    client_h = {"Authorization": f"Bearer {clientlogin.json()['token']}"}
+    client_h = await login_as(client, "client")
     assert (await client.get("/risk-map", headers=client_h)).status_code == 200
 
     # ai_team and devops are not on the assurance surface.
-    devops = await client.post("/auth/login", json={"username": "devops", "password": "demo"})
-    devops_h = {"Authorization": f"Bearer {devops.json()['token']}"}
+    devops_h = await login_as(client, "devops")
     assert (await client.get("/risk-map", headers=devops_h)).status_code == 403
 
     assert (await client.get("/risk-map")).status_code == 401
@@ -369,8 +364,7 @@ async def test_savings_shape_and_math(client, db):
 async def test_savings_reachable_for_every_role(client, db):
     """Overview's savings figure must load for every portal role (require_auth)."""
     for username in ("admin", "ai", "devops", "client"):
-        login = await client.post("/auth/login", json={"username": username, "password": "demo"})
-        headers = {"Authorization": f"Bearer {login.json()['token']}"}
+        headers = await login_as(client, username)
         assert (await client.get("/savings", headers=headers)).status_code == 200, username
 
     assert (await client.get("/savings")).status_code == 401
@@ -382,8 +376,7 @@ async def test_savings_reachable_for_every_role(client, db):
 async def test_metrics_reachable_for_every_role(client, db):
     """Overview polls /metrics in every portal; the guard was relaxed to require_auth."""
     for username in ("admin", "ai", "devops", "client"):
-        login = await client.post("/auth/login", json={"username": username, "password": "demo"})
-        headers = {"Authorization": f"Bearer {login.json()['token']}"}
+        headers = await login_as(client, username)
         resp = await client.get("/metrics", headers=headers)
         assert resp.status_code == 200, username
         body = resp.json()

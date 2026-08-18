@@ -178,11 +178,12 @@ async def test_tenant_admin_cannot_set_other_tenant_budget(client, db):
     assert resp.status_code == 403
 
 
-async def test_demo_admin_login_still_works_and_maps_to_platform_admin(client, db):
-    # Back-compat: the built-in demo admin still logs in (no users row needed) and
-    # its JWT authorises the platform-admin surface.
+async def test_seeded_admin_login_maps_to_platform_admin(client, db, platform_principals):
+    # The seed's ``admin`` account carries no tenant, so it is the platform admin tier
+    # and its JWT authorises the platform-admin surface. Before §3.8 this principal was
+    # invented by the login handler with no ``users`` row behind it at all.
     login = await client.post(
-        "/auth/login", json={"username": "admin", "password": "demo"}
+        "/auth/login", json={"username": "admin", "password": platform_principals}
     )
     assert login.status_code == 200
     token = login.json()["token"]

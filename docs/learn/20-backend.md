@@ -71,19 +71,22 @@ flowchart TB
     L["POST /auth/login"] --> DB{"users row for this username?"}
     DB -->|yes| VER{"active AND Argon2id verify?"}
     VER -->|yes| OK["AuthContext from the row<br/>tenant_id + fine role"]
-    VER -->|no| REJ["401 — never falls through to the demo table"]
-    DB -->|"no row, or DB unreachable"| DEV{"APP_ENV == dev?"}
-    DEV -->|no| REJ
-    DEV -->|yes| DEMO{"in _DEMO_USERS with the right password?"}
-    DEMO -->|yes| OKD["AuthContext, platform-scoped<br/>tenant_id = None ⇒ ungoverned run"]
-    DEMO -->|no| REJ
+    VER -->|no| REJ["401 — the row is the only authority"]
+    DB -->|"no row"| ANY{"any users row at all?"}
+    ANY -->|yes| REJ
+    ANY -->|no| SEED["503 — 'run python -m app.seed'"]
+    DB -->|"DB unreachable"| UNAVAIL["503 — the credentials were never checked"]
     OK --> MINT["_mint_token → HS256 JWT"]
-    OKD --> MINT
 ```
 
-The demo table is a **dev-only** convenience and is closed two ways: a real `users` row
-always wins for that username, and `APP_ENV != dev` disables the table entirely. The
-five demo principals all use the password `demo`:
+There is **no fallback table**. `_DEMO_USERS` — five hardcoded principals consulted on a
+database miss — was deleted in §3.8: it made a platform with zero tenants, zero users and
+zero budgets look usable, which is how every per-tenant control went unexercised. The two
+states that are not a credential failure are now reported as themselves rather than
+collapsed into a 401.
+
+`python -m app.seed` writes the accounts (idempotently). The five platform-staff
+principals it creates use the password `demo` unless `AEGIS_SEED_PASSWORD` says otherwise:
 
 | Username | Coarse role | Persona |
 |---|---|---|
@@ -91,6 +94,9 @@ five demo principals all use the password `demo`:
 | `ai` or `aiteam` | `ai_team` | `operations_lead` |
 | `devops` | `devops` | `operations_lead` |
 | `client` | `client` | `client` |
+
+It also writes two tenants, each with a tenant admin, two users, a daily budget and three
+documents — the rows the tenant-scoped surfaces and the isolation tests need.
 
 ### Two role vocabularies
 
