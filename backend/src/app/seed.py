@@ -333,12 +333,16 @@ def seed_password() -> str:
     return os.environ.get(SEED_PASSWORD_ENV) or DEFAULT_SEED_PASSWORD
 
 
-async def ensure_tenant(name: str, summary: SeedSummary) -> int:
+async def ensure_tenant(name: str, summary: SeedSummary, *, usd_cap: float) -> int:
     """Return the id of the tenant called ``name``, creating it if absent.
 
     Args:
         name: The tenant's unique name — the idempotency key.
         summary: Counter to record the outcome against.
+        usd_cap: The tenant's spend cap. Required because
+            :func:`aegis.governance.enforcement.create_tenant` writes the tenant and its
+            ``budgets`` row in one transaction — a capless tenant is uncapped, and this
+            seed is what a demo logs in against.
 
     Returns:
         The tenant's primary key.
@@ -351,7 +355,7 @@ async def ensure_tenant(name: str, summary: SeedSummary) -> int:
             summary.record("tenants", created=False)
             return existing.id
     try:
-        row = await create_tenant(name)
+        row = await create_tenant(name, usd_cap=usd_cap)
     except DuplicateTenantError:
         # Lost a race with a concurrent seed: the row exists, which is the outcome
         # asked for. Re-read it rather than failing the run.
@@ -462,9 +466,10 @@ async def _ensure_budget(
                 )
             )
         ).scalars().first()
-    if existing is not None:
-        summary.record("budgets", created=False)
-        return
+    # The upsert runs either way. ``create_tenant`` now writes the tenant's ``budgets``
+    # row with its USD cap, so on a fresh run that row already exists — returning early
+    # here would leave it without the token/rpm/tpm caps this spec also carries.
+    summary.record("budgets", created=existing is None)
     await upsert_budget(
         scope_type=scope_type,
         scope_id=scope_id,
@@ -475,7 +480,6 @@ async def _ensure_budget(
         tpm=tpm,
         tenant_id=tenant_id,
     )
-    summary.record("budgets", created=True)
 
 
 async def _ensure_document(spec: DocumentSpec, summary: SeedSummary, *, tenant_id: int) -> None:
@@ -549,7 +553,7 @@ async def seed(password: str | None = None) -> SeedSummary:
     summary = SeedSummary()
     await seed_platform_principals(summary, password=password)
     for spec in TENANTS:
-        tenant_id = await ensure_tenant(spec.name, summary)
+        tenant_id = await ensure_tenant(spec.name, summary, usd_cap=spec.usd_cap)
         await ensure_principal(
             spec.admin, summary, tenant_id=tenant_id, password=password
         )

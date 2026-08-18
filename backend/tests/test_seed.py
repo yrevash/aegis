@@ -23,7 +23,14 @@ from aegis.jobs.models import Document, JobStatus
 from sqlalchemy import func, select
 
 from app.core.security import PLATFORM_ADMIN, TENANT_ADMIN
-from app.data import Budget, Tenant, User, get_sessionmaker, set_tenant_scope
+from app.data import (
+    Budget,
+    BudgetScope,
+    Tenant,
+    User,
+    get_sessionmaker,
+    set_tenant_scope,
+)
 from app.seed import PLATFORM_PRINCIPALS, TENANTS, seed, seed_password
 
 pytestmark = pytest.mark.asyncio
@@ -60,8 +67,10 @@ async def test_seed_writes_two_tenants_with_admins_users_budgets_and_documents(d
     assert summary.created == {
         "tenants": len(TENANTS),
         "users": expected_users,
-        # One tenant-scope budget and one user-scope budget per tenant.
-        "budgets": 2 * len(TENANTS),
+        # Only the user-scope budgets are created *by the seed*: a tenant's own budget
+        # row is written by ``create_tenant`` in the same transaction as the tenant, so
+        # by the time the seed looks it is already there. The row count below is still 4.
+        "budgets": len(TENANTS),
         "documents": sum(len(t.documents) for t in TENANTS),
     }
     assert await _count(Tenant) == 2
@@ -94,6 +103,35 @@ async def test_seed_writes_two_tenants_with_admins_users_budgets_and_documents(d
             assert len(documents) == len(spec.documents)
             assert all(d.status is JobStatus.PENDING for d in documents)
             assert all(d.page_count is None and d.chunk_count is None for d in documents)
+
+
+async def test_a_tenants_budget_carries_every_cap_its_spec_declares(db):
+    """``create_tenant`` writes the USD cap; the seed must still fill the rest.
+
+    The tenant's ``budgets`` row now exists before the seed reaches it, so a
+    get-or-create that returned early on "already present" would leave the row with a
+    USD cap and no token, rpm or tpm cap — a budget that looks set on the screen and
+    binds on one dimension out of four.
+    """
+    await seed()
+    async with get_sessionmaker()() as session:
+        tenants = {
+            t.name: t.id
+            for t in (await session.execute(select(Tenant))).scalars().all()
+        }
+        for spec in TENANTS:
+            row = (
+                await session.execute(
+                    select(Budget).where(
+                        Budget.scope_type == BudgetScope.TENANT,
+                        Budget.scope_id == tenants[spec.name],
+                    )
+                )
+            ).scalars().one()
+            assert row.usd_cap == pytest.approx(spec.usd_cap)
+            assert row.token_cap == spec.token_cap
+            assert row.rpm == spec.rpm
+            assert row.tpm == spec.tpm
 
 
 async def test_running_the_seed_twice_creates_nothing_and_changes_nothing(db):

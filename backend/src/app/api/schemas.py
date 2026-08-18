@@ -742,6 +742,18 @@ class TenantCreateRequest(BaseModel):
     """Body for `POST /admin/tenants` — create a client/tenant (platform-admin only)."""
 
     name: str = Field(min_length=1, max_length=255, description="Unique tenant (client) name.")
+    usd_cap: float = Field(
+        gt=0,
+        le=100000.0,
+        description=(
+            "The tenant's USD spend cap. Required: an absent budget row means "
+            "uncapped, so a tenant onboarded without one would spend without limit "
+            "and the omission would surface as a bill rather than an error."
+        ),
+    )
+    window: Literal["day", "month"] = Field(
+        default="day", description="The accounting window the cap runs over."
+    )
 
 
 # ``BudgetRow`` now lives in ``aegis.governance.types`` and is re-exported above.

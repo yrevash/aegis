@@ -19,9 +19,7 @@ pytestmark = pytest.mark.asyncio
 
 
 def _headers(role: str, *, tenant_id=None, user_id=1, username="op") -> dict[str, str]:
-    token = create_access_token(
-        user_id=user_id, username=username, role=role, tenant_id=tenant_id
-    )
+    token = create_access_token(user_id=user_id, username=username, role=role, tenant_id=tenant_id)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -29,7 +27,9 @@ def _headers(role: str, *, tenant_id=None, user_id=1, username="op") -> dict[str
 
 
 async def test_create_tenant_then_lists(client, db, admin_headers):
-    r = await client.post("/admin/tenants", json={"name": "Initech"}, headers=admin_headers)
+    r = await client.post(
+        "/admin/tenants", json={"name": "Initech", "usd_cap": 50.0}, headers=admin_headers
+    )
     assert r.status_code == 201
     body = r.json()
     assert body["name"] == "Initech"
@@ -39,16 +39,37 @@ async def test_create_tenant_then_lists(client, db, admin_headers):
     assert "Initech" in {t["name"] for t in listing.json()["rows"]}
 
 
+async def test_a_tenant_cannot_be_created_without_a_spend_cap(client, admin_headers):
+    """No cap means uncapped, so the API refuses rather than onboarding a blank cheque.
+
+    The omission would otherwise surface as a bill: an absent ``budgets`` row is exactly
+    what :func:`enforce_governance` treats as "no limit".
+    """
+    r = await client.post("/admin/tenants", json={"name": "Capless"}, headers=admin_headers)
+    assert r.status_code == 422
+
+    zero = await client.post(
+        "/admin/tenants", json={"name": "Zero", "usd_cap": 0}, headers=admin_headers
+    )
+    assert zero.status_code == 422
+
+
 async def test_create_tenant_duplicate_conflicts(client, db, admin_headers):
-    await client.post("/admin/tenants", json={"name": "Umbrella"}, headers=admin_headers)
-    dupe = await client.post("/admin/tenants", json={"name": "Umbrella"}, headers=admin_headers)
+    await client.post(
+        "/admin/tenants", json={"name": "Umbrella", "usd_cap": 50.0}, headers=admin_headers
+    )
+    dupe = await client.post(
+        "/admin/tenants", json={"name": "Umbrella", "usd_cap": 50.0}, headers=admin_headers
+    )
     assert dupe.status_code == 409
 
 
 async def test_create_tenant_rejects_non_platform_admin(client, db):
     # A tenant-admin is not a platform-admin — tenant creation is platform-only.
     r = await client.post(
-        "/admin/tenants", json={"name": "Nope"}, headers=_headers(TENANT_ADMIN, tenant_id=1)
+        "/admin/tenants",
+        json={"name": "Nope", "usd_cap": 50.0},
+        headers=_headers(TENANT_ADMIN, tenant_id=1),
     )
     assert r.status_code == 403
 
@@ -58,7 +79,9 @@ async def test_create_tenant_rejects_non_platform_admin(client, db):
 
 async def test_create_user_then_lists(client, db, admin_headers):
     # Create the owning tenant first, then a user inside it.
-    t = await client.post("/admin/tenants", json={"name": "Acme"}, headers=admin_headers)
+    t = await client.post(
+        "/admin/tenants", json={"name": "Acme", "usd_cap": 50.0}, headers=admin_headers
+    )
     tid = t.json()["id"]
     r = await client.post(
         "/admin/users",
@@ -92,9 +115,7 @@ async def test_created_user_can_log_in(client, db, admin_headers):
     assert login.status_code == 200
     assert login.json()["role"] == "client"
     # A wrong password is rejected (the hash is verified, not bypassed).
-    bad = await client.post(
-        "/auth/login", json={"username": "real.person", "password": "wrong"}
-    )
+    bad = await client.post("/auth/login", json={"username": "real.person", "password": "wrong"})
     assert bad.status_code == 401
 
 

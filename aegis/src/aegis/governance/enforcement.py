@@ -367,20 +367,54 @@ async def list_tenants() -> list[TenantRow]:
     ]
 
 
-async def create_tenant(name: str) -> TenantRow:
-    """Create a tenant (client) and return its row (platform-admin surface).
+async def create_tenant(
+    name: str,
+    *,
+    usd_cap: float,
+    window: BudgetWindow = BudgetWindow.DAY,
+) -> TenantRow:
+    """Create a tenant (client) **and its spend cap**, and return its row.
 
-    Tenant names are unique; a clash raises :class:`DuplicateTenantError` (the API
-    surface maps it to a 409) rather than a raw driver error. New tenants default to
-    the ``active`` status.
+    The cap is required, and the tenant and its ``budgets`` row are committed in one
+    transaction, so a tenant that exists without a cap is not a state this system can
+    reach. That is deliberate: an absent ``budgets`` row means *uncapped* — the same
+    answer :func:`enforce_governance` gives — so a tenant onboarded without one would
+    spend without limit, and the omission would show up as a bill rather than as an
+    error. Requiring it here is the only place the requirement can be enforced once.
+
+    The tenant admin then allocates each of their users a cap under this one; a user's
+    effective limit is clamped inward by it (see :func:`_limits_for`).
+
+    Args:
+        name: The unique tenant (client) name.
+        usd_cap: The tenant's spend cap in USD over ``window``. Must be positive — a
+            zero cap would create a tenant that cannot make a single call, which is
+            almost certainly a typo rather than an intention.
+        window: The accounting window the cap runs over.
 
     Raises:
         DuplicateTenantError: If a tenant with this name already exists.
+        ValueError: If ``usd_cap`` is not positive.
     """
+    if usd_cap <= 0:
+        raise ValueError(
+            f"usd_cap must be positive, got {usd_cap!r} — a tenant with a zero cap "
+            "cannot make a single call"
+        )
     async with _session() as session:
         tenant = Tenant(name=name)
         session.add(tenant)
         try:
+            await session.flush()
+            session.add(
+                Budget(
+                    tenant_id=tenant.id,
+                    scope_type=BudgetScope.TENANT,
+                    scope_id=tenant.id,
+                    window=window,
+                    usd_cap=usd_cap,
+                )
+            )
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()

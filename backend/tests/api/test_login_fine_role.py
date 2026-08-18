@@ -34,9 +34,7 @@ async def _create_and_login(client, headers, *, username, role, tenant_id, passw
         headers=headers,
     )
     assert created.status_code == 201, created.text
-    login = await client.post(
-        "/auth/login", json={"username": username, "password": password}
-    )
+    login = await client.post("/auth/login", json={"username": username, "password": password})
     assert login.status_code == 200, login.text
     return login.json()
 
@@ -63,7 +61,7 @@ async def test_login_of_a_tenant_admin_carries_tenant_admin(client, db, admin_he
     two responses agreed the browser would have nothing to branch on.
     """
     tenant = await client.post(
-        "/admin/tenants", json={"name": "Northwind"}, headers=admin_headers
+        "/admin/tenants", json={"name": "Northwind", "usd_cap": 50.0}, headers=admin_headers
     )
     assert tenant.status_code == 201, tenant.text
     tenant_id = tenant.json()["id"]

@@ -145,6 +145,7 @@ from app.core.security import (
     verify_password,
 )
 from app.data import (
+    BudgetWindow,
     CrossTenantBudgetError,
     DuplicateTenantError,
     DuplicateUserError,
@@ -1261,9 +1262,15 @@ async def admin_create_tenant(
 
     Tenant names are unique — a clash returns 409 rather than a 500. The action is
     audited so the trail records who onboarded each client.
+
+    The spend cap is part of creating a tenant, not a later step: an absent ``budgets``
+    row means uncapped, so a tenant created without one would spend without limit until
+    somebody noticed the bill.
     """
     try:
-        row = await create_tenant(req.name.strip())
+        row = await create_tenant(
+            req.name.strip(), usd_cap=req.usd_cap, window=BudgetWindow(req.window)
+        )
     except DuplicateTenantError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await _safe_audit(
