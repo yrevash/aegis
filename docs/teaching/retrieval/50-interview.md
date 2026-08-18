@@ -20,7 +20,8 @@ hash, source.
 **Retrieve**: a near-exact semantic cache in front; then hybrid wide recall — dense vector,
 graph traversal, and a BM25 keyword arm (corpus-wide when the backend can search by keyword;
 there's a story below about what happens when it can't) — fused with Reciprocal Rank Fusion;
-then an LLM reranker over the ~20 fused candidates down to 6; then spotlighted assembly into
+then a local cross-encoder rerank over the ~20 fused candidates down to 6; then spotlighted
+assembly into
 the answer context; then a cache write.
 
 Optionally wrapped in a bounded Self-RAG loop: retrieve, judge whether the context is
@@ -168,15 +169,28 @@ passes.
 
 Hence two stages: cheap over millions, expensive over twenty.
 
-We use an **LLM-as-reranker** rather than a local cross-encoder, and I'd be direct about why:
-the deployment target is 16 GB with no GPU. It's a real quality trade with a stated upgrade
-path.
+We run a **local cross-encoder** — a 33M-parameter model on onnxruntime, ~130 MB, CPU-only.
+The honest part of this answer is that we didn't, for a while, and the reason we gave was
+wrong: "the deployment target is 16 GB with no GPU". A cross-encoder is not a GPU model by
+nature; that one loads in 0.14 s and reranks twenty passages in ~74 ms on the laptop. The
+false premise cost us a measured **+12.1 pp recall@5 and +17.2 pp MRR@3** — the second
+largest quality lever in the retrieval path — until somebody checked it. The LLM reranker is
+still there as the fallback.
 
 ---
 
 ### "What happens when the reranker fails?"
 
-We keep the fused RRF order — and we **say that we did**.
+It depends which one, and the difference is the point.
+
+If the **local cross-encoder** fails — missing weights, a dead ONNX session — we log at
+ERROR and fall back to the LLM reranker. Never to the fused RRF order: a retrieval stage that
+quietly stops running costs 12 pp of recall@5 and says nothing, which is the worst possible
+combination. `observability.rerank.engine` reports `local` or `api`, so a demotion is
+visible rather than inferred.
+
+If the **LLM reranker** then fails to grade, we keep the fused RRF order — and we **say that
+we did**.
 
 The bug we fixed was that the fallback was silent. An ungraded list is byte-shaped exactly
 like a graded one, so downstream nobody could tell "the model judged this a 9" from "this

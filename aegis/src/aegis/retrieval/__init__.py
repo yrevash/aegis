@@ -3,7 +3,8 @@
 Structure-aware chunking → dedup → poisoning validation → hybrid recall (vector +
 graph, plus a hand-rolled BM25 arm when the backend can search its corpus by keyword —
 otherwise BM25 is a labelled re-ranking pass, never a claimed recall arm) → Reciprocal
-Rank Fusion → LLM-as-reranker → spotlighted assembly, with a two-tier semantic cache,
+Rank Fusion → local ONNX cross-encoder rerank (LLM-as-reranker behind it, loudly) →
+spotlighted assembly, with a two-tier semantic cache,
 an agentic Self-RAG loop, and honest provenance/citations. LLM-agnostic (inject a
 completer + embedder); heavy deps
 (lightrag/neo4j/redis/chromadb/asyncpg) are lazy-imported, so `import aegis.retrieval`
@@ -28,6 +29,10 @@ Self-RAG/FLARE iterative loop in :mod:`aegis.retrieval.agentic` (`agentic_retrie
 
 from __future__ import annotations
 
+from aegis.retrieval.local_reranker import (
+    DEFAULT_LOCAL_RERANK_MODEL,
+    LocalCrossEncoderReranker,
+)
 from aegis.retrieval.models import (
     AgenticReport,
     ArmReport,
@@ -39,6 +44,7 @@ from aegis.retrieval.models import (
     KeywordReport,
     Provenance,
     Recall,
+    RerankEngine,
     RerankReport,
     RetrievalObservability,
     RetrievalResult,
@@ -62,6 +68,7 @@ from aegis.retrieval.types import (
 )
 
 __all__ = [
+    "DEFAULT_LOCAL_RERANK_MODEL",
     "EMBED_DIM",
     "TENANT_METADATA_KEY",
     "AgenticReport",
@@ -75,8 +82,10 @@ __all__ = [
     "GraphNode",
     "IngestReport",
     "KeywordReport",
+    "LocalCrossEncoderReranker",
     "Provenance",
     "Recall",
+    "RerankEngine",
     "RerankReport",
     "RetrievalConfig",
     "RetrievalObservability",

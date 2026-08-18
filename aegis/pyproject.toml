@@ -29,6 +29,18 @@ retrieval = [
     "lightrag-hku>=1.0",
     "neo4j>=5.24",
     "redis>=5.1",
+    # The local ONNX cross-encoder reranker (`aegis.retrieval.local_reranker`). Pinned
+    # exactly, for the same reason Docling is: a reranker release can change tokenisation
+    # or the exported graph, and a different score ordering is a different answer set -
+    # a floating pin would silently re-order retrieval after any rebuild.
+    #
+    # `fastembed`, NOT `fastembed-gpu`: checked against the resolver before committing to
+    # the name. `fastembed==0.8.0` resolves to huggingface-hub, loguru, mmh3, numpy,
+    # onnxruntime (the CPU build), pillow, py-rust-stemmers, requests, tokenizers, tqdm -
+    # ten wheels and NO torch. `fastembed-gpu` is the one that pulls onnxruntime-gpu, and
+    # the deploy box has no GPU. The reranker asks for `CPUExecutionProvider` explicitly
+    # anyway, so an onnxruntime-gpu that arrived some other way cannot silently take over.
+    "fastembed==0.8.0",
     # Chroma is THE vector store for retrieval + memory recall, run EMBEDDED
     # (``PersistentClient`` over a local directory). No server binary, no port — the
     # constraint that lets Aegis install on a locked-down enterprise machine. LightRAG's

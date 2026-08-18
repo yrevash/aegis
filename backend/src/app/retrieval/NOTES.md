@@ -46,15 +46,32 @@ Source of truth: `HKUDS/LightRAG` `lightrag/lightrag.py`, `lightrag/base.py`,
   constructing LightRAG (LightRAG offers no direct kwargs for them). The vector store
   needs **no** env var: `NanoVectorDBStorage` persists to JSON under `working_dir`.
 
-## Reranker — LLM-as-reranker (design decision)
+## Reranker — local ONNX cross-encoder, LLM-as-reranker behind it (phase 4, D6)
 
-The fleet (`app.core.models`) has **no dedicated rerank model** and the platform runs on
-a 16 GB, no-GPU machine, so a local cross-encoder is off the table. We therefore
-implement **LLM-as-reranker**: a single `ModelRole.CHEAP` (escalatable to `REASONING`)
-scoring prompt that grades each wide-recall candidate 0–10 for relevance and returns
-strict JSON. Candidate text is **spotlighted before it reaches the scoring model**
-(the reranker consumes untrusted retrieved content, so it is itself an injection
-surface). See `reranker.py`.
+**This section used to say a local cross-encoder was "off the table" because the platform
+runs on a 16 GB, no-GPU machine. That reason was wrong**, and it kept a measured +12.1 pp
+recall@5 / +17.2 pp MRR@3 improvement switched off. A cross-encoder does not imply a GPU:
+`fastembed`'s `TextCrossEncoder` runs on **onnxruntime** with no torch, and the checkpoint we
+ship (`jinaai/jina-reranker-v1-tiny-en`) is 33M parameters and ~130 MB. Measured on the
+16 GB M3: 0.14 s to load, ~74 ms p50 to rerank a 20-candidate pool, +134 MB RSS. The
+constraint that is real is the **query clock**, and that is what the model size is chosen
+against — see `docs/dev_new_docs_v2/phase-04-ingestion.md` §D6 for the numbers and
+`spikes/rerank_bench.py` to reproduce them.
+
+So the order is:
+
+1. **Local cross-encoder** (`aegis.retrieval.local_reranker`) — deterministic, free per
+   query, no gateway call, and it scores the (query, passage) pair jointly.
+2. **LLM-as-reranker** (`aegis.retrieval.reranker`) — the fallback, reached only on a local
+   failure that is logged at **ERROR**, and the primary for a deployment that sets
+   `RERANK_LOCAL=false`. A single `ModelRole.CHEAP` (escalatable to `REASONING`) scoring
+   prompt that grades each wide-recall candidate 0–10 and returns strict JSON. Candidate
+   text is **spotlighted before it reaches the scoring model** (that reranker consumes
+   untrusted retrieved content, so it is itself an injection surface); the local encoder
+   needs no such screen because it emits a float, not a continuation.
+
+What never happens is a silent fall-through to *no* reranking. `observability.rerank.engine`
+reports which of the two produced the order.
 
 ## Semantic cache — `redis.asyncio` (redis-py `>=5.1`)
 

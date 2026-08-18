@@ -43,6 +43,7 @@ from aegis.retrieval.models import (
     GraphDelta,
     KeywordReport,
     Provenance,
+    RerankEngine,
     RerankReport,
     RetrievalObservability,
     RetrievalResult,
@@ -238,6 +239,7 @@ def _merge_observability(
             "fused_candidates": base.fused_candidates + incoming.fused_candidates,
             "rerank": RerankReport(
                 ran=base.rerank.ran and incoming.rerank.ran,
+                engine=_merge_rerank_engine(base.rerank, incoming.rerank),
                 graded=base.rerank.graded and incoming.rerank.graded,
                 input_candidates=base.rerank.input_candidates
                 + incoming.rerank.input_candidates,
@@ -256,6 +258,28 @@ def _merge_observability(
             "spotlight_applied": spotlight and bool(merged),
         }
     )
+
+
+def _merge_rerank_engine(base: RerankReport, incoming: RerankReport) -> RerankEngine:
+    """Report the *weakest* engine across the merged rounds, never the best one.
+
+    A merged list is only as well-ordered as its worst contributor: if round 2 fell back to
+    the API reranker, the merged order is not a local-cross-encoder order and must not claim
+    to be. Same rule as ``graded``.
+
+    Args:
+        base: Round 1's rerank report.
+        incoming: Round 2's rerank report.
+
+    Returns:
+        ``"none"`` if either round did not rerank, ``"api"`` if either used the fallback,
+        else ``"local"``.
+    """
+    if not (base.ran and incoming.ran):
+        return "none"
+    if "api" in (base.engine, incoming.engine):
+        return "api"
+    return "local"
 
 
 def _merge_results(

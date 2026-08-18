@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 
-from aegis.retrieval.pipeline import RetrievalConfig, Retriever
+from aegis.retrieval.pipeline import RetrievalConfig, Retriever, build_local_reranker
 from aegis.retrieval.protocols import GraphBackend
 from aegis.retrieval.types import GraphEdge, GraphNode, RetrievalScope
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +41,7 @@ __all__ = [
 def _config_from_settings(settings: Settings) -> RetrievalConfig:
     """Map the platform's `Settings` onto a package `RetrievalConfig`."""
     return RetrievalConfig(
+        local_rerank_enabled=settings.rerank_local,
         postgres_dsn=settings.postgres_dsn,
         neo4j_uri=settings.neo4j_uri,
         neo4j_user=settings.neo4j_user,
@@ -82,7 +83,8 @@ def build_default_retriever(settings: Settings | None = None) -> Retriever:
 
     Returns:
         A `Retriever` wired to LightRAG (Neo4j + NanoVectorDB), the Redis semantic
-        cache, and the shared LLM gateway.
+        cache, the shared LLM gateway, and the local ONNX cross-encoder reranker
+        (unless ``RERANK_LOCAL=false``).
     """
     settings = settings or get_settings()
     config = _config_from_settings(settings)
@@ -96,7 +98,14 @@ def build_default_retriever(settings: Settings | None = None) -> Retriever:
         ttl_seconds=config.cache_ttl_seconds,
         similarity_threshold=config.semantic_threshold,
     )
-    return Retriever(backend=backend, cache=cache, complete=complete, embed=embed, config=config)
+    return Retriever(
+        backend=backend,
+        cache=cache,
+        complete=complete,
+        embed=embed,
+        config=config,
+        local_reranker=build_local_reranker(config),
+    )
 
 
 _default_retriever: Retriever | None = None

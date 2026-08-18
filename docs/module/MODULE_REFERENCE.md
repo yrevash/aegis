@@ -176,7 +176,7 @@ the module is taught in depth.
 | `aegis.guardrails` | Input/output rails: schema, PII, injection, media screens | none for the base pipeline; `nemo` (Colang), `pii` (Presidio), `media`, `redis` are optional | `guardrail_verdict` | [`teaching/guardrails`](../teaching/guardrails/10-guide.md) |
 | `aegis.ml` | Prediction + SHAP explanation + conformal intervals | `ml` | `shap_explanation`, `conformal_interval` | [`teaching/ml`](../teaching/ml/10-guide.md) |
 | `aegis.forecast` | Time-series forecasting with measured, calibrated intervals | `forecast` | none | [`teaching/forecast`](../teaching/forecast/10-guide.md) |
-| `aegis.retrieval` | Hybrid vector + graph RAG: chunk, recall, RRF-fuse, rerank, spotlight | `retrieval` | `retrieval_citations` | [`teaching/retrieval`](../teaching/retrieval/10-guide.md) |
+| `aegis.retrieval` | Hybrid vector + graph RAG: chunk, recall, RRF-fuse, rerank (local ONNX cross-encoder, LLM-as-reranker as its loud fallback), spotlight | `retrieval` | `retrieval_citations` | [`teaching/retrieval`](../teaching/retrieval/10-guide.md) |
 | `aegis.gateway` | The LiteLLM chokepoint: routing, cost, budget, fallback | `gateway` | `model_call` | [`teaching/gateway`](../teaching/gateway/10-guide.md) |
 | `aegis.memory` | Working, episodic and semantic memory; recall and consolidation | `data` (no dedicated `memory` extra) | `memory_recall` | [`teaching/memory`](../teaching/memory/10-guide.md) |
 | `aegis.governance` | Tenants, RBAC, RLS, budgets, audit | `governance` | none — a policy/data layer, not a narrator | [`teaching/governance`](../teaching/governance/10-guide.md) |

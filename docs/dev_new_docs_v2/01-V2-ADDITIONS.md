@@ -43,8 +43,11 @@ project already:
   memory than the pipeline we ship. The real objection — 255× throughput — was found only by
   measuring.
 - *Over-conservative:* the reranker was locked to API-only "because the deploy target is a
-  16 GB, no-GPU machine". A 250M ONNX cross-encoder needs neither. That premise blocked a
-  **+12.1 pp recall@5** change.
+  16 GB, no-GPU machine". An ONNX cross-encoder needs neither — the one now shipped is 33M
+  parameters and 134 MB. That premise blocked a **+12.1 pp recall@5** change. Symmetrically,
+  measuring it in task 4.9 also caught the *optimistic* half of the same decision: the
+  predicted 150–400 ms rerank is 1.44 s in reality. The rule cuts both ways or it is not a
+  rule.
 - *Over-complex:* a proposed enrichment stack of document expansion, hypothetical questions,
   per-chunk summaries and local enrichment models — when the evidence says the wins come from
   *having three components*, not elaborating around them.

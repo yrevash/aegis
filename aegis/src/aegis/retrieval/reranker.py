@@ -1,17 +1,37 @@
-"""Second-stage reranking via an **LLM-as-reranker** (API only).
+"""Second-stage reranking via an **LLM-as-reranker**, over the model gateway.
 
-## Why LLM-as-reranker
+## What this is now: the fallback, not the reranker
 
-`docs/architecture/backend.md` prescribes two-stage retrieval (wide recall → rerank → top-K), and
-`docs/module/MODULE_REFERENCE.md` locks the reranker to **API-based only** — no local cross-encoder,
-because the deploy target is a 16 GB, no-GPU machine and the model fleet
-has **no dedicated rerank deployment** in typical deployments. We therefore score relevance
-with a single cheap gateway call: the model grades each candidate 0–10 for how well it
-answers the query and returns strict JSON, which we parse and sort by. Defaults to
-`ModelRole.CHEAP`; callers may pass `ModelRole.REASONING` for harder queries.
+This module used to be the whole story, and its docstring said so on a premise that was
+false. The old sentence — *"API only, no local cross-encoder, because the deploy target is a
+16 GB, no-GPU machine"* — treated "local cross-encoder" as a synonym for "GPU and a heavy
+model". It is not. `fastembed`'s ONNX ``TextCrossEncoder`` needs no GPU and pulls no torch,
+and the checkpoint we ship is 33M parameters / ~130 MB. The deploy machine was never the
+obstacle; the belief that it was kept a **+12.1 pp recall@5** improvement switched off, which
+is the most expensive kind of documentation defect — a reader inherits the sentence and with
+it the wrong decision.
+
+Since task 4.9 the primary reranker is :mod:`aegis.retrieval.local_reranker`, and this module
+is what runs **behind** it: when the local model cannot load or dies mid-query, the pipeline
+logs at ERROR and comes here. It is also the whole reranker for a deployment that genuinely
+cannot carry model weights (an air-gapped box with no cached ONNX file, say) — which is why
+it stays a first-class, tested path rather than dead code.
+
+## Why an LLM can rerank at all
+
+`docs/architecture/backend.md` prescribes two-stage retrieval (wide recall → rerank → top-K),
+and the model fleet has **no dedicated rerank deployment**. So we score relevance with a
+single cheap gateway call: the model grades each candidate 0-10 for how well it answers the
+query and returns strict JSON, which we parse and sort by. Defaults to `ModelRole.CHEAP`;
+callers may pass `ModelRole.REASONING` for harder queries. Its costs versus the local
+encoder are real and are the reason it is second in line: one billed call per query, a
+non-deterministic order that two eval runs cannot be compared across, and a parse that can
+fail (which is why :class:`RerankOutcome` reports ``graded`` separately from ``ran``).
 
 Candidate text is **spotlighted before it reaches the scoring model** — the reranker
-consumes untrusted retrieved content, so it is itself a prompt-injection surface.
+consumes untrusted retrieved content, so it is itself a prompt-injection surface. The local
+encoder does not need this: it emits a float, not a continuation, so there is no instruction
+for injected text to be obeyed by.
 """
 
 from __future__ import annotations
@@ -20,7 +40,7 @@ import json
 from dataclasses import dataclass
 
 from aegis.core.models import ModelRole
-from aegis.retrieval.models import Candidate
+from aegis.retrieval.models import Candidate, RerankEngine
 from aegis.retrieval.protocols import CompleteFn
 from aegis.retrieval.spotlight import spotlight, spotlight_system_instruction
 
@@ -60,12 +80,17 @@ class RerankOutcome:
             keep the score they arrived with (the fused RRF score) — never a fabricated
             ``0.0``.
         reason: Why a call that ran could not grade, else ``None``.
+        engine: Which reranker produced this order — ``"api"`` for everything this module
+            returns, ``"local"`` for :mod:`aegis.retrieval.local_reranker`. Carried on the
+            outcome rather than assumed by the caller, because after a local failure the
+            fallback's result is byte-shaped exactly like a first-choice one.
     """
 
     candidates: list[Candidate]
     graded: bool
     ungraded: int
     reason: str | None = None
+    engine: RerankEngine = "api"
 
 
 def _parse_scores(content: str, count: int) -> dict[int, float]:

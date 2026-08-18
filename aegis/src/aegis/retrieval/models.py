@@ -162,8 +162,15 @@ class ArmReport(BaseModel):
     fired: bool = False
 
 
+#: Which reranker produced the final order. ``"local"`` is the ONNX cross-encoder,
+#: ``"api"`` the LLM-as-reranker (the fallback), ``"none"`` no rerank at all (the knob is
+#: off). Reported rather than inferred: "local" and "api" produce orders that look identical
+#: from the outside, and the difference between them is a 12 pp recall gap.
+RerankEngine = Literal["none", "local", "api"]
+
+
 class RerankReport(BaseModel):
-    """Whether the LLM reranker ran, and the top rerank scores it produced.
+    """Whether the reranker ran, on which engine, and the top rerank scores it produced.
 
     ``ran`` and ``graded`` are deliberately **separate**: a rerank call can execute and
     still return nothing usable (unparseable JSON, no in-range ids). In that case the
@@ -172,8 +179,12 @@ class RerankReport(BaseModel):
     rather than laundered into ``top_scores``.
 
     Attributes:
-        ran: Whether the second-stage LLM rerank call executed (``False`` when the
+        ran: Whether second-stage reranking executed (``False`` when the
             ``rerank_enabled`` knob is off — the fused RRF order is kept instead).
+        engine: Which reranker produced the order — ``"local"`` (the ONNX cross-encoder),
+            ``"api"`` (the LLM-as-reranker, either by configuration or as the loud fallback
+            after a local failure), or ``"none"``. A silent demotion from ``"local"`` to
+            ``"api"`` is a 12 pp recall@5 event, so it is named here as well as logged.
         graded: Whether the survivors' order actually came from model grades. ``False``
             both when no call ran and when the call ran but produced no usable score.
         input_candidates: How many fused candidates were offered to rerank (measured).
@@ -190,6 +201,7 @@ class RerankReport(BaseModel):
     """
 
     ran: bool = False
+    engine: RerankEngine = "none"
     graded: bool = False
     input_candidates: int = 0
     kept: int = 0

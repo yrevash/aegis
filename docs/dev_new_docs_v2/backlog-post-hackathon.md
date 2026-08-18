@@ -251,7 +251,6 @@ returning nearly the same documents look like corroboration and are not.
   hard-coded demo fiction into a swap-time freebie.
 - **Corpus-wide BM25 via Postgres full-text search.** No new dependency; the current BM25 arm
   does not fire in production.
-- **A local cross-encoder reranker** (`fastembed` `TextCrossEncoder`) alongside the LLM one.
 - **Memurai does not ship RediSearch** — verified — which breaks the memory cache's vector
   path. Needs a documented fallback rather than a silent degradation.
 - **Sub-agents spawning sub-agents.** Deliberately one level deep; depth is where budgets and

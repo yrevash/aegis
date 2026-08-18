@@ -134,6 +134,12 @@ reranker is ~130 MB. The measured value of reranking in the research: **+12.1 pp
 text+table documents) reranking is worth roughly **5.5× what per-chunk LLM enrichment is
 worth** — at a per-query cost rather than a per-chunk one.
 
+> **[CONFIRMED] 2026-08-19, task 4.9.** Every factual claim in this section held up when
+> installed and measured: `fastembed==0.8.0` pulls onnxruntime and **no torch**, and the 33M
+> reranker is **134 MB on disk, measured**. The lock is removed and the local reranker ships.
+> The one number this section does *not* make and D6 does — the latency — did not survive;
+> see the correction under D6.
+
 ### 2.4 The chunk prefix carries the weakest of the three useful fields
 
 We prepend the heading path (`[Returns > Refund window]`). The ECIR 2026 field ablation
@@ -211,6 +217,11 @@ This is the section to argue with. Nothing here is "because the laptop is small.
 | Who waits | Nobody | A person |
 | Budget | Hours are fine | Sub-second |
 
+**[MEASURED] 2026-08-19, task 4.9: the query budget is the one this phase overran.** The
+reranker costs 1.44 s p50 on this machine, not the sub-second the table asks for. It is kept,
+because it replaces a gateway call over the same twenty passages that is no faster and is
+billed — but "sub-second" is now a target we miss by 0.44 s and say so, not a claim.
+
 The user's ruling: *"chunking is one time thing… if it takes an hour more but quality improves
 then it's ok."* So we buy quality at ingest and we measure latency at query time.
 
@@ -231,7 +242,8 @@ local enrichment models, no second embedding field. Each is a real technique wit
 paper; none of them beats simply connecting BM25 and turning on the reranker, and every one
 adds a moving part that can fail on stage.
 
-The one local model we take is the reranker (~250M, query clock, benchmarked). Nothing else
+The one local model we take is the reranker (33M as shipped, query clock, **benchmarked
+2026-08-19: 1.44 s p50 over 20 x 400-word chunks — see the correction under D6**). Nothing else
 runs locally.
 
 **Future scope, written down so it is a decision and not an oversight:** doc2query expansion,
@@ -692,6 +704,70 @@ change ships the read arm complete and the corpus it reads arrives with the stag
 
 ### D6 — Add a local ONNX cross-encoder reranker (~250M, API fallback)
 
+> **[MEASURED] 2026-08-19, task 4.9, 16 GB M3, `fastembed==0.8.0`,
+> `jinaai/jina-reranker-v1-tiny-en`. Reproduce: `PYTHONPATH=aegis/src
+> backend/.venv/bin/python spikes/rerank_bench.py`.**
+>
+> **The premise reversal was right, and the latency estimate below is wrong by 4x.** Both
+> halves matter, so both are recorded.
+>
+> **Right:** `fastembed==0.8.0` resolves to huggingface-hub, loguru, mmh3, numpy,
+> **onnxruntime** (CPU), pillow, py-rust-stemmers, requests, tokenizers, tqdm. **No torch.**
+> (`fastembed-gpu` is the variant that pulls onnxruntime-gpu; we do not use it, and the
+> reranker asks for `CPUExecutionProvider` by name so an onnxruntime-gpu arriving via some
+> other package cannot silently take over.) The model is 33M parameters and **134 MB on
+> disk, measured** — the "~250M / ~250 MB" in the text below is the size we budgeted for,
+> not the size we needed.
+>
+> **Wrong:** *"~250M over 20 passages is roughly 150–400 ms on CPU, which a person does not
+> notice."*
+>
+> | | measured |
+> |---|---|
+> | Rerank 20 passages x 400 words (`recall_top_k` x `chunk_size`) | **p50 1.44 s · p95 1.55 s** |
+> | Per passage | **~72 ms** per 400-word passage — the constant that travels between boxes |
+> | Warm load (weights cached) | 0.43 s |
+> | Cold load (download + init, good wifi) | 7.84 s, 134 MB on disk |
+> | Peak RSS | 427 MB after load, 610 MB steady while serving |
+>
+> The estimate was not wrong about the model, it was wrong about the **passage**. A
+> cross-encoder's cost is linear in total sequence length and in pool size, and the 150–400 ms
+> figure comes from ~60-word retrieval passages. Our chunks are 400 words. Measured:
+> 64 words → 221 ms, 128 → 418 ms, 256 → 939 ms, 400 → 1585 ms, 460 → 1848 ms; and pool size
+> is linear too (5 → 383 ms, 10 → 752 ms, 20 → 1567 ms, 30 → 2420 ms). **`recall_top_k` is
+> therefore the honest latency lever**, and it is a straight quality trade, not a free one.
+>
+> **Verdict: ship it, and say the number out loud.** 1.44 s is not "a person does not notice".
+> But it is not 1.44 s *added*: it replaces an LLM call that graded the same twenty passages
+> (~12k prompt tokens through the gateway), which is neither faster, nor free, nor
+> reproducible across two eval runs. What we bought is +12.1 pp recall@5, a per-query cost of
+> zero, and a deterministic order. What it costs on the **Windows demo box is unmeasured** —
+> re-run `spikes/rerank_bench.py` there, as 4.0 did for Docling.
+>
+> **Three findings the plan did not anticipate:**
+>
+> 1. **Batch size is a 400 MB memory decision and not a speed one.** At `fastembed`'s default
+>    batch of 64 the process settles at **867 MB** RSS; at batch 4 it is **470 MB**, because
+>    onnxruntime's CPU arena sizes itself to the largest batch it ever saw and never returns
+>    it. Latency is unchanged (1.39 s vs 1.47 s — batch 4 is marginally *ahead*) and scores are
+>    identical to 1e-7. The reranker therefore defaults to `batch_size=4`.
+> 2. **Do not pin onnxruntime to one thread.** D4a's `OMP_NUM_THREADS=1` has no effect here
+>    (onnxruntime uses its own pool, not OpenMP): 1593 ms pinned vs 1610 ms unpinned. But
+>    passing `threads=1` to the session **is** 2.6x slower (3712 ms vs 1524 ms). The two knobs
+>    look alike and only one of them is free.
+> 3. **The weights default into `$TMPDIR`.** `fastembed`'s cache is
+>    `<system temp>/fastembed_cache` unless `FASTEMBED_CACHE_PATH` says otherwise — cleared on
+>    reboot on most Linux boxes, which on a venue with no network means the first query after
+>    a restart falls to the API reranker. The loader now logs a WARNING when it lands there.
+>
+> **The model comparison the cut list said to skip was cheap enough to do**, and it changed
+> the answer. All four at pool 20 x 400 words: `jina-reranker-v1-tiny-en` **1.57 s**,
+> `ms-marco-MiniLM-L-6-v2` 1.88 s, `jina-reranker-v1-turbo-en` 2.38 s,
+> `ms-marco-MiniLM-L-12-v2` 3.69 s. The 33M default is also the fastest — and MiniLM-L-6 has a
+> 512-token input cap, which would silently truncate the tail of a 400-**word** chunk.
+> `bge-reranker-base` and `jina-reranker-v2-base-multilingual` were not benchmarked: ~1.05 GB
+> each, and the v2 model is CC-BY-NC.
+
 `fastembed` `TextCrossEncoder`, ONNX, no torch.
 
 **Reason:** +12.1 pp recall@5, +17.2 pp MRR@3. Second-highest-value change available, and it
@@ -862,7 +938,7 @@ and its error bar, not the library that printed it.
 | 4.6c | **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out |
 | 4.7 | ✅ **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. D5 — **Landed 2026-08-18**; two corrections, see D5 |
 | 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
-| 4.9 | **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest |
+| 4.9 | ✅ **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest. **Landed 2026-08-19.** `fastembed==0.8.0` in the `retrieval` extra (no torch); `jinaai/jina-reranker-v1-tiny-en` (33M, 134 MB). The API reranker is now the **loud** fallback. **D6's latency estimate was wrong by 4x** — measured 1.44 s p50 over 20 x 400-word chunks, not 150–400 ms; see the correction under D6 |
 | 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b. Duplicated table captions are already fixed in `convert.py`, so summaries are written over text that does not repeat itself |
 | 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
 | 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |

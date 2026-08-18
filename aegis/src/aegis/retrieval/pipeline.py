@@ -11,8 +11,13 @@ every chunk written, so what one tenant stores is what that tenant — and only 
 tenant — can read back. There is deliberately **no default**; an omitted scope is a
 call-site error the type checker reports, not a silent unscoped query.
 
+The rerank stage is the **local ONNX cross-encoder** (:mod:`aegis.retrieval.local_reranker`)
+when the retriever was built with one, and the LLM-as-reranker
+(:mod:`aegis.retrieval.reranker`) behind it on a loud failure — never a silent fall-through
+to the unranked fused order. ``observability.rerank.engine`` records which one ran.
+
 `Retriever` holds its collaborators (knowledge backend, semantic cache, completer,
-embedder) by dependency injection, so the whole flow is unit-testable with fakes and
+embedder, local reranker) by dependency injection, so the whole flow is unit-testable with fakes and
 no live Neo4j/Redis/network. There is no process-wide default instance and no
 LLM-gateway binding here — a host application constructs a `Retriever` (directly, or
 via :func:`build_default_retriever` / :func:`aegis.retrieval.memory.build_lite_retriever`)
@@ -32,6 +37,11 @@ from aegis.retrieval import chunker
 from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.fusion import RankedList, collect_origins, reciprocal_rank_fusion
 from aegis.retrieval.lightrag_backend import LightRAGBackend
+from aegis.retrieval.local_reranker import (
+    DEFAULT_LOCAL_RERANK_MODEL,
+    LocalCrossEncoderReranker,
+    rerank_scored_local_first,
+)
 from aegis.retrieval.models import (
     ArmReport,
     Candidate,
@@ -52,7 +62,6 @@ from aegis.retrieval.protocols import (
     KnowledgeBackend,
     MultiListBackend,
 )
-from aegis.retrieval.reranker import rerank_scored
 from aegis.retrieval.spotlight import build_plain_context, build_spotlighted_context
 from aegis.retrieval.types import (
     TENANT_METADATA_KEY,
@@ -95,10 +104,19 @@ class RetrievalConfig:
     recall_top_k: int = 20
     final_top_k: int = 6
     rerank_role: ModelRole = ModelRole.CHEAP
-    #: Second-stage LLM rerank toggle. When ``False`` the fused RRF order is kept
+    #: Second-stage rerank toggle. When ``False`` the fused RRF order is kept
     #: (truncated to ``final_top_k``) with **no** rerank model call — a real behaviour
     #: change a consumer can observe via ``observability.rerank.ran``.
     rerank_enabled: bool = True
+    #: Whether the **local ONNX cross-encoder** is used when the retriever was built with
+    #: one. ``False`` demotes reranking to the API reranker for the whole process — the
+    #: operator kill switch for a box where the weights cannot be cached. This does not
+    #: turn reranking *off*; ``rerank_enabled`` is the knob that does that.
+    local_rerank_enabled: bool = True
+    #: Which cross-encoder the composition roots load. A different model is a different
+    #: answer order, so it is configuration, not a hard-coded literal, and it is recorded
+    #: here where an eval run can read it back.
+    local_rerank_model: str = DEFAULT_LOCAL_RERANK_MODEL
     #: Microsoft-Spotlighting toggle for the assembled answer context. When ``False``
     #: the context is assembled un-spotlighted (raw fenced sources) — observable via
     #: ``observability.spotlight_applied``. Defaults ON (the injection defence).
@@ -146,6 +164,14 @@ class Retriever:
     complete: CompleteFn
     embed: EmbedFn
     config: RetrievalConfig = field(default_factory=RetrievalConfig)
+    #: The **local ONNX cross-encoder** used for second-stage reranking, injected like every
+    #: other collaborator. ``None`` means this retriever reranks through the API reranker —
+    #: which is a legitimate configuration but a materially worse one (+12.1 pp recall@5 is
+    #: what the local encoder buys), so the composition roots
+    #: (:func:`build_default_retriever`, :func:`aegis.retrieval.memory.build_lite_retriever`)
+    #: wire one in and only ``local_rerank_enabled=False`` takes it back out. Constructing
+    #: it is free; the weights load on the first query that uses it.
+    local_reranker: LocalCrossEncoderReranker | None = None
     #: ``(tenant_id, content_hash)`` pairs already accepted, so re-ingesting a corpus is
     #: idempotent and incremental (only genuinely new chunks reach the backend).
     #: Process-scoped; the LightRAG backend additionally dedupes by content hash in its
@@ -159,7 +185,7 @@ class Retriever:
 
         Flow: near-exact cache → **hybrid wide recall** (vector + graph, plus a BM25
         keyword arm when the backend can search its corpus by keyword, fused by
-        Reciprocal Rank Fusion) → LLM rerank → spotlight → assemble → write back to
+        Reciprocal Rank Fusion) → cross-encoder rerank → spotlight → assemble → write back to
         cache. An exact or near-exact (cosine ≥ ``semantic_threshold``) cache hit
         returns immediately with `cache_hit=True` and honest cache provenance; anything
         below that runs the full fused pipeline (the sub-threshold match is only a
@@ -192,16 +218,22 @@ class Retriever:
             query, scope
         )
         if self.config.rerank_enabled:
-            outcome = await rerank_scored(
+            # Local cross-encoder first; the API reranker behind it on a LOUD failure. The
+            # one thing that never happens here is falling through to no rerank at all.
+            outcome = await rerank_scored_local_first(
                 query,
                 fused,
                 complete=self.complete,
                 top_k=self.config.final_top_k,
+                local=(
+                    self.local_reranker if self.config.local_rerank_enabled else None
+                ),
                 role=self.config.rerank_role,
             )
             top = outcome.candidates
             rerank_report = RerankReport(
                 ran=True,
+                engine=outcome.engine,
                 graded=outcome.graded,
                 input_candidates=len(fused),
                 kept=len(top),
@@ -215,6 +247,7 @@ class Retriever:
             top = fused[: self.config.final_top_k]
             rerank_report = RerankReport(
                 ran=False,
+                engine="none",
                 graded=False,
                 input_candidates=len(fused),
                 kept=len(top),
@@ -600,6 +633,27 @@ def bm25_ranked(query: str, corpus: Sequence[Candidate]) -> list[Candidate]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def build_local_reranker(config: RetrievalConfig) -> LocalCrossEncoderReranker | None:
+    """Build the local cross-encoder a composition root should hand to its `Retriever`.
+
+    One function so the three composition roots cannot drift apart on the kill switch —
+    "the lite retriever quietly reranks differently from the full one" is exactly the sort
+    of divergence nobody notices until an eval disagrees with production.
+
+    Args:
+        config: The retrieval config; ``local_rerank_enabled`` decides, and
+            ``local_rerank_model`` names the checkpoint.
+
+    Returns:
+        A :class:`~aegis.retrieval.local_reranker.LocalCrossEncoderReranker` (unloaded — the
+        weights arrive on first use), or ``None`` when the operator turned it off, which
+        demotes reranking to the API reranker rather than switching it off.
+    """
+    if not config.local_rerank_enabled:
+        return None
+    return LocalCrossEncoderReranker(model_name=config.local_rerank_model)
+
+
 def build_default_retriever(
     *, complete: CompleteFn, embed: EmbedFn, config: RetrievalConfig | None = None
 ) -> Retriever:
@@ -613,8 +667,9 @@ def build_default_retriever(
         config: Tunables + store connection settings; defaults to `RetrievalConfig()`.
 
     Returns:
-        A `Retriever` wired to a `LightRAGBackend` (Neo4j + NanoVectorDB) and a Redis
-        `SemanticCache`.
+        A `Retriever` wired to a `LightRAGBackend` (Neo4j + NanoVectorDB), a Redis
+        `SemanticCache`, and the local ONNX cross-encoder reranker (unless
+        ``config.local_rerank_enabled`` is off).
     """
     config = config or RetrievalConfig()
     backend = LightRAGBackend(complete, embed, config=config)
@@ -623,4 +678,11 @@ def build_default_retriever(
         ttl_seconds=config.cache_ttl_seconds,
         similarity_threshold=config.semantic_threshold,
     )
-    return Retriever(backend=backend, cache=cache, complete=complete, embed=embed, config=config)
+    return Retriever(
+        backend=backend,
+        cache=cache,
+        complete=complete,
+        embed=embed,
+        config=config,
+        local_reranker=build_local_reranker(config),
+    )

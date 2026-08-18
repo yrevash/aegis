@@ -2,7 +2,7 @@
 
 This package used to own the full retrieval implementation (structure-aware
 chunking, dedup, poisoning validation, hybrid vector+graph+BM25 recall, Reciprocal
-Rank Fusion, LLM-as-reranker, spotlighted assembly, the two-tier semantic cache, and
+Rank Fusion, reranking, spotlighted assembly, the two-tier semantic cache, and
 the LightRAG/in-memory backends). That implementation has moved to the standalone,
 LLM-agnostic ``aegis.retrieval`` package (see ``/aegis``) so it can be imported by any
 component without pulling in this platform's LLM gateway or config. This module (and
@@ -16,15 +16,16 @@ surface and call sites (notably ``app.agent.deps.AgentDeps.default``'s
 Public surface (the `app.retrieval` contract, unchanged since before the migration):
 
 * `retrieve(query, *, scope) -> RetrievalResult` — semantic cache in front of
-  two-stage graph+vector retrieval with LLM-as-reranker and Spotlighting. The
+  two-stage graph+vector retrieval with a local cross-encoder rerank (LLM-as-reranker
+  behind it) and Spotlighting. The
   `RetrievalScope` is required and is reconciled against the request's governance
   tenant before it reaches the process-wide retriever.
 * `ingest(docs, *, scope) -> IngestReport` — validated ingestion into LightRAG (Neo4j +
   vectors), with the scope's tenant stamped onto every chunk written.
 
 The pipeline (LightRAG), stores (Neo4j graph + embedded NanoVectorDB vectors + Postgres
-KV), reranker (LLM-as-
-reranker via the gateway), and semantic cache (Redis) are documented in `NOTES.md`.
+KV), reranker (a local ONNX cross-encoder, with the LLM-as-reranker via the gateway as its
+loud fallback), and semantic cache (Redis) are documented in `NOTES.md`.
 """
 
 from __future__ import annotations

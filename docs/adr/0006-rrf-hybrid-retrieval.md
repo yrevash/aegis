@@ -73,6 +73,11 @@ lite paths:
 - **Weighted score fusion (α·cosine + β·bm25 + γ·graph).** Tunable, but fuses
   incomparable score scales; the weights are fragile and dataset-specific, exactly what
   RRF's rank-only formulation avoids.
-- **A local cross-encoder reranker instead of fusion.** Strong quality, but needs a GPU
-  or a heavy model and a rerank deployment the fleet does not have (16 GB / no-GPU) — we
-  keep the LLM-as-reranker after RRF instead.
+- **A local cross-encoder reranker instead of fusion.** Rejected here for two reasons, and
+  **one of them was false.** The true half stands: a cross-encoder is not a fusion strategy —
+  it cannot merge two recall lists, it can only reorder one, so it was never an alternative
+  to RRF and the two now compose (RRF fuses, the cross-encoder reorders what RRF produced).
+  The false half was "needs a GPU or a heavy model": `fastembed`'s ONNX `TextCrossEncoder`
+  needs neither, and phase 4 D6 measured a 33M-parameter one at ~74 ms over a 20-candidate
+  pool on the 16 GB / no-GPU box. It is now the reranker after RRF, with the LLM-as-reranker
+  as its loud fallback (`aegis.retrieval.local_reranker`).

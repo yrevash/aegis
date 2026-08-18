@@ -58,7 +58,12 @@ from aegis.retrieval.graph_extract import (
     find_mentions,
 )
 from aegis.retrieval.models import Candidate, Chunk, Recall
-from aegis.retrieval.pipeline import RetrievalConfig, Retriever, bm25_ranked
+from aegis.retrieval.pipeline import (
+    RetrievalConfig,
+    Retriever,
+    bm25_ranked,
+    build_local_reranker,
+)
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
 from aegis.retrieval.types import (
     TENANT_METADATA_KEY,
@@ -815,7 +820,10 @@ def build_lite_retriever(
         working_dir: Directory for the graph-extraction disk cache.
 
     Returns:
-        A `Retriever` over an in-memory backend and an in-memory semantic cache.
+        A `Retriever` over an in-memory backend and an in-memory semantic cache. Lite mode
+        drops the databases, not the retrieval quality: the local cross-encoder reranker is
+        wired here exactly as it is in the full path, so an answer demoed offline is ordered
+        by the same model as an answer served in production.
     """
     config = config or RetrievalConfig()
     extractor = build_extractor(complete=complete, working_dir=working_dir, prefer="llm")
@@ -828,4 +836,11 @@ def build_lite_retriever(
         ttl_seconds=config.cache_ttl_seconds,
         similarity_threshold=config.semantic_threshold,
     )
-    return Retriever(backend=backend, cache=cache, complete=complete, embed=embed, config=config)
+    return Retriever(
+        backend=backend,
+        cache=cache,
+        complete=complete,
+        embed=embed,
+        config=config,
+        local_reranker=build_local_reranker(config),
+    )

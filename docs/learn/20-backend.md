@@ -301,15 +301,18 @@ second front door onto the *same* check functions, selected with
 ### Aegis Retrieval — `app/retrieval` → `aegis.retrieval`
 
 `Retriever.retrieve()` runs: exact cache → semantic cache → hybrid wide recall (vector +
-graph + hand-rolled BM25) → RRF fusion → LLM rerank → spotlight → assemble → cache
+graph + hand-rolled BM25) → RRF fusion → cross-encoder rerank → spotlight → assemble → cache
 write-back. The shim adds the host pieces: building a `RetrievalConfig` from
 `app.config.Settings`, the lazily-built process-wide default retriever that honours
 `STORES`, and the module-level `retrieve`/`ingest` the graph calls.
 
 Supporting modules: `fusion.py` (pure RRF, k=60, origin-tagged, reused by memory),
-`spotlight.py` (delimiting + datamarking against indirect injection), `reranker.py`
-(LLM-as-reranker, API-only — no local cross-encoder, because the target machine has
-16 GB and no GPU), `lightrag_backend.py` (Neo4j graph + embedded NanoVectorDB vectors + Postgres KV),
+`spotlight.py` (delimiting + datamarking against indirect injection),
+`local_reranker.py` (the reranker: a 33M-parameter ONNX cross-encoder on `fastembed`,
+CPU-only and no torch — the old "no local cross-encoder, the target machine has 16 GB and no
+GPU" reason was simply wrong, and it cost 12 pp of recall@5 until phase 4 D6 measured it),
+`reranker.py` (LLM-as-reranker, now the **loud** fallback behind it — never a silent fall
+back to no reranking), `lightrag_backend.py` (Neo4j graph + embedded NanoVectorDB vectors + Postgres KV),
 `chunker.py` (heading-aware), `validation.py` (write-time poisoning gate),
 `query_rewrite.py`, `agentic.py` (the bounded Self-RAG loop), `answer_cache.py`, and
 `memory.py` — the databaseless in-memory backend used when `STORES=off`.

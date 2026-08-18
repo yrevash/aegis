@@ -206,6 +206,14 @@ class Settings(BaseSettings):
     answer_cache_threshold: float = Field(default=0.97)
     answer_cache_ttl_seconds: int = Field(default=1800)
 
+    # ── Reranking (phase 4, D6) ──────────────────────────────────────────────
+    # Second-stage reranking runs on a LOCAL ONNX cross-encoder (33M params, ~130 MB,
+    # CPU-only — no torch, no GPU). Set ``RERANK_LOCAL=false`` to demote every query to the
+    # API reranker; that is the switch for a box where the ONNX weights cannot be cached,
+    # and it costs ~12 pp of recall@5, so it is a deliberate operator choice rather than a
+    # default. It does NOT switch reranking off — nothing does that silently.
+    rerank_local: bool = Field(default=True)
+
     # ── Run mode (see docs/operations/runbook.md) ───────────────────────────────────────
     # "on" (default) uses the real stores — LightRAG over Neo4j + NanoVectorDB with a
     # Redis semantic cache. "off" runs a self-contained in-memory backend + cache

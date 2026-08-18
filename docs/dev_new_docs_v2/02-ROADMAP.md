@@ -170,9 +170,12 @@ on — re-opening the leak Phase 1 closed, through a path Phase 1 never covered.
 `keyword_recall`, so today BM25 re-scores the 20 candidates dense already found. It cannot
 surface anything dense missed. BM25 alone (0.644 R@5) beats dense alone (0.587).
 
-**Local ONNX cross-encoder (~250M), API fallback on a loud failure** — +12.1 pp recall@5. The
-only local model in the roadmap. It is on the query clock, so its latency is measured, not
-assumed.
+**Local ONNX cross-encoder, API fallback on a loud failure** — +12.1 pp recall@5. The only
+local model in the roadmap. It is on the query clock, so its latency is measured, not assumed
+— and **[MEASURED] 2026-08-19 (task 4.9) the measurement disagreed with the plan**: the model
+shipped is 33M / 134 MB rather than ~250M, and it costs **1.44 s p50** over 20 x 400-word
+chunks, not the 150–400 ms estimated. Kept, because it replaces a billed gateway call over the
+same passages. See phase 4 D6.
 
 **Deterministic chunk prefix** — title · type · date · heading path. Context@5 33.3% → 55.0%,
 zero model calls.

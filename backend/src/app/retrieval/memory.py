@@ -18,7 +18,7 @@ from aegis.retrieval.memory import (
     InMemoryRedis,
     _local_embed,  # noqa: F401 - re-exported for existing tests
 )
-from aegis.retrieval.pipeline import RetrievalConfig, Retriever
+from aegis.retrieval.pipeline import RetrievalConfig, Retriever, build_local_reranker
 
 from app.config import Settings
 
@@ -64,11 +64,11 @@ class InMemoryKnowledgeBackend(_InMemoryKnowledgeBackend):
 def build_lite_retriever(settings: Settings) -> Retriever:
     """Build a databaseless :class:`Retriever`: adapter-corpus recall + in-memory cache.
 
-    The reranker and embeddings still run through the real gateway (lite mode has
-    the model gateway; it only drops the databases), so retrieval quality and the
-    cache-hit metric are genuine.
+    Embeddings still run through the real gateway and reranking still runs on the local
+    ONNX cross-encoder (lite mode drops the *databases*, nothing else), so retrieval
+    quality and the cache-hit metric are genuine rather than a demo shape.
     """
-    config = RetrievalConfig()
+    config = RetrievalConfig(local_rerank_enabled=settings.rerank_local)
     complete = gateway.default_complete()
     embed = gateway.default_embed()
     backend = InMemoryKnowledgeBackend.from_corpus(
@@ -79,4 +79,11 @@ def build_lite_retriever(settings: Settings) -> Retriever:
         ttl_seconds=config.cache_ttl_seconds,
         similarity_threshold=config.semantic_threshold,
     )
-    return Retriever(backend=backend, cache=cache, complete=complete, embed=embed, config=config)
+    return Retriever(
+        backend=backend,
+        cache=cache,
+        complete=complete,
+        embed=embed,
+        config=config,
+        local_reranker=build_local_reranker(config),
+    )
