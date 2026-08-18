@@ -1,7 +1,7 @@
 # Swapping the domain
 
 This directory is the **only** thing that changes when the real hackathon problem
-is revealed. The core (`agent/`, `retrieval/`, `ml/`, `guardrails/`, `api/`,
+is revealed. The core (`agent/`, `retrieval/`, `ml/`, `memory/`, `guardrails/`, `api/`,
 `observability/`) imports the domain *exclusively* through `adapter/__init__.py`.
 Keep those export names stable and the core keeps working.
 
@@ -10,6 +10,11 @@ world — it is illustrative only, so the vertical slice runs before the real do
 is known.
 
 ## Retarget checklist (edit these files, in order)
+
+Ten pieces: **eight modules** plus `corpus/` and `skills/`. The numbers are the
+piece numbers each module's own docstring carries, and the order is the order to
+edit them in. `__init__.py` is not a piece — it is the registry; keep its
+`__all__` stable and the core keeps working.
 
 1. **`schema.py`** — redefine the entities and enums for the new world. This is
    the vocabulary everything else shares.
@@ -24,9 +29,21 @@ is known.
 4. **`tools.py`** — replace the action tools with the new domain's real actions.
    Keep them typed, idempotent, reversible, audited, and registered in
    `TOOL_REGISTRY`; update `ALLOWLIST`.
-5. **`personas.py` + `prompts.py`** — re-voice the two personas and their data
-   scope + system prompts.
-6. **`corpus/`** — drop in the new seed `*.md` documents (same frontmatter keys).
+5. **`personas.py`** — re-voice the two personas and their data scope.
+6. **`prompts.py`** — re-voice the matching system prompts (paired with piece 5).
+7. **`memory_spec.py`** — redefine what counts as a *durable fact* in the new
+   domain, how it is extracted from a conversation, who it is scoped to, and how
+   the profile reads. Nothing in `app/memory/*` changes — this is the only memory
+   seam, exactly as `ml_spec.py` is the only ML seam.
+8. **`roster.py`** — declare the specialists the supervisor may route to
+   (`role`, `keywords`, `description`, exactly one `is_default`). Each `role` must
+   match a graph specialist node; the core falls back to a `qa`-only roster if the
+   contract is absent, so a wrong `role` degrades silently rather than failing —
+   check the `routing` stream event after editing.
+9. **`corpus/`** — drop in the new seed `*.md` documents (same frontmatter keys).
+10. **`skills/`** — rewrite the procedural how-to-act playbooks (`*.md`). They are
+    discovered from `memory_spec.SKILLS_DIR` and chosen per query by
+    `memory_spec.select_skills`, so renaming a file means updating that selector.
 
 ## ML reshape points (a tenant capability, not an agent step)
 

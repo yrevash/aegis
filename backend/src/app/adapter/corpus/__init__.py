@@ -1,6 +1,6 @@
 """Seed document corpus — the hand-written knowledge the domain ships with.
 
-This is **piece 6 of 5** (the bonus): a few small Markdown documents with simple
+This is **piece 9 of 10** of the adapter: a few small Markdown documents with simple
 YAML-style frontmatter that :func:`load_seed_corpus` parses into typed
 :class:`~app.adapter.schema.Document` records. The retrieval layer ingests these
 alongside the LLM-generated corpus from :mod:`app.adapter.generator`.

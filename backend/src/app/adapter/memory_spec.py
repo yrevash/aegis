@@ -1,4 +1,4 @@
-"""Memory contract — **piece 6 of 6** of the adapter (the ONLY domain seam for memory).
+"""Memory contract — **piece 7 of 10** of the adapter (the ONLY domain seam for memory).
 
 The core memory subsystem (:mod:`app.memory`) is domain-agnostic: *how* to persist,
 score, recall, budget and consolidate is core; *what counts as a durable fact*, *how to

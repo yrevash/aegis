@@ -1,6 +1,6 @@
 """ML spec — features + a genuinely predictable target for the ML spine.
 
-This is **piece 4 of 5** of the adapter. It declares what :mod:`app.ml` trains on:
+This is **piece 2 of 10** of the adapter. It declares what :mod:`app.ml` trains on:
 
 * :data:`FEATURES` — the typed feature contract (name, dtype, description).
 * :data:`TARGET` — a **regression** target, ``resolution_hours``.

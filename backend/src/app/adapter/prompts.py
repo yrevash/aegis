@@ -1,6 +1,6 @@
 """System prompts — the agent's voice and guardrails per persona.
 
-This is **piece 5b of 5** of the adapter (paired with :mod:`app.adapter.personas`).
+This is **piece 6 of 10** of the adapter (paired with :mod:`app.adapter.personas`, piece 5).
 It holds the base system prompt for each persona and a small renderer that folds
 in the persona's live **data scope** and **tool allowlist**, so the instructions
 the model receives always match what it is actually permitted to do.

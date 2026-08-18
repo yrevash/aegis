@@ -1,6 +1,6 @@
 """Synthetic-data generator — the single highest-value pre-build.
 
-This is **piece 2 of 5** of the adapter and the reason the vertical slice can run
+This is **piece 3 of 10** of the adapter and the reason the vertical slice can run
 before the real hackathon domain is known: it fabricates a realistic, fully-typed
 :class:`~app.adapter.schema.SyntheticDataset` (customers, agents, requests and a
 knowledge-document corpus) on demand.

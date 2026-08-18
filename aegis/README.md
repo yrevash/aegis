@@ -59,7 +59,7 @@ Every Aegis module adheres to a single design contract enforcing modularity, obs
 
 - **`aegis.core`** contains only interfaces, types, config, and lazy-import helpers — zero heavy dependencies (no litellm, torch, langgraph, xgboost, fastapi, redis, nemoguardrails).
 - Leaf modules (`aegis.guardrails`, etc.) import only `aegis.core` + their own third-party libraries.
-- Optional dependencies fail loudly via `aegis.require()` with the exact install command.
+- Optional dependencies fail loudly via `aegis.core.require(extra, module)` with the exact install command — `from aegis.core import require`. (It is **not** `aegis.require`: the top-level package exports only `__version__`.)
 
 ### Pillar B: Shows its work
 

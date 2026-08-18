@@ -182,7 +182,7 @@ Do not build the agent loop against the happy path until this is confirmed. Repo
 ## 11. Quality bar
 
 - Pydantic types everywhere; Ruff enforced; pytest on the agent/retrieval/ML critical path (not 100% coverage).
-- **Modular boundaries:** `api/`, `agent/`, `retrieval/`, `ml/`, `guardrails/`, `data/`, `observability/`, plus an isolated `adapter/` for the five domain-specific pieces. No god-files. No domain logic in the core.
+- **Modular boundaries:** `api/`, `agent/`, `retrieval/`, `ml/`, `guardrails/`, `data/`, `observability/`, plus an isolated `adapter/` for the ten domain-specific pieces (eight modules plus `corpus/` and `skills/`). No god-files. No domain logic in the core.
 - README with first-screen architecture; ADRs for LightRAG-vs-GraphRAG, conformal prediction, multi-model routing, OTel-native observability.
 
 ---

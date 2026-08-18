@@ -20,7 +20,7 @@ def test_core_imports_no_heavy_deps() -> None:
     ``aegis.data`` / ``aegis.governance`` (the ``aegis[data]`` / ``aegis[governance]``
     extras), and ``opentelemetry`` lives in ``aegis.observability`` (the
     ``aegis[observability]`` extra) — never in ``aegis.core``, which stays
-    pydantic-only. These must be imported *only* through aegis.require() / the
+    pydantic-only. These must be imported *only* through aegis.core.require() / the
     relevant extra when explicitly installed.
 
     The subprocess resolves ``aegis`` from the source tree via ``PYTHONPATH`` so the guard

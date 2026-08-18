@@ -17,7 +17,7 @@ src/app/
   guardrails/       # input/output rails
   data/             # DB models, audit log
   observability/    # OTel gen_ai.* spans → Phoenix
-  adapter/          # the five domain-specific pieces (see adapter/README.md)
+  adapter/          # the ten domain-specific pieces (see adapter/README.md)
 ```
 
 ## Setup

@@ -1,9 +1,10 @@
 """Agent roster — the domain's declaration of which specialists the supervisor may route to.
 
-This is the **adapter** half of the multi-agent supervisor: the core owns the
-router mechanism (classifier + hand-off protocol), while the domain declares *which*
-specialists exist, how to recognise them, and what each one does. On the day only
-this file changes to add or retune an intent — the core reads it defensively through
+This is **piece 8 of 10** of the adapter, and the adapter half of the multi-agent
+supervisor: the core owns the router mechanism (classifier + hand-off protocol),
+while the domain declares *which* specialists exist, how to recognise them, and
+what each one does. On the day only this file changes to add or retune an intent —
+the core reads it defensively through
 :func:`agent_roster` and falls back to a ``qa``-only roster if the contract is absent.
 
 Each :class:`RosterSpecialist` carries:

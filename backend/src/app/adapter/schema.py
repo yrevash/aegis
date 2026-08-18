@@ -1,6 +1,6 @@
 """Domain schema — the *shape of the world* for the example adapter.
 
-This is **piece 1 of 5** of the swappable adapter (see ``adapter/README.md``).
+This is **piece 1 of 10** of the swappable adapter (see ``adapter/README.md``).
 The illustrative domain is a neutral **service-request / case-management** world:
 customers raise :class:`ServiceRequest` records, support agents work them, and a
 small knowledge :class:`Document` corpus backs retrieval. Nothing here is tied to

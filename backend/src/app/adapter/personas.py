@@ -1,6 +1,6 @@
 """Personas — who the agent is and whom it serves.
 
-This is **piece 5a of 5** of the adapter (paired with :mod:`app.adapter.prompts`).
+This is **piece 5 of 10** of the adapter (paired with :mod:`app.adapter.prompts`, piece 6).
 It defines the two personas the platform ships with for the example domain and,
 crucially, **the scope each one carries**: which data it may see and which tools
 it may call. The core routes a request to a persona (via ``QueryRequest.persona``)

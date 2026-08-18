@@ -1,6 +1,6 @@
 """Action tools — the real, typed operations the agent may perform.
 
-This is **piece 3 of 5** of the adapter. It exposes a small set of **MCP-shaped**
+This is **piece 4 of 10** of the adapter. It exposes a small set of **MCP-shaped**
 action tools over the service-request domain. Every tool is:
 
 * **Typed** — arguments are validated by a pydantic model, and the MCP/OpenAI
