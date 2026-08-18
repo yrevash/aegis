@@ -70,7 +70,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.exceptions import ApplicationError
 
 from app.ingestion.artifacts import dumps_parsed, loads_parsed
-from app.ingestion.store import DocumentStore
+from app.ingestion.store import DocumentStore, DocumentStoreProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ class IngestDependencies:
             honest about which one actually ran.
     """
 
-    store: DocumentStore
+    store: DocumentStoreProtocol
     embed: EmbedFn | None = None
     publish: Any = None  # noqa: ANN401 - a coroutine fn; see publish_chunks
     extractor: Extractor | None = None
@@ -412,19 +412,25 @@ async def parse_stage(
     """
     document = await _document(session, document_id)
     store = _deps().store
-    path = store.path_for(
-        tenant_id=document.tenant_id, sha256=document.content_sha256
-    )
-    if not path.is_file():
-        raise _fatal(
-            f"document {document_id} has no stored bytes at {path}: the upload did not "
-            "complete, or this worker cannot see the document store the API wrote to",
-            kind="DocumentBytesMissing",
-        )
-    # Docling is blocking, CPU-bound and minutes long on a large document. Off the loop,
-    # so the activity's heartbeat keeps beating and the orchestrator does not conclude
-    # this worker died in the middle of the most expensive stage to redo.
-    parsed: ParsedDocument = await asyncio.to_thread(parse_pdf, path)
+    # ``open_local`` rather than ``path_for``: the parse needs a file on disk because
+    # Docling parses one, but it must not need the *store* to be a disk. An object-store
+    # implementation materialises a temporary file here and removes it on exit, and this
+    # stage cannot tell the difference — which is what keeps the bytes movable.
+    try:
+        with store.open_local(
+            tenant_id=document.tenant_id, sha256=document.content_sha256
+        ) as path:
+            # Docling is blocking, CPU-bound and minutes long on a large document. Off
+            # the loop, so the activity's heartbeat keeps beating and the orchestrator
+            # does not conclude this worker died in the most expensive stage to redo.
+            #
+            # Inside the ``with``: an object-store implementation's temporary file must
+            # outlive the parse, and only the parse knows when it is finished with it.
+            parsed: ParsedDocument = await asyncio.to_thread(parse_pdf, path)
+    except FileNotFoundError as exc:
+        # Not retryable, and retrying burns the stage's whole attempt budget
+        # rediscovering the same absence.
+        raise _fatal(str(exc), kind="DocumentBytesMissing") from exc
     store.put_artifact(
         tenant_id=document.tenant_id,
         sha256=document.content_sha256,

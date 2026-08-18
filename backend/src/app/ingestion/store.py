@@ -46,13 +46,16 @@ import hashlib
 import logging
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DocumentStore", "sha256_of"]
+__all__ = ["DocumentStore", "DocumentStoreProtocol", "sha256_of"]
 
 #: The suffix the uploaded bytes are stored under. Deliberately not ``.pdf``: the store
 #: holds whatever was uploaded, and naming the file for a format nobody verified would be
@@ -81,6 +84,51 @@ def sha256_of(data: bytes) -> str:
         64 lower-case hex characters.
     """
     return hashlib.sha256(data).hexdigest()
+
+
+@runtime_checkable
+class DocumentStoreProtocol(Protocol):
+    """What the pipeline needs of a document store, and nothing about *where* it is.
+
+    The stage handlers depend on this rather than on :class:`DocumentStore` so the bytes
+    can move to object storage without touching a caller. That is not speculative: the
+    local store carries a **shared-filesystem assumption** — ``parse`` runs on the CPU
+    queue and ``chunk`` on the default queue, so a deployment that splits those queues
+    across machines needs storage both can reach. The industry answer is an S3-compatible
+    object store (MinIO self-hosted, or S3/GCS/Azure), and this Protocol is the seam an
+    ``S3DocumentStore`` implements without any other file changing.
+
+    The operations are deliberately **byte-level**. An earlier shape exposed
+    :meth:`DocumentStore.path_for` and the parse stage used it directly, which reads as a
+    small convenience and is in fact the one thing that makes object storage impossible:
+    a bucket has no paths. :meth:`open_local` is the honest form of that need — Docling
+    parses from a file, so a store that has no files must materialise one and clean it up,
+    and only the store knows which of those it is.
+    """
+
+    def put(self, *, tenant_id: int | None, sha256: str, data: bytes) -> object:
+        """Store ``data`` for a tenant under its digest."""
+        ...
+
+    def read(self, *, tenant_id: int | None, sha256: str) -> bytes:
+        """Return the stored bytes."""
+        ...
+
+    def has(self, *, tenant_id: int | None, sha256: str) -> bool:
+        """Return whether the bytes are already stored."""
+        ...
+
+    def put_artifact(self, *, tenant_id: int | None, sha256: str, payload: str) -> object:
+        """Store the parse artifact beside the bytes."""
+        ...
+
+    def read_artifact(self, *, tenant_id: int | None, sha256: str) -> str:
+        """Return the stored parse artifact."""
+        ...
+
+    def open_local(self, *, tenant_id: int | None, sha256: str) -> AbstractContextManager[Path]:
+        """Yield a local filesystem path to the bytes, for the duration of the block."""
+        ...
 
 
 class DocumentStore:
@@ -243,6 +291,40 @@ class DocumentStore:
         self._atomic_write(path, data)
         logger.debug("stored %d bytes for tenant %s at %s", len(data), tenant_id, path)
         return path
+
+    @contextmanager
+    def open_local(self, *, tenant_id: int | None, sha256: str) -> Iterator[Path]:
+        """Yield a real filesystem path to the stored bytes, for the block's duration.
+
+        Docling parses a *file*, not a buffer, so something has to hand it a path. For
+        this store that is the stored file itself: no copy, no temporary, no cleanup. An
+        object store would download to a temporary file and remove it on exit, and **the
+        caller cannot tell the difference** — which is the whole point. The parse stage
+        stops knowing whether the bytes live on a disk it can see.
+
+        This exists because :meth:`path_for` leaking into the parse stage was the one
+        thing that made object storage impossible: a bucket has no paths.
+
+        Args:
+            tenant_id: The owning tenant, or ``None`` for a platform document.
+            sha256: The content digest the bytes are addressed by.
+
+        Yields:
+            A path that exists for as long as the block runs.
+
+        Raises:
+            FileNotFoundError: When the bytes are not stored. Raised here rather than
+                yielding a path that does not exist, so a caller cannot mistake an absent
+                document for an unreadable one.
+        """
+        path = self.path_for(tenant_id=tenant_id, sha256=sha256)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"no stored bytes for {sha256[:12]}… under tenant {tenant_id}: the upload "
+                "did not complete, or this worker cannot see the document store the API "
+                "wrote to"
+            )
+        yield path
 
     def read(self, *, tenant_id: int | None, sha256: str) -> bytes:
         """Return one document's stored bytes.
