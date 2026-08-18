@@ -818,8 +818,8 @@ and its error bar, not the library that printed it.
 | 4.0 | ✅ Spike — **macOS leg done 2026-08-18**, Windows leg outstanding | 0.25 | Docling install, model prefetch, cold start, all four fixtures. See §4.0 |
 | 4.1 | ✅ `convert.py` seam — **with page/bbox from line one** | 0.5 | Done 2026-08-18. `aegis/src/aegis/ingestion/`; Docling never leaks past `convert.py` |
 | 4.2 | ✅ Text-layer probe + header/footer/page-number stripping | 0.25 | Done 2026-08-18. The stripper is a **backstop** on these fixtures — see §4.0 |
-| 4.3 | `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | The chunker survives intact |
-| 4.4 | Enriched prefix: title · type · date · heading path | 0.15 | Highest quality-per-hour in the phase |
+| 4.3 | ✅ `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | **Landed 2026-08-18.** The chunker survived intact: `_pack_units` gained the unit indices a chunk needs to find its blocks again, and nothing else moved. Page and bbox thread through, including for the words carried in an overlap tail |
+| 4.4 | ✅ Enriched prefix: title · type · date · heading path | 0.15 | **Landed 2026-08-18** with 4.3. Highest quality-per-hour in the phase. A field the document does not carry renders as a placeholder (`untitled` · `untyped` · `undated` · `unsectioned`) rather than collapsing — the prefix is embedded, so its *shape* must not vary across a corpus |
 | 4.5 | Upload route + **stage handlers on the P3 workflow** | 0.4 | `documents` already exists (P3). No queue machinery — the stages are activities |
 | 4.6 | ✅ **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change. **Landed 2026-08-18** |
 | 4.6b | ✅ **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm was fail-open; shipped with 4.6. **Landed 2026-08-18** |
