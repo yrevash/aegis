@@ -474,20 +474,6 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
             "under-estimating admits one that cannot finish."
         ),
     ),
-    SettingSpec(
-        key="budget.usd_cap",
-        type_=float,
-        default=100.0,
-        writable_by=frozenset({PLATFORM_ADMIN}),
-        readable_by=_EVERY_ROLE,
-        merge=MergeRule.TIGHTEN_ONLY,
-        bounds=(0.0, 100000.0),
-        stricter=Strictness.LOWER,
-        description=(
-            "USD spend cap for the scope. Platform-writable only: a tenant raising its "
-            "own cap is the second of Phase 7's forbidden controls."
-        ),
-    ),
 )
 
 _BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in SETTING_SPECS}

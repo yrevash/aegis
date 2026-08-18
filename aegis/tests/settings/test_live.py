@@ -347,8 +347,8 @@ async def test_a_role_outside_writable_by_is_refused(db):
     with pytest.raises(SettingNotWritableError, match="may not write"):
         await _write(
             db,
-            "budget.usd_cap",
-            50000.0,
+            "jobs.max_inflight.ingest",
+            999,
             scope=SettingScope.TENANT,
             role="tenant_admin",
             tenant_id=_TENANT,

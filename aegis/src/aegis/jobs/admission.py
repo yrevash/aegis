@@ -31,9 +31,15 @@ can name. Every error here carries a ``reason`` that is safe to render.
 Where the caps come from
 ------------------------
 
-The settings catalogue (:mod:`aegis.settings.spec`), not this module and not a deploy:
-``jobs.max_inflight.{job_type}`` and ``budget.usd_cap``. Both are ``TIGHTEN_ONLY``, which
-for a cap is the only coherent rule — see :func:`admit`.
+**The concurrency cap** comes from the settings catalogue (:mod:`aegis.settings.spec`) —
+not this module and not a deploy: ``jobs.max_inflight.{job_type}``, ``TIGHTEN_ONLY``,
+which for a cap is the only coherent rule.
+
+**The USD cap comes from the ``budgets`` table**, and from nowhere else. An Aegis admin
+sets a tenant's cap when creating the tenant; a tenant admin allocates each of their users
+a cap under it; the gateway charges every model call against both. A duplicate
+``budget.usd_cap`` in the catalogue was removed, because two places holding one number is
+how the figure on the budgets screen stops being the figure that binds.
 
 A job type with no ``jobs.max_inflight.*`` entry raises
 :class:`aegis.settings.spec.UnknownSettingError` rather than defaulting to "unlimited".
@@ -54,7 +60,6 @@ from aegis.jobs.models import JobRun, JobStatus
 from aegis.settings.resolver import resolve
 
 __all__ = [
-    "BUDGET_CAP_KEY",
     "IN_FLIGHT_STATUSES",
     "AdmissionDeniedError",
     "AdmissionError",
@@ -76,9 +81,6 @@ IN_FLIGHT_STATUSES: tuple[JobStatus, ...] = (
     JobStatus.RUNNING,
     JobStatus.RECONCILING,
 )
-
-#: The catalogue key carrying the USD spend cap the budget gate pre-authorises against.
-BUDGET_CAP_KEY = "budget.usd_cap"
 
 #: The prefix of the per-job-type concurrency cap keys. Built here rather than written out
 #: at the call site so the catalogue and the reader agree by construction.
@@ -298,11 +300,12 @@ async def _check_budget(
 ) -> None:
     """Refuse a job the tenant's remaining budget cannot cover.
 
-    The cap is the **stricter** of the catalogue's ``budget.usd_cap`` and any tenant-scoped
-    ``budgets`` row, because two caps that both claim to bind must resolve to the tighter
-    one or one of them is decoration. The window comes from the ``budgets`` row when there
-    is one — a catalogue cap applied over a longer window is at worst stricter, never
-    weaker, which is the safe direction for a guess.
+    The cap comes from the ``budgets`` table and from nowhere else — the same rows
+    :func:`aegis.governance.enforcement.enforce_governance` charges against at the
+    gateway. There is deliberately no second cap in the settings catalogue: an Aegis
+    admin sets the tenant's cap when creating the tenant, a tenant admin allocates each
+    of their users a cap under it, and one number in one place is what makes the figure
+    on the budgets screen the figure that binds.
 
     Args:
         session: The scoped session.
@@ -322,9 +325,12 @@ async def _check_budget(
         )
     if tenant_id is None:
         return
-    catalogue_cap, _source = await resolve(session, BUDGET_CAP_KEY, tenant_id=tenant_id)
-    row_cap, window = await _tenant_budget_cap(session, tenant_id)
-    cap = float(catalogue_cap) if row_cap is None else min(float(catalogue_cap), row_cap)
+    cap, window = await _tenant_budget_cap(session, tenant_id)
+    if cap is None:
+        # No ``budgets`` row means no cap, which is exactly what the gateway does with an
+        # absent row (``GovernanceLimits()`` is uncapped). Inventing a default here would
+        # reintroduce the second cap this function was rewritten to remove.
+        return
     # The ledger's ``ts`` is TIMESTAMP WITHOUT TIME ZONE holding UTC, so the bound is
     # naive UTC too — comparing an aware bound against it raises on PostgreSQL.
     since = datetime.now(UTC).replace(tzinfo=None) - timedelta(

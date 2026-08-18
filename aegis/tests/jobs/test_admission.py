@@ -44,8 +44,10 @@ _OTHER_TENANT = 70302
 #: platform default changes.
 _CAP: int = spec_for("jobs.max_inflight.ingest").default
 
-#: The platform default USD cap, likewise read from the catalogue.
-_USD_CAP: float = spec_for("budget.usd_cap").default
+#: The tenant USD cap these tests set on a real ``budgets`` row. There is deliberately no
+#: catalogue default to read: an Aegis admin sets a tenant's cap when creating the tenant,
+#: and the ``budgets`` table is the only place that number lives.
+_USD_CAP: float = 100.0
 
 
 @pytest_asyncio.fixture
@@ -78,6 +80,23 @@ async def _add_jobs(
         session.add_all(rows)
         await session.commit()
         return [row.id for row in rows]
+
+
+async def _set_budget(
+    db: async_sessionmaker, tenant_id: int, usd_cap: float
+) -> None:
+    """Give a tenant a real ``budgets`` row — the only thing that caps spend."""
+    async with db() as session:
+        session.add(
+            Budget(
+                tenant_id=tenant_id,
+                scope_type=BudgetScope.TENANT,
+                scope_id=tenant_id,
+                window=BudgetWindow.DAY,
+                usd_cap=usd_cap,
+            )
+        )
+        await session.commit()
 
 
 async def _spend(db: async_sessionmaker, tenant_id: int, cost_usd: float) -> None:
@@ -212,12 +231,14 @@ async def test_an_undeclared_job_type_fails_closed(db) -> None:
 
 async def test_a_job_that_fits_the_remaining_budget_is_admitted(db) -> None:
     """Spend well inside the cap leaves room, and the gate says nothing."""
+    await _set_budget(db, _TENANT, _USD_CAP)
     await _spend(db, _TENANT, _USD_CAP / 2)
     await _admit(db, tenant_id=_TENANT, estimated_cost_usd=1.0)
 
 
 async def test_a_job_beyond_the_remaining_budget_is_refused(db) -> None:
     """Committed spend plus the estimate over the cap is a refusal carrying the numbers."""
+    await _set_budget(db, _TENANT, _USD_CAP)
     await _spend(db, _TENANT, _USD_CAP - 1.0)
     with pytest.raises(BudgetExceededError) as caught:
         await _admit(db, tenant_id=_TENANT, estimated_cost_usd=2.0)
@@ -232,32 +253,32 @@ async def test_a_job_beyond_the_remaining_budget_is_refused(db) -> None:
 
 async def test_another_tenants_spend_does_not_consume_this_tenants_budget(db) -> None:
     """Spend is attributed, not pooled — the ledger is per tenant and so is the gate."""
+    await _set_budget(db, _TENANT, _USD_CAP)
     await _spend(db, _OTHER_TENANT, _USD_CAP)
     await _admit(db, tenant_id=_TENANT, estimated_cost_usd=1.0)
 
 
-async def test_a_budgets_row_binds_even_when_it_is_tighter_than_the_catalogue(db) -> None:
+async def test_the_administrators_budgets_row_is_what_binds(db) -> None:
     """An administrator's $1 cap must bind, or the budgets screen is decoration.
 
-    The catalogue cap is far higher here, so a gate that read only the catalogue would
-    admit this job — which is the failure a tenant admin would report as "I set a cap and
-    it did nothing".
+    This is the number a tenant admin types into ``/admin/budgets``. There is no second
+    cap anywhere for it to lose to — the gate reads this row and nothing else.
     """
-    async with db() as session:
-        session.add(
-            Budget(
-                tenant_id=_TENANT,
-                scope_type=BudgetScope.TENANT,
-                scope_id=_TENANT,
-                window=BudgetWindow.DAY,
-                usd_cap=1.0,
-            )
-        )
-        await session.commit()
+    await _set_budget(db, _TENANT, 1.0)
 
     with pytest.raises(BudgetExceededError) as caught:
         await _admit(db, tenant_id=_TENANT, estimated_cost_usd=2.0)
     assert caught.value.cap_usd == pytest.approx(1.0)
+
+
+async def test_a_tenant_with_no_budgets_row_is_not_capped(db) -> None:
+    """No row means no cap — the same answer the gateway gives an unbudgeted tenant.
+
+    Inventing a default here would be the second cap all over again: a tenant would be
+    refused against a number no administrator ever set and no screen ever showed.
+    """
+    await _spend(db, _TENANT, 10_000.0)
+    await _admit(db, tenant_id=_TENANT, estimated_cost_usd=10_000.0)
 
 
 async def test_a_negative_estimate_is_refused(db) -> None:
@@ -280,6 +301,7 @@ async def test_the_gates_refuse_separately_and_say_which(db) -> None:
     with pytest.raises(AdmissionDeniedError):
         await _admit(db, tenant_id=_TENANT, estimated_cost_usd=0.001)
 
+    await _set_budget(db, _OTHER_TENANT, _USD_CAP)
     await _spend(db, _OTHER_TENANT, _USD_CAP)
     with pytest.raises(BudgetExceededError):
         await _admit(db, tenant_id=_OTHER_TENANT, estimated_cost_usd=1.0)

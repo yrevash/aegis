@@ -35,7 +35,9 @@ _USER_B = 22
 #: Read from the catalogue rather than restated: these tests must keep meaning the same
 #: thing when a platform admin changes the default from the dashboard.
 _CAP: int = spec_for("jobs.max_inflight.ingest").default
-_USD_CAP: float = spec_for("budget.usd_cap").default
+#: The tenant's cap lives on a real ``budgets`` row and nowhere else, so the test writes
+#: the row it asserts against rather than reading a catalogue default that no longer exists.
+_USD_CAP: float = 100.0
 _PER_MB: float = spec_for("jobs.estimated_cost_usd.ingest_per_mb").default
 
 
@@ -101,6 +103,13 @@ async def _seed_tenants() -> None:
             Tenant(id=_TENANT_B, name="Tenant B"),
             User(id=_USER_A, username="a-admin", role=Role.ADMIN, tenant_id=_TENANT_A),
             User(id=_USER_B, username="b-admin", role=Role.ADMIN, tenant_id=_TENANT_B),
+            Budget(
+                tenant_id=_TENANT_A,
+                scope_type=BudgetScope.TENANT,
+                scope_id=_TENANT_A,
+                window=BudgetWindow.DAY,
+                usd_cap=_USD_CAP,
+            ),
         )
         await session.commit()
 
