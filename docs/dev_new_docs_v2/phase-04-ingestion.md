@@ -1087,8 +1087,8 @@ and its error bar, not the library that printed it.
 | 4.9 | ✅ **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest. **Landed 2026-08-19.** `fastembed==0.8.0` in the `retrieval` extra (no torch); `jinaai/jina-reranker-v1-tiny-en` (33M, 134 MB). The API reranker is now the **loud** fallback. **D6's latency estimate was wrong by 4x** — measured 1.44 s p50 over 20 x 400-word chunks, not 150–400 ms; see the correction under D6 |
 | 4.10 | ✅ **Table objects with NL summaries, hash-cached** | 0.4 | **Landed 2026-08-19.** A table is now its own chunk carrying `(rows, cols)`, its caption and a content digest; above a configured size the `chunk` stage writes a generated sentence or two **in front of** the grid and caches it in `table_summaries`, keyed on the digest. **TableFormer stays on ACCURATE** — see D3b, unchanged. Duplicated table captions were already fixed in `convert.py`, so the summaries are written over text that does not repeat itself. **One correction to D8, and it is not cosmetic — see below.** |
 | 4.11 | ✅ Span-anchored gold set + naive-baseline ablation | 0.5 | **Landed 2026-08-19.** 58 cases (53 gradeable) over all four fixtures, every span verified verbatim in the PDF's own text layer. **The ladder does not go up the way §5 assumed and three of its arms do not pay for themselves — see the measured block under §5, which is the most important correction in the phase.** |
-| 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
-| 4.12b | **Graph construction visible in the ingest log** | 0.25 | Entities and relations as they are extracted — the user asked to see the KG being built, not just its result |
+| 4.12 | ✅ Live ingest log — a projection over the job row | 0.4 | **Landed 2026-08-19.** `app/ingestion/progress.py` (read) + `app/jobs/ingest_log.py` (write) + `GET /documents/{id}/ingest`. **Two corrections, and the first one is a whole half of the task — see below.** |
+| 4.12b | ✅ **Graph construction visible in the ingest log** | 0.25 | **Landed 2026-08-19** with 4.12. Entities and relations aggregated out of `chunks.meta` in SQL, with mention counts and both ends of every edge resolved to their human labels |
 | 4.13 | ✅ Re-index handler on the P3 scheduler | 0.1 | **Landed 2026-08-19.** `app/ingestion/reindex.py` — every stage except `parse`, over the stored parse artifact. Two corrections, see §4.13 |
 | 4.14 | ✅ Verbatim citation verification | 0.15 | **Landed 2026-08-19.** `aegis/src/aegis/retrieval/citations.py` — the primitive 4.11 grades with, plus `verify_citations`. A failed check is **marked, never dropped**; see the correction under D10 |
 
@@ -1318,6 +1318,65 @@ Two things it must show, because they are the honest parts:
 Because the record is durable, a refresh mid-ingest resumes the view rather than losing it —
 which is why replay is cheap here and expensive everywhere it is not built on `run_events`.
 
+#### What actually landed, 2026-08-19 — and one of these is half the task
+
+1. **"Plus the per-stage `run_events` rows from Phase 3 §3.6" described rows that did not
+   exist.** Phase 3 built the record — the partitioned table, the fold, the regenerable
+   header — and shipped it with **no producer at all**: `grep -rn record_events backend/src`
+   returned nothing. So this task supplied the *write* side as well as the read side, in
+   `app/jobs/ingest_log.py`, and the projection is the second thing rather than the only
+   thing. The entry is appended **inside the stage's own transaction**, so the log line and
+   the `completed_stage` bump it describes commit together; a stage's `seq` is its index in
+   `INGEST_STAGES` rather than a counter, so a replay writes the number it wrote before
+   instead of appending a second, later-looking entry. This is why the phrase "do not build
+   a second log" survived intact: `run_events` now has a real consumer instead of a
+   documented one.
+
+2. **A stage handler had nowhere to put anything that is not a `documents` column** — so
+   4.6c's hand-off could not be honoured as written. The substrate applies a handler's
+   return value through an allow-list (`_HANDLER_WRITABLE_COLUMNS`), which correctly refuses
+   any key that is not a column, and the parse *reasons*, the OCR decision and the heading
+   histogram are none of them columns and should not be. So there is a second, narrow
+   channel — `report_stage_facts` / `collect_stage_facts`, a `ContextVar` holding a mutable
+   dict — with the split stated in its docstring: what a handler **returns** is state and
+   goes on the row; what it **reports** is evidence about the attempt and goes in the
+   append-only log. Reporting outside a collector is a no-op, so a handler called from a
+   test or from 4.13's re-index loop needs no double. A context variable rather than a
+   module global because `IO_QUEUE` runs 32 activities in one process, and a global would
+   interleave one document's evidence into another's.
+
+   It lives in a **new `aegis/jobs/facts.py`, not in `aegis/jobs/stages.py`**, and the
+   first attempt at the latter is what found the reason: `stages.py` is re-imported inside
+   the orchestrator's workflow sandbox on every workflow task, so a `ContextVar` declared
+   there would be minted fresh each time and a handler and its collector could end up
+   holding two different ones with nothing reporting a problem. `aegis/tests/jobs/
+   test_stages.py::test_this_module_imports_nothing_a_workflow_sandbox_would_re_execute`
+   asserts that module's import list against its own AST and caught the mistake — a test
+   worth naming, because the failure it prevents would have been silent.
+
+3. **The endpoint is `GET /documents/{id}/ingest`, not `/events`.** Re-streaming the raw
+   events alone would leave the browser to derive "which stages completed" from them — and
+   that derivation must happen once, server-side, **off `documents.completed_stage`**, or a
+   log entry that failed to write would erase a committed stage from the screen. The route
+   returns the whole projection: stage states, per-stage durations and facts, the parse
+   verdict, the corpus counts, the tables, the graph, and the chronological tail.
+
+4. **The cut order's item 1 turned out not to be a cut.** It offers to drop the
+   OCR-decision and heading-histogram panels; both are one field on an event that was being
+   written anyway and one small block in a component, so cutting them would have saved
+   nothing measurable. Both shipped.
+
+5. **A re-queue makes a new workflow id** (it must — `job_runs.workflow_id` is unique), so
+   reading the log off `documents.workflow_id` would show only the latest attempt and lose
+   the stages an earlier one committed. The projection collects every `job_runs` row for the
+   document instead, so a re-queue produces a *longer* log rather than a rewritten one.
+
+6. **`include_router` is lazy in FastAPI 0.141** and appends one `_IncludedRouter`
+   placeholder with no `path` and no `methods`. Mounting the new route module that way would
+   have made the endpoint invisible to `tests/api/test_route_coverage.py`, which enumerates
+   `app.api.routes.router` — a route escaping the coverage test by accident is exactly the
+   drift that test exists to catch. `app.api.ingest_log.mount` extends `routes` instead.
+
 ### 4.13 — Scheduled re-indexing (0.25d)
 
 A direct requirement: *"re indexing pipeline can be structured in a way that it runs in set
@@ -1507,9 +1566,10 @@ path rather than of a lookalike.
 
 ## 6. Cut order — decided now, not at 2am
 
-1. **The ingest-log detail panels** (4.12 keeps the live stage tail; the OCR-decision and
-   heading-histogram panels go). Replay is *not* a cut — it is free once the events are in
-   `run_events`.
+1. ~~**The ingest-log detail panels**~~ — **not taken.** Both panels are one field on an
+   event the stage writes anyway plus a small block in one component; the cut would have
+   saved nothing. See the corrections under 4.12. Replay was never a cut — it is free once
+   the events are in `run_events`.
 2. **bbox renderer** — keep the data, drop the visual overlay
 3. **Table NL summaries** — keep tables as objects, drop the generated summary
 4. **Local reranker benchmark** — ship the 33M default rather than comparing three

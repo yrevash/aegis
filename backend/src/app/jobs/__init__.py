@@ -8,6 +8,8 @@ everything that does lives here:
 :mod:`app.jobs.client`       The Temporal client singleton, built from settings.
 :mod:`app.jobs.activities`   The activity implementation — one scoped, idempotent,
                              single-transaction stage runner.
+:mod:`app.jobs.ingest_log`   The ingest's entries in Phase 3's ``run_events`` record —
+                             task 4.12's write side, and not a second log.
 :mod:`app.jobs.reconcile`    The sweeper that closes or restarts a job row whose
                              workflow no longer exists.
 :mod:`app.jobs.reindex`      The debounced re-index: its activity, its handler

@@ -13,6 +13,9 @@ this package:
   ``parse`` stage to the ``chunk`` stage.
 * :mod:`app.ingestion.stages` — the six stage handlers, and the registration a process
   entry point calls to bind them to Phase 3's substrate.
+* :mod:`app.ingestion.progress` — the live ingest log, as a **projection** over
+  ``documents``, ``job_runs``, ``chunks`` and ``run_events``. It owns no state and no
+  log of its own; it is what ``GET /documents/{id}/ingest`` reads.
 
 The rest of this module is the two host decisions about the *parser*, and they are both
 here.

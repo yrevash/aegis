@@ -34,16 +34,30 @@ records its completion, and then run again. Both writing activities here are key
 The guard is in the ``WHERE`` clause rather than in a Python ``if``, and that is not
 style: a read-then-write with the decision in Python is the SELECT-then-guarded-UPDATE
 pattern this substrate replaces, and it loses under concurrency.
+
+What the tenant watches (task 4.12)
+-----------------------------------
+
+Both writing activities also append to the durable run record — Phase 3 §3.6's
+``run_events``, through :mod:`app.jobs.ingest_log`, **in the same transaction as the
+write they describe**. That is the whole of the live ingest log's write side: there is no
+second channel, no in-memory progress and nothing to reconstruct after a restart. An
+entry is written only when the guarded ``UPDATE`` above actually changed a row, so a
+replay records nothing, and because the entry and the ``completed_stage`` bump commit
+together a worker killed between them is not a state the database can hold. The read side
+is :mod:`app.ingestion.progress`, which is a projection and owns no state of its own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from aegis.jobs.facts import collect_stage_facts
 from aegis.jobs.models import Document, JobRun, JobStatus
 from aegis.jobs.scope import tenant_activity
 from aegis.jobs.stages import stage_handler, stage_spec
@@ -63,6 +77,7 @@ from app.jobs.flows.contracts import (
     StageOutcome,
     StartOutcome,
 )
+from app.jobs.ingest_log import run_finished, stage_committed
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +363,9 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
        two attempts would both read "not yet done" and both run the handler;
     4. run the registered handler, which does its own writes on this same session;
     5. apply the handler's column updates **and** the ``completed_stage`` bump in one
-       guarded ``UPDATE``.
+       guarded ``UPDATE``;
+    6. append the stage's entry to the durable run record — but **only if step 5 changed a
+       row**, so the log records work and never a replay.
 
     The decorator commits once, after this returns. So a stage that "finished" but whose
     output rolled back is not a state the schema can reach — which is what makes each
@@ -389,28 +406,55 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
         raise ApplicationError(
             str(exc), type="UnregisteredStage", non_retryable=True
         ) from exc
-    updates = await _run_with_heartbeat(
-        handler(
-            session,
-            tenant_id=inp.tenant_id,
-            document_id=inp.document_id,
-            stage=inp.stage,
-        ),
-        spec.heartbeat_seconds,
-    )
+    started = time.monotonic()
+    # The handler's second, narrow channel out (:func:`aegis.jobs.report_stage_facts`):
+    # what it *found*, as opposed to what it returns, which is what it *set*. Opened
+    # here so a handler never has to know whether the substrate, a test or the re-index
+    # loop is calling it — outside this scope reporting is a no-op.
+    with collect_stage_facts() as facts:
+        updates = await _run_with_heartbeat(
+            handler(
+                session,
+                tenant_id=inp.tenant_id,
+                document_id=inp.document_id,
+                stage=inp.stage,
+            ),
+            spec.heartbeat_seconds,
+        )
+    duration_ms = int((time.monotonic() - started) * 1000)
+    columns = _validated_updates(inp.stage, updates)
     result = await session.execute(
         update(Document)
         .where(
             Document.id == inp.document_id,
             Document.completed_stage.is_distinct_from(inp.stage),
         )
-        .values(**_validated_updates(inp.stage, updates), completed_stage=inp.stage)
+        .values(**columns, completed_stage=inp.stage)
     )
-    await session.execute(
-        update(JobRun)
-        .where(JobRun.workflow_id == inp.workflow_id)
-        .values(completed_stage=inp.stage)
-    )
+    job_id = (
+        await session.execute(
+            update(JobRun)
+            .where(JobRun.workflow_id == inp.workflow_id)
+            .values(completed_stage=inp.stage)
+            .returning(JobRun.id)
+        )
+    ).scalar_one_or_none()
+    if result.rowcount:
+        # Task 4.12. In *this* transaction, so the entry and the stage bump it describes
+        # commit together: a worker killed between them is not a state that exists, and
+        # the log therefore cannot claim a stage the row does not.
+        await stage_committed(
+            session,
+            workflow_id=inp.workflow_id,
+            tenant_id=inp.tenant_id,
+            document_id=inp.document_id,
+            job_id=job_id,
+            stage=inp.stage,
+            queue=spec.task_queue,
+            duration_ms=duration_ms,
+            columns=columns,
+            facts=facts,
+        )
     return StageOutcome(
         stage=inp.stage,
         document_id=inp.document_id,
@@ -498,7 +542,12 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
             non_retryable=True,
         )
     now = _now()
-    closed = (
+    # ``completed_stage`` comes back with the guard so the terminal log entry can say
+    # *where* a failed run stopped, and ``id`` so "the guard matched no row" (a replayed
+    # close-out) is distinguishable from "it matched a row whose chunk_count is NULL".
+    # Reading ``chunk_count`` alone could not tell those apart, and only one of them is
+    # a reason to write anything at all.
+    row = (
         await session.execute(
             update(Document)
             .where(
@@ -506,17 +555,34 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
                 Document.status.is_distinct_from(status),
             )
             .values(status=status, error=inp.error)
-            .returning(Document.chunk_count)
+            .returning(Document.id, Document.chunk_count, Document.completed_stage)
+        )
+    ).first()
+    closed = row[1] if row is not None else None
+    job_id = (
+        await session.execute(
+            update(JobRun)
+            .where(
+                JobRun.workflow_id == inp.workflow_id,
+                JobRun.status.is_distinct_from(status),
+            )
+            .values(status=status, error=inp.error, finished_at=now)
+            .returning(JobRun.id)
         )
     ).scalar_one_or_none()
-    await session.execute(
-        update(JobRun)
-        .where(
-            JobRun.workflow_id == inp.workflow_id,
-            JobRun.status.is_distinct_from(status),
+    if row is not None:
+        # Task 4.12's terminal entry, guarded by the same ``WHERE`` the status write is:
+        # a replayed close-out changed no row and therefore records no second ending.
+        await run_finished(
+            session,
+            workflow_id=inp.workflow_id,
+            tenant_id=inp.tenant_id,
+            document_id=inp.document_id,
+            job_id=job_id,
+            status=status.value,
+            completed_stage=row[2],
+            error=inp.error,
         )
-        .values(status=status, error=inp.error, finished_at=now)
-    )
     if closed:
         # ``closed`` is the row's ``chunk_count``, and it is ``None`` for a run that never
         # reached the ``chunk`` stage and ``None`` again when the guard above matched no

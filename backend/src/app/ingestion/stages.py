@@ -63,6 +63,7 @@ from aegis.ingestion import ParsedDocument, parse_pdf
 from aegis.ingestion.blocks import BlockKind
 from aegis.ingestion.quality import LOW_CONFIDENCE
 from aegis.ingestion.tables import TableSummaryPolicy
+from aegis.jobs.facts import report_stage_facts
 from aegis.jobs.models import Chunk, Document
 from aegis.jobs.stages import INGEST_STAGES, register_stage_handler
 from aegis.retrieval.chunker import DocumentContext, SectionChunk, chunk_sections
@@ -572,6 +573,37 @@ async def parse_stage(
             LOW_CONFIDENCE,
             "; ".join(quality.reasons),
         )
+    # Task 4.12 / 4.6c's hand-off. ``parse_confidence`` lands on the row; the *reasons*
+    # have nowhere on a row to live and were, until now, only a WARNING in a log file no
+    # tenant can read. They go into the durable run record instead, which is what makes
+    # "this document parsed at 0.57" actionable rather than merely alarming. The OCR
+    # decision and the heading histogram travel with them for the same reason: D3 trades
+    # a silent ``do_ocr=False`` away, and a silent trade is one nobody can audit.
+    report_stage_facts(
+        parser=parsed.parser,
+        parse_seconds=round(parsed.parse_seconds, 3),
+        page_count=parsed.page_count,
+        block_count=len(parsed.blocks),
+        table_count=parsed.table_count,
+        heading_histogram={str(level): count for level, count in sorted(
+            parsed.heading_histogram.items()
+        )},
+        removed_furniture=len(parsed.removed_furniture),
+        ocr={"enabled": parsed.ocr.enabled, "reason": parsed.ocr.reason},
+        quality=None
+        if quality is None
+        else {
+            "confidence": round(quality.confidence, 4),
+            "low": quality.is_low,
+            "threshold": LOW_CONFIDENCE,
+            "ordering": None if quality.ordering is None else round(quality.ordering, 4),
+            "ordering_pages": quality.ordering_pages,
+            "ordering_anchors": quality.ordering_anchors,
+            "fragment_rate": round(quality.fragment_rate, 4),
+            "flat_headings": quality.flat_headings,
+            "reasons": list(quality.reasons),
+        },
+    )
     return {
         "page_count": parsed.page_count,
         "title": _derive_title(parsed, document.filename),
@@ -681,14 +713,22 @@ async def chunk_stage(
                 for piece in pieces
             ],
         )
+    tables = sum(1 for piece in pieces if piece.table is not None)
     logger.info(
         "chunked document %s into %d chunk(s), %d of them tables (%d summarised, "
         "%d model call(s))",
         document_id,
         len(pieces),
-        sum(1 for piece in pieces if piece.table is not None),
+        tables,
         len(summaries.summaries),
         summaries.model_calls,
+    )
+    report_stage_facts(
+        chunks=len(pieces),
+        tables=tables,
+        summarised=len(summaries.summaries),
+        model_calls=summaries.model_calls,
+        words=sum(piece.word_count for piece in pieces),
     )
     return {"chunk_count": len(pieces)}
 
@@ -748,6 +788,7 @@ async def enrich_stage(
         text(_ENRICH_SQL), {"document_id": document_id, "tenant_id": owner}
     )
     logger.info("enriched %d chunk(s) of document %s", result.rowcount, document_id)
+    report_stage_facts(enriched=result.rowcount)
     return {}
 
 
@@ -788,6 +829,7 @@ async def embed_stage(
     rows = await _document_chunks(session, document_id)
     if not rows:
         logger.info("document %s has no chunks to embed", document_id)
+        report_stage_facts(embedded=0)
         return {}
     embed = _deps().resolve_embed()
     embedded = 0
@@ -809,6 +851,7 @@ async def embed_stage(
             )
             embedded += 1
     logger.info("embedded %d chunk(s) of document %s", embedded, document_id)
+    report_stage_facts(embedded=embedded, batches=-(-len(rows) // _EMBED_BATCH))
     return {}
 
 
@@ -853,6 +896,7 @@ async def index_stage(
     rows = await _document_chunks(session, document_id)
     if not rows:
         logger.info("document %s has no chunks to index", document_id)
+        report_stage_facts(indexed=0)
         return {}
     owner_token = tenant_metadata_value(owner)
     published = [
@@ -872,6 +916,7 @@ async def index_stage(
     ]
     await _deps().publish_chunks(published)
     logger.info("indexed %d chunk(s) of document %s", len(published), document_id)
+    report_stage_facts(indexed=len(published), collection=owner_token)
     return {}
 
 
@@ -913,6 +958,7 @@ async def graph_stage(
     rows = await _document_chunks(session, document_id)
     if not rows:
         logger.info("document %s has no chunks to extract from", document_id)
+        report_stage_facts(entities=0, relations=0)
         return {}
     extractor = _deps().resolve_extractor()
     entities_total = 0
@@ -949,6 +995,16 @@ async def graph_stage(
         relations_total,
         document_id,
         extractor.name,
+    )
+    # Task 4.12b. The *counts* here; the entities and relations themselves are already
+    # durable on ``chunks.meta``, which is what the projection reads them out of — so
+    # this event stays a fixed size whether the document yielded nine entities or nine
+    # thousand.
+    report_stage_facts(
+        entities=entities_total,
+        relations=relations_total,
+        extractor=extractor.name,
+        chunks=len(rows),
     )
     return {}
 

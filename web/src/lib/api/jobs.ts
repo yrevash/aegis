@@ -179,3 +179,132 @@ export async function uploadDocument(
   }
   return (await res.json()) as DocumentUpload
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The live ingest log (phase 4 §4.12 / §4.12b)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What a stage is doing right now. Mirrors `app/ingestion/progress.py`. */
+export type StageState = 'completed' | 'running' | 'queued'
+
+/** One stage of the six-stage ingest pipeline. */
+export interface IngestStage {
+  name: string
+  state: StageState
+  /** The task queue whose concurrency policy made it wait. */
+  queue: string
+  /** ISO 8601 commit time, or null for a stage that has not run. */
+  at: string | null
+  duration_ms: number | null
+  /** What the stage found — its own report merged with the columns it set. */
+  detail: Record<string, unknown>
+}
+
+/** The D-parse quality gate's verdict, which until 4.12 only reached a log file. */
+export interface IngestParse {
+  confidence: number | null
+  low: boolean
+  threshold: number
+  /** One line per signal, written for a person — 4.6c's explicit hand-off. */
+  reasons: string[]
+  heading_histogram: Record<string, number>
+  ocr_enabled: boolean | null
+  ocr_reason: string | null
+  parser: string | null
+  parse_seconds: number | null
+}
+
+/** One table the chunk stage lifted out as its own chunk (D8). */
+export interface IngestTable {
+  caption: string | null
+  rows: number | null
+  cols: number | null
+  summarised: boolean
+  reason: string | null
+}
+
+/** One entity the graph stage extracted, with its mention count. */
+export interface IngestEntity {
+  id: string
+  label: string
+  kind: string
+  mentions: number
+}
+
+/** One extracted edge, both ends already resolved to their human labels. */
+export interface IngestRelation {
+  source: string
+  phrase: string
+  target: string
+  mentions: number
+}
+
+/** The knowledge graph this ingest built — §4.12b. */
+export interface IngestGraph {
+  extractor: string | null
+  entity_total: number
+  relation_total: number
+  entities: IngestEntity[]
+  relations: IngestRelation[]
+}
+
+/** What the document became, counted off `chunks`. */
+export interface IngestCorpus {
+  chunks: number
+  tables: number
+  summarised: number
+  enriched: number
+  embedded: number
+}
+
+/** One chronological line of the log. */
+export interface IngestLogEntry {
+  seq: number
+  ts: string
+  kind: string
+  stage: string | null
+  message: string
+}
+
+/** Body of `GET /documents/{id}/ingest`. Mirrors `IngestProgressResponse`. */
+export interface IngestProgress {
+  document_id: number
+  filename: string
+  title: string | null
+  status: string
+  completed_stage: string | null
+  page_count: number | null
+  chunk_count: number | null
+  parse_confidence: number | null
+  workflow_id: string | null
+  error: string | null
+  created_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  stages: IngestStage[]
+  parse: IngestParse
+  corpus: IngestCorpus
+  tables: IngestTable[]
+  graph: IngestGraph
+  entries: IngestLogEntry[]
+}
+
+/**
+ * Read one document's live ingest log (`GET /documents/{id}/ingest`).
+ *
+ * A **projection**, not a stream: which stages completed is read off
+ * `documents.completed_stage` and what each produced off the `run_events` entry written
+ * in that stage's own transaction. So polling this is a replay — a browser that
+ * refreshes, reconnects, or opens the document an hour later gets the same answer, and a
+ * worker killed mid-ingest cannot make it disagree with what actually committed.
+ */
+export async function getIngestProgress(
+  documentId: number,
+  token: string | null,
+): Promise<IngestProgress> {
+  return jobsRequest<IngestProgress>(
+    `/documents/${encodeURIComponent(documentId)}/ingest`,
+    { method: 'GET' },
+    token,
+  )
+}

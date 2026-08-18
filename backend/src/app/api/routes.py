@@ -3396,3 +3396,19 @@ async def upload_document(
         doc_date=outcome.doc_date,
         detail=detail,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sub-routers (phase 4 §4.12) — endpoints that live in their own module
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# This file is past 3,300 lines, so a new surface gets its own module and is mounted
+# here rather than appended. The import is at the **bottom** and not with the others
+# because the mounted module reads ``require_auth`` and ``AuthContext`` off this one:
+# by this line both are defined, so the cycle resolves. Mounting onto ``router``
+# (rather than onto the app in ``app.main``) is what keeps the served route table
+# complete for ``tests/api/test_route_coverage.py``, which reads it from here — see
+# ``app.api.ingest_log.mount`` for why it is a merge rather than ``include_router``.
+from app.api.ingest_log import mount as _mount_ingest_log  # noqa: E402 - see above
+
+_mount_ingest_log(router)

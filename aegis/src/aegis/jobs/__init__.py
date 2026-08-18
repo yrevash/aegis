@@ -17,7 +17,14 @@ The division of labour is the point:
   queues that carry the concurrency policy, and the resume arithmetic;
   :mod:`aegis.jobs.scope` declares the one rule every activity obeys —
   :func:`~aegis.jobs.scope.tenant_activity` binds the tenant scope from the activity's
-  own typed argument and refuses to run without one.
+  own typed argument and refuses to run without one; :mod:`aegis.jobs.facts` is the
+  narrow second channel a stage handler reports *evidence* on, as opposed to the record
+  columns it returns.
+
+  ``facts`` is a separate module rather than part of the stage contract on purpose: the
+  contract is re-imported inside the orchestrator's workflow sandbox on every workflow
+  task, and a :class:`~contextvars.ContextVar` is import-time mutable state that would be
+  minted afresh each time. See that module's docstring.
 * **It also owns tenant policy, which is not execution mechanics.**
   :mod:`aegis.jobs.admission` decides whether a tenant may start another job at all —
   the concurrency cap and the budget pre-authorisation, both read from the settings
@@ -55,6 +62,7 @@ from aegis.jobs.cancel import (
     JobNotVisibleError,
     cancel_job,
 )
+from aegis.jobs.facts import collect_stage_facts, report_stage_facts
 from aegis.jobs.models import Chunk, Document, JobRun, JobStatus, TableSummary
 from aegis.jobs.scope import (
     ActivityInput,
@@ -116,10 +124,12 @@ __all__ = [
     "admit",
     "cancel_job",
     "clear_stage_handlers",
+    "collect_stage_facts",
     "max_inflight_key",
     "queue_spec",
     "register_stage_handler",
     "remaining_stages",
+    "report_stage_facts",
     "reset_activity_session_factory",
     "set_activity_session_factory",
     "stage_handler",

@@ -1,11 +1,21 @@
 'use client'
 
-import { CircleSlash, Layers, Loader2, RefreshCw, RotateCcw, XCircle } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleSlash,
+  Layers,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  XCircle,
+} from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/primitives/badge'
 import { Card } from '@/components/primitives/card'
 import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
+import { IngestLog } from '@/components/jobs/IngestLog'
 import { UploadPanel } from '@/components/jobs/UploadPanel'
 import { cancelJob, getJobs, JobsApiError, requeueJob, type JobRunRow } from '@/lib/api/jobs'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -60,10 +70,18 @@ interface JobsViewProps {
  * nobody can see is the defect the gate exists to prevent, and a banner that said
  * only "failed" would reproduce it in the browser. **Cancel** signals the
  * orchestrator and records who asked on the row.
+ *
+ * **Watch** expands the row into `IngestLog` — the live, stage-by-stage record of the
+ * document being read (§4.12). It is a projection over rows the ingest already
+ * committed, so it survives a refresh and cannot claim a stage a killed worker never
+ * finished.
  */
 export function JobsView({ token }: JobsViewProps): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [busy, setBusy] = useState<number | null>(null)
+  // Which job's ingest log is expanded. One at a time: the log polls while its document
+  // is still being read, and six open panels would be six polls saying the same thing.
+  const [openJob, setOpenJob] = useState<number | null>(null)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'refused' | 'error'; text: string } | null>(
     null,
   )
@@ -183,50 +201,72 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
                   <th className="px-4 py-2 font-medium">Cost</th>
                   <th className="px-4 py-2 font-medium">Created</th>
                   <th className="px-4 py-2 font-medium">Detail</th>
+                  <th className="px-4 py-2 font-medium">Ingest log</th>
                   <th className="px-4 py-2 text-right font-medium">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
                 {rows.map((row) => (
-                  <tr key={row.id} className="align-middle">
-                    <td className="px-4 py-2.5">
-                      <span className="font-mono text-xs text-foreground">#{row.id}</span>
-                      <span className="ml-2 text-muted-foreground">{row.job_type}</span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                      {row.completed_stage ?? '—'}
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                      ${row.cost_usd.toFixed(4)}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                      {formatTime(row.created_at)}
-                    </td>
-                    <td className="max-w-[22rem] truncate px-4 py-2.5 text-xs text-muted-foreground">
-                      {row.error ??
-                        (row.cancelled_by ? `cancelled by ${row.cancelled_by}` : row.workflow_id)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      {TERMINAL.has(row.status) ? (
-                        <RowAction
-                          icon={RotateCcw}
-                          label="Re-queue"
-                          busy={busy === row.id}
-                          onClick={() => void act(row.id, 'requeue')}
-                        />
-                      ) : (
-                        <RowAction
-                          icon={XCircle}
-                          label="Cancel"
-                          busy={busy === row.id}
-                          onClick={() => void act(row.id, 'cancel')}
-                        />
-                      )}
-                    </td>
-                  </tr>
+                  <Fragment key={row.id}>
+                    <tr className="align-middle">
+                      <td className="px-4 py-2.5">
+                        <span className="font-mono text-xs text-foreground">#{row.id}</span>
+                        <span className="ml-2 text-muted-foreground">{row.job_type}</span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
+                        {row.completed_stage ?? '—'}
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
+                        ${row.cost_usd.toFixed(4)}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        {formatTime(row.created_at)}
+                      </td>
+                      <td className="max-w-[22rem] truncate px-4 py-2.5 text-xs text-muted-foreground">
+                        {row.error ??
+                          (row.cancelled_by ? `cancelled by ${row.cancelled_by}` : row.workflow_id)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {row.document_id === null ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <RowAction
+                            icon={openJob === row.id ? ChevronDown : ChevronRight}
+                            label={openJob === row.id ? 'Hide' : 'Watch'}
+                            busy={false}
+                            onClick={() => setOpenJob(openJob === row.id ? null : row.id)}
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {TERMINAL.has(row.status) ? (
+                          <RowAction
+                            icon={RotateCcw}
+                            label="Re-queue"
+                            busy={busy === row.id}
+                            onClick={() => void act(row.id, 'requeue')}
+                          />
+                        ) : (
+                          <RowAction
+                            icon={XCircle}
+                            label="Cancel"
+                            busy={busy === row.id}
+                            onClick={() => void act(row.id, 'cancel')}
+                          />
+                        )}
+                      </td>
+                    </tr>
+                    {openJob === row.id && row.document_id !== null ? (
+                      <tr>
+                        <td colSpan={8} className="bg-surface-2/40 p-4">
+                          <IngestLog documentId={row.document_id} token={token} />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -285,7 +325,9 @@ export function JobsMount(): ReactElement {
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             Background work this tenant owns. Re-queueing passes admission control — the
             in-flight cap and the budget pre-authorisation — and a refusal is shown with the
-            reason it carried, never queued out of sight.
+            reason it carried, never queued out of sight. <strong>Watch</strong> opens the
+            live ingest log for a document: which stage is running, what each one produced,
+            the parse&rsquo;s own confidence in itself, and the graph as it is extracted.
           </p>
         </div>
         <JobsView token={session?.token ?? null} />
