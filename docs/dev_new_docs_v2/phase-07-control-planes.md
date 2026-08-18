@@ -478,6 +478,26 @@ page. Three real sources instead: `run_events` filtered (every request-path comp
 labelled **per-process and volatile**, exactly the way `latency_summary` already labels its
 window. **Say plainly on the page: this is not a log store.**
 
+### 7.10b — The cache page, rendering real numbers (0.5d)
+
+`CacheView.tsx` currently renders a **hard-coded array with no fetch**, on a screen labelled
+with a measurement. That is the exact defect class this project keeps removing.
+
+The user's requirement is explicit: *"cache should be a real thing not a gimmick… we need to use
+the cache to the fullest and show how cache is being used really in the pipeline."*
+
+**What to build:** the caches emit per-run `*_cache` events on the stream and keep no durable
+aggregate, so there is nothing to read today. `run_events` (Phase 3 §3.6) fixes that for free —
+hit rate, saved spend and per-tier breakdown become **queries over the event log**, not a new
+counter subsystem.
+
+Show the two tiers separately (exact-match and semantic), the tenant partition, and the
+`corpus_version` invalidation from Phase 4 — so a document upload visibly resets that tenant's
+hit rate rather than silently serving stale answers.
+
+**If the numbers are not measurable, show nothing.** An empty state that says "no cache activity
+recorded yet" beats a fabricated percentage.
+
 ### 7.11 — Audit filtering (0.15d)
 
 `GET /audit` (`routes.py:1090`) takes `limit`, clamped to `[1, 200]`, and nothing else.

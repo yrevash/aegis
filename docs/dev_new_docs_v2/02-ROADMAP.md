@@ -24,6 +24,7 @@ possible.
 | **6** | **Console** | Chat sessions · composer (mode · model · tools) · result tabs · live agent panel · budget pill · memory panel | Needs P4 and P5 to have something real to show. |
 | **7** | **Control planes** | Per-role dashboards · admin DB page · pipeline health · per-tenant guardrails/LLMOps/memory · reports · red-team | Needs the settings catalogue (P3) and the console shell (P6). |
 | **8** | **Modularity** | `Aegis` runtime object · `DomainAdapter` · conformance suite · `/v1` · generated clients · `AGENTS.md` | Best done after the surface stops moving. This is the thesis of the product. |
+| **10** | **MCP + skills** | Multi-tenant MCP server with per-call RBAC · MCP client · skills as data with progressive disclosure · admin MCP console | Both were deferred when timing was the constraint. It no longer is, and the user named both as major additions. |
 | **9** | **Scale + hardening** | RLS fail-closed · budget on background jobs · vector-store mode seam · connection pools · admission control | Depends on everything above existing to harden. |
 
 ---

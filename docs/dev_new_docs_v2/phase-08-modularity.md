@@ -88,8 +88,9 @@ plus a hand-written TypeScript mirror.
 | 8.9 | `PUBLIC.md`, SemVer, `CHANGELOG.md`, `deprecated()` | 0.5 |
 | 8.10 | `pdoc` reference docs, git-ignored | 0.25 |
 | 8.11 | `AGENTS.md` + one `SKILL.md` replacing `SWAP.md` | 0.5 |
+| 8.12 | **`PipelineSpec`** — one declaration per pipeline, four consumers | 0.75 |
 
-**Total: 7.0 days.**
+**Total: 7.75 days.**
 
 ### 8.3 — The `Aegis` runtime object
 
@@ -126,6 +127,27 @@ a required field, a corpus that produces no chunks.
 **It is a jury artifact, not just a dev tool.** "Here is the command an integrator runs to prove
 they wired it correctly, and here is it passing" is a stronger claim than any architecture
 diagram, and it belongs in the demo script.
+
+### 8.12 — `PipelineSpec`: one declaration, four consumers
+
+The user's requirement: *"for eg rag or agent — everything should have a proper flow pipeline
+and all components… clear docs of how each module is implemented."*
+
+**The pattern already exists and works.** `/agent/topology` serves the graph shape from the
+compiled graph, with a label tripwire and a CI snapshot test, so the console cannot draw a
+diagram that contradicts the code. Generalise it.
+
+A declared `PipelineSpec` per pipeline — **three pipelines, not sixteen**: retrieval, agent,
+ingestion. Each names its stages, the module that owns each, and what each stage emits. Then
+**four consumers read the one declaration**: the runtime (stage names on `run_events` rows), the
+API (`GET /pipelines`), the console (the Phase 7 pipeline-health page), and the docs.
+
+**Why this is here and not in Phase 7:** it is a contract, not a screen. The health page is one
+of its four consumers, and building the page against a declaration is what stops the page and
+the runtime drifting the way the hardcoded topology diagram did.
+
+**Do not rewrite `docs/teaching/`.** It is a current, accurate 16-module course. The gap is a
+machine-readable *structure*, not more prose.
 
 ### 8.11 — `AGENTS.md`, and why not `llms.txt`
 

@@ -502,6 +502,7 @@ and its error bar, not the library that printed it.
 | 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b |
 | 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
 | 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
+| 4.12b | **Graph construction visible in the ingest log** | 0.25 | Entities and relations as they are extracted — the user asked to see the KG being built, not just its result |
 | 4.13 | Scheduled re-index on the P3 scheduler | 0.25 | Direct requirement — see the task |
 | 4.14 | Verbatim citation verification | 0.15 | ~40 lines, reuses 4.11's primitive |
 
