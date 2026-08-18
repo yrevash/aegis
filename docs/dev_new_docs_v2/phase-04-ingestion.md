@@ -610,9 +610,30 @@ to D2's half-configured heading hierarchy, which yields a plausible-looking `{1:
 
 You cannot prevent this. You detect it, at parse time, and record it on the document:
 
+> **REDESIGNED [MEASURED] 2026-08-18, task 4.0.** The original design leaned on the heading
+> histogram to catch D2's half-configured case. **It cannot.** On `docling==2.120.3`,
+> enabling `heading_hierarchy` alone no longer yields an obviously flat tree — it yields
+> `{1: 13, 2: 12, 3: 8}`, a *plausible* three-level tree with eleven headings at the wrong
+> depth. No histogram check can tell that apart from a correct one, because it is
+> well-shaped and wrong. **The only defence against that case is setting both switches**,
+> which `convert.py` now does and asserts.
+>
+> The histogram still earns its place against the *flat* case (`{1: 33}` on defaults), which
+> is a real failure mode if the configuration is ever regressed. It is simply not the
+> defence for the half-configured one, and this table no longer claims it is.
+>
+> Two further parse-side defects were found by reading real chunks, and both are **fixed**
+> rather than gated (fixing beats detecting when the cause is knowable): Docling's layout
+> model collapsed `3.2 Attention` and `3.2.1 Scaled Dot-Product Attention` to one level, so
+> the deeper heading popped its own parent and the path lost a rung — depth now comes from
+> the author's own section numbering where a heading carries one. And a table's caption was
+> emitted **twice**, standalone and again at the head of the table's Markdown, putting one
+> fact in two chunks; the standalone copy is now dropped when an adjacent table already
+> carries it, keeping the table self-describing.
+
 | Signal | What it catches |
 |---|---|
-| **Heading-level histogram** | Everything at level 1 across a long structured document — D2's silent partial failure |
+| **Heading-level histogram** | The **flat** case only — everything at level 1 across a long structured document. Explicitly *not* the half-configured case; see the correction above |
 | **Text-layer cross-check** | Independently extract the raw text layer and compare *ordering* against Docling's output. Column interleaving scrambles order while keeping token overlap high, so ordering is the signal, not overlap |
 | **Fragment rate** | Chunks ending mid-clause spike when columns interleave |
 
@@ -691,6 +712,21 @@ reranking — a retrieval stage that quietly stops running is exactly the class 
 1 and 2 spent their time removing.
 
 ### D7 — Enrich the chunk prefix: document title · type · date · heading path
+
+> **CORRECTION [MEASURED] 2026-08-18, task 4.4.** This decision says the four fields "are
+> already on the `documents` row". **Two thirds of that is false.** `documents` carries
+> `filename`, `mime_type`, `content_sha256`, `size_bytes` and `created_at` — **no title, no
+> document type, no document date.** `mime_type` is `application/pdf` for the entire corpus
+> so it discriminates nothing, and `created_at` is when somebody uploaded the file, not when
+> the document is from — using it would stamp every chunk of a 2019 contract with 2026.
+>
+> **Title** is therefore derived from the parse (the document's first heading, which on all
+> four fixtures is the real printed title), falling back to the filename stem.
+> **Type and date must be supplied by the tenant at upload — that is now task 4.5's scope**,
+> and it is the only task that can honestly know them. Until it does they degrade to
+> `untyped`/`undated` placeholders rather than to a confident wrong constant.
+>
+> The "zero model-call cost" claim survives intact: these are still metadata, not inference.
 
 Deterministic. Zero model calls.
 
@@ -820,14 +856,14 @@ and its error bar, not the library that printed it.
 | 4.2 | ✅ Text-layer probe + header/footer/page-number stripping | 0.25 | Done 2026-08-18. The stripper is a **backstop** on these fixtures — see §4.0 |
 | 4.3 | ✅ `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | **Landed 2026-08-18.** The chunker survived intact: `_pack_units` gained the unit indices a chunk needs to find its blocks again, and nothing else moved. Page and bbox thread through, including for the words carried in an overlap tail |
 | 4.4 | ✅ Enriched prefix: title · type · date · heading path | 0.15 | **Landed 2026-08-18** with 4.3. Highest quality-per-hour in the phase. A field the document does not carry renders as a placeholder (`untitled` · `untyped` · `undated` · `unsectioned`) rather than collapsing — the prefix is embedded, so its *shape* must not vary across a corpus |
-| 4.5 | Upload route + **stage handlers on the P3 workflow** | 0.4 | `documents` already exists (P3). No queue machinery — the stages are activities |
+| 4.5 | Upload route + **stage handlers on the P3 workflow**, **and `documents.title`/`doc_type`/`doc_date`** | 0.55 | `documents` already exists (P3). No queue machinery — the stages are activities. **Owns the three prefix fields D7 wrongly assumed existed** — see the correction under D7 |
 | 4.6 | ✅ **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change. **Landed 2026-08-18** |
 | 4.6b | ✅ **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm was fail-open; shipped with 4.6. **Landed 2026-08-18** |
 | 4.6c | **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out |
 | 4.7 | ✅ **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. D5 — **Landed 2026-08-18**; two corrections, see D5 |
 | 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
 | 4.9 | **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest |
-| 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b |
+| 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b. Duplicated table captions are already fixed in `convert.py`, so summaries are written over text that does not repeat itself |
 | 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
 | 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
 | 4.12b | **Graph construction visible in the ingest log** | 0.25 | Entities and relations as they are extracted — the user asked to see the KG being built, not just its result |

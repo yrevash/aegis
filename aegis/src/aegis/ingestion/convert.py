@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from importlib import metadata
@@ -357,6 +358,45 @@ def _text_of(item: Any, document: Any, label: str) -> tuple[str, tuple[int, int]
     return str(getattr(item, "text", "") or "").strip(), None
 
 
+#: A heading opening with a dotted section number states its own depth. Matched against
+#: the heading text because the author's numbering is better evidence than an inference
+#: from font size — see :func:`_heading_level`.
+_SECTION_NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S")
+
+#: Depth past which numbering is not believed. HiChunk finds hierarchy gains minimal
+#: beyond level three, and a numbering-like run ("1.2.3.4.5.6 Notes") would otherwise
+#: nest a heading deeper than any real document does.
+_MAX_HEADING_DEPTH = 6
+
+
+def _heading_level(text: str, model_level: Any) -> int:  # noqa: ANN401 - Docling's own value
+    """Return a heading's depth, preferring the document's own numbering.
+
+    Docling's layout model infers a level from font and layout evidence, and on real
+    documents it collapses depths the *numbering* distinguishes. Measured on
+    ``transformer-single-column.pdf``: "3.2 Attention" and "3.2.1 Scaled Dot-Product
+    Attention" arrive at the same level, so the deeper heading pops its own parent and
+    the path loses a rung — chunks read ``3 Model Architecture > 3.2.1 …``. That path is
+    not wrong so much as *missing*, which is worse, because nothing downstream can see
+    that a level went absent.
+
+    Where a heading opens with a dotted section number, that number is the author's own
+    statement of depth: counting its components is exact where the model is approximate.
+    Headings without one fall back to the model's level, which is what it is good at.
+
+    Args:
+        text: The heading text, numbering included.
+        model_level: Docling's inferred level; ``0`` or ``None`` when it has none.
+
+    Returns:
+        A depth of at least 1, capped at :data:`_MAX_HEADING_DEPTH`.
+    """
+    match = _SECTION_NUMBER.match(text.strip())
+    if match is not None:
+        return min(len(match.group(1).split(".")), _MAX_HEADING_DEPTH)
+    return int(model_level or 0) or 1
+
+
 def _blocks_from(document: Any, page_heights: dict[int, float]) -> tuple[ParsedBlock, ...]:  # noqa: ANN401
     """Walk the Docling tree in reading order and build our blocks.
 
@@ -388,7 +428,7 @@ def _blocks_from(document: Any, page_heights: dict[int, float]) -> tuple[ParsedB
             continue
         level: int | None = None
         if kind is BlockKind.HEADING:
-            level = int(getattr(item, "level", 0) or 0) or 1
+            level = _heading_level(text, getattr(item, "level", 0))
             while stack and stack[-1][0] >= level:
                 stack.pop()
         blocks.append(
@@ -404,7 +444,52 @@ def _blocks_from(document: Any, page_heights: dict[int, float]) -> tuple[ParsedB
         )
         if level is not None:
             stack.append((level, text))
-    return tuple(blocks)
+    return tuple(_drop_duplicated_captions(blocks))
+
+
+def _drop_duplicated_captions(blocks: list[ParsedBlock]) -> list[ParsedBlock]:
+    """Drop a standalone caption whose text a neighbouring table already carries.
+
+    Docling's Markdown export of a table **opens with that table's caption**, and the
+    caption is *also* emitted as its own ``CAPTION`` item. Measured on
+    ``transformer-single-column.pdf``: the same caption text exists twice in the parse
+    and lands in two different chunks. Neither chunk is wrong about its box — this is a
+    duplication in the source, not a chunking bug — but a corpus that holds every table
+    caption twice hands the lexical arm two hits for one fact, and 4.10's table summaries
+    would be written over text that repeats itself.
+
+    The table's copy is the one kept: a table block that opens with its own caption is
+    self-describing, which is what makes it retrievable on its own terms. The standalone
+    caption adds nothing the table does not already say.
+
+    Only an *adjacent* caption is dropped — a caption is matched against the table it sits
+    beside, never against any table in the document, because two tables in one paper
+    legitimately share a caption prefix ("Table 1:" / "Table 2:") and a document-wide
+    match would delete a real block.
+
+    Args:
+        blocks: The blocks in reading order.
+
+    Returns:
+        The blocks, with duplicated standalone captions removed.
+    """
+    drop: set[int] = set()
+    for index, block in enumerate(blocks):
+        if block.kind is not BlockKind.CAPTION:
+            continue
+        caption = " ".join(block.text.split()).casefold()
+        if not caption:
+            continue
+        for neighbour in (index - 1, index + 1):
+            if not 0 <= neighbour < len(blocks):
+                continue
+            other = blocks[neighbour]
+            if other.kind is BlockKind.TABLE and caption in " ".join(
+                other.text.split()
+            ).casefold():
+                drop.add(index)
+                break
+    return [block for index, block in enumerate(blocks) if index not in drop]
 
 
 def parse_pdf(
