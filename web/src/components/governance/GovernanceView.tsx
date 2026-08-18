@@ -6,6 +6,7 @@ import {
   Loader2,
   PhoneCall,
   ScrollText,
+  ShieldCheck,
   Sigma,
   Users,
 } from 'lucide-react'
@@ -18,6 +19,7 @@ import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { getGovernanceDashboard } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { adminScopeCaption, isPlatformAdmin } from '@/lib/auth/tier'
 import type { BudgetStatusRow, GovernanceDashboardResponse } from '@/lib/api/platform'
 
 // ── formatting helpers ───────────────────────────────────────────────────────
@@ -180,10 +182,19 @@ function GovernanceView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div>
-        <p className="eyebrow mb-1">tenants · budgets</p>
-        <h1 className="t-hero text-foreground">Governance</h1>
+      {/* Section header — the scope caption is driven by the session's fine tier
+          (`fine_role`), because the backend pins a tenant admin to its own tenant:
+          captioning both tiers the same would show one tenant's rows as the
+          platform's. */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="eyebrow mb-1">tenants · budgets</p>
+          <h1 className="t-hero text-foreground">Governance</h1>
+        </div>
+        <Badge tone={isPlatformAdmin(session) ? 'ml' : 'neutral'} className="gap-1.5">
+          <ShieldCheck className="size-3" />
+          {adminScopeCaption(session)}
+        </Badge>
       </div>
 
       {error ? (

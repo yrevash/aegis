@@ -441,6 +441,7 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     # ``app.data.models`` shims) and register on ``aegis.data.AegisBase`` — a separate
     # metadata from the platform's ``app.data`` Base — so both must be created.
     import aegis.governance.models  # noqa: F401,PLC0415 - registration side-effect only
+    import aegis.jobs.models  # noqa: F401,PLC0415 - registration side-effect only
     import aegis.ops.models  # noqa: F401,PLC0415 - registration side-effect only
     from aegis.data import AegisBase  # noqa: PLC0415 - local to avoid an import-time dep
 

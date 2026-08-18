@@ -1,5 +1,9 @@
 # INSTALL.md — Setup & Run Guide
 
+> **Setting up the hackathon machine?** Follow [`docs/install/`](docs/install/) instead — a
+> four-step runbook with the exact commands, the checks after each one, and the three
+> measurements Phase 3 still needs from that box. This file remains the general reference.
+
 > **Bare Windows machine?** `scripts\install-windows.ps1` (elevated) does the whole
 > setup — toolchain, the four native stores, then the app dependencies. Add
 > `-SkipStores` if you only intend to run `-Mode lite`.

@@ -10,6 +10,7 @@ import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { adminScopeCaption } from '@/lib/auth/tier'
 import { cn } from '@/lib/utils'
 import type { AdminUser } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
@@ -131,6 +132,10 @@ export function RolesAccess({ token }: { token: string | null }): ReactElement {
         <KeyRound className="size-4 text-agent" />
         <CardTitle>Roles &amp; Access</CardTitle>
         <Badge variant="secondary">RBAC</Badge>
+        {/* `GET /admin/users` is tenant-scoped server-side (`_scope_tenant`), so a
+            tenant admin's roster is a subset. The caption is driven by the session's
+            fine tier so the page never presents one tenant's users as everyone. */}
+        <Badge variant="outline">{adminScopeCaption(session)}</Badge>
         <InfoTip label="Why this matters">
           Why this matters: in an enterprise the admin&apos;s real power is delegation. Each team should
           see only its own portal — build, ops, or outcomes — never the whole platform. This is where

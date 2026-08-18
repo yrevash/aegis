@@ -55,6 +55,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 # would simply not exist and the failure would surface as a confusing UndefinedTable in
 # an unrelated test.
 import aegis.governance.models  # noqa: F401 - registration side-effect only
+import aegis.jobs.models  # noqa: F401 - registration side-effect only
 import aegis.memory.stores  # noqa: F401 - registration side-effect only
 import aegis.ops.models  # noqa: F401 - registration side-effect only
 from aegis.data import AegisBase

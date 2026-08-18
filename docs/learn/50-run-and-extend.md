@@ -193,7 +193,7 @@ password **`demo`** (`_DEMO_USERS` in `backend/src/app/api/routes.py`):
 | `admin` | `admin` → `/app/admin/dashboard` | `operations_lead` |
 | `ai` or `aiteam` | `ai_team` → `/app/ai_team/console` | `operations_lead` |
 | `devops` | `devops` → `/app/devops/dashboard` | `operations_lead` |
-| `client` | `client` → `/app/client/dashboard` | `client` |
+| `client` | `client` → `/app/client/console` | `client` |
 
 The demo table is dev-only: it is skipped entirely when `APP_ENV != dev`, and a real
 `users` row always wins for that username. A real deployment seeds `users` with

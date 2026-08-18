@@ -191,6 +191,9 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         # aegis.ops.models
         "eval_results",
         "prompt_versions",
+        # aegis.jobs.models
+        "documents",
+        "job_runs",
         # host-owned
         "approvals",
     }

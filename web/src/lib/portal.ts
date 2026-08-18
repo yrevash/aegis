@@ -274,12 +274,21 @@ export const SECTIONS: Record<string, Section> = {
   },
 }
 
-/** Which sections each role's portal exposes, in nav order (RBAC). */
+/**
+ * Which sections each role's portal exposes, in nav order (RBAC).
+ *
+ * `console` leads the client portal: the client is the role the product exists
+ * for, and without it the tenant end-user has every read-only report and no way
+ * to ask a question. `POST /query` has always admitted every authenticated role
+ * (`require_auth`); only this catalogue withheld the surface. The route-coverage
+ * test in `backend/tests/api/test_route_coverage.py` is what stops it being
+ * dropped again.
+ */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
   admin: ['dashboard', 'forecast', 'governance', 'audit', 'roles'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'voice', 'vision', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit'],
-  client: ['dashboard', 'savings', 'forecast', 'risk', 'simulation'],
+  client: ['console', 'dashboard', 'savings', 'forecast', 'risk', 'simulation'],
 }
 
 /** Section definitions for a role's portal, in nav order. */

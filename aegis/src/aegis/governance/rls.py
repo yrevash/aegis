@@ -116,6 +116,9 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     # aegis.ops.models — the LLM-Ops eval results and prompt registry
     "eval_results",
     "prompt_versions",
+    # aegis.jobs.models — the durable job substrate's system of record
+    "documents",
+    "job_runs",
     # host-owned (app.data.models) — the durable agent approvals inbox
     "approvals",
 )

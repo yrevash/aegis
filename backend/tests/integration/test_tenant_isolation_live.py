@@ -58,6 +58,7 @@ from datetime import UTC, datetime
 # exactly as ``app.data.session.bootstrap`` does — the scratch schema has to be the
 # schema the application actually runs on, or the sweep would silently skip tables.
 import aegis.governance.models  # noqa: F401 - registration side-effect only
+import aegis.jobs.models  # noqa: F401 - registration side-effect only
 import aegis.ops.models  # noqa: F401 - registration side-effect only
 import pytest
 from aegis.data import AegisBase

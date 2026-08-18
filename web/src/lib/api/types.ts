@@ -14,15 +14,30 @@ export interface LoginRequest {
 }
 
 /**
+ * The fine RBAC tier the backend derives from the coarse role + tenancy
+ * (`aegis.governance.security.principal_role`). `role` collapses both admin tiers
+ * to `admin`; this is the value that tells them apart. Non-admin roles are their
+ * own tier, so this is a superset of `Role`.
+ */
+export type FineRole = 'platform_admin' | 'tenant_admin' | 'ai_team' | 'devops' | 'client'
+
+/**
  * Response from `POST /auth/login`. `token` is now a signed JWT (stored and sent
  * as a Bearer token); `role` scopes the served portal and `tenant_id` pins the
  * session to its tenant for multi-tenant governance.
+ *
+ * `fine_role` is the admin sub-tier — without it the browser cannot tell a
+ * platform admin (every tenant) from a tenant admin (pinned to one), so a
+ * tenant admin's own-tenant-only governance view renders as if it were the whole
+ * platform.
  */
 export interface LoginResponse {
   token: string
   role: Role
   /** The tenant this session belongs to, or null (platform scope). */
   tenant_id: number | null
+  /** Fine RBAC tier — `platform_admin` / `tenant_admin` for an admin. */
+  fine_role: FineRole
 }
 
 /** Body for `POST /query` (the response is the SSE stream, not JSON). */

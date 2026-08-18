@@ -309,7 +309,8 @@ exists to keep workflow definitions away from the modules that do `asyncio.run()
 
 **Dev server RSS: 135 MB** on macOS (123 MB previously measured on the same class of machine).
 
-**Still outstanding — the Windows leg**, which cannot be run from here:
+**Still outstanding — the Windows leg**, which cannot be run from here. The runbook for it is
+[`docs/install/04-verify.md`](../install/04-verify.md):
 
 - Total RSS with Postgres 17 + Neo4j Desktop + Memurai + Temporal all running.
 - The same kill test on Windows, confirming behaviour parity.

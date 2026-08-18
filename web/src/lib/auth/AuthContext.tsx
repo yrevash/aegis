@@ -28,6 +28,7 @@ import {
 
 import { login as apiLogin } from '@/lib/api/client'
 import { setAuthToken } from '@/lib/api/authToken'
+import type { FineRole } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 
 /** The current session, or null when signed out. */
@@ -37,6 +38,23 @@ export interface Session {
   username: string
   /** Tenant this session is scoped to, or null (platform scope). */
   tenantId: number | null
+  /**
+   * The fine RBAC tier from `POST /auth/login` — the only thing that separates a
+   * platform admin (every tenant) from a tenant admin (pinned to one). `role` is
+   * `admin` for both.
+   */
+  fineRole: FineRole
+}
+
+/**
+ * The fine tier to assume when a persisted session predates `fine_role` (a
+ * localStorage session written by an older build). It fails **closed**: an admin
+ * is treated as the narrower `tenant_admin`, so a stale session can never grant
+ * platform-wide affordances it was never issued. The next sign-in carries the
+ * real tier.
+ */
+function fallbackFineRole(role: Role): FineRole {
+  return role === 'admin' ? 'tenant_admin' : role
 }
 
 interface AuthContextValue {
@@ -54,7 +72,13 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 function readStoredSession(): Session | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as Session) : null
+    if (!raw) return null
+    const stored = JSON.parse(raw) as Partial<Session> & Pick<Session, 'role' | 'token' | 'username'>
+    return {
+      ...stored,
+      tenantId: stored.tenantId ?? null,
+      fineRole: stored.fineRole ?? fallbackFineRole(stored.role),
+    }
   } catch {
     return null
   }
@@ -74,8 +98,8 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   }, [])
 
   const signIn = useCallback(async (username: string, password: string): Promise<Session> => {
-    const { role, token, tenant_id } = await apiLogin({ username, password })
-    const next: Session = { role, token, username, tenantId: tenant_id }
+    const { role, token, tenant_id, fine_role } = await apiLogin({ username, password })
+    const next: Session = { role, token, username, tenantId: tenant_id, fineRole: fine_role }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
     } catch {
