@@ -269,36 +269,54 @@ orchestrates differently, and it is what makes the fallback substrate a drop-in 
 
 ---
 
-### 3.0 — The spike, on the actual Windows box (0.25d)
+### 3.0 — The spike — **DONE on macOS 2026-08-18; Windows leg outstanding**
 
-Everything measured so far was on macOS. **Do this first and do not skip it.**
+Run rather than argued. Temporal CLI **1.8.2 (Server 1.31.2, UI 2.50.1)** — the identical
+version already verified on the target Windows box — and `temporalio` **1.31.0** installed into
+`backend/.venv` as the `jobs` extra: **+3 packages** (`temporalio`, `nexus-rpc`,
+`types-protobuf`), and **both suites still pass** (685 backend / 1270 aegis).
 
-```powershell
-# 1. Install — no installer, no dependencies
-Invoke-WebRequest -Uri "https://temporal.download/cli/archive/latest?platform=windows&arch=amd64" -OutFile temporal.zip
-Expand-Archive temporal.zip -DestinationPath C:\temporal
+**Resumability — measured, not assumed.** A workflow with our six real stage names, worker
+hard-killed (`SIGKILL`) while `embed` was in flight, then a fresh worker process started:
 
-# 2. Start alongside everything else already running
-C:\temporal\temporal.exe server start-dev --db-filename C:\temporal\dev.db --ui-port 8233
+```
+parse    pid=8377        ### HARD-KILL
+chunk    pid=8377        embed    pid=8610   ← replayed: it never completed
+enrich   pid=8377        index    pid=8610
+embed    pid=8377        graph    pid=8610
+
+stages that re-ran after the kill: ['embed']   ← only the in-flight one
 ```
 
-**Four things to establish, and write the numbers down:**
+`parse`, `chunk` and `enrich` **did not re-run**. That is the resumability claim, proved.
 
-1. **Total RSS** with Postgres + Neo4j Desktop + Memurai + Temporal all running. The box has
-   16 GB and Neo4j is not small.
-2. **The architecture.** `python -c "import platform; print(platform.machine())"` — there is
-   **no `win_arm64` wheel** for `temporalio`. If this says ARM, stop and use the fallback.
-3. **The sandbox import trap, deliberately.** Define a workflow in a module that imports
-   something side-effectful and confirm it fails validation; then confirm the import-safe layout
-   works. This is a known ergonomic tax and it costs an hour now or a day in Phase 4.
-4. **A kill test.** One workflow, five activities, hard-kill the worker mid-run, restart, confirm
-   completed stages do not re-run.
+**And it is the empirical case for task 3.3.** The in-flight activity *did* replay — so an
+activity that is not idempotent will double-write on every crash. This is not a theoretical
+requirement.
 
-**Exit criteria:** all four answered, numbers recorded in the PR description. If the spike fails,
-the fallback is the hand-rolled `jobs` substrate specified in this file's git history — it is
-fully written and remains buildable.
+**The sandbox trap, characterised precisely.** The prior research reported "side effects at
+import fail validation". That is too broad, and the correct boundary matters because it decides
+the module layout:
 
----
+| At import time | Result |
+|---|---|
+| `time.time()`, `os.environ.get(...)` | **accepted** |
+| `asyncio.run(...)` | **REJECTED** — `RuntimeError: Failed validating workflow` |
+
+So the rule is narrower and sharper than "keep it pure": **a workflow module must not run an
+event loop at import.** Ordinary module-level constants are fine. `backend/src/app/jobs/flows/`
+exists to keep workflow definitions away from the modules that do `asyncio.run()` at import.
+
+**Dev server RSS: 135 MB** on macOS (123 MB previously measured on the same class of machine).
+
+**Still outstanding — the Windows leg**, which cannot be run from here:
+
+- Total RSS with Postgres 17 + Neo4j Desktop + Memurai + Temporal all running.
+- The same kill test on Windows, confirming behaviour parity.
+- `.\scripts\db-roles.ps1` after installing Postgres, or the app connects as superuser and **all
+  13 RLS policies are inert** — the exact defect Phase 1 fixed.
+
+Install order on the box: **Postgres → `db-roles.ps1` → Memurai → Neo4j → Temporal.**
 
 ### 3.1 — The record tables (0.75d)
 

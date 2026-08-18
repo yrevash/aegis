@@ -709,7 +709,15 @@ async def login(req: LoginRequest) -> LoginResponse:
         ctx.username,
         payload={"role": ctx.fine_role, "tenant_id": ctx.tenant_id},
     )
-    return LoginResponse(role=ctx.role, token=token, tenant_id=ctx.tenant_id)
+    # ``fine_role`` is echoed from the principal (the same value ``_mint_token`` puts
+    # on the JWT), never re-derived here — a second derivation is a second chance to
+    # disagree with the token the browser will send back.
+    return LoginResponse(
+        role=ctx.role,
+        token=token,
+        tenant_id=ctx.tenant_id,
+        fine_role=ctx.fine_role,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -46,6 +46,20 @@ auth = [
     "pyjwt>=2.9",
     "argon2-cffi>=23.1",
 ]
+# Durable orchestration for multi-stage background work (Phase 3). Temporal owns
+# *execution* state - retries, timers, stage resumability, cancellation - while the
+# tenant-scoped ``job_runs``/``documents`` tables stay the system of record, so RLS
+# still protects every row a tenant can see. Chosen over procrastinate/pgqueuer/DBOS/
+# SAQ because none of them carries a ``tenant_id``: ``rls.py`` skips a table with no
+# tenant column *before* recording a gap, so their tables would be invisible to the
+# very diagnostic built to catch ungoverned tables.
+#
+# Floor at 1.18: ``WorkflowEnvironment.start_time_skipping`` and the sandbox
+# restrictions the workflow code relies on are stable from there. Capped <2 so a major
+# release cannot land unreviewed - the SDK's sandbox semantics are load-bearing here.
+jobs = [
+    "temporalio>=1.18,<2",
+]
 observability = [
     "opentelemetry-sdk>=1.27",
     "opentelemetry-api>=1.27",

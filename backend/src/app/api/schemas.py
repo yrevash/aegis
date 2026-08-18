@@ -514,15 +514,31 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Response for `POST /auth/login` — the role, tenant and bearer (JWT) token.
+    """Response for `POST /auth/login` — the role, tier, tenant and bearer (JWT) token.
 
     ``tenant_id`` is additive (optional) so the demo/global principals that carry no
     tenant still serialise; the frontend reads it to scope tenant-admin surfaces.
+
+    ``fine_role`` is the §3.3 admin sub-tier — ``platform_admin`` (global operator,
+    every tenant) or ``tenant_admin`` (pinned to one tenant) — or, for a non-admin,
+    the role's own string. ``role`` alone collapses both admin tiers to ``admin``, so
+    without this the browser cannot tell a platform operator from a tenant operator
+    and renders a tenant admin's own-tenant-only view as if it were the whole
+    platform. It is the value :func:`aegis.governance.security.principal_role`
+    already derives for the JWT, echoed rather than re-derived, so the wire and the
+    token can never disagree.
     """
 
     role: Role
     token: str
     tenant_id: int | None = None
+    fine_role: str = Field(
+        default=Role.CLIENT.value,
+        description=(
+            "Fine RBAC tier: 'platform_admin' / 'tenant_admin' for an admin, else "
+            "the coarse role's own string."
+        ),
+    )
 
 
 class QueryRequest(BaseModel):
