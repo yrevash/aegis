@@ -1,5 +1,67 @@
 # Phase 6 — The unified console
 
+> ## Amendments of 2026-08-19 — four premises are now stale
+>
+> This phase was written before Phases 3, 4 and 5 landed. The body is still right about the
+> shape; four of its constraints are not. **This block is the authority where they disagree.**
+>
+> ### A. Per-tenant and per-user defaults are no longer blocked
+>
+> The body defers persisting model defaults because *"that needs the `tenant_settings`
+> table"*. **That table shipped in Phase 3 as `settings`**, and two of the keys the composer
+> needs are already declared in the catalogue:
+>
+> | Key | Default | Writable by | Merge |
+> |---|---|---|---|
+> | `agent.model` | `"default"` | every role | `OVERRIDE` |
+> | `agent.mode` | `"standard"` | every role | `OVERRIDE`, choices `fast/standard/team` |
+>
+> So the composer's Mode and Model controls **persist through the existing resolver**
+> (`platform → tenant → user`, `resolve()` returning `(value, source)`) rather than living in
+> component state. `OVERRIDE` is the right rule for both — a preference is not a cap, and the
+> user is meant to win. Contrast `jobs.max_inflight.*`, which is `TIGHTEN_ONLY` precisely
+> because it *is* a cap.
+>
+> **The composer must show `source`.** The resolver already returns it, and "Team (your
+> setting)" versus "Team (your tenant's default)" is the difference between a control a user
+> trusts and one they poke at.
+>
+> ### B. Team width is the user's decision, not a platform cap
+>
+> The body describes Team as *"force `TEAM` at the platform-capped width"*. **Phase 5
+> Amendment A overrules that.** The classifier decides only in Auto; an explicit width is the
+> user's choice and the platform does not second-guess someone spending their own budget.
+>
+> The only thing that may refuse a run is the **tenant's own budget**, enforced where every
+> other spend is — and that is the tenant admin's cap, not our opinion. We optimise
+> supply-side instead: the answer cache, cheap models for agents that do not reason, and one
+> shared retrieval pool per run.
+>
+> **Copy ChatGPT's honest touch here:** automatic escalation does not consume quota the way
+> manually choosing the expensive path does. If Auto escalates to TEAM, say so in the routing
+> event — the user did not ask for the cost.
+>
+> ### C. The sources tab can now be real, and citations verifiable
+>
+> Phase 4 shipped `documents` and `chunks`, every chunk carrying **page number and bounding
+> box**, and task 4.14 adds verbatim span verification. So the result tabs are no longer
+> rendering a promise: a citation can name its page, and the span check means the console can
+> show *"this text is verbatim in the source"* rather than *"the model said so"*.
+>
+> That is the strongest thing this phase can put in front of a jury, and it did not exist when
+> the body was written.
+>
+> ### D. New endpoints go in a new router module
+>
+> The four missing endpoints (`/models`, `/sessions`, `/attachments`, `/me/budget`) are still
+> missing. **Do not append them to `backend/src/app/api/routes.py`** — it is past 3,300 lines
+> and is the file every other phase also has to touch. A new `api/routes_console.py` included
+> once by the app keeps the merge surface to a single line.
+>
+> `GET /models` remains a projection over `routing_table()`, not a subsystem. Every route must
+> be reachable from a real portal — `test_route_coverage.py` passes with **no allowlist
+> entry**, the standard Phase 3 set and Phase 4 held to.
+
 **After phases 3, 4 and 5 — this is what makes them visible.**
 
 Building it earlier means building it twice: the events it renders do not exist until Phase 5,
