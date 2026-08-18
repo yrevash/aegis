@@ -203,6 +203,9 @@ either `pyproject.toml` and no `tavily` reference anywhere in `aegis/src`, `back
 | **Now** | Per-agent timeout as a *designed* terminal state. |
 | **Now** | Tavily behind a seam, cached in Memurai. |
 | **Now** | `GuardStage.TOOL_RESULT`. |
+| **Now** | A circuit breaker over the existing gateway fallback, **visible** and **bounded by the tenant's tier** (§5.8). |
+| **Now** | A per-agent harness record, sub-agent prompts in the LLM-Ops registry, and the user's memory in sub-agent context (§5.9). |
+| **Now** | The user's explicit width is honoured; the classifier decides **only in Auto** (Amendment A). |
 | **Already done, in Phase 3** | The durable `run_events` log itself — table, partitioning, RLS, the `runs` header, and the sink at the `emit()` seam (§3.6). This phase **fills its `agent_id` column**; it does not build it, and it must not build a parallel one. |
 | **Waits** | Replay mode. The events are durable from Phase 3, so replay is a Phase 6 read surface (`GET /runs/{id}/events` re-streamed through the same reducer), not new machinery. It is the best demo insurance in the plan. |
 | **Waits** | The console rendering of any of this. Phase 6. Agree the event shape with it **before** starting 5.4. |
@@ -219,6 +222,21 @@ Task 5.6's roster entries are what shrink.
 ---
 
 ## Tasks
+
+| # | Task | Days | Note |
+|---|---|---|---|
+| 5.1 | Depth classifier **+ the override seam** | 0.5 | Do this first. Defaults SINGLE on every failure path; the seam is what Phase 6's mode control writes to |
+| 5.2 | One sub-agent, one bounded loop | 0.75 | Allowlist ∩ persona through the *same* `is_allowed`. Never raises. Write the gate test on day one |
+| 5.3 | The fan-out node | 0.5 | `return_exceptions=True` always; one summed delta; the `qa` path stays byte-identical |
+| 5.4 | `agent_id` on every event | 0.25 | Fills the `run_events` column Phase 3 built. No parallel log |
+| 5.5 | Synthesis + timeout as a designed state | 0.25 | Names contributing **and omitted** agents |
+| 5.6 | Tavily behind a seam, cached | 0.5 | The key in `backend/.env` is spelled wrong — that is why search has never worked |
+| 5.7 | `GuardStage.TOOL_RESULT` | 0.25 | Tool output passes a rail **before** it reaches any agent's context |
+| **5.8** | **Fallback that survives a fan-out** | 0.4 | Circuit breaker + visible + tier-bounded. Extends the gateway's existing chains; builds no second mechanism |
+| **5.9** | **A real harness for every agent** | 0.5 | Per-agent trace, sub-agent `prompt_key`s, user memory in context. Extends `harness.py` and `ops/`; rebuilds neither |
+
+**Total: ~3.9 days.**
+
 
 ### 5.1 — The depth classifier (0.5d) — **do this first**
 
@@ -496,6 +514,102 @@ things this phase adds to the security story. It is also 0.25 days.
 
 ---
 
+### 5.8 — Fallback that survives a fan-out (0.4d)
+
+**Do not build a second fallback mechanism.** `aegis/src/aegis/gateway/llm.py` already has
+per-role chains (`_DEFAULT_ROLE_FALLBACKS`, `_effective_fallbacks()`, overridable via
+`configure(fallbacks=...)`) routed through LiteLLM. This task adds only the three things a
+fan-out needs and a single agent did not.
+
+**1. A circuit breaker, because a dead provider now costs N timeouts, not one.**
+
+With one agent, a down deployment costs one timeout and the chain moves on. With four
+concurrent agents, all four independently discover it is down and each pays the full
+timeout — the failure gets *more* expensive exactly when the system is already degraded.
+
+Track consecutive failures per deployment id. Past a threshold, mark it degraded and skip it
+for a cooldown; a single probe request re-opens it. Keep the state in-process and per-worker
+— a shared breaker is a distributed-systems problem this phase does not need, and a stale
+shared "down" flag is worse than a local one that re-probes.
+
+**2. The fallback must be visible.**
+
+Emit an event carrying the role, the deployment that failed, the one taken instead, and the
+reason; log at ERROR. A silent downgrade is the same defect class as a governance hook that
+skips the database when no context is bound, and as a reranker that quietly stops reranking:
+the system keeps answering and nobody learns the answer got worse.
+
+**3. Fallback must not escape the tenant's model allowlist.**
+
+The `/v1` model resolution and `routing_table()` decide what a tenant's tier may reach. A
+tenant entitled to `CHEAP` being silently served `GENERATION` because the cheap deployment
+was down is **a spend decision taken on their behalf**, and it lands in `usage_ledger` as
+their money. Bound the chain by the tier. When every model in tier is unavailable, the run
+**fails loudly** rather than succeeding expensively.
+
+**Tests required:**
+
+- A deployment that fails N times in a row is skipped on the next call, and a probe re-opens
+  it. Assert on which deployment was *called*, not on a log line.
+- A fallback emits its event and logs at ERROR — a fallback nobody can see is the defect.
+- A tier-bounded chain refuses to promote: a `CHEAP`-only tenant whose cheap deployment is
+  down gets a loud failure, **not** a `GENERATION` call. Assert the expensive deployment was
+  never called.
+- One sub-agent's model failure does not cancel its siblings (this is `return_exceptions`
+  from 5.3, asserted here against a real failing deployment rather than a synthetic raise).
+
+---
+
+### 5.9 — A real harness for every agent, and prompts that improve through the gate (0.5d)
+
+Both surfaces exist. **Neither is to be rebuilt**, and a second copy of either is the
+failure this task exists to prevent.
+
+**What exists:** `aegis/src/aegis/agent/harness.py` — `harness_config()` reflects every
+`AgentConfig` knob as a typed, bounded descriptor, and `run_summary()` folds the ordered
+event stream into one record. Because `run_summary` consumes the emitted events verbatim,
+the "how it worked" record **cannot** diverge from what streamed to the client. And
+`aegis/src/aegis/ops/models.py` — `PromptVersion` / `PromptStatus`
+(`draft → staged → active → archived`), with the registry cache and the eval gate. That
+**is** the LLM-Ops loop; it is built, and sub-agents do not use it.
+
+**(a) Per-agent trace.** `run_summary` gains an agent dimension so the harness renders one
+record per sub-agent instead of one blurred record for the run. This is nearly free once
+§5.4 lands — the events are already stamped with `agent_id`; the fold just has to group on
+it. A run with four agents produces four readable records plus the synthesis, and that is
+what makes "per-agent logs" a fact rather than a UI grouping guess.
+
+**(b) Every sub-agent prompt is a `prompt_key`.** Register each `SubAgentSpec`'s system
+prompt in the registry. Then improving an agent's prompt is **promoting a version through
+the existing eval gate**, not editing a string in a file and hoping. The adapter's prompt
+remains the floor when no `ACTIVE` version exists, exactly as the main prompt already
+behaves — so a registry outage degrades to the shipped prompt rather than to none.
+
+**(c) The user's memory and skills reach sub-agent context.** The main graph already
+resolves `memory_subject` and the adapter already owns selection
+(`memory_spec.render_profile`, `select_skills`). A sub-agent that cannot see the user's
+durable facts is a *worse* agent than the single one it replaced, which would be an odd
+thing to ship as an upgrade. Use the adapter's selection — **one selector in the codebase**,
+for the same reason there is one tool-allowlist intersection.
+
+**(d) Every new knob gets a `_KnobSpec`.** Already in the Definition of done, restated here
+because it is this task that adds the knobs: a knob with no spec is a control the harness
+cannot render and nobody can tune, and it will be discovered on the day somebody needs to
+turn it.
+
+**Tests required:**
+
+- A four-agent run produces four per-agent harness records, each carrying that agent's own
+  model, tokens, cost and tool calls — and the totals reconcile with the run's summed delta.
+- A sub-agent with an `ACTIVE` `PromptVersion` uses it; with none, it uses the adapter floor.
+  Both asserted on the prompt actually sent.
+- A sub-agent's context contains the user's rendered profile, and the selection came from the
+  adapter — assert the adapter selector was called, so a second copy cannot creep in.
+- `harness_config()` covers every new `AgentConfig` knob — the existing bijection test
+  extended, so a knob added without a spec fails at test time rather than in a demo.
+
+---
+
 ## Budget, stated plainly
 
 Team mode is roughly 4–6× a single-pass run. Against $100 of gateway credit and 50–100 demo
@@ -533,6 +647,22 @@ than a number nobody explained.
 - [ ] Tavily key absent → Research agent degrades loudly to internal-only, run completes.
 - [ ] `web/src/config/graphTopology.json` regenerated; the topology snapshot test passes.
 - [ ] Every new `AgentConfig` field has a `_KnobSpec`.
+- [ ] An explicit width from the user is honoured exactly; the classifier does not override
+      it. Only the tenant's own budget can refuse a run.
+- [ ] Four concurrent agents retrieve the tenant's chunks **once**, not four times — asserted
+      on the retrieval call count, which is the supply-side optimisation Amendment A commits
+      to instead of restricting the user.
+- [ ] A deployment that fails repeatedly is skipped for a cooldown rather than costing every
+      concurrent agent its own timeout, and a probe re-opens it.
+- [ ] A fallback emits an event and logs at ERROR. There is no silent downgrade.
+- [ ] A `CHEAP`-tier tenant whose deployment is down **fails loudly** and is never served a
+      `GENERATION` model — asserted by the expensive deployment never being called.
+- [ ] A four-agent run produces four per-agent harness records whose totals reconcile with
+      the run's summed delta.
+- [ ] A sub-agent uses its `ACTIVE` `PromptVersion` when one exists and the adapter floor
+      when none does — asserted on the prompt actually sent.
+- [ ] A sub-agent's context carries the user's rendered profile, selected by the **adapter's**
+      selector rather than a second copy.
 
 ## Demo at the end of this phase
 
