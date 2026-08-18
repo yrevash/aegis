@@ -139,10 +139,73 @@ minimum thing that passes a test:
 
 - **Stage-level progress on the job row**, so a resumed ingest restarts at the failed stage.
 - **Batching is a first-class feature**, not an optimisation — embedding cost depends on it.
-- **A concurrency limit per job type**, because Docling parses must serialise while embed calls
-  should not.
+- **Two separate concurrency numbers**, because one is not enough. `concurrency` is per job
+  *type* (Docling parses serialise at 1; embed calls do not) and `worker_concurrency` is how many
+  slots a single worker process runs. DBOS validates one against the other; we should too, or a
+  worker with 8 slots quietly ignores a type limit of 1.
 - **Budget context travels with the job** (Phase 9 hardens this), because every consumer above
   spends money.
+
+---
+
+---
+
+## Build vs buy — settled, and why
+
+24 frameworks were surveyed after the first draft of this phase was challenged for having
+compared only seven. Full report: [`research/job-framework-survey.md`](research/job-framework-survey.md).
+
+**The decision stands. The original reasoning did not**, and two of its three arguments were
+wrong in the over-conservative direction this project keeps correcting:
+
+- **The pgmq rejection was factually wrong.** It ships a SQL-only install — one
+  `psql -f pgmq.sql`, no compiler, no `CREATE EXTENSION`. Right conclusion, wrong reason.
+- **"No new infrastructure on Windows" is not the argument.** Measured: Temporal is a **42.2 MB
+  zip, zero dependencies, 123 MB RSS, ready in 0.2 s**, +3 packages against Aegis's 243-package
+  graph with no conflicts. NATS is one `.exe` with Windows-service support. Install cost was
+  never the binding constraint.
+
+### The one criterion that decided it
+
+`aegis/src/aegis/governance/rls.py:327` classifies a table with **no tenant column** as *not
+tenant-scoped* and `continue`s past it **before any gap is recorded**.
+
+So a queue whose tables carry no `tenant_id` is not merely unprotected — it is **invisible to
+the diagnostic built to catch exactly that**. Verified by grep in a throwaway venv: procrastinate
+0 tenant hits (4 tables, 39 migrations), pgqueuer 0, DBOS 0, SAQ 0. No library ships a column for
+someone else's tenancy model, and adding one means forking a schema we do not own.
+
+That is the same failure class as "RLS is inert under a superuser": the check reads healthy while
+the thing it protects is off.
+
+### Temporal, measured and then declined
+
+The strongest candidate, and the test was run rather than argued: a 5-activity workflow named
+after our stages, worker **hard-killed mid-run**, restarted in a new process. `parse`, `chunk`
+and `embed` did **not** re-run; only the in-flight `index` replayed, then `graph` finished. That
+is this phase's hardest definition-of-done item and Phase 4's resumability requirement, with
+zero substrate code.
+
+Declined on architecture, not cost. **Workflow state lives inside Temporal, not inside
+Postgres**, which means:
+
+| | |
+|---|---|
+| No row for RLS to protect | Phase 1 made tenant isolation provable; Temporal has namespaces, not `tenant_id` |
+| Nothing to join to `budgets` | Phase 9 needs budget context on every model-calling job |
+| Invisible to the admin DB page | The requirement is "view the full db", and half the platform's work would not be in it |
+| No row for the tenant's live log | Ingest progress must be tenant-scoped and queryable |
+
+**And it does not replace the `jobs` table** — admission control, budget pre-authorisation,
+cancellation and the tenant-visible log all still need tenant-scoped rows. Adopting it means
+operating **two** substrates, which breaks the one-mechanism rule and splits every question
+("what is queued? what did it cost? who owns it?") across two systems.
+
+Stated plainly: **if Aegis were single-tenant, Temporal beats this phase and the recommendation
+would be to use it.** Multi-tenancy decides it.
+
+**Therefore §3.2b exists.** The stage machine is designed as the *portable subset*, so a future
+Temporal adoption is a driver swap rather than a rewrite.
 
 ---
 
@@ -199,6 +262,48 @@ does nothing about a worker that dies holding one.
 **Fix `memory_consolidation_job` in the same change** — migrate it onto the substrate rather
 than leaving a second, weaker job system beside the new one.
 
+### 3.2b — The stage machine (0.75d) — **the biggest gap in the first draft**
+
+The first draft said "stage progress is on the row" and never defined the mechanism. Every
+surveyed framework has one; this is what makes a job *resumable* rather than merely *retried*.
+
+**A job type declares its stages as an ordered tuple:**
+
+```python
+INGEST_STAGES = ("parse", "chunk", "enrich", "embed", "index", "graph")
+```
+
+The row carries `completed_stage`. A retry resumes at the first stage **after** it — so a
+failure in `graph` does not re-parse 200 pages, which at ~1.1 s/page is a four-minute penalty
+for a ten-second bug.
+
+**Three rules that make it correct rather than decorative:**
+
+- **A stage is committed with its own output.** The `completed_stage` bump and whatever that
+  stage produced are one transaction. A stage that "finished" but whose output was rolled back
+  is the bug this design exists to prevent.
+- **Stages are declared, not inferred.** The tuple is the contract; the health page and the
+  console read it, so a new stage appears in the UI by declaration.
+- **Design it as the portable subset.** Stage names, order, and "resume after the last committed
+  stage" are exactly what a durable-execution engine gives. Keeping the shape compatible means
+  swapping the driver later, not rewriting the pipeline.
+
+### 3.2c — `lease_epoch`, the fencing token (0.25d)
+
+`worker_id` + `lease_until` tell you *when* a lease expired. They do not tell you **who is
+allowed to write the result.**
+
+The window: worker A's lease expires, the reaper requeues, worker B claims and starts — then
+worker A wakes from a slow network call and writes its result. Two workers, one job, last write
+wins.
+
+**The fix:** an integer `lease_epoch` incremented on every claim. Every write carries the epoch
+it was claimed under, and `WHERE lease_epoch = $n` makes a stale writer's update affect zero
+rows. It then logs and exits rather than pretending it succeeded.
+
+**No test that does not kill a process will find this**, which is exactly why it is a named task
+rather than something to notice later.
+
 ### 3.3 — Idempotency, priority, admission, cancellation (0.5d)
 
 - **Idempotency key** unique per tenant. Re-enqueueing the same logical work is a no-op that
@@ -227,6 +332,18 @@ notification — a queue that only wakes on notify silently stalls.
 runs with `set_tenant_scope` on the **serving engine**. A worker that claims with a tenant bound
 sees an empty queue.
 
+### 3.4b — The worker registry and an `UNLOGGED` history table (0.25d)
+
+Phase 7's pipeline-health page has a question it currently cannot answer from outside a process:
+**is a worker alive?**
+
+- **`workers` registry** — a row per worker with `last_heartbeat`. The health page reads it; the
+  reaper uses it to distinguish "lease expired because the job is slow" from "lease expired
+  because the process is gone".
+- **`job_history`, `UNLOGGED`** — the completed-job archive. `UNLOGGED` because it is a
+  diagnostic: losing it on an unclean shutdown costs nothing, and it keeps the hot `jobs` table
+  small without a second durable write on every completion.
+
 ### 3.5 — The scheduler (0.5d)
 
 A `job_schedules` table plus a materialiser step inside the worker loop, claimed with the same
@@ -239,6 +356,12 @@ in production; 3.x jobstores are not multi-scheduler safe. **Not `pg_cron`** —
 **Not Windows Task Scheduler** — a second place where work is defined, and it swallows errors.
 
 **DB clock only, never the worker's.** A worker with a skewed clock must not fire early.
+
+**Debounce is not idempotency, and the re-indexing requirement needs the former.** Idempotency
+says "this exact work is already queued, return it". Debounce says "work of this kind is already
+queued for this tenant; collapse this request into it and push the run time out". Ten documents
+uploaded in a minute should produce **one** re-index, not ten — and an idempotency key cannot
+express that, because each upload is legitimately different work.
 
 ### 3.6 — `run_events` and the `runs` header (0.75d)
 
@@ -322,6 +445,14 @@ hitting `AttributeError` on line one.
 - [ ] Re-enqueueing the same idempotency key returns the existing job and does not duplicate
       work.
 - [ ] `memory_consolidation_job` runs on the substrate; the old claim path is deleted.
+- [ ] A job that fails at stage 4 of 6 resumes at stage 5 — **verified by killing the process at
+      stage 4**, not by asserting the code path.
+- [ ] A worker whose lease expired **cannot** write its result: the stale write affects zero rows
+      and the worker logs and exits.
+- [ ] A job type with `concurrency=1` never runs twice at once, even with a worker configured for
+      8 slots.
+- [ ] Ten re-index requests inside the debounce window produce **one** job.
+- [ ] The health endpoint reports a worker as gone within one heartbeat interval of killing it.
 - [ ] Two workers in two processes never run the same job — concurrency test, N workers, M jobs,
       every job runs exactly once.
 - [ ] A schedule fires once per tick with two workers running.
