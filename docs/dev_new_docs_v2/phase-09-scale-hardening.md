@@ -8,7 +8,9 @@ Research: [`plans/05-modularity-scale.md`](plans/05-modularity-scale.md) ·
 
 ---
 
-## Which limit binds first, and it is not architecture
+## What is actually wrong
+
+### Which limit binds first, and it is not architecture
 
 **The model bill, by an order of magnitude.**
 
@@ -22,7 +24,7 @@ Nothing in this phase changes that. The controls that do are Phase 5's depth cla
 6's manual-escalation pre-flight, and the caching already in place. **Say this plainly to a jury
 rather than claiming an architecture that the budget would never let you exercise.**
 
-## The first *architectural* limit: embedded stores are single-process
+### The first *architectural* limit: embedded stores are single-process
 
 This is the one thing that forecloses "scaling later is a deployment change".
 
@@ -34,6 +36,16 @@ This is the one thing that forecloses "scaling later is a deployment change".
 
 Measured: 50k vectors at 3072-dim float32 brute force = **614 MB and 13.5 ms per query**, ×3
 LightRAG stores, **on the event loop**.
+
+### Three things spend or stall with nothing bounding them
+
+- **Background jobs spend money with no enforcement.** `backend/src/app/main.py:99-112` binds the
+  live completer and the real embedder to a sweeper running every 60 seconds;
+  `enforce_governance` is on the request path only.
+- **Nothing limits concurrent model calls.** Five users × four agents is twenty simultaneous
+  gateway calls.
+- **The Postgres pools are unconfigured** — SQLAlchemy's default 15, then a 30-second stall with
+  no diagnostic, across two engines plus a worker pool.
 
 ---
 
