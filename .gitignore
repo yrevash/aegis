@@ -64,3 +64,7 @@ dump.rdb
 # this repo's history.
 docs/teaching/**/*.html
 docs/teaching/_assets/
+
+# Phase 4 ingestion fixtures: downloaded by tests/fixtures/pdfs/fetch.sh, not committed
+# (two are arXiv papers whose licence does not clearly permit redistribution — see the README)
+tests/fixtures/pdfs/*.pdf
