@@ -227,13 +227,34 @@ that architecture is what reversed the decision.**
 
 ---
 
+## Where the code goes
+
+The Module Contract decides this: `aegis` is the importable core, `backend` composes it.
+
+| Path | Holds | Why here |
+|---|---|---|
+| `aegis/src/aegis/jobs/__init__.py` | Public exports | The module's surface |
+| `aegis/src/aegis/jobs/models.py` | `JobRun`, `Document` ORM | Registers on `aegis.data.AegisBase`, like every other module's models |
+| `aegis/src/aegis/jobs/scope.py` | `@tenant_activity` decorator | The isolation guarantee belongs with the core, not the host |
+| `aegis/src/aegis/jobs/stages.py` | `StageSpec`, the stage contract | Portable subset — a driver swap later touches only the runner |
+| `aegis/src/aegis/jobs/admission.py` | Admission cap + budget pre-auth | Tenant policy is a core concern |
+| `backend/src/app/jobs/client.py` | Temporal client singleton | Needs `app.config` |
+| `backend/src/app/jobs/worker.py` | Worker bootstrap, both launch modes | Host wiring |
+| `backend/src/app/jobs/reconcile.py` | The reconciler sweep | Needs both the client and the session factory |
+
+**`aegis.jobs` must not import `temporalio`.** The core declares the contract — stage specs, the
+scope decorator, the models. The host runs it. That keeps `aegis` importable by a consumer who
+orchestrates differently, and it is what makes the fallback substrate a drop-in if §3.0 fails.
+
+---
+
 ## Tasks
 
 | # | Task | Days |
 |---|---|---|
 | 3.0 | Temporal spike on the real Windows box | 0.25 |
-| 3.1 | The record tables — `documents`, `job_runs`, tenant-scoped and RLS-registered | 0.75 |
-| 3.2 | Temporal wiring — worker bootstrap, tenant-scoped activities, the stage contract | 1.0 |
+| 3.1 | Record tables — `documents`, `job_runs` | 0.75 |
+| 3.2 | Temporal wiring — client, worker, scope decorator, stage contract | 1.0 |
 | 3.3 | Idempotent activities and the reconciler | 0.5 |
 | 3.4 | Admission control, budget pre-authorisation, cancellation | 0.5 |
 | 3.5 | Temporal Schedules — re-index cadence with debounce | 0.25 |
@@ -244,138 +265,438 @@ that architecture is what reversed the decision.**
 | 3.10 | The client console + route-coverage test | 0.25 |
 | 3.11 | `py.typed` and the four documentation lies | 0.25 |
 
-**Total: 6.0 days** — up from 5.25, because the tables and the reconciler are real work even
-though lease/reaper/fencing/scheduler are now Temporal's problem. The trade is **~2.5 days of the
-most bug-prone code in the phase** for ~0.75 days of integration.
+**Total: 6.0 days.**
+
+---
 
 ### 3.0 — The spike, on the actual Windows box (0.25d)
 
-Everything measured so far was on macOS. Before anything is built on it:
+Everything measured so far was on macOS. **Do this first and do not skip it.**
 
-- Temporal dev server running **alongside** Postgres, Neo4j Desktop and Memurai. Record total RSS.
-- **Hit the sandbox import trap deliberately.** Define a workflow in a module that imports
-  something side-effectful and confirm it fails; then confirm the import-safe layout works. This
-  is the known ergonomic tax and it should cost an hour now, not a day in Phase 4.
-- One ingestion-shaped workflow writing to a tenant-scoped table, killed mid-run, resumed.
-- **Confirm the laptop is x64, not ARM** — there is no `win_arm64` wheel.
+```powershell
+# 1. Install — no installer, no dependencies
+Invoke-WebRequest -Uri "https://temporal.download/cli/archive/latest?platform=windows&arch=amd64" -OutFile temporal.zip
+Expand-Archive temporal.zip -DestinationPath C:\temporal
 
-If the spike fails, the fallback is the hand-rolled substrate the earlier draft specified. It is
-written down in git history and remains buildable.
+# 2. Start alongside everything else already running
+C:\temporal\temporal.exe server start-dev --db-filename C:\temporal\dev.db --ui-port 8233
+```
+
+**Four things to establish, and write the numbers down:**
+
+1. **Total RSS** with Postgres + Neo4j Desktop + Memurai + Temporal all running. The box has
+   16 GB and Neo4j is not small.
+2. **The architecture.** `python -c "import platform; print(platform.machine())"` — there is
+   **no `win_arm64` wheel** for `temporalio`. If this says ARM, stop and use the fallback.
+3. **The sandbox import trap, deliberately.** Define a workflow in a module that imports
+   something side-effectful and confirm it fails validation; then confirm the import-safe layout
+   works. This is a known ergonomic tax and it costs an hour now or a day in Phase 4.
+4. **A kill test.** One workflow, five activities, hard-kill the worker mid-run, restart, confirm
+   completed stages do not re-run.
+
+**Exit criteria:** all four answered, numbers recorded in the PR description. If the spike fails,
+the fallback is the hand-rolled `jobs` substrate specified in this file's git history — it is
+fully written and remains buildable.
+
+---
 
 ### 3.1 — The record tables (0.75d)
 
-**These are ours and they are the system of record.** Temporal never becomes the place you look
+**These are ours, and they are the system of record.** Temporal never becomes the place you look
 to answer "what does this tenant have".
 
-| Table | Carries |
-|---|---|
-| `documents` | `tenant_id`, `status`, `completed_stage`, `workflow_id`, source metadata |
-| `job_runs` | `tenant_id`, `workflow_id`, `job_type`, `cost_usd`, timings, `error` |
+```python
+# aegis/src/aegis/jobs/models.py
 
-**Both registered in `_TENANT_SCOPED_TABLES`**, both with an RLS policy, both covered by the
-live isolation test from Phase 1. The `workflow_id` column is the only link to Temporal, and it
-is a string — no foreign key into a system we do not own.
+class JobStatus(StrEnum):
+    """Lifecycle of a durable job, from the record layer's point of view.
 
-`job_runs` is what the pipeline-health page (Phase 7) and the tenant's live log read. It is also
-what joins to `budgets` for Phase 9.
+    Deliberately *not* a mirror of Temporal's workflow status: this is what a tenant
+    sees and what the console renders. RECONCILING is the state a row enters when the
+    reconciler finds a workflow it cannot account for — visible, rather than a row
+    silently stuck in RUNNING forever.
+    """
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    RECONCILING = "reconciling"
+
+
+class JobRun(AegisBase):
+    """One durable unit of background work, owned by a tenant.
+
+    The ``workflow_id`` is a plain string, not a foreign key: Temporal is a system we
+    do not own and must not constrain our schema. It is the only link, and it is
+    deliberately one-way — this row is readable, joinable and auditable without
+    Temporal being reachable at all.
+    """
+    __tablename__ = "job_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    job_type: Mapped[str] = mapped_column(String(64), index=True)
+    workflow_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    run_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    status: Mapped[JobStatus] = mapped_column(SAEnum(JobStatus), index=True)
+    completed_stage: Mapped[str | None] = mapped_column(String(64), default=None)
+    payload: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
+    result: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    cost_usd: Mapped[float] = mapped_column(default=0.0)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(default=None)
+    finished_at: Mapped[datetime | None] = mapped_column(default=None)
+    cancelled_by: Mapped[str | None] = mapped_column(String(255), default=None)
+
+
+class Document(AegisBase):
+    """A tenant's source document and where its ingestion got to.
+
+    ``content_sha256`` is the idempotency anchor for the whole pipeline: re-uploading
+    identical bytes must not re-parse them, and the unique constraint per tenant is
+    what makes that structural rather than a check somebody remembers to write.
+    """
+    __tablename__ = "documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(512))
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    mime_type: Mapped[str] = mapped_column(String(128))
+    size_bytes: Mapped[int]
+    status: Mapped[JobStatus] = mapped_column(SAEnum(JobStatus), index=True)
+    completed_stage: Mapped[str | None] = mapped_column(String(64), default=None)
+    workflow_id: Mapped[str | None] = mapped_column(String(255), index=True, default=None)
+    page_count: Mapped[int | None] = mapped_column(default=None)
+    chunk_count: Mapped[int | None] = mapped_column(default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "content_sha256", name="uq_documents_tenant_sha"),
+    )
+```
+
+**Register both in `_TENANT_SCOPED_TABLES`** (`aegis/src/aegis/governance/rls.py`). The
+boot-time catalog read-back will otherwise report them, which is the diagnostic working
+correctly — do not silence it, add the entries.
+
+**Tests required:**
+
+- Both tables appear in `pg_policies` with `tenant_isolation` after `bootstrap_rls`.
+- The Phase 1 live isolation test (`backend/tests/integration/test_tenant_isolation_live.py`)
+  covers both, driven from the registry, so this is automatic once registered — **confirm it, do
+  not assume it.**
+- The unique constraint rejects a second identical upload for the same tenant, and **permits**
+  the same bytes for a different tenant.
+
+---
 
 ### 3.2 — Temporal wiring (1.0d)
 
-**Worker bootstrap.** One worker process type, launched in-process for the demo and standalone
-via `python -m aegis.jobs.worker`. Temporal handles the pool; we handle the wiring.
-
-**Tenant scope on every activity.** The workflow id is `{job_type}:{tenant_id}:{entity_id}`, and
-**every activity opens its session with `set_tenant_scope` bound from the workflow argument** —
-not from ambient context, which does not survive a replay in a new process.
-
-> This is the single most important rule in the integration. An activity that forgets the scope
-> is an activity running unscoped on the serving engine, and Phase 1 exists to make that
-> impossible to do accidentally. Make it structural: one decorator that binds scope and refuses
-> to run without a tenant argument.
-
-**The stage contract.** A job type declares its stages as an ordered tuple:
+#### The scope decorator — the single most important thing in this phase
 
 ```python
-INGEST_STAGES = ("parse", "chunk", "enrich", "embed", "index", "graph")
+# aegis/src/aegis/jobs/scope.py
+
+def tenant_activity(fn: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
+    """Bind the tenant scope for an activity, and refuse to run without one.
+
+    Phase 1 made tenant isolation provable, and the way that guarantee dies is an
+    activity that opens a session without binding a scope: it runs unscoped on the
+    serving engine and reads every tenant's rows. A convention cannot prevent that —
+    somebody forgets — so this is structural.
+
+    The tenant comes from the activity's own typed argument, never from a contextvar:
+    ambient context does not survive a Temporal replay in a fresh worker process, and
+    an activity that *silently* loses its scope on replay is the worst version of this
+    bug.
+
+    Raises:
+        MissingTenantScopeError: If the activity's argument carries no ``tenant_id``
+            field. Raised at call time, and covered by a test that a decorated
+            activity without one cannot run.
+    """
 ```
 
-Each stage is one Temporal activity. The activity writes its output **and** bumps
-`documents.completed_stage` in **one transaction**. Temporal gives resumability across stages;
-that single transaction is what makes each stage individually correct.
+Every activity signature therefore takes a typed argument carrying `tenant_id`:
 
-**Task queues carry the concurrency policy.** A `docling-parse` queue with a worker configured
-for one concurrent activity is how CPU-bound parses serialise, while an `embed` queue runs many.
-This is the "two separate numbers" requirement, and Temporal expresses it natively.
+```python
+@dataclass(frozen=True, slots=True)
+class ActivityInput:
+    tenant_id: int | None
+    workflow_id: str
+    ...
+```
+
+#### The stage contract
+
+```python
+# aegis/src/aegis/jobs/stages.py
+
+@dataclass(frozen=True, slots=True)
+class StageSpec:
+    """One stage of a multi-stage job — the portable subset of durable execution.
+
+    Stage names, their order, and "resume after the last committed stage" are exactly
+    what a durable-execution engine provides. Declaring them here rather than encoding
+    them in Temporal decorators means the console, the health page and the docs read
+    one source, and a future orchestrator swap touches only the runner.
+    """
+    name: str
+    timeout_seconds: int
+    max_attempts: int
+    task_queue: str          # concurrency policy lives on the queue
+```
+
+```python
+INGEST_STAGES: tuple[StageSpec, ...] = (
+    StageSpec("parse",  timeout_seconds=1800, max_attempts=2, task_queue="aegis-cpu"),
+    StageSpec("chunk",  timeout_seconds=300,  max_attempts=3, task_queue="aegis-default"),
+    StageSpec("enrich", timeout_seconds=300,  max_attempts=3, task_queue="aegis-default"),
+    StageSpec("embed",  timeout_seconds=900,  max_attempts=5, task_queue="aegis-io"),
+    StageSpec("index",  timeout_seconds=600,  max_attempts=3, task_queue="aegis-default"),
+    StageSpec("graph",  timeout_seconds=1800, max_attempts=2, task_queue="aegis-cpu"),
+)
+```
+
+**`parse` and `graph` sit on `aegis-cpu`, whose worker runs `max_concurrent_activities=1`.**
+That is how CPU-bound Docling parses serialise while embed calls on `aegis-io` run wide — the
+"two separate concurrency numbers" requirement, expressed natively rather than hand-built.
+
+#### The stage commit rule
+
+> **Each activity writes its output *and* bumps `completed_stage` in ONE transaction.**
+
+Temporal gives resumability *across* stages. That single transaction is what makes each stage
+individually correct — a stage that "finished" but whose output rolled back is precisely the bug
+this design exists to prevent.
+
+#### Worker bootstrap
+
+```python
+# backend/src/app/jobs/worker.py — one implementation, two launch modes
+```
+
+In-process as an asyncio task in the lifespan (what runs on demo day), and
+`python -m app.jobs.worker` standalone. **Identical code path.** Config:
+`TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUES`.
+
+**Workflow definitions live in their own import-safe module** — `backend/src/app/jobs/flows/`.
+Nothing in that package may do side-effectful work at import; the sandbox re-imports it.
+
+**Tests required:**
+
+- A decorated activity called without a tenant argument **raises**, and the test asserts the
+  exception rather than the absence of one.
+- An activity called with `tenant_id=7` sees only tenant 7's rows — against live Postgres, as a
+  non-superuser, extending the Phase 1 fixture.
+- `aegis.jobs` does **not** import `temporalio` — an import-isolation test in the style of
+  `aegis/tests/core/test_core_is_dep_free.py`.
+- Two activities on `aegis-cpu` never run concurrently.
+
+---
 
 ### 3.3 — Idempotent activities and the reconciler (0.5d)
 
 **The one genuinely new problem this architecture introduces.** An activity can commit to
-Postgres and then die before Temporal records its completion — so on replay it runs again.
+Postgres and then die before Temporal records its completion — so on replay, it runs again.
 
-**Therefore every activity must be idempotent**, keyed on `(workflow_id, stage)`. Writing chunk
-rows for a document that already has them is an upsert, not an insert. This is Temporal's
-standard requirement and it is well-understood, but it must be stated as a rule rather than
-discovered per activity.
+**Every activity is idempotent, keyed on `(workflow_id, stage)`:**
 
-**The reconciler** covers the opposite skew: a `documents` row stuck in a stage whose workflow no
-longer exists (server wiped, workflow terminated externally). A periodic sweep asks Temporal for
-the workflow's status and either resumes, fails the row with a reason, or leaves it alone. It is
-small, and without it a stuck row is invisible — the same silence the reaper existed to break.
+- Writing chunks for a document that already has them is a **delete-then-insert within the
+  transaction**, or an upsert. Never a bare insert.
+- The `completed_stage` bump is `UPDATE … WHERE completed_stage IS DISTINCT FROM :stage`, so a
+  replay is a no-op rather than a double count.
+
+**The reconciler** (`backend/src/app/jobs/reconcile.py`) covers the opposite skew — a row whose
+workflow no longer exists, because the server was wiped or the workflow terminated externally.
+It runs on a Temporal Schedule, and for each `RUNNING` row older than a threshold it asks
+Temporal for the workflow's status and either lets it be, marks the row `FAILED` with the reason,
+or restarts it.
+
+Without it, a stuck row is invisible — **the same silence the reaper existed to break in the
+hand-rolled design.**
+
+**Tests required:**
+
+- Invoking each activity **twice** for the same `(workflow_id, stage)` produces one result — a
+  parametrised test over the stage tuple, so a new stage cannot skip it.
+- A `RUNNING` row whose workflow id does not exist in Temporal is reconciled to `FAILED` with a
+  reason, tested with a fake client returning `NotFound`.
+
+---
 
 ### 3.4 — Admission control, budget pre-auth, cancellation (0.5d)
 
 **Still ours, because these are tenant policy, not execution mechanics.**
 
-- **Admission control** — a per-tenant cap on in-flight workflows, enforced before starting one,
-  returning a **visible 429**. Invisible backpressure is the same defect as a silent fallback.
-- **Budget pre-authorisation** — estimated cost checked against the tenant's remaining budget
-  *before* the workflow starts. Phase 9 hardens the per-call path; this is the gate at the door.
-- **Cancellation** — a Temporal cancellation signal, surfaced as a button. Our `job_runs` row
-  records who cancelled and when; Temporal stops the work.
+```python
+# aegis/src/aegis/jobs/admission.py
+
+async def admit(session, *, tenant_id, job_type, estimated_cost_usd) -> None:
+    """Decide whether a tenant may start another job, and say no out loud.
+
+    Two independent gates. The concurrency cap stops one tenant occupying every
+    worker slot; the budget pre-check stops a job starting that the tenant cannot
+    afford to finish. Both raise rather than queueing silently: invisible
+    backpressure is the same defect as a silent fallback, and a 429 a user can see
+    beats a job that never runs for reasons nobody can name.
+
+    Raises:
+        AdmissionDeniedError: Tenant is at its in-flight cap for this job type.
+        BudgetExceededError: Estimated cost exceeds the tenant's remaining budget.
+    """
+```
+
+Both caps come from the **settings catalogue** (§3.7) — `jobs.max_inflight.{job_type}` — so a
+platform admin changes them from a dashboard rather than a deploy.
+
+**Cancellation** is a Temporal cancellation signal. Our row records `cancelled_by` and the
+timestamp; Temporal stops the work. The route is `POST /jobs/{id}/cancel`, guarded so a tenant
+can only cancel its own.
+
+**Tests required:**
+
+- The `(n+1)`th concurrent job for a tenant raises `AdmissionDeniedError`, and the route returns
+  **429** with a reason in the body.
+- A job whose estimate exceeds the remaining budget never starts a workflow — asserted by a fake
+  Temporal client recording zero `start_workflow` calls.
+- A tenant cannot cancel another tenant's job (403).
+
+---
 
 ### 3.5 — Temporal Schedules, with debounce (0.25d)
 
 Re-indexing on a cadence is a **Temporal Schedule**, not a table we maintain.
 
-**Debounce is ours and is not the same as idempotency.** Idempotency says "this exact work is
-queued, return it". Debounce says "work of this kind is already pending for this tenant; fold
-this request in and push the run time out". Ten documents uploaded in a minute produce **one**
-re-index. Temporal expresses this with a workflow id per tenant plus
-`WorkflowIDReusePolicy`, so the second start joins the first rather than queueing behind it.
+**Debounce is ours, and it is not idempotency.** Idempotency says *"this exact work is already
+queued, return it"*. Debounce says *"work of this kind is already pending for this tenant; fold
+this request in and push the run time out"*. Ten documents uploaded in a minute must produce
+**one** re-index — and an idempotency key cannot express that, because each upload is
+legitimately different work.
+
+Implemented with a per-tenant workflow id (`reindex:{tenant_id}`) plus a timer the workflow
+resets when a new signal arrives, so the second request joins the first rather than queueing
+behind it.
+
+**Test required:** ten signals inside the window produce one execution.
 
 ### 3.6 — `run_events` and the `runs` header (0.75d)
 
-Exactly as [`plans/02`](plans/02-agentic-core-console.md) §2.2 specifies, plus `trace_id`,
-`span_id`, `job_id`, and a `runs` header row.
+The durable, tenant-scoped, replayable record. **Do not add a fourth tracking mechanism** —
+OTel spans, Phoenix and the SSE stream already exist; this is the one that survives a restart.
 
-**Partition by month at creation.** This is the one irreversible decision in the roadmap:
+```sql
+CREATE TABLE run_events (
+    id           bigserial,
+    run_id       text        NOT NULL,
+    tenant_id    integer     REFERENCES tenants(id),
+    seq          integer     NOT NULL,
+    ts           timestamptz NOT NULL DEFAULT now(),
+    event_type   text        NOT NULL,
+    agent_id     text,                       -- Phase 5 writes this
+    job_id       bigint      REFERENCES job_runs(id),
+    trace_id     text,                       -- reconciles with Phoenix
+    span_id      text,
+    payload      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY (id, ts)
+) PARTITION BY RANGE (ts);
+```
+
+**Partitioned by month, at creation.** This is the **one irreversible decision** in the roadmap:
 converting a large heap table later needs a migration, and `backend/pyproject.toml` deliberately
-has no Alembic.
+has no Alembic. Create the current and next month's partitions at bootstrap, and a scheduled job
+(§3.5) that rolls the next one forward.
 
-The `runs` header is a second table against the one-mechanism rule, so it earns its place
-explicitly: it is a **regenerable projection**, and it ships with a test that rebuilds it from
-events. If the two ever disagree, events win.
+**`runs` is a header row, and it is a second table against the one-mechanism rule**, so it earns
+its place explicitly: it is a **regenerable projection** — `run_id`, `tenant_id`, `user_id`,
+status, timings, token and cost totals — and it ships with a test that **rebuilds it from
+events**. If the two ever disagree, events win.
 
-Phoenix stays the ephemeral deep-dive. `run_events` is the durable, tenant-scoped, replayable
-record.
+**Retention:** a scheduled prune dropping whole partitions, not `DELETE`. Dropping a partition is
+instant; deleting 10M rows is not.
+
+**Tests required:**
+
+- Writing an event outside the current partition's range fails loudly rather than silently
+  landing nowhere — the classic partitioning trap.
+- The `runs` header rebuilt from events equals the incrementally-maintained header, on a run with
+  every event type.
+- A tenant reads only its own events — through the Phase 1 live isolation fixture.
 
 ### 3.7 — The settings catalogue (1.0d)
 
-A `settings` table scoped platform / tenant / user, plus a **`SettingSpec` catalogue** declaring
-`key`, `type`, `bounds`, `writable_by`, `readable_by`, `merge`.
+**The mechanism behind "0 code change from the dashboard".** Every per-tenant control in phases
+6, 7 and 10 is an entry here rather than a bespoke screen.
 
-**Generalise the existing pattern, do not invent a second.** `_KNOB_SPECS` / `harness_config()`
-already does exactly this, with a bijection test that makes a knob impossible to add without a
-UI control appearing.
+```python
+# aegis/src/aegis/settings/spec.py
 
-`resolve(key, tenant, user)` returns `(value, source)` so a screen can always say *where* a
-value came from.
+class MergeRule(StrEnum):
+    """How a tenant or user value combines with the platform default.
 
-**`merge: tighten_only` is the load-bearing part.** It makes the tenant-safety rules executable
-configuration rather than prose: the resolver **cannot compute a value weaker than the platform
-default**. That is the mechanism behind "a tenant may add a guardrail but never weaken one", and
-it is why Phase 7's fifteen forbidden controls are catalogue entries rather than fifteen
-hand-written checks.
+    ``TIGHTEN_ONLY`` is the load-bearing one: it makes the tenant-safety rules
+    *executable configuration* rather than prose, because the resolver structurally
+    cannot compute a value weaker than the platform default. That is what turns "a
+    tenant may add a guardrail but never weaken one" from a policy somebody has to
+    remember into arithmetic.
+    """
+    OVERRIDE = "override"          # last scope wins  (e.g. preferred model)
+    TIGHTEN_ONLY = "tighten_only"  # may only become stricter (e.g. gate_min_risk)
+    UNION = "union"                # sets accumulate  (e.g. extra guardrails)
+
+
+@dataclass(frozen=True, slots=True)
+class SettingSpec:
+    key: str
+    type_: type
+    default: Any
+    writable_by: frozenset[str]    # fine roles
+    readable_by: frozenset[str]
+    merge: MergeRule
+    bounds: tuple[Any, Any] | None = None
+    description: str = ""          # rendered as the control's help text
+```
+
+```sql
+CREATE TABLE settings (
+    id         bigserial PRIMARY KEY,
+    scope      text    NOT NULL CHECK (scope IN ('platform','tenant','user')),
+    tenant_id  integer REFERENCES tenants(id),
+    user_id    integer REFERENCES users(id),
+    key        text    NOT NULL,
+    value      jsonb   NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    updated_by text,
+    UNIQUE (scope, tenant_id, user_id, key)
+);
+```
+
+```python
+async def resolve(session, key: str, *, tenant_id, user_id) -> tuple[Any, str]:
+    """Return the effective value and the scope it came from.
+
+    The ``source`` half is not decoration: a control that shows a value without saying
+    whether it is the platform default, the tenant's choice or the user's own is a
+    control nobody can reason about. Phase 6's composer renders it as a badge.
+    """
+```
+
+**Generalise `_KNOB_SPECS` / `harness_config()`, do not invent a second mechanism** — and inherit
+its **bijection test**, which makes a setting impossible to add without a UI control appearing.
+
+**Tests required:**
+
+- A `TIGHTEN_ONLY` key: a tenant setting a *weaker* value than the platform default resolves to
+  the platform default, and the write is **rejected with a reason** rather than silently ignored.
+- `UNION`: a tenant's extra guardrails append to the platform's; the platform's cannot be removed.
+- `resolve()` returns the correct `source` at each of the three scopes.
+- The bijection test covers every `SettingSpec`.
+- A user cannot write a key whose `writable_by` excludes their fine role (403).
 
 ### 3.8 — The two-tenant seed (0.5d)
 
@@ -414,6 +735,54 @@ Small, and it is the difference between an AI integrator succeeding on the first
 hitting `AttributeError` on line one.
 
 ---
+
+---
+
+## How this is built — the standard, not a suggestion
+
+Every task above is implemented to this bar. An agent that cannot meet it should stop and report
+rather than lower it.
+
+**Verify, do not assert.** Every claim about current behaviour is grounded in real source that
+was opened and read. This repo's standing failure mode is documentation that says the opposite
+of the code — RLS inert under a superuser, a budget test green while asserting the reverse of
+reality, a console whose every live query returned 400. All three were found by reading, not by
+trusting.
+
+**No test is weakened to make something pass.** If a test breaks, either it encoded the old
+contract — fix it deliberately and say so in the PR — or the change is wrong. Deleting an
+assertion to get green is the one unrecoverable mistake here.
+
+**No bare `except`.** No swallowing. A control that cannot run fails **closed** and says so. A
+diagnostic wrapped in a broad `except` is how this repo once shipped a warning that could never
+fire for any input.
+
+**Docstrings explain *why*, in Google style, matching the file being edited.** Read the
+neighbouring code first — `aegis/src/aegis/governance/rls.py` is the standard for this codebase
+and it is unusually well documented.
+
+**Tests prove behaviour, not shape.** The definition of done requires killing a process, running
+an activity twice, and exceeding a real budget. `assert func is not None` proves nothing.
+
+**Every new table is registered in `_TENANT_SCOPED_TABLES`** and covered by the live isolation
+test. The boot-time catalog read-back reporting your table is the diagnostic working — add the
+entry, never silence it.
+
+### Verification, run before any task is called done
+
+```bash
+cd /Users/yrevash/aegis/backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q
+cd /Users/yrevash/aegis/aegis   && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q
+cd /Users/yrevash/aegis/backend && .venv/bin/python -m ruff check ../aegis ../backend
+cd /Users/yrevash/aegis/web     && npx tsc --noEmit && npx next lint --dir src && npx next build
+```
+
+Baselines to beat, not regress: **685 backend / 1270 aegis passing, ruff clean repo-wide, build
+37/37 pages.** New tests add to those numbers.
+
+Postgres is at `localhost:5432`; the app database is `taif`; the serving role is the
+non-superuser `aegis_app` and the owner DSN is separate. **Never run destructive DDL against
+`taif`** — create a scratch database, verify, drop it.
 
 ## Definition of done
 
