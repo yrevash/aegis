@@ -22,6 +22,7 @@ import {
   Gauge,
   KeyRound,
   Landmark,
+  ListChecks,
   Layers,
   LayoutDashboard,
   Lock,
@@ -240,6 +241,15 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Aegis Loop — self-improving prompts · trace → eval → release',
     group: 'Governance',
   },
+  jobs: {
+    id: 'jobs',
+    label: 'Jobs',
+    icon: ListChecks,
+    hint: 'durable queue',
+    tooltip:
+      'Aegis Substrate — durable background work, its admission caps, and the cancel control',
+    group: 'Governance',
+  },
   governance: {
     id: 'governance',
     label: 'Governance',
@@ -285,8 +295,8 @@ export const SECTIONS: Record<string, Section> = {
  * dropped again.
  */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
-  admin: ['dashboard', 'forecast', 'governance', 'audit', 'roles'],
-  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'voice', 'vision', 'guardrails', 'simulation'],
+  admin: ['dashboard', 'forecast', 'governance', 'jobs', 'audit', 'roles'],
+  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit'],
   client: ['console', 'dashboard', 'savings', 'forecast', 'risk', 'simulation'],
 }

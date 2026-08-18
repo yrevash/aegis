@@ -17,6 +17,12 @@ The division of labour is the point:
   arithmetic; :mod:`aegis.jobs.scope` declares the one rule every activity obeys —
   :func:`~aegis.jobs.scope.tenant_activity` binds the tenant scope from the activity's
   own typed argument and refuses to run without one.
+* **It also owns tenant policy, which is not execution mechanics.**
+  :mod:`aegis.jobs.admission` decides whether a tenant may start another job at all —
+  the concurrency cap and the budget pre-authorisation, both read from the settings
+  catalogue — and :mod:`aegis.jobs.cancel` decides whether this caller may stop this row
+  and records who did. Neither answer belongs in a workflow definition, and both must be
+  answerable with no orchestrator running.
 * **The host runs the work.** The orchestrator client, the worker bootstrap and the
   reconciler sweep live in the composing application (``app.jobs``), because they need
   host configuration and a host session factory.
@@ -25,12 +31,29 @@ So **``aegis.jobs`` must not import an orchestrator SDK** (``temporalio`` in thi
 platform's host), directly or transitively. That is what keeps this package importable by
 a consumer who orchestrates differently, and what makes a driver swap touch the runner
 rather than the schema. Importing it pulls ``sqlalchemy`` (the ``aegis[data]`` extra) and
-:mod:`aegis.governance.models`, whose ``tenants`` / ``users`` tables the job foreign keys
-reference — and nothing else.
+the ``aegis[governance]`` extra — :mod:`aegis.governance.models`, whose ``tenants`` /
+``users`` tables the job foreign keys reference, plus the budgets and settings that
+admission reads — and nothing else. In particular no orchestrator SDK, no web framework
+and no model client.
 """
 
 from __future__ import annotations
 
+from aegis.jobs.admission import (
+    IN_FLIGHT_STATUSES,
+    AdmissionDeniedError,
+    AdmissionError,
+    BudgetExceededError,
+    admit,
+    max_inflight_key,
+)
+from aegis.jobs.cancel import (
+    TERMINAL_STATUSES,
+    CancellationError,
+    JobNotCancellableError,
+    JobNotVisibleError,
+    cancel_job,
+)
 from aegis.jobs.models import Document, JobRun, JobStatus
 from aegis.jobs.scope import (
     ActivityInput,
@@ -65,10 +88,18 @@ __all__ = [
     "CPU_QUEUE",
     "DEFAULT_QUEUE",
     "INGEST_STAGES",
+    "IN_FLIGHT_STATUSES",
     "IO_QUEUE",
     "TASK_QUEUES",
+    "TERMINAL_STATUSES",
     "ActivityInput",
+    "AdmissionDeniedError",
+    "AdmissionError",
+    "BudgetExceededError",
+    "CancellationError",
     "Document",
+    "JobNotCancellableError",
+    "JobNotVisibleError",
     "JobRun",
     "JobStatus",
     "MissingTenantScopeError",
@@ -79,7 +110,10 @@ __all__ = [
     "UnknownStageError",
     "UnregisteredStageError",
     "activity_session_factory",
+    "admit",
+    "cancel_job",
     "clear_stage_handlers",
+    "max_inflight_key",
     "queue_spec",
     "register_stage_handler",
     "remaining_stages",

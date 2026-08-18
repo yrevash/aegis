@@ -22,7 +22,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aegis.ml import MLModelUnavailableError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -40,6 +40,7 @@ from app.api.schemas import (
     AdminUserCreateRequest,
     AdminUserRow,
     AdminUsersResponse,
+    AdmissionRefusedResponse,
     AegisModuleRow,
     AgentTopologyResponse,
     ApprovalDecisionRequest,
@@ -60,6 +61,9 @@ from app.api.schemas import (
     GraphNode,
     GraphResponse,
     HarnessConfigResponse,
+    JobActionResponse,
+    JobRunRow,
+    JobsResponse,
     LatencyResponse,
     LoginRequest,
     LoginResponse,
@@ -166,6 +170,9 @@ from app.platform import (
     build_stack,
     patch_check,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; keeps ``temporalio`` off the import
+    from app.jobs.control import JobRow
 
 logger = logging.getLogger(__name__)
 
@@ -3072,3 +3079,147 @@ async def forecast_domain(
     from app.forecast.service import domain_forecast
 
     return await _forecast_or_refusal(domain_forecast(horizon=horizon))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Durable jobs (§3.4) — admission control, re-queue, cancellation
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _job_row(row: JobRow) -> JobRunRow:
+    """Project an :class:`app.jobs.control.JobRow` onto the wire contract."""
+    return JobRunRow(
+        id=row.id,
+        job_type=row.job_type,
+        status=row.status,
+        completed_stage=row.completed_stage,
+        workflow_id=row.workflow_id,
+        document_id=row.document_id,
+        cost_usd=row.cost_usd,
+        error=row.error,
+        cancelled_by=row.cancelled_by,
+        created_at=row.created_at,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+    )
+
+
+def _admission_refusal(exc: Exception) -> HTTPException:
+    """Turn an admission refusal into the visible 429 the substrate promises.
+
+    A **429**, not a 403 or a silent enqueue. Both gates describe a condition that will
+    change — a running job finishes, a budget window rolls, an administrator raises a cap
+    — so the honest answer is "not now", carrying the reason and naming which gate said
+    so on ``X-Admission-Gate``.
+
+    Args:
+        exc: The :class:`aegis.jobs.AdmissionError` subclass that was raised.
+
+    Returns:
+        The HTTP error to raise in its place.
+    """
+    from aegis.jobs import BudgetExceededError as JobBudgetExceededError
+
+    gate = "budget" if isinstance(exc, JobBudgetExceededError) else "concurrency"
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=exc.reason,
+        headers={"X-Admission-Gate": gate},
+    )
+
+
+@router.get("/jobs", response_model=JobsResponse, tags=["jobs"])
+async def list_jobs(
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> JobsResponse:
+    """Return the caller's tenant's durable background jobs, newest first.
+
+    Read from the ``job_runs`` record layer rather than the orchestrator, so the queue is
+    still legible when Temporal is unreachable — the substrate's whole claim about who
+    owns the record. A platform admin (no tenant pin) sees every tenant's rows.
+    """
+    from app.jobs.control import list_jobs as _list_jobs
+
+    rows = await _list_jobs(tenant_id=_scope_tenant(auth, None))
+    return JobsResponse(rows=[_job_row(row) for row in rows])
+
+
+@router.post(
+    "/jobs/{job_id}/requeue",
+    response_model=JobActionResponse,
+    tags=["jobs"],
+    responses={429: {"model": AdmissionRefusedResponse}},
+)
+async def requeue_job(
+    job_id: int,
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> JobActionResponse:
+    """Re-run a job's ingestion, resuming after the last stage that committed.
+
+    **The admission-controlled path.** The tenant's concurrency cap and its budget
+    pre-authorisation are evaluated before any workflow is started, so a refusal leaves
+    nothing behind in the orchestrator to reconcile later.
+    """
+    from aegis.jobs import AdmissionError, JobNotVisibleError
+
+    from app.jobs.control import MissingDocumentError
+    from app.jobs.control import requeue_job as _requeue
+
+    tenant_id = _scope_tenant(auth, None)
+    try:
+        row = await _requeue(job_id=job_id, tenant_id=tenant_id, user_id=auth.user_id)
+    except JobNotVisibleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=exc.reason
+        ) from exc
+    except MissingDocumentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except AdmissionError as exc:
+        raise _admission_refusal(exc) from exc
+    await _safe_audit(
+        "jobs.requeue", auth.username, payload={"job_id": job_id, "tenant_id": tenant_id}
+    )
+    return JobActionResponse(
+        job=_job_row(row), detail=f"Job {job_id} re-queued from stage {row.completed_stage}."
+    )
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobActionResponse, tags=["jobs"])
+async def cancel_job(
+    job_id: int,
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> JobActionResponse:
+    """Cancel a running job: the orchestrator stops it, the row records who asked.
+
+    A tenant can only cancel its own. The row is loaded by id **and** tenant on a session
+    bound to the caller's scope, so another tenant's job never resolves — there is no path
+    on which a workflow id reaches Temporal without a row having been found under the
+    caller's own tenant first. A miss is a 403 whether the job belongs to someone else or
+    does not exist, because answering those differently would make this endpoint an oracle
+    for other tenants' job ids.
+    """
+    from aegis.jobs import JobNotCancellableError, JobNotVisibleError
+
+    from app.jobs.control import cancel_job as _cancel
+
+    tenant_id = _scope_tenant(auth, None)
+    try:
+        row = await _cancel(
+            job_id=job_id, tenant_id=tenant_id, cancelled_by=auth.username
+        )
+    except JobNotVisibleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=exc.reason
+        ) from exc
+    except JobNotCancellableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=exc.reason
+        ) from exc
+    await _safe_audit(
+        "jobs.cancel", auth.username, payload={"job_id": job_id, "tenant_id": tenant_id}
+    )
+    return JobActionResponse(
+        job=_job_row(row), detail=f"Job {job_id} cancelled by {auth.username}."
+    )

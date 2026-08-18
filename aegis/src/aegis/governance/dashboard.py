@@ -26,7 +26,7 @@ from sqlalchemy import func, select
 
 from aegis.governance.audit import list_recent_audit
 from aegis.governance.enforcement import (
-    _WINDOW_SECONDS,
+    WINDOW_SECONDS,
     _budget_row,
     _now_naive,
     _session,
@@ -91,7 +91,7 @@ async def budget_status(
                 else UsageLedger.user_id
             )
             since = now - timedelta(
-                seconds=_WINDOW_SECONDS.get(b.window, _WINDOW_SECONDS[BudgetWindow.DAY])
+                seconds=WINDOW_SECONDS.get(b.window, WINDOW_SECONDS[BudgetWindow.DAY])
             )
             tokens, cost, calls = await _usage_sums(
                 session, scope_col=scope_col, scope_id=b.scope_id, since=since
@@ -128,7 +128,7 @@ async def usage_summary(
     """
     pt, ct, cost, by_model, series = await usage_rollup(tenant_id, window)
     win = BudgetWindow(window)
-    since = _now_naive() - timedelta(seconds=_WINDOW_SECONDS[win])
+    since = _now_naive() - timedelta(seconds=WINDOW_SECONDS[win])
     async with _session() as session:
         await _set_tenant_scope(session, tenant_id)
         stmt = select(func.count(UsageLedger.id)).where(UsageLedger.ts >= since)

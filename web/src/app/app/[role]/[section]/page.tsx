@@ -15,6 +15,7 @@ import { TokenOptMount } from '@/components/gateway/TokenOptView'
 import { GovernanceMount } from '@/components/governance/GovernanceView'
 import { GraphMount } from '@/components/graph/GraphView'
 import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
+import { JobsMount } from '@/components/jobs/JobsView'
 import { HarnessMount } from '@/components/harness/HarnessView'
 import { LatencyMount } from '@/components/latency/LatencyView'
 import { MLOpsMount } from '@/components/ml/MLOpsView'
@@ -60,6 +61,7 @@ export default async function SectionPage({
   if (section === 'rag') return <RagMount role={role} />
   if (section === 'graph') return <GraphMount role={role} />
   if (section === 'cache') return <CacheMount />
+  if (section === 'jobs') return <JobsMount />
   if (section === 'tokenopt') return <TokenOptMount />
   if (section === 'guardrails') return <GuardrailsMount />
   if (section === 'security') return <SecurityMount />

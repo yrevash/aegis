@@ -1612,3 +1612,78 @@ class VisionAnalyseResponse(BaseModel):
 
     analysis: VisionAnalysis
     coverage: str = Field(description="One line: which controls ran, and which did not.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Durable jobs (§3.4) — the substrate's tenant-facing surface
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class JobRunRow(BaseModel):
+    """One durable background job as its owning tenant sees it (`GET /jobs`).
+
+    Projected from the ``job_runs`` record layer, never from the orchestrator, so the
+    list still answers when Temporal is unreachable — which is the whole reason the row
+    is the system of record and the workflow is not.
+    """
+
+    id: int
+    job_type: str = Field(description="What kind of work it is, e.g. `ingest`.")
+    status: str = Field(
+        description="pending | running | succeeded | failed | cancelled | reconciling."
+    )
+    completed_stage: str | None = Field(
+        default=None, description="Last stage that committed; a resume restarts after it."
+    )
+    workflow_id: str = Field(description="The orchestrator execution behind this row.")
+    document_id: int | None = Field(
+        default=None, description="The document being processed, when the payload names one."
+    )
+    cost_usd: float = Field(default=0.0, description="What the run has cost so far.")
+    error: str | None = Field(default=None, description="Failure reason, when it failed.")
+    cancelled_by: str | None = Field(
+        default=None,
+        description="Who cancelled it — an audit question before an operational one.",
+    )
+    created_at: str | None = Field(default=None, description="ISO 8601 UTC.")
+    started_at: str | None = Field(default=None, description="ISO 8601 UTC, or null.")
+    finished_at: str | None = Field(
+        default=None,
+        description=(
+            "ISO 8601 UTC terminal time; for a cancelled job this IS the cancellation time."
+        ),
+    )
+
+
+class JobsResponse(BaseModel):
+    """Body for `GET /jobs` — the caller's tenant's recent jobs, newest first."""
+
+    rows: list[JobRunRow]
+
+
+class JobActionResponse(BaseModel):
+    """Body for `POST /jobs/{id}/cancel` and `POST /jobs/{id}/requeue`.
+
+    Carries the row the action was applied to plus a one-line ``detail``, so a surface
+    can say *what happened* rather than only that something did.
+    """
+
+    job: JobRunRow
+    detail: str = Field(description="One line describing the outcome, safe to render.")
+
+
+class AdmissionRefusedResponse(BaseModel):
+    """Body of the **429** an admission refusal produces.
+
+    The reason is mandatory. Backpressure a user cannot see is the same defect as a
+    silent fallback: "the job did not start", with nothing after it, is the silence
+    admission control exists to break.
+
+    Which of the two gates refused travels on the ``X-Admission-Gate`` header
+    (``concurrency`` | ``budget``) rather than in the body, so it survives FastAPI's
+    single-key error envelope and a client can branch on it without parsing prose.
+    """
+
+    detail: str = Field(
+        description="Why the job was refused, in one renderable sentence."
+    )

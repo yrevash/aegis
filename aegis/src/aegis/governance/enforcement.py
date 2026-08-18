@@ -52,6 +52,7 @@ from aegis.governance.types import (
 )
 
 __all__ = [
+    "WINDOW_SECONDS",
     "DuplicateTenantError",
     "DuplicateUserError",
     "LastPlatformAdminError",
@@ -114,8 +115,11 @@ def _session() -> AsyncSession:
     return _session_factory()
 
 
-# The rolling span, in seconds, for each budget window (token/usd caps).
-_WINDOW_SECONDS: dict[BudgetWindow, int] = {
+#: The rolling span, in seconds, for each budget window (token/usd caps). Public because
+#: it is the one definition of what a window *means*: the dashboard, the config projection
+#: and job admission (:mod:`aegis.jobs.admission`) all measure spend over it, and a second
+#: copy would let one of them disagree with the caps this module enforces.
+WINDOW_SECONDS: dict[BudgetWindow, int] = {
     BudgetWindow.DAY: 24 * 3600,
     BudgetWindow.MONTH: 30 * 24 * 3600,
 }
@@ -262,7 +266,7 @@ async def enforce_governance(*, tenant_id: int | None, user_id: int | None) -> N
                 else UsageLedger.user_id
             )
             window_since = now - timedelta(
-                seconds=_WINDOW_SECONDS.get(b.window, _WINDOW_SECONDS[BudgetWindow.DAY])
+                seconds=WINDOW_SECONDS.get(b.window, WINDOW_SECONDS[BudgetWindow.DAY])
             )
             tokens, cost, _calls = await _usage_sums(
                 session, scope_col=scope_col, scope_id=b.scope_id, since=window_since
@@ -725,7 +729,7 @@ async def usage_rollup(
         oldest-first (Python-side bucketing keeps the query portable across dialects).
     """
     win = BudgetWindow(window)
-    since = _now_naive() - timedelta(seconds=_WINDOW_SECONDS[win])
+    since = _now_naive() - timedelta(seconds=WINDOW_SECONDS[win])
     async with _session() as session:
         await _set_tenant_scope(session, tenant_id)
         stmt = select(UsageLedger).where(UsageLedger.ts >= since)

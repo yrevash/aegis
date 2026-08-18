@@ -458,6 +458,23 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         ),
     ),
     SettingSpec(
+        key="jobs.estimated_cost_usd.ingest_per_mb",
+        type_=float,
+        default=0.5,
+        writable_by=frozenset({PLATFORM_ADMIN}),
+        readable_by=_OPERATORS,
+        merge=MergeRule.TIGHTEN_ONLY,
+        bounds=(0.0, 1000.0),
+        stricter=Strictness.HIGHER,
+        description=(
+            "USD per megabyte used to pre-authorise an ingestion job against the "
+            "tenant's remaining budget. An estimate, never a charge: the ledger still "
+            "records what the run actually cost. A HIGHER figure is the stricter one "
+            "because over-estimating refuses a job that might not fit, while "
+            "under-estimating admits one that cannot finish."
+        ),
+    ),
+    SettingSpec(
         key="budget.usd_cap",
         type_=float,
         default=100.0,

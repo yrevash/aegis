@@ -13,7 +13,7 @@ dev default is still in force (which a real deployment must not leave true).
 from __future__ import annotations
 
 from aegis.governance import security
-from aegis.governance.enforcement import _RATE_SECONDS, _WINDOW_SECONDS
+from aegis.governance.enforcement import _RATE_SECONDS, WINDOW_SECONDS
 from aegis.governance.models import BudgetWindow
 from aegis.governance.rls import _TENANT_SCOPED_TABLES
 from aegis.governance.security import (
@@ -110,8 +110,8 @@ def effective_config() -> GovernanceConfig:
         role_ladder=list(RBAC_LADDER),
         budgets=BudgetDefaults(
             default_window=BudgetWindow.DAY.value,
-            day_window_seconds=_WINDOW_SECONDS[BudgetWindow.DAY],
-            month_window_seconds=_WINDOW_SECONDS[BudgetWindow.MONTH],
+            day_window_seconds=WINDOW_SECONDS[BudgetWindow.DAY],
+            month_window_seconds=WINDOW_SECONDS[BudgetWindow.MONTH],
             rate_window_seconds=_RATE_SECONDS,
         ),
         rls=RlsConfig(
