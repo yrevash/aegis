@@ -31,6 +31,7 @@ __all__ = [
     "Retriever",
     "TenantScopeMismatch",
     "build_default_retriever",
+    "get_retriever",
     "ingest",
     "knowledge_graph",
     "retrieve",
@@ -117,6 +118,22 @@ def _get_retriever() -> Retriever:
 
             _default_retriever = build_lite_retriever(get_settings())
     return _default_retriever
+
+
+def get_retriever() -> Retriever:
+    """Return the process-wide retriever, building it on first use.
+
+    The public name for what ``retrieve``/``ingest`` use internally, for the one caller
+    that needs the *backend* rather than a query: the ``index`` stage of ingestion, which
+    publishes a freshly parsed document's chunks into whichever knowledge store this
+    deployment actually searches. Going through the same singleton is the point — an
+    ingest that wrote to a second, privately-built backend would index into a store no
+    query reads, and nothing would report the corpus as missing.
+
+    Returns:
+        The shared :class:`Retriever` (real stores, or the lite one under ``STORES=off``).
+    """
+    return _get_retriever()
 
 
 class TenantScopeMismatch(RuntimeError):

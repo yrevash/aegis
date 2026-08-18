@@ -8,8 +8,12 @@ which is the case the substrate has to survive.
 The only thing this adds to production's entry point is stage handlers. It registers them
 and then calls :func:`app.jobs.worker.main` — the identical function ``python -m
 app.jobs.worker`` invokes — so what the test exercises is the shipped worker and not a
-test-local imitation. (Handlers have to be added here because nothing registers a real
-one until Phase 4 brings Docling; the worker warns about exactly that at startup.)
+test-local imitation. The handlers here are **instrumented**, not stand-ins: Phase 4's real
+ones parse PDFs and write chunks, which would tell this test nothing about *where a kill
+landed*. Registration is a seam the process entry point fills (``python -m
+app.jobs.worker`` registers the real ones in its ``__main__`` guard, the API lifespan does
+the same for the in-process mode), which is exactly why this file can fill it with
+journalling handlers and still run the shipped bootstrap underneath.
 
 Each handler appends one line per event to the journal file named by ``AEGIS_KILL_TEST_LOG``:
 

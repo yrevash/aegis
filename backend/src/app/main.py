@@ -247,8 +247,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # present and silently runs nothing. The API keeps serving either way.
     worker_task: asyncio.Task[None] | None = None
     if settings.stores_enabled and settings.temporal_worker_inprocess:
+        from app.ingestion.stages import register_ingest_handlers
         from app.jobs.worker import start_worker_task
 
+        # The composition root: this is where the *work* of the ingest stages is bound to
+        # the substrate that runs them. It is here rather than inside ``run_workers``
+        # because that function is the bootstrap both launch modes share, and starting a
+        # worker must not silently replace handlers a host has already registered — the
+        # substrate's registry is deliberately a seam, not a hard-coded table.
+        register_ingest_handlers()
         worker_task = start_worker_task(sweeper_stop)
         _supervise(worker_task, "temporal-worker")
 

@@ -22,6 +22,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from aegis.ml import MLModelUnavailableError
@@ -53,6 +54,7 @@ from app.api.schemas import (
     BudgetRow,
     BudgetUpsertRequest,
     CapabilitiesResponse,
+    DocumentUploadResponse,
     EvalsReportResponse,
     ForecastRefusal,
     ForecastResponse,
@@ -3237,4 +3239,160 @@ async def cancel_job(
     )
     return JobActionResponse(
         job=_job_row(row), detail=f"Job {job_id} cancelled by {auth.username}."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Documents (phase 4 §4.5) — the upload that starts an ingest
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/documents",
+    response_model=DocumentUploadResponse,
+    tags=["ingestion"],
+    responses={429: {"model": AdmissionRefusedResponse}},
+)
+async def upload_document(
+    file: UploadFile = File(..., description="The document (PDF)."),
+    doc_type: str | None = Form(
+        default=None,
+        description="The tenant's own classification — 'policy', '10-K', 'lab report'.",
+    ),
+    doc_date: str | None = Form(
+        default=None,
+        description="The date the document is about (YYYY-MM-DD). Not the upload date.",
+    ),
+    auth: AuthContext = Depends(require_auth),
+) -> DocumentUploadResponse:
+    """Store a document and start its ingest, under this caller's tenant.
+
+    **Multipart, like ``/voice/transcribe``**, rather than base64 — the same reasoning
+    applies and applies harder here: base64 inflates a payload by a third, and on a
+    126-page PDF that is megabytes of pure overhead materialised as one JSON string on
+    both sides before anything can look at it.
+
+    **Two optional fields, and they are the point of the form.** ``doc_type`` and
+    ``doc_date`` are two of the four fields D7's chunk prefix carries, and this is the
+    only place in the system that can honestly know them: a MIME type is
+    ``application/pdf`` for the whole corpus, and ``created_at`` is when somebody
+    uploaded the file rather than when the document is from — using it would stamp every
+    chunk of a 2019 contract with this year. Omitted, they degrade to the chunker's
+    ``untyped`` / ``undated`` placeholders, which is a stated absence rather than a
+    confident wrong value.
+
+    **Idempotent on the bytes.** Re-uploading an identical document returns the existing
+    row with ``created: false`` and starts **no** second ingest. That is not politeness:
+    parsing is CPU-bound at roughly a second a page and embedding is billed, so a
+    duplicate that slipped through would cost real minutes on a single-slot queue and
+    real money against a $100 budget.
+
+    **Admission runs before the workflow starts.** A tenant at its in-flight cap, or
+    without the budget to finish the run, gets a **429** carrying the reason and naming
+    the gate on ``X-Admission-Gate`` — and nothing is left behind in the orchestrator to
+    reconcile, because the gate raises before anything is started.
+
+    Args:
+        file: The multipart document.
+        doc_type: Optional tenant classification for the D7 prefix.
+        doc_date: Optional ISO ``YYYY-MM-DD`` document date for the D7 prefix.
+        auth: The authenticated principal; the document is owned by their tenant.
+
+    Returns:
+        A :class:`~app.api.schemas.DocumentUploadResponse`.
+
+    Raises:
+        HTTPException: 400 for a principal with no tenant or a malformed date, 413 over
+            the size cap, 415 when the bytes are not a PDF, 429 when admission refuses,
+            503 when the orchestrator could not start the ingest.
+    """
+    from aegis.jobs import AdmissionError
+
+    from app.ingestion.upload import (
+        DocumentTooLarge,
+        UnsupportedDocumentType,
+        UploadUnscopedError,
+        WorkflowStartFailed,
+    )
+    from app.ingestion.upload import upload_document as _upload
+
+    parsed_date: date | None = None
+    if doc_date:
+        try:
+            parsed_date = date.fromisoformat(doc_date.strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"doc_date {doc_date!r} is not an ISO date (YYYY-MM-DD). It is "
+                    "embedded into every chunk of this document, so it is not guessed at."
+                ),
+            ) from exc
+
+    data = await file.read()
+    tenant_id = _scope_tenant(auth, None)
+    try:
+        outcome = await _upload(
+            tenant_id=tenant_id,
+            user_id=auth.user_id,
+            filename=file.filename or "document.pdf",
+            data=data,
+            doc_type=doc_type,
+            doc_date=parsed_date,
+        )
+    except UploadUnscopedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except DocumentTooLarge as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
+        ) from exc
+    except UnsupportedDocumentType as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
+        ) from exc
+    except AdmissionError as exc:
+        raise _admission_refusal(exc) from exc
+    except WorkflowStartFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Document {exc.document_id} was stored but its ingest could not be "
+                f"started: {exc.reason}"
+            ),
+        ) from exc
+
+    await _safe_audit(
+        "documents.upload",
+        auth.username,
+        payload={
+            "document_id": outcome.document_id,
+            "tenant_id": tenant_id,
+            "filename": outcome.filename,
+            "bytes": outcome.size_bytes,
+            "sha256": outcome.content_sha256,
+            "created": outcome.created,
+        },
+    )
+    detail = (
+        f"Ingest {outcome.workflow_id} started for {outcome.filename}."
+        if outcome.created
+        else (
+            f"Identical bytes were already uploaded as document {outcome.document_id}; "
+            "no second ingest was started."
+        )
+    )
+    return DocumentUploadResponse(
+        document_id=outcome.document_id,
+        filename=outcome.filename,
+        content_sha256=outcome.content_sha256,
+        size_bytes=outcome.size_bytes,
+        status=outcome.status,
+        workflow_id=outcome.workflow_id,
+        created=outcome.created,
+        title=outcome.title,
+        doc_type=outcome.doc_type,
+        doc_date=outcome.doc_date,
+        detail=detail,
     )

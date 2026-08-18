@@ -12,6 +12,7 @@ the variant's `type` and whose `data:` field is the model's JSON.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Any, Literal
 
 from aegis.core.types import (  # noqa: F401 - re-exported for identity, see docstrings below
@@ -1699,3 +1700,46 @@ class AdmissionRefusedResponse(BaseModel):
     detail: str = Field(
         description="Why the job was refused, in one renderable sentence."
     )
+
+
+class DocumentUploadResponse(BaseModel):
+    """Body for `POST /documents` — the row the upload produced and its ingest.
+
+    ``created`` is the field that carries the guarantee. Re-uploading identical bytes is
+    a **200 with ``created: false``**, naming the document that already exists, rather
+    than a 409 or a second row: the ``uq_documents_tenant_sha`` constraint makes the
+    document idempotent per tenant, and telling the caller which document their bytes
+    are is more useful than refusing them. A surface can therefore say "already
+    uploaded — ingest ``ingest:3:41``" instead of "conflict".
+
+    ``title`` is ``null`` until the parse stage derives it from the document's first
+    heading, and ``doc_type``/``doc_date`` are ``null`` unless the uploader supplied
+    them: nothing in a PDF's bytes reliably states either, so an absent value is stated
+    as absent rather than guessed (see the correction under D7 in the phase document).
+    """
+
+    document_id: int = Field(description="The `documents` row this upload owns.")
+    filename: str = Field(description="The name the document was uploaded under.")
+    content_sha256: str = Field(
+        description="SHA-256 of the bytes; the per-tenant idempotency key."
+    )
+    size_bytes: int = Field(description="How large the document is.")
+    status: str = Field(description="The row's job status (pending/running/...).")
+    workflow_id: str | None = Field(
+        default=None, description="The execution ingesting it, when one was started."
+    )
+    created: bool = Field(
+        description="True when these bytes were new and an ingest was started; false "
+        "when an identical document already existed and no second ingest was started."
+    )
+    title: str | None = Field(
+        default=None, description="Derived from the parse; null until it has run."
+    )
+    doc_type: str | None = Field(
+        default=None, description="The tenant's own classification, if supplied."
+    )
+    doc_date: date | None = Field(
+        default=None,
+        description="The date the document is about, if supplied. Never the upload time.",
+    )
+    detail: str = Field(description="One line describing the outcome, safe to render.")

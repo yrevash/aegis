@@ -20,6 +20,18 @@ Only the default queue's worker registers the **workflows**. A workflow task is 
 frequent; letting one occupy the single slot on the CPU queue would let a workflow wait
 for a slot held by its own activity.
 
+Where the stage handlers are registered, and why it is not here
+---------------------------------------------------------------
+
+:func:`run_workers` binds the session factory and *reports* which stages have no handler;
+it does not install them. The work of a stage reaches the substrate through
+:func:`aegis.jobs.register_stage_handler`, and that registry is a seam — a host may fill
+it differently, and the substrate's own tests fill it with instrumented handlers in order
+to observe what ran. A bootstrap that force-registered on every start would silently
+replace whatever the host had installed. So each *process entry point* registers instead:
+``app.main``'s lifespan for the in-process mode, and the ``__main__`` guard at the bottom
+of this module for ``python -m app.jobs.worker``.
+
 What this module deliberately does not do
 -----------------------------------------
 
@@ -39,6 +51,7 @@ from temporalio.worker import Worker
 
 from app.config import get_settings
 from app.ingestion import warm_parser
+from app.ingestion.stages import register_ingest_handlers
 from app.jobs.activities import ALL_ACTIVITIES
 from app.jobs.client import get_temporal_client
 from app.jobs.flows import (
@@ -299,4 +312,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess, not imported
+    # The composition root of the standalone launch mode: the *process* is where the work
+    # of the stages is bound to the substrate that runs it. Deliberately not inside
+    # :func:`run_workers` or :func:`main` — both are shared code, and a caller that has
+    # already registered its own handlers (a different parser, a test's instrumented
+    # ones) must not have them silently replaced by starting a worker. The in-process
+    # launch mode registers in ``app.main``'s lifespan for exactly the same reason.
+    register_ingest_handlers()
     main()

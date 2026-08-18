@@ -60,6 +60,7 @@ __all__ = [
     "JobRow",
     "MissingDocumentError",
     "cancel_job",
+    "estimate_ingest_usd",
     "list_jobs",
     "requeue_job",
 ]
@@ -169,6 +170,31 @@ async def list_jobs(*, tenant_id: int | None) -> list[JobRow]:
     return [_row(job) for job in rows]
 
 
+async def estimate_ingest_usd(
+    session: AsyncSession, *, size_bytes: int, tenant_id: int | None
+) -> float:
+    """Return the pre-authorisation estimate for ingesting a document of this size.
+
+    The **one** ingest estimate in the platform, shared by the upload path (task 4.5) and
+    by the re-queue path here. Two formulas would mean a document the upload gate admitted
+    could be refused by the re-queue gate — or, worse, the reverse — and neither refusal
+    would be explicable to the tenant looking at one number on a budgets screen.
+
+    Args:
+        session: The scoped session, for resolving the catalogue rate.
+        size_bytes: The document's size on disk.
+        tenant_id: The tenant the rate is resolved for.
+
+    Returns:
+        ``size_bytes / 1 MiB × jobs.estimated_cost_usd.ingest_per_mb``. Size is used
+        rather than ``page_count`` because a document that has never been parsed has no
+        page count, and the gate has to be able to refuse *that* job — the expensive one —
+        rather than only the ones already partly done.
+    """
+    rate, _source = await resolve(session, ESTIMATE_PER_MB_KEY, tenant_id=tenant_id)
+    return (size_bytes / _BYTES_PER_MB) * float(rate)
+
+
 async def _estimate_usd(
     session: AsyncSession, document: Document, *, tenant_id: int | None
 ) -> float:
@@ -180,13 +206,11 @@ async def _estimate_usd(
         tenant_id: The tenant the rate is resolved for.
 
     Returns:
-        ``size_bytes / 1 MiB × jobs.estimated_cost_usd.ingest_per_mb``. Size is used
-        rather than ``page_count`` because a document that has never been parsed has no
-        page count, and the gate has to be able to refuse *that* job — the expensive one —
-        rather than only the ones already partly done.
+        What :func:`estimate_ingest_usd` says for this document's size.
     """
-    rate, _source = await resolve(session, ESTIMATE_PER_MB_KEY, tenant_id=tenant_id)
-    return (document.size_bytes / _BYTES_PER_MB) * float(rate)
+    return await estimate_ingest_usd(
+        session, size_bytes=document.size_bytes, tenant_id=tenant_id
+    )
 
 
 async def requeue_job(

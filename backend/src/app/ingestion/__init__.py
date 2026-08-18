@@ -1,8 +1,21 @@
-"""Host wiring for ingestion — when the parser is loaded, and by which process.
+"""Host wiring for ingestion — the upload, the stages, and when the parser is loaded.
 
-The parsing itself lives in :mod:`aegis.ingestion`, which knows nothing about this
-application: no settings, no orchestrator, no event loop. What is left over is the two
-host decisions, and they are both here.
+The parsing itself lives in :mod:`aegis.ingestion` and the chunking in
+:mod:`aegis.retrieval.chunker`, neither of which knows anything about this application:
+no settings, no orchestrator, no event loop. What is left over is the host's, and it is
+this package:
+
+* :mod:`app.ingestion.upload` — ``POST /documents``: store the bytes, deduplicate on
+  them, admit the job against the tenant's budget, start the workflow.
+* :mod:`app.ingestion.store` — where those bytes live, content-addressed and partitioned
+  by tenant, and where the parse artifact is written beside them.
+* :mod:`app.ingestion.artifacts` — the codec that carries a parsed document from the
+  ``parse`` stage to the ``chunk`` stage.
+* :mod:`app.ingestion.stages` — the six stage handlers, and the registration a process
+  entry point calls to bind them to Phase 3's substrate.
+
+The rest of this module is the two host decisions about the *parser*, and they are both
+here.
 
 **Which process pays for the models.** Docling's layout and table models are ~730 MB on
 disk and hold a little under a gigabyte resident once loaded. Only a process that

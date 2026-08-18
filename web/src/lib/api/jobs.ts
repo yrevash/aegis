@@ -126,3 +126,56 @@ export async function cancelJob(id: number, token: string | null): Promise<JobAc
     token,
   )
 }
+
+/** The `documents` row an upload produced. Mirrors `DocumentUploadResponse`. */
+export interface DocumentUpload {
+  document_id: number
+  filename: string
+  content_sha256: string
+  size_bytes: number
+  status: string
+  workflow_id: string | null
+  /** False when identical bytes were already uploaded — no second ingest was started. */
+  created: boolean
+  title: string | null
+  doc_type: string | null
+  doc_date: string | null
+  detail: string
+}
+
+/**
+ * Upload a document and start its ingest (`POST /documents`).
+ *
+ * Multipart, not JSON: base64 would inflate a 126-page PDF by a third and force the
+ * whole thing to be materialised as one string on both sides. The `Content-Type` header
+ * is deliberately left unset so the browser writes the multipart boundary itself.
+ *
+ * `docType` and `docDate` are optional and are the two chunk-prefix fields nothing but
+ * the uploader can honestly know — a MIME type is `application/pdf` for the whole corpus,
+ * and the upload time is not the date the document is *from*. Omitted, the backend
+ * renders them as `untyped` / `undated` rather than inventing a value.
+ *
+ * Admission runs before any ingest starts, so a tenant at its in-flight cap or out of
+ * budget gets a 429 whose reason `JobsApiError` carries verbatim.
+ */
+export async function uploadDocument(
+  file: File,
+  options: { docType?: string; docDate?: string },
+  token: string | null,
+): Promise<DocumentUpload> {
+  const form = new FormData()
+  form.append('file', file)
+  if (options.docType) form.append('doc_type', options.docType)
+  if (options.docDate) form.append('doc_date', options.docDate)
+
+  const headers = new Headers()
+  const bearer = token ?? getAuthToken()
+  if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
+  const res = await fetch(`${API_BASE}/documents`, { method: 'POST', body: form, headers })
+  if (!res.ok) {
+    const header = res.headers.get('X-Admission-Gate')
+    const gate = header === 'concurrency' || header === 'budget' ? header : null
+    throw new JobsApiError(res.status, await detailOf(res), gate)
+  }
+  return (await res.json()) as DocumentUpload
+}

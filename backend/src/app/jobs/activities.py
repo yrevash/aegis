@@ -79,8 +79,15 @@ __all__ = [
 #: mapping of column updates and the substrate applies them, so this allow-list is what
 #: stops a handler from writing ``tenant_id`` (moving a document between tenants) or
 #: ``completed_stage`` (claiming progress the substrate did not verify).
+#:
+#: ``title`` is here and ``doc_type``/``doc_date`` deliberately are **not**. The title is
+#: *derived* — the parse stage reads it off the document's first heading — so a stage is
+#: exactly the right writer for it. The other two can only be supplied by the tenant at
+#: upload (see the correction under D7): nothing in the bytes states them, so a stage that
+#: could write them could only ever be writing a guess, and a guessed document date is
+#: indistinguishable from a real one once it is embedded into every chunk's prefix.
 _HANDLER_WRITABLE_COLUMNS = frozenset(
-    {"page_count", "chunk_count", "mime_type", "filename", "size_bytes"}
+    {"page_count", "chunk_count", "mime_type", "filename", "size_bytes", "title"}
 )
 
 

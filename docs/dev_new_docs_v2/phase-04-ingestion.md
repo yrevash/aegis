@@ -856,7 +856,7 @@ and its error bar, not the library that printed it.
 | 4.2 | ✅ Text-layer probe + header/footer/page-number stripping | 0.25 | Done 2026-08-18. The stripper is a **backstop** on these fixtures — see §4.0 |
 | 4.3 | ✅ `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | **Landed 2026-08-18.** The chunker survived intact: `_pack_units` gained the unit indices a chunk needs to find its blocks again, and nothing else moved. Page and bbox thread through, including for the words carried in an overlap tail |
 | 4.4 | ✅ Enriched prefix: title · type · date · heading path | 0.15 | **Landed 2026-08-18** with 4.3. Highest quality-per-hour in the phase. A field the document does not carry renders as a placeholder (`untitled` · `untyped` · `undated` · `unsectioned`) rather than collapsing — the prefix is embedded, so its *shape* must not vary across a corpus |
-| 4.5 | Upload route + **stage handlers on the P3 workflow**, **and `documents.title`/`doc_type`/`doc_date`** | 0.55 | `documents` already exists (P3). No queue machinery — the stages are activities. **Owns the three prefix fields D7 wrongly assumed existed** — see the correction under D7 |
+| 4.5 | ✅ Upload route + **stage handlers on the P3 workflow**, **and `documents.title`/`doc_type`/`doc_date`** | 0.55 | `documents` already exists (P3). No queue machinery — the stages are activities. **Owns the three prefix fields D7 wrongly assumed existed** — see the correction under D7. **Landed 2026-08-18**; four corrections, see §4.5 |
 | 4.6 | ✅ **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change. **Landed 2026-08-18** |
 | 4.6b | ✅ **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm was fail-open; shipped with 4.6. **Landed 2026-08-18** |
 | 4.6c | **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out |
@@ -927,6 +927,58 @@ Memurai and Temporal also resident is the number that decides whether one parse 
 enough.
 
 ### 4.5 — `documents`, the upload route, and the `ingest_document` job (0.75d)
+
+**[LANDED] 2026-08-18 — with four corrections to what follows.**
+
+*The `documents` table was not this task's to create.* Amendment B already said so; what was
+actually missing is the three prefix fields, and they are now on the row: `title` (nullable,
+written by the **parse** stage from the document's first heading, falling back to the
+filename stem — never to `source_name`, which is the content-addressed path in the document
+store and so is a SHA-256), `doc_type` and `doc_date` (nullable, supplied by the uploader,
+left `NULL` and rendered as `untyped`/`undated` when they are not). `title` was added to
+`_HANDLER_WRITABLE_COLUMNS`; `doc_type` and `doc_date` deliberately were **not** — a stage
+that could write them could only ever be writing a guess.
+
+*The bytes need somewhere to live, and the phase never said where.* They are not on the row:
+a 126-page PDF is megabytes of `bytea` on the hottest tenant-scoped table in the system.
+`app.ingestion.store` is a content-addressed, tenant-partitioned directory under
+`DOCUMENT_STORE_PATH`, addressed by the same `content_sha256` the row carries. **The parse
+artifact lives there too** — `parse` (CPU queue) and `chunk` (default queue) are different
+activities in different transactions, so the structured tree has to survive the gap or the
+chunk stage would re-parse two hundred pages to learn what the parse already knew. That is a
+**shared-filesystem assumption**, stated rather than hidden: it holds trivially on the
+single-box posture, and a deployment that splits the queues across machines must point that
+setting at shared storage.
+
+*`chunks.embedding` is `NOT NULL`, so the chunk stage cannot leave it unset.* It writes the
+**empty** list, which is off-dimension by construction and therefore skipped rather than
+believed; a zero vector of the right width would be a valid-looking vector pointing nowhere.
+The column was left as task 4.6 shipped it rather than relaxed, because the additive
+reconciler cannot relax a live `NOT NULL` and the model would then be describing a schema no
+deployed database has.
+
+*Handlers are registered by the process entry point, not by the worker bootstrap.*
+`run_workers` reports which stages have no handler and installs none: the registry is a seam
+(the kill-and-resume test fills it with journalling handlers and runs the shipped bootstrap
+underneath), and a bootstrap that force-registered would silently replace them. `app.main`'s
+lifespan registers for the in-process mode; the `__main__` guard in `app.jobs.worker` does it
+for `python -m app.jobs.worker`.
+
+**What the six handlers do** (`app.ingestion.stages`): `parse` → Docling, artifact, returns
+`page_count` + `title`; `chunk` → `chunk_sections`, **delete-then-insert** of `chunks` rows
+carrying tenant, document, prefix, section, page spans and content id, returns `chunk_count`;
+`enrich` → one guarded `UPDATE` folding the D7 prefix into `content` (which is also what
+`search_vector` is generated from); `embed` → the embedding of record per chunk; `index` →
+publishes the chunks to the configured knowledge backend under a tenant-prefixed,
+content-addressed id; `graph` → entity/relation extraction recorded on the chunk row, named
+with the extractor that produced it.
+
+**Measured on the way in.** `transformer-single-column.pdf` uploaded through the route:
+15 pages, 33 chunks, `title` = *"Attention Is All You Need"* read off the first heading, and
+`keyword_recall("multi-head attention")` returns the chunk whose prefix reads
+`[Attention Is All You Need · research paper · 2017-06-12 · 3 Model Architecture > 3.2
+Attention > Scaled Dot-Product Attention]`. Task 4.7's keyword arm has a corpus.
+
 
 **There is no job machinery in this task.** The claim, the lease, the reaper, the retry, the
 dead-letter status, the idempotency key, the priority, the admission cap, the cancellation flag

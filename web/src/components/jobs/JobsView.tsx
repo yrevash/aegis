@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import { Badge } from '@/components/primitives/badge'
 import { Card } from '@/components/primitives/card'
 import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
+import { UploadPanel } from '@/components/jobs/UploadPanel'
 import { cancelJob, getJobs, JobsApiError, requeueJob, type JobRunRow } from '@/lib/api/jobs'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
@@ -115,6 +116,9 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* The front door: an upload is what puts a document into this queue at all. */}
+      <UploadPanel token={token} onUploaded={() => void refresh()} />
+
       <Card className="gap-0 p-0">
         <div className="flex flex-wrap items-center justify-between gap-3 p-5">
           <div className="flex items-center gap-3">

@@ -159,6 +159,15 @@ class Settings(BaseSettings):
     # doc assumed - the large cost is the 730 MB first download, which
     # ``spikes/docling_spike.py --prefetch`` exists to pay in advance.
     docling_warm_on_start: bool = Field(default=False)
+    # Where an uploaded document's bytes and its parse artifact live. Not the database:
+    # a 126-page PDF is megabytes of ``bytea`` on the hottest tenant-scoped table in the
+    # system, in every backup, read past by every query that never wants it. The store is
+    # content-addressed and tenant-partitioned (``app.ingestion.store``), so a re-upload
+    # of identical bytes writes the same path the ``uq_documents_tenant_sha`` constraint
+    # deduplicates the row on. The ``parse`` stage (CPU queue) writes the artifact the
+    # ``chunk`` stage (default queue) reads, so a deployment that splits those queues
+    # across machines must point this at shared storage.
+    document_store_path: str = Field(default="document_storage")
 
     # ── Guardrails engine (one policy, two front doors; docs/security/overview.md §3) ──
     # Two front doors enforce the same policy: the fast, offline-testable

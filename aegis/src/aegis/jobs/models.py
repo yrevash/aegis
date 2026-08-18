@@ -52,7 +52,7 @@ consumer who orchestrates differently, and keeps the fallback substrate a drop-i
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -202,6 +202,27 @@ class Document(AegisBase):
     because they are *discovered* by the parse and chunk stages rather than known at
     upload, so ``NULL`` honestly means "not parsed yet" where ``0`` would claim an empty
     document.
+
+    The three D7 prefix fields — ``title``, ``doc_type``, ``doc_date`` — are the correction
+    recorded under that decision. D7 assumed all four of its fields were already on this
+    row; two thirds of that was false, and this is where the missing three live. Each is
+    nullable, and each is nullable for its own reason rather than for tidiness:
+
+    * ``title`` is *derived*, by the parse stage, from the document's first heading (which
+      on every fixture is the real printed title), falling back to the filename stem. It
+      is ``NULL`` between the upload and the parse, which is the honest reading of "we
+      have not opened the file yet".
+    * ``doc_type`` and ``doc_date`` can only be **supplied by the tenant at upload**. A
+      MIME type is ``application/pdf`` for the whole corpus and so discriminates nothing,
+      and there is nothing in the bytes that reliably states either. Left ``NULL`` they
+      degrade to :func:`aegis.retrieval.chunker.chunk_prefix`'s ``untyped`` / ``undated``
+      placeholders — a stated absence, which keeps the prefix's *shape* constant across a
+      corpus, rather than a confident wrong value.
+
+    ``doc_date`` is a ``date`` and it is **never** derived from ``created_at``. That column
+    is when somebody uploaded the file; using it would stamp every chunk of a 2019 contract
+    with 2026 and would do so invisibly, because a plausible date looks exactly like a
+    correct one.
     """
 
     __tablename__ = "documents"
@@ -214,6 +235,12 @@ class Document(AegisBase):
     content_sha256: Mapped[str] = mapped_column(String(64), index=True)
     mime_type: Mapped[str] = mapped_column(String(128))
     size_bytes: Mapped[int]
+    # D7's three prefix fields; see the class docstring for why each is nullable and why
+    # ``doc_date`` may never be back-filled from ``created_at``. ``title`` is sized like
+    # ``filename`` because its fallback *is* the filename stem.
+    title: Mapped[str | None] = mapped_column(String(512), default=None)
+    doc_type: Mapped[str | None] = mapped_column(String(128), default=None)
+    doc_date: Mapped[date | None] = mapped_column(default=None)
     status: Mapped[JobStatus] = mapped_column(_JOB_STATUS, index=True)
     completed_stage: Mapped[str | None] = mapped_column(String(64), default=None)
     workflow_id: Mapped[str | None] = mapped_column(String(255), index=True, default=None)
