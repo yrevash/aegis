@@ -975,6 +975,35 @@ It is also the same primitive the gold set uses, so it is built once and used tw
 **Trade-off:** it catches fabricated quotes, not fabricated *reasoning* over real quotes.
 Worth saying plainly rather than overselling.
 
+**[LANDED] 2026-08-19, task 4.14 — with two things this decision did not settle.**
+
+*It lives in `aegis/src/aegis/retrieval/citations.py`, and the gold set imports it from
+there.* `normalise_span` / `span_present` are the grading rule of 4.11 and the verification
+rule of a citation, one function, so a normalisation that is too generous inflates the eval
+and waves through a fabricated quote in the same motion. What it folds is transport and
+nothing else: NFKC (a PDF font's `ﬁ` ligature), line-wrap hyphens, case, and every
+non-alphanumeric run — including the spotlight datamark, so turning the injection defence on
+does not silently fail every citation. It also deletes `U+FFFE`, which is what PDFium emits
+where it cannot map the wrap-hyphen glyph — **332 times in `bert-two-column.pdf` alone**, and
+without that rule 8 of 53 gold spans failed to anchor to the document they are printed in.
+
+*A failed check is **marked, never dropped**, and this decision does not say which.* Dropping
+it is the tempting option because the output looks clean; it is wrong, because an answer
+quoting a sentence that is in no retrieved chunk is the loudest hallucination signal the
+system can produce, and deleting it destroys the evidence while leaving the prose it justified
+in place and unlabelled. So `verify_citations` returns one check per citation with an explicit
+status — `verified`, `unverified`, or `unknown-source` (a citation naming a chunk the answer
+was never given, which is an id-mapping bug and not a hallucination) — plus a `matched_fraction`,
+so a paraphrase at 0.8 and an invention at 0.09 are not the same red cross.
+
+*What it is not yet wired to, because there is nothing to wire it to.* The answer path emits
+**prose**, not structured citations: `RetrievalResult.sources` carries chunks, and
+`ScoredSource` in the API schema carries `id`/`label`/`score` with no quoted span anywhere.
+So 4.14 ships as a verified, exported primitive with no caller in the serving path, and the
+generator that emits `(source_id, quote)` pairs is what turns it on. Stated here rather than
+left for someone to discover that "every citation is checked" checks a list that is always
+empty.
+
 ### D11 — Keep our chunker. Do not adopt semantic or LLM chunking.
 
 **Reason, and this one is unusually clear in the 2026 literature:** semantic, proposition
@@ -1057,11 +1086,11 @@ and its error bar, not the library that printed it.
 | 4.8 | ✅ `corpus_version` bump + cache invalidation | 0.25 | **Landed 2026-08-19.** Plugs into Phase 1's seam. The bump lives in `finish_ingest` — the close-out activity — and not in the upload route or in a stage: see the correction under 4.8 below, which also records that one claim in 4.5's body about the idempotency key is wrong |
 | 4.9 | ✅ **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest. **Landed 2026-08-19.** `fastembed==0.8.0` in the `retrieval` extra (no torch); `jinaai/jina-reranker-v1-tiny-en` (33M, 134 MB). The API reranker is now the **loud** fallback. **D6's latency estimate was wrong by 4x** — measured 1.44 s p50 over 20 x 400-word chunks, not 150–400 ms; see the correction under D6 |
 | 4.10 | ✅ **Table objects with NL summaries, hash-cached** | 0.4 | **Landed 2026-08-19.** A table is now its own chunk carrying `(rows, cols)`, its caption and a content digest; above a configured size the `chunk` stage writes a generated sentence or two **in front of** the grid and caches it in `table_summaries`, keyed on the digest. **TableFormer stays on ACCURATE** — see D3b, unchanged. Duplicated table captions were already fixed in `convert.py`, so the summaries are written over text that does not repeat itself. **One correction to D8, and it is not cosmetic — see below.** |
-| 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
+| 4.11 | ✅ Span-anchored gold set + naive-baseline ablation | 0.5 | **Landed 2026-08-19.** 58 cases (53 gradeable) over all four fixtures, every span verified verbatim in the PDF's own text layer. **The ladder does not go up the way §5 assumed and three of its arms do not pay for themselves — see the measured block under §5, which is the most important correction in the phase.** |
 | 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
 | 4.12b | **Graph construction visible in the ingest log** | 0.25 | Entities and relations as they are extracted — the user asked to see the KG being built, not just its result |
 | 4.13 | ✅ Re-index handler on the P3 scheduler | 0.1 | **Landed 2026-08-19.** `app/ingestion/reindex.py` — every stage except `parse`, over the stored parse artifact. Two corrections, see §4.13 |
-| 4.14 | Verbatim citation verification | 0.15 | ~40 lines, reuses 4.11's primitive |
+| 4.14 | ✅ Verbatim citation verification | 0.15 | **Landed 2026-08-19.** `aegis/src/aegis/retrieval/citations.py` — the primitive 4.11 grades with, plus `verify_citations`. A failed check is **marked, never dropped**; see the correction under D10 |
 
 **Total: ~5.0 days** after the P3 credit (−0.35 on 4.5, −0.15 on 4.13) and the three
 additions above (+0.9). Honest rather than padded — see the cut order.
@@ -1371,6 +1400,108 @@ before a judge asks is worth more than the extra decimal place.
 [`research/eval-design.md`](research/eval-design.md) §4, including a five-rung fallback ladder
 for when the gateway is down. The single most valuable preparation item: **a timed rehearsal
 on an unfamiliar corpus before 30 August.**
+
+---
+
+### [MEASURED] 2026-08-19, task 4.11 — the table, and the four things above it that are wrong
+
+**Reproduce:** `AEGIS_DOCLING_SLOW_FIXTURES=1 PYTHONPATH=aegis/src backend/.venv/bin/python
+scripts/eval_goldset.py`. Artifact: [`runs/eval-goldset-20260819.json`](../../runs/eval-goldset-20260819.json)
+(git sha, model ids, corpus hashes, gold-set hash, seed, per-case ranks). Cost **$0.00** — the
+embedder and the reranker are both local ONNX, so two runs are comparable.
+
+**The set:** 58 span-anchored cases, **53 gradeable**, over all four fixtures — 30 hand-written,
+11 known-item, 9 table, 3 multi-hop, 5 unanswerable. Every span is asserted verbatim in the
+**PDF's own text layer** (PDFium), not in the Docling parse, because checking a parse against
+itself is not a check. Corpus: 519 naive windows / 774 structural chunks.
+
+| arm | what changed | recall@20 | recall@6 | precision@6 | MRR@20 | nDCG@10 |
+|---|---|---|---|---:|---:|---:|
+| **A0** | naive: text layer + fixed windows, dense only | 0.934 (0.85–0.98) | 0.755 (0.62–0.85) | 0.138 | 0.568 | 0.642 |
+| **A1** | + layout-aware parse and structural chunking | 0.906 (0.80–0.96) | 0.774 (0.64–0.87) | 0.135 | 0.533 | 0.613 |
+| **A2** | + enriched chunk prefix (D7) | 0.896 (0.80–0.96) | 0.736 (0.60–0.84) | 0.129 | 0.563 | 0.625 |
+| **A3** | + hybrid recall (vector + graph + BM25, RRF) | 0.915 (0.80–0.96) | 0.821 (0.71–0.91) | 0.145 | 0.557 | 0.633 |
+| **A4** | = shipped: A3 + local cross-encoder rerank | 0.915 (0.80–0.96) | 0.830 (0.71–0.91) | 0.151 | **0.686** | 0.752 |
+| **L1** | A4 − graph arm | **0.972 (0.90–1.00)** | **0.849 (0.73–0.92)** | 0.154 | 0.692 | 0.760 |
+| **L2** | A4 − BM25 arm | 0.821 (0.71–0.91) | 0.764 (0.62–0.85) | 0.135 | 0.643 | 0.693 |
+
+n = 53; Wilson 95%. Paired deltas, bootstrap 95% CI and exact McNemar:
+
+| comparison | Δ recall@6 | 95% CI | discordant | p |
+|---|---:|---|---|---:|
+| A0 → A1 (structure) | +0.019 | −0.094 … +0.151 | 11 (6 for A1) | 1.00 |
+| A1 → A2 (prefix) | **−0.038** | −0.113 … +0.038 | 4 (1 for A2) | 0.63 |
+| A2 → A3 (hybrid) | **+0.085** | **+0.019 … +0.170** | 5 (5 for A3) | 0.06 |
+| A3 → A4 (rerank) | +0.009 | −0.066 … +0.085 | 5 (3 for A4) | 1.00 |
+| A0 → A4 (everything) | +0.075 | −0.038 … +0.198 | 12 (8 for A4) | 0.39 |
+| L2 → A4 (BM25 earns it) | **+0.066** | **+0.009 … +0.142** | 4 (4 for A4) | 0.13 |
+| L1 → A4 (graph costs it) | **−0.019** | −0.057 … +0.000 | 1 (0 for A4) | 1.00 |
+
+**1. A0 is much stronger than this section assumed, and only one arm beats it with an
+interval that excludes zero.** A competent naive baseline — text layer, 400-word windows,
+the *same* embedder — already reaches **recall@20 = 0.934**. The end-to-end A0 → A4 delta on
+recall@6 is **+0.075 (95% CI −0.038 to +0.198, p = 0.39): not significant at n = 53**, exactly
+as §4.3 of the eval design predicted for an effect under 15 points. The honest headline is
+"+7.5 points, which this sample cannot defend", and it is a better sentence than a decimal
+place nobody can challenge.
+
+**2. Structure and the enriched prefix did not pay for themselves here.** A1 is +1.9 pp on
+recall@6 and **−2.8 pp on recall@20**; A2 is **−3.8 pp on recall@6** against A1. D7's cited
+"Context@5 33.3% → 55.0%" does not reproduce on this corpus with this embedder. One mechanism
+is measured rather than guessed: `BAAI/bge-small-en-v1.5` truncates at **512 tokens**, a
+400-word chunk is ~520, and adding the prefix takes the share of chunks that overflow from
+**15% to 21%** and pushes one more gold span past the cut. That accounts for about one of the
+two cases A2 loses, so it is a partial explanation and is reported as one. The production
+embedder (`text-embedding-3-large`, 8191 tokens) does not have this ceiling — which makes
+"re-run the ladder under the gateway embedder" the single highest-value follow-up, and makes
+**chunk_size vs embedder context a real coupling this phase never wrote down**.
+
+**3. The reranker's +12.1 pp does not reproduce — but it is not doing nothing.** A3 → A4 moves
+recall@6 by **+0.009** (5 discordant, 3 favouring A4). The recall@20 → recall@6 gap is
+**−9.4 pp for A3 and −8.5 pp for A4**: reranking recovers **0.9 pp** of what truncating 20
+candidates to 6 costs. What it *does* buy is **ordering**: MRR@20 **0.557 → 0.686 (+12.9 pp)**
+and nDCG@10 **0.633 → 0.752**. So the 1.44 s/query measured in D6 buys a better-ordered
+answer, not a materially more complete one, and D6's "+12.1 pp recall@5" should be read as an
+external result we did not reproduce rather than as ours. **A4's recall@20 is identical to
+A3's by construction** — a reranker reorders the pool and cannot add to it — which is why this
+gap is the reranker isolated and not a proxy for it.
+
+**4. The leave-one-out probes disagree with each other, and the graph arm loses.** Removing
+BM25 (L2) costs **9.4 pp of recall@20 and 6.6 pp of recall@6** — the BM25 arm is the one piece
+of this pipeline that clearly earns its place, and D5's "single largest quality gap" is the
+one claim in the phase the measurement supports outright. Removing the **graph** arm (L1)
+**improves** every metric: recall@20 0.915 → **0.972**, recall@6 0.830 → **0.849**. On this
+corpus the graph arm is a net negative, because RRF gives a co-occurrence-expanded list equal
+standing with two arms that are actually about the query. D14 said to position the graph as
+the relational/explainability arm and not the quality engine; **it is worse than that here —
+it is a quality cost**, and the ablation would have contradicted us on our own slide exactly
+as D14 warned.
+
+**The subsets say where the work landed** — descriptive only, and labelled as such: at
+n = 9 and n = 3 these cannot be statistically separated.
+
+| kind | n | A0 | A2 | A3 | A4 | L2 (−BM25) |
+|---|---:|---:|---:|---:|---:|---:|
+| known-item (exact identifiers) recall@6 | 11 | 0.636 | 0.818 | 0.818 | **0.909** | 0.818 |
+| table (the answer is a cell) recall@20 | 9 | 0.889 | 0.778 | 0.889 | 0.889 | **0.667** |
+| multi-hop recall@20 | 3 | 0.833 | 0.833 | 0.833 | 0.833 | **0.500** |
+| hand-written recall@6 | 30 | 0.800 | 0.767 | **0.867** | 0.833 | 0.800 |
+
+The pattern is consistent with D5 and with nothing else in the ladder: the arm that carries
+the **exact-identifier and table** questions — the ones a judge is most likely to ask on
+stage — is BM25, and taking it away costs 22 points of table recall@20 and 33 of multi-hop.
+The +27 pp A0 → A4 move on known-item questions is the one place the ladder does what §5
+expected it to do everywhere.
+
+Two limits on that last finding, stated rather than buried: the arm measured is
+`InMemoryKnowledgeBackend`'s **co-occurrence expansion** (the lite shipped configuration), not
+LightRAG's entity graph; and 3 multi-hop cases cannot separate anything. It is a real result
+about the arm we ran, not a general claim about graph retrieval.
+
+**What none of this changes:** the gold set, the primitive and the runner are the instrument,
+and the instrument is verified — `test_ablation.py` asserts arm A3's ordering **equals**
+`Retriever.retrieve`'s over the same backend, so the table is a measurement of the shipped
+path rather than of a lookalike.
 
 ---
 

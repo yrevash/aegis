@@ -28,6 +28,9 @@ data/*.csv
 *.joblib
 *.pkl
 
+# Docling parse cache for scripts/eval_goldset.py (re-derivable, ~30 MB)
+.parse-cache/
+
 # Local infra state
 phoenix.db
 neo4j/

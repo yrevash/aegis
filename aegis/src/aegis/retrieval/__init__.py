@@ -29,6 +29,15 @@ Self-RAG/FLARE iterative loop in :mod:`aegis.retrieval.agentic` (`agentic_retrie
 
 from __future__ import annotations
 
+from aegis.retrieval.citations import (
+    Citation,
+    CitationCheck,
+    CitationStatus,
+    citation_validity,
+    normalise_span,
+    span_present,
+    verify_citations,
+)
 from aegis.retrieval.local_reranker import (
     DEFAULT_LOCAL_RERANK_MODEL,
     LocalCrossEncoderReranker,
@@ -76,6 +85,9 @@ __all__ = [
     "CacheProvenance",
     "Candidate",
     "Chunk",
+    "Citation",
+    "CitationCheck",
+    "CitationStatus",
     "FusionMethod",
     "GraphDelta",
     "GraphEdge",
@@ -92,9 +104,13 @@ __all__ = [
     "RetrievalOrigin",
     "RetrievalResult",
     "RetrievalScope",
-    "UnresolvedTenantScopeError",
     "Retriever",
     "RewriteReport",
     "Source",
+    "UnresolvedTenantScopeError",
     "build_default_retriever",
+    "citation_validity",
+    "normalise_span",
+    "span_present",
+    "verify_citations",
 ]

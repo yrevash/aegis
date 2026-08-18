@@ -1,0 +1,6027 @@
+{
+  "kind": "aegis.phase4.ablation",
+  "complete_corpus": true,
+  "note": "every fixture",
+  "git_sha": "277e10405bc847e1354ae6bd06f758a17fadc0a4",
+  "embedding_model": "BAAI/bge-small-en-v1.5",
+  "rerank_model": "jinaai/jina-reranker-v1-tiny-en",
+  "recall_top_k": 20,
+  "final_top_k": 6,
+  "chunk_size": 400,
+  "chunk_overlap": 60,
+  "bootstrap_seed": 20260830,
+  "gold_set_hash": "209fcad572a9440a7f90fca41254b5c6bc12806a9aa0a1f24cf7fe4650ef32b8",
+  "gold_cases": 53,
+  "gold_kinds": {
+    "handwritten": 30,
+    "known_item": 11,
+    "multi_hop": 3,
+    "table": 9,
+    "unanswerable": 5
+  },
+  "documents": [
+    "transformer-single-column.pdf",
+    "bert-two-column.pdf",
+    "census-income-tables.pdf",
+    "irs-1040-instructions-tables.pdf"
+  ],
+  "corpora": {
+    "naive_windows": {
+      "chunks": 519,
+      "sha256": "32dae888ff9b663afb96370c3c5c439dabf615faf724ea0dbb433aa8d150c151"
+    },
+    "structural": {
+      "chunks": 774,
+      "sha256": "1d496a26dc6177b1b8b3c9b16b6e16fa1d4b8e86faa408e7cba26a8f3d06f3d7"
+    },
+    "structural_prefixed": {
+      "chunks": 774,
+      "sha256": "83605c39dc136ba2b695b1b92f0b28b719e4b1cf02259ed4d5926f3916fc1ac8"
+    }
+  },
+  "spend_usd": 0.0,
+  "arms": [
+    {
+      "name": "A0",
+      "label": "naive: text layer + fixed windows, dense only",
+      "chunking": "naive_windows",
+      "signals": [
+        "vector"
+      ],
+      "rerank": false,
+      "chunks": 519,
+      "seconds": 0.83,
+      "means": {
+        "recall_20": 0.9339622641509434,
+        "recall_6": 0.7547169811320755,
+        "precision_6": 0.1383647798742139,
+        "mrr_20": 0.5677367085634216,
+        "ndcg_10": 0.6422320080823665
+      },
+      "wilson95": {
+        "recall_20": [
+          0.8462955106387368,
+          0.9805636910726857
+        ],
+        "recall_6": [
+          0.6243318493782992,
+          0.8506723728814543
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "g-001",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.14285714285714285,
+          "ndcg_10": 0.3333333333333333
+        },
+        {
+          "case_id": "g-002",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1,
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.3333333333333333
+        },
+        {
+          "case_id": "g-003",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-004",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-005",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-006",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-007",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-008",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1,
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.6309297535714575
+        },
+        {
+          "case_id": "g-009",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-010",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-011",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-012",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-013",
+          "kind": "multi_hop",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ],
+            [
+              1,
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.5,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.1837889117207785
+        },
+        {
+          "case_id": "g-014",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07692307692307693,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-015",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-016",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-017",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-018",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-019",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-020",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-021",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-022",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07692307692307693,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-023",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.14285714285714285,
+          "ndcg_10": 0.3333333333333333
+        },
+        {
+          "case_id": "g-024",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              12
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.08333333333333333,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-025",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-026",
+          "kind": "multi_hop",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [],
+            [
+              10
+            ]
+          ],
+          "recall_20": 0.5,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.1,
+          "ndcg_10": 0.17723928678404774
+        },
+        {
+          "case_id": "g-027",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1,
+              12
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-028",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              9
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.1111111111111111,
+          "ndcg_10": 0.3010299956639812
+        },
+        {
+          "case_id": "g-029",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-030",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-031",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-032",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              4,
+              18
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-033",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              19
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05263157894736842,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-034",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-035",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-036",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-037",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-038",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-039",
+          "kind": "multi_hop",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              3
+            ],
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 0.9197207891481876
+        },
+        {
+          "case_id": "g-040",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-041",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-042",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-043",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              16
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0625,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-044",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-045",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-046",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-047",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-048",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-049",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-050",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-051",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-052",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-053",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              11
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.09090909090909091,
+          "ndcg_10": 0.0
+        }
+      ]
+    },
+    {
+      "name": "A1",
+      "label": "+ layout-aware parse and structural chunking",
+      "chunking": "structural",
+      "signals": [
+        "vector"
+      ],
+      "rerank": false,
+      "chunks": 774,
+      "seconds": 0.68,
+      "means": {
+        "recall_20": 0.9056603773584906,
+        "recall_6": 0.7735849056603774,
+        "precision_6": 0.1352201257861636,
+        "mrr_20": 0.5330551523947749,
+        "ndcg_10": 0.6127396118714691
+      },
+      "wilson95": {
+        "recall_20": [
+          0.7974602432629856,
+          0.9590279625581031
+        ],
+        "recall_6": [
+          0.6447347199775757,
+          0.8654550002273447
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "g-001",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-002",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-003",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-004",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-005",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-006",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-007",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              20
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-008",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-009",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-010",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-011",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-012",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-013",
+          "kind": "multi_hop",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              5
+            ],
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.5012658353418871
+        },
+        {
+          "case_id": "g-014",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-015",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-016",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              9
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.1111111111111111,
+          "ndcg_10": 0.3010299956639812
+        },
+        {
+          "case_id": "g-017",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              6,
+              8
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.671672063893751
+        },
+        {
+          "case_id": "g-018",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-019",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-020",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-021",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-022",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-023",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07692307692307693,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-024",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              18
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05555555555555555,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-025",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              20
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-026",
+          "kind": "multi_hop",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              8
+            ],
+            [
+              16
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.125,
+          "ndcg_10": 0.19342640361727081
+        },
+        {
+          "case_id": "g-027",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1,
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.6309297535714575
+        },
+        {
+          "case_id": "g-028",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-029",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-030",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-031",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-032",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-033",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-034",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-035",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-036",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-037",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-038",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-039",
+          "kind": "multi_hop",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              12
+            ],
+            [
+              20
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.08333333333333333,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-040",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-041",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-042",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-043",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-044",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-045",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-046",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-047",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-048",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-049",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-050",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-051",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-052",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-053",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        }
+      ]
+    },
+    {
+      "name": "A2",
+      "label": "+ enriched chunk prefix (D7)",
+      "chunking": "structural_prefixed",
+      "signals": [
+        "vector"
+      ],
+      "rerank": false,
+      "chunks": 774,
+      "seconds": 0.84,
+      "means": {
+        "recall_20": 0.8962264150943396,
+        "recall_6": 0.7358490566037735,
+        "precision_6": 0.12893081761006298,
+        "mrr_20": 0.5628421107194692,
+        "ndcg_10": 0.6245727561466197
+      },
+      "wilson95": {
+        "recall_20": [
+          0.7974602432629856,
+          0.9590279625581031
+        ],
+        "recall_6": [
+          0.6041907894277545,
+          0.8356279348868316
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "g-001",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-002",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-003",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-004",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-005",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-006",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-007",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07692307692307693,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-008",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-009",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-010",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-011",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-012",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-013",
+          "kind": "multi_hop",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              6
+            ],
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5249810332008933
+        },
+        {
+          "case_id": "g-014",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.14285714285714285,
+          "ndcg_10": 0.3333333333333333
+        },
+        {
+          "case_id": "g-015",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-016",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              14
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07142857142857142,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-017",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-018",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-019",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-020",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-021",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-022",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-023",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-024",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-025",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              20
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-026",
+          "kind": "multi_hop",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              20
+            ],
+            [
+              18
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05555555555555555,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-027",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1,
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.6309297535714575
+        },
+        {
+          "case_id": "g-028",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-029",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-030",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-031",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-032",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07692307692307693,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-033",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-034",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-035",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-036",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-037",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-038",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-039",
+          "kind": "multi_hop",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [],
+            [
+              16
+            ]
+          ],
+          "recall_20": 0.5,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0625,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-040",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-041",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              9
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.1111111111111111,
+          "ndcg_10": 0.3010299956639812
+        },
+        {
+          "case_id": "g-042",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-043",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-044",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-045",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              10
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.1,
+          "ndcg_10": 0.2890648263178879
+        },
+        {
+          "case_id": "g-046",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-047",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-048",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-049",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-050",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-051",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-052",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-053",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        }
+      ]
+    },
+    {
+      "name": "A3",
+      "label": "+ hybrid recall (vector + graph + BM25, RRF)",
+      "chunking": "structural_prefixed",
+      "signals": [
+        "bm25",
+        "graph",
+        "vector"
+      ],
+      "rerank": false,
+      "chunks": 774,
+      "seconds": 7.27,
+      "means": {
+        "recall_20": 0.9150943396226415,
+        "recall_6": 0.8207547169811321,
+        "precision_6": 0.14465408805031454,
+        "mrr_20": 0.5573075771188978,
+        "ndcg_10": 0.6334942482331379
+      },
+      "wilson95": {
+        "recall_20": [
+          0.7974602432629856,
+          0.9590279625581031
+        ],
+        "recall_6": [
+          0.7077446317626587,
+          0.9080015822777624
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "g-001",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-002",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-003",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-004",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-005",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-006",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-007",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-008",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-009",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-010",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-011",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-012",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-013",
+          "kind": "multi_hop",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              6
+            ],
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.48247555939075504
+        },
+        {
+          "case_id": "g-014",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-015",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-016",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-017",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3,
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-018",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-019",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-020",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-021",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-022",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-023",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-024",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.14285714285714285,
+          "ndcg_10": 0.3333333333333333
+        },
+        {
+          "case_id": "g-025",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              12
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.08333333333333333,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-026",
+          "kind": "multi_hop",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              9
+            ],
+            [
+              11
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.1111111111111111,
+          "ndcg_10": 0.18457569677956817
+        },
+        {
+          "case_id": "g-027",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1,
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.6309297535714575
+        },
+        {
+          "case_id": "g-028",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              12
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.08333333333333333,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-029",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-030",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-031",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-032",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-033",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-034",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-035",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-036",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-037",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-038",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-039",
+          "kind": "multi_hop",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [],
+            [
+              1
+            ]
+          ],
+          "recall_20": 0.5,
+          "recall_6": 0.5,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 0.6131471927654584
+        },
+        {
+          "case_id": "g-040",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-041",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-042",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-043",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-044",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-045",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              6
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.3562071871080222
+        },
+        {
+          "case_id": "g-046",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-047",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-048",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-049",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-050",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-051",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-052",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-053",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              20
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05,
+          "ndcg_10": 0.0
+        }
+      ]
+    },
+    {
+      "name": "A4",
+      "label": "= shipped: A3 + local cross-encoder rerank",
+      "chunking": "structural_prefixed",
+      "signals": [
+        "bm25",
+        "graph",
+        "vector"
+      ],
+      "rerank": true,
+      "chunks": 774,
+      "seconds": 76.44,
+      "means": {
+        "recall_20": 0.9150943396226415,
+        "recall_6": 0.8301886792452831,
+        "precision_6": 0.1509433962264152,
+        "mrr_20": 0.6859170518715472,
+        "ndcg_10": 0.7522774801367974
+      },
+      "wilson95": {
+        "recall_20": [
+          0.7974602432629856,
+          0.9590279625581031
+        ],
+        "recall_6": [
+          0.7077446317626587,
+          0.9080015822777624
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "g-001",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-002",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-003",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-004",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-005",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-006",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-007",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-008",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-009",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-010",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-011",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-012",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-013",
+          "kind": "multi_hop",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              5
+            ],
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.5012658353418871
+        },
+        {
+          "case_id": "g-014",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-015",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-016",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-017",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2,
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.5,
+          "ndcg_10": 1.0616063116448506
+        },
+        {
+          "case_id": "g-018",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-019",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-020",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-021",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-022",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-023",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-024",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-025",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-026",
+          "kind": "multi_hop",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              6
+            ],
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.5,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.4227898344066503
+        },
+        {
+          "case_id": "g-027",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1,
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.6309297535714575
+        },
+        {
+          "case_id": "g-028",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              17
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.058823529411764705,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-029",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-030",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-031",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-032",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-033",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-034",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-035",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-036",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-037",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.14285714285714285,
+          "ndcg_10": 0.3333333333333333
+        },
+        {
+          "case_id": "g-038",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-039",
+          "kind": "multi_hop",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [],
+            [
+              4
+            ]
+          ],
+          "recall_20": 0.5,
+          "recall_6": 0.5,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.2640681225725909
+        },
+        {
+          "case_id": "g-040",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-041",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-042",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-043",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-044",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-045",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              8
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.125,
+          "ndcg_10": 0.31546487678572877
+        },
+        {
+          "case_id": "g-046",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-047",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-048",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-049",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-050",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-051",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-052",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-053",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07692307692307693,
+          "ndcg_10": 0.0
+        }
+      ]
+    },
+    {
+      "name": "L1",
+      "label": "A4 minus the graph arm",
+      "chunking": "structural_prefixed",
+      "signals": [
+        "bm25",
+        "vector"
+      ],
+      "rerank": true,
+      "chunks": 774,
+      "seconds": 86.26,
+      "means": {
+        "recall_20": 0.9716981132075472,
+        "recall_6": 0.8490566037735849,
+        "precision_6": 0.15408805031446549,
+        "mrr_20": 0.6921559310710256,
+        "ndcg_10": 0.7595765897072605
+      },
+      "wilson95": {
+        "recall_20": [
+          0.9005685649885059,
+          0.9966616326132506
+        ],
+        "recall_6": [
+          0.7294549545634046,
+          0.9214767574221834
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "g-001",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-002",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-003",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-004",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-005",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-006",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-007",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-008",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-009",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-010",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-011",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-012",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-013",
+          "kind": "multi_hop",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              5
+            ],
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.5012658353418871
+        },
+        {
+          "case_id": "g-014",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-015",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-016",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-017",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2,
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.5,
+          "ndcg_10": 1.0616063116448506
+        },
+        {
+          "case_id": "g-018",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-019",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-020",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-021",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-022",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-023",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-024",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-025",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-026",
+          "kind": "multi_hop",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              6
+            ],
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.5,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.16666666666666666,
+          "ndcg_10": 0.4227898344066503
+        },
+        {
+          "case_id": "g-027",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1,
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.6309297535714575
+        },
+        {
+          "case_id": "g-028",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              16
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0625,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-029",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-030",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-031",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-032",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              14
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07142857142857142,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-033",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-034",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-035",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-036",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-037",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.14285714285714285,
+          "ndcg_10": 0.3333333333333333
+        },
+        {
+          "case_id": "g-038",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-039",
+          "kind": "multi_hop",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [],
+            [
+              4
+            ]
+          ],
+          "recall_20": 0.5,
+          "recall_6": 0.5,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.2640681225725909
+        },
+        {
+          "case_id": "g-040",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-041",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              18
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05555555555555555,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-042",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-043",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-044",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-045",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              8
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.125,
+          "ndcg_10": 0.31546487678572877
+        },
+        {
+          "case_id": "g-046",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-047",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-048",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              5
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.2,
+          "ndcg_10": 0.38685280723454163
+        },
+        {
+          "case_id": "g-049",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-050",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-051",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-052",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-053",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              13
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.07692307692307693,
+          "ndcg_10": 0.0
+        }
+      ]
+    },
+    {
+      "name": "L2",
+      "label": "A4 minus the BM25 arm",
+      "chunking": "structural_prefixed",
+      "signals": [
+        "graph",
+        "vector"
+      ],
+      "rerank": true,
+      "chunks": 774,
+      "seconds": 74.35,
+      "means": {
+        "recall_20": 0.8207547169811321,
+        "recall_6": 0.7641509433962265,
+        "precision_6": 0.1352201257861636,
+        "mrr_20": 0.642894579215334,
+        "ndcg_10": 0.6932503510369671
+      },
+      "wilson95": {
+        "recall_20": [
+          0.7077446317626587,
+          0.9080015822777624
+        ],
+        "recall_6": [
+          0.6243318493782992,
+          0.8506723728814543
+        ]
+      },
+      "cases": [
+        {
+          "case_id": "g-001",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-002",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-003",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-004",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-005",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-006",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-007",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-008",
+          "kind": "table",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-009",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-010",
+          "kind": "known_item",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-011",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-012",
+          "kind": "handwritten",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-013",
+          "kind": "multi_hop",
+          "doc_id": "transformer-single-column.pdf",
+          "ranks": [
+            [
+              4
+            ],
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5706417189553201
+        },
+        {
+          "case_id": "g-014",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-015",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-016",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-017",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-018",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-019",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-020",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-021",
+          "kind": "table",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-022",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-023",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-024",
+          "kind": "known_item",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-025",
+          "kind": "handwritten",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-026",
+          "kind": "multi_hop",
+          "doc_id": "bert-two-column.pdf",
+          "ranks": [
+            [],
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-027",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1,
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.3333333333333333,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.6309297535714575
+        },
+        {
+          "case_id": "g-028",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-029",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-030",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-031",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-032",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-033",
+          "kind": "table",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-034",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-035",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-036",
+          "kind": "known_item",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-037",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              7
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.14285714285714285,
+          "ndcg_10": 0.3333333333333333
+        },
+        {
+          "case_id": "g-038",
+          "kind": "handwritten",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-039",
+          "kind": "multi_hop",
+          "doc_id": "census-income-tables.pdf",
+          "ranks": [
+            [],
+            [
+              3
+            ]
+          ],
+          "recall_20": 0.5,
+          "recall_6": 0.5,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.3065735963827292
+        },
+        {
+          "case_id": "g-040",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-041",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              18
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.05555555555555555,
+          "ndcg_10": 0.0
+        },
+        {
+          "case_id": "g-042",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              2
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.5,
+          "ndcg_10": 0.6309297535714575
+        },
+        {
+          "case_id": "g-043",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-044",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-045",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              8
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.125,
+          "ndcg_10": 0.31546487678572877
+        },
+        {
+          "case_id": "g-046",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-047",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-048",
+          "kind": "table",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              4
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.25,
+          "ndcg_10": 0.43067655807339306
+        },
+        {
+          "case_id": "g-049",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-050",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-051",
+          "kind": "known_item",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              1
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 1.0,
+          "ndcg_10": 1.0
+        },
+        {
+          "case_id": "g-052",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            [
+              3
+            ]
+          ],
+          "recall_20": 1.0,
+          "recall_6": 1.0,
+          "precision_6": 0.16666666666666666,
+          "mrr_20": 0.3333333333333333,
+          "ndcg_10": 0.5
+        },
+        {
+          "case_id": "g-053",
+          "kind": "handwritten",
+          "doc_id": "irs-1040-instructions-tables.pdf",
+          "ranks": [
+            []
+          ],
+          "recall_20": 0.0,
+          "recall_6": 0.0,
+          "precision_6": 0.0,
+          "mrr_20": 0.0,
+          "ndcg_10": 0.0
+        }
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "baseline": "A0",
+      "arm": "A1",
+      "metric": "recall_20",
+      "delta": -0.02830188679245283,
+      "favouring_arm": 3,
+      "favouring_baseline": 4,
+      "p_value": 1.0,
+      "ci95": [
+        -0.12264150943396226,
+        0.0660377358490566
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A0",
+      "arm": "A1",
+      "metric": "recall_6",
+      "delta": 0.018867924528301886,
+      "favouring_arm": 6,
+      "favouring_baseline": 5,
+      "p_value": 1.0,
+      "ci95": [
+        -0.09433962264150944,
+        0.1509433962264151
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A1",
+      "arm": "A2",
+      "metric": "recall_20",
+      "delta": -0.009433962264150943,
+      "favouring_arm": 1,
+      "favouring_baseline": 2,
+      "p_value": 1.0,
+      "ci95": [
+        -0.0660377358490566,
+        0.04716981132075472
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A1",
+      "arm": "A2",
+      "metric": "recall_6",
+      "delta": -0.03773584905660377,
+      "favouring_arm": 1,
+      "favouring_baseline": 3,
+      "p_value": 0.625,
+      "ci95": [
+        -0.11320754716981132,
+        0.03773584905660377
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A2",
+      "arm": "A3",
+      "metric": "recall_20",
+      "delta": 0.018867924528301886,
+      "favouring_arm": 3,
+      "favouring_baseline": 2,
+      "p_value": 1.0,
+      "ci95": [
+        -0.05660377358490566,
+        0.09433962264150944
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A2",
+      "arm": "A3",
+      "metric": "recall_6",
+      "delta": 0.08490566037735849,
+      "favouring_arm": 5,
+      "favouring_baseline": 0,
+      "p_value": 0.0625,
+      "ci95": [
+        0.018867924528301886,
+        0.16981132075471697
+      ],
+      "significant": true
+    },
+    {
+      "baseline": "A3",
+      "arm": "A4",
+      "metric": "recall_20",
+      "delta": 0.0,
+      "favouring_arm": 0,
+      "favouring_baseline": 0,
+      "p_value": 1.0,
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A3",
+      "arm": "A4",
+      "metric": "recall_6",
+      "delta": 0.009433962264150943,
+      "favouring_arm": 3,
+      "favouring_baseline": 2,
+      "p_value": 1.0,
+      "ci95": [
+        -0.0660377358490566,
+        0.08490566037735849
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A0",
+      "arm": "A4",
+      "metric": "recall_20",
+      "delta": -0.018867924528301886,
+      "favouring_arm": 2,
+      "favouring_baseline": 3,
+      "p_value": 1.0,
+      "ci95": [
+        -0.08490566037735849,
+        0.04716981132075472
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "A0",
+      "arm": "A4",
+      "metric": "recall_6",
+      "delta": 0.07547169811320754,
+      "favouring_arm": 8,
+      "favouring_baseline": 4,
+      "p_value": 0.3876953125,
+      "ci95": [
+        -0.03773584905660377,
+        0.19811320754716982
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "L1",
+      "arm": "A4",
+      "metric": "recall_20",
+      "delta": -0.05660377358490566,
+      "favouring_arm": 0,
+      "favouring_baseline": 3,
+      "p_value": 0.25,
+      "ci95": [
+        -0.1320754716981132,
+        0.0
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "L1",
+      "arm": "A4",
+      "metric": "recall_6",
+      "delta": -0.018867924528301886,
+      "favouring_arm": 0,
+      "favouring_baseline": 1,
+      "p_value": 1.0,
+      "ci95": [
+        -0.05660377358490566,
+        0.0
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "L2",
+      "arm": "A4",
+      "metric": "recall_20",
+      "delta": 0.09433962264150944,
+      "favouring_arm": 6,
+      "favouring_baseline": 1,
+      "p_value": 0.125,
+      "ci95": [
+        0.0,
+        0.18867924528301888
+      ],
+      "significant": false
+    },
+    {
+      "baseline": "L2",
+      "arm": "A4",
+      "metric": "recall_6",
+      "delta": 0.0660377358490566,
+      "favouring_arm": 4,
+      "favouring_baseline": 0,
+      "p_value": 0.125,
+      "ci95": [
+        0.009433962264150943,
+        0.14150943396226415
+      ],
+      "significant": true
+    }
+  ],
+  "table_markdown": "| arm | what changed | chunks | recall@20 | recall@6 | precision@6 | MRR@20 | nDCG@10 |\n|---|---|---:|---|---|---:|---:|---:|\n| **A0** | naive: text layer + fixed windows, dense only | 519 | 0.934 (0.85\u20130.98) | 0.755 (0.62\u20130.85) | 0.138 | 0.568 | 0.642 |\n| **A1** | + layout-aware parse and structural chunking | 774 | 0.906 (0.80\u20130.96) | 0.774 (0.64\u20130.87) | 0.135 | 0.533 | 0.613 |\n| **A2** | + enriched chunk prefix (D7) | 774 | 0.896 (0.80\u20130.96) | 0.736 (0.60\u20130.84) | 0.129 | 0.563 | 0.625 |\n| **A3** | + hybrid recall (vector + graph + BM25, RRF) | 774 | 0.915 (0.80\u20130.96) | 0.821 (0.71\u20130.91) | 0.145 | 0.557 | 0.633 |\n| **A4** | = shipped: A3 + local cross-encoder rerank | 774 | 0.915 (0.80\u20130.96) | 0.830 (0.71\u20130.91) | 0.151 | 0.686 | 0.752 |\n| **L1** | A4 minus the graph arm | 774 | 0.972 (0.90\u20131.00) | 0.849 (0.73\u20130.92) | 0.154 | 0.692 | 0.760 |\n| **L2** | A4 minus the BM25 arm | 774 | 0.821 (0.71\u20130.91) | 0.764 (0.62\u20130.85) | 0.135 | 0.643 | 0.693 |\n\nn = 53; intervals are Wilson 95%.\n"
+}
