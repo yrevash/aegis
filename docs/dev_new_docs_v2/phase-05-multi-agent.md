@@ -1,5 +1,76 @@
 # Phase 5 — Adaptive multi-agent
 
+> ## Amendments of 2026-08-19 — four rulings, read before the body
+>
+> These are decisions from the user and they override the body where they disagree.
+>
+> ### A. The user's width is the user's decision
+>
+> The classifier decides **only in Auto**. In an explicit mode the user's number wins, and
+> the platform does not second-guess it. **We optimise tokens as a platform rather than by
+> restricting the person paying for them.**
+>
+> The optimisations are therefore all supply-side and none of them are refusals: the answer
+> cache, `ModelRole.CHEAP` for the agents that do not reason, the Tavily cache, **one shared
+> retrieval pool per run** (fanning out four agents must not retrieve the same chunks four
+> times), and de-duplicating overlapping sub-tasks before dispatch rather than after.
+>
+> The one gate that remains is the **tenant's own budget**, and that is not us overriding the
+> user — it is the tenant admin's cap, enforced where every other spend is enforced.
+> `BudgetExceededError` inside a gathered task still terminates the run as `blocked`.
+>
+> ### B. Fallback is a first-class requirement, and it must respect the tier
+>
+> `aegis/src/aegis/gateway/llm.py` already carries per-role fallback chains
+> (`_DEFAULT_ROLE_FALLBACKS`, overridable via `configure(fallbacks=...)`), routed through
+> LiteLLM. **This phase does not build a second fallback mechanism.** It adds the three
+> things multi-agent needs and single-agent did not:
+>
+> 1. **A circuit breaker.** A deployment that fails repeatedly is marked degraded and skipped
+>    for a cooldown, instead of every one of N concurrent agents independently discovering it
+>    is down and each paying the timeout. With a fan-out, a dead provider costs N times what
+>    it used to.
+> 2. **Fallback must be visible.** It emits an event and logs at ERROR. A silent downgrade is
+>    the same defect class as the budget hook that skipped the database when no context was
+>    bound, and as a reranker that quietly stops reranking.
+> 3. **Fallback must not escape the tenant's model allowlist.** A tenant entitled to CHEAP
+>    must not be silently upgraded to GENERATION because the cheap deployment was down — that
+>    is a spend decision made on the tenant's behalf. If every model in tier is unavailable,
+>    the run fails loudly.
+>
+> ### C. A real harness for every agent, and the LLM-Ops loop reaches sub-agents
+>
+> Both surfaces already exist and neither is to be rebuilt:
+>
+> - `aegis/src/aegis/agent/harness.py` — `harness_config()` (every `AgentConfig` knob as a
+>   typed, bounded descriptor) and `run_summary()` (the ordered event stream folded into one
+>   record). Because `run_summary` consumes the emitted events verbatim, the "how it worked"
+>   record cannot diverge from what streamed.
+> - `aegis/src/aegis/ops/models.py` — `PromptVersion` / `PromptStatus`
+>   (`draft → staged → active → archived`), with the registry cache and the eval gate. This
+>   **is** the LLM-Ops loop; it exists and is unused by sub-agents.
+>
+> What this phase adds:
+>
+> - **Per-agent trace.** `run_summary` gains an agent dimension, so the harness renders one
+>   record per sub-agent rather than one blurred record for the run. This falls out of §5.4's
+>   `agent_id` almost free — the events are already stamped.
+> - **Every sub-agent prompt is a `prompt_key` in the registry**, so a system prompt is
+>   improved by promoting a version through the existing gate, not by editing a string in a
+>   file. The adapter prompt stays the floor when no active version exists.
+> - **Every new knob gets a `_KnobSpec`** (already in the Definition of done) — a knob with no
+>   spec is a control the harness cannot show and nobody can tune.
+> - **User memory and skills reach sub-agent context.** The main graph already resolves
+>   `memory_subject`, renders the profile and selects skills; a sub-agent that cannot see the
+>   user's durable facts is a worse agent than the single one it replaced. The selection is
+>   the adapter's (`memory_spec.render_profile` / `select_skills`), not a second copy.
+>
+> ### D. `agent_id` is confirmed as §5.4 and is load-bearing for all of the above
+>
+> It is simultaneously the wire field, the `run_events` column Phase 3 already created, and
+> the key the per-agent harness record groups on. Phase 3 built the table; this phase fills
+> the column and must not build a parallel log.
+
 **3 days. The money shot, done honestly.**
 
 **Depends on Phase 3 and Phase 4.** Per-agent logs are `run_events` rows
