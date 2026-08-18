@@ -1004,13 +1004,13 @@ and its error bar, not the library that printed it.
 | 4.6b | ✅ **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm was fail-open; shipped with 4.6. **Landed 2026-08-18** |
 | 4.6c | ✅ **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out. **Landed 2026-08-19** — and `bert-two-column.pdf` turns out to parse *correctly* on 2.120.3, so the gate is proved against the failure rather than against the fixture. Four corrections, see D-parse |
 | 4.7 | ✅ **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. D5 — **Landed 2026-08-18**; two corrections, see D5 |
-| 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
+| 4.8 | ✅ `corpus_version` bump + cache invalidation | 0.25 | **Landed 2026-08-19.** Plugs into Phase 1's seam. The bump lives in `finish_ingest` — the close-out activity — and not in the upload route or in a stage: see the correction under 4.8 below, which also records that one claim in 4.5's body about the idempotency key is wrong |
 | 4.9 | ✅ **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest. **Landed 2026-08-19.** `fastembed==0.8.0` in the `retrieval` extra (no torch); `jinaai/jina-reranker-v1-tiny-en` (33M, 134 MB). The API reranker is now the **loud** fallback. **D6's latency estimate was wrong by 4x** — measured 1.44 s p50 over 20 x 400-word chunks, not 150–400 ms; see the correction under D6 |
 | 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b. Duplicated table captions are already fixed in `convert.py`, so summaries are written over text that does not repeat itself |
 | 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
 | 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
 | 4.12b | **Graph construction visible in the ingest log** | 0.25 | Entities and relations as they are extracted — the user asked to see the KG being built, not just its result |
-| 4.13 | Re-index handler on the P3 scheduler | 0.1 | Schedule + debounce already shipped in P3; this supplies the handler |
+| 4.13 | ✅ Re-index handler on the P3 scheduler | 0.1 | **Landed 2026-08-19.** `app/ingestion/reindex.py` — every stage except `parse`, over the stored parse artifact. Two corrections, see §4.13 |
 | 4.14 | Verbatim citation verification | 0.15 | ~40 lines, reuses 4.11's primitive |
 
 **Total: ~5.0 days** after the P3 credit (−0.35 on 4.5, −0.15 on 4.13) and the three
@@ -1149,9 +1149,14 @@ What this task owns:
   `graph` must never re-run `parse` — at ~1.1 s/page a 200-page document is four minutes of
   work being thrown away for a ten-second bug, and it is the single most likely thing to
   happen on 29 August.
-- **The idempotency key is `ingest:{sha256}:{corpus_version}`.** Re-uploading the same bytes
-  under the same corpus version is a no-op that returns the existing job. Bumping
-  `corpus_version` (4.8) is what makes a re-ingest a *new* job rather than a duplicate.
+- ~~**The idempotency key is `ingest:{sha256}:{corpus_version}`.**~~ **Wrong, and corrected
+  by 4.8 rather than implemented by it.** What shipped in 4.5 is the `UNIQUE (tenant_id,
+  content_sha256)` constraint on `documents`, and a re-upload of identical bytes is a no-op
+  *whatever* the corpus version. Folding the version into the key would have made every
+  re-upload after any ingest a fresh, billed parse of bytes the platform already holds —
+  which is precisely the double-billing that constraint exists to prevent. The corpus version
+  is a **cache** key, not a document identity; a tenant who genuinely wants the same bytes
+  re-processed asks for a re-index (4.13), which rebuilds without re-parsing at all.
 - **Concurrency limits, per job type, and they differ:**
 
   | Job type | Limit | Why |
@@ -1170,6 +1175,52 @@ What this task owns:
   `BudgetExceeded` reason string, not half way through the embed stage.
 - **Cancellation is the substrate's `cancel_requested` flag**, checked at each stage boundary.
   A tenant who uploaded the wrong file should be able to stop the spend.
+
+### 4.8 — Where the `corpus_version` bump goes (0.25d) — LANDED 2026-08-19
+
+Phase 1 built the counter and both cache keys already fold it in
+(`aegis/src/aegis/retrieval/corpus.py`, `RetrievalScope.partition_key`, the answer cache's
+scope string). The only open question was **where the increment goes**, and it is the whole
+of the task, because every candidate position is defensible and only one is right.
+
+**It goes in `finish_ingest`** — the close-out activity in `app/jobs/activities.py` — inside
+the same guarded `UPDATE` that moves the document to its terminal status.
+
+Not the upload route: that invalidates the tenant's cache before a byte has been parsed, and
+every request during the ingest then misses, recomputes, and re-caches an answer over the
+*old* corpus, which is worse than the stale answer it replaced. Not a stage handler either.
+A bump at `chunk` invalidates while the chunks have no prefix and no vectors; a bump at
+`index` invalidates while the graph arm is still empty. Each of those states answers
+questions plausibly and wrongly, and the window is minutes rather than milliseconds.
+
+Three properties that fall out of that position, each of which is a line of code and a test:
+
+1. **`RETURNING` on the guarded update, not a second read.** The bump happens only if that
+   `UPDATE` actually changed a row, so a replayed close-out — which the substrate does
+   produce, measured in Phase 3 §3.0 — bumps nothing. Double-bumping is not a correctness
+   bug, but it discards a tenant's whole cache for free.
+2. **A `failed` or `cancelled` run bumps too, if `chunk_count` is set.** Chunks written
+   before the failure are live to the keyword arm the instant that stage commits. Bumping
+   only on success is the version of this feature that is silently wrong exactly when
+   something else already went wrong.
+3. **The bump precedes the commit.** The transaction may still roll back, in which case the
+   tenant paid one cache miss. The other ordering risks a committed ingest with no bump,
+   which costs a wrong answer. The asymmetry decides it.
+
+**What turned out wrong.** 4.5's body claims the ingest idempotency key is
+`ingest:{sha256}:{corpus_version}` and that bumping the version is what makes a re-ingest a
+new job. It is not, and it must not be — see the strikethrough there. The counter is a cache
+key; the document's identity is its bytes.
+
+**One property to state rather than let somebody discover.** The counter is process-local.
+That is correct for the posture this platform ships in — `app.main`'s lifespan runs the
+Temporal worker as an `asyncio` task in the API process, so the bump and the cache lookup
+share a counter — and it stops being correct the moment anybody runs
+`python -m app.jobs.worker` as a separate process, where the bump would move a counter the
+API cannot see and the stale answer would come back with no error anywhere. Splitting the
+worker out therefore requires replacing the store in `aegis/src/aegis/retrieval/corpus.py`
+with a shared one; the keying it feeds is already right either way. The module docstring
+carries this warning so it is read at the point of change.
 
 ### 4.12 — The live ingest log, as a projection (0.4d)
 
@@ -1206,6 +1257,37 @@ Cadence is per-tenant configurable through the Phase 3 §3.7 settings catalogue
 
 **DB clock only, never the worker's** (Phase 3 §3.5). A skewed demo laptop must not fire a
 nightly re-index during the pitch.
+
+#### What actually landed, 2026-08-19 — two corrections
+
+Everything above is Phase 3's, and Phase 3 shipped it: the cadence is a **Temporal Schedule**
+(`app/jobs/schedules.py`), not a `job_schedules` table with a materialiser, and the burst is
+folded by `ReindexWorkflow`'s per-tenant workflow id and timer reset. So this task supplied
+the **handler**, in `backend/src/app/ingestion/reindex.py`, registered at the same two
+composition roots that register the ingest stage handlers.
+
+1. **"Re-embed and re-index documents whose `corpus_version` is behind the current one" was
+   the wrong selector.** `corpus_version` is a per-tenant cache counter; it is not recorded
+   on a document and could not be, since the thing that goes stale is the *index*, not the
+   row. The handler re-runs over every document the tenant has in `succeeded` — the same
+   visibility test the cadence tick already uses before it asks for a run at all, so the
+   schedule never wakes a worker for documents the handler would then decline to touch.
+2. **The nightly graph rebuild is not a second schedule, and cutting it would be a bug.**
+   The `chunk` stage is delete-then-insert, so re-chunking destroys the entities and
+   relations the `graph` stage wrote onto `chunks.meta`. A re-index that stopped after
+   `index` would silently empty one of the three retrieval arms for every document it
+   touched. `graph` is therefore part of the corpus re-index rather than a separate job, and
+   the cut-order entry that offers to drop it (§6, item 5) should be read as dropping the
+   *separate schedule* — which no longer exists — and never as dropping the stage.
+
+The re-index runs **every stage except `parse`**, in the pipeline's declared order, through
+the *registered* stage handlers rather than a second copy of them. `parse` is excluded
+because its output is already durable beside the bytes: re-deriving it costs 0.43–3.20 s a
+page, six minutes on `irs-1040-instructions-tables.pdf`, to reproduce a tree on disk. It
+bumps `corpus_version` once per run, for the same reason an ingest does. The whole run is one
+transaction, so a document with a missing parse artifact fails the run and rolls it back
+rather than leaving half the corpus embedded under a new model and half under the old — the
+one thing worse than either outcome alone.
 
 ---
 
@@ -1250,7 +1332,7 @@ on an unfamiliar corpus before 30 August.**
 2. **bbox renderer** — keep the data, drop the visual overlay
 3. **Table NL summaries** — keep tables as objects, drop the generated summary
 4. **Local reranker benchmark** — ship the 33M default rather than comparing three
-5. **The nightly graph rebuild in 4.13** — keep the corpus re-index schedule, drop the second
+5. ~~**The nightly graph rebuild in 4.13**~~ — **no longer cuttable, and no longer a second schedule.** `chunk` is delete-then-insert, so re-chunking destroys the graph metadata; a re-index that skipped `graph` would silently empty one retrieval arm. See the corrections under 4.13.
 
 **Never cut:** page provenance, `chunks.tenant_id` (4.6), **the per-tenant vector collection
 (4.6b)**, the BM25 arm, stage-level job progress, and the gold set. The first two are correctness; the last three are what turn claims
@@ -1282,13 +1364,22 @@ into evidence.
       **only one parse runs at a time**.
 - [ ] An upload whose cost estimate exceeds the tenant budget is refused **at upload**, with
       the existing `BudgetExceeded` reason string.
-- [ ] Re-uploading identical bytes under the same `corpus_version` returns the existing job.
-      Bumping `corpus_version` produces a new one.
+- [x] Re-uploading identical bytes returns the existing document and starts no second
+      ingest — enforced by `UNIQUE (tenant_id, content_sha256)`, and deliberately *not* by
+      the corpus version; see the correction under 4.8.
+- [x] **An ingest bumps that tenant's `corpus_version` and no other tenant's**, and an answer
+      cached before the upload is unreachable afterwards — asserted on both tenants, since a
+      global counter would satisfy the first half and quietly discard everybody else's cache.
+- [x] **A re-index rebuilds chunks, embeddings and index from the stored parse artifact with
+      the parser never called** — asserted on a spy, not on a stopwatch — and bumps
+      `corpus_version` once per run.
+- [x] Ten re-index requests inside the debounce window still produce **one** run with the real
+      handler doing real work, not only with Phase 3's recording double.
 - [ ] Cancelling an in-flight ingest stops it at the next stage boundary and the spend stops
       with it.
 - [ ] The ingest log streams stage transitions live, survives a page refresh, and names the
       per-document OCR decision.
-- [ ] The nightly re-index schedule fires **once** per tick with two workers running.
+- [ ] The nightly re-index schedule fires **once** per tick with two workers running. (The fold itself is proved; what remains unproved here is two *workers* racing one tick.)
 - [ ] The reranker runs locally, its measured p50/p95 latency over 20 passages is recorded in
       the phase notes, and an induced failure falls **loudly** to the API reranker.
 - [ ] Every citation's quoted span is verified verbatim against its chunk.

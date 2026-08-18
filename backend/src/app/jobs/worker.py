@@ -51,6 +51,7 @@ from temporalio.worker import Worker
 
 from app.config import get_settings
 from app.ingestion import warm_parser
+from app.ingestion.reindex import register_corpus_reindex_handler
 from app.ingestion.stages import register_ingest_handlers
 from app.jobs.activities import ALL_ACTIVITIES
 from app.jobs.client import get_temporal_client
@@ -319,4 +320,5 @@ if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess, not 
     # ones) must not have them silently replaced by starting a worker. The in-process
     # launch mode registers in ``app.main``'s lifespan for exactly the same reason.
     register_ingest_handlers()
+    register_corpus_reindex_handler()
     main()

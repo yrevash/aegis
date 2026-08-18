@@ -47,6 +47,7 @@ from typing import Any
 from aegis.jobs.models import Document, JobRun, JobStatus
 from aegis.jobs.scope import tenant_activity
 from aegis.jobs.stages import stage_handler, stage_spec
+from aegis.retrieval.corpus import bump_corpus_version
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -435,6 +436,45 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
     guarded-update rule exists to prevent, in the one column where it would never look
     like an error.
 
+    Where the corpus version is bumped, and why it is here (task 4.8)
+    ----------------------------------------------------------------
+
+    This activity is the **only** place an ingest bumps the tenant's
+    :func:`aegis.retrieval.corpus.corpus_version`, and the position is the decision.
+
+    Both caches in front of the agent key on that counter, so a bump makes every entry
+    cached over the *old* corpus unreachable. Bumping it any earlier than here would
+    invalidate the caches while the ingest is still running — and the requests that then
+    miss the cache would be answered from a corpus that is half built: chunks written but
+    not enriched, enriched but not embedded, embedded but not published to the dense
+    index. Every one of those states answers questions, plausibly and wrongly, and the
+    only thing worse than a stale answer is a confidently incomplete one. The other end —
+    bumping when the ``documents`` row is *created* — is worse still: it invalidates the
+    cache before a single byte has been parsed.
+
+    So the bump happens once the run is terminal, in the same transaction that records it
+    as terminal. Three properties follow, and each is the reason for a line below:
+
+    * **It is guarded by the same ``WHERE`` the status write is.** ``RETURNING`` reports
+      the rows that update actually changed, so a replayed close-out changes nothing and
+      bumps nothing. Under-bumping is the dangerous direction (a stale cache is silent),
+      but double-bumping on every replay would throw a tenant's whole cache away for
+      free, and neither is necessary.
+    * **A failed or cancelled run bumps too, if it got as far as writing chunks.**
+      ``chunk_count`` is the honest test: it is ``NULL`` until the ``chunk`` stage
+      commits, and from that moment the tenant's ``chunks`` rows — and therefore the
+      keyword arm that searches them — are genuinely different from what any cached
+      answer was computed over. Bumping only on success would leave exactly that case
+      silently stale.
+    * **It runs before the commit, not after.** The decorator commits when this returns,
+      so a bump on a transaction that then rolls back is possible; it costs the tenant a
+      cache miss. The reverse ordering would risk a committed ingest with no bump, which
+      costs the tenant a wrong answer. The asymmetry decides the order.
+
+    The counter is process-local (see :mod:`aegis.retrieval.corpus`), which is correct for
+    the in-process worker the platform runs by default and is stated there rather than
+    assumed here.
+
     Args:
         inp: The tenant, workflow id, document, terminal status and failure reason.
         session: The scoped session supplied by ``@tenant_activity``.
@@ -458,14 +498,17 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
             non_retryable=True,
         )
     now = _now()
-    await session.execute(
-        update(Document)
-        .where(
-            Document.id == inp.document_id,
-            Document.status.is_distinct_from(status),
+    closed = (
+        await session.execute(
+            update(Document)
+            .where(
+                Document.id == inp.document_id,
+                Document.status.is_distinct_from(status),
+            )
+            .values(status=status, error=inp.error)
+            .returning(Document.chunk_count)
         )
-        .values(status=status, error=inp.error)
-    )
+    ).scalar_one_or_none()
     await session.execute(
         update(JobRun)
         .where(
@@ -474,6 +517,22 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
         )
         .values(status=status, error=inp.error, finished_at=now)
     )
+    if closed:
+        # ``closed`` is the row's ``chunk_count``, and it is ``None`` for a run that never
+        # reached the ``chunk`` stage and ``None`` again when the guard above matched no
+        # row (a replayed close-out). Either way nothing about the tenant's searchable
+        # corpus changed on this call, so neither way is a bump.
+        version = bump_corpus_version(inp.tenant_id)
+        logger.info(
+            "ingest of document %s finished %s with %d chunk(s); corpus version for "
+            "tenant %s is now %d, so every answer cached over the previous corpus is "
+            "unreachable",
+            inp.document_id,
+            status.value,
+            closed,
+            inp.tenant_id,
+            version,
+        )
 
 
 #: Every activity a worker registers. Derived once, here, so adding an activity is one

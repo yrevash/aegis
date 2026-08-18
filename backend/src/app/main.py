@@ -247,6 +247,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # present and silently runs nothing. The API keeps serving either way.
     worker_task: asyncio.Task[None] | None = None
     if settings.stores_enabled and settings.temporal_worker_inprocess:
+        from app.ingestion.reindex import register_corpus_reindex_handler
         from app.ingestion.stages import register_ingest_handlers
         from app.jobs.worker import start_worker_task
 
@@ -256,6 +257,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # worker must not silently replace handlers a host has already registered — the
         # substrate's registry is deliberately a seam, not a hard-coded table.
         register_ingest_handlers()
+        # The other half of the same seam, and the same reasoning: the scheduled re-index
+        # is Phase 3's machinery with no work of its own, and this binds Phase 4's work to
+        # it. Without this line every cadence tick raises rather than recording a
+        # ``succeeded`` re-index that rebuilt nothing.
+        register_corpus_reindex_handler()
         worker_task = start_worker_task(sweeper_stop)
         _supervise(worker_task, "temporal-worker")
 
