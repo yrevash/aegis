@@ -168,6 +168,30 @@ class Settings(BaseSettings):
     # ``chunk`` stage (default queue) reads, so a deployment that splits those queues
     # across machines must point this at shared storage.
     document_store_path: str = Field(default="document_storage")
+    # ── Table summaries (D8 / task 4.10) ─────────────────────────────────────
+    # A table's Markdown grid embeds badly: "| 27.3 | 28.4 |" is arithmetic with no
+    # semantic surface, so "which model scored best" cannot find the table that answers
+    # it. The ``chunk`` stage spends one cheap-model call per table on a sentence or two
+    # describing what it shows, embedded *in front of* the grid — never instead of it,
+    # because the numbers are the answer.
+    #
+    # Two knobs bound the cost, and only one of them is here: the other is the
+    # ``table_summaries`` cache, keyed on the table's own content hash, which makes a
+    # re-ingest and a 4.13 re-index free. This is the threshold below which a table is
+    # not worth a call at all — its Markdown already reads as prose. The default
+    # (3 rows x 3 columns and 12 cells) is the smallest genuinely two-dimensional grid:
+    # two columns is a key-and-value list and two rows is a label and a value. Every one
+    # of the twelve real tables in the phase's two paper fixtures clears it; the smallest
+    # is 8x3. Raise it on a corpus of small inline tables, lower it at your own expense.
+    table_summary_enabled: bool = Field(default=True)
+    table_summary_min_rows: int = Field(default=3)
+    table_summary_min_cols: int = Field(default=3)
+    table_summary_min_cells: int = Field(default=12)
+    # How much of a large grid the prompt carries. The cost of a summary is almost
+    # entirely its input tokens, and a 21x13 table on the transformer fixture is ~9,600
+    # characters. Rows past this are dropped and the prompt says so, so the model cannot
+    # describe a range as the table's when it saw a third of it.
+    table_summary_max_grid_chars: int = Field(default=6_000)
 
     # ── Guardrails engine (one policy, two front doors; docs/security/overview.md §3) ──
     # Two front doors enforce the same policy: the fast, offline-testable

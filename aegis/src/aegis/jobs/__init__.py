@@ -55,7 +55,7 @@ from aegis.jobs.cancel import (
     JobNotVisibleError,
     cancel_job,
 )
-from aegis.jobs.models import Chunk, Document, JobRun, JobStatus
+from aegis.jobs.models import Chunk, Document, JobRun, JobStatus, TableSummary
 from aegis.jobs.scope import (
     ActivityInput,
     MissingTenantScopeError,
@@ -109,6 +109,7 @@ __all__ = [
     "SessionFactoryNotConfiguredError",
     "StageHandler",
     "StageSpec",
+    "TableSummary",
     "UnknownStageError",
     "UnregisteredStageError",
     "activity_session_factory",

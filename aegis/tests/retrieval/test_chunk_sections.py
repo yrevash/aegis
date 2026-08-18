@@ -14,6 +14,7 @@ from datetime import date, datetime
 import pytest
 
 from aegis.ingestion import BBox, BlockKind, OcrDecision, ParsedBlock, ParsedDocument, ParsedPage
+from aegis.ingestion.tables import table_digest
 from aegis.retrieval.chunker import (
     ChunkPiece,
     DocumentContext,
@@ -484,3 +485,165 @@ def test_the_markdown_path_is_untouched_by_the_parsed_path():
 
     plain = chunk_structured("Just a plain sentence with no markdown headings at all.")
     assert plain[0].contextualized() == plain[0].text
+
+
+# ── D8 / task 4.10: a table is a first-class chunk ───────────────────────────
+
+
+_TABLE_MARKDOWN = """Table 2: BLEU scores on newstest2014.
+
+| Model       | EN-DE   | EN-FR   |
+|-------------|---------|---------|
+| ByteNet     | 23.75   |         |
+| GNMT + RL   | 24.6    | 39.92   |
+| Transformer | 28.4    | 41.8    |"""
+
+
+def _table(
+    page: int = 1,
+    *,
+    text: str = _TABLE_MARKDOWN,
+    shape: tuple[int, int] | None = (5, 3),
+    path: tuple[str, ...] = ("Results",),
+) -> ParsedBlock:
+    return ParsedBlock(
+        kind=BlockKind.TABLE,
+        text=text,
+        page_no=page,
+        bbox=BBox(72.0, 300.0, 540.0, 500.0),
+        heading_path=path,
+        table_shape=shape,
+    )
+
+
+def test_a_table_becomes_its_own_chunk_carrying_its_shape_and_caption():
+    """The whole of D8's "first-class object": shape and caption, on the chunk.
+
+    Without this a consumer can only recover "is this a table" by counting pipes in the
+    text, and can only recover the shape by trusting that count — on exactly the merged
+    and nested headers TableFormer is running on ACCURATE (D3b) to get right.
+    """
+    blocks = [
+        _heading("Results", 1),
+        _text("The Transformer outperforms every previously reported model.", 1, path=("Results",)),
+        _table(1),
+        _text("Training took twelve hours on eight GPUs.", 1, path=("Results",)),
+    ]
+
+    chunks = chunk_sections(_document(blocks))
+
+    tables = [chunk for chunk in chunks if chunk.table is not None]
+    assert len(tables) == 1
+    table = tables[0]
+    assert table.table.rows == 5
+    assert table.table.cols == 3
+    assert table.table.caption == "Table 2: BLEU scores on newstest2014."
+    assert table.table.digest == table_digest(_TABLE_MARKDOWN)
+
+
+def test_a_table_is_never_packed_together_with_the_prose_around_it():
+    """A chunk that is half a table cannot be labelled one, and cites two places at once.
+
+    All three blocks here fit inside one 400-word window, so before task 4.10 they were
+    one chunk: the paragraph, the grid and the next paragraph, sharing a citation.
+    """
+    before = "The Transformer outperforms every previously reported model."
+    after = "Training took twelve hours on eight GPUs."
+    blocks = [
+        _heading("Results", 1),
+        _text(before, 1, path=("Results",)),
+        _table(1),
+        _text(after, 1, path=("Results",)),
+    ]
+
+    chunks = chunk_sections(_document(blocks))
+
+    assert [chunk.text for chunk in chunks] == [before, _TABLE_MARKDOWN, after]
+    assert [chunk.table is not None for chunk in chunks] == [False, True, False]
+    assert [chunk.ordinal for chunk in chunks] == [0, 1, 2]
+
+
+def test_a_table_seeds_no_overlap_into_the_chunk_that_follows_it():
+    """Otherwise the next prose chunk opens with rows of numbers it does not contain."""
+    tail = " ".join(f"w{n}" for n in range(200))
+    blocks = [
+        _heading("Results", 1),
+        _table(1),
+        _text(tail, 1, path=("Results",)),
+    ]
+
+    chunks = chunk_sections(_document(blocks), chunk_size=100, overlap=30)
+
+    assert chunks[0].text == _TABLE_MARKDOWN
+    assert chunks[1].text.startswith("w0 w1")
+    assert "|" not in chunks[1].text
+
+
+def test_the_grid_itself_is_what_the_table_chunk_holds():
+    """The summary is added downstream, in front of this. It never replaces it."""
+    chunks = chunk_sections(_document([_heading("Results", 1), _table(1)]))
+
+    assert chunks[0].text == _TABLE_MARKDOWN
+    assert "| Transformer | 28.4    | 41.8    |" in chunks[0].text
+
+
+def test_two_consecutive_tables_are_two_chunks_and_two_digests():
+    other = _TABLE_MARKDOWN.replace("Table 2", "Table 3").replace("28.4", "26.4")
+    blocks = [
+        _heading("Results", 1),
+        _table(1),
+        _table(2, text=other),
+    ]
+
+    chunks = chunk_sections(_document(blocks))
+
+    assert len(chunks) == 2
+    assert chunks[0].table.digest != chunks[1].table.digest
+    assert [chunk.page_no for chunk in chunks] == [1, 2]
+
+
+def test_the_same_table_in_two_places_shares_one_digest():
+    """The cache key is the table, not the position — this is what makes it hit."""
+    blocks = [
+        _heading("Results", 1),
+        _table(1),
+        _heading("Appendix", 2),
+        _table(2, path=("Appendix",)),
+    ]
+
+    chunks = chunk_sections(_document(blocks))
+
+    assert len(chunks) == 2
+    assert chunks[0].section != chunks[1].section
+    assert chunks[0].table.digest == chunks[1].table.digest
+
+
+def test_a_table_block_with_no_reported_shape_records_zero_rather_than_a_guess():
+    """A shape counted back out of the Markdown would be wrong exactly where it matters."""
+    chunks = chunk_sections(_document([_heading("Results", 1), _table(1, shape=None)]))
+
+    assert chunks[0].table.rows == 0
+    assert chunks[0].table.cols == 0
+
+
+def test_a_prose_chunk_carries_no_table_reference_at_all():
+    blocks = [_heading("Intro", 1), _text("Plain prose, no grid in sight.", 1, path=("Intro",))]
+
+    chunks = chunk_sections(_document(blocks))
+
+    assert chunks[0].table is None
+
+
+def test_a_table_chunk_keeps_its_own_page_and_box():
+    """A table isolated into its own chunk must not lose the provenance that cites it."""
+    blocks = [
+        _heading("Results", 1),
+        _text("Prose on page one.", 1, path=("Results",)),
+        _table(2),
+    ]
+
+    chunks = chunk_sections(_document(blocks))
+
+    table = next(chunk for chunk in chunks if chunk.table is not None)
+    assert [span.page_no for span in table.spans] == [2]
+    assert table.bbox == BBox(72.0, 300.0, 540.0, 500.0)

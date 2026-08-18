@@ -51,6 +51,12 @@ _TENANT_B = 70202
 #: One document's bytes, uploaded by both tenants in the constraint tests.
 _SHA = "b" * 64
 
+#: The tables whose ``tenant_isolation`` policy is read back out of the live catalog
+#: below. ``chunks`` has its own dedicated isolation module, so it is not repeated here;
+#: ``table_summaries`` (task 4.10's summary cache) is, because a cache is the easiest
+#: place for a tenant boundary to be argued away.
+_POLICED = ["documents", "job_runs", "table_summaries"]
+
 
 def _jobs_tables() -> list:
     """Return every table :mod:`aegis.jobs.models` maps, read from the ORM registry.
@@ -115,7 +121,12 @@ async def _write(sessionmaker, tenant_id: int, row) -> None:  # noqa: ANN001
 def test_every_table_this_module_maps_is_tenant_scoped_and_registered():
     """An unregistered tenant table looks governed from outside and is not."""
     tables = _jobs_tables()
-    assert {table.name for table in tables} == {"chunks", "documents", "job_runs"}, (
+    assert {table.name for table in tables} == {
+        "chunks",
+        "documents",
+        "job_runs",
+        "table_summaries",
+    }, (
         "aegis.jobs.models mapped a table this suite does not know about; if it carries "
         "tenant_id it also needs a line in aegis.governance.rls._TENANT_SCOPED_TABLES"
     )
@@ -127,7 +138,7 @@ def test_every_table_this_module_maps_is_tenant_scoped_and_registered():
         )
 
 
-async def test_bootstrap_installed_the_tenant_policy_on_both_job_tables(pg_owner_engine):
+async def test_bootstrap_installed_the_tenant_policy_on_the_job_tables(pg_owner_engine):
     """Read the policy back out of the catalog, not out of the DDL we hoped was emitted."""
     async with pg_owner_engine.connect() as conn:
         policies = {
@@ -139,7 +150,7 @@ async def test_bootstrap_installed_the_tenant_policy_on_both_job_tables(pg_owner
                         "WHERE schemaname = 'public' AND policyname = :policy "
                         "AND tablename = ANY(:names)"
                     ),
-                    {"policy": _POLICY_NAME, "names": ["documents", "job_runs"]},
+                    {"policy": _POLICY_NAME, "names": _POLICED},
                 )
             ).all()
         }
@@ -151,18 +162,18 @@ async def test_bootstrap_installed_the_tenant_policy_on_both_job_tables(pg_owner
                         "SELECT relname, relrowsecurity, relforcerowsecurity "
                         "FROM pg_class WHERE relname = ANY(:names)"
                     ),
-                    {"names": ["documents", "job_runs"]},
+                    {"names": _POLICED},
                 )
             ).all()
         }
 
-    missing = {"documents", "job_runs"} - set(policies)
+    missing = set(_POLICED) - set(policies)
     assert not missing, f"no {_POLICY_NAME} policy on {sorted(missing)} in the live catalog"
     for table, qual in policies.items():
         assert _TENANT_COLUMN in qual, f"{table}'s policy does not filter on {_TENANT_COLUMN}"
         assert "app.tenant_id" in qual, f"{table}'s policy reads no bound scope: {qual}"
     # ENABLE alone leaves the table owner exempt; FORCE is what makes the policy real.
-    assert forced == {"documents": (True, True), "job_runs": (True, True)}
+    assert forced == dict.fromkeys(_POLICED, (True, True))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

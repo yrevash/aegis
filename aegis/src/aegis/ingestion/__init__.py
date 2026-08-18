@@ -50,8 +50,17 @@ from aegis.ingestion.probe import (
     probe_text_layer,
 )
 from aegis.ingestion.quality import LOW_CONFIDENCE, ParseQuality, assess_parse
+from aegis.ingestion.tables import (
+    DEFAULT_TABLE_SUMMARY_POLICY,
+    TableRef,
+    TableSummaryPolicy,
+    summarise_table,
+    table_caption,
+    table_digest,
+)
 
 __all__ = [
+    "DEFAULT_TABLE_SUMMARY_POLICY",
     "INGESTION_EXTRA",
     "LOW_CONFIDENCE",
     "MIN_CHARS_PER_PAGE",
@@ -65,6 +74,8 @@ __all__ = [
     "ParseQuality",
     "ParsedDocument",
     "ParsedPage",
+    "TableRef",
+    "TableSummaryPolicy",
     "TextLayerProbe",
     "TextLayerProbeError",
     "assess_parse",
@@ -76,5 +87,8 @@ __all__ = [
     "probe_text_layer",
     "reset_converters",
     "strip_running_furniture",
+    "summarise_table",
+    "table_caption",
+    "table_digest",
     "warm_converter",
 ]

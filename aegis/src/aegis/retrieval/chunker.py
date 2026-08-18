@@ -65,6 +65,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from aegis.ingestion.blocks import BBox, BlockKind, ParsedBlock, ParsedDocument
+from aegis.ingestion.tables import TableRef, table_caption, table_digest
 
 _WHITESPACE = re.compile(r"\s+")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
@@ -547,10 +548,15 @@ class SectionChunk(ChunkPiece):
             citation renderer (4.12) read.
         prefix: The D7 prefix as it will be embedded, built once at chunk time because
             the document context it needs is not reachable from the chunk later.
+        table: Set when this chunk **is** a table (D8, task 4.10) — its shape, its
+            caption and the content digest its natural-language summary is cached under.
+            ``None`` for prose. A table chunk holds exactly one table and nothing else,
+            so this is a property of the whole chunk rather than of part of it.
     """
 
     spans: tuple[PageSpan, ...] = ()
     prefix: str = ""
+    table: TableRef | None = None
 
     @property
     def page_no(self) -> int | None:
@@ -624,8 +630,9 @@ def _block_units(
     piece keeps the page and box of the block it came out of. A **table** block is never
     split: its text is a Markdown grid, and sentence-splitting a grid produces rows that
     have lost their header. An oversized table therefore becomes one oversized chunk,
-    which is the honest outcome until D8's natural-language table summary replaces the
-    embedded text (task 4.10).
+    which is the honest outcome: a table is answered from its numbers, and half a table
+    cannot be. What task 4.10 adds is a natural-language summary written *in front of*
+    that grid at ingest — see :mod:`aegis.ingestion.tables` — never in place of it.
 
     Args:
         blocks: One section's blocks, in reading order.
@@ -645,6 +652,76 @@ def _block_units(
         for piece in _sentence_units(text, chunk_size):
             units.append((piece, block))
     return units
+
+
+def _packing_groups(
+    units: list[tuple[str, ParsedBlock]],
+) -> list[tuple[int, list[tuple[str, ParsedBlock]]]]:
+    """Split one section's units into runs that may be packed together.
+
+    **A table is packed with nothing else** (D8, task 4.10). Left in the general run it
+    would be greedily merged with whatever prose happened to precede it — so the chunk
+    that holds "Table 2: BLEU scores…" would also hold the last paragraph of §6.1, its
+    citation would name two pages, and it could not be labelled a table because it is
+    only partly one. Worse in the other direction: the grid's own tail becomes the
+    ``overlap`` seed of the *next* prose chunk, which then opens with three rows of
+    orphaned numbers that belong to a table it does not contain.
+
+    Isolating it costs a small number of extra chunks on a table-dense document and buys
+    two things nothing downstream can reconstruct: a chunk that *is* a table (so the
+    shape, the caption and the summary are properties of the whole row), and a page span
+    that is the table's page rather than the union of the table's and its neighbour's.
+
+    Args:
+        units: One section's units, in reading order.
+
+    Returns:
+        ``(offset, units)`` per group, in reading order, where ``offset`` is the group's
+        first position in ``units`` — the caller needs it to map a window's unit indices
+        back to the blocks they came from.
+    """
+    groups: list[tuple[int, list[tuple[str, ParsedBlock]]]] = []
+    current: list[tuple[str, ParsedBlock]] = []
+    start = 0
+    for index, unit in enumerate(units):
+        if unit[1].kind is BlockKind.TABLE:
+            if current:
+                groups.append((start, current))
+                current = []
+            groups.append((index, [unit]))
+            start = index + 1
+            continue
+        if not current:
+            start = index
+        current.append(unit)
+    if current:
+        groups.append((start, current))
+    return groups
+
+
+def _table_ref(block: ParsedBlock) -> TableRef:
+    """Build the chunk's :class:`~aegis.ingestion.tables.TableRef` from a table block.
+
+    The shape comes from TableFormer, through
+    :attr:`~aegis.ingestion.blocks.ParsedBlock.table_shape`. A block that reached here
+    without one is recorded as ``(0, 0)`` rather than guessed at from the pipe count:
+    a shape inferred from the Markdown would be confidently wrong on exactly the merged
+    and nested headers the shape is wanted for, and ``(0, 0)`` fails the summary
+    threshold, which is the safe direction to fail in.
+
+    Args:
+        block: The table block.
+
+    Returns:
+        Its shape, caption and content digest.
+    """
+    rows, cols = block.table_shape or (0, 0)
+    return TableRef(
+        rows=rows,
+        cols=cols,
+        caption=table_caption(block.text),
+        digest=table_digest(block.text),
+    )
 
 
 def _carried_indices(
@@ -716,7 +793,7 @@ def chunk_sections(
     :func:`chunk_structured` uses, and each resulting window is given back the page and
     box of every block whose text it holds.
 
-    Two properties are worth stating because downstream work depends on them:
+    Three properties are worth stating because downstream work depends on them:
 
     * **A chunk never spans two sections.** Packing restarts at every heading, so a
       window cannot mix text from two sections, however short they are.
@@ -724,6 +801,9 @@ def chunk_sections(
       a repeat of the previous window's tail; the blocks that supplied them are counted
       into this chunk's spans too, so :attr:`SectionChunk.spans` covers every page whose
       text is actually in the chunk.
+    * **A table is its own chunk** (D8, task 4.10), carrying its shape, its caption and
+      its content digest on :attr:`SectionChunk.table`. It is packed with no prose before
+      it and seeds no overlap into what follows — see :func:`_packing_groups`.
 
     Args:
         document: The parsed document (:func:`aegis.ingestion.parse_pdf`'s output).
@@ -754,27 +834,35 @@ def chunk_sections(
             continue
         prefix = chunk_prefix(fields, section)
         previous: tuple[int, ...] = ()
-        for window in _pack_units([text for text, _ in units], chunk_size, overlap):
-            word_count = len(window.text.split())
-            # Same correction as chunk_structured: the carried words are not new text,
-            # so the offset walks back over them instead of counting them twice.
-            word_start = max(0, running_words - window.carried)
-            contributing = _carried_indices(units, previous, window.carried)
-            contributing.extend(window.unit_indices)
-            chunks.append(
-                SectionChunk(
-                    text=window.text,
-                    ordinal=ordinal,
-                    section=section,
-                    word_start=word_start,
-                    word_count=word_count,
-                    spans=_spans_of([units[index][1] for index in contributing]),
-                    prefix=prefix,
-                )
+        for offset, group in _packing_groups(units):
+            table = (
+                _table_ref(group[0][1])
+                if len(group) == 1 and group[0][1].kind is BlockKind.TABLE
+                else None
             )
-            ordinal += 1
-            running_words = word_start + word_count
-            previous = tuple(contributing)
+            for window in _pack_units([text for text, _ in group], chunk_size, overlap):
+                word_count = len(window.text.split())
+                # Same correction as chunk_structured: the carried words are not new
+                # text, so the offset walks back over them instead of counting them
+                # twice.
+                word_start = max(0, running_words - window.carried)
+                contributing = _carried_indices(units, previous, window.carried)
+                contributing.extend(offset + index for index in window.unit_indices)
+                chunks.append(
+                    SectionChunk(
+                        text=window.text,
+                        ordinal=ordinal,
+                        section=section,
+                        word_start=word_start,
+                        word_count=word_count,
+                        spans=_spans_of([units[index][1] for index in contributing]),
+                        prefix=prefix,
+                        table=table,
+                    )
+                )
+                ordinal += 1
+                running_words = word_start + word_count
+                previous = tuple(contributing)
     return chunks
 
 # ─────────────────────────────────────────────────────────────────────────────

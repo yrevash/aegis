@@ -211,6 +211,7 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         "chunks",
         "documents",
         "job_runs",
+        "table_summaries",
         # aegis.runs.models
         "run_events",
         "runs",

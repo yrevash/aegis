@@ -137,6 +137,11 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "chunks",
     "documents",
     "job_runs",
+    # The per-table natural-language summary cache (D8 / task 4.10). Keyed by a hash of
+    # the table's own content, and scoped per tenant anyway: a cache is the easiest place
+    # for a boundary to be argued away ("the input was identical, so the output is
+    # safe"), and the predicate on the row is what makes that argument unnecessary.
+    "table_summaries",
     # aegis.runs.models — the durable, replayable per-run record. ``run_events`` is
     # PARTITIONED BY RANGE (ts); its monthly partitions are not registered here (their
     # names are a function of the calendar) and are covered by the partition rule in

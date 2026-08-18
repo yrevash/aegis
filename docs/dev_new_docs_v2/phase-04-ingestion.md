@@ -904,6 +904,56 @@ same document is free.
 **I have moved this out of the cut list.** The old plan named tables as first-to-cut; both
 research reports say that is inverted.
 
+**[IMPLEMENTED] 2026-08-19 — task 4.10, with one correction and three measurements.**
+
+**The correction: the summary does not replace the embedded text; it is prepended to it.**
+As written above, "the table's *embedded* text **is** a generated NL summary" and the grid is
+"stored alongside". Following that literally is a quiet data loss. The numbers are what most
+questions about a table are actually asking for — *"what BLEU did the Transformer reach on
+EN-FR?"* is answered by `41.8` and by no sentence anyone would write about that table — and a
+chunk whose text is only prose about the grid cannot be quoted, cannot be span-verified
+(4.14), and cannot be reranked on the cell the asker wants. `chunks.content` for a table is
+therefore `summary` + blank line + grid: the summary is what makes the table *findable*, the
+grid is what makes it *answerable*, and PostgreSQL generates `search_vector` from both. In
+front rather than behind because the head of a chunk is what a truncating embedder and a
+cross-encoder reranker both see most of.
+
+**A table is now its own chunk.** Left in the general packing run a 143-word table merges
+with the paragraph above it, so the chunk is only partly a table, its citation names two
+pages, and the grid's tail becomes the overlap seed of the next prose chunk — which then
+opens with three rows of orphaned numbers. `chunker._packing_groups` isolates it. Cost: a
+handful of extra chunks on a table-dense document.
+
+**The threshold, measured rather than guessed.** A table is summarised at ≥3 rows, ≥3 columns
+**and** ≥12 cells (`app.config.table_summary_*`). Two columns is a key-and-value list and two
+rows is a label and a value; both already read as prose. Across all four fixtures:
+
+| fixture | tables | above threshold | distinct |
+|---|---:|---:|---:|
+| `transformer-single-column.pdf` | 4 | 4 | 4 |
+| `bert-two-column.pdf` | 8 | 8 | 8 |
+| `census-income-tables.pdf` | 40 | 38 | 38 |
+| `irs-1040-instructions-tables.pdf` | 39 | 37 | 37 |
+
+So the threshold refuses 4 of 91 real tables — every one of them a 2-column block — and the
+smallest table it admits from the two papers is 8×3. It buys its saving from layout artefacts,
+not from the tables D8 exists for.
+
+**Where the money actually is, and it is not the call count.** It is the *input tokens*. The
+IRS fixture's 39 tables are **3.2 MB of Markdown**; the 126-page document would send ~800 k
+tokens of grid in one ingest. The 6,000-character-per-table prompt cap
+(`table_summary_max_grid_chars`) takes that to 134 KB, ~33 k tokens, and says in the prompt how
+many rows it dropped so the model cannot describe a third of a table as the whole of it. The
+census fixture goes 442 KB → 184 KB the same way. **The cap is a bigger lever than the
+threshold by two orders of magnitude**, which the original decision did not anticipate.
+
+**The cache is per tenant**, not global — `table_summaries(tenant_id, digest)`, registered in
+`rls._TENANT_SCOPED_TABLES`. A global cache would hit more often and the summary of an
+identical grid leaks nothing, but "safe to share because the inputs were equal" is a rule that
+survives exactly until what is cached is widened, and it would be the first row in the
+retrieval path whose predicate is not `tenant_id`. The digest normalises Docling's column
+padding, so the same table rendered beside a wider neighbour still hits.
+
 ### D9 — Page and bounding-box provenance, threaded from day one
 
 **Reason:** it is what makes a citation checkable rather than decorative — "page 7, this
@@ -1006,7 +1056,7 @@ and its error bar, not the library that printed it.
 | 4.7 | ✅ **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. D5 — **Landed 2026-08-18**; two corrections, see D5 |
 | 4.8 | ✅ `corpus_version` bump + cache invalidation | 0.25 | **Landed 2026-08-19.** Plugs into Phase 1's seam. The bump lives in `finish_ingest` — the close-out activity — and not in the upload route or in a stage: see the correction under 4.8 below, which also records that one claim in 4.5's body about the idempotency key is wrong |
 | 4.9 | ✅ **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest. **Landed 2026-08-19.** `fastembed==0.8.0` in the `retrieval` extra (no torch); `jinaai/jina-reranker-v1-tiny-en` (33M, 134 MB). The API reranker is now the **loud** fallback. **D6's latency estimate was wrong by 4x** — measured 1.44 s p50 over 20 x 400-word chunks, not 150–400 ms; see the correction under D6 |
-| 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b. Duplicated table captions are already fixed in `convert.py`, so summaries are written over text that does not repeat itself |
+| 4.10 | ✅ **Table objects with NL summaries, hash-cached** | 0.4 | **Landed 2026-08-19.** A table is now its own chunk carrying `(rows, cols)`, its caption and a content digest; above a configured size the `chunk` stage writes a generated sentence or two **in front of** the grid and caches it in `table_summaries`, keyed on the digest. **TableFormer stays on ACCURATE** — see D3b, unchanged. Duplicated table captions were already fixed in `convert.py`, so the summaries are written over text that does not repeat itself. **One correction to D8, and it is not cosmetic — see below.** |
 | 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
 | 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
 | 4.12b | **Graph construction visible in the ingest log** | 0.25 | Entities and relations as they are extracted — the user asked to see the KG being built, not just its result |
@@ -1425,6 +1475,13 @@ document with 80 tables is real money against $100. 4.10 caches by content hash 
 preflights the estimate against the tenant budget before the job runs — that preflight moved
 into the phase when the substrate arrived, because a queued job is the only place a preflight
 has to stand on.
+
+  **[CLOSED] 2026-08-19 by 4.10, and the shape of the risk was wrong.** The bill is not
+  dominated by the number of calls — 37 cheap-model calls on the 126-page IRS fixture — but by
+  the *input tokens*, whose uncapped total for that one document is ~800 k. The per-table
+  prompt cap is what bounds it; the content-hash cache is what stops a re-upload or a 4.13
+  re-index paying twice; the size threshold is the smallest of the three levers. All three are
+  asserted on a call-counting spy in `backend/tests/ingestion/test_table_summaries.py`.
 
 **Phase 4 slips if Phase 3 slips, and there is no way around it.** Every task from 4.5 onward
 either runs on the substrate or streams from it. The temptation on a bad day is to write "just

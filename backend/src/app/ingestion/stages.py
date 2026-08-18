@@ -13,7 +13,9 @@ Stage        Queue           What it does
                              D-parse ``parse_confidence``.
 ``chunk``    ``aegis-...``   Packs the parsed sections into ``chunks`` rows, with the
                              D7 prefix, the page/bbox spans and the tenant on every row.
-                             Returns ``chunk_count``.
+                             A table becomes its own row, carrying its shape and caption,
+                             and — above a configured size — a natural-language summary
+                             written in front of the grid (D8). Returns ``chunk_count``.
 ``enrich``   ``aegis-...``   Folds that prefix into the text that is embedded and
                              full-text indexed — one guarded ``UPDATE``.
 ``embed``    ``aegis-io``    Embeds each chunk and writes ``chunks.embedding``, the
@@ -60,19 +62,22 @@ from typing import Any
 from aegis.ingestion import ParsedDocument, parse_pdf
 from aegis.ingestion.blocks import BlockKind
 from aegis.ingestion.quality import LOW_CONFIDENCE
+from aegis.ingestion.tables import TableSummaryPolicy
 from aegis.jobs.models import Chunk, Document
 from aegis.jobs.stages import INGEST_STAGES, register_stage_handler
 from aegis.retrieval.chunker import DocumentContext, SectionChunk, chunk_sections
 from aegis.retrieval.graph_extract import Extractor, build_extractor
 from aegis.retrieval.models import Chunk as RetrievalChunk
-from aegis.retrieval.protocols import EmbedFn
+from aegis.retrieval.protocols import CompleteFn, EmbedFn
 from aegis.retrieval.types import TENANT_METADATA_KEY, tenant_metadata_value
 from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.exceptions import ApplicationError
 
+from app.config import get_settings
 from app.ingestion.artifacts import dumps_parsed, loads_parsed
 from app.ingestion.store import DocumentStore, DocumentStoreProtocol
+from app.ingestion.tables import TableSummaryReport, summarise_document_tables
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +129,11 @@ class IngestDependencies:
         embed: The embedding function. ``None`` resolves the platform's gateway on first
             use (:func:`app.retrieval.gateway.default_embed`), which is what a deployed
             worker gets.
+        complete: The chat-completion function, used by the ``chunk`` stage for D8's
+            per-table natural-language summaries and by nothing else. ``None`` resolves
+            :func:`app.retrieval.gateway.default_complete` on first use. A test that
+            wants to assert *how many* summaries an ingest paid for injects a spy here —
+            which is the only honest way to test a cache.
         publish: Coroutine taking the document's chunks and writing them into the
             knowledge backend the platform searches. ``None`` resolves the process
             retriever's backend on first use.
@@ -136,6 +146,7 @@ class IngestDependencies:
     embed: EmbedFn | None = None
     publish: Any = None  # noqa: ANN401 - a coroutine fn; see publish_chunks
     extractor: Extractor | None = None
+    complete: CompleteFn | None = None
 
     def resolve_embed(self) -> EmbedFn:
         """Return the embedding function, resolving the platform default on first use."""
@@ -144,6 +155,14 @@ class IngestDependencies:
 
             self.embed = default_embed()
         return self.embed
+
+    def resolve_complete(self) -> CompleteFn:
+        """Return the completion function, resolving the platform default on first use."""
+        if self.complete is None:
+            from app.retrieval.gateway import default_complete  # noqa: PLC0415 - lazy
+
+            self.complete = default_complete()
+        return self.complete
 
     def resolve_extractor(self) -> Extractor:
         """Return the entity/relation extractor, building the default on first use."""
@@ -318,7 +337,82 @@ def _document_context(document: Document) -> DocumentContext:
     )
 
 
-def _chunk_meta(chunk: SectionChunk, *, document: Document, parser: str) -> dict[str, Any]:
+def _table_policy() -> TableSummaryPolicy:
+    """Build D8's table-summary policy from this deployment's settings.
+
+    Returns:
+        The threshold, the prompt's size budget and the model role, as configured. The
+        defaults live in :class:`aegis.ingestion.tables.TableSummaryPolicy`; the settings
+        exist so the cut-off can follow a corpus rather than a commit.
+    """
+    settings = get_settings()
+    return TableSummaryPolicy(
+        enabled=settings.table_summary_enabled,
+        min_rows=settings.table_summary_min_rows,
+        min_cols=settings.table_summary_min_cols,
+        min_cells=settings.table_summary_min_cells,
+        max_grid_chars=settings.table_summary_max_grid_chars,
+    )
+
+
+def _chunk_content(chunk: SectionChunk, summary: str) -> str:
+    """Return the text written to ``chunks.content`` — grid included, always.
+
+    The summary goes **in front of** the grid and never in place of it. D8's own wording
+    ("the table's embedded text *is* a generated NL summary") reads the other way, and
+    following it would be a quiet data loss: the numbers are what most questions about a
+    table are actually asking for, and a chunk holding only prose about them cannot be
+    quoted, cannot be span-verified (4.14), and cannot answer "what was the BLEU score".
+    In front rather than behind because the head of a chunk is what a truncating
+    embedder and a cross-encoder reranker both see most of.
+
+    Args:
+        chunk: The packed chunk.
+        summary: The generated summary, or ``""`` when the chunk has none.
+
+    Returns:
+        The chunk's stored text.
+    """
+    return f"{summary}\n\n{chunk.text}" if summary else chunk.text
+
+
+def _table_meta(chunk: SectionChunk, report: TableSummaryReport) -> dict[str, Any] | None:
+    """Return the ``table`` block of a table chunk's metadata, or ``None`` for prose.
+
+    This is what makes a table retrievable *as a table* (D8): the shape TableFormer
+    reported and the caption it was printed with, on the row, rather than something a
+    consumer has to recover by counting pipes in the text.
+
+    ``summarised`` and ``reason`` are both recorded because their absence is ambiguous.
+    A table with no summary because it is 8x3 and a table with no summary because the
+    gateway returned a 500 look identical on a row, and only one of them is worth waking
+    somebody for.
+
+    Args:
+        chunk: The packed chunk.
+        report: The document's summarisation outcome.
+
+    Returns:
+        The metadata block, or ``None`` when the chunk is not a table.
+    """
+    table = chunk.table
+    if table is None:
+        return None
+    summary = report.summary_for(table)
+    return {
+        "rows": table.rows,
+        "cols": table.cols,
+        "caption": table.caption,
+        "digest": table.digest,
+        "summarised": bool(summary),
+        "summary": summary or None,
+        "reason": report.reason_for(table) or None,
+    }
+
+
+def _chunk_meta(
+    chunk: SectionChunk, *, document: Document, parser: str, table: dict[str, Any] | None
+) -> dict[str, Any]:
     """Return the provenance recorded on one ``chunks`` row.
 
     Everything a citation needs and nothing a query has to re-derive: where the text sits
@@ -331,11 +425,15 @@ def _chunk_meta(chunk: SectionChunk, *, document: Document, parser: str) -> dict
         chunk: The packed chunk.
         document: The row it belongs to.
         parser: The parser name and version recorded on the parse.
+        table: The :func:`_table_meta` block when this chunk is a table, else ``None``.
+            Present as ``null`` on a prose row rather than absent, so "this is not a
+            table" and "this row predates task 4.10" stay distinguishable.
 
     Returns:
         A JSON-serialisable mapping for ``chunks.meta``.
     """
     return {
+        "table": table,
         "ordinal": chunk.ordinal,
         "section": chunk.section,
         "prefix": chunk.prefix,
@@ -499,6 +597,16 @@ async def chunk_stage(
     ``DELETE`` costs one statement and removes the question, and because it shares the
     transaction with the insert there is no window in which the document has no chunks.
 
+    **Tables (D8, task 4.10).** Each table is its own chunk, carrying the shape
+    TableFormer reported and the caption it was printed with; above a configured size it
+    also carries a generated sentence or two saying what it shows, written *in front of*
+    the grid rather than instead of it. That is the one place this handler spends money,
+    and it is bounded twice: by the threshold, which never sends a table a reader could
+    already follow, and by ``table_summaries``, which is keyed on the table's own content
+    hash. The idempotency contract therefore covers the bill as well as the rows — the
+    second run of this stage finds every summary cached and makes no model call at all,
+    which is also what makes 4.13's re-index free.
+
     Args:
         session: The scoped session, inside this stage's transaction.
         tenant_id: The tenant the substrate bound the scope to.
@@ -533,7 +641,23 @@ async def chunk_stage(
             kind="ParseArtifactUnreadable",
         ) from exc
 
-    pieces = chunk_sections(parsed, context=_document_context(document))
+    context = _document_context(document)
+    pieces = chunk_sections(parsed, context=context)
+    # D8 / task 4.10. Before the delete rather than after, so a summarisation that fails
+    # outright leaves the previous ingest's chunks untouched rather than replacing them
+    # with a set that has lost its table summaries. The gateway is resolved only when
+    # summaries are switched on and this document actually has a table: a corpus of prose
+    # must not make the ``chunk`` stage depend on a model being reachable at all.
+    policy = _table_policy()
+    wants_model = policy.enabled and any(piece.table is not None for piece in pieces)
+    summaries = await summarise_document_tables(
+        session,
+        pieces,
+        tenant_id=owner,
+        complete=_deps().resolve_complete() if wants_model else None,
+        policy=policy,
+        title=context.title,
+    )
     # One transaction: the old rows and the new ones can never both be visible, and a
     # failure anywhere below leaves the previous ingest's chunks exactly as they were.
     await session.execute(delete(Chunk).where(Chunk.document_id == document_id))
@@ -545,14 +669,27 @@ async def chunk_stage(
                     "tenant_id": owner,
                     "document_id": document_id,
                     "persona": None,
-                    "content": piece.text,
+                    "content": _chunk_content(piece, summaries.summary_for(piece.table)),
                     "embedding": _UNEMBEDDED,
-                    "meta": _chunk_meta(piece, document=document, parser=parsed.parser),
+                    "meta": _chunk_meta(
+                        piece,
+                        document=document,
+                        parser=parsed.parser,
+                        table=_table_meta(piece, summaries),
+                    ),
                 }
                 for piece in pieces
             ],
         )
-    logger.info("chunked document %s into %d chunk(s)", document_id, len(pieces))
+    logger.info(
+        "chunked document %s into %d chunk(s), %d of them tables (%d summarised, "
+        "%d model call(s))",
+        document_id,
+        len(pieces),
+        sum(1 for piece in pieces if piece.table is not None),
+        len(summaries.summaries),
+        summaries.model_calls,
+    )
     return {"chunk_count": len(pieces)}
 
 

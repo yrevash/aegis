@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM for the durable job substrate — ``job_runs``, ``documents``, ``chunks``.
+"""The durable job substrate's ORM — ``job_runs``, ``documents``, ``chunks``, ``table_summaries``.
 
 **These tables are the system of record.** The orchestrator that actually executes the
 work (Temporal, in this platform's host) owns *execution* state — retries, timers,
@@ -19,7 +19,7 @@ Like every other module's models these register on the shared
 ops tables — on PostgreSQL with native ``jsonb`` and ``timestamptz`` columns via
 :data:`aegis.data.JsonB` and the base's ``UtcDateTime`` annotation map.
 
-All three tables carry ``tenant_id`` and are therefore registered in
+All four tables carry ``tenant_id`` and are therefore registered in
 :data:`aegis.governance.rls._TENANT_SCOPED_TABLES`, which is what earns them a
 ``tenant_isolation`` Row-Level Security policy at boot. Registration is not optional
 bookkeeping: an unregistered table with a ``tenant_id`` column looks governed from the
@@ -80,6 +80,7 @@ __all__ = [
     "Document",
     "JobRun",
     "JobStatus",
+    "TableSummary",
 ]
 
 
@@ -360,4 +361,62 @@ class Chunk(AegisBase):
         # faster to search, and lossless — a GiST text-search index returns candidates
         # that must be rechecked against the row).
         Index("ix_chunks_search_vector", "search_vector", postgresql_using="gin"),
+    )
+
+
+class TableSummary(AegisBase):
+    """The hash-cached natural-language summary of one table (D8, task 4.10).
+
+    A table's Markdown grid embeds badly — ``| 27.3 | 28.4 | 41.8 |`` carries arithmetic
+    and no semantics — so ingestion spends one model call per table on a sentence or two
+    describing what it shows, and embeds that alongside the grid. This table is the reason
+    that cost is paid **once**.
+
+    ``digest`` is :func:`aegis.ingestion.tables.table_digest` of the table's own content,
+    which makes the key the table rather than the document it arrived in. Three things
+    then become free rather than billed again: the same table appearing twice in one
+    document, the same table appearing in two documents of a corpus (a repeated schedule
+    or rate card, which is the common case in the enterprise PDFs D8 is about), and every
+    re-ingest or 4.13 re-index of bytes already seen. It is the same idea ``documents``
+    already applies at ``content_sha256``, one level down.
+
+    **The cache is per tenant, and that is a deliberate cost for a boundary.** A global
+    cache would hit more often, and the summary of an identical grid is derivable from
+    what the second tenant already holds — but it would be the first row in the retrieval
+    path whose predicate is not ``tenant_id``, and "this row is safe to share because the
+    input was equal" is a rule that survives exactly until someone widens what is cached.
+    The registry entry in :data:`aegis.governance.rls._TENANT_SCOPED_TABLES` is what makes
+    the policy real, and it can only exist if the owner is on the row.
+
+    Deliberately **not** ``ON DELETE CASCADE`` from ``documents``: the point of the cache
+    is to outlive the document that paid for it. It holds no passage of the source — one
+    generated sentence and a hash — so it is cheap to keep and expensive to lose. A tenant
+    deletion removes it through ``tenants.id`` like everything else the tenant owns.
+    """
+
+    __tablename__ = "table_summaries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
+    # 64 hex characters of SHA-256, sized exactly like ``documents.content_sha256`` — the
+    # same kind of key, over the table's Markdown rather than the file's bytes.
+    digest: Mapped[str] = mapped_column(String(64))
+    summary: Mapped[str] = mapped_column(Text)
+    # The shape the summary was written about. Stored rather than re-derived because the
+    # grid it describes is not kept here, and a summary whose table has been re-parsed
+    # into a different shape by a later Docling is a summary to distrust.
+    row_count: Mapped[int] = mapped_column()
+    col_count: Mapped[int] = mapped_column()
+    # The model *role* that produced it (``cheap``), not a model id: the id behind a role
+    # is the gateway's to change, and a cache row that named one would look stale the day
+    # the fleet moved without anything about the summary having changed.
+    model_role: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        # The lookup *is* the uniqueness: one summary per table per tenant, and the
+        # constraint is what lets two concurrent ingests of the same corpus race safely —
+        # the loser's ``ON CONFLICT DO NOTHING`` keeps the winner's sentence rather than
+        # writing a second, differently-worded one for the same grid.
+        UniqueConstraint("tenant_id", "digest", name="uq_table_summaries_tenant_digest"),
     )
