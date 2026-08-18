@@ -5,7 +5,7 @@ The per-profile control matrix (C3) · Grok-style agent selection (C1) · multi-
 as a *control* (C2) · and the seven tenant-facing capabilities in D that have no plan yet.
 
 This is research, not a phase file. It ends with a dependency-ordered sequence that
-[`phase-05-console.md`](../phase-05-console.md) and [`phase-06-admin-surfaces.md`](../phase-06-admin-surfaces.md)
+[`phase-05-console.md`](../phase-06-console.md) and [`phase-06-admin-surfaces.md`](../phase-07-control-planes.md)
 absorb. Where those two already own a task, this document says so and stops.
 
 ---
@@ -1385,10 +1385,10 @@ grep -rn "createBudget\|postApproval\|assignUserRole\|createUser\|createTenant" 
 **Sibling plans, built on and not re-planned:**
 [`plans/04-enterprise-substrate.md`](04-enterprise-substrate.md) (jobs, health, DB page,
 request tracking) · [`plans/05-modularity-scale.md`](05-modularity-scale.md) (module contract,
-API versioning) · [`phase-03-ingestion-v2.md`](../phase-03-ingestion-v2.md) ·
-[`phase-04-multi-agent.md`](../phase-04-multi-agent.md) ·
-[`phase-05-console.md`](../phase-05-console.md) ·
-[`phase-06-admin-surfaces.md`](../phase-06-admin-surfaces.md) ·
+API versioning) · [`phase-03-ingestion-v2.md`](../phase-04-ingestion.md) ·
+[`phase-04-multi-agent.md`](../phase-05-multi-agent.md) ·
+[`phase-05-console.md`](../phase-06-console.md) ·
+[`phase-06-admin-surfaces.md`](../phase-07-control-planes.md) ·
 [`backlog-post-hackathon.md`](../backlog-post-hackathon.md)
 
 **External** (all `[EVIDENCE]`, retrieved 2026-08-17):

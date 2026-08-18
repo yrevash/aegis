@@ -1,6 +1,9 @@
-# Phase 5 — The unified console
+# Phase 6 — The unified console
 
-**3 days. After phases 3 and 4 — this is what makes them visible.**
+**After phases 3, 4 and 5 — this is what makes them visible.**
+
+Building it earlier means building it twice: the events it renders do not exist until Phase 5,
+and the documents it cites do not exist until Phase 4.
 
 Phase 3 gives Aegis real ingestion. Phase 4 gives it real concurrent agents. Neither is
 visible today. The console is a single-shot bento panel over one run, with no chat, no
@@ -137,7 +140,7 @@ architecture and they are in [`backlog-post-hackathon.md`](backlog-post-hackatho
 
 ## Tasks
 
-### 5.1 — Repair the protocol drift (0.25d)
+### 6.1 — Repair the protocol drift (0.25d)
 
 The cheapest work in the whole plan.
 
@@ -150,7 +153,7 @@ The cheapest work in the whole plan.
   `backend/tests/api/test_stream_name_mirror.py` — parse `stream.ts`, diff against the Python
   variants, fail on drift. The existing test guards `streamNames.ts`, which nothing imports.
 
-### 5.2 — Chat sessions in Postgres, and actually send the id (0.5d)
+### 6.2 — Chat sessions in Postgres, and actually send the id (0.5d)
 
 ```
 chat_sessions  (id uuid pk, tenant_id, user_id, title, created_at, last_active_at)
@@ -170,7 +173,7 @@ after Phase 1 must not silently arrive without one.
 event arrive on screen.** That event is only visible because of 5.1. If it does not arrive,
 memory is still dark and you have not finished this task.
 
-### 5.3 — The chat shell and the live run surface (0.75d)
+### 6.3 — The chat shell and the live run surface (0.75d)
 
 Clean before a query. Alive during it. Structured after it.
 
@@ -196,7 +199,7 @@ Clean before a query. Alive during it. Structured after it.
 cards have nothing to group by and this degrades to a single-lane log. Confirm the event shape
 with Phase 4 before starting 5.3, not during it.
 
-### 5.4 — Result tabs (0.5d)
+### 6.4 — Result tabs (0.5d)
 
 The rule, from the v2 doc: the main tab carries what a user actually wants. Anything they
 would only ask for on purpose gets its own tab.
@@ -211,21 +214,72 @@ would only ask for on purpose gets its own tab.
 
 If a panel has no real data for a run, the tab says so. It does not render an empty chart.
 
-### 5.5 — Model selection (0.25d)
+### 6.5 — The composer: mode, model, tools (1.0d)
 
-- `GET /models` projected from `routing_table()` (`gateway/routing.py:47`) plus `unit_cost` —
-  role, deployment id, small/large, price per 1k.
-- `QueryRequest` gains `model_overrides: dict[str, str] | None` (role → deployment), carried on
-  the **existing** `set_governance_context` contextvar so `deps.complete` resolves it without a
-  single signature change through the graph.
-- The composer picker shows the *effective* model per role **and its source** — "Aegis default"
-  or "your choice".
+Replaces the old "model selection" task, which was one axis of three.
 
-Persisting a default per tenant and per user needs a settings table, which is deferred. Say so
-in the UI rather than pretending: the picker holds the user's choice for the session, and the
-source label never claims a saved tenant default that does not exist.
+Grok, ChatGPT and Claude have all converged on the same shape, and it is worth copying because
+it is the shape users already understand:
 
-### 5.6 — Image upload (0.25d)
+| Product | What it ships | The lesson |
+|---|---|---|
+| **Grok** | One switch in the input bar: **Auto · Fast · Expert · Heavy** — its own descriptions are "Chooses Fast or Expert", "Quick responses", "Thinks hard", "Team of experts" | The mode names a **strategy**, not a model. "Heavy = team of experts" is our `TEAM`. |
+| **ChatGPT** | Auto router with **Instant · Thinking · Pro** | **Automatic escalation does not consume the quota; manually picking it does.** |
+| **Claude** | Model, effort and extended-thinking are three independent settings; tools are a separate surface | Depth, model and tools are **orthogonal**. Do not fuse them. |
+
+```
+┌─ composer ───────────────────────────────────────────────────────────┐
+│  [ Mode: Auto ▾ ]   [ Model: Aegis default ▾ ]   [ Tools: 6 of 9 ▾ ]  │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │  Ask anything…                                                 │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│  ◷ $2.14 of $50 today                                    [ Send ]    │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**The five modes**, named for what they do to *this* system rather than copied from anyone's
+marketing:
+
+| Mode | What it does | Maps to |
+|---|---|---|
+| **Auto** *(default)* | Phase 5's classifier decides `SINGLE` vs `TEAM` and the fan-out width | `RouterDecision` unchanged |
+| **Fast** | Force `SINGLE`, skip the classifier's model tiebreak, pin the cheap deployment, disable the agentic-retrieval loop | `depth=SINGLE`, `agentic_retrieval_enabled=False` |
+| **Deep** | Force `SINGLE` with the full retrieval loop and the larger model — "think harder in one lane" | `depth=SINGLE`, `agentic_retrieval_max_rounds` at ceiling |
+| **Team** | Force `TEAM` at the platform-capped width. The user is explicitly buying a fan-out | `depth=TEAM`, `fanout=cap` |
+| **Custom** | Reveals the pinning panel: choose agents from the roster, tools, and width | `depth=TEAM` with an explicit roster |
+
+**Why five and not three:** Fast and Deep both force `SINGLE` and differ only in retrieval depth
+and model tier — but that is the entire "quick answer vs think hard" distinction every
+comparable product ships, and `AgentConfig` **already has both knobs**
+(`agentic_retrieval_enabled`, `agentic_retrieval_max_rounds`). Collapsing them throws away a
+control the code already has.
+
+**Precedence — manual wins, and the screen says who decided:**
+
+```
+effective_depth = user_mode if user_mode != AUTO else classifier_decision
+```
+
+Phase 5 puts `decided_by` on the `routing` event. This phase renders it, so the trace always
+names whether the user or the classifier chose.
+
+**The budget rule worth fighting for:** auto-escalation is free; **manual escalation is charged
+and pre-flighted.** Before a `Team` run the composer shows the estimated cost and the remaining
+balance. This is the asymmetry ChatGPT ships, and with ~650 total fan-out queries on $100 it is
+the only thing between a Team button and a burned balance.
+
+**Persistence is the settings catalogue** (Phase 3 §3.7), not a bespoke store:
+`agent.mode`, `agent.model`, `agent.tools` resolve platform → tenant → user. `resolve()` returns
+`(value, source)` so the control can show *"tenant default"* next to the value.
+
+**Tool pinning uses the same `is_allowed` intersection Phase 5 already specifies** —
+`platform ∩ persona ∩ tenant ∩ user`. One intersection, not two implementations.
+
+**Do not enforce the caps in the dropdown alone.** The allowed model set and the fan-out cap are
+exactly the controls that get "enforced" by a UI control and bypassed by a `curl`. They are
+server-side checks; the dropdown only reflects them.
+
+### 6.6 — Image upload (0.25d)
 
 Almost entirely reuse. Mount `ImageDropzone.tsx` in the composer, post through `analyseImage`
 (`client.ts:724`) to `POST /vision/analyse` (`routes.py:2787`), and attach the result to the
@@ -234,7 +288,7 @@ chip in the turn, before the answer, so the rail is visibly doing work.
 
 No new storage. The attachment lives for the run. A durable `attachments` table is backlog.
 
-### 5.7 — The budget indicator (0.25d)
+### 6.7 — The budget indicator (0.25d)
 
 - `GET /me/budget` returning the caller's own effective caps, spend and remaining, read from
   the same `BudgetStatusRow` the enforcer reads — so the pill and the enforcer cannot disagree.
@@ -244,7 +298,7 @@ No new storage. The attachment lives for the run. A durable `attachments` table 
 If a figure is not measured, do not draw it. An empty pill that says "not yet measured" is
 worth more than a plausible number, and the jury rewards exactly that distinction.
 
-### 5.8 — The mascot (0.25d) — cut this first
+### 6.8 — The mascot (0.25d) — cut this first
 
 Inline SVG. `pointermove` on `window`, pupil offset clamped to the iris radius, rAF-throttled,
 listener detached when off-screen, `prefers-reduced-motion` respected. Idle blink on a timer.

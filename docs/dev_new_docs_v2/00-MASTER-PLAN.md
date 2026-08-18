@@ -1,5 +1,9 @@
 # Aegis v2 — the master plan
 
+> **SUPERSEDED for phase ordering by [`02-ROADMAP.md`](02-ROADMAP.md).**
+> The principles below still stand. The phase table here reflects the original
+> six-phase plan; the live plan is phases 3–9 in the roadmap.
+
 **Written 2026-08-16. Target: the hackathon starts 2026-08-30 — 14 days.**
 
 This file decides the order. The three documents in [`plans/`](plans/) are the deep research
@@ -54,10 +58,10 @@ These are not cancelled. They are sequenced after, in [`backlog-post-hackathon.m
 |---|---|---|---|
 | 1 | [Tenant isolation](phase-01-tenant-isolation.md) | 3 | A live cross-tenant leak. Everything else is built on top of it, and we make the claim publicly. |
 | 2 | [Strip ML and the demo fiction](phase-02-strip-ml-and-fiction.md) | 1 | Cheap, and it simplifies the graph *before* we make the graph concurrent. |
-| 3 | [Real ingestion (Docling)](phase-03-ingestion.md) | 3 | The capability that does not exist and that 30 August requires. |
-| 4 | [Adaptive multi-agent](phase-04-multi-agent.md) | 3 | The money shot, done honestly — a classifier decides whether to fan out. |
-| 5 | [Unified console](phase-05-console.md) | 3 | The demo surface. Without it, phases 3 and 4 are invisible. |
-| 6 | [Admin surfaces](phase-06-admin-surfaces.md) | 1 | Mostly frontend — the backend already works. |
+| 3 | [Real ingestion (Docling)](phase-04-ingestion.md) | 3 | The capability that does not exist and that 30 August requires. |
+| 4 | [Adaptive multi-agent](phase-05-multi-agent.md) | 3 | The money shot, done honestly — a classifier decides whether to fan out. |
+| 5 | [Unified console](phase-06-console.md) | 3 | The demo surface. Without it, phases 3 and 4 are invisible. |
+| 6 | [Admin surfaces](phase-07-control-planes.md) | 1 | Mostly frontend — the backend already works. |
 
 **Total: 14 days.** That is the whole window with **zero buffer**, which is not a plan, it is
 a hope. So:

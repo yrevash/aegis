@@ -1,8 +1,17 @@
-# Phase 3 — Ingestion and retrieval, rebuilt on evidence
+# Phase 4 — Ingestion and retrieval, rebuilt on evidence
 
 **Status: awaiting approval. Nothing here is implemented.**
 
-This supersedes `phase-03-ingestion.md`, which was written from assumption. Thirteen of its
+**Depends on Phase 3.** Ingestion is the primary consumer of the job substrate
+([`phase-03-platform-spine.md`](phase-03-platform-spine.md) §3.1–3.4) and of `run_events`
+(§3.6) — not a decorative user of it. Stage-level resumability, parse serialisation, batching
+across queued documents, the live log and scheduled re-indexing are all **ingestion
+correctness properties that the substrate provides and nothing else does**; §2.6 states each
+one as a requirement. This phase **runs on that substrate**; it does not build a queue of its
+own. Starting Phase 4 before 3.1–3.4 land means writing a second, weaker job system that then
+has to be deleted.
+
+This supersedes the v1 ingestion plan, which was written from assumption. Thirteen of its
 factual claims turned out to be wrong — including one of mine that was not merely overstated
 but backwards. Everything below is either measured on hardware, or cited to a paper or
 primary source, and every decision carries its reason, its trade-off, and what we would do
@@ -48,10 +57,14 @@ Three of those boxes do not exist today, and one exists but is disconnected.
 ### 2.1 There is no ingestion at all
 
 Not weak — absent. Zero hits for `docling`, `pypdf`, `PyMuPDF`, `pdfplumber`, `unstructured`
-across both source trees and both `pyproject.toml` files. `routes.py` is 3,066 lines and ~60
-routes with no upload route, no ingest route, no job route. `Retriever.ingest()` exists and
-**nothing in the application ever calls it**. Whatever is in the LightRAG working directory
-on the demo machine was put there by hand.
+across both source trees and both `pyproject.toml` files. `backend/src/app/api/routes.py` is
+**3,066 lines and 57 `@router` decorators** with no upload route, no ingest route, no job
+route.
+
+`Retriever.ingest()` exists, and `backend/src/app/retrieval/pipeline.py:164` wraps it as a
+governed public entry point — **and no route reaches either.** Verified: `grep -n ingest
+backend/src/app/api/routes.py` returns two comments and no call. Whatever is in the LightRAG
+working directory on the demo machine was put there by hand.
 
 ### 2.2 The production backend has no corpus-wide keyword search
 
@@ -93,6 +106,57 @@ Context@K drop and no Title@K effect.
 
 So we ship the junior partner of the winning technique and omit both senior ones — at zero
 model-call cost. Adding document identity and date takes Context@5 from **33.3% → 55.0%**.
+
+### 2.5 The corpus table cannot express a tenant — and this one is a blocker
+
+**Verified in source, `backend/src/app/data/models.py:141-156`.** The `Chunk` model declares
+exactly six columns:
+
+```python
+# backend/src/app/data/models.py:149
+__tablename__ = "chunks"
+id, doc_id, persona, content, embedding, meta
+```
+
+**There is no `tenant_id`.** So `chunks` is not one of the tenant-scoped tables Phase 1
+registered, it carries no RLS policy, and its isolation today is the vector-store namespace
+plus whatever `meta` happens to hold.
+
+Every other defect in §2 is a quality gap. This one is a **security regression waiting on a
+feature**: §2.2's fix queries `chunks` directly through Postgres FTS, and with no `tenant_id`
+column there is no predicate to filter on. Shipping the keyword arm before the column means
+shipping a known cross-tenant read path — re-opening precisely the leak Phase 1 closed,
+through a path Phase 1 never covered because the arm did not exist yet.
+
+**This is D4b. It is a blocker, not a note.** It gates task 4.7 and it appears in the
+definition of done as a hard gate.
+
+### 2.6 There is nowhere durable to run an ingest
+
+An ingest is a **multi-stage pipeline, minutes long, with billed model calls in it**. It cannot
+live in an HTTP request. Today there is no queue at all: the one job pattern in the repo is
+`aegis/src/aegis/memory/consolidate.py:983-1005`, a SELECT-then-guarded-UPDATE with **no lease,
+no reaper, and an `attempts` counter read nowhere** — Phase 3 §1 documents why copying it is
+the wrong move.
+
+Phase 3 §3.1–3.4 builds the substrate. Phase 3 §3.6 builds the `run_events` record the live log
+reads from. **Neither is this phase's work, and this phase must not build a second one.**
+
+What ingestion specifically requires from it — every item is correctness, not convenience, and
+each is stated as a requirement in Phase 3's *"Why this exists"* section:
+
+| Requirement | What breaks without it |
+|---|---|
+| **Stage-level progress on the job row** | A failure at the graph stage re-parses 200 pages. At ~1.1 s/page that is a four-minute penalty for a ten-second bug. |
+| **A per-job-type concurrency limit** | Docling is CPU-bound and single-process. Two concurrent parses on a 16 GB box contend and both get slower. **Parses serialise; embed calls do not** — one limiter, two different values. |
+| **Batching across documents, not only within one** | Embedding is billed per call. Batching across the queue, not just across one document's chunks, is a real saving against $100 of credit — and it is only possible because the work is queued. |
+| **Multi-document upload** | Ten files dropped at once must become ten queued jobs with visible queue positions. Without a queue they are ten timeouts. |
+| **A durable job row to stream from** | The live ingest log the tenant watches **is job progress**. There is no separate log channel to invent — task 4.12 is a projection over the job row and `run_events`. |
+| **The scheduler** | Re-indexing on a cadence is a direct requirement, not a nice-to-have. See task 4.13. |
+| **Budget context on the job** | Ingest spends money. A cost preflight before the job runs is the difference between refusing a 200-page upload and discovering it half way through. |
+
+If Phase 3 §3.1–3.4 has not landed, this phase has nowhere to put its longest-running operation
+and should not start.
 
 ---
 
@@ -233,10 +297,13 @@ us a document — stalls for a minute with no explanation.
 machine running Postgres, Neo4j and Memurai, that is worth measuring rather than assuming;
 the task includes doing so.
 
-### D4b — `chunks` needs `tenant_id` BEFORE the BM25 arm lands
+### D4b — 🚧 **BLOCKER** — `chunks` needs `tenant_id` BEFORE the BM25 arm lands
 
-**Verified against the live database, 2026-08-17.** `chunks` columns are
-`id, embedding, meta, doc_id, persona, content`. **There is no `tenant_id`.**
+**This is the one hard gate in the phase. Nothing about D5 is safe to merge without it.**
+
+**Verified in source and against the live database, `backend/src/app/data/models.py:141-156`.**
+`chunks` columns are `id, doc_id, persona, content, embedding, meta`. **There is no
+`tenant_id`.**
 
 It is therefore not one of the 13 tenant-scoped tables Phase 1 registered, and it carries no
 RLS policy — its isolation today is the vector-store namespace plus the `meta` payload.
@@ -249,13 +316,16 @@ path Phase 1 never covered because the arm did not exist yet.
 **The work, and it is not optional:**
 
 - Add `tenant_id` to `chunks`, backfilled from the owning document.
-- Register it in `_TENANT_SCOPED_TABLES` so the boot-time catalog read-back covers it.
+- Register it in the tenant-scoped table catalogue so the boot-time catalog read-back covers
+  it — the same registration `jobs` gets in Phase 3 §3.1.
 - The FTS query carries the tenant predicate on the same row — which was the argument for
   Postgres FTS in D5 in the first place.
-- Extend the live isolation test to assert a lexical hit cannot cross tenants.
+- Extend the live isolation test (Phase 1 task 1.6) to assert a lexical hit cannot cross
+  tenants.
 
-**Sequencing: this lands in the same change as D5, or D5 does not land.** Shipping the keyword
-arm first and the column second means shipping a known cross-tenant path.
+**Sequencing: task 4.6 lands in the same change as task 4.7, or 4.7 does not land.** Shipping
+the keyword arm first and the column second means shipping a known cross-tenant path, and
+"we'll add the column next" is exactly how it stays shipped.
 
 ### D5 — Connect the corpus-wide BM25 arm
 
@@ -419,22 +489,111 @@ and its error bar, not the library that printed it.
 
 | # | Task | Days | Notes |
 |---|---|---|---|
-| 3.0 | Spike on the real Windows box | 0.25 | Docling install, model prefetch, cold start, one real PDF |
-| 3.1 | `convert.py` seam — **with page/bbox from line one** | 0.5 | Docling never leaks past this module |
-| 3.2 | Text-layer probe + header/footer/page-number stripping | 0.25 | Running headers otherwise trip our Jaccard dedup and look like a bug on stage |
-| 3.3 | `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | The chunker survives intact |
-| 3.4 | Enriched prefix: title · type · date · heading path | 0.15 | Highest quality-per-hour in the phase |
-| 3.5 | Document + job tables, upload route, guarded-claim worker | 0.75 | Reuses the `consolidate.py` claim pattern and the `/voice/transcribe` upload pattern |
-| 3.6 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
-| 3.7 | **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap |
-| 3.8 | **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest |
-| 3.9 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b |
-| 3.10 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
-| 3.11 | Verbatim citation verification | 0.15 | ~40 lines, reuses 3.10's primitive |
-| 3.12 | Live ingest log (SSE) | 0.5 | The tenant watches their document being read |
+| 4.0 | Spike on the real Windows box | 0.25 | Docling install, model prefetch, cold start, one real PDF |
+| 4.1 | `convert.py` seam — **with page/bbox from line one** | 0.5 | Docling never leaks past this module |
+| 4.2 | Text-layer probe + header/footer/page-number stripping | 0.25 | Running headers otherwise trip our Jaccard dedup and look like a bug on stage |
+| 4.3 | `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | The chunker survives intact |
+| 4.4 | Enriched prefix: title · type · date · heading path | 0.15 | Highest quality-per-hour in the phase |
+| 4.5 | `documents` table, upload route, **`ingest_document` job on the P3 substrate** | 0.75 | No queue machinery here — Phase 3 §3.1–3.4 owns it |
+| 4.6 | 🚧 **`chunks.tenant_id`** + RLS + isolation test | 0.25 | **Blocker for 4.7.** See D4b — it ships in the same change or 4.7 does not ship |
+| 4.7 | **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. Gated on 4.6 |
+| 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
+| 4.9 | **Local ONNX cross-encoder reranker** + model benchmark | 0.5 | Second largest |
+| 4.10 | Table objects with NL summaries, hash-cached | 0.4 | Promoted out of the cut list. **TableFormer stays on ACCURATE** — see D3b |
+| 4.11 | Span-anchored gold set + naive-baseline ablation | 0.5 | The number that goes on the slide |
+| 4.12 | Live ingest log — a projection over the job row | 0.4 | The tenant watches their document being read. Cheaper than the old estimate because the job row already carries stage progress |
+| 4.13 | Scheduled re-index on the P3 scheduler | 0.25 | Direct requirement — see the task |
+| 4.14 | Verbatim citation verification | 0.15 | ~40 lines, reuses 4.11's primitive |
 
-**Total: 4.75 days** against a 3-day budget in the master plan. That is honest rather than
-padded — see the cut order.
+**Total: 5.15 days.** That is honest rather than padded — see the cut order.
+
+Three of these have detail that does not fit a table row.
+
+### 4.5 — `documents`, the upload route, and the `ingest_document` job (0.75d)
+
+**There is no job machinery in this task.** The claim, the lease, the reaper, the retry, the
+dead-letter status, the idempotency key, the priority, the admission cap, the cancellation flag
+and the worker are all Phase 3 §3.1–3.4. Do not reimplement any of them, and specifically do
+**not** reuse `consolidate.py`'s SELECT-then-UPDATE claim — Phase 3 §1 is the argument against
+it and Phase 3 §3.2 migrates `memory_consolidation_job` off it.
+
+What this task owns:
+
+- **A `documents` table** — `id, tenant_id, filename, content_type, byte_size, sha256, status,
+  page_count, uploaded_by, created_at`. Tenant-scoped and registered in the catalogue, like
+  `chunks` in 4.6 and `jobs` in Phase 3 §3.1.
+- **`POST /documents`** — multipart upload, following the existing `/voice/transcribe` upload
+  pattern rather than inventing a second one. It **stores the bytes and enqueues; it never
+  parses inline.** Ten files dropped at once is ten enqueues and ten queue positions in the
+  response, which is the whole reason multi-document upload works at all.
+- **The `ingest_document` job type**, with its stages named on the row:
+
+  ```
+  parse → chunk → enrich → embed → index → graph
+  ```
+
+  `payload` carries `{document_id, corpus_version}`; the job writes the **completed stage**
+  back on every transition. **A retry resumes at the first incomplete stage.** A failure in
+  `graph` must never re-run `parse` — at ~1.1 s/page a 200-page document is four minutes of
+  work being thrown away for a ten-second bug, and it is the single most likely thing to
+  happen on 29 August.
+- **The idempotency key is `ingest:{sha256}:{corpus_version}`.** Re-uploading the same bytes
+  under the same corpus version is a no-op that returns the existing job. Bumping
+  `corpus_version` (4.8) is what makes a re-ingest a *new* job rather than a duplicate.
+- **Concurrency limits, per job type, and they differ:**
+
+  | Job type | Limit | Why |
+  |---|---|---|
+  | `ingest_document` (parse stage) | **1** | Docling is CPU-bound and single-process at ~1.1 s/page. Two concurrent parses on a 16 GB box contend and both get slower; the queue is what serialises them without dropping work. |
+  | embed / index stages | ≥ 4 | Network-bound. Serialising these wastes the whole ingest window for nothing. |
+
+  This is why Phase 3's substrate needs a **per-job-type** limit rather than one global worker
+  count, and it is stated there as a requirement (§"What this means for how it is built").
+- **Batching across documents, not only within one.** The embed stage pulls from the queue, so
+  a batch may span several queued documents. That is a real API round-trip and cost saving
+  against $100 of credit, and it is only reachable because the work is queued.
+- **Cost preflight against the tenant budget before the job runs.** Estimate from
+  `page_count × chunks/page × embedding unit cost`, plus one model call per table if 4.10 is
+  on. A 200-page document with 80 tables is real money. Refuse at upload with the existing
+  `BudgetExceeded` reason string, not half way through the embed stage.
+- **Cancellation is the substrate's `cancel_requested` flag**, checked at each stage boundary.
+  A tenant who uploaded the wrong file should be able to stop the spend.
+
+### 4.12 — The live ingest log, as a projection (0.4d)
+
+**Do not build a log channel.** The tenant watching their document being read is watching **job
+progress**: the stage transitions written by 4.5, plus the per-stage `run_events` rows from
+Phase 3 §3.6. `GET /documents/{id}/events` re-streams them; a live run tails them.
+
+Two things it must show, because they are the honest parts:
+
+- **The OCR decision from D3** — per-document, named on screen. A silent `do_ocr=False` on a
+  scanned page is exactly the failure D3 trades away, so it has to be visible.
+- **The structure that was found** — the heading-level histogram from D2. A multi-column PDF
+  that parsed into scrambled chunks looks fine in an answer and obvious in a histogram
+  (see Risks).
+
+Because the record is durable, a refresh mid-ingest resumes the view rather than losing it —
+which is why replay is cheap here and expensive everywhere it is not built on `run_events`.
+
+### 4.13 — Scheduled re-indexing (0.25d)
+
+A direct requirement: *"re indexing pipeline can be structured in a way that it runs in set
+duration and in the meantime user own db take care."* This is Phase 3 §3.5's `job_schedules`
+table and its materialiser — **this task only registers the schedules.**
+
+| Schedule | Cadence | Job |
+|---|---|---|
+| Corpus re-index | nightly | Re-embed and re-index documents whose `corpus_version` is behind the current one. Idempotency-keyed per Phase 3 §3.5 (`sched:{id}:{fire_time}`), so two workers materialising the same tick produce one job. |
+| Graph rebuild | nightly, after re-index | The graph arm is the expensive one and it is the least latency-sensitive (D14). |
+| Orphan sweep | daily | Chunks whose document is deleted; documents stuck in a non-terminal status past the lease horizon. |
+
+Cadence is per-tenant configurable through the Phase 3 §3.7 settings catalogue
+(`ingest.reindex.cadence`), so it is a dashboard control rather than a constant — which is the
+"0 code change" goal applied to the one background process a tenant will actually ask about.
+
+**DB clock only, never the worker's** (Phase 3 §3.5). A skewed demo laptop must not fire a
+nightly re-index during the pitch.
 
 ---
 
@@ -473,37 +632,98 @@ on an unfamiliar corpus before 30 August.**
 
 ## 6. Cut order — decided now, not at 2am
 
-1. **SSE live-log replay** (3.12 keeps the live tail; replay after a refresh goes)
+1. **The ingest-log detail panels** (4.12 keeps the live stage tail; the OCR-decision and
+   heading-histogram panels go). Replay is *not* a cut — it is free once the events are in
+   `run_events`.
 2. **bbox renderer** — keep the data, drop the visual overlay
 3. **Table NL summaries** — keep tables as objects, drop the generated summary
 4. **Local reranker benchmark** — ship the 33M default rather than comparing three
+5. **The nightly graph rebuild in 4.13** — keep the corpus re-index schedule, drop the second
 
-**Never cut:** page provenance, the BM25 arm, the gold set. Those are the three things that
-turn claims into evidence.
+**Never cut:** page provenance, `chunks.tenant_id` (4.6), the BM25 arm, stage-level job
+progress, and the gold set. The first two are correctness; the last three are what turn claims
+into evidence.
 
 ---
 
-## 7. Risks
+## 7. Definition of done
 
-**Docling on the real Windows box.** Everything is measured on macOS. 3.0 exists to find out
+- [ ] A PDF uploaded through `POST /documents` is stored, enqueued, and **parsed by a worker,
+      never inside the request**.
+- [ ] `chunks.tenant_id` exists, is registered in the tenant-scoped catalogue, carries an RLS
+      policy, and the live isolation test asserts **a lexical hit cannot cross tenants**. This
+      is merged in the same change as `keyword_recall`, or neither is merged.
+- [ ] `LightRAGBackend.keyword_recall` searches the **whole tenant corpus**, not the dense
+      pool — proved by a query whose answer dense retrieval alone does not return.
+- [ ] Heading levels come back as a real tree, not `{1: N}` — asserted on the golden fixture.
+- [ ] **Killing the worker during the `embed` stage resumes at `embed`, not at `parse`** —
+      tested by actually killing it, and verified by the parse stage not re-running.
+- [ ] Three documents uploaded at once produce three queued jobs with queue positions, and
+      **only one parse runs at a time**.
+- [ ] An upload whose cost estimate exceeds the tenant budget is refused **at upload**, with
+      the existing `BudgetExceeded` reason string.
+- [ ] Re-uploading identical bytes under the same `corpus_version` returns the existing job.
+      Bumping `corpus_version` produces a new one.
+- [ ] Cancelling an in-flight ingest stops it at the next stage boundary and the spend stops
+      with it.
+- [ ] The ingest log streams stage transitions live, survives a page refresh, and names the
+      per-document OCR decision.
+- [ ] The nightly re-index schedule fires **once** per tick with two workers running.
+- [ ] The reranker runs locally, its measured p50/p95 latency over 20 passages is recorded in
+      the phase notes, and an induced failure falls **loudly** to the API reranker.
+- [ ] Every citation's quoted span is verified verbatim against its chunk.
+- [ ] The ablation table A0→A4 exists with paired bootstrap intervals, and the slide states
+      what n=50 can and cannot defend.
+- [ ] Full suites green, ruff clean, `next build` green.
+
+## 8. Demo at the end of this phase
+
+Drop three PDFs nobody has seen onto the console at once. Three jobs appear with queue
+positions; one parses while the others wait, and the log names what it found — five heading
+levels, forty tables, OCR off because the document is born-digital. Kill the worker while the
+third document is embedding, and watch it come back and resume **at the embed stage**, not at
+page one.
+
+Then ask *"what does clause 7.3.2 say?"* — the exact-identifier query that dense retrieval
+alone gets wrong — and get the right passage with a page number and a bounding box. Ask the
+same question as the other tenant and get nothing, because `chunks` now knows who owns a row.
+
+Finish on the ablation slide: A0 naive to A4 shipped, with the interval drawn on it.
+
+---
+
+## 9. Risks
+
+**Docling on the real Windows box.** Everything is measured on macOS. 4.0 exists to find out
 on day one rather than on 29 August. If it fails there, the fallback is `pypdf` plus our
 existing chunker — materially worse, but not nothing.
 
 **A jury PDF that parses badly.** Multi-column is a known Docling weakness
 ([#2067](https://github.com/docling-project/docling/issues/2067)) and it **fails silently into
-scrambled chunks**. Mitigation: a multi-column golden fixture in 3.0, and the ingest log
-showing what structure was found so a human can see it went wrong.
+scrambled chunks**. Mitigation: a multi-column golden fixture in 4.0, and the ingest log
+(4.12) showing the heading histogram so a human can see it went wrong.
 
 **The reranker's first local weight.** New failure class in the serving path. Must fail loudly
 to the API reranker, never silently to no reranking.
 
 **Ingest cost on a large document.** One model call per table, plus embeddings. A 200-page
-document with 80 tables is real money against $100. 3.9 caches by content hash; a cost
-preflight against the tenant budget is on the more-time list.
+document with 80 tables is real money against $100. 4.10 caches by content hash and 4.5
+preflights the estimate against the tenant budget before the job runs — that preflight moved
+into the phase when the substrate arrived, because a queued job is the only place a preflight
+has to stand on.
+
+**Phase 4 slips if Phase 3 slips, and there is no way around it.** Every task from 4.5 onward
+either runs on the substrate or streams from it. The temptation on a bad day is to write "just
+a small worker for now" — that is the second job system Phase 3 §3.2 already exists to delete,
+and it will be the thing that has no lease when a process dies on the 29th.
+
+**Parse serialisation is easy to get wrong in the permissive direction.** A per-job-type limit
+that defaults to "no limit" looks correct in every test that runs one document. Test it with
+three concurrent uploads on the real box and watch the parse stage, not the queue depth.
 
 ---
 
-## 8. What we would do with more time, ranked
+## 10. What we would do with more time, ranked
 
 1. **Per-page OCR triage** rather than per-document.
 2. **Late chunking** — architecturally blocked today: it needs token-level embeddings from a

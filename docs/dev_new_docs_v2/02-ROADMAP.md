@@ -150,7 +150,7 @@ Four wrong sentences that reproduce the Mumbai back-and-forth exactly.
 # Phase 4 — Ingestion
 
 Full decision record with reasoning in
-[`phase-03-ingestion-v2.md`](phase-03-ingestion-v2.md). The spine:
+[`phase-04-ingestion.md`](phase-04-ingestion.md). The spine:
 
 **Docling standard pipeline** — not the VLM (255× slower at 281 s/page vs 1.10; it uses *less*
 memory, so the earlier "impossible at 16 GB" was backwards). **TableFormer `ACCURATE`** — the

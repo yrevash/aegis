@@ -1,6 +1,15 @@
-# Phase 4 — Adaptive multi-agent
+# Phase 5 — Adaptive multi-agent
 
 **3 days. The money shot, done honestly.**
+
+**Depends on Phase 3 and Phase 4.** Per-agent logs are `run_events` rows
+([`phase-03-platform-spine.md`](phase-03-platform-spine.md) §3.6) — this phase adds `agent_id`
+to the event schema and does **not** invent a storage channel for agent output. Phase 4 gives
+the Knowledge agent a corpus worth retrieving from.
+
+**Phase 6 owns the manual override; this phase owns the field it writes to.** The composer's
+mode control (`phase-06-console.md` §6.9) sets `effective_depth`; the classifier below is what
+happens when it says `AUTO`. Build the classifier to be overridden — see task 5.1.
 
 Read the constraint before the design, because the constraint *is* the design:
 
@@ -23,12 +32,11 @@ answer in one pass; ask a hard one, watch four agents go.* The contrast is the d
 
 `aegis/src/aegis/agent/graph.py` compiles one `StateGraph` with a strictly linear hot path.
 Every edge is sequential. `act` executes its tool calls in a plain `for` loop
-(`graph.py:890`).
+(`graph.py:891`).
 
 The "supervisor" is the `route` node calling `aegis/src/aegis/agent/router.py::route_query`.
 It is a **deterministic keyword classifier that picks exactly one role**, with a cheap-LLM
-tiebreak only on a genuine tie (`router.py:171-211`). `SPECIALIST_NODES` (`graph.py:128-131`)
-maps exactly two:
+tiebreak only on a genuine tie. `SPECIALIST_NODES` (`graph.py:126-129`) maps exactly two:
 
 ```python
 SPECIALIST_NODES: dict[str, str] = {
@@ -42,10 +50,11 @@ log, one lane.
 
 ### 2. The accumulator work is already done, which is the good news
 
-`AgentState` (`aegis/src/aegis/agent/state.py:128,146-148`) already carries `operator.add`
+`AgentState` (`aegis/src/aegis/agent/state.py:123,138-140`) already carries `operator.add`
 reducers on `plan_iterations`, `prompt_tokens`, `completion_tokens`, `cost_usd`, and its
-docstring says outright that they exist so state "remains correct under a fan-out" — a
-fan-out that does not exist yet. Fan-out costs no state-schema churn.
+docstring at `state.py:11` says outright that they exist so state remains correct when nodes
+each contribute a share — a fan-out that does not exist yet. Fan-out costs no state-schema
+churn.
 
 ### 3. The concurrency question is settled — do not reopen it
 
@@ -70,14 +79,17 @@ consequential action without passing the one gate.
 
 ### 4. Three real events are already on the wire and invisible
 
-`routing`, `reflection` and `memory` are emitted by the backend and are **not in
-`web/src/lib/stream.ts`'s union at all** — `runReducer.ts` ends with `default: return next`,
-so they land in `state.events` and are dropped.
+`routing`, `reflection` and `memory` are emitted by the backend
+(`backend/src/app/api/schemas.py:324,347,367`, all three in the `StreamEvent` union at
+`schemas.py:389`) and are **not in `web/src/lib/stream.ts`'s union at all** — that union
+(`stream.ts:268`) carries fifteen variants and none of the three. `runReducer.ts` ends with
+`default: return next`, so they land in `state.events` and are dropped.
 
 Two consequences. First, additive protocol changes are provably safe: an unknown `type`
 never breaks the client, so backend can land before frontend. Second, the `routing` event
-(`aegis/src/aegis/agent/events.py:243-256`) is exactly where the depth decision belongs, and
-rendering it is free demo value already sitting on the floor.
+(`aegis/src/aegis/agent/events.py:217-230`) is exactly where the depth decision belongs, and
+rendering it is free demo value already sitting on the floor. **Phase 6 task 6.1 does the
+rendering; this phase puts the fields on the event.**
 
 ### 5. The rails cover two seams, and we are about to open a third
 
@@ -113,15 +125,16 @@ either `pyproject.toml` and no `tavily` reference anywhere in `aegis/src`, `back
 
 | | |
 |---|---|
-| **Now** | A cheap classifier that decides fan-out width — including width zero. |
+| **Now** | A cheap classifier that decides fan-out width — including width zero, and **overridable by Phase 6**. |
 | **Now** | Genuinely concurrent sub-agents with their own prompts, tool allowlists, budgets and failure containment. |
-| **Now** | `agent_id` on every event; per-agent logs and tool calls. |
+| **Now** | `agent_id` on the event base — which is simultaneously the wire field and the `run_events` column. |
 | **Now** | A synthesis event naming contributing **and omitted** agents. |
 | **Now** | Per-agent timeout as a *designed* terminal state. |
 | **Now** | Tavily behind a seam, cached in Memurai. |
 | **Now** | `GuardStage.TOOL_RESULT`. |
-| **Waits** | Persisting the run-event log to Postgres (`run_events`). Plan 02's highest-leverage item and it belongs to Phase 5's console work, not here. |
-| **Waits** | Replay mode. Depends on the above. It is the best demo insurance in the whole plan — flag it loudly for Phase 5. |
+| **Already done, in Phase 3** | The durable `run_events` log itself — table, partitioning, RLS, the `runs` header, and the sink at the `emit()` seam (§3.6). This phase **fills its `agent_id` column**; it does not build it, and it must not build a parallel one. |
+| **Waits** | Replay mode. The events are durable from Phase 3, so replay is a Phase 6 read surface (`GET /runs/{id}/events` re-streamed through the same reducer), not new machinery. It is the best demo insurance in the plan. |
+| **Waits** | The console rendering of any of this. Phase 6. Agree the event shape with it **before** starting 5.4. |
 | **Waits** | Skills attached to sub-agents. The mechanism already exists (filesystem markdown, adapter-selected); wiring it per-agent is not a 3-day item. |
 | **Waits** | MCP. Excellent, not required to win a blind problem. |
 
@@ -129,19 +142,20 @@ either `pyproject.toml` and no `tavily` reference anywhere in `aegis/src`, `back
 
 Per the master plan: **if we slip, the team drops from 4 agents to 2 — research +
 synthesise.** Still genuinely concurrent (research runs while knowledge retrieval runs),
-still genuinely visible, half the work. Tasks 4.1–4.5 and 4.7 are load-bearing at any width.
-Task 4.6's roster entries are what shrink.
+still genuinely visible, half the work. Tasks 5.1–5.5 and 5.7 are load-bearing at any width.
+Task 5.6's roster entries are what shrink.
 
 ---
 
 ## Tasks
 
-### 4.1 — The depth classifier (0.5d) — **do this first**
+### 5.1 — The depth classifier (0.5d) — **do this first**
 
 This is the task the user actually asked for, and building it first stops the fan-out from
 becoming the default by accident.
 
-Extend `RouterDecision` (`aegis/src/aegis/agent/router.py:41-53`) with the width:
+Extend `RouterDecision` (`aegis/src/aegis/agent/router.py:42-54`, currently three fields:
+`role`, `reason`, `used_llm`) with the width:
 
 ```python
 @dataclass(frozen=True)
@@ -167,10 +181,45 @@ That is already how `route_query` works and it is the right shape here too.
 **Default to SINGLE on every failure path.** A broken classifier that quietly fans out is
 the exact failure the budget cannot absorb.
 
-Put `depth` and `fanout` on the existing `routing` event (`events.py:243-256`). The
-reason string is already demoable and glass-box — "3 sub-questions detected, fanning out to
-3 agents" and "single-intent query, answering in one pass" are both good things to have on
-screen, and the second one is the one that shows maturity.
+#### The classifier must be overridable — build the seam now, not later
+
+Phase 6's composer ships a mode control (Auto · Fast · Deep · Team · Custom). **Phase 6 owns
+the control; this phase owns the field it writes to**, and retrofitting an override into a
+classifier that assumed it was the only decider is a rewrite of the `route` node.
+
+The rule, and it is one line:
+
+```
+effective_depth = user_mode if user_mode != AUTO else classifier_decision
+```
+
+**Manual wins.** Three consequences that belong in this task, not Phase 6's:
+
+1. **The classifier is skipped, not overruled after the fact,** when `user_mode != AUTO`.
+   `Fast` must not pay for the cheap-model tiebreak it is trying to avoid.
+2. **A manual choice can be narrowed by the platform, never widened by the user.** If
+   `max_parallel_agents=4` and a user pins 6, they get 4. `Custom` is not a way around a
+   budget cap, and the clamp lives here — in the same place the cap is read — rather than in
+   the browser.
+3. **The `routing` event carries `decided_by`** so the screen can name who decided:
+
+   ```python
+   # aegis/src/aegis/agent/events.py:217 — routing() gains, alongside depth and fanout
+   decided_by: Literal['auto', 'user', 'tenant_default', 'platform_cap']
+   ```
+
+   The trace then reads *"TEAM ×3 — you selected Team mode"* or *"SINGLE — single-intent
+   query, answering in one pass"*. **Never a width with no explanation.**
+
+**The failure default is SINGLE on both paths.** If the settings resolver cannot read a mode,
+if the classifier throws, if the roster is empty — SINGLE. The manual path must not introduce
+a second, more permissive default than the automatic one.
+
+Put `depth`, `fanout` and `decided_by` on the existing `routing` event (`events.py:217-230`,
+today `{type, role, reason, used_llm}`). The reason string is already demoable and glass-box —
+"3 sub-questions detected, fanning out to 3 agents" and "single-intent query, answering in one
+pass" are both good things to have on screen, and the second one is the one that shows
+maturity.
 
 New `AgentConfig` knobs: `team_enabled`, `max_parallel_agents` (4),
 `max_concurrent_agents` (3), `subagent_max_steps` (4), `subagent_timeout_s` (45),
@@ -178,9 +227,11 @@ New `AgentConfig` knobs: `team_enabled`, `max_parallel_agents` (4),
 
 `aegis/tests/agent/test_harness_config.py:44,55` asserts a bijection between `AgentConfig`
 fields and `harness.py::_KNOB_SPECS`. Every knob needs a `_KnobSpec` — and in exchange each
-one gets a harness UI control for free.
+one gets a harness UI control for free. `max_parallel_agents` is also the platform cap Phase 6
+clamps against, so it becomes a Phase 3 §3.7 settings-catalogue entry (`agent.team.max_parallel`,
+`merge: tighten_only`) rather than a second copy of the number.
 
-### 4.2 — One sub-agent, one bounded loop (0.75d)
+### 5.2 — One sub-agent, one bounded loop (0.75d)
 
 New `aegis/src/aegis/agent/subagent.py`.
 
@@ -199,15 +250,17 @@ Invariants — **all enforced in code, none in a prompt:**
 
 - Tools are the spec's allowlist **intersected with** the persona allowlist
   (`backend/src/app/adapter/tools.py:462::is_allowed`). A sub-agent can never widen its own
-  reach.
-- Any tool at or above `config.gate_min_risk` is **not executable here**. It is returned in
-  `SubAgentResult.proposed_actions` and flows into the main graph's gate. Today that is
-  exactly one tool — `update_request_status`, `HIGH` (`adapter/tools.py:426-433`).
+  reach. **Phase 6's tool pins go through this same function** — one intersection in the
+  codebase, not two, because two is how the second one ends up subtly more permissive.
+- Any tool at or above `config.gate_min_risk` (`aegis/src/aegis/agent/deps.py:135`, default
+  `HIGH`) is **not executable here**. It is returned in `SubAgentResult.proposed_actions` and
+  flows into the main graph's gate. Today that is exactly one tool —
+  `update_request_status`, `RiskLevel.HIGH` (`adapter/tools.py:425-434`).
 - `max_steps` hard cap. `asyncio.wait_for(timeout_s)`.
 - **Never raises.** Every failure becomes `SubAgentResult(status=failed|timeout, error=…)`
   — except `BudgetExceededError` (`aegis.gateway.types`), which is captured and re-raised
   after fan-in so the orchestrator's existing handler
-  (`aegis/src/aegis/agent/orchestrator.py:328`) still terminates the run cleanly as blocked.
+  (`aegis/src/aegis/agent/orchestrator.py:334`) still terminates the run cleanly as blocked.
 - Its own token/cost totals, returned for the node's summed delta.
 
 **Write the gate test on day one of this task**, before the fan-out exists: a sub-agent
@@ -215,7 +268,7 @@ proposes a HIGH-risk action, the run gates, parks, resumes correctly. That inter
 the sharp edge of this whole phase and the design constraint in §3 is what removes it — prove
 the removal rather than assuming it.
 
-### 4.3 — The fan-out node (0.5d)
+### 5.3 — The fan-out node (0.5d)
 
 New `aegis/src/aegis/agent/team.py`, plus the graph wiring.
 
@@ -231,10 +284,12 @@ SPECIALIST_NODES = {
 route ─(team)→ plan_team → run_team → synthesize → gate → approval → act → …
 ```
 
-`plan_team` turns the classifier's width into a task list against the sub-agent roster (one
-cheap model call, with a deterministic keyword fallback). `run_team` is the
-`asyncio.gather`, under `asyncio.Semaphore(config.max_concurrent_agents)`, launches
-staggered ~250 ms to avoid a burst against the gateway.
+`plan_team` turns the **effective** width — the classifier's, or the user's from Phase 6 —
+into a task list against the sub-agent roster (one cheap model call, with a deterministic
+keyword fallback). In `Custom` mode the roster selection *is* the task list and the model call
+is skipped entirely. `run_team` is the `asyncio.gather`, under
+`asyncio.Semaphore(config.max_concurrent_agents)`, launches staggered ~250 ms to avoid a burst
+against the gateway.
 
 Three rules:
 
@@ -242,7 +297,7 @@ Three rules:
 2. **The node returns one summed delta.** Because the gather is inside a node, it returns a
    single `{prompt_tokens, completion_tokens, cost_usd}` and the existing `operator.add`
    reducers keep working untouched.
-3. Extend `_MODEL_RETRY` (`graph.py:1114`, `RetryPolicy(max_attempts=3)`) to sub-agent model
+3. Extend `_MODEL_RETRY` (`graph.py:1112`, `RetryPolicy(max_attempts=3)`) to sub-agent model
    calls.
 
 The team path lands on the **existing** `gate → approval → act → reflect → generate →
@@ -251,29 +306,56 @@ cache and memory persistence all keep working untouched, and **the `qa` path sta
 byte-identical**, which is what keeps the golden-trace tests green.
 
 `aegis/src/aegis/agent/topology.py` compiles the graph over inert deps, and
-`backend/tests/api/test_agent_topology.py:100` asserts `web/src/config/graphTopology.json`
+`backend/tests/api/test_agent_topology.py:109` asserts `web/src/config/graphTopology.json`
 equals the served topology. **Regenerate that snapshot** when you add the three nodes, same
 as in Phase 2.
 
-### 4.4 — Agent identity on every event (0.25d)
+### 5.4 — Agent identity on every event, and therefore on every `run_events` row (0.25d)
 
 This is what makes the per-agent logs and tool calls real rather than a UI grouping guess.
 
+**There is no per-agent log channel to build.** Phase 3 §3.6 already persists every stamped
+event to `run_events`, and that table was designed with the column this task fills:
+
+```
+run_events (
+  run_id      uuid,
+  seq         int,
+  ts          timestamptz,
+  tenant_id   int,          -- RLS anchor
+  user_id     int,          -- RLS anchor
+  session_id  uuid,
+  agent_id    text null,    -- NULL = supervisor / graph-level   ← this task
+  type        text,
+  payload     jsonb,
+  primary key (run_id, seq)
+)
+```
+
+So "per-agent logs" is `WHERE agent_id = …` over a table that already exists, tenant-scoped by
+an RLS policy that already exists, durable across a restart because Phase 3 made it so. **One
+optional field on the wire is the entire per-agent-log requirement.** Anything else — a
+per-agent buffer, a second stream, a log file — is a fourth tracking mechanism and Phase 3 §2
+already argues against a fourth.
+
 The orchestrator stamps every event through an **injected `stamp` callable**
-(`orchestrator.py:66-73`, called from `emit` at `:169-173`) so the pure package never imports
-the host schema. That seam is exactly where identity is enforced.
+(`orchestrator.py:66`, called from `emit` at `:169-173`) so the pure package never imports the
+host schema. That seam is exactly where identity is enforced, and it is the same seam the
+Phase 3 `run_events` sink hangs off — so the wire field and the column are populated by one
+change, not two.
 
 - `run_subagent` writes through a writer bound to its `agent_id`, so every event a sub-agent
   emits carries it automatically. Do not ask each call site to remember.
-- `agent_id: str | None` becomes an optional field on the shared event base. **`None` means
-  supervisor / graph-level**, which keeps every existing event valid and unchanged.
-- Add it to the `StreamEvent` union in `backend/src/app/api/schemas.py:448` and mirror in
-  `web/src/lib/stream.ts:334`.
+- `agent_id: str | None` becomes an optional field on the shared event base
+  (`_BaseEvent`, `backend/src/app/api/schemas.py`). **`None` means supervisor / graph-level**,
+  which keeps every existing event valid and unchanged — the eighteen variants in the union at
+  `schemas.py:389` need no other edit.
+- Mirror it on the TS side in `web/src/lib/stream.ts` (the `BaseEvent` interface; the union is
+  at `stream.ts:268`).
+- **Index `(run_id, agent_id)`** on `run_events` in the same change, or the per-agent
+  projection is a partition scan on a partitioned table.
 
-One optional column on the wire is the entire per-agent-log requirement. It is also what
-makes Phase 5's `WHERE agent_id = …` projection trivial when the run-event log lands.
-
-### 4.5 — Synthesis, and timeout as a designed state (0.25d)
+### 5.5 — Synthesis, and timeout as a designed state (0.25d)
 
 `synthesize(results, deps) -> str` — one model call merging the agents' findings. The
 synthesiser prompt is told to attribute claims to the agent that produced them.
@@ -282,7 +364,7 @@ Emit a `synthesis` event that names **which agents contributed and which were om
 say it in the answer text too: *"synthesised from 3 of 4 agents; the policy agent timed out
 at 45 s."*
 
-This is not politeness. Plan 02's R2 is that partial failure reads as a bug: one agent times
+This is not politeness. Partial failure otherwise reads as a bug: one agent times
 out, its card sits spinning, and the audience concludes the thing is broken. A hard per-agent
 timeout with a **designed** terminal state turns that into visible, graceful degradation,
 which scores under both Working Prototype and Business Impact — but only if it is designed,
@@ -292,7 +374,7 @@ The critic pass from plan 02 (a fifth, sequential agent reviewing the merged dra
 genuine quality control and it is **out of scope at 3 days**. Note it in the backlog. Do not
 pad the agent count to hit "4-5"; the user asked for the right balance, not a number.
 
-### 4.6 — Tavily as the real search client (0.5d)
+### 5.6 — Tavily as the real search client (0.5d)
 
 New `aegis/src/aegis/retrieval/web.py`, wrapping `tavily-python` behind a `WebSearchResult`
 type. **Optional extra** in `aegis/pyproject.toml` — a missing key degrades the Research
@@ -321,7 +403,7 @@ domain-specific content, which is the seam discipline that file already document
 concurrent (a slow web call overlapping a slow retrieval) and they are the pair a judge
 cares about.
 
-### 4.7 — The `TOOL_RESULT` guardrail stage (0.25d)
+### 5.7 — The `TOOL_RESULT` guardrail stage (0.25d)
 
 Required, not optional.
 
@@ -335,7 +417,7 @@ Required, not optional.
   machinery, not a new pipeline.
 - Apply it to **every tool result before it enters any agent's context** — Tavily content in
   particular.
-- Emit the `guardrail` event stamped with the `agent_id` from task 4.4, so the console shows
+- Emit the `guardrail` event stamped with the `agent_id` from task 5.4, so the console shows
   the rail firing *inside* an agent's log.
 
 This maps directly to OWASP LLM01 and the Agentic Top 10, and it is one of the strongest
@@ -352,7 +434,7 @@ in this plan:
 1. **The classifier defaults to SINGLE.** Most queries never fan out.
 2. **`ModelRole.CHEAP` for three of the four agents.** Only Policy reasons.
 3. **The caches doing real work** — the answer cache from Phase 1, the Tavily cache from
-   task 4.6. A rehearsed demo query on a warm cache costs nothing.
+   task 5.6. A rehearsed demo query on a warm cache costs nothing.
 
 Show per-agent cost live. Tokens are already visible to the jury, so the fan-out cost is
 going to be seen either way — better that the *choice* is visible beside it. "Parallel agents

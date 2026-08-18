@@ -12,10 +12,7 @@ that decides how to build it.
 |---|---|
 | **1 — Tenant isolation** | **DONE** — pushed `d1822c0`. Retrieval leak closed, RLS 3→13 tables and genuinely enforced under a non-superuser role, live mutation-tested proof, SQLite out of tests |
 | **2 — ML out of the graph, fiction deleted** | **DONE** — pushed `7e21890`, `d06e0ce`. `aegis.ml` intact, mock data gone, zero refund references, gold corpus re-derived. Found and fixed the persona bug that made every live console query return 400 |
-| **3 — Ingestion** | Plan written (`phase-03-ingestion-v2.md`), **awaiting approval**. Now also absorbs the additions below |
-| **4 — Multi-agent** | Planned. Absorbs the agent-selection and animation additions |
-| **5 — Console** | Planned. Absorbs the dashboard-control additions |
-| **6 — Admin surfaces** | Planned. Absorbs the DB-query page and reports |
+| **3–9** | Replanned in [`02-ROADMAP.md`](02-ROADMAP.md) as platform spine · ingestion · multi-agent · console · control planes · modularity · scale. Each has its own `phase-NN-*.md` |
 
 **Timing is no longer a constraint.** The user's instruction: *"dont think of timing at all at
 this point, you just focus on application sota."* Sequence by dependency, not by calendar.
