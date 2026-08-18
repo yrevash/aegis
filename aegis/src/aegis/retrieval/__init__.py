@@ -58,6 +58,7 @@ from aegis.retrieval.types import (
     GraphNode,
     RetrievalOrigin,
     RetrievalScope,
+    UnresolvedTenantScopeError,
 )
 
 __all__ = [
@@ -82,6 +83,7 @@ __all__ = [
     "RetrievalOrigin",
     "RetrievalResult",
     "RetrievalScope",
+    "UnresolvedTenantScopeError",
     "Retriever",
     "RewriteReport",
     "Source",

@@ -92,6 +92,13 @@ retrieval = [
     # pandas>=2.2,<2.4).
     "chromadb>=1.5",
 ]
+# PDF ingestion (app.ingestion -> aegis.ingestion). The version is pinned in the aegis
+# package, where the code that depends on its exact behaviour lives; the backend declares
+# the extra so a deployment that ingests gets it, and one that does not is not asked to
+# download 816 MB of torch and opencv it will never import.
+ingestion = [
+    "aegis[ingestion]",
+]
 ml = [
     "xgboost>=2.1",
     "scikit-learn>=1.5",

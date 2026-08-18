@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM for the durable job substrate — ``job_runs`` and ``documents``.
+"""SQLAlchemy ORM for the durable job substrate — ``job_runs``, ``documents``, ``chunks``.
 
 **These tables are the system of record.** The orchestrator that actually executes the
 work (Temporal, in this platform's host) owns *execution* state — retries, timers,
@@ -19,11 +19,20 @@ Like every other module's models these register on the shared
 ops tables — on PostgreSQL with native ``jsonb`` and ``timestamptz`` columns via
 :data:`aegis.data.JsonB` and the base's ``UtcDateTime`` annotation map.
 
-Both tables carry ``tenant_id`` and are therefore registered in
+All three tables carry ``tenant_id`` and are therefore registered in
 :data:`aegis.governance.rls._TENANT_SCOPED_TABLES`, which is what earns them a
 ``tenant_isolation`` Row-Level Security policy at boot. Registration is not optional
 bookkeeping: an unregistered table with a ``tenant_id`` column looks governed from the
 outside and is not, and the boot-time catalog read-back exists precisely to report that.
+
+``chunks`` lives here — rather than beside the host's own tables, where it used to — for
+one structural reason: it needs a real ``ForeignKey`` to ``documents.id``, and
+SQLAlchemy resolves a foreign key by name **within one MetaData**. The host keeps a
+second declarative base for its platform-owned tables, so a ``chunks`` declared there
+could not reference a ``documents`` declared here at all; the two would be joined by
+convention and by nothing the database checks. The retrieval corpus and the document it
+was parsed out of are one lifecycle — the chunk exists because the document was ingested
+and must stop existing when it is deleted — so they belong on the same metadata.
 
 **This module imports :mod:`aegis.governance.models`, and that import is load-bearing**
 rather than incidental: ``job_runs`` declares real ``ForeignKey`` references to
@@ -48,16 +57,17 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 # Registration side-effect, and deliberately not a lazy import: the foreign keys below
 # reference ``tenants.id`` / ``users.id``, which SQLAlchemy resolves by name against the
 # shared metadata at mapper-configuration time. See the module docstring.
 import aegis.governance.models  # noqa: F401
-from aegis.data import AegisBase, JsonB
+from aegis.data import EMBED_DIM, AegisBase, JsonB, VectorColumn
 
 __all__ = [
+    "Chunk",
     "Document",
     "JobRun",
     "JobStatus",
@@ -206,3 +216,70 @@ class Document(AegisBase):
     __table_args__ = (
         UniqueConstraint("tenant_id", "content_sha256", name="uq_documents_tenant_sha"),
     )
+
+
+class Chunk(AegisBase):
+    """One retrievable passage of an ingested document, plus its embedding-of-record.
+
+    This table is the **lexical** arm of retrieval. Dense search runs on the vector store
+    (:class:`aegis.retrieval.vector_store.ChromaVectorStore`); ``embedding`` here is the
+    durable JSON source-of-record that index rebuilds replay from, not a search index —
+    this cluster has no ``pgvector`` and nothing in the pipeline assumes one.
+
+    Two columns are new, and both are load-bearing:
+
+    ``document_id`` replaces a ``doc_id VARCHAR(255)`` that referenced nothing. It could
+    not be joined to ``documents.id`` at all (a string against an integer), so there was
+    no way to get from a chunk back to the document that produced it — which is what
+    citation provenance, re-index and cascade deletion each need. ``ON DELETE CASCADE``
+    because re-ingesting a document otherwise leaves its old chunks behind, still
+    answering queries from text the tenant believes they replaced.
+
+    ``tenant_id`` is **denormalised onto this row on purpose**, even though it is
+    reachable through ``documents``. An RLS policy that has to join to find the owner
+    makes the *join* the boundary rather than the row, and a parent's policy does not
+    protect what is reached another way — the exact failure this platform measured on
+    ``run_events``' partitions, where a scoped connection saw one tenant through the
+    parent and both through the partition. The predicate has to sit on the row it
+    protects, so the owner does.
+
+    It is ``NOT NULL`` where ``documents.tenant_id`` is nullable, and the asymmetry is
+    deliberate rather than an oversight. Under the ``tenant_isolation`` predicate
+    ``NULL = <scope>`` is NULL — not true — so a null-tenant chunk would be invisible to
+    every tenant while still being counted, indexed and paid for. Making it
+    unrepresentable is better than making it useless: a platform-level document simply
+    does not own rows in this table.
+
+    The composite index leads on ``tenant_id`` because every read is tenant-scoped first
+    and document-scoped second — the RLS predicate is on ``tenant_id``, so an index that
+    led with ``document_id`` could not serve it.
+    """
+
+    __tablename__ = "chunks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # NOT NULL and a real FK: see the class docstring for why the owner is duplicated
+    # here rather than resolved through ``documents``. Deliberately *not* ``index=True``:
+    # the composite below already leads on ``tenant_id``, so a second single-column index
+    # would serve no query the composite cannot and would cost a write on every chunk of
+    # every ingest — the hottest insert path in the system.
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
+    # Typed to match ``documents.id`` exactly. That column is a plain ``integer``
+    # (``Mapped[int]``), not the ``BIGINT`` the phase document assumed; declaring
+    # ``BIGINT`` here would still work — PostgreSQL has an ``int8 = int4`` operator — but
+    # it would leave the referencing side a width the referenced index is not, which is a
+    # trap to inherit rather than a guarantee to keep.
+    #
+    # Indexed on its own as well, and this index is *not* redundant with the composite:
+    # that one leads on ``tenant_id``, so it cannot serve the document-only lookup the
+    # ``ON DELETE CASCADE`` performs, and an unindexed FK child turns every document
+    # delete into a table scan.
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    persona: Mapped[str | None] = mapped_column(String(128), default=None, index=True)
+    content: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(VectorColumn(EMBED_DIM))
+    meta: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
+
+    __table_args__ = (Index("ix_chunks_tenant_document", "tenant_id", "document_id"),)

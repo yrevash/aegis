@@ -158,10 +158,17 @@ source .venv/bin/activate                 # Windows: .venv\Scripts\activate
 
 # Install the core + every feature extra (data, auth, observability, agent,
 # retrieval, ml, guardrails) plus dev tools:
-uv pip install -e ".[data,auth,observability,agent,retrieval,ml,guardrails,mcp,dev]"
+uv pip install -e ".[data,auth,observability,agent,retrieval,ingestion,ml,guardrails,mcp,dev]"
 
 cp .env.example .env                      # then fill in the secrets below
 ```
+
+> **`ingestion`** pulls Docling (layout + TableFormer) and, through it, torch and
+> opencv — **+816 MB in the venv and 730 MB of model weights** on first use. Prime the
+> model cache while there is still network:
+> `PYTHONPATH=../aegis/src .venv/bin/python ../spikes/docling_spike.py --prefetch ~/.cache/docling/models`
+> (measured: 730 MB in 67 s). Set `DOCLING_WARM_ON_START=true` on the box that runs the
+> ingest worker.
 
 > **New optional-dependency groups** (production upgrade):
 > - **`auth`** — `pyjwt` (signed access tokens) + `argon2-cffi` (Argon2id password

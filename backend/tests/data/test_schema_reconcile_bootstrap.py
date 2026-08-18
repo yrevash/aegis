@@ -102,3 +102,111 @@ async def test_an_unreachable_database_still_degrades_cleanly(monkeypatch):
 
     async with lifespan(app):
         pass  # no exception: an absent database never blocks startup
+
+
+#: The pre-tenancy ``chunks`` shape, verbatim: a ``doc_id`` string that referenced
+#: nothing and no owner column at all.
+_LEGACY_CHUNKS = (
+    "CREATE TABLE chunks ("
+    " id serial PRIMARY KEY,"
+    " doc_id varchar(255) NOT NULL,"
+    " persona varchar(128),"
+    " content varchar NOT NULL,"
+    " embedding jsonb NOT NULL,"
+    " meta jsonb NOT NULL)"
+)
+
+
+async def _install_legacy_chunks(engine, rows: int = 0) -> None:
+    """Replace the live ``chunks`` table with the pre-tenancy one, optionally populated."""
+    from sqlalchemy import text
+
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE IF EXISTS chunks"))
+        await conn.execute(text(_LEGACY_CHUNKS))
+        for index in range(rows):
+            await conn.execute(
+                text(
+                    "INSERT INTO chunks (doc_id, content, embedding, meta) "
+                    "VALUES (:doc, 'legacy passage', '[]'::jsonb, '{}'::jsonb)"
+                ),
+                {"doc": f"doc-{index}"},
+            )
+
+
+async def _chunk_columns(engine) -> set[str]:
+    """Return the live ``chunks`` column names."""
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        return set(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND table_name = 'chunks'"
+                    )
+                )
+            ).scalars().all()
+        )
+
+
+async def test_bootstrap_rebuilds_an_empty_pre_tenancy_chunks_table(postgres_database):
+    """The one table no additive ALTER can fix is recreated instead of blocking the boot.
+
+    ``chunks`` gained two ``NOT NULL`` foreign keys, and
+    :func:`aegis.governance.schema.reconcile_additive_columns` correctly refuses to add
+    those to an existing table — there is no value to back-fill. Left alone, that means
+    every database bootstrapped before this change refuses to start. An **empty** legacy
+    table has nothing to back-fill, so recreating it is the whole migration, and that is
+    what this asserts end to end: the legacy shape goes in, ``bootstrap`` runs, and the
+    current shape comes out.
+    """
+    from app.data.session import bootstrap
+
+    engine = create_async_engine(postgres_database.scratch.owner_dsn)
+    try:
+        await _install_legacy_chunks(engine)
+        assert "doc_id" in await _chunk_columns(engine)
+
+        await bootstrap(engine)
+
+        columns = await _chunk_columns(engine)
+        assert "doc_id" not in columns, "the legacy column survived the rebuild"
+        assert {"tenant_id", "document_id"} <= columns
+    finally:
+        await bootstrap(engine)  # leave the session's schema as the other tests expect
+        await engine.dispose()
+
+
+async def test_bootstrap_refuses_to_drop_a_populated_pre_tenancy_chunks_table(
+    postgres_database,
+):
+    """A table with rows in it is a migration, not a rebuild — and it is not this code's.
+
+    The rebuild above is only safe because "empty" is checked rather than assumed. This
+    is the other half: with a row present the boot fails loudly and the row is still
+    there afterwards, so the recreate can never quietly become a ``DELETE`` of a tenant's
+    corpus.
+    """
+    from sqlalchemy import text
+
+    from app.data.session import bootstrap
+
+    engine = create_async_engine(postgres_database.scratch.owner_dsn)
+    try:
+        await _install_legacy_chunks(engine, rows=2)
+
+        with pytest.raises(SchemaDriftError, match="pre-tenancy"):
+            await bootstrap(engine)
+
+        async with engine.connect() as conn:
+            survivors = (
+                await conn.execute(text("SELECT count(*) FROM chunks"))
+            ).scalar_one()
+        assert survivors == 2, "the refusal deleted rows it refused to migrate"
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP TABLE IF EXISTS chunks"))
+        await bootstrap(engine)
+        await engine.dispose()

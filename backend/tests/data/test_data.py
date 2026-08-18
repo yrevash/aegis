@@ -10,17 +10,23 @@ nothing about the types the deployed schema really uses.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
+from aegis.jobs.models import Document, JobStatus
+from sqlalchemy import delete, select
 
 from app.api.schemas import Role
 from app.data import (
     AuditLog,
     Chunk,
     EvalResult,
+    Tenant,
     User,
     record_audit,
     to_asyncpg_dsn,
 )
+
+#: The tenant the chunk tests own their rows under. ``chunks.tenant_id`` is a NOT NULL
+#: foreign key now, so these rows cannot be written without one existing.
+_TENANT = 77001
 
 
 def test_to_asyncpg_dsn_rewrites_driver():
@@ -67,10 +73,32 @@ async def test_record_audit_writes_row(db):
 
 
 async def test_chunk_embedding_roundtrip(db):
+    """A chunk round-trips — and now belongs to a tenant and to a real document.
+
+    ``doc_id`` used to be a free string that referenced nothing (``VARCHAR(255)``
+    against ``documents.id BIGINT``), so a chunk could not be traced back to the
+    document it came from and carried no owner at all. Both are now foreign keys, which
+    is why this test has to create the rows they point at: the schema no longer lets a
+    chunk exist without a document or without a tenant, and that is the guarantee being
+    exercised here as much as the JSON round-trip is.
+    """
     async with db() as session:
+        session.add(Tenant(id=_TENANT, name="Roundtrip"))
+        await session.flush()
+        document = Document(
+            tenant_id=_TENANT,
+            filename="policy.pdf",
+            content_sha256="a" * 64,
+            mime_type="application/pdf",
+            size_bytes=1024,
+            status=JobStatus.SUCCEEDED,
+        )
+        session.add(document)
+        await session.flush()
         session.add(
             Chunk(
-                doc_id="doc-1",
+                tenant_id=_TENANT,
+                document_id=document.id,
                 persona="analyst",
                 content="hello",
                 embedding=[0.1, 0.2, 0.3],
@@ -78,13 +106,55 @@ async def test_chunk_embedding_roundtrip(db):
             )
         )
         await session.commit()
+        document_id = document.id
 
     async with db() as session:
         chunk = (await session.execute(select(Chunk))).scalar_one()
-        assert chunk.doc_id == "doc-1"
+        assert chunk.tenant_id == _TENANT
+        assert chunk.document_id == document_id
         assert chunk.persona == "analyst"
         assert list(chunk.embedding) == [0.1, 0.2, 0.3]
         assert chunk.meta == {"page": 1}
+
+
+async def test_deleting_a_document_deletes_its_chunks(db):
+    """The FK cascades, so a re-ingest cannot leave orphaned passages behind.
+
+    An orphan here is not tidy-up debt: it is a chunk with no document, still matching
+    queries and still citable, describing text the tenant believes they replaced.
+    """
+    async with db() as session:
+        session.add(Tenant(id=_TENANT, name="Cascade"))
+        await session.flush()
+        document = Document(
+            tenant_id=_TENANT,
+            filename="policy.pdf",
+            content_sha256="b" * 64,
+            mime_type="application/pdf",
+            size_bytes=1024,
+            status=JobStatus.SUCCEEDED,
+        )
+        session.add(document)
+        await session.flush()
+        session.add(
+            Chunk(
+                tenant_id=_TENANT,
+                document_id=document.id,
+                content="a passage that must not outlive its document",
+                embedding=[0.1],
+            )
+        )
+        await session.commit()
+
+    async with db() as session:
+        assert (await session.execute(select(Chunk))).scalars().all(), (
+            "no chunk was written, so the delete below would prove nothing"
+        )
+        await session.execute(delete(Document))
+        await session.commit()
+
+    async with db() as session:
+        assert (await session.execute(select(Chunk))).scalars().all() == []
 
 
 async def test_eval_result_roundtrip(db):

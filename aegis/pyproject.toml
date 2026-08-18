@@ -37,6 +37,25 @@ retrieval = [
     # Postgres stays for LightRAG's KV + doc-status stores, hence asyncpg.
     "asyncpg>=0.29",
 ]
+# The PDF ingestion stack (aegis.ingestion). Docling's STANDARD pipeline - layout model
+# plus TableFormer - not its VLM pipeline: measured on a 16 GB M3, the VLM is 255x slower
+# per page (281 s vs 1.10 s), which is the whole argument (phase-04 D1). It pulls torch,
+# transformers and opencv, hence an extra rather than a core dependency: +816 MB in the
+# venv and 730 MB of model weights on disk, measured.
+#
+# `[rapidocr]` because OCR must be a NAMED engine. Docling's default `OcrAutoOptions`
+# resolves to whichever engine happens to be installed, so the same document could be
+# read by different models on the laptop and on the demo box with no log line saying so;
+# `aegis.ingestion.convert` asks for RapidOCR explicitly and this extra is what makes
+# that resolvable. NOT `docling[models-onnxruntime]`, which installs onnxruntime-GPU on
+# Windows.
+#
+# Pinned exactly, unlike every other extra here. A parser release moves reading order,
+# heading levels and table structure, so two Docling versions produce two different
+# corpora from the same PDF - and the chunks already embedded under the old one are not
+# interchangeable with the new one. A floating pin would silently re-index differently
+# after any rebuild; `ParsedDocument.parser` records which version produced a document.
+ingestion = ["docling[rapidocr]==2.120.3"]
 gateway = ["litellm>=1.52"]
 # Embeddings persist as JSON of record (list[float]); ANN search runs in the embedded
 # vector store, so the data layer needs only SQLAlchemy — pgvector was removed.
@@ -92,7 +111,7 @@ media = [
     "presidio-image-redactor>=0.0.53",
     "pillow>=10.0",
 ]
-all = ["aegis[redis,nemo,pii,postgres,retrieval,ml,forecast,media,gateway,data,governance,observability,phoenix,agent]"]
+all = ["aegis[redis,nemo,pii,postgres,retrieval,ingestion,ml,forecast,media,gateway,data,governance,observability,phoenix,agent]"]
 # `aegis[postgres]` (asyncpg) is a hard requirement of the test suite, not an optional
 # extra of it: every database-backed test runs against a real cluster over a
 # `NOSUPERUSER NOBYPASSRLS` role, because the RLS policies this package installs are

@@ -150,6 +150,16 @@ class Settings(BaseSettings):
     # that catches drift nothing signalled.
     temporal_reindex_interval_seconds: int = Field(default=86_400)
 
+    # ── Ingestion (Docling; docs/dev_new_docs_v2/phase-04) ───────────────────
+    # Load the layout and table models when the worker starts rather than when the first
+    # document arrives (D4). OFF by default and turned on by the deployment that actually
+    # parses: the models hold a little under a gigabyte resident, and an API-only process
+    # or a test worker that will never run the parse stage must not carry that. Measured
+    # on an M3 with the model cache primed the saving is ~3 s, not the 50-120 s the phase
+    # doc assumed - the large cost is the 730 MB first download, which
+    # ``spikes/docling_spike.py --prefetch`` exists to pay in advance.
+    docling_warm_on_start: bool = Field(default=False)
+
     # ── Guardrails engine (one policy, two front doors; docs/security/overview.md §3) ──
     # Two front doors enforce the same policy: the fast, offline-testable
     # programmatic rails (``app.guardrails.check_input``/``check_output``,

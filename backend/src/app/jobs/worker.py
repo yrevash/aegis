@@ -33,11 +33,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from aegis.jobs.stages import TASK_QUEUES, QueueSpec, UnknownStageError, queue_spec
+from aegis.jobs.stages import CPU_QUEUE, TASK_QUEUES, QueueSpec, UnknownStageError, queue_spec
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 from app.config import get_settings
+from app.ingestion import warm_parser
 from app.jobs.activities import ALL_ACTIVITIES
 from app.jobs.client import get_temporal_client
 from app.jobs.flows import (
@@ -240,6 +241,12 @@ async def run_workers(stop: asyncio.Event | None = None) -> None:
         await ensure_tenant_reindex_schedules(client)
     workers = build_workers(client, queues)
     async with asyncio.TaskGroup() as group:
+        if any(spec.name == CPU_QUEUE for spec in queues):
+            # D4: the models load in a thread while the workers start, not on the first
+            # upload of the day. Only the process serving the CPU queue runs the parse
+            # stage, so only it pays; ``warm_parser`` is best-effort and never raises,
+            # which matters inside a TaskGroup that would otherwise cancel the workers.
+            group.create_task(warm_parser())
         for worker in workers:
             group.create_task(worker.run())
         if stop is not None:

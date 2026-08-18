@@ -51,7 +51,7 @@ from aegis.governance.rls import (
 )
 from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
 from aegis.governance.schema import (
-    SchemaDriftError,  # noqa: F401 - re-exported so a host can catch it by name
+    SchemaDriftError,
     reconcile_additive_columns,
 )
 from sqlalchemy import make_url, text
@@ -394,6 +394,63 @@ async def _align_timestamp_columns(
         )
 
 
+async def _recreate_legacy_chunks(
+    conn: Any,  # noqa: ANN401 - AsyncConnection, kept loose (no import-time asyncpg dep)
+) -> None:
+    """Drop a pre-tenancy ``chunks`` table so ``create_all`` can rebuild it correctly.
+
+    ``chunks`` was declared with ``doc_id VARCHAR(255)`` and no ``tenant_id`` at all. Both
+    columns of the replacement are ``NOT NULL`` foreign keys, which
+    :func:`aegis.governance.schema.reconcile_additive_columns` cannot install additively —
+    correctly, because for a table holding rows there is no right value to back-fill and
+    only a human can choose one. The reconciler would therefore raise ``SchemaDriftError``
+    on every boot against a database bootstrapped before this change, and the platform
+    would not start.
+
+    An **empty** legacy table has no such dilemma: there is nothing to back-fill, and
+    recreating it is the migration. So this drops it, and drops it only when it is
+    provably empty — a table with rows in it raises instead, naming what it holds. That
+    asymmetry is the whole point: this function must never be able to become a silent
+    ``DELETE`` of a tenant's corpus, and "it looked stale" is not evidence.
+
+    Recognition is by the *legacy* column rather than by the absence of a new one, so it
+    cannot mistake a half-created table for a legacy one. Runs before ``create_all``,
+    which then materialises the current definition.
+
+    Args:
+        conn: An open (transactional) async connection on the owner engine.
+
+    Raises:
+        SchemaDriftError: If the legacy table still holds rows.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    legacy = (
+        await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'chunks' AND column_name = 'doc_id'"
+            )
+        )
+    ).first()
+    if legacy is None:
+        return
+    rows = (await conn.execute(text("SELECT count(*) FROM chunks"))).scalar_one()
+    if rows:
+        msg = (
+            f"chunks still has the pre-tenancy 'doc_id' column and holds {rows} row(s). "
+            "The replacement declares tenant_id and document_id NOT NULL, and neither "
+            "can be back-filled for rows whose owning document was never recorded (the "
+            "old doc_id is a string that does not join to documents.id). Export or "
+            "delete those rows and re-ingest; refusing to drop a populated table."
+        )
+        logger.critical("%s", msg)
+        raise SchemaDriftError(msg)
+    await conn.execute(text("DROP TABLE chunks"))
+    logger.info("dropped the empty pre-tenancy chunks table; create_all will rebuild it")
+
+
 async def bootstrap(engine: AsyncEngine | None = None) -> None:
     """Create every table (relational + JSON embeddings-of-record).
 
@@ -402,9 +459,14 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     vector server) is required.
 
     ``create_all`` only ever *creates*; it never alters a table that already exists.
-    With no Alembic in this project, this function is the schema owner, so the two
+    With no Alembic in this project, this function is the schema owner, so the
     reconciliation steps a long-lived database needs run here, on PostgreSQL only:
 
+    0. :func:`_recreate_legacy_chunks` — drop a ``chunks`` table left over from before
+       the retrieval corpus was tenant-scoped, but only when it is provably empty. It is
+       first because the other two cannot fix it: the replacement's ``tenant_id`` and
+       ``document_id`` are ``NOT NULL`` foreign keys, which no additive ``ALTER`` can
+       install onto an existing table.
     1. :func:`aegis.governance.schema.reconcile_additive_columns` — install any column
        the models declare that the live table lacks. This is what keeps the usage
        ledger writable after a column is added to
@@ -456,6 +518,9 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
 
     metadatas = (Base.metadata, AegisBase.metadata)
     async with engine.begin() as conn:
+        # Before create_all, not after: the current ``chunks`` definition cannot be
+        # reconciled onto the pre-tenancy one, so the stale table has to go first.
+        await _recreate_legacy_chunks(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(AegisBase.metadata.create_all)
         await reconcile_additive_columns(conn, metadatas)

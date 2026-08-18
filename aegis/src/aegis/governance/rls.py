@@ -72,9 +72,16 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 #: Name of the per-tenant discriminator column. A table that has it is tenant-scoped;
-#: a table that does not (``tenants``, keyed by ``id``; ``chunks``, whose isolation is
-#: the per-tenant vector-store namespace plus its ``meta`` payload) is not, and gets no
-#: policy — a policy referencing a column that does not exist would not compile.
+#: a table that does not (``tenants``, keyed by ``id``) is not, and gets no policy — a
+#: policy referencing a column that does not exist would not compile.
+#:
+#: ``chunks`` used to be named here as an exception, on the grounds that its isolation
+#: was "the per-tenant vector-store namespace plus its ``meta`` payload". That was never
+#: isolation the database enforced, and it stopped being defensible the moment the
+#: retrieval corpus grew a lexical arm that reads ``chunks`` through SQL: a keyword hit
+#: is filtered by whatever predicate the query happens to carry, and a forgotten
+#: predicate returns every tenant's passages with no error. The table now carries a real
+#: ``tenant_id`` and is registered below like any other.
 _TENANT_COLUMN = "tenant_id"
 
 #: The single policy name this module owns, on every table it governs. Fixed (rather
@@ -121,7 +128,13 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     # aegis.ops.models — the LLM-Ops eval results and prompt registry
     "eval_results",
     "prompt_versions",
-    # aegis.jobs.models — the durable job substrate's system of record
+    # aegis.jobs.models — the durable job substrate's system of record, plus the
+    # retrieval corpus parsed out of it. ``chunks`` carries its own ``tenant_id``
+    # rather than reaching one through ``documents``: an RLS predicate that has to
+    # join to find the owner makes the join the boundary instead of the row, and a
+    # parent's policy does not protect what is reached another way (measured on
+    # ``run_events``' partitions — see :func:`_plan_rls`).
+    "chunks",
     "documents",
     "job_runs",
     # aegis.runs.models — the durable, replayable per-run record. ``run_events`` is

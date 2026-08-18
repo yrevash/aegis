@@ -9,12 +9,13 @@ consumer.
 
 The division of labour is the point:
 
-* **This package declares the contract and owns the record.** :class:`JobRun` and
-  :class:`Document` are tenant-scoped rows under Row-Level Security, and they are what
-  answers "what does this tenant have, how far did it get, and what did it cost" — with
-  no orchestrator reachable. :mod:`aegis.jobs.stages` declares the stages, their retry
-  and timeout policy, the queues that carry the concurrency policy, and the resume
-  arithmetic; :mod:`aegis.jobs.scope` declares the one rule every activity obeys —
+* **This package declares the contract and owns the record.** :class:`JobRun`,
+  :class:`Document` and :class:`Chunk` are tenant-scoped rows under Row-Level
+  Security, and they are what answers "what does this tenant have, how far did it
+  get, and what did it cost" — with no orchestrator reachable.
+  :mod:`aegis.jobs.stages` declares the stages, their retry and timeout policy, the
+  queues that carry the concurrency policy, and the resume arithmetic;
+  :mod:`aegis.jobs.scope` declares the one rule every activity obeys —
   :func:`~aegis.jobs.scope.tenant_activity` binds the tenant scope from the activity's
   own typed argument and refuses to run without one.
 * **It also owns tenant policy, which is not execution mechanics.**
@@ -54,7 +55,7 @@ from aegis.jobs.cancel import (
     JobNotVisibleError,
     cancel_job,
 )
-from aegis.jobs.models import Document, JobRun, JobStatus
+from aegis.jobs.models import Chunk, Document, JobRun, JobStatus
 from aegis.jobs.scope import (
     ActivityInput,
     MissingTenantScopeError,
@@ -97,6 +98,7 @@ __all__ = [
     "AdmissionError",
     "BudgetExceededError",
     "CancellationError",
+    "Chunk",
     "Document",
     "JobNotCancellableError",
     "JobNotVisibleError",

@@ -8,7 +8,9 @@ passages. Each test below pins one link of the chain that now prevents that:
 * the exact and semantic cache tiers are partitioned per tenant, not filtered;
 * a corpus-version bump invalidates one tenant's entries and nobody else's;
 * the backend's vector, keyword and graph arms all apply the same tenant predicate;
-* a null tenant reads the shared corpus and is never a wildcard.
+* a null tenant reads the shared corpus and is never a wildcard;
+* each tenant's vectors live in a collection of their own, so a forgotten filter
+  returns nothing rather than everything, and an unresolvable tenant raises.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from aegis.retrieval.types import (
     TENANT_METADATA_KEY,
     RetrievalOrigin,
     RetrievalScope,
+    UnresolvedTenantScopeError,
+    tenant_collection_name,
     tenant_metadata_value,
 )
 from aegis.retrieval.vector_store import ChromaVectorStore
@@ -329,3 +333,234 @@ async def test_end_to_end_one_tenants_passage_never_reaches_another():
         assert not any("Globex" in s.text for s in acme.sources)
         assert "Acme" not in globex.answer_context
         assert not any("Acme" in s.text for s in globex.sources)
+
+
+# ──────────────────────────────────────────────── collection per tenant (D4c)
+
+
+#: The three passages the collection-per-tenant tests assert on. They are near-identical
+#: on purpose: every arm below is asked the *same* question, so what separates the
+#: results has to be the partition rather than the wording.
+_ACME_TEXT = "Acme approves closures within five business days."
+_GLOBEX_TEXT = "Globex approves closures within five business days."
+_HANDBOOK_TEXT = "Closures are approved and returned to the original approver."
+_QUERY = "closures approved within business days"
+
+
+class _RecordingStore:
+    """A vector store that records which collections were searched.
+
+    The assertion "nothing leaked" is weaker than the assertion "nothing was even
+    looked at", and only the second one can distinguish *refusing* to search from
+    searching everything and filtering the results afterwards. This wrapper is what makes
+    the second one available: it delegates every call to the real embedded Chroma store
+    and keeps a list of the collection names ``search`` was asked for.
+    """
+
+    def __init__(self, inner: ChromaVectorStore) -> None:
+        self._inner = inner
+        self.searched: list[str] = []
+
+    def ensure_collection(self, name: str, dim: int, **kwargs: object) -> None:
+        self._inner.ensure_collection(name, dim, **kwargs)  # type: ignore[arg-type]
+
+    def upsert(self, name: str, ids, vectors, payloads) -> None:  # noqa: ANN001
+        self._inner.upsert(name, ids, vectors, payloads)
+
+    def search(self, name: str, vector, k: int, *, filter=None):  # noqa: A002, ANN001, ANN202
+        self.searched.append(name)
+        return self._inner.search(name, vector, k, filter=filter)
+
+
+async def _recording_backend() -> InMemoryKnowledgeBackend:
+    """Build a lite backend over a recording store holding all three passages."""
+    backend = InMemoryKnowledgeBackend([], vector_store=_RecordingStore(ChromaVectorStore.local()))
+    retriever = Retriever(
+        backend=backend,
+        cache=SemanticCache(FakeRedis(), ttl_seconds=60, similarity_threshold=0.985),
+        complete=RecordingComplete('{"scores": []}'),
+        embed=SequenceEmbed([1.0, 0.0]),
+        config=RetrievalConfig(),
+    )
+    for doc_id, text, scope in (
+        ("acme", _ACME_TEXT, _ACME),
+        ("globex", _GLOBEX_TEXT, _GLOBEX),
+        ("handbook", _HANDBOOK_TEXT, _SHARED),
+    ):
+        await retriever.ingest([{"id": doc_id, "text": text}], scope=scope)
+    return backend
+
+
+def _vector_texts(ranked) -> set[str]:  # noqa: ANN001 - RankedRecall
+    """Return the candidate *texts* of the vector arm — never the ids or the count."""
+    vector = next(rl for rl in ranked.lists if RetrievalOrigin.VECTOR in rl.origins)
+    return {c.text for c in vector.candidates}
+
+
+async def test_two_tenants_asking_the_same_question_get_disjoint_passages():
+    """The same query, two tenants, and the only text they share is the shared corpus.
+
+    Asserted on **content**. A count assertion ("each sees two") is satisfied by a policy
+    that returns everything and truncates, and by one that returns the wrong tenant's
+    row; only the text says which passage actually came back. The intersection is
+    asserted too, and asserted to be exactly the shared handbook rather than merely
+    small — the shared corpus is deliberately readable by both, and every *other* overlap
+    would be a leak.
+    """
+    backend = await _recording_backend()
+
+    acme = _vector_texts(await backend.recall_ranked(_QUERY, top_k=10, scope=_ACME))
+    globex = _vector_texts(await backend.recall_ranked(_QUERY, top_k=10, scope=_GLOBEX))
+
+    assert acme == {_ACME_TEXT, _HANDBOOK_TEXT}
+    assert globex == {_GLOBEX_TEXT, _HANDBOOK_TEXT}
+    assert acme & globex == {_HANDBOOK_TEXT}, (
+        "the only passage two tenants may both read is the tenant-less shared corpus"
+    )
+    assert _GLOBEX_TEXT not in acme and _ACME_TEXT not in globex
+
+
+async def test_a_tenants_vectors_live_in_a_collection_of_their_own():
+    """Each tenant's rows are a separate Chroma collection, and a read touches only its own.
+
+    The names are asserted because they are the boundary: ``aegis_chunks_t1`` cannot be
+    reached by a query against ``aegis_chunks_t2`` no matter what filter that query
+    carries or forgets.
+    """
+    backend = await _recording_backend()
+    store = backend._vector_store
+
+    assert backend._collection_for(_ACME.tenant_value()) == "aegis_chunks_t1"
+    assert backend._collection_for(_GLOBEX.tenant_value()) == "aegis_chunks_t2"
+    assert backend._collection_for(None) == "aegis_chunks_shared"
+
+    store.searched.clear()
+    await backend.recall_ranked(_QUERY, top_k=10, scope=_ACME)
+    assert store.searched == ["aegis_chunks_t1", "aegis_chunks_shared"], (
+        "tenant 1's recall read collections it does not own"
+    )
+
+
+async def test_the_collection_returns_one_tenant_even_with_no_filter_at_all():
+    """Forget the ``where`` filter entirely and the partition still answers for one tenant.
+
+    This is the property the whole change exists for, and it is asserted at its weakest
+    point: the store is queried directly, with ``filter=None``, which under the previous
+    single-collection layout returned **every** tenant's chunks and no error. A boundary
+    that only holds while callers remember something is not a boundary.
+    """
+    backend = await _recording_backend()
+    store = backend._vector_store
+    q_vec = (await backend._embed([_QUERY]))[0]
+
+    unfiltered = store.search("aegis_chunks_t1", q_vec, 10, filter=None)
+    texts = {str(hit.payload.get("text")) for hit in unfiltered}
+    assert texts == {_ACME_TEXT}, (
+        f"an unfiltered search of tenant 1's collection returned {texts} — the "
+        "collection is not the boundary"
+    )
+
+
+async def test_a_tenant_with_nothing_ingested_reads_nothing_of_anyone_elses():
+    """An unwritten partition is empty, not absent-therefore-unfiltered.
+
+    A collection that was never created is the state a *new* tenant is in, and it is the
+    state a bug that mis-derives the name produces. Both must return the tenant's own
+    (empty) corpus plus the shared one — never a widened search.
+    """
+    backend = await _recording_backend()
+    stranger = RetrievalScope(tenant_id=9999)
+
+    texts = _vector_texts(await backend.recall_ranked(_QUERY, top_k=10, scope=stranger))
+    assert texts == {_HANDBOOK_TEXT}, (
+        f"a tenant with no corpus of its own read {texts}"
+    )
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        None,
+        "7",
+        RetrievalScope(tenant_id="7"),
+        RetrievalScope(tenant_id=True),
+        RetrievalScope(tenant_id=object()),
+    ],
+    ids=["missing", "bare-string", "string-tenant", "bool-tenant", "object-tenant"],
+)
+async def test_an_unresolvable_scope_raises_instead_of_searching_unscoped(scope):
+    """Every recall arm refuses, and refuses **before** touching the store.
+
+    Each parameter is a real shape a tenant id arrives in when it has lost its type on
+    the way — a header value, a JSON payload, a half-built request object, or a
+    ``bool`` that would otherwise resolve to the genuinely-existing tenant 1. None of
+    them names a partition, so none of them may be answered.
+
+    The store assertion is the load-bearing half. "It returned nothing" would also be
+    true of a search that ran against a collection that happened to be empty; "it never
+    searched" is the only evidence that the refusal is the mechanism rather than luck.
+    """
+    backend = await _recording_backend()
+    store = backend._vector_store
+    store.searched.clear()
+
+    with pytest.raises(UnresolvedTenantScopeError):
+        await backend.recall_ranked(_QUERY, top_k=10, scope=scope)
+    with pytest.raises(UnresolvedTenantScopeError):
+        await backend.keyword_recall(_QUERY, top_k=10, scope=scope)
+    with pytest.raises(UnresolvedTenantScopeError):
+        await backend.recall(_QUERY, top_k=10, scope=scope)
+
+    assert store.searched == [], (
+        f"an unresolvable scope reached the vector store: {store.searched}. It must "
+        "never fall back to an unscoped search"
+    )
+
+
+def test_a_collection_name_cannot_be_built_from_an_arbitrary_string():
+    """The partition name is derived, never accepted — including on the write side.
+
+    A chunk whose recorded owner is not a token this package minted would otherwise pick
+    its own collection, which is the same class of bug as a caller choosing its own
+    tenant filter.
+    """
+    assert tenant_collection_name("p", None) == "p_shared"
+    assert tenant_collection_name("p", tenant_metadata_value(3)) == "p_t3"
+    for forged in ("shared", "t3'; drop", "", "T3", "t-3"):
+        with pytest.raises(UnresolvedTenantScopeError):
+            tenant_collection_name("p", forged)
+
+
+async def test_an_unresolvable_scope_cannot_reach_a_real_tenants_cache_partition():
+    """The cache is the *first* door, so resolution has to happen there too.
+
+    ``Retriever.retrieve`` consults both cache tiers before it ever calls the backend.
+    A scope carrying ``tenant_id="7"`` would therefore have been served tenant 7's
+    cached answer — its partition key was built with ``int(self.tenant_id)``, which
+    happily turns the string ``"7"`` into the integer 7 — with no arm of the backend
+    running and nothing to raise. Closing the vector arm alone would have left that
+    path open, which is why it is asserted here rather than assumed.
+    """
+    cache = _cache()
+    await cache.set("what is our escalation policy?", RetrievalScope(tenant_id=7), [1.0, 0.0],
+                    _result("tenant seven's answer"))
+    forged = RetrievalScope(tenant_id="7")
+
+    with pytest.raises(UnresolvedTenantScopeError):
+        forged.partition_key()
+    with pytest.raises(UnresolvedTenantScopeError):
+        await cache.get_exact("what is our escalation policy?", forged)
+    with pytest.raises(UnresolvedTenantScopeError):
+        await cache.get_semantic([1.0, 0.0], forged)
+
+    # The positive control: the real tenant 7 still reads its own entry, so the refusal
+    # above is about resolution and not about a cache that stopped working.
+    hit = await cache.get_exact("what is our escalation policy?", RetrievalScope(tenant_id=7))
+    assert hit is not None and hit.answer_context == "tenant seven's answer"
+
+
+async def test_the_pipeline_refuses_an_unresolvable_scope_before_the_cache():
+    """End to end: ``retrieve`` raises rather than answering an unresolvable request."""
+    retriever = _retriever()
+    with pytest.raises(UnresolvedTenantScopeError):
+        await retriever.retrieve("why is the sky blue?", scope=RetrievalScope(tenant_id="7"))

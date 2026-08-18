@@ -208,6 +208,7 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         "eval_results",
         "prompt_versions",
         # aegis.jobs.models
+        "chunks",
         "documents",
         "job_runs",
         # aegis.runs.models
@@ -218,10 +219,12 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         # host-owned
         "approvals",
     }
-    # ``tenants`` is keyed by ``id`` and ``chunks`` carries no tenant column, so a
-    # policy on either would not compile — they are correctly absent.
+    # ``tenants`` is keyed by ``id``, so a policy filtering on ``tenant_id`` would not
+    # compile there — it is correctly absent. ``chunks`` used to be listed here for the
+    # same reason and is not any more: it grew a real ``tenant_id`` (the retrieval
+    # corpus is read through SQL by the keyword arm), and the day a table gains that
+    # column is the day it must gain a policy.
     assert "tenants" not in _TENANT_SCOPED_TABLES
-    assert "chunks" not in _TENANT_SCOPED_TABLES
 
 
 async def test_bootstrap_forces_rls_on_every_tenant_scoped_table():

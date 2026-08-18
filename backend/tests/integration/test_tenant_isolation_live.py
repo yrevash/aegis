@@ -62,6 +62,7 @@ import hashlib
 import os
 import secrets
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -79,7 +80,7 @@ import aegis.ops.models  # noqa: F401 - registration side-effect only
 import aegis.runs.models  # noqa: F401 - registration side-effect only
 import aegis.settings.models  # noqa: F401 - registration side-effect only
 import pytest
-from aegis.data import AegisBase
+from aegis.data import AegisBase, VectorColumn
 from aegis.governance.rls import (
     _POLICY_NAME,
     _TENANT_COLUMN,
@@ -269,6 +270,14 @@ def _synthetic_value(column, tag: str) -> object:  # noqa: ANN001 - sqlalchemy C
     enums = getattr(column.type, "enums", None)
     if enums:
         return enums[0]
+    if isinstance(column.type, VectorColumn):
+        # ``chunks.embedding`` is NOT NULL. Its ``python_type`` declines to name itself
+        # (it is JSON underneath), so without this branch the generic JSON fallback
+        # below would seed an *object* into a column that holds an embedding — legal
+        # JSON, and a lie about the row. Three zeros rather than a full-width vector:
+        # the column documents that JSON storage does not enforce ``dim``, and the sweep
+        # is about the policy on the row, not about what the vector says.
+        return [0.0, 0.0, 0.0]
     try:
         python_type = column.type.python_type
     except NotImplementedError:
@@ -965,13 +974,336 @@ async def test_a_tenant_reads_the_platform_settings_baseline_but_cannot_write_on
         await engine.dispose()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ``chunks`` — the retrieval corpus. Its lexical arm reads these rows through
+# SQL, so the policy on them is what stops one tenant's passage answering
+# another tenant's question.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The clause **both** tenants' chunks quote. A lexical search has to have something to
+#: match on each side of the boundary, or "tenant A only saw its own row" would be a
+#: statement about the corpus rather than about the policy.
+_CLAUSE_QUERY = "clause 7.3.2"
+
+#: Tenant B's counterpart to :data:`_LEAK_PHRASE` — a token that appears nowhere else in
+#: this repository either, so each tenant's passage is identifiable on sight.
+_TENANT_B_PHRASE = "MARLIN-CASSOWARY-2048"
+
+#: The two passages, each carrying its owner's unmistakable token. The assertions below
+#: are on **content**: a count would be satisfied by a policy that returned the wrong
+#: row, and "each tenant sees one" is exactly what a broken ``LIMIT 1`` also produces.
+_CHUNK_TEXT = {
+    _TENANT_A: f"Clause 7.3.2 caps {_LEAK_PHRASE} liability at ninety days.",
+    _TENANT_B: f"Clause 7.3.2 caps {_TENANT_B_PHRASE} liability at one year.",
+}
+
+
+async def _seeded_documents(scratch: _Scratch) -> dict[int, int]:
+    """Return each tenant's seeded ``documents`` row id, read over the owner connection.
+
+    Deliberately a direct query rather than a slice of :func:`_parents`: that function is
+    driven by the *registry*, so a mutation that unregistered ``chunks`` would make the
+    chunk tests below fail during setup with a ``KeyError`` instead of failing their own
+    assertions. A test whose proof of isolation is a fixture crash proves less than one
+    that reads the other tenant's passage and says so.
+    """
+    engine = create_async_engine(scratch.owner_dsn)
+    try:
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(f"SELECT {_TENANT_COLUMN}, id FROM documents")
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+    return {tenant_id: document_id for tenant_id, document_id in rows}
+
+
+async def _insert_chunks(
+    scratch: _Scratch, rows: Sequence[tuple[int, str]]
+) -> list[int]:
+    """Insert chunks over the owner connection and return their ids.
+
+    Written as the owner because seeding through the policy would make the fixture
+    depend on the very thing under test — the same reasoning as :func:`_provision`.
+
+    Args:
+        scratch: The provisioned scratch handle.
+        rows: ``(tenant, content)`` pairs; each is attached to that tenant's own seeded
+            document, so the row is internally consistent.
+
+    Returns:
+        The inserted primary keys, in the order given.
+    """
+    documents = await _seeded_documents(scratch)
+    engine = create_async_engine(scratch.owner_dsn)
+    ids: list[int] = []
+    try:
+        async with engine.begin() as conn:
+            for tenant_id, content in rows:
+                ids.append(
+                    (
+                        await conn.execute(
+                            text(
+                                "INSERT INTO chunks "
+                                "(tenant_id, document_id, content, embedding, meta) "
+                                "VALUES (:tenant, :document, :content, "
+                                "'[0.0,0.0,0.0]'::jsonb, '{}'::jsonb) RETURNING id"
+                            ),
+                            {
+                                "tenant": tenant_id,
+                                "document": documents[tenant_id],
+                                "content": content,
+                            },
+                        )
+                    ).scalar_one()
+                )
+    finally:
+        await engine.dispose()
+    return ids
+
+
+async def _delete_chunks(scratch: _Scratch, ids: Sequence[int]) -> None:
+    """Remove chunks by id over the owner connection.
+
+    Cleanup matters more here than it usually does: the module's scratch database is
+    shared by every test in it, and
+    :func:`test_the_scratch_database_really_holds_both_tenants_rows` asserts that each
+    swept table holds exactly one row per tenant. A test that left rows behind would
+    make that one fail depending on collection order.
+    """
+    engine = create_async_engine(scratch.owner_dsn)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM chunks WHERE id = ANY(:ids)"), {"ids": list(ids)}
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+def clause_chunks(scratch: _Scratch) -> dict[int, int]:
+    """Give each tenant one chunk quoting the same clause, and take them away after.
+
+    Yields:
+        ``{tenant: chunk id}``.
+    """
+    rows = [(tenant, _CHUNK_TEXT[tenant]) for tenant in (_TENANT_A, _TENANT_B)]
+    ids = asyncio.run(_insert_chunks(scratch, rows))
+    try:
+        yield dict(zip((_TENANT_A, _TENANT_B), ids, strict=True))
+    finally:
+        asyncio.run(_delete_chunks(scratch, ids))
+
+
+async def test_a_lexical_hit_on_chunks_cannot_cross_tenants(
+    scratch: _Scratch, clause_chunks: dict[int, int]
+):
+    """A full-text search for a clause both tenants quote returns only the caller's.
+
+    This is the arm the tenant column was added for. The keyword arm queries ``chunks``
+    through PostgreSQL full-text search, and before this change there was no column to
+    put a predicate on — an exact identifier (a clause number, a case number, a part
+    number) is precisely the query BM25 is best at and precisely the one that would have
+    returned another tenant's passage.
+
+    Asserted on **content**, not on counts: "each tenant sees one row" is also what a
+    policy that returned the *wrong* row produces, and a count assertion would pass for
+    a query that had silently stopped matching anything at all. The non-vacuity check
+    reads both rows over the owner connection first, so the query is known to match on
+    both sides of the boundary before the scoped read is believed.
+    """
+    assert set(clause_chunks) == {_TENANT_A, _TENANT_B}
+    search = (
+        "SELECT content FROM chunks "
+        "WHERE to_tsvector('english', content) "
+        "      @@ plainto_tsquery('english', :query)"
+    )
+
+    owner = create_async_engine(scratch.owner_dsn)
+    try:
+        async with owner.connect() as conn:
+            both = (
+                await conn.execute(text(search + " ORDER BY content"), {"query": _CLAUSE_QUERY})
+            ).scalars().all()
+    finally:
+        await owner.dispose()
+    assert sorted(both) == sorted(_CHUNK_TEXT.values()), (
+        "the full-text query does not match both tenants' passages, so a scoped read "
+        f"returning one of them would prove nothing: {both}"
+    )
+
+    engine = _app_engine(scratch)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        for tenant_id in (_TENANT_A, _TENANT_B):
+            async with maker() as session:
+                await set_tenant_scope(session, tenant_id)
+                visible = (
+                    await session.execute(text(search), {"query": _CLAUSE_QUERY})
+                ).scalars().all()
+                await session.rollback()
+            assert visible == [_CHUNK_TEXT[tenant_id]], (
+                f"a lexical search under tenant {tenant_id} returned {visible} — the "
+                "keyword arm can read another tenant's passage"
+            )
+    finally:
+        await engine.dispose()
+
+
+async def test_a_tenant_asking_for_another_tenants_chunks_gets_nothing(
+    scratch: _Scratch, clause_chunks: dict[int, int]
+):
+    """Naming the other tenant explicitly, joining to reach it, and counting all fail.
+
+    Three shapes, because a policy can be defeated by each of them differently:
+
+    * ``WHERE tenant_id = <other>`` — the request that *asks* for the leak. It must
+      return nothing rather than what it asked for.
+    * a ``JOIN`` through ``documents`` — the shape that would work if the tenant were
+      reachable only through the parent. It is the reason ``tenant_id`` is denormalised
+      onto this row: a predicate carried by the join is a predicate the caller can
+      choose not to carry.
+    * a bare ``COUNT(*)`` — the leak that survives every "I only returned my own rows"
+      review. A count is a read of every row, and the other tenant's *existence* is
+      itself information.
+    """
+    engine = _app_engine(scratch)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as session:
+            await set_tenant_scope(session, _TENANT_A)
+
+            asked_for_it = (
+                await session.execute(
+                    text("SELECT content FROM chunks WHERE tenant_id = :other"),
+                    {"other": _TENANT_B},
+                )
+            ).scalars().all()
+            assert asked_for_it == [], (
+                f"tenant {_TENANT_A} read tenant {_TENANT_B}'s chunks by naming them: "
+                f"{asked_for_it}"
+            )
+
+            through_the_parent = (
+                await session.execute(
+                    text(
+                        "SELECT c.content FROM chunks c "
+                        "JOIN documents d ON d.id = c.document_id "
+                        "WHERE d.tenant_id = :other"
+                    ),
+                    {"other": _TENANT_B},
+                )
+            ).scalars().all()
+            assert through_the_parent == [], (
+                "a join through documents reached another tenant's chunks: "
+                f"{through_the_parent}"
+            )
+
+            counted = (
+                await session.execute(text("SELECT count(*) FROM chunks"))
+            ).scalar_one()
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+    # Two seeded rows (one per tenant) plus the two the fixture added: tenant A may see
+    # exactly its own two, and the count must not betray that the others exist.
+    assert counted == 2, (
+        f"a bare COUNT(*) under tenant {_TENANT_A} returned {counted}; it is counting "
+        f"rows tenant {_TENANT_A} cannot read, so the row count leaks even though the "
+        "rows do not"
+    )
+
+
+async def test_deleting_a_document_takes_its_chunks_with_it(scratch: _Scratch):
+    """``ON DELETE CASCADE``, asserted — a re-ingest must not leave answerable orphans.
+
+    Without the cascade, re-ingesting a document leaves its previous chunks in the
+    corpus, still matching queries, still cited, with no row anywhere saying they are
+    stale. The neighbour tenant's chunk is asserted to survive in the same breath, so a
+    cascade that had turned into an over-broad delete would fail here rather than look
+    like success.
+    """
+    doomed = (await _seeded_documents(scratch))[_TENANT_A]
+    ids = await _insert_chunks(
+        scratch,
+        [(_TENANT_A, "First passage of the doomed document."),
+         (_TENANT_A, "Second passage of the doomed document."),
+         (_TENANT_B, "A neighbour's passage, which must survive.")],
+    )
+    survivor = ids[-1]
+
+    engine = create_async_engine(scratch.owner_dsn)
+    try:
+        async with engine.connect() as conn:
+            before = (
+                await conn.execute(
+                    text("SELECT count(*) FROM chunks WHERE id = ANY(:ids)"),
+                    {"ids": ids},
+                )
+            ).scalar_one()
+            assert before == len(ids), (
+                f"only {before} of {len(ids)} chunks were inserted, so the delete below "
+                "would prove nothing"
+            )
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM documents WHERE id = :id"), {"id": doomed}
+            )
+
+        async with engine.connect() as conn:
+            left = (
+                await conn.execute(
+                    text("SELECT id FROM chunks WHERE id = ANY(:ids) ORDER BY id"),
+                    {"ids": ids},
+                )
+            ).scalars().all()
+    finally:
+        await _delete_chunks(scratch, ids)
+        await engine.dispose()
+
+    assert left == [survivor], (
+        "deleting a document did not remove exactly its own chunks — orphaned passages "
+        f"keep answering queries from text that was replaced: {left}"
+    )
+
+
+def _required_parents() -> set[str]:
+    """Return the tables a registered row must reference by a NOT NULL foreign key.
+
+    Derived from the metadata rather than listed by hand, so a newly registered table
+    that references a new parent is handled here instead of failing the cross-tenant
+    write probe with a ``KeyError`` that looks like a test bug rather than a schema
+    change. ``tenants`` is excluded: its key *is* the tenant id, which the row builder
+    already knows.
+
+    Returns:
+        The parent table names to read seeded primary keys for.
+    """
+    parents: set[str] = set()
+    for table in _registered_tables():
+        for column in table.columns:
+            if column.nullable:
+                continue
+            for key in column.foreign_keys:
+                parent = key.column.table.name
+                if parent != "tenants":
+                    parents.add(parent)
+    return parents
+
+
 async def _parents(scratch: _Scratch) -> dict[tuple[str, int], object]:
     """Return the seeded parent keys a child row needs, for **both** tenants.
 
-    Only ``memory_message`` needs one (its ``session_id`` references ``memory_session``),
-    and the cross-tenant write probe must build a row that is internally valid:
-    foreign-key checks bypass row security, so a dangling reference would raise before
-    the policy could — and the test would "pass" on the wrong error.
+    Two tables need one — ``memory_message.session_id`` references ``memory_session``,
+    and ``chunks.document_id`` references ``documents`` — and the cross-tenant write
+    probe must build a row that is internally valid: foreign-key checks bypass row
+    security, so a dangling reference would raise before the policy could, and the test
+    would "pass" on the wrong error.
 
     Read over the owner connection precisely *because* it bypasses RLS: a scoped read
     could never see the other tenant's parent row, which is the whole point.
@@ -983,16 +1315,21 @@ async def _parents(scratch: _Scratch) -> dict[tuple[str, int], object]:
         ``{(parent table, tenant): primary key}`` for the parents this module seeds.
     """
     engine = create_async_engine(scratch.owner_dsn)
+    parents: dict[tuple[str, int], object] = {}
     try:
         async with engine.connect() as conn:
-            rows = (
-                await conn.execute(
-                    text(f"SELECT id, {_TENANT_COLUMN} FROM memory_session")
+            for parent in sorted(_required_parents()):
+                rows = (
+                    await conn.execute(
+                        text(f'SELECT id, {_TENANT_COLUMN} FROM "{parent}"')
+                    )
+                ).all()
+                parents.update(
+                    {(parent, tenant_id): key for key, tenant_id in rows}
                 )
-            ).all()
     finally:
         await engine.dispose()
-    return {("memory_session", tenant_id): key for key, tenant_id in rows}
+    return parents
 
 
 async def test_an_unbound_scope_is_deliberately_fail_open_pending_security_definer_login(

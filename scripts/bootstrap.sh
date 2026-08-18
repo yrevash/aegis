@@ -24,7 +24,7 @@ cd "$ROOT/backend"
 # EVERY extra the backend actually imports. `auth` (JWT/argon2 login + RBAC) and
 # `mcp` (the MCP tool-server facade, which needs mcp>=2.0) were missing here, so a
 # fresh box came up without them and their tests failed at import.
-extras='data,auth,observability,agent,retrieval,ml,guardrails,mcp,dev'
+extras='data,auth,observability,agent,retrieval,ingestion,ml,guardrails,mcp,dev'
 echo "  installing backend + all extras ($extras) ..."
 uv pip install -e ".[$extras]" >/dev/null
 [ -f .env ] || { cp .env.example .env; echo "  created backend/.env (fill in GENAILAB_API_KEY)"; }

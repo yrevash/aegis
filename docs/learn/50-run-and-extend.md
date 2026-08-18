@@ -145,7 +145,7 @@ Windows `.ps1` twins exist for all three (`bootstrap.ps1`, `preflight.ps1`,
 
 ```bash
 uv venv && source .venv/bin/activate            # Windows: .venv\Scripts\activate
-uv pip install -e ".[data,auth,observability,agent,retrieval,ml,guardrails,mcp,dev]"
+uv pip install -e ".[data,auth,observability,agent,retrieval,ingestion,ml,guardrails,mcp,dev]"
 cp .env.example .env                            # fill in GENAILAB_API_KEY (+ stores for full)
 uvicorn app.main:app --reload --app-dir src     # → http://localhost:8000  (/docs for OpenAPI)
 ```

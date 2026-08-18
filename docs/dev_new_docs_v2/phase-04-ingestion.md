@@ -27,6 +27,13 @@
 > filter. Adding `tenant_id` to `chunks` therefore fixes **one of three arms**. See the new
 > **D4c**, which is a second blocker.
 >
+> **E. Task 4.0 found a blocker nobody planned for: `OMP_NUM_THREADS`.** Installing
+> Docling puts `torch` in the venv, and `presidio-analyzer` then imports it on sight — so
+> the *PII path*, not the parser, loads a second OpenMP runtime into the same process as
+> `xgboost`. One order segfaults, the other deadlocks, and both suites died on it. Fixed
+> with `OMP_NUM_THREADS=1` at the composition roots; recorded as **D4a**. Read it before
+> touching anything that imports torch.
+>
 > Also recorded: **this Postgres has no `pgvector`** (`plpgsql` only). Nothing in this phase
 > depends on it, but no task may assume a native vector column exists.
 >
@@ -241,6 +248,28 @@ HyPE, contextual retrieval (+2.2pp on top of hybrid), late chunking. All revisit
 
 **Reason:** 255× slower. That is the whole argument.
 
+**[MEASURED] 2026-08-18, task 4.0, same 16 GB M3, `docling==2.120.3`, on the four Phase 4
+fixtures** (`spikes/docling_spike.py`). The 1.10 s/page above is a text-dense number and does
+not generalise — TableFormer on ACCURATE dominates, so a table-dense document costs ~3× more:
+
+| Fixture | Pages | Tables | Parse | s/page | Peak RSS |
+|---|---:|---:|---:|---:|---:|
+| `bert-two-column.pdf` | 16 | 8 | 7.6 s | **0.47** | 1,422 MB |
+| `transformer-single-column.pdf` | 15 | 4 | 6.4 s | **0.43** | 1,515 MB |
+| `census-income-tables.pdf` | 67 | 40 | 214.3 s | **3.20** | **3,248 MB** |
+| `irs-1040-instructions-tables.pdf` | 126 | 39 | 361.3 s | **2.87** | **3,381 MB** |
+
+RSS is a single-document process peak (`ru_maxrss`), measured one document per fresh process;
+the two small papers were measured in a shared process, so their figures include the models.
+
+**Two planning numbers in this document are therefore wrong.** "~1.1 s/page" makes a 126-page
+government PDF a two-minute parse; it is **six minutes**. And "a Docling parse peaks around
+2.2 GB" (repeated in `aegis/src/aegis/jobs/stages.py` and `backend/.env.example`) is
+**3.2–3.4 GB** on a document of that size — peak RSS scales with the document, not just with
+the models. Both make the CPU queue's `max_concurrent_activities = 1` more clearly right, not
+less: two concurrent parses of a document like these would want ~7 GB on a 16 GB box that is
+also running Postgres, Neo4j and Memurai.
+
 **The trade-off, stated honestly:** the VLM is not worse at everything. It is a single model
 that reads layout, tables and reading order together, and on genuinely messy documents —
 scanned, rotated, heavy multi-column — it can beat a layout-model pipeline. We are giving that
@@ -267,8 +296,26 @@ Docling ships `heading_hierarchy_options.enabled = False`. Its layout model emit
 | `heading_hierarchy.enabled=True` alone | `{1: 16, 2: 4}` — **silent partial failure** |
 | both, plus `generate_parsed_pages=True` | `{1: 8, 2: 6, 3: 4, 4: 1, 5: 1}` — real 5-level tree |
 
-**Reason:** the middle row is the dangerous one. It looks like it worked. You would ship
-flattened context for four fifths of your headings and never see an error.
+**[MEASURED] 2026-08-18 on `docling==2.120.3`, `bert-two-column.pdf` (16 pages), one run
+each — and the middle row is worse than described:**
+
+| Configuration | Heading histogram |
+|---|---|
+| defaults | `{1: 33}` — completely flat, exactly as claimed |
+| `heading_hierarchy.enabled=True` alone | `{1: 13, 2: 12, 3: 8}` — a **plausible three-level tree** |
+| both, plus `generate_parsed_pages=True` | `{1: 2, 2: 13, 3: 18}` — the same headings, correctly placed |
+
+**Reason:** the middle row is the dangerous one, and on this version it no longer even looks
+partial. It is a well-shaped tree with eleven headings at the wrong depth, and **no histogram
+check can catch it** — the only defence is setting both switches. That is why
+`aegis.ingestion.convert` sets them together in one function and a test asserts the resulting
+*histogram*, not the configuration.
+
+The measured histograms for the other three fixtures, all under the shipped configuration:
+`transformer-single-column.pdf` `{1: 8, 2: 15, 3: 4}`; `census-income-tables.pdf`
+`{1: 7, 2: 2, 3: 3, 4: 21, 5: 33, 6: 52}`; `irs-1040-instructions-tables.pdf`
+`{1: 24, 2: 45, 3: 129, 4: 133, 5: 25, 6: 120}`. Six real levels on both long documents, so
+D2 holds; the flat-tree failure it was written about does not occur with both switches on.
 
 **Cost:** +5.6% wall clock. **Trade-off:** none worth naming at that price.
 
@@ -291,6 +338,30 @@ per-*page* mitigation the old plan proposed already exists upstream at finer gra
 does not help.
 
 **Decision:** probe for a text layer per *document*, and set `do_ocr` accordingly.
+
+**[MEASURED] 2026-08-18 — the 88% figure does not reproduce on `docling==2.120.3` with
+RapidOCR, and the reason to keep the probe is the other direction.**
+
+| Fixture | `do_ocr=False` | `do_ocr=True` | OCR share | Blocks |
+|---|---:|---:|---:|---:|
+| `bert-two-column.pdf` (16 p) | 7.8 s | 8.3 s | **6%** | 254 → 254 |
+| `census-income-tables.pdf` (67 p) | 239.2 s | 259.1 s | **8%** | 567 → 568 |
+
+So OCR on a born-digital document costs **6–8%**, not 88%, and it finds essentially
+nothing (one extra block on 67 pages). Whatever produced 33.5 s of 38.1 s was a different
+engine or an older release; it is not what we are shipping.
+
+**That does not retire the probe — it re-points it.** The expensive mistake is now the
+*other* branch: a scanned document parsed with `do_ocr=False` yields almost no text,
+produces a handful of empty chunks, reports success, and answers every question about
+itself with "not found". The probe is what prevents that, and its own cost is **0.37 s on
+126 pages** (PDFium text extraction, no model). Keep it; stop justifying it on the OCR
+saving.
+
+The four fixtures' decisions, measured: three at 100% born-digital, and
+`census-income-tables.pdf` at 66/67 — page 66 carries no text layer and is named in the
+log as a page we chose not to OCR, which is exactly the trade-off below being made
+visible rather than silent.
 
 **Trade-off:** a document that is 90% digital with one scanned page gets no OCR on that page,
 and we lose it. **Mitigation:** report the per-document decision in the ingest log so it is
@@ -318,14 +389,72 @@ corpus large enough that ingest wall-clock becomes the binding constraint. Neith
 
 ### D4 — Warm the converter at startup
 
-Cold start is **50–120 seconds**, documented nowhere in Docling's own docs.
+**[MEASURED] 2026-08-18 — the 50–120 s figure is two different costs added together, and
+separating them changes what this decision is for.**
 
-**Reason:** without this, the first upload of the day — which on 30 August is a jury handing
-us a document — stalls for a minute with no explanation.
+| | Measured |
+|---|---:|
+| Model **download**, into an empty directory (layout + TableFormer + RapidOCR) | **730 MB in 66.8 s** |
+| Model **load** from a primed cache — the actual cold start | **3.1–3.7 s** |
+| Resident after warm-up, before any document | **989 MB** |
 
-**Trade-off:** the worker holds ~2 GB resident from boot rather than on first use. On a 16 GB
-machine running Postgres, Neo4j and Memurai, that is worth measuring rather than assuming;
-the task includes doing so.
+So warming at startup buys ~3 seconds, not a minute. The minute-long stall D4 was written
+about is real but it is the **first download**, which happens once per machine and only if
+nobody primed the cache — and it fails outright on a box with no network, which is the
+scenario that would actually lose the demo.
+
+**What that changes:** the warm-up stays (it is three lines and it moves a visible pause off
+the first upload), but the load-bearing mitigation is now **prefetching the models on the demo
+box while there is still network**: `python spikes/docling_spike.py --prefetch <dir>`.
+
+**Trade-off:** the worker holds **989 MB** resident from boot rather than on first use —
+measured, not the ~2 GB assumed. It is therefore gated on `DOCLING_WARM_ON_START`, off by
+default: only the process that serves the CPU queue and actually runs the parse stage should
+pay it, and an API-only process or a test worker should not.
+
+### D4a — 🚧 **BLOCKER, found by task 4.0** — Docling's torch and the ML spine's xgboost cannot share a process unbrokered
+
+**Installing Docling brought `torch` into the venv, and that alone broke the platform.**
+Not the parser — the *presence* of torch.
+
+| Order | Result |
+|---|---|
+| `import torch`, then an xgboost fit | **Segmentation fault** in `xgboost.core.set_label` |
+| xgboost first, then any `torch` op | **Deadlock** — a 512×512 matmul never returns |
+| Either order, `OMP_NUM_THREADS=1` | Works |
+| Either order, `OMP_NUM_THREADS` = 2, 4 or 8 | Still segfaults |
+| Either order, `KMP_DUPLICATE_LIB_OK=TRUE` | Still segfaults |
+
+`torch` ships its own `libomp.dylib`; `xgboost` and `scikit-learn` ship another. Two
+OpenMP runtimes in one process is undefined behaviour, and on macOS/arm64 it is not
+subtle.
+
+**Why this is not confined to the ingest worker.** `presidio-analyzer` — the PII engine —
+imports `torch` *opportunistically* the moment it is installed
+(`presidio_analyzer/nlp_engine/device_detector.py`, and `HuggingFaceNerRecognizer`). So
+merely running a PII check in the API process now loads torch, and the next ML prediction
+segfaults the process. **Measured, not hypothesised:** both test suites started dying —
+the backend suite at `tests/api/test_platform_reads.py::test_model_card_returns_measured_shape`,
+after `tests/api/test_agui_demo.py` had triggered the PII path. Nothing in ingestion was
+involved.
+
+**Neither failure raises anything catchable.** A segfault takes the process; a deadlock
+takes the request and every one behind it. On stage that is the demo ending mid-answer.
+
+**The fix, and it is one line in three places:** `OMP_NUM_THREADS=1`, set before the first
+OpenMP library loads —
+`backend/src/app/__init__.py` (the composition root, so every entry point gets it),
+plus each suite's root `conftest.py`. `aegis.ingestion.convert` also pins it immediately
+before it imports Docling, so a process that reaches the parser by a path that skipped the
+application package is still safe.
+
+**Cost, measured:** +5% on a Docling parse (7.6 s → 8.0 s on the 16-page fixture), and the
+aegis ML suite got *faster* (12.1 s → 5.2 s — thread-pool overhead dominates on models
+this small). `setdefault`, so a deployment can override it deliberately.
+
+**What this constrains later in the phase:** task 4.5 may not assume it can raise Docling's
+`accelerator_options.num_threads` for speed, and a future decision to run the ingest worker
+as a separate process is now a *second* mitigation rather than the only one.
 
 ### D4b — 🚧 **BLOCKER** — `chunks` needs `tenant_id` BEFORE the BM25 arm lands
 
@@ -381,6 +510,31 @@ only the caller's own row. Not even the count leaks.
 the keyword arm first and the column second means shipping a known cross-tenant path, and
 "we'll add the column next" is exactly how it stays shipped.
 
+**[LANDED] 2026-08-18, task 4.6 — with two corrections to the DDL above.**
+
+*`documents.id` is not `BIGINT`.* It is declared `Mapped[int]`, which SQLAlchemy maps to a
+plain `integer`, and the live `taif` database confirms it. `document_id` is therefore
+`integer` too. A `BIGINT` child would still *work* — PostgreSQL has an `int8 = int4`
+operator — but it would leave the referencing column a width the referenced index is not,
+which is a trap to inherit rather than a guarantee to keep.
+
+*The `ALTER TABLE` was a `CREATE TABLE`.* `chunks` held **zero rows**, so there was nothing
+to back-fill and the "backfilled from the owning document" step above had no work to do.
+`app.data.session._recreate_legacy_chunks` drops the pre-tenancy table at bootstrap **only
+when it is provably empty** and raises `SchemaDriftError` naming the row count when it is
+not — the recreate can never quietly become a `DELETE` of a tenant's corpus.
+
+*`Chunk` moved to `aegis.jobs.models`.* It was on the host's own declarative base, and
+SQLAlchemy resolves a `ForeignKey` by name **within one MetaData** — so a `chunks` there
+could not reference a `documents` here at all, and the D4b relationship would have been a
+naming convention the database never checked. It is re-exported from `app.data.models` under
+its historical name.
+
+`tenant_id` is `NOT NULL` where `documents.tenant_id` is nullable. Deliberate: under the
+`tenant_isolation` predicate `NULL = <scope>` is NULL, so a null-tenant chunk would be
+invisible to every tenant while still being indexed and paid for. A platform-level document
+owns no rows in this table.
+
 ### D4c — 🚧 **BLOCKER** — one Chroma collection per tenant, not one shared collection
 
 **D4b protects the keyword arm. It does not protect the dense arm, which is the primary one.**
@@ -426,6 +580,24 @@ neither is a reason to prefer a fail-open boundary.
 
 **Sequencing: D4c ships with D4b.** Fixing the lexical arm while the dense arm stays shared
 would leave the *primary* retrieval path as the weak one, and the phase would read as solved.
+
+**[LANDED] 2026-08-18, task 4.6b — plus one hole D4c did not name.**
+
+Collections are `aegis_chunks_t<id>` and `aegis_chunks_shared`, derived by
+`aegis.retrieval.types.tenant_collection_name` from the bound scope (or, on the write side,
+from the row's own recorded owner) and never from a caller argument. A tenant-scoped read is
+a two-collection fan-out — its own, then the shared corpus — merged by score; a name built
+from anything that is not a token this package minted raises rather than being interpreted.
+
+*The cache is the first door, not the backend.* `Retriever.retrieve` consults both cache
+tiers **before** any recall arm runs, and `RetrievalScope.partition_key` built its key with
+`int(self.tenant_id)` — which turns the *string* `"7"` into tenant 7. A scope whose tenant
+had lost its type would therefore have been served a real tenant's cached answer with no arm
+of the backend running and nothing to raise. Fixing the vector arm alone would have left that
+path open. `partition_key`, `tenant_value` and `visible_tenant_values` all now route through
+`RetrievalScope.resolved_tenant_id`, which raises `UnresolvedTenantScopeError` — `None` stays
+*resolved* (the shared corpus), because "I have no tenant" is an answer and "I do not know
+whose data this is" is a defect.
 
 ---
 
@@ -615,14 +787,14 @@ and its error bar, not the library that printed it.
 
 | # | Task | Days | Notes |
 |---|---|---|---|
-| 4.0 | Spike on the real Windows box | 0.25 | Docling install, model prefetch, cold start, one real PDF |
-| 4.1 | `convert.py` seam — **with page/bbox from line one** | 0.5 | Docling never leaks past this module |
-| 4.2 | Text-layer probe + header/footer/page-number stripping | 0.25 | Running headers otherwise trip our Jaccard dedup and look like a bug on stage |
+| 4.0 | ✅ Spike — **macOS leg done 2026-08-18**, Windows leg outstanding | 0.25 | Docling install, model prefetch, cold start, all four fixtures. See §4.0 |
+| 4.1 | ✅ `convert.py` seam — **with page/bbox from line one** | 0.5 | Done 2026-08-18. `aegis/src/aegis/ingestion/`; Docling never leaks past `convert.py` |
+| 4.2 | ✅ Text-layer probe + header/footer/page-number stripping | 0.25 | Done 2026-08-18. The stripper is a **backstop** on these fixtures — see §4.0 |
 | 4.3 | `chunk_sections()` — feed pre-structured sections to the existing packer | 0.25 | The chunker survives intact |
 | 4.4 | Enriched prefix: title · type · date · heading path | 0.15 | Highest quality-per-hour in the phase |
 | 4.5 | Upload route + **stage handlers on the P3 workflow** | 0.4 | `documents` already exists (P3). No queue machinery — the stages are activities |
-| 4.6 | 🚧 **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change |
-| 4.6b | 🚧 **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm is fail-open today; ships with 4.6 |
+| 4.6 | ✅ **`chunks.tenant_id` + `document_id` FK** + RLS + isolation test | 0.35 | **Blocker for 4.7.** D4b — repairs the broken join in the same change. **Landed 2026-08-18** |
+| 4.6b | ✅ **Collection per tenant in the vector store** | 0.25 | **Second blocker.** D4c — the dense arm was fail-open; shipped with 4.6. **Landed 2026-08-18** |
 | 4.6c | **Parse quality gate** — heading histogram, order cross-check, fragment rate | 0.3 | D-parse. Docling fails silently on multi-column; the gate is how anyone finds out |
 | 4.7 | **Corpus-wide `keyword_recall`** on Postgres FTS | 0.5 | The largest quality gap. Gated on 4.6 |
 | 4.8 | `corpus_version` bump + cache invalidation | 0.25 | Plugs into Phase 1's seam |
@@ -638,6 +810,57 @@ and its error bar, not the library that printed it.
 additions above (+0.9). Honest rather than padded — see the cut order.
 
 Three of these have detail that does not fit a table row.
+
+### 4.0 — the spike, and the five things it corrected (macOS leg DONE 2026-08-18)
+
+**Installed:** `docling[rapidocr]==2.120.3` — pinned exactly, because a parser release moves
+reading order, heading levels and table structure, and chunks embedded under one version are
+not interchangeable with another. With it: `docling-core` 2.91.0, `docling-parse` 7.14.0,
+`docling-ibm-models` 3.14.0, `rapidocr` 3.9.2, `pypdfium2` 5.13.0, `torch` 2.13.0,
+`transformers` 5.8.1. **52 packages added, +816 MB in the venv** (1,469 → 2,285 MB), and two
+packages *downgraded* by the resolver: `tokenizers` 0.23.1 → 0.22.2 and `typer` 0.27.1 →
+0.26.8. Both are shared with chromadb / litellm / spacy / nemoguardrails; both suites pass
+after the downgrade, which is the only reason it is acceptable.
+
+**Model weights:** 730 MB, downloaded in 66.8 s into an empty directory
+(`spikes/docling_spike.py --prefetch <dir>`). Do this on the demo box while there is still
+network.
+
+**Five corrections, each measured rather than argued:**
+
+1. **s/page is corpus-dependent, and the planning number is 3× low.** 0.43–0.47 s/page on the
+   two papers; **2.87–3.20 s/page** on the two table-dense documents. See D1.
+2. **Peak RSS scales with the document**, not just with the models: **3.2–3.4 GB** on the 67-
+   and 126-page fixtures, against the 2.2 GB assumed. See D1.
+3. **Cold start is 3.1–3.7 s, not 50–120 s** — with the model cache primed. The 50–120 s is
+   the first download. See D4.
+4. **OCR is not 88% of runtime on this stack.** See D3.
+5. **Docling 2.120.3 already discards running headers and footers** on all four fixtures.
+   The raw text layer of `census-income-tables.pdf` carries
+   `"34 Poverty in the United States: 2022 U.S. Census Bureau"` on every page and
+   `irs-1040-instructions-tables.pdf` carries a bare page number plus
+   `"Need more information or forms? Visit IRS.gov."`; **neither reaches our blocks**, and no
+   item on any fixture came back labelled `page_header` or `page_footer`. So task 4.2's
+   stripper removed **nothing** on all four documents. It ships anyway, as a backstop for the
+   documents where furniture does survive — it removes parser-labelled furniture outright and
+   position-plus-repetition runs otherwise — and it is proved by unit tests over synthetic
+   blocks rather than by a fixture, which is stated here so nobody reads the fixture run as
+   evidence that it works.
+
+6. **Installing the parser broke the platform, and not through the parser.** Docling
+   brings torch; `presidio-analyzer` imports torch on sight; torch and xgboost cannot
+   share a process. Both suites segfaulted. See the new **D4a**, which is a blocker.
+
+**Where the code landed.** `aegis/src/aegis/ingestion/` — `blocks.py` (our vocabulary),
+`probe.py` (the text-layer probe and the OCR decision), `furniture.py` (the stripper),
+`convert.py` (the only module allowed to import Docling). Host wiring is
+`backend/src/app/ingestion/` (the D4 warm-up, gated on `DOCLING_WARM_ON_START`) called from
+`app.jobs.worker.run_workers` when this process serves the CPU queue.
+
+**Still outstanding: the Windows leg.** Every number above is macOS on an M3. 4.0 is not
+closed until the same script has been run on the demo box — total RSS with Postgres, Neo4j,
+Memurai and Temporal also resident is the number that decides whether one parse at a time is
+enough.
 
 ### 4.5 — `documents`, the upload route, and the `ingest_document` job (0.75d)
 
@@ -812,6 +1035,9 @@ into evidence.
 - [ ] Every citation's quoted span is verified verbatim against its chunk.
 - [ ] The ablation table A0→A4 exists with paired bootstrap intervals, and the slide states
       what n=50 can and cannot defend.
+- [ ] **A PII check, an ingest and an ML prediction in one process do not kill it** —
+      the `OMP_NUM_THREADS=1` pin of D4a is in place at every entry point. Two OpenMP
+      runtimes is a segfault, and a segfault is not a test failure, it is a dead demo.
 - [ ] Full suites green, ruff clean, `next build` green.
 
 ## 8. Demo at the end of this phase

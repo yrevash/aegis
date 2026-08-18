@@ -115,7 +115,7 @@ async def _write(sessionmaker, tenant_id: int, row) -> None:  # noqa: ANN001
 def test_every_table_this_module_maps_is_tenant_scoped_and_registered():
     """An unregistered tenant table looks governed from outside and is not."""
     tables = _jobs_tables()
-    assert {table.name for table in tables} == {"documents", "job_runs"}, (
+    assert {table.name for table in tables} == {"chunks", "documents", "job_runs"}, (
         "aegis.jobs.models mapped a table this suite does not know about; if it carries "
         "tenant_id it also needs a line in aegis.governance.rls._TENANT_SCOPED_TABLES"
     )

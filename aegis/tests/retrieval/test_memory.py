@@ -146,8 +146,12 @@ async def test_vector_recall_reads_back_through_chroma():
     )
     assert vector_list.candidates, "a corpus-overlapping query should hit Chroma vectors"
     # A direct store search returns the same nearest chunk id (proof it came from Chroma).
+    # The collection is derived from the scope, exactly as the backend derives it — this
+    # corpus is tenant-less, so that is the shared partition.
     q_vec = _local_embed(query)
-    hits = backend._vector_store.search(backend._collection, q_vec, 5)
+    collection = backend._collection_for(_SCOPE.tenant_value())
+    assert collection.endswith("_shared")
+    hits = backend._vector_store.search(collection, q_vec, 5)
     assert hits and hits[0].id == vector_list.candidates[0].id
 
 

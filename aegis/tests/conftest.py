@@ -35,6 +35,17 @@ test_tenant_isolation_live.py``, deliberately: one fixture design, not two.
 
 from __future__ import annotations
 
+# Before any import: this venv holds two OpenMP runtimes (torch's, via Docling and via
+# presidio-analyzer's device detector, and xgboost's/scikit-learn's), and one process
+# holding both segfaults or deadlocks depending on load order — measured 2026-08-18, and
+# it took this suite down at ~24%. ``OMP_NUM_THREADS=1`` is the only value that fixes it.
+# It must be set before the first OpenMP library loads, which is why it is here rather
+# than in a fixture. See ``backend/src/app/__init__.py`` for the full note.
+import os  # noqa: E402
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+
 import asyncio
 import getpass
 import os

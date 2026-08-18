@@ -10,12 +10,19 @@ enum) now live in the standalone ``aegis.ops.models`` on the shared
 :class:`aegis.data.AegisBase` metadata, and are re-exported here under their historical
 names so every ``from app.data.models import EvalResult`` call site is unchanged.
 
-The tables that still belong to the platform stay here on its own :class:`Base`:
-``Approval`` (agent HITL) and ``Chunk`` (retrieval). Their ``tenant_id`` is a plain indexed
-column (no cross-package foreign key to the now-separate ``aegis.governance`` ``tenants``
-table — mirroring how ``aegis.memory`` isolates at the query/RLS layer); the
-belt-and-suspenders tenant scoping + Postgres RLS provide the isolation, not a DDL foreign
-key.
+The **retrieval corpus** (``Chunk``) now lives in ``aegis.jobs.models`` beside the
+``Document`` it is parsed out of, on the same :class:`aegis.data.AegisBase` metadata, and
+is re-exported here under its historical name. It had to move: its ``document_id`` is a
+real ``ForeignKey`` with ``ON DELETE CASCADE``, and SQLAlchemy resolves a foreign key by
+name within **one** MetaData — a ``chunks`` on this ``Base`` could not reference a
+``documents`` on that one, so the relationship would have been a naming convention the
+database never checked.
+
+The table that still belongs to the platform stays here on its own :class:`Base`:
+``Approval`` (agent HITL). Its ``tenant_id`` is a plain indexed column (no cross-package
+foreign key to the now-separate ``aegis.governance`` ``tenants`` table — mirroring how
+``aegis.memory`` isolates at the query/RLS layer); the belt-and-suspenders tenant scoping
++ Postgres RLS provide the isolation, not a DDL foreign key.
 
 Both metadatas (this ``Base`` and ``AegisBase``) are created by ``app.data.session.bootstrap``.
 """
@@ -38,6 +45,7 @@ from aegis.governance.models import (
     UsageLedger,
     User,
 )
+from aegis.jobs.models import Chunk
 from aegis.ops.models import EvalResult, PromptStatus, PromptVersion
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import String, func
@@ -81,7 +89,7 @@ class ApprovalStatus(StrEnum):
 
 
 class Base(DeclarativeBase):
-    """Declarative base for the platform-owned tables (approvals/chunks/evals/prompts).
+    """Declarative base for the platform-owned tables (the approvals inbox).
 
     The tenancy/governance tables live on :class:`aegis.data.AegisBase` (via
     ``aegis.governance.models``); the host creates both metadatas at bootstrap.
@@ -138,24 +146,7 @@ class Approval(Base):
     decided_by: Mapped[str | None] = mapped_column(String(255), default=None)
 
 
-class Chunk(Base):
-    """A retrievable text chunk plus its embedding-of-record (reused by retrieval).
-
-    The embedding column is the durable JSON source-of-record for chunk vectors; the
-    retrieval pipeline writes here at ingest time. Nearest-neighbour (ANN) search runs
-    in the embedded vector store — this column is the mirror source, not a search index.
-    """
-
-    __tablename__ = "chunks"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    doc_id: Mapped[str] = mapped_column(String(255), index=True)
-    persona: Mapped[str | None] = mapped_column(String(128), default=None, index=True)
-    content: Mapped[str] = mapped_column(String())
-    embedding: Mapped[list[float]] = mapped_column(VectorColumn(EMBED_DIM))
-    meta: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
-
-
-# ``EvalResult`` / ``PromptStatus`` / ``PromptVersion`` are imported from
-# ``aegis.ops.models`` (on ``aegis.data.AegisBase``) and re-exported above under their
-# historical names. Backend ``create_all`` covers them via the ``AegisBase`` metadata.
+# ``Chunk`` / ``EvalResult`` / ``PromptStatus`` / ``PromptVersion`` are imported from
+# ``aegis.jobs.models`` / ``aegis.ops.models`` (both on ``aegis.data.AegisBase``) and
+# re-exported above under their historical names. Backend ``create_all`` covers them via
+# the ``AegisBase`` metadata.
