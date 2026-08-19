@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from aegis.gateway.routing import tenant_selectable_deployments
 from aegis.governance.rls import set_tenant_scope
 from aegis.settings import (
     SettingNotReadableError,
@@ -33,6 +34,13 @@ from aegis.settings import (
 from aegis.settings.models import Setting
 
 from .._seed import ensure_tenants, ensure_users
+
+#: Four real deployments from the platform's allowed set, used wherever this suite
+#: needs distinguishable values for ``agent.model``. Read off the fleet rather than
+#: spelled out: the key's domain is the platform's to decide (§7.16 row 6), so a
+#: literal here would be a fifth copy of a set whose whole point is that there is one.
+_MODELS = tenant_selectable_deployments()
+_PLATFORM_MODEL, _TENANT_MODEL, _USER_MODEL, _OTHER_MODEL = _MODELS[:4]
 
 _TENANT = 601
 _OTHER_TENANT = 602
@@ -283,30 +291,30 @@ async def test_resolve_reports_the_scope_that_actually_decided_the_value(db):
     )
 
     await _write(
-        db, "agent.model", "tenant-choice", scope=SettingScope.PLATFORM, role="platform_admin"
+        db, "agent.model", _PLATFORM_MODEL, scope=SettingScope.PLATFORM, role="platform_admin"
     )
     assert await _resolve(db, "agent.model", tenant_id=_TENANT, user_id=_USER) == (
-        "tenant-choice",
+        _PLATFORM_MODEL,
         "platform",
     )
 
     await _write(
         db,
         "agent.model",
-        "the-tenants",
+        _TENANT_MODEL,
         scope=SettingScope.TENANT,
         role="tenant_admin",
         tenant_id=_TENANT,
     )
     assert await _resolve(db, "agent.model", tenant_id=_TENANT, user_id=_USER) == (
-        "the-tenants",
+        _TENANT_MODEL,
         "tenant",
     )
 
     await _write(
         db,
         "agent.model",
-        "mine",
+        _USER_MODEL,
         scope=SettingScope.USER,
         role="client",
         tenant_id=_TENANT,
@@ -314,12 +322,12 @@ async def test_resolve_reports_the_scope_that_actually_decided_the_value(db):
         actor=_USER,
     )
     assert await _resolve(db, "agent.model", tenant_id=_TENANT, user_id=_USER) == (
-        "mine",
+        _USER_MODEL,
         "user",
     )
     # …and another user in the same tenant still sees the tenant's choice.
     assert await _resolve(db, "agent.model", tenant_id=_TENANT, user_id=_OTHER_USER) == (
-        "the-tenants",
+        _TENANT_MODEL,
         "tenant",
     )
 
@@ -328,7 +336,7 @@ async def test_one_tenants_setting_is_invisible_to_another(db):
     await _write(
         db,
         "agent.model",
-        "acme-only",
+        _OTHER_MODEL,
         scope=SettingScope.TENANT,
         role="tenant_admin",
         tenant_id=_TENANT,
@@ -361,7 +369,7 @@ async def test_a_business_user_may_set_their_own_preference_but_not_the_tenants(
         await _write(
             db,
             "agent.model",
-            "everyones",
+            _OTHER_MODEL,
             scope=SettingScope.TENANT,
             role="client",
             tenant_id=_TENANT,
@@ -371,14 +379,14 @@ async def test_a_business_user_may_set_their_own_preference_but_not_the_tenants(
     row = await _write(
         db,
         "agent.model",
-        "mine",
+        _USER_MODEL,
         scope=SettingScope.USER,
         role="client",
         tenant_id=_TENANT,
         user_id=_USER,
         actor=_USER,
     )
-    assert row.value == "mine"
+    assert row.value == _USER_MODEL
 
 
 async def test_a_user_cannot_write_another_users_setting(db):
@@ -386,7 +394,7 @@ async def test_a_user_cannot_write_another_users_setting(db):
         await _write(
             db,
             "agent.model",
-            "not-yours",
+            _OTHER_MODEL,
             scope=SettingScope.USER,
             role="client",
             tenant_id=_TENANT,
@@ -412,7 +420,7 @@ async def test_a_user_scoped_row_without_a_tenant_is_refused(db):
         await _write(
             db,
             "agent.model",
-            "orphan",
+            _OTHER_MODEL,
             scope=SettingScope.USER,
             role="client",
             tenant_id=None,
@@ -469,7 +477,7 @@ async def test_resolve_all_returns_every_readable_key_with_its_source(db):
     await _write(
         db,
         "agent.model",
-        "the-tenants",
+        _TENANT_MODEL,
         scope=SettingScope.TENANT,
         role="tenant_admin",
         tenant_id=_TENANT,
@@ -484,13 +492,13 @@ async def test_resolve_all_returns_every_readable_key_with_its_source(db):
         )
         await session.rollback()
 
-    assert admin_view["agent.model"] == ("the-tenants", "tenant")
+    assert admin_view["agent.model"] == (_TENANT_MODEL, "tenant")
     assert admin_view["agent.gate_min_risk"] == ("high", "platform")
     assert "jobs.max_inflight.ingest" in admin_view
     # A client sees the same values for the keys it may read, and simply does not get
     # the operator-only one — a screen with one unreadable key is not a blank screen.
     assert "jobs.max_inflight.ingest" not in client_view
-    assert client_view["agent.model"] == ("the-tenants", "tenant")
+    assert client_view["agent.model"] == (_TENANT_MODEL, "tenant")
 
 
 async def test_writing_the_same_key_twice_updates_the_one_row(db):
@@ -498,7 +506,7 @@ async def test_writing_the_same_key_twice_updates_the_one_row(db):
     await _write(
         db,
         "agent.model",
-        "first",
+        _PLATFORM_MODEL,
         scope=SettingScope.TENANT,
         role="tenant_admin",
         tenant_id=_TENANT,
@@ -506,7 +514,7 @@ async def test_writing_the_same_key_twice_updates_the_one_row(db):
     await _write(
         db,
         "agent.model",
-        "second",
+        _TENANT_MODEL,
         scope=SettingScope.TENANT,
         role="tenant_admin",
         tenant_id=_TENANT,
@@ -518,4 +526,4 @@ async def test_writing_the_same_key_twice_updates_the_one_row(db):
                 Setting.__table__.select().where(Setting.key == "agent.model")
             )
         ).all()
-    assert [row.value for row in rows] == ["second"]
+    assert [row.value for row in rows] == [_TENANT_MODEL]

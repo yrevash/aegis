@@ -25,6 +25,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
+from aegis.gateway.routing import (
+    DeploymentNotAllowedError,
+    deployment_for_choice,
+    selected_deployment,
+)
 from aegis.ml import MLModelUnavailableError
 from aegis.retrieval.types import (
     AllTenants,
@@ -172,6 +177,7 @@ from app.data import (
     DuplicateTenantError,
     DuplicateUserError,
     LastPlatformAdminError,
+    UserCapAboveTenantCapError,
     count_approved,
     create_tenant,
     create_user,
@@ -598,6 +604,64 @@ async def _resolve_governance(auth: AuthContext) -> GovernanceContext:
         role=auth.role,
         limits=limits,
     )
+
+
+async def _resolve_model_choice(auth: AuthContext) -> str | None:
+    """Return the deployment this run must use, or ``None`` for the platform's routing.
+
+    **This is what makes ``agent.model`` a control rather than a dropdown (§7.16 row 6).**
+    The tenant's (or the user's) preference is resolved here, where the tenant is finally
+    known, and validated against the platform's own allowed-deployment set — the same set
+    :func:`aegis.gateway.routing.tenant_model_choices` renders the control from, so the
+    enum on the screen is a projection of the enforcement and not a second copy of it.
+
+    Two failures are told apart deliberately:
+
+    * **The preference cannot be read at all** (no store, no tenant, an unreachable
+      database) — nothing is selected, so the run uses the platform's own routed model.
+      That is the safe answer rather than a weakening: the platform's model is the
+      approved one, and it is the model every run used before this control existed.
+    * **A preference is read and names a deployment tenants may not select** — refused,
+      loudly, naming it. Serving that run on a different model under the same name is
+      exactly the "enforced by a dropdown, bypassed by a curl" the row warns about, and
+      falling back quietly would hide from the tenant that their choice is not in force.
+
+    Raises:
+        HTTPException: 409 when a stored preference names a deployment the platform no
+            longer offers to tenants.
+    """
+    if auth.tenant_id is None or not get_settings().stores_enabled:
+        return None
+    from aegis.settings import resolve as resolve_setting
+
+    from app.data.session import get_sessionmaker, set_tenant_scope
+
+    try:
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, auth.tenant_id)
+            choice, _source = await resolve_setting(
+                session, "agent.model", tenant_id=auth.tenant_id, user_id=auth.user_id
+            )
+            await session.rollback()
+    except Exception:  # noqa: BLE001 - an unreadable preference is not a reason to fail
+        logger.error(  # noqa: TRY400
+            "Could not resolve agent.model for tenant %s; the run uses the platform's "
+            "own routed deployment, which is the approved one.",
+            auth.tenant_id,
+            exc_info=True,
+        )
+        return None
+    try:
+        return deployment_for_choice(choice)
+    except DeploymentNotAllowedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This tenant's model preference is {choice!r}, which the platform does "
+                f"not offer to tenants: {exc} The run was not started on a different "
+                "model in its place; an admin must change the preference."
+            ),
+        ) from exc
 
 
 def _resolve_persona(requested: str | None, auth: AuthContext) -> str:
@@ -1193,6 +1257,10 @@ async def query(
     # context inside the streaming task so the LiteLLM chokepoint (core.llm.complete)
     # can enforce budgets/rates and write the usage ledger for this run (§3.3).
     governance = await _resolve_governance(auth)
+    # The tenant's chosen deployment, validated against the platform's allowed set
+    # BEFORE the stream opens, so a refusal is an HTTP status and not a half-sent
+    # SSE stream that has already been charged for.
+    model_choice = await _resolve_model_choice(auth)
 
     # The chat transcript's tenant *and* its owner, resolved exactly as every scoped
     # read resolves them. ``None`` for the tenant can only have come from ALL_TENANTS; a
@@ -1218,37 +1286,45 @@ async def query(
         token = set_governance_context(governance)
         answer: list[str] = []
         try:
-            async for event in run_agent(
-                req.query,
-                persona=persona,
-                role=auth.role.value,
-                deps=deps,
-                registry=get_approval_registry(),
-                session_id=req.session_id,
-                memory_subject=memory_subject,
-                # Validated in ``QueryRequest``, honoured in ``decide_depth``, and
-                # narrowed only by the tenant's cap (reported as `platform_cap`). This
-                # route passes them and decides nothing.
-                depth_mode=req.depth_mode,
-                requested_fanout=req.requested_fanout,
-            ):
-                _update_dashboards(event, graph_store, metrics, persona)
-                if event.type == "token":
-                    answer.append(event.text)
-                elif (
-                    event.type == "run_finished"
-                    and transcript is not None
-                    and chat_owner is not None
+            # Bound to this run exactly as the governance context is, and for the same
+            # reason: the gateway is process-wide and shared by every tenant, so one
+            # tenant's model must not outlive their stream. It rewrites the deployment
+            # for the answer role ONLY — the classifier the rails judge this tenant by
+            # is not theirs to choose (§7.16 row 7).
+            with selected_deployment(model_choice):
+                async for event in run_agent(
+                    req.query,
+                    persona=persona,
+                    role=auth.role.value,
+                    deps=deps,
+                    registry=get_approval_registry(),
+                    session_id=req.session_id,
+                    memory_subject=memory_subject,
+                    # Validated in ``QueryRequest``, honoured in ``decide_depth``, and
+                    # narrowed only by the tenant's cap (reported as `platform_cap`).
+                    # This route passes them and decides nothing.
+                    depth_mode=req.depth_mode,
+                    requested_fanout=req.requested_fanout,
                 ):
-                    await _safe_chat_turn(
-                        transcript,
-                        role="assistant",
-                        content="".join(answer),
-                        tenant_id=chat_tenant,
-                        user_id=chat_owner,
-                        run_id=event.run_id,
+                    _update_dashboards(event, graph_store, metrics, persona)
+                    if event.type == "token":
+                        answer.append(event.text)
+                    elif (
+                        event.type == "run_finished"
+                        and transcript is not None
+                        and chat_owner is not None
+                    ):
+                        await _safe_chat_turn(
+                            transcript,
+                            role="assistant",
+                            content="".join(answer),
+                            tenant_id=chat_tenant,
+                            user_id=chat_owner,
+                            run_id=event.run_id,
+                        )
+                    yield ServerSentEvent(
+                        event=event.type, data=event.model_dump_json()
                     )
-                yield ServerSentEvent(event=event.type, data=event.model_dump_json())
         finally:
             reset_governance_context(token)
 
@@ -1943,6 +2019,23 @@ async def admin_budgets_upsert(
     A tenant-admin may only set a cap owned by its *own* tenant — both **tenant**-
     scoped caps (H3 pre-existing) and **user**-scoped caps, whose target user's
     tenant is resolved and checked. Platform-admins may set any.
+
+    **A user sub-cap above its tenant's is refused (§7.16 row 2), not stored.** The
+    effective limit was always clamped inward, so the row saved happily and $500 read
+    back off a screen where $50 was what bound — a control whose displayed value is not
+    the value in force, which is the ``gate_min_risk`` defect again. The refusal is the
+    data layer's (:class:`~aegis.governance.enforcement.UserCapAboveTenantCapError`) and
+    its sentence names the tenant cap that binds; this route chooses the status code and
+    nothing else. It is a **422**, not a 403: no role may store a figure that can never
+    apply, so it is a statement about the value and not about the writer's authority.
+
+    The mirror case is handled where it happens rather than here: lowering a *tenant*
+    cap beneath an existing sub-cap narrows that sub-cap in the same transaction, so
+    neither write path can leave a stored cap above the one that binds it.
+
+    Raises:
+        HTTPException: 403 on a cross-tenant write; 422 on a sub-cap above the tenant
+            cap; 404 when a user-scoped cap names an unknown user.
     """
     owning_tenant = await _resolve_budget_tenant(req, auth)
     try:
@@ -1968,6 +2061,23 @@ async def admin_budgets_upsert(
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except UserCapAboveTenantCapError as exc:
+        # The write-time half of §7.16 row 2. Audited as a denial like the cross-tenant
+        # case: an operator repeatedly trying to raise a cap they do not own is exactly
+        # the pattern a governance review asks to see.
+        await _safe_audit(
+            "admin.budget.upsert.denied",
+            auth,
+            payload={
+                "scope_type": req.scope_type,
+                "scope_id": req.scope_id,
+                "reason": "user_cap_above_tenant_cap",
+            },
+            tenant_id=owning_tenant,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
     await _safe_audit(
         "admin.budget.upsert",

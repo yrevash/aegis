@@ -21,12 +21,13 @@ callers never thread a session through their signatures. All sums use
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,6 +57,7 @@ __all__ = [
     "DuplicateTenantError",
     "DuplicateUserError",
     "LastPlatformAdminError",
+    "UserCapAboveTenantCapError",
     "configure_enforcement",
     "create_tenant",
     "create_user",
@@ -74,6 +76,8 @@ __all__ = [
 # ─────────────────────────────────────────────────────────────────────────────
 # Injected host wiring — the session factory + the RLS scope binder.
 # ─────────────────────────────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
 
 _SessionFactory = Callable[[], AsyncSession]
 _SetTenantScope = Callable[[AsyncSession, int | None], Awaitable[None]]
@@ -155,6 +159,13 @@ def _clamp_inward(user_cap: int | float | None, tenant_cap: int | float | None):
 
     ``None`` means uncapped, so a present cap always binds over an absent one and two
     present caps resolve to their minimum — the inward-enforcement semantics.
+
+    **Defence in depth, not the only defence.** :func:`upsert_budget` now refuses to
+    *store* a user sub-cap above its tenant's, so in a healthy database this clamp has
+    nothing to clamp. It stays because the two answer different questions: the write
+    guard makes the stored number and the enforced number agree, and this makes the
+    enforced number safe whatever is in the row — a row written before the guard
+    existed, by a migration, or by hand.
     """
     caps = [c for c in (user_cap, tenant_cap) if c is not None]
     return min(caps) if caps else None
@@ -575,6 +586,24 @@ class CrossTenantBudgetError(RuntimeError):
     """
 
 
+class UserCapAboveTenantCapError(ValueError):
+    """Raised when a user sub-cap would be **stored** above the tenant cap that binds it.
+
+    §7.16 row 2 — *"a tenant admin may set sub-caps on their own users, always <= the
+    tenant cap"* — reads two ways, and only one of them used to hold. The *effective*
+    limit was always inward (:func:`_clamp_inward`), but the *stored* one was whatever
+    was posted: a tenant admin could set a user's cap to $500 under a $50 tenant cap,
+    the row saved, the budgets screen read back $500, and $50 was what bound. A
+    control whose displayed value is not the value in force is the ``gate_min_risk``
+    defect wearing a budget's clothes, so the write is refused here rather than silently
+    clamped at read time.
+
+    A ``ValueError`` because it is a statement about the *value*, not about the writer's
+    authority: no role — tenant admin or platform admin — may store a cap that cannot
+    bind, so this is never a 403.
+    """
+
+
 class LastPlatformAdminError(RuntimeError):
     """Raised when a role change would remove the platform's last platform-admin.
 
@@ -657,6 +686,152 @@ def _budget_row(b: Budget) -> BudgetRow:
     )
 
 
+#: The four cap columns a budget row carries, and how each is spelled to an operator.
+#: Derived nowhere and listed once: a fifth cap added to :class:`Budget` without an
+#: entry here would be the one field a user could still store above its tenant's.
+_CAP_FIELDS: tuple[tuple[str, str], ...] = (
+    ("token_cap", "tokens"),
+    ("usd_cap", "usd"),
+    ("rpm", "count"),
+    ("tpm", "count"),
+)
+
+
+def _spell_cap(value: float | int, unit: str) -> str:
+    """Render a cap the way an operator reads it on the budgets screen."""
+    return f"${value:,.2f}" if unit == "usd" else f"{value:,}"
+
+
+async def _tenant_cap_row(
+    session: AsyncSession, *, tenant_id: int | None, window: BudgetWindow
+) -> Budget | None:
+    """Return the tenant-scoped cap governing ``window``, or ``None`` if uncapped.
+
+    The comparison is **same-window**, deliberately: a monthly tenant cap and a daily
+    user cap are different quantities, and refusing a $50/day user cap because the
+    tenant's *month* is capped at $40 would be arithmetic nobody could defend.
+    :func:`enforce_governance` measures each row over its own window for the same
+    reason.
+    """
+    if tenant_id is None:
+        return None
+    return (
+        (
+            await session.execute(
+                select(Budget).where(
+                    Budget.scope_type == BudgetScope.TENANT,
+                    Budget.scope_id == tenant_id,
+                    Budget.window == window,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
+async def _refuse_user_cap_above_tenant(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    window: BudgetWindow,
+    caps: dict[str, int | float | None],
+    fallback_tenant: int | None,
+) -> None:
+    """Refuse a user sub-cap that the tenant cap would override, naming that cap.
+
+    The governing tenant is read from the ``users`` row rather than trusted from the
+    caller: the API layer resolves it too, but the data layer must not depend on that —
+    the same reason :class:`CrossTenantBudgetError` is raised here and not only upstream.
+    ``fallback_tenant`` is used only when there is no such user row to read (a cap
+    written for a principal the users table does not know).
+
+    Raises:
+        UserCapAboveTenantCapError: When any of the four caps is above its tenant's.
+    """
+    user = await session.get(User, user_id)
+    governing = user.tenant_id if user is not None else fallback_tenant
+    tenant_row = await _tenant_cap_row(session, tenant_id=governing, window=window)
+    if tenant_row is None:
+        return
+    clauses: list[str] = []
+    for field, unit in _CAP_FIELDS:
+        asked = caps.get(field)
+        binds = getattr(tenant_row, field)
+        if asked is not None and binds is not None and asked > binds:
+            clauses.append(
+                f"{field} {_spell_cap(asked, unit)} is above tenant {governing}'s "
+                f"{_spell_cap(binds, unit)}"
+            )
+    if not clauses:
+        return
+    raise UserCapAboveTenantCapError(
+        f"{'; '.join(clauses)} for the {window.value} window. A user sub-cap can never "
+        "exceed the cap on its own tenant — the tenant's figure is what binds — so the "
+        "larger number would be stored, shown back to you, and never reached. Lower it "
+        "to the tenant cap, or raise the tenant cap first."
+    )
+
+
+async def _narrow_user_caps_to_tenant(
+    session: AsyncSession,
+    *,
+    tenant_id: int,
+    window: BudgetWindow,
+    caps: dict[str, int | float | None],
+) -> None:
+    """Pull this tenant's user sub-caps down to a tenant cap that has just been lowered.
+
+    **The ordering hazard, decided.** A write-time refusal on the *user* path alone
+    leaves the same lie reachable from the *tenant* path: set a $500 user cap under a
+    $1000 tenant cap (legal), then lower the tenant to $50, and the $500 row is
+    back — stored, displayed, and not what binds. The alternatives were to refuse the
+    tenant write (which would make a tenant admin's own sub-caps a lock on tightening
+    their tenant, exactly backwards) or to leave the rows alone (the lie). So a tenant
+    cap that moves **takes its sub-caps with it**, in the same transaction as the write
+    that moved it: after any tenant write, every user sub-cap of that tenant is at most
+    the tenant's own, which is the invariant the refusal above enforces from the other
+    side.
+
+    Only *downward*: raising a tenant cap leaves sub-caps where their admin set them.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(Budget)
+                .outerjoin(User, User.id == Budget.scope_id)
+                .where(
+                    Budget.scope_type == BudgetScope.USER,
+                    Budget.window == window,
+                    or_(Budget.tenant_id == tenant_id, User.tenant_id == tenant_id),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        narrowed: list[str] = []
+        for field, unit in _CAP_FIELDS:
+            binds = caps.get(field)
+            stored = getattr(row, field)
+            if binds is not None and stored is not None and stored > binds:
+                setattr(row, field, binds)
+                narrowed.append(
+                    f"{field} {_spell_cap(stored, unit)} -> {_spell_cap(binds, unit)}"
+                )
+        if narrowed:
+            logger.warning(
+                "Tenant %s's %s cap was lowered beneath user %s's sub-cap; the sub-cap "
+                "was narrowed with it (%s) so the stored figure stays the figure that "
+                "binds.",
+                tenant_id,
+                window.value,
+                row.scope_id,
+                ", ".join(narrowed),
+            )
+
+
 async def upsert_budget(
     *,
     scope_type: str,
@@ -723,6 +898,21 @@ async def upsert_budget(
                 f"budget {scope_type}:{scope_id}/{window} is owned by tenant "
                 f"{existing.tenant_id}; tenant {tenant_id} may not overwrite it"
             )
+        caps: dict[str, int | float | None] = {
+            "token_cap": token_cap,
+            "usd_cap": usd_cap,
+            "rpm": rpm,
+            "tpm": tpm,
+        }
+        if scope is BudgetScope.USER:
+            # Refuse a figure that could never bind, BEFORE it is stored and read back.
+            await _refuse_user_cap_above_tenant(
+                session,
+                user_id=scope_id,
+                window=win,
+                caps=caps,
+                fallback_tenant=tenant_id,
+            )
         if existing is None:
             existing = Budget(scope_type=scope, scope_id=scope_id, window=win)
             session.add(existing)
@@ -734,6 +924,12 @@ async def upsert_budget(
         existing.usd_cap = usd_cap
         existing.rpm = rpm
         existing.tpm = tpm
+        if scope is BudgetScope.TENANT:
+            # The other half of the same invariant: a tenant cap that moves down takes
+            # every sub-cap it now overrides with it, in this transaction.
+            await _narrow_user_caps_to_tenant(
+                session, tenant_id=scope_id, window=win, caps=caps
+            )
         await session.commit()
         await session.refresh(existing)
         return _budget_row(existing)

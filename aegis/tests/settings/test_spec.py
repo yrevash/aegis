@@ -217,15 +217,21 @@ def test_a_key_is_declared_inert_exactly_when_nothing_binds_it():
     """The catalogue is where "does this control do anything?" is answered, once.
 
     Six keys once saved, wrote an audit row and badged themselves "Your setting" while
-    reaching nothing. Four of them now bind — through
+    reaching nothing. Five of them now bind — four through
     :data:`aegis.settings.agent.AGENT_SETTING_BINDINGS` and
-    :data:`aegis.settings.guardrails.GUARDRAIL_SETTING_BINDINGS` — and the two that do
-    not (``agent.model``, ``agent.mode``, both request-level ``OVERRIDE`` preferences
-    with no request field to carry them) say so in the one place every layer reads.
+    :data:`aegis.settings.guardrails.GUARDRAIL_SETTING_BINDINGS`, and ``agent.model``
+    through the platform's allowed-deployment set (§7.16 row 6), which is why it is
+    absent from ``bound`` below and still not inert: an ``OVERRIDE`` request-level
+    preference is resolved and applied per run at the host's gateway seam, not folded
+    onto the process-wide ``AgentConfig``. The one that remains (``agent.mode``, whose
+    vocabulary does not line up with ``DepthMode``'s) says so in the one place every
+    layer reads.
 
-    Drop the ``inert_reason`` from either without giving it a consumer and the control
-    goes back to claiming it works; add a binding for one without clearing the reason
-    and the import-time check in the binding module fails first.
+    Drop the ``inert_reason`` from it without giving it a consumer and the control goes
+    back to claiming it works; add a binding for it without clearing the reason and the
+    import-time check in the binding module fails first. The converse — a key that is
+    live but read by nothing — is caught in ``test_forbidden_controls.py``, which scans
+    the source trees for a reader rather than trusting a list here.
     """
     from aegis.settings.agent import AGENT_SETTING_BINDINGS
     from aegis.settings.guardrails import GUARDRAIL_SETTING_BINDINGS
@@ -236,7 +242,7 @@ def test_a_key_is_declared_inert_exactly_when_nothing_binds_it():
     inert = {spec.key for spec in SETTING_SPECS if not spec.effective}
 
     assert bound & inert == set(), f"bound and declared inert: {sorted(bound & inert)}"
-    assert inert == {"agent.model", "agent.mode"}, (
+    assert inert == {"agent.mode"}, (
         "the set of controls that change nothing moved; every member needs an "
         f"inert_reason naming what would make it live: {sorted(inert)}"
     )

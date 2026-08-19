@@ -31,6 +31,7 @@ from aegis.governance import (
     Tenant,
     UsageLedger,
     User,
+    UserCapAboveTenantCapError,
     effective_limits,
     enforce_governance,
     enforcement,
@@ -368,6 +369,115 @@ async def test_platform_admin_may_overwrite_and_does_not_erase_the_owner_stamp(d
     assert updated.id == owned.id and updated.token_cap == 300
     # Still listed under tenant 1 — an unscoped write must not orphan the row.
     assert [r.id for r in await list_budgets(tenant_id=1)] == [owned.id]
+
+
+# ── §7.16 row 2: a stored sub-cap can never be a figure that does not bind ────
+
+
+async def test_a_user_sub_cap_above_the_tenant_cap_is_refused_rather_than_stored(db):
+    """The write-time half of row 2, which is the half that used to be missing.
+
+    ``_clamp_inward`` always made the *effective* limit inward, so this row saved
+    happily and the budgets screen read back $500 while $50 was what bound. The refusal
+    names the tenant cap that binds, because "invalid" would leave the operator to guess
+    which of the four caps and whose figure they collided with.
+    """
+    await ensure_tenants(db, 1)
+    await ensure_users(db, u42=1)
+    await upsert_budget(scope_type="tenant", scope_id=1, usd_cap=50.0, tenant_id=1)
+
+    with pytest.raises(UserCapAboveTenantCapError) as caught:
+        await upsert_budget(scope_type="user", scope_id=42, usd_cap=500.0, tenant_id=1)
+    message = str(caught.value)
+    assert "$500.00" in message and "$50.00" in message and "tenant 1" in message
+
+    # Refused, not partially written: there is no user row at all to read back.
+    assert [r.scope_type for r in await list_budgets(tenant_id=1)] == ["tenant"]
+
+
+async def test_a_user_sub_cap_at_or_under_the_tenant_cap_still_writes(db):
+    """The other side of the boundary — an over-eager guard is its own defect.
+
+    Equality is legal (the row says "always <= the tenant cap"), an absent tenant cap
+    constrains nothing, and the comparison is same-window: a *monthly* tenant cap is a
+    different quantity from a daily sub-cap and must not refuse one.
+    """
+    await ensure_tenants(db, 1)
+    await ensure_users(db, u42=1, u43=1)
+    await upsert_budget(scope_type="tenant", scope_id=1, usd_cap=50.0, tenant_id=1)
+
+    at_the_cap = await upsert_budget(
+        scope_type="user", scope_id=42, usd_cap=50.0, tenant_id=1
+    )
+    assert at_the_cap.usd_cap == 50.0
+    # A different window is not the same cap, and is not measured against it.
+    monthly = await upsert_budget(
+        scope_type="user", scope_id=43, window="month", usd_cap=500.0, tenant_id=1
+    )
+    assert monthly.usd_cap == 500.0
+
+
+async def test_every_cap_column_is_guarded_not_only_the_usd_one(db):
+    """A guard on one column leaves the same lie reachable through the other three."""
+    await ensure_tenants(db, 1)
+    await ensure_users(db, u42=1)
+    await upsert_budget(
+        scope_type="tenant", scope_id=1, token_cap=100, usd_cap=5.0, rpm=10, tpm=1_000,
+        tenant_id=1,
+    )
+    for field, value in (
+        ("token_cap", 1_000),
+        ("usd_cap", 50.0),
+        ("rpm", 100),
+        ("tpm", 10_000),
+    ):
+        with pytest.raises(UserCapAboveTenantCapError, match=field):
+            await upsert_budget(
+                scope_type="user", scope_id=42, tenant_id=1, **{field: value}
+            )
+
+
+async def test_lowering_the_tenant_cap_narrows_the_sub_caps_it_now_overrides(db):
+    """The ordering hazard: the same lie, reached from the *tenant* write path.
+
+    $500 under a $1000 tenant cap is legal when it is written. Lowering the tenant to
+    $50 afterwards would leave that $500 stored, displayed, and not what binds — the
+    identical defect, arrived at in two steps instead of one. So a tenant cap that moves
+    down takes its sub-caps with it, in the same transaction as the write that moved it.
+    """
+    await ensure_tenants(db, 1)
+    await ensure_users(db, u42=1, u43=1)
+    await upsert_budget(scope_type="tenant", scope_id=1, usd_cap=1_000.0, tenant_id=1)
+    await upsert_budget(scope_type="user", scope_id=42, usd_cap=500.0, tenant_id=1)
+    await upsert_budget(scope_type="user", scope_id=43, usd_cap=20.0, tenant_id=1)
+
+    await upsert_budget(scope_type="tenant", scope_id=1, usd_cap=50.0, tenant_id=1)
+
+    stored = {
+        (r.scope_type, r.scope_id): r.usd_cap for r in await list_budgets(tenant_id=1)
+    }
+    assert stored[("user", 42)] == 50.0, "the sub-cap above the new tenant cap survived"
+    assert stored[("user", 43)] == 20.0, "a sub-cap already under the cap was moved"
+    # And the invariant now holds from the other side too: the narrowed row is a legal
+    # write, so re-posting it is accepted rather than refused by the guard above.
+    assert (await upsert_budget(
+        scope_type="user", scope_id=42, usd_cap=50.0, tenant_id=1
+    )).usd_cap == 50.0
+
+
+async def test_raising_the_tenant_cap_leaves_the_sub_caps_where_their_admin_set_them(db):
+    """Narrowing is one-directional; a sub-cap is a decision, not a percentage."""
+    await ensure_tenants(db, 1)
+    await ensure_users(db, u42=1)
+    await upsert_budget(scope_type="tenant", scope_id=1, usd_cap=50.0, tenant_id=1)
+    await upsert_budget(scope_type="user", scope_id=42, usd_cap=20.0, tenant_id=1)
+
+    await upsert_budget(scope_type="tenant", scope_id=1, usd_cap=1_000.0, tenant_id=1)
+
+    stored = {
+        (r.scope_type, r.scope_id): r.usd_cap for r in await list_budgets(tenant_id=1)
+    }
+    assert stored[("user", 42)] == 20.0
 
 
 async def test_upsert_budget_binds_the_tenant_scope(db, scope_spy):

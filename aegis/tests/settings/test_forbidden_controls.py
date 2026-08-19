@@ -25,13 +25,17 @@ What is proven here, by row:
   asked for at all. One data-driven refusal table, because "there is no such key" is the
   same assertion six times and a sixteenth key called ``agent.tools`` is how it stops
   being true.
-* **6** — reported as **NOT ENFORCED**, and asserted as such. The row says the server
-  validates a model override against the platform's allowed deployments; there is no
-  such set anywhere in the repo (:func:`aegis.gateway.routing.routing_table` maps a role
-  to *one* deployment — it is not a list of alternatives), ``QueryRequest`` has no field
-  to carry an override, and ``agent.model`` is declared ``inert_reason`` precisely
-  because of that. The assertion here fails the day somebody makes the key live without
-  building the set, which is the honest form of "a UI enum is not enforcement".
+* **6** — the allowed-deployment set exists and is what decides. It used to be reported
+  as NOT ENFORCED, because there was no such set anywhere in the repo
+  (:func:`aegis.gateway.routing.routing_table` maps a role to *one* deployment — a
+  routing decision, not a list of alternatives) and ``agent.model`` carried an
+  ``inert_reason`` saying so. The set is now
+  :data:`aegis.gateway.routing._FLEET_DECLARATION`; the catalogue **reads** its legal
+  values from it rather than restating them, so the enum a screen renders is a
+  projection of the check every write goes through; the choice is re-validated at the
+  point of use so a row that predates a withdrawal cannot take effect; no deployment on
+  a role the host's own safety layers call is selectable at all (row 7 held against row
+  6); and the ledger prices the deployment that answered rather than its tier.
 
 Rows **5** (``_scope_tenant``), **11** (``check_input`` before storage), **13**
 (``require_devops`` on a live red-team run) and **15** (``admin_create_user``) are
@@ -52,6 +56,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from aegis.core.models import ModelRole
 from aegis.governance.rls import set_tenant_scope
 from aegis.governance.security import TENANT_ADMIN
 from aegis.guardrails.policy import GuardrailPolicy
@@ -71,6 +76,7 @@ from aegis.settings.spec import (
     MergeRule,
     SettingSpec,
     Strictness,
+    setting_controls,
     spec_for,
     strictest,
     strictest_legal,
@@ -491,7 +497,7 @@ def test_no_catalogue_key_exists_for_a_control_a_tenant_must_never_have(row, fra
 
 
 def test_row_2_a_user_sub_cap_above_the_tenant_cap_can_never_bind():
-    """Row 2 has two readings, and only one of them is true. This is the true one.
+    """Row 2 has two readings, and **both** now hold. This is the resolution half.
 
     *"A tenant admin may set sub-caps on their own users, always <= the tenant cap"*
     reads two ways:
@@ -503,13 +509,17 @@ def test_row_2_a_user_sub_cap_above_the_tenant_cap_can_never_bind():
       nothing. The chokepoint agrees by a second, independent route:
       ``enforce_governance`` checks **every** governing row, and the tenant row is
       measured against the whole tenant's ledger, so it trips first by arithmetic.
-    * **a sub-cap above the tenant cap cannot be stored** — this does **not** hold.
-      ``POST /admin/budgets`` has no write-time comparison against the tenant cap, so
-      the row saves and a budgets screen will read back \\$500 while \\$50 is what
-      binds. That is a screen telling an operator a number that is not the truth, which
-      is the ``gate_min_risk`` defect again; it is a real gap and it is recorded as one.
-      The check would live in ``backend/src/app/api/routes.py``, which this task does
-      not own.
+    * **a sub-cap above the tenant cap cannot be stored** — this used *not* to hold: the
+      row saved and a budgets screen read back \\$500 while \\$50 was what bound, which
+      is the ``gate_min_risk`` defect wearing a budget's clothes. It holds now.
+      :func:`aegis.governance.enforcement.upsert_budget` refuses the write with
+      :class:`~aegis.governance.enforcement.UserCapAboveTenantCapError`, and a *tenant*
+      cap lowered beneath an existing sub-cap narrows that sub-cap in the same
+      transaction, so neither write path can leave the two readings disagreeing. The
+      behaviour is driven against a real database in
+      ``aegis/tests/governance/test_enforcement.py`` and over HTTP in the backend suite;
+      what is asserted here is the clamp that makes the *enforced* number safe whatever
+      is in the row, which is why it stays.
 
     The catalogue's own half of row 2 — that there is no *settings* key by which a cap
     could be raised at all — is asserted by the table above.
@@ -535,47 +545,174 @@ def test_row_2_a_user_sub_cap_above_the_tenant_cap_can_never_bind():
         )
 
 
-# ── row 6: reported as NOT ENFORCED, and asserted as such ─────────────────────
+# ── row 6: the allowed-deployment set exists, and it is what decides ──────────
 
 
-def test_row_6_the_allowed_deployment_set_does_not_exist_so_agent_model_stays_inert():
-    """**Row 6 is not enforced, and this is the assertion that keeps it honest.**
+def test_row_6_a_tenant_model_override_is_validated_against_the_allowed_set():
+    """**Row 6, enforced.** The set exists, the key is live, and the enum is derived.
 
     The row promises that the server validates a model override against the platform's
-    allowed deployments. There is no such set: :func:`aegis.gateway.routing.routing_table`
-    maps each :class:`ModelRole` to exactly **one** deployment id, which is a routing
-    decision and not a list of alternatives a tenant may pick from, and no catalogue key
-    enumerates one either. ``QueryRequest`` carries no model field to override with.
+    allowed deployments, and warns that *"a UI enum is not enforcement"*. There used to
+    be no such set — :func:`aegis.gateway.routing.routing_table` maps each role to
+    exactly one deployment, which is a routing decision and not a list of alternatives —
+    so ``agent.model`` carried an ``inert_reason`` and bound nothing.
 
-    So the honest state is: the control is **off**, ``agent.model`` says so in its
-    ``inert_reason``, and nothing validates anything because nothing can be overridden.
-    What must never happen is the key going live while the set is still missing — that
-    is precisely the "enforced by a dropdown, bypassed by a curl" this row warns about.
-    This test fails on that day.
+    The set is now :data:`aegis.gateway.routing._FLEET_DECLARATION`, and the shape of
+    the fix is what keeps the row's warning satisfied: the catalogue does not *restate*
+    the legal values, it reads them from
+    :func:`~aegis.gateway.routing.tenant_model_choices`, which is the same function the
+    rendered control's ``choices`` are projected from. So the enum is a **view of** the
+    enforcement rather than a second copy that a ``curl`` can walk around — there is
+    only one set, and :meth:`SettingSpec.validate` is the thing every write goes
+    through.
     """
-    from aegis.gateway.routing import routing_table
+    from aegis.gateway.routing import (
+        PLATFORM_DEFAULT,
+        allowed_deployments,
+        tenant_selectable_deployments,
+    )
 
     spec = spec_for("agent.model")
-    assert not spec.effective, (
-        "agent.model is no longer declared inert. Row 6 requires the server to validate "
-        "an override against the platform's allowed deployments; declare the key holding "
-        "that set and assert the validation here before making this one live."
+    assert spec.effective, "agent.model is inert again; row 6 has stopped being enforced"
+    assert spec.merge is MergeRule.OVERRIDE, (
+        "a model choice has no rankable order, so tighten_only would have no direction "
+        "to fold in and no strictest value to fail closed to"
     )
-    assert "ALLOWED" in spec.inert_reason, (
-        "agent.model's inert_reason no longer names the missing allowed-deployment list, "
-        "which is the reason it is inert"
+
+    selectable = tenant_selectable_deployments()
+    assert selectable, "the allowed set is empty, so the control offers nothing"
+    assert spec.legal_choices == (PLATFORM_DEFAULT, *selectable), (
+        "the catalogue's domain and the fleet's tenant-selectable set have drifted; the "
+        "enum a screen renders would then be a second policy"
     )
-    table = routing_table()
-    assert table and all(isinstance(value, str) for value in table.values()), (
-        "routing_table() now returns something other than one deployment per role; if it "
-        "has become a set of allowed deployments, row 6 is enforceable and agent.model "
-        "can be validated against it"
+    # The projection a UI reads is that same set, not a copy assembled beside it.
+    control = next(c for c in setting_controls([spec]) if c["key"] == "agent.model")
+    assert control["control"] == "select"
+    assert control["choices"] == list(spec.legal_choices)
+
+    # An unknown deployment and a real-but-reserved one are both refused, by the same
+    # check every write goes through — never ignored, never swapped for a default.
+    fleet = allowed_deployments()
+    reserved = next(name for name, _role in fleet.items() if name not in selectable)
+    for refused in ("gpt-4o", "../../etc/passwd", reserved):
+        with pytest.raises(ValueError, match="not one of"):
+            spec.validate(refused)
+    assert spec.validate(PLATFORM_DEFAULT) is None
+    for allowed in selectable:
+        assert spec.validate(allowed) is None
+
+
+def test_row_6_the_refusal_survives_the_catalogue_and_reaches_the_gateway_seam():
+    """The second gate: a value that was legal when stored must not take effect anyway.
+
+    The catalogue refuses the *write*. This is the refusal at the point of use, which is
+    the one that matters the day the platform withdraws a deployment a tenant had
+    already chosen — the stored row is still there and still passes nothing at all.
+    ``selected_deployment`` re-validates rather than trusting the row, and refuses
+    rather than quietly substituting a default, because a run served on a different
+    model under the tenant's chosen name is the dropdown-and-curl failure again.
+    """
+    from aegis.gateway.routing import (
+        DeploymentNotAllowedError,
+        deployment_for_choice,
+        model_for,
+        selected_deployment,
+        tenant_selectable_deployments,
     )
-    assert not [
-        candidate.key
-        for candidate in SETTING_SPECS
-        if "deployment" in candidate.key or "allowed_model" in candidate.key
-    ], "an allowed-deployment catalogue key appeared; wire row 6's validation to it"
+
+    chosen = tenant_selectable_deployments()[-1]
+    assert deployment_for_choice(chosen) == chosen
+    assert deployment_for_choice("default") is None
+    assert deployment_for_choice(None) is None
+
+    with pytest.raises(DeploymentNotAllowedError):
+        deployment_for_choice("genailab-maas-gpt-4o-mini")
+    with pytest.raises(DeploymentNotAllowedError), selected_deployment("a-model-nobody"):
+        pass  # pragma: no cover - the context body is never entered
+
+    before = model_for(ModelRole.GENERATION)
+    with selected_deployment(chosen):
+        assert model_for(ModelRole.GENERATION) == chosen
+    assert model_for(ModelRole.GENERATION) == before, "the selection outlived its run"
+
+
+def test_row_6_a_tenants_model_is_never_the_guardrail_completers(monkeypatch):
+    """Row 7 held against row 6: the two must not be satisfiable at each other's cost.
+
+    The guardrail completer resolves through ``complete(ModelRole.CHEAP, ...)`` and the
+    media screen through ``VISION``. If a tenant could select a deployment on either
+    role, ``model_for`` would hand their run the model its own injection classifier is
+    judged by — the rail still runs, still reports, and passes everything. So no
+    deployment on a reserved role is selectable (refused at import), and a selection in
+    force leaves every other role's routing exactly where the platform put it.
+    """
+    from aegis.gateway.routing import (
+        allowed_deployments,
+        guardrail_reserved_roles,
+        model_for,
+        selected_deployment,
+        tenant_selectable_deployments,
+    )
+
+    reserved = guardrail_reserved_roles()
+    assert ModelRole.CHEAP in reserved, (
+        "the injection / content-safety classifier runs on CHEAP; dropping it from the "
+        "reserved set would make that model a tenant control"
+    )
+    fleet = allowed_deployments()
+    assert not [name for name in tenant_selectable_deployments() if fleet[name] in reserved]
+
+    untouched = {role: model_for(role) for role in ModelRole if role is not ModelRole.GENERATION}
+    with selected_deployment(tenant_selectable_deployments()[-1]):
+        assert {
+            role: model_for(role) for role in ModelRole if role is not ModelRole.GENERATION
+        } == untouched
+
+
+def test_row_6_the_ledger_prices_the_deployment_that_answered_not_the_tier():
+    """Cost follows the model, or a selected model is charged at another model's rate.
+
+    ``_COST_PER_1K`` prices a *role*, which is the same thing as pricing its model only
+    while the role has one model. The moment a tenant may select a different deployment,
+    the tier's rate is the wrong model's price — a ledger that is wrong in whichever
+    direction the fleet happens to be priced, and a USD cap that binds at the wrong
+    spend. Both directions are asserted: the cheaper alternative is cheaper, and the
+    default is unchanged.
+    """
+    from aegis.gateway.routing import (
+        _FLEET,
+        model_for,
+        selected_deployment,
+        unit_cost,
+    )
+
+    default_deployment = model_for(ModelRole.GENERATION)
+    at_the_tier = unit_cost(ModelRole.GENERATION, prompt_tokens=1000, completion_tokens=1000)
+    assert unit_cost(
+        ModelRole.GENERATION,
+        prompt_tokens=1000,
+        completion_tokens=1000,
+        deployment=default_deployment,
+    ) == at_the_tier, "naming the routed default repriced a call that did not change"
+
+    cheaper = "genailab-maas-DeepSeek-V3-0324"
+    entry = _FLEET[cheaper]
+    priced = unit_cost(
+        ModelRole.GENERATION,
+        prompt_tokens=1000,
+        completion_tokens=1000,
+        deployment=cheaper,
+    )
+    assert priced == pytest.approx(entry.input_rate + entry.output_rate)
+    assert priced < at_the_tier, "the alternative is priced at the tier it replaced"
+
+    # And the gateway's own estimator reaches the same figure with nothing passed to it,
+    # because the selection is what ``model_for`` answers with.
+    from aegis.gateway.llm import _estimate_cost
+
+    with selected_deployment(cheaper):
+        assert _estimate_cost(ModelRole.GENERATION, 1000, 1000) == pytest.approx(priced)
+    assert _estimate_cost(ModelRole.GENERATION, 1000, 1000) == pytest.approx(at_the_tier)
 
 
 # ── the sixteenth inert key: every effective key is read by something ─────────

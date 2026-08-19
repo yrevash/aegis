@@ -1,10 +1,20 @@
-"""Config-driven model registry: a *role → model* routing table + cost tables.
+"""Config-driven model registry: the fleet, a *role → model* routing table, cost tables.
 
 Heterogeneous model routing means code requests a model by **role**, never by a
 hard-coded id, so swapping the underlying fleet is a one-file change
 (env-overridable per role). This module owns the routing table and the per-role
 cost-per-1k lookup the gateway falls back to when a provider's own cost map has
 no entry for a custom deployment id.
+
+It also owns the **allowed-deployment set** — :data:`_FLEET_DECLARATION`, the platform's
+statement of which deployments exist and which of them a tenant may select. That set is
+what makes ``agent.model`` a control instead of a dropdown: the settings catalogue reads
+its legal values from :func:`tenant_model_choices`, so the enum a screen renders is a
+projection of the set the server validates against; :func:`check_tenant_may_select`
+refuses anything else at the write path *and* at the point of use; and no deployment on
+a role the host's own safety layers call is selectable at all
+(:func:`guardrail_reserved_roles`), which is §7.16 row 7 enforced at import rather than
+by a check somebody remembers to write.
 
 Depends only on :mod:`aegis.core.models` — no litellm, no network.
 """
@@ -13,19 +23,34 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from enum import StrEnum
 
 from aegis.core.models import ModelRole
 
 __all__ = [
+    "PLATFORM_DEFAULT",
     "BillingUnit",
+    "Deployment",
+    "DeploymentNotAllowedError",
+    "allowed_deployments",
     "baseline_role",
     "billable_input_units",
     "billing_unit",
+    "check_tenant_may_select",
+    "deployment_for_choice",
+    "guardrail_reserved_roles",
     "is_routable_role",
     "is_small_model",
     "model_for",
+    "role_for_deployment",
     "routing_table",
+    "selected_deployment",
+    "tenant_model_choices",
+    "tenant_selectable_deployments",
     "unit_cost",
 ]
 
@@ -41,9 +66,281 @@ _DEFAULT_ROUTING: dict[ModelRole, str] = {
 }
 
 
-def model_for(role: ModelRole) -> str:
-    """Return the deployment id configured for ``role`` (env override wins)."""
+# ─────────────────────────────────────────────────────────────────────────────
+# The fleet — which deployments exist, and which a tenant may select (§7.16 row 6)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class DeploymentNotAllowedError(ValueError):
+    """A deployment the platform does not run, or does not let a tenant select.
+
+    §7.16 row 6 asks the server to validate a model override against the platform's
+    allowed deployments, and adds *"a UI enum is not enforcement"*. This is the refusal
+    that makes the sentence true: an unknown id and a real-but-reserved id are both
+    refused, and neither is quietly swapped for a default — a tenant who asked for a
+    model they may not have must be told so, not served by something else under the
+    same name.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Deployment:
+    """One model deployment the platform runs, and what it costs.
+
+    Attributes:
+        id: The gateway deployment id, exactly as the provider spells it.
+        role: The job this deployment does. It is also the **billing unit** and the
+            fallback-chain tier it belongs to, so a deployment cannot be declared for
+            one purpose and priced as another.
+        input_rate: USD per one billable input unit (see :func:`billing_unit`).
+        output_rate: USD per 1k completion tokens.
+        tenant_selectable: Whether a tenant may point ``agent.model`` at it. Declared
+            per deployment rather than inferred, because "the platform runs it" and
+            "a tenant may choose it" are two different decisions and conflating them is
+            how the guardrail classifier ends up on a tenant's model.
+    """
+
+    id: str
+    role: ModelRole
+    input_rate: float
+    output_rate: float
+    tenant_selectable: bool = False
+
+
+#: The roles whose deployment a tenant may **never** redirect, because host-side safety
+#: machinery calls them and nothing about that call is the tenant's to configure:
+#: ``CHEAP`` is the injection / content-safety / topical classifier's completer, and
+#: ``VISION`` is the media screen's. §7.16 row 7 is not a check somebody remembers to
+#: write — pointing the classifier at a model of the tenant's choosing disables it
+#: *without appearing to*, since the rail still runs, still reports, and passes
+#: everything — so the reservation is declared here and enforced at import below.
+_GUARDRAIL_RESERVED_ROLES: frozenset[ModelRole] = frozenset(
+    {ModelRole.CHEAP, ModelRole.VISION}
+)
+
+
+def guardrail_reserved_roles() -> frozenset[ModelRole]:
+    """Return the roles a tenant may never redirect (the safety layers' own models)."""
+    return _GUARDRAIL_RESERVED_ROLES
+
+
+#: **The allowed-deployment set.** The platform's whole fleet, declared once, exactly as
+#: ``docs/architecture/backend.md`` §2 lists it ("Only these models may be used") — and
+#: the ``tenant_selectable`` column is the platform saying which of them a tenant may
+#: choose between. Only the main answer-generation tier is selectable: that is what
+#: ``agent.model`` is a preference *about*, and everything else in this table is
+#: infrastructure a tenant does not pick — the classifier the rails judge them by, the
+#: embedding model their index is built with, Whisper, the media screen.
+#:
+#: The rates are the same kind of figure as :data:`_COST_PER_1K` — approximate, honest
+#: and never zero — but they are **per deployment**, which is the point: a tenant who
+#: selects DeepSeek-V3 must be ledgered at DeepSeek's price, not at gpt-4o's.
+_FLEET_DECLARATION: tuple[Deployment, ...] = (
+    Deployment("genailab-maas-gpt-35-turbo", ModelRole.CHEAP, 0.0005, 0.0015),
+    Deployment("genailab-maas-gpt-4o-mini", ModelRole.CHEAP, 0.00015, 0.0006),
+    Deployment("genailab-maas-Phi-4-reasoning", ModelRole.REASONING, 0.0011, 0.0044),
+    Deployment("genailab-maas-DeepSeek-R1", ModelRole.REASONING, 0.00135, 0.0054),
+    Deployment(
+        "genailab-maas-gpt-4o", ModelRole.GENERATION, 0.0025, 0.01, tenant_selectable=True
+    ),
+    Deployment(
+        "genailab-maas-DeepSeek-V3-0324",
+        ModelRole.GENERATION,
+        0.00027,
+        0.0011,
+        tenant_selectable=True,
+    ),
+    Deployment(
+        "genailab-maas-Llama-3.3-70B-Instruct",
+        ModelRole.GENERATION,
+        0.00071,
+        0.00071,
+        tenant_selectable=True,
+    ),
+    Deployment(
+        "genailab-maas-Llama-4-Maverick-17B-128E-Instruct-FP8",
+        ModelRole.GENERATION,
+        0.00035,
+        0.00141,
+        tenant_selectable=True,
+    ),
+    Deployment(
+        "genailab-maas-text-embedding-3-large", ModelRole.EMBEDDING, 0.00013, 0.0
+    ),
+    Deployment(
+        "genailab-maas-Llama-3.2-90B-Vision-Instruct", ModelRole.VISION, 0.0025, 0.01
+    ),
+    Deployment(
+        "genailab-maas-Phi-3.5-vision-instruct", ModelRole.VISION, 0.0004, 0.0016
+    ),
+    Deployment("genailab-maas-whisper", ModelRole.VOICE, 0.006, 0.0),
+)
+
+_FLEET: dict[str, Deployment] = {entry.id: entry for entry in _FLEET_DECLARATION}
+if len(_FLEET) != len(_FLEET_DECLARATION):
+    raise ValueError("the fleet declares a deployment id twice")
+for _entry in _FLEET_DECLARATION:
+    # §7.16 row 7, structurally: a selectable deployment on a role the safety layers
+    # call would hand a tenant the classifier that judges them. Refused at import, so
+    # the mistake is a failed test run rather than a rail that silently passes
+    # everything.
+    if _entry.tenant_selectable and _entry.role in _GUARDRAIL_RESERVED_ROLES:
+        raise ValueError(
+            f"{_entry.id} is declared tenant-selectable on {_entry.role.value}, which is "
+            "reserved for the host's own safety layers; a tenant selecting it would "
+            "choose the model their own guardrails are run on"
+        )
+del _entry
+
+#: The value ``agent.model`` carries when a tenant has expressed no preference — "use
+#: whatever the platform routes". A sentinel rather than an empty string so the stored
+#: value, the UI option and the audit record all say the same readable thing.
+PLATFORM_DEFAULT = "default"
+
+#: The deployment this call context has selected, or ``None`` for the platform's own
+#: routing. A ContextVar because the selection belongs to **one run** — the gateway is
+#: process-wide and shared by every tenant, and a module-level "current model" is a
+#: cross-tenant leak with a shorter name.
+_selection: ContextVar[str | None] = ContextVar("aegis_selected_deployment", default=None)
+
+
+def allowed_deployments() -> dict[str, ModelRole]:
+    """Return every deployment the platform runs, mapped to the role it serves."""
+    return {entry.id: entry.role for entry in _FLEET.values()}
+
+
+def tenant_selectable_deployments() -> tuple[str, ...]:
+    """Return the deployment ids a tenant may point ``agent.model`` at, in fleet order.
+
+    Read off :data:`_FLEET` rather than the declaration tuple so there is one runtime
+    view of the set: the list an operator is offered and the check their write goes
+    through can never be answering from different copies of it.
+    """
+    return tuple(entry.id for entry in _FLEET.values() if entry.tenant_selectable)
+
+
+def tenant_model_choices() -> tuple[str, ...]:
+    """Return the legal values of ``agent.model`` — the sentinel, then the fleet.
+
+    The settings catalogue reads its choices from **this** function rather than
+    restating them, so the enum a screen renders is a projection of the set the server
+    validates against and cannot drift from it. That is the whole of "a UI enum is not
+    enforcement": the enum is not the enforcement, it is a view of it.
+    """
+    return (PLATFORM_DEFAULT, *tenant_selectable_deployments())
+
+
+def role_for_deployment(deployment: str) -> ModelRole:
+    """Return the role ``deployment`` serves.
+
+    Raises:
+        DeploymentNotAllowedError: If the platform does not run it.
+    """
+    entry = _FLEET.get(deployment)
+    if entry is None:
+        raise DeploymentNotAllowedError(
+            f"{deployment!r} is not a deployment this platform runs; the fleet is "
+            f"{sorted(_FLEET)}"
+        )
+    return entry.role
+
+
+def check_tenant_may_select(deployment: str) -> Deployment:
+    """Return the fleet entry for ``deployment``, or refuse a tenant's choice of it.
+
+    The single server-side gate for §7.16 row 6, called from the settings write path
+    (through the catalogue) and again at the point of use, so a value that became
+    unpermitted after it was stored cannot quietly take effect.
+
+    Raises:
+        DeploymentNotAllowedError: If the platform does not run the deployment, or runs
+            it but does not offer it to tenants.
+    """
+    entry = _FLEET.get(deployment)
+    if entry is None:
+        raise DeploymentNotAllowedError(
+            f"{deployment!r} is not a deployment this platform runs. Choose one of "
+            f"{list(tenant_model_choices())}."
+        )
+    if not entry.tenant_selectable:
+        raise DeploymentNotAllowedError(
+            f"{deployment!r} is a real deployment but is not offered to tenants: it "
+            f"serves the {entry.role.value} role, which the platform keeps for its own "
+            "use. Choose one of "
+            f"{list(tenant_model_choices())}."
+        )
+    return entry
+
+
+def deployment_for_choice(choice: str | None) -> str | None:
+    """Return the deployment an ``agent.model`` value names, or ``None`` for the default.
+
+    Args:
+        choice: The resolved value of ``agent.model``.
+
+    Returns:
+        The validated deployment id, or ``None`` when the tenant expressed no preference.
+
+    Raises:
+        DeploymentNotAllowedError: If the value names something a tenant may not select.
+    """
+    if choice is None or choice == PLATFORM_DEFAULT:
+        return None
+    check_tenant_may_select(choice)
+    return choice
+
+
+@contextmanager
+def selected_deployment(deployment: str | None) -> Iterator[None]:
+    """Bind ``deployment`` as the model answering its role, for this context only.
+
+    Validated on entry rather than trusted: this is the second of the two places row 6
+    is enforced, and it is the one that catches a value that was legal when it was
+    written and is not any more.
+
+    Args:
+        deployment: A tenant-selectable deployment id, or ``None`` for no selection.
+
+    Yields:
+        Nothing; the selection is in force for the body.
+
+    Raises:
+        DeploymentNotAllowedError: If ``deployment`` is not one a tenant may select.
+    """
+    if deployment is not None:
+        check_tenant_may_select(deployment)
+    token = _selection.set(deployment)
+    try:
+        yield
+    finally:
+        _selection.reset(token)
+
+
+def _routed_default(role: ModelRole) -> str:
+    """Return the deployment ``role`` routes to when no tenant has chosen one.
+
+    The platform's own answer — the table above, or the ``MODEL_<ROLE>`` environment
+    override. Kept separate from :func:`model_for` because it is also the yardstick the
+    pricing uses: a call answered by *this* deployment is priced at the role's own
+    (env-overridable) rate exactly as it always was, and only a deployment other than
+    this one is repriced from the fleet.
+    """
     return os.environ.get(f"MODEL_{role.name}", _DEFAULT_ROUTING[role])
+
+
+def model_for(role: ModelRole) -> str:
+    """Return the deployment id in force for ``role`` on this call.
+
+    The tenant's validated selection (:func:`selected_deployment`) wins for the **one**
+    role that selection belongs to; every other role keeps the platform's routing. That
+    asymmetry is the point: a tenant choosing their answer model must not, as a side
+    effect, choose the model the injection classifier is judged by — see
+    :func:`guardrail_reserved_roles`.
+    """
+    chosen = _selection.get()
+    if chosen is not None and _FLEET[chosen].role is role:
+        return chosen
+    return _routed_default(role)
 
 
 def routing_table() -> dict[str, str]:
@@ -192,12 +489,26 @@ def billing_unit(role: ModelRole) -> BillingUnit:
         return default
 
 
-def _rate_for(role: ModelRole) -> tuple[float, float]:
-    """Return the (input, output) rate for ``role`` (env-overridable).
+def _rate_for(role: ModelRole, deployment: str | None = None) -> tuple[float, float]:
+    """Return the (input, output) rate for a call, in the role's billing unit.
 
     The output rate is always $/1k completion tokens; the input rate is per one
     unit of :func:`billing_unit` for the role.
+
+    **Cost follows the model, not the tier.** ``_COST_PER_1K`` prices a *role*, which is
+    the same thing as pricing its model only while the role has one model. The moment a
+    tenant may select a different deployment for a role, charging their run at the
+    tier's rate is charging one model at another model's price — a ledger that is wrong
+    in whichever direction the fleet happens to be priced, and a budget cap that binds
+    at the wrong spend. So a deployment that is **not** the one this role routes to by
+    default is priced from its own declaration in :data:`_FLEET`. When nothing has been
+    selected, ``deployment`` is the routed default and this reduces exactly to the
+    original per-role lookup, env overrides and all.
     """
+    if deployment is not None and deployment != _routed_default(role):
+        entry = _FLEET.get(deployment)
+        if entry is not None:
+            return entry.input_rate, entry.output_rate
     default_in, default_out = _COST_PER_1K.get(role, (0.0, 0.0))
     rate_in = float(os.environ.get(f"COST_{role.name}_IN", default_in))
     rate_out = float(os.environ.get(f"COST_{role.name}_OUT", default_out))
@@ -231,6 +542,7 @@ def unit_cost(
     completion_tokens: int = 0,
     audio_seconds: float = 0.0,
     images: int = 0,
+    deployment: str | None = None,
 ) -> float:
     """Return the fallback USD cost of one ``role`` call from its billable units.
 
@@ -238,8 +550,19 @@ def unit_cost(
     input unit is whatever :func:`billing_unit` says for the role. A token-only
     call reduces exactly to the original per-1k-token formula, so existing
     behaviour is unchanged.
+
+    Args:
+        role: The role that was called.
+        prompt_tokens: Prompt tokens consumed.
+        completion_tokens: Completion tokens produced.
+        audio_seconds: Seconds of audio, for an audio-billed role.
+        images: Image parts sent, for an image-billed role.
+        deployment: The deployment that actually answered. Omitted means "whatever
+            this role routes to", which is the only answer there was before a tenant
+            could select one; naming it is what makes a selected model cost what *it*
+            costs rather than what its tier costs.
     """
-    rate_in, rate_out = _rate_for(role)
+    rate_in, rate_out = _rate_for(role, deployment)
     units_in = billable_input_units(
         role, prompt_tokens=prompt_tokens, audio_seconds=audio_seconds, images=images
     )

@@ -993,6 +993,11 @@ def _estimate_cost(
     model, per audio-minute for ``VOICE``, per image for an image-billed role. The
     two positional token arguments keep the original signature, so every existing
     caller is unchanged.
+
+    The deployment is passed rather than left implicit so **cost follows the model**: a
+    tenant who selected a different deployment for this role is ledgered at that
+    deployment's price, not at the tier's. With no selection in force ``model_for``
+    returns the role's routed default and the figure is identical to before.
     """
     return unit_cost(
         role,
@@ -1000,6 +1005,7 @@ def _estimate_cost(
         completion_tokens=completion_tokens,
         audio_seconds=audio_seconds,
         images=images,
+        deployment=model_for(role),
     )
 
 

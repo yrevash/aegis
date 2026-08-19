@@ -24,17 +24,22 @@ runs in (:class:`Strictness`) — a rule that cannot say which way is tighter is
 rule, so the catalogue refuses to be constructed without it.
 
 Requires the ``aegis[governance]`` extra: the role names a spec is written against are
-the fine RBAC tiers, and they are imported rather than restated.
+the fine RBAC tiers, and they are imported rather than restated. The one key whose legal
+values the *platform* decides rather than this file — ``agent.model`` — reads them from
+:func:`aegis.gateway.routing.tenant_model_choices` for the same reason: a copy here
+would be a second statement of the allowed-deployment set, and the whole point of that
+set is that there is one.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 from aegis.core.types import RiskLevel
+from aegis.gateway.routing import PLATFORM_DEFAULT, tenant_model_choices
 from aegis.governance.security import PLATFORM_ADMIN, TENANT_ADMIN
 from aegis.governance.types import Role
 
@@ -135,6 +140,15 @@ class SettingSpec:
         choices: The legal values, in order, for an enumerated key. For a
             ``TIGHTEN_ONLY`` key they are ordered **strictest first**, because the
             comparison is the index.
+        choices_source: A callable returning the legal values, for a key whose domain
+            the *platform* decides rather than this file — ``agent.model``'s is the set
+            of deployments the fleet declares tenant-selectable. Declared as a function
+            so the catalogue, the validation and the rendered control read the one set
+            at the one moment, instead of a copy frozen here going stale against the
+            fleet. Mutually exclusive with ``choices``, and refused on a
+            ``TIGHTEN_ONLY`` key: ranking is *by index into the domain*, so a domain
+            that can change under the resolver would silently move what "stricter"
+            means.
         stricter: Which direction is stricter. Required for — and only meaningful
             for — ``TIGHTEN_ONLY``.
         description: Rendered as the control's help text. Required: an unexplained
@@ -166,6 +180,7 @@ class SettingSpec:
     merge: MergeRule
     bounds: tuple[Any, Any] | None = None
     choices: tuple[Any, ...] | None = None
+    choices_source: Callable[[], tuple[Any, ...]] | None = None
     stricter: Strictness | None = None
     description: str = ""
     inert_reason: str | None = None
@@ -185,6 +200,19 @@ class SettingSpec:
                 f"setting {self.key!r} declares itself inert but does not say why or "
                 "what would make it live; an unexplained dead control is the defect the "
                 "field exists to end, not a lighter version of it"
+            )
+        if self.choices is not None and self.choices_source is not None:
+            raise ValueError(
+                f"setting {self.key!r} declares both choices and choices_source; the "
+                "legal values have to come from exactly one place or the two will "
+                "disagree about what is legal"
+            )
+        if self.choices_source is not None and self.merge is MergeRule.TIGHTEN_ONLY:
+            raise ValueError(
+                f"setting {self.key!r} is tighten_only with a runtime choices_source; "
+                "a tighten_only key ranks values by their index into the domain, so a "
+                "domain that can change under the resolver would move what 'stricter' "
+                "means without anything appearing to change"
             )
         if self.merge is MergeRule.TIGHTEN_ONLY and self.stricter is None:
             raise ValueError(
@@ -217,9 +245,21 @@ class SettingSpec:
         return self.inert_reason is None
 
     @property
+    def legal_choices(self) -> tuple[Any, ...] | None:
+        """The values this key accepts right now, or ``None`` when it is not enumerated.
+
+        The single answer every layer asks for: the validation, the rendered control and
+        the tests all read this, so a key whose domain is the platform's to decide has
+        exactly one domain rather than one per reader.
+        """
+        if self.choices_source is not None:
+            return tuple(self.choices_source())
+        return self.choices
+
+    @property
     def control(self) -> str:
         """The kind of control a UI renders for this setting."""
-        return "select" if self.choices else _CONTROL_BY_TYPE[self.type_]
+        return "select" if self.legal_choices else _CONTROL_BY_TYPE[self.type_]
 
     def validate(self, value: Any) -> None:  # noqa: ANN401 - any setting value
         """Check a candidate value against this spec's type, bounds and choices.
@@ -233,15 +273,16 @@ class SettingSpec:
                 tenant's write to the nearest legal value is the same defect class as
                 silently ignoring it.
         """
+        choices = self.legal_choices
         if self.type_ is list:
             if not isinstance(value, list | tuple):
                 raise ValueError(f"{self.key}: expected a list of members, got {value!r}")
-            if self.choices is not None:
-                unknown = [item for item in value if item not in self.choices]
+            if choices is not None:
+                unknown = [item for item in value if item not in choices]
                 if unknown:
                     raise ValueError(
                         f"{self.key}: {unknown!r} not among the allowed members "
-                        f"{list(self.choices)!r}"
+                        f"{list(choices)!r}"
                     )
             return
         # bool before int: ``isinstance(True, int)`` is True, so an int key would
@@ -257,9 +298,9 @@ class SettingSpec:
                 raise ValueError(f"{self.key}: expected a number, got {value!r}")
         elif not isinstance(value, self.type_):
             raise ValueError(f"{self.key}: expected {self.type_.__name__}, got {value!r}")
-        if self.choices is not None and value not in self.choices:
+        if choices is not None and value not in choices:
             raise ValueError(
-                f"{self.key}: {value!r} is not one of {list(self.choices)!r}"
+                f"{self.key}: {value!r} is not one of {list(choices)!r}"
             )
         if self.bounds is not None:
             low, high = self.bounds
@@ -471,25 +512,22 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     SettingSpec(
         key="agent.model",
         type_=str,
-        default="default",
+        default=PLATFORM_DEFAULT,
         writable_by=_EVERY_ROLE,
         readable_by=_EVERY_ROLE,
+        # OVERRIDE, and deliberately not TIGHTEN_ONLY: a model choice has no rankable
+        # order — Llama-3.3-70B is not "stricter" than DeepSeek-V3, it is a different
+        # model — so there is no direction for the fold to take, no strictest value to
+        # fail closed to, and ``__post_init__`` refuses such a spec outright. What keeps
+        # "last scope wins" safe here is that every value it can win with is already on
+        # the platform's own list: the domain is the constraint, not the merge rule.
         merge=MergeRule.OVERRIDE,
+        choices_source=tenant_model_choices,
         description=(
-            "Preferred model deployment for a run. A preference, not a permission: the "
-            "server validates any override against the platform's allowed deployments."
-        ),
-        inert_reason=(
-            "Nothing reads this yet. It is an OVERRIDE, request-level preference, and "
-            "there is no request field to carry it: QueryRequest has no model override, "
-            "and the gateway picks a deployment per ModelRole with no per-run seam. "
-            "Making it live needs three things this key cannot supply on its own — a "
-            "field on QueryRequest, a per-tenant list of ALLOWED deployments to "
-            "validate it against (the sentence above promises a validation that has no "
-            "list to validate against), and a gateway that accepts a deployment for one "
-            "run. Resolving it server-side as a run default instead was considered and "
-            "rejected: an unvalidated tenant string reaching the gateway is a way to "
-            "point one tenant's spend at a model nobody approved."
+            "Preferred model deployment for a run, from the deployments the platform "
+            "offers tenants. A preference, not a permission: the server validates the "
+            "choice against that set on write and again at the point of use, and the "
+            "ledger prices the deployment that actually answered."
         ),
     ),
     SettingSpec(
@@ -670,8 +708,8 @@ def setting_controls(
             control["inert_reason"] = spec.inert_reason
         if spec.bounds is not None:
             control["minimum"], control["maximum"] = spec.bounds
-        if spec.choices is not None:
-            control["choices"] = list(spec.choices)
+        if spec.legal_choices is not None:
+            control["choices"] = list(spec.legal_choices)
         if spec.stricter is not None:
             control["stricter"] = spec.stricter.value
         controls.append(control)
