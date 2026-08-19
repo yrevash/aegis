@@ -459,6 +459,28 @@ if _RISK_TIERS_STRICTEST_FIRST != ("low", "medium", "high"):
 #: ``platform ∩ persona ∩ tenant ∩ user`` through one ``is_allowed`` function, and an
 #: intersection is not one of the three merge rules. Adding a fourth rule to model it
 #: here would create the second mechanism this catalogue exists to prevent.
+#:
+#: **``guardrails.topics.allowed`` is not here, for the same reason**, though §7.6's table
+#: names it. An allowed-topic set folds by *intersection* — the tenant who names three
+#: topics out of the platform's five has tightened; the user who names a sixth has widened
+#: — and none of the three merge rules is an intersection. ``UNION`` is the one that looks
+#: closest and is exactly backwards: it would let a user scope re-admit a topic their
+#: tenant excluded. ``TIGHTEN_ONLY`` cannot rank a *set* at all, and ``OVERRIDE`` lets a
+#: scope replace the platform's list outright. There is a second problem underneath the
+#: first: an empty set means "unrestricted" rather than "nothing allowed", so even the
+#: intersection is not the plain one. The topical rail's domain therefore stays the
+#: adapter's ``DOMAIN_DESCRIPTION``, which is the one sentence in the host that says what
+#: the platform is *for*, and the tenant control over that rail is
+#: ``guardrails.topical.block`` — advisory versus hard block, which *is* ordered.
+#:
+#: ``requires_citation``, the fourth template §7.6 lists, is not here either: this
+#: platform's citations are structured objects verified by
+#: :mod:`aegis.retrieval.citations`, and the output rail is handed only ``(text,
+#: contexts)``. A rail grepping the prose for a ``[1]`` marker would fire on almost every
+#: answer, because nothing in the prompt floor asks a model to emit one — a rail that
+#: always fires is the same defect as a rail that never runs. Making it real means the
+#: citation objects reaching the output rail, which is an answer-path change and not a
+#: catalogue one.
 SETTING_SPECS: tuple[SettingSpec, ...] = (
     SettingSpec(
         key="agent.gate_min_risk",

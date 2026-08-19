@@ -21,7 +21,13 @@ from aegis.guardrails.content_safety import (
 )
 from aegis.guardrails.grounding import GroundingVerdict, check_grounding
 from aegis.guardrails.media import MediaGuardResult, MediaScreen, media_rail, screen_image
-from aegis.guardrails.pipeline import AnyRail, Guardrails, LegacyTextRail, Rail
+from aegis.guardrails.pipeline import (
+    AnyRail,
+    Guardrails,
+    LegacyTextRail,
+    Rail,
+    RailDescription,
+)
 from aegis.guardrails.topical import TopicVerdict, screen_topic
 from aegis.media import MediaPayload
 
@@ -132,6 +138,7 @@ __all__ = [
     "MediaGuardResult",
     "MediaScreen",
     "Rail",
+    "RailDescription",
     "TopicVerdict",
     "check_grounding",
     "check_input",
