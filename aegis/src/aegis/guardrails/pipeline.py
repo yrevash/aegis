@@ -15,6 +15,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from aegis.core.config import AegisMode, CoreSettings
@@ -170,6 +171,53 @@ def _clean_terms(values: Sequence[str] | None) -> tuple[str, ...]:
         if isinstance(value, str) and value.strip():
             seen.setdefault(value.strip(), None)
     return tuple(seen)
+
+
+@dataclass(frozen=True, slots=True)
+class RailDescription:
+    """One rail in the stack, as configuration rather than as prose.
+
+    §7.6(i): *"read the platform defaults first — nearly free, and it is a trust
+    feature"*. Every field is read off the pipeline that will actually run, never off a
+    hand-maintained list beside it, because a rail table that is written twice is a rail
+    table that will eventually describe a stack the process is not enforcing — and the
+    whole value of showing a tenant their rails is that it is true.
+
+    Attributes:
+        id: Stable identifier for the rail.
+        layer: The ``layer`` label the rail stamps on its verdict, so a console can line
+            a blocked run up against the rail that blocked it. Empty where a rail cannot
+            produce a verdict of its own.
+        name: Short human name.
+        screens: What it looks for, in one sentence.
+        stage: ``input`` (also the tool-result path), ``output``, or ``both``.
+        enforcement: What a hit does *in this configuration* — ``block``, ``redact``,
+            ``advisory``, or ``off`` when the rail cannot run at all.
+        active: Whether the rail runs at all as configured. A rail that is off says so
+            rather than being omitted: "we do not screen topics here" is an answer, and
+            a missing row is not.
+        model_backed: Whether it needs the guardrail completer. Those rails degrade to
+            nothing when no completer is wired, which is a fact an operator must be able
+            to see before they trust a block rate.
+        threshold: The configured bound, where the rail has one (a character limit, a
+            count of screened terms), as a short string. ``None`` where it has none.
+        policy_fields: The :class:`~aegis.guardrails.policy.GuardrailPolicy` fields that
+            govern this rail. Deliberately fields and **not** catalogue keys: the
+            key↔field wire is declared once, in
+            :data:`aegis.settings.guardrails.GUARDRAIL_SETTING_BINDINGS`, and restating
+            it here would be the second copy that drifts.
+    """
+
+    id: str
+    layer: str
+    name: str
+    screens: str
+    stage: str
+    enforcement: str
+    active: bool
+    model_backed: bool
+    threshold: str | None = None
+    policy_fields: tuple[str, ...] = ()
 
 
 @register("guardrail", "default")
@@ -344,6 +392,156 @@ class Guardrails:
         clone._pii_block = policy.pii_block
         clone._input_max_chars = int(policy.input_max_chars)
         return clone
+
+    def rail_stack(self) -> tuple[RailDescription, ...]:
+        """Describe the rails this pipeline enforces, in the order they run.
+
+        Honest introspection of the configuration in :meth:`__init__` — nothing is
+        measured, nothing is asserted about how often a rail fires, and a rail that
+        cannot run in this configuration is reported as ``off`` rather than dropped.
+        Because it is read off ``self``, the stack a *tenant* is shown is the one their
+        folded policy produces: call it on the object
+        :meth:`with_policy` returned and the topical rail reads ``block`` for the tenant
+        who asked for that and ``advisory`` for the tenant who did not.
+
+        Returns:
+            One :class:`RailDescription` per rail, input stages first.
+        """
+        model = self._completer is not None
+        terms = len(self._denylist_terms) + len(self._denylist_patterns)
+        return (
+            RailDescription(
+                id="input_schema",
+                layer="schema",
+                name="Schema and format",
+                screens=(
+                    "Empty, oversized and invisible-character payloads, checked as "
+                    "written and after NFKC normalisation."
+                ),
+                stage="input",
+                enforcement="block",
+                active=True,
+                model_backed=False,
+                threshold=f"{self._input_max_chars} characters",
+                policy_fields=("input_max_chars",),
+            ),
+            RailDescription(
+                id="denylist",
+                layer="denylist",
+                name="Denied terms and screened patterns",
+                screens=(
+                    "This tenant's own words and the vetted secret shapes they switched "
+                    "on — screened inbound, on every tool result, and outbound."
+                ),
+                stage="both",
+                enforcement="block",
+                active=terms > 0,
+                model_backed=False,
+                threshold=(
+                    f"{len(self._denylist_terms)} term(s), "
+                    f"{len(self._denylist_patterns)} pattern(s)"
+                ),
+                policy_fields=("denylist_terms", "denylist_patterns"),
+            ),
+            RailDescription(
+                id="pii",
+                layer="pii",
+                name="PII detection",
+                screens=(
+                    "Personal data in the question and in the answer, through the "
+                    f"{pii.active_engine()} engine plus this tenant's extra kinds."
+                ),
+                stage="both",
+                enforcement="block" if self._pii_block else "redact",
+                active=True,
+                model_backed=False,
+                threshold=f"{len(self._pii_entities)} entity kind(s) beyond the engine's",
+                policy_fields=("pii_entities", "pii_block"),
+            ),
+            RailDescription(
+                id="injection",
+                layer=INJECTION_LAYER,
+                name="Prompt injection",
+                screens=(
+                    "Deterministic jailbreak signatures first, then a model classifier "
+                    "over the redacted text. An unscreenable payload is blocked, never "
+                    "passed."
+                ),
+                stage="input",
+                enforcement="block",
+                active=True,
+                model_backed=True,
+                threshold=None,
+            ),
+            RailDescription(
+                id="content_safety",
+                layer="content_safety",
+                name="Content safety",
+                screens="Hazardous requests and hazardous answers.",
+                stage="both",
+                enforcement="block",
+                active=model,
+                model_backed=True,
+                threshold=None,
+            ),
+            RailDescription(
+                id="topical",
+                layer="topical",
+                name="Topical",
+                screens="Questions outside the business domain this deployment serves.",
+                stage="input",
+                enforcement="block" if self._topical_block else "advisory",
+                active=bool(self._allowed_topics),
+                model_backed=True,
+                threshold=None,
+                policy_fields=("topical_block",),
+            ),
+            RailDescription(
+                id="output_schema",
+                layer="schema",
+                name="Answer format and leak markers",
+                screens=(
+                    "Oversized answers, invisible characters, and the chat-template and "
+                    "system-prompt markers a leaked preamble carries."
+                ),
+                stage="output",
+                enforcement="block",
+                active=True,
+                model_backed=False,
+                threshold=f"{schema.MAX_OUTPUT_CHARS} characters",
+            ),
+            RailDescription(
+                id="grounding",
+                layer="grounding",
+                name="Grounding",
+                screens=(
+                    "Answers the retrieved sources do not support. Runs only when the "
+                    "answer path hands the rail its contexts."
+                ),
+                stage="output",
+                enforcement="block" if self._grounding_block else "advisory",
+                active=self._ground_answers,
+                model_backed=True,
+                threshold=None,
+                policy_fields=("grounding_block",),
+            ),
+            RailDescription(
+                id="custom",
+                layer="",
+                name="Custom rails",
+                screens=(
+                    "Rails the host bolted on, run after the built-ins; any non-PASS "
+                    "verdict short-circuits with its own label."
+                ),
+                stage="both",
+                enforcement="block",
+                active=bool(self._input_rails or self._output_rails),
+                model_backed=False,
+                threshold=(
+                    f"{len(self._input_rails)} inbound, {len(self._output_rails)} outbound"
+                ),
+            ),
+        )
 
     def with_completer(self, completer: ChatCompleter | None) -> Guardrails:
         """Return a pipeline whose model-backed layers use ``completer``.

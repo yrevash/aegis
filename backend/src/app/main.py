@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.api.routes_analytics import mount as _mount_analytics
+from app.api.routes_guardrails import mount as _mount_guardrails
 from app.api.routes_health import mount as _mount_health
 from app.api.routes_llmops import mount as _mount_llmops
 from app.api.routes_memory import mount as _mount_memory
@@ -52,6 +53,11 @@ _mount_llmops(router)
 # that the read-only ``/memory/*`` surfaces in ``app.api.routes`` never had. Same shape,
 # same reason, same idempotent mount.
 _mount_memory(router)
+
+# The guardrail control plane (§7.6) — the effective rail stack with each control's
+# provenance, so an operator can see what the rails do and who decided it. Same shape,
+# same reason, same idempotent mount.
+_mount_guardrails(router)
 
 # Pipeline health, /readyz and the live cache counters (§7.10 / §7.10b / §7.14). Same
 # shape and the same idempotent mount: the routes land on ``router`` itself, so the

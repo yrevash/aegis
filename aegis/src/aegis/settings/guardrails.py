@@ -64,6 +64,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
 
 __all__ = [
     "GUARDRAIL_SETTING_BINDINGS",
+    "fold_resolved",
     "resolve_guardrail_policy",
     "strictest_guardrail_policy",
 ]
@@ -239,6 +240,36 @@ def _fold(binding: _Binding, policy: GuardrailPolicy, resolved: Any) -> Any:  # 
         return resolved
 
 
+def fold_resolved(
+    policy: GuardrailPolicy, resolved: dict[str, tuple[Any, str]]
+) -> GuardrailPolicy:
+    """Return ``policy`` with an already-resolved settings mapping folded onto it.
+
+    The fold itself, separated from the read so a caller who has resolved a **different
+    layer** can use the identical arithmetic. The guardrails control plane resolves the
+    platform layer alone (``tenant_id=None``) to show a tenant the floor they are
+    measured against; computing that floor with a second, hand-written fold is how the
+    number on the screen stops matching the number the rails enforce.
+
+    Args:
+        policy: The policy to fold onto — the host's, in every current caller.
+        resolved: ``{key: (value, source)}`` as :func:`aegis.settings.resolver
+            .resolve_all` returns it. Keys that are absent are left at ``policy``'s
+            value rather than defaulted, so a caller resolving as a role that may not
+            read a key does not silently reset it.
+
+    Returns:
+        A new policy; ``policy`` is never mutated, and no bound field is ever weaker
+        than it was, because every field goes through the spec's own merge rule.
+    """
+    updates = {
+        binding.field: _fold(binding, policy, resolved[binding.key][0])
+        for binding in GUARDRAIL_SETTING_BINDINGS
+        if binding.key in resolved
+    }
+    return dataclasses.replace(policy, **updates)
+
+
 async def resolve_guardrail_policy(
     session: AsyncSession,
     policy: GuardrailPolicy,
@@ -270,10 +301,7 @@ async def resolve_guardrail_policy(
         return policy
     try:
         resolved = await resolve_all(session, tenant_id=tenant_id, user_id=user_id)
-        updates = {
-            binding.field: _fold(binding, policy, resolved[binding.key][0])
-            for binding in GUARDRAIL_SETTING_BINDINGS
-        }
+        folded = fold_resolved(policy, resolved)
     except Exception:  # noqa: BLE001 - a rail we cannot read fails closed, loudly
         logger.error(
             "Could not resolve the guardrail settings for tenant %s; failing closed to "
@@ -286,4 +314,4 @@ async def resolve_guardrail_policy(
             exc_info=True,
         )
         return strictest_guardrail_policy(policy)
-    return dataclasses.replace(policy, **updates)
+    return folded
