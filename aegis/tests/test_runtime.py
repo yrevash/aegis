@@ -327,3 +327,46 @@ async def test_a_second_domain_in_one_process_is_refused_not_merged() -> None:
         adapter="fake_gadgets_adapter", mode="lite", replace=True
     )
     assert replaced.domain_id == "gadgets"
+
+
+# ──────────────────────────────────────── the type-only imports must resolve ──
+async def test_every_type_only_import_in_runtime_resolves() -> None:
+    """``runtime.py``'s ``TYPE_CHECKING`` block must name things that exist.
+
+    Nothing at runtime executes that block, so an import in it can name a symbol its
+    module does not export and no test, no suite and no import will ever notice — and
+    it did: ``from aegis.gateway import GatewayConfig, GovernanceHook,
+    ObservabilitySink`` named three Protocols that lived only in
+    ``aegis.gateway.llm``. The visible cost was the annotations on ``Aegis.from_env``
+    itself — the one supported way up — resolving to nothing for a type checker and for
+    the generated reference, on a package that ships ``py.typed`` precisely to promise
+    they do.
+
+    This executes the block instead of trusting it, which is the only thing that can
+    fail when it is wrong.
+    """
+    import ast
+    import importlib
+    from pathlib import Path
+
+    import aegis.runtime
+
+    source = Path(aegis.runtime.__file__).read_text()
+    unresolved: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.If) and ast.unparse(node.test) == "TYPE_CHECKING"):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.ImportFrom) or child.module is None:
+                continue
+            module = importlib.import_module(child.module)
+            unresolved += [
+                f"{child.module}.{alias.name}"
+                for alias in child.names
+                if not hasattr(module, alias.name)
+            ]
+
+    assert not unresolved, (
+        "aegis/runtime.py imports these under TYPE_CHECKING and they do not exist, so "
+        f"every annotation using them is unresolvable for a type checker: {unresolved}"
+    )

@@ -248,10 +248,17 @@
         "type": "object"
       },
       "AegisModuleRow": {
-        "description": "One Aegis module in the capabilities manifest — branded name + honest tech.\n\nThe API projection of :class:`app.capabilities.AegisModule`. Mirrors it field\nfor field so the manifest is exposed verbatim (no hiding, no renaming). ``tech``\nis always carried alongside ``name`` — the branding never stands without the\nreal technology underneath.",
+        "description": "One Aegis module in the capabilities manifest — branded name + honest tech.\n\nThe API projection of :class:`app.capabilities.AegisModule`. Mirrors it field\nfor field so the manifest is exposed verbatim (no hiding, no renaming). ``tech``\nis always carried alongside ``name`` — the branding never stands without the\nreal technology underneath.\n\n``category`` and ``status`` reuse the source model's own ``Literal`` aliases rather\nthan restating them as ``str``. They are closed sets, and typing them loosely here\npublished them as bare strings: the generated TypeScript client (§8.7) can only be\nas precise as this document, so a projection that widens a closed set hands the\nconsole ``string`` for a field with five legal values — the exact drift generating\nthe client was meant to end.",
         "properties": {
           "category": {
             "description": "Coarse grouping: runtime | knowledge | trust | ops | platform.",
+            "enum": [
+              "runtime",
+              "knowledge",
+              "trust",
+              "ops",
+              "platform"
+            ],
             "title": "Category",
             "type": "string"
           },
@@ -272,6 +279,10 @@
           },
           "status": {
             "description": "'live' (always runs) or 'optional' (gated dependency).",
+            "enum": [
+              "live",
+              "optional"
+            ],
             "title": "Status",
             "type": "string"
           },

@@ -1,65 +1,57 @@
-# Resume notes — paused 2026-08-19
+# Where Aegis stands
 
-Working tree is clean. Everything is committed and pushed. Nothing in progress on disk.
+Last updated 2026-08-20, after the Phase 8 audit closed.
 
-## Where we stopped
+## Status
 
-**Phases 1–7 are complete.** Phase 8 is 4 of 12 done, 3 paused mid-task, 5 not started.
+**Phases 1–8 complete and audited.** Phase 9 (scale hardening) and Phase 10 (MCP + skills)
+remain. Phase 11 (Langflow) is parked.
 
-Suites at the last clean measurement (commit `8fcddaa`):
-`backend 1089 passed / 1 skipped · aegis 2216 passed / 14 skipped · web 137 · ruff clean`
+Verified on a quiet tree at the Phase 8 gate:
+`backend 1101 passed / 1 skipped · aegis 2225 passed / 14 skipped · web 139 · ruff clean ·
+next build 64/64 · conformance 13/13`
 
-The `wip` checkpoint `7ac8c36` on top of that is **not verified** — three lanes were
-stopped mid-edit. Run all three suites before trusting it.
+## The working rule for every phase
 
-## The three paused lanes — resume by relaunching with these briefs
-
-| Task | Stopped at | Owns |
-|---|---|---|
-| **8.6 + 8.7 + 8.8** — `/v1` prefix, OpenAPI snapshot, generated TS client, `StreamEvent` schema | just before "the mutation proof and the full backend suite" — likely nearly done | every `backend/src/app/api/routes*.py`, `ingest_log.py`, `schemas.py`, `main.py`, `web/src/lib/api/*` |
-| **8.3** — `Aegis.from_env(adapter=...)` | "the package export" | a new runtime module + `aegis/src/aegis/__init__.py` |
-| **8.5** — conformance suite | about to run against the reference adapter | `aegis/src/aegis/conformance/`, `aegis/pyproject.toml` |
-
-**8.3 was deliberately forbidden from editing `backend/src/app/main.py`** (the `/v1` lane
-owns it) and was told to report the replacement for the ten `configure_*` calls instead.
-That report was never delivered — the main.py consolidation still has to happen, and it
-must happen *after* the `/v1` lane lands.
-
-## Phase 8 — not started
-
-- **8.7's dependency chain**: 8.6 → 8.7 → 8.8 are one lane and must stay one lane.
-- Nothing else outstanding in Phase 8 beyond finishing the three above.
-
-## Next after Phase 8, in the user's stated order
-
-1. **Frontend testing pass.** The user wants to drive the UI in a browser and iterate
-   before any scale work. This matters: this session added the approvals inbox, five
-   portals, admin forms, generated settings screens, memory management, red team,
-   analytics, reports, forecast, the database console and seats — **none of it has been
-   looked at in a browser.** All of it is verified only by types, tests and `next build`.
-2. Phases 9 (scale hardening) and 10 (MCP/skills). Phase 11 (Langflow) is parked.
+**build -> verify on a quiet tree -> audit -> fix the findings -> push.** Never push before
+the audit closes, and never batch audits to the end. Both were learned the expensive way:
+the Phase 6 audit was skipped as "just UI" and had to be retrofitted, and the Phase 7/8
+audits caught a cross-tenant prompt leak, a red-team scoring defect, and a `SKILL.md` whose
+first two commands could not be run in sequence.
 
 ## Open decisions for the user
 
-- **Should a platform-scoped red-team run write `usage_ledger` rows?** Today `_governed`
-  returns `None` when there is no tenant, so cap *and* ledger are both gated behind a
-  bound tenant by design. `estimated_cost_usd` is the only cost figure such a run will
-  ever have. Diagnosed, not changed — widening it would start ledgering every ungoverned
-  flow in the product.
-- **Superset runbook verification on Windows** — `docs/operations/superset-embedded.md` §6,
-  twelve steps. Four things remain unverified there, the important one being step 8: that
-  the guest token's RLS clause actually filters rows.
-- Stale counts in the root `README.md` ("18 packages, 723 tests", "51 endpoints, 593
-  tests"). Left deliberately — they move every hour while lanes are landing.
+- **Should a platform-scoped red-team run write `usage_ledger` rows?** `_governed` returns
+  `None` with no tenant, so cap *and* ledger are gated behind a bound tenant by design, and
+  `estimated_cost_usd` is the only cost such a run will ever have. Diagnosed, not changed.
+- **Superset on Windows** — `docs/operations/superset-embedded.md` §6, twelve steps. Step 8
+  is the one that matters: that the guest token's RLS clause actually filters rows.
+- **The frontend repaint** to `DESIGN.md` (one blue hue, receipts as the signature) is
+  planned but not started. Nothing built since Phase 6 has been opened in a browser.
 
-## Environment notes that cost time today
+## Known gaps, tracked not hidden
 
-- **Two backend suites must not run concurrently against this Postgres.** A lane wedged
-  for 20 minutes at 0% CPU on a `TRUNCATE` blocked by a relation lock held by an
-  `idle in transaction` session. Check `pg_stat_activity`, do not assume a code deadlock.
-- **Temporal must be running** for any ingest: `temporal server start-dev`. Without it
-  `/documents` fails at boot with a clear message naming the fix.
-- The gateway currently points at **Azure AI Foundry** for testing, not genailab.
-  `backend/.env` holds both; the genailab lines are commented directly above the Azure
-  ones and are restored by uncommenting two lines. DeepSeek-V4-Flash is a demo fleet —
-  genailab will not have it on 30 August.
+- **Phase 8's own definition of done was never executed**: *"a fresh agent session, given
+  only the repo and a one-line problem statement, produces a working adapter — actually
+  tried, not assumed."* The audit found no evidence it was attempted. This is the honest
+  test of the whole phase.
+- `mypy` is not installed in the venv, so the DoD's type-checker claim was verified by
+  annotation inspection rather than by running mypy.
+- `web/src/lib/stream.ts` still hand-mirrors `StreamEvent`; 8.8 published the union but did
+  not generate the console's copy. A mirror test keeps it honest.
+- `aegis/governance/dashboard.py:33` early-binds `_set_tenant_scope`, so the H1 spy seam is
+  blind to dashboard reads. Pre-existing, harmless today.
+- The `extra="ignore"` producer half: `stamp()` would silently drop a key a future event
+  builder adds. Latent, not live — verified no current builder does.
+
+## Environment facts that cost time
+
+- **Two backend suites must not run concurrently against this Postgres.** A lane wedged 20
+  minutes at 0% CPU on a `TRUNCATE` blocked by an `idle in transaction` session. Check
+  `pg_stat_activity`; do not assume a code deadlock.
+- **Temporal must be running for any ingest**: `temporal server start-dev`.
+- **Qdrant** is installed and running locally for Phase 9 verification (v1.19.0, `:6333`).
+- The gateway points at **Azure AI Foundry** (DeepSeek-V4-Flash + text-embedding-3-large),
+  not genailab. `backend/.env` holds both; the genailab lines are commented directly above
+  the Azure ones and are restored by uncommenting two lines. **Azure calls cost real money —
+  never let a test reach the gateway.**

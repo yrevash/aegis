@@ -83,6 +83,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.capabilities import ModuleCategory, ModuleStatus
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Enums
 # ─────────────────────────────────────────────────────────────────────────────
@@ -548,19 +550,28 @@ class AegisModuleRow(BaseModel):
     for field so the manifest is exposed verbatim (no hiding, no renaming). ``tech``
     is always carried alongside ``name`` — the branding never stands without the
     real technology underneath.
+
+    ``category`` and ``status`` reuse the source model's own ``Literal`` aliases rather
+    than restating them as ``str``. They are closed sets, and typing them loosely here
+    published them as bare strings: the generated TypeScript client (§8.7) can only be
+    as precise as this document, so a projection that widens a closed set hands the
+    console ``string`` for a field with five legal values — the exact drift generating
+    the client was meant to end.
     """
 
     key: str = Field(description="Stable machine key, e.g. 'gateway'.")
     name: str = Field(description="Branded module name, e.g. 'Aegis Gateway'.")
     tech: str = Field(description="Honest underlying tech, e.g. 'LiteLLM'.")
     summary: str = Field(description="One honest line describing what the module does.")
-    category: str = Field(
+    category: ModuleCategory = Field(
         description="Coarse grouping: runtime | knowledge | trust | ops | platform."
     )
     module_path: str = Field(
         description="Importable path of the real implementing code, e.g. 'app.core.llm'."
     )
-    status: str = Field(description="'live' (always runs) or 'optional' (gated dependency).")
+    status: ModuleStatus = Field(
+        description="'live' (always runs) or 'optional' (gated dependency)."
+    )
 
 
 class CapabilitiesResponse(BaseModel):

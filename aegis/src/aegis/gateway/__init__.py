@@ -12,6 +12,15 @@ OTel dependency of its own; both default to a documented no-op.
 ``import aegis.gateway`` never requires it — install ``aegis[gateway]`` and
 call :func:`configure` to actually run calls.
 
+:class:`GatewayConfig`, :class:`GovernanceHook` and :class:`ObservabilitySink` are
+re-exported here because they are :func:`configure`'s parameter types: a host writing a
+budget hook has to name the Protocol it satisfies, and reaching into
+``aegis.gateway.llm`` for it means binding to a submodule path that ``PUBLIC.md`` calls
+internal. They lived only in the submodule, so ``aegis.runtime``'s own
+``TYPE_CHECKING`` import of all three named nothing the package exported — a type-only
+import that no test could fail, and that a type checker (and ``pdoc``) reported as
+undefined on ``Aegis.from_env`` itself.
+
 Standalone usage::
 
     from aegis.gateway import complete, configure
@@ -24,6 +33,9 @@ Standalone usage::
 from __future__ import annotations
 
 from aegis.gateway.llm import (
+    GatewayConfig,
+    GovernanceHook,
+    ObservabilitySink,
     complete,
     configure,
     embed,
@@ -47,7 +59,10 @@ from aegis.gateway.types import (
 __all__ = [
     "BudgetExceededError",
     "CostSource",
+    "GatewayConfig",
+    "GovernanceHook",
     "LLMResult",
+    "ObservabilitySink",
     "ToolCallResult",
     "TranscriptionResult",
     "TranscriptionSegment",

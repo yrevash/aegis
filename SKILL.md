@@ -24,11 +24,17 @@ and the other one is stale.
 Run this **first**, before you have changed anything. If it is not green now, you
 are about to attribute a pre-existing failure to your own edit and lose an hour.
 
+**Every command in this file is written from the repository root**, and each `cd`
+is wrapped in a subshell so a run of them one after another in one terminal works.
+Without the parentheses the second command lands in the first one's directory and
+fails on `cd: no such file or directory` — which reads like a broken repo and is
+not one.
+
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter tests/agent -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter tests/agent -q)
 ```
 
-At the time of writing this is **117 passed** in well under a minute, with **no**
+At the time of writing this is **127 passed** in well under a minute, with **no**
 database, no Neo4j, no Redis, and no API key. That is deliberate: the whole
 vertical slice runs on injected fakes, which is what makes this loop fast enough
 to run after every single step below.
@@ -56,18 +62,33 @@ declares the seam as an executable Protocol, so "have I implemented the adapter?
 has a real answer:
 
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -c "
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -c "
 import app.adapter
 from aegis.adapter import DomainAdapter, missing_members
 print('missing:', missing_members(app.adapter))
 print('satisfies:', isinstance(app.adapter, DomainAdapter))
-"
+")
 ```
 
 `missing: []` means every member exists. It does **not** mean every member has
 the right shape — that is what the per-step checks below are for. Ten pieces map
 to **nine members**; `skills/` has none of its own because it is already named by
 `memory_spec.SKILLS_DIR`.
+
+**The shape check is one command too**, and it is the one to keep re-running as you
+work through the steps below:
+
+```bash
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest \
+    --pyargs aegis.conformance --aegis-adapter app.adapter -q)
+```
+
+Thirteen checks, no database, no key, well under a second. Each one descends from a
+wiring mistake this repository actually shipped — a specialist with no handler node,
+a playbook the selector can never name, an ML spec that silently trained on noise —
+and each failure prints what is wrong, the edit that fixes it, what happens if you
+leave it, and the defect it came from. `pytest --pyargs aegis.conformance` with no
+`--aegis-adapter` stops with a usage error naming the flag, not with thirteen skips.
 
 | # | File | You define |
 |---|---|---|
@@ -96,7 +117,7 @@ container the generator returns and the ML spine reads.
 
 **Verify:**
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_schema.py -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_schema.py -q)
 ```
 
 **Trap:** keep the *container* names the registry re-exports even while you
@@ -124,7 +145,7 @@ on, and `describe_prediction` says nothing about service requests.
 
 **Verify:**
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_ml_spec.py -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_ml_spec.py -q)
 ```
 
 **Trap — this one costs a demo:** the generator must sample labels *around your
@@ -150,7 +171,7 @@ whose labels come from `ml_spec`'s latent function, with `complete=None`.
 
 **Verify:**
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_generator.py -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_generator.py -q)
 ```
 
 ---
@@ -177,7 +198,7 @@ grants each persona only what it should have.
 
 **Verify:**
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_tools.py tests/adapter/test_allowlist.py -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_tools.py tests/adapter/test_allowlist.py -q)
 ```
 
 **Trap, and it fails safe:** an *unregistered* tool name resolves to `HIGH`, so
@@ -212,7 +233,7 @@ tools — and nothing about service requests.
 
 **Verify steps 5 and 6 together:**
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_registry.py -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter/test_registry.py -q)
 ```
 
 ---
@@ -274,7 +295,7 @@ deliberate, reported core edit), and exactly one is `is_default`.
 **Verify** — run a query and read the `routing` stream event, or check the build
 warning:
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/agent/test_router.py -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/agent/test_router.py -q)
 ```
 
 ---
@@ -313,25 +334,33 @@ So step 10 is really two edits — the `*.md` files, and the `hints` dict back i
 
 ```bash
 # 0. The structural check — seconds, and it catches a whole piece you forgot.
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -c "
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -c "
 import app.adapter
 from aegis.adapter import DomainAdapter, missing_members
 assert not missing_members(app.adapter), missing_members(app.adapter)
 assert isinstance(app.adapter, DomainAdapter)
 print('adapter contract: satisfied')
-"
+")
 
-# 1. The adapter and the whole agent graph, on fakes. No infrastructure.
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter tests/agent -q
+# 1. The conformance suite — thirteen checks, no infrastructure, under a second.
+#    Every one of them descends from a wiring defect this repo actually shipped,
+#    and every one fails with the fix, the consequence and the scar written out.
+#    Run it after every step above, not only here: it is the fastest signal in
+#    the repo that the adapter is wired and not merely present.
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest \
+    --pyargs aegis.conformance --aegis-adapter app.adapter -q)
 
-# 2. The full backend suite.
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q
+# 2. The adapter and the whole agent graph, on fakes. No infrastructure.
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter tests/agent -q)
 
-# 3. The core package, untouched by your edits — so it must be exactly as green
+# 3. The full backend suite.
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q)
+
+# 4. The core package, untouched by your edits — so it must be exactly as green
 #    as it was before you started.
-cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q
+(cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q)
 
-# 4. Lint.
+# 5. Lint.
 backend/.venv/bin/python -m ruff check aegis backend
 ```
 
@@ -343,7 +372,7 @@ is missing from the checklist is a piece nobody swaps.
 Then train the ML spine on your new spec:
 
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m app.ml
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m app.ml)
 ```
 
 ---
@@ -365,7 +394,7 @@ be reported rather than done quietly.
 ## What to report when you are done
 
 New dependencies, new environment variables, any core edit you were forced to
-make and why, and the outputs of all five final-gate commands. Do not add
+make and why, and the outputs of all six final-gate commands. Do not add
 dependencies to `aegis/pyproject.toml` yourself — name them in the report.
 
 ## If you need more context

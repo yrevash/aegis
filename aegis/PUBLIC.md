@@ -41,8 +41,8 @@ print(total)
 EOF
 ```
 
-**44 of them are Stable** — roughly one name in seventeen. That ratio is the
-point. A surface that is 94% unpromised is a surface that can still be changed.
+**50 of them are Stable** — roughly one name in fifteen. That ratio is the
+point. A surface that is 93% unpromised is a surface that can still be changed.
 
 ---
 
@@ -60,10 +60,29 @@ they are, they are simply not promised.
 
 ---
 
-## Stable — the 44
+## Stable — the 50
 
 Each of these resolves, and is in its package's `__all__`. That is not a claim,
 it is asserted by `tests/core/test_public_surface.py`, which reads this file.
+
+### `aegis` — the one supported way up
+
+The composition root, and the errors it raises. These are the first names an
+integrator touches and the last ones that may move: a bring-up call that changed
+shape would break every host at once.
+
+| Name | What it is |
+|---|---|
+| `aegis.Aegis` | The composition root. `Aegis.from_env(adapter=...)` is the **only** supported way to bring a process up; it verifies the adapter, reads the environment and writes every seam in one call. |
+| `aegis.AegisError` | Base of everything `from_env` raises, so a host can catch the set. |
+| `aegis.AdapterContractError` | The adapter could not be imported, or is missing a `DomainAdapter` member — each one named. |
+| `aegis.MissingConfigurationError` | A required variable or host seam is absent. The message names the variable, the value shape and the honest alternative. |
+| `aegis.AegisAlreadyConfiguredError` | A second, **different** domain was configured in one process. |
+| `aegis.Seam` | One row of the boot record: which seam was written, from what, and whether the choice is durable. What `Aegis.describe()` and `.ephemeral_seams` are made of. |
+
+`aegis.active` is exported alongside these and is deliberately **Provisional**: a
+process-global accessor is a lifecycle detail, and keeping the handle `from_env`
+returned is the supported way to reach it.
 
 ### `aegis.core` — the shared vocabulary
 
@@ -100,7 +119,7 @@ it is already named by `memory_spec.SKILLS_DIR`.
 | `aegis.adapter.adapter_members` | Every member name the Protocol requires, read off the Protocol itself. |
 | `aegis.adapter.missing_members` | What a candidate adapter does not have yet. Necessary, not sufficient — it checks presence, not shape. |
 
-The eight per-piece Protocols (`SchemaModule`, `MLSpecModule`, `GeneratorModule`,
+The nine per-piece Protocols (`SchemaModule`, `MLSpecModule`, `GeneratorModule`,
 `ToolsModule`, `PersonasModule`, `PromptsModule`, `MemorySpecModule`,
 `RosterModule`, `CorpusModule`) are the members of `DomainAdapter` and are
 exported alongside it; they are Provisional while the shapes settle. Bind to

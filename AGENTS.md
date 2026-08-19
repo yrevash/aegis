@@ -29,27 +29,39 @@ something about the domain, you have gone the wrong way.
 Both suites run from a venv in `backend/`. `PYTHONPATH` is not optional — the
 packages are used from source, not installed.
 
-```bash
-# Backend suite  (baseline: 1033 passed, 1 skipped)
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q
+**Every command below is written from the repository root, and each `cd` is wrapped
+in a subshell so running them one after another in one terminal works.** Without the
+subshell the second command lands in the first command's directory and fails on
+`cd: no such file or directory`.
 
-# Core package suite  (baseline: 2149 passed, 14 skipped)
-cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q
+```bash
+# Backend suite  (baseline: 1101 passed, 1 skipped)
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q)
+
+# Core package suite  (baseline: 2224 passed, 14 skipped)
+(cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q)
 
 # Lint — must be clean
 backend/.venv/bin/python -m ruff check aegis backend
 
 # Console
-cd web && npm run build && npm test
+(cd web && npm run build && npm test)
 
 # Generated API reference -> docs/api/ (git-ignored)
 backend/.venv/bin/python scripts/build_api_docs.py
+
+# Conformance — thirteen checks that an adapter is wired right. No database, no
+# key, no model call, under a second. Every check descends from a wiring defect
+# this repo shipped, and every failure names the fix. Run it after any adapter
+# edit; `--aegis-adapter` is required and its absence is one usage error.
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest \
+    --pyargs aegis.conformance --aegis-adapter app.adapter -q)
 
 # The HTTP contract -> backend/openapi.json (COMMITTED, snapshot-tested), and the
 # TypeScript client generated from it. Run both after changing any route, request
 # model, response model or StreamEvent variant; the suites fail if you do not.
 backend/.venv/bin/python scripts/build_openapi.py
-cd web && npm run gen:api
+(cd web && npm run gen:api)
 ```
 
 Install and run: `./scripts/bootstrap.sh && ./scripts/dev-native.sh`, then
@@ -105,7 +117,7 @@ These are invariants, not preferences. Each one has a reason and most have a tes
 - **Docstrings carry the reasoning**, not just the signature. This repo's
   docstrings explain *why* a thing is the way it is, often naming the defect that
   caused it. Match that; a docstring that restates the parameter names is noise.
-- **`aegis/PUBLIC.md` is the API boundary.** 44 Stable names out of 700+ exported.
+- **`aegis/PUBLIC.md` is the API boundary.** 50 Stable names out of 700+ exported.
   Adding to a package's `__all__` is cheap; adding to the Stable table is a
   promise. Removing a Stable name needs `aegis.core.deprecated` and one minor
   release first.
@@ -130,8 +142,8 @@ These are invariants, not preferences. Each one has a reason and most have a tes
 Never report success without pasting real output. In order:
 
 ```bash
-cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q
-cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q
+(cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q)
+(cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q)
 backend/.venv/bin/python -m ruff check aegis backend
 ```
 

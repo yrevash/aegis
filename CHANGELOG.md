@@ -29,7 +29,7 @@ the tree is listed here.
 
 ### Added
 
-- **`aegis/PUBLIC.md`** — the public/internal boundary. Three tiers, 44 Stable
+- **`aegis/PUBLIC.md`** — the public/internal boundary. Three tiers, 50 Stable
   names out of 700+ exported, and a stated reason for everything left internal.
   Read by `aegis/tests/core/test_public_surface.py`, so a rename fails the suite
   rather than silently invalidating the document.
@@ -92,8 +92,26 @@ the tree is listed here.
   `/health`, `/ready`, `/readyz` — because a liveness URL that moves with the API
   version starts 404-ing halfway through a rollout. The console followed in one
   place (`web/src/lib/api/config.ts`).
+- **`AegisModuleRow.category` and `.status` are published as their real closed sets.**
+  `app.capabilities.AegisModule` has always typed them `Literal[...]`; the API
+  projection restated them as `str`, so the OpenAPI document — and therefore the
+  generated TypeScript client — described a field with five legal values as
+  `string`. The generated client can only be as precise as the document it is
+  generated from, so a projection that widens a closed set reintroduces exactly the
+  drift generating the client removed.
 - `chunks` became a tenant-scoped table.
 - `aegis.core.__all__` gained the three deprecation names above.
+- **`aegis.gateway` re-exports `GatewayConfig`, `GovernanceHook` and
+  `ObservabilitySink`.** They are `configure()`'s parameter types and lived only in
+  `aegis.gateway.llm`, so a host writing a budget hook had to bind to a submodule
+  path `PUBLIC.md` calls internal — and `aegis.runtime`'s own `TYPE_CHECKING`
+  import of all three named nothing the package exported, leaving three annotations
+  on `Aegis.from_env` unresolvable for a type checker on a package that ships
+  `py.typed` to promise otherwise. Provisional, not Stable.
+- **`PUBLIC.md` promises the composition root.** `aegis.Aegis` and the four errors
+  `from_env` raises were in the top-level `__all__` but in no Stable table, so the
+  one supported way to bring a process up carried no stability promise at all. The
+  Stable count moved from 44 to 50; `aegis.active` is stated Provisional.
 
 ### Deprecated
 
