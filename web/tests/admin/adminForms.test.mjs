@@ -22,7 +22,7 @@ import {
   checkBudgetDraft,
   checkTenantDraft,
   checkUserDraft,
-  clampAdvisory,
+  capRefusalWarning,
   isWellFormed,
   refusalSentence,
   scopeVerdict,
@@ -137,13 +137,13 @@ test('a budget with no cap on it is not a budget, and a blank box is null not ze
   })
 })
 
-test('a sub-cap above the tenant cap is warned about, not refused', () => {
+test('a sub-cap above the tenant cap is warned about before the server refuses it', () => {
   // `effective_limits` clamps a user cap inward, so the row saves and never binds.
-  assert.match(clampAdvisory(900, 500), /clamps a user cap inward/)
-  assert.equal(clampAdvisory(400, 500), null)
-  assert.equal(clampAdvisory(500, 500), null)
-  assert.equal(clampAdvisory(900, null), null, 'nothing known to clamp against, nothing to say')
-  assert.equal(clampAdvisory(null, 500), null)
+  assert.match(capRefusalWarning(900, 500), /the server will refuse it/)
+  assert.equal(capRefusalWarning(400, 500), null)
+  assert.equal(capRefusalWarning(500, 500), null)
+  assert.equal(capRefusalWarning(900, null), null, 'nothing known to clamp against, nothing to say')
+  assert.equal(capRefusalWarning(null, 500), null)
 })
 
 test('the server’s own reason survives the trip, whatever shape it arrived in', () => {

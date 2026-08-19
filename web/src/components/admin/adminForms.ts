@@ -287,23 +287,30 @@ export function budgetBody(draft: BudgetDraft): Budget {
 }
 
 /**
- * The advisory for a user cap that sits above the tenant cap governing it.
+ * The warning for a user cap that sits above the tenant cap governing it.
  *
- * Not a refusal — the backend accepts it. `effective_limits` clamps a user cap
- * *inward* to its tenant's (`_clamp_inward`, `aegis/governance/enforcement.py`), so
- * the row saves and then never binds. Saying so is the difference between a control
- * that lies and one that tells you what it will do.
+ * This used to say the backend would accept the figure and clamp it inward, which was
+ * true and was the defect: the row saved, the screen read back $500, and $50 bound.
+ * `upsert_budget` now refuses it outright with a 422 naming both figures, so the
+ * warning says what will actually happen rather than describing a clamp.
+ *
+ * Deliberately a warning and not a block. The tenant cap this compares against is
+ * whatever the last load returned, and it can be stale — another admin may have raised
+ * it a second ago. The server is the authority on the refusal, and its sentence is
+ * more precise than anything computable here; this only saves a round trip when the
+ * browser already has enough to know.
  *
  * @param userUsd - The USD cap being set on the user, or null.
  * @param tenantUsd - The USD cap already governing that user's tenant, or null.
  * @returns One sentence of warning, or null when there is nothing to warn about.
  */
-export function clampAdvisory(userUsd: number | null, tenantUsd: number | null): string | null {
+export function capRefusalWarning(userUsd: number | null, tenantUsd: number | null): string | null {
   if (userUsd === null || tenantUsd === null) return null
   if (userUsd <= tenantUsd) return null
   return (
-    `This is above the tenant cap of $${tenantUsd}. Aegis clamps a user cap inward, ` +
-    `so $${tenantUsd} would bind and this figure would never be reached.`
+    `This is above the tenant cap of $${tenantUsd}, so the server will refuse it. A user ` +
+    `sub-cap can never exceed the cap on its own tenant. Lower it to $${tenantUsd}, or ` +
+    `raise the tenant cap first.`
   )
 }
 

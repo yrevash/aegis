@@ -13,7 +13,7 @@ import {
   WINDOWS,
   budgetBody,
   checkBudgetDraft,
-  clampAdvisory,
+  capRefusalWarning,
   isWellFormed,
   numberOrNull,
   positiveIntOrNull,
@@ -89,7 +89,7 @@ export function BudgetForm({
           (b) => b.scope_type === 'tenant' && b.scope_id === chosenUser.tenant_id && b.window === draft.window,
         )?.usd_cap ?? null)
       : null
-  const advisory = clampAdvisory(numberOrNull(draft.usdCap), governingTenantCap)
+  const advisory = capRefusalWarning(numberOrNull(draft.usdCap), governingTenantCap)
 
   const submit = (event: FormEvent): void => {
     event.preventDefault()
