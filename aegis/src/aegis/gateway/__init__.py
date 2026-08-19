@@ -52,6 +52,7 @@ from aegis.gateway.llm import (
     optimization_config,
     optimization_summary,
     record_call,
+    reset_usage_tally,
     transcribe,
     usage_tally,
 )
@@ -91,5 +92,6 @@ __all__ = [
     "optimization_summary",
     "record_call",
     "transcribe",
+    "reset_usage_tally",
     "usage_tally",
 ]

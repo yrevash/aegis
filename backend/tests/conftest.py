@@ -42,6 +42,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from aegis.gateway import reset_usage_tally
 from aegis.retrieval.types import RetrievalScope
 
 # Ensure the ``src`` layout is importable even when the editable install's .pth
@@ -536,3 +537,18 @@ def parse_sse():
         return events
 
     return _parse
+
+
+@pytest.fixture(autouse=True)
+def _isolate_usage_tally():
+    """Give every test a clean gateway usage tally.
+
+    ``aegis.gateway``'s tally is a process global, which is correct for the metric
+    it serves and wrong for a suite: two platform tests assert honest zeros
+    "before any metered call", and they began failing the moment an unrelated file
+    that meters calls started sorting ahead of them. Reordering would only move the
+    problem to the next file that meters.
+    """
+    reset_usage_tally()
+    yield
+    reset_usage_tally()

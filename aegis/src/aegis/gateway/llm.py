@@ -1098,6 +1098,22 @@ class _UsageTally:
 _tally = _UsageTally()
 
 
+def reset_usage_tally() -> None:
+    """Clear the process-wide usage tally.
+
+    The tally is a module global, which is right for the metric it serves — a
+    process-wide count of model calls — and wrong for a test suite, where it makes
+    any assertion about "before any metered call" depend on which files ran first.
+    Two platform tests asserted honest zeros and began failing the moment an
+    unrelated test file that meters calls started sorting ahead of them.
+
+    Exported so a suite can isolate a test rather than reordering itself around a
+    global, and so nothing has to reach into ``_tally`` to do it.
+    """
+    global _tally
+    _tally = _UsageTally()
+
+
 def _attribution_role(model_id: str, role: ModelRole | None) -> ModelRole:
     """Return the role a call is attributed to in the per-role breakdown.
 
