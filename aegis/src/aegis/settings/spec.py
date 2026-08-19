@@ -635,6 +635,37 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
             "under-estimating admits one that cannot finish."
         ),
     ),
+    SettingSpec(
+        key="memory.retention_days",
+        type_=int,
+        default=90,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.OVERRIDE,
+        bounds=(0, 3650),
+        description=(
+            "Days of raw conversation turns kept before they are hard-deleted. 0 keeps "
+            "them indefinitely, which is what a legal hold looks like. OVERRIDE rather "
+            "than TIGHTEN_ONLY because neither direction is the safer one: a shorter "
+            "horizon is better for privacy, a longer one is what a regulated tenant's "
+            "retention obligation requires. This is a tenant's choice, not a floor the "
+            "platform defends on their behalf."
+        ),
+    ),
+    SettingSpec(
+        key="memory.closed_fact_retention_days",
+        type_=int,
+        default=30,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.OVERRIDE,
+        bounds=(0, 3650),
+        description=(
+            "Days a superseded or invalidated fact is kept for the belief timeline "
+            "before its row is deleted. A fact that is currently valid is never removed "
+            "by age, at any horizon."
+        ),
+    ),
 )
 
 _BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in SETTING_SPECS}

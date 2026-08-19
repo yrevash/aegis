@@ -369,14 +369,14 @@ export const SECTIONS: Record<string, Section> = {
  *
  * Refused on purpose, and each is a task that owns it rather than an oversight:
  *
- *   - `llmops` on `tenant_admin` — the prompt-registry read path is not yet
- *     per-tenant (`_ACTIVE_CACHE` is keyed on the prompt key alone), so the screen
- *     would look right and show another tenant's active version. Task 7.7 fixes the
- *     read path *before* mounting the surface.
- *   - `memory` on `tenant_admin` / `client` — read-only today; the write and the
- *     forget are task 7.5. A memory screen you cannot correct is a report.
  *   - `jobs` on `devops` — `GET /jobs` is `require_admin_or_ai_team`, so devops would
- *     get a 403 where the nav promised a control.
+ *     get a 403 where the nav promised a control. Pipeline health reaches them through
+ *     `stack` instead, which is already theirs.
+ *   - `llmops` and `memory` were refused here until 7.7 and 7.5 landed. `llmops` is now
+ *     on `tenant_admin` because the registry is keyed per tenant and a version no longer
+ *     deletes the platform floor; `memory` is on `tenant_admin` and `client` because the
+ *     write, the correction and the forget exist — a memory screen you cannot correct is
+ *     a report, and it is not one any more.
  *   - `simulation` stays where it tells the isolation story and is not propagated: it
  *     is a demo artefact, not an operator tool.
  *
@@ -391,10 +391,10 @@ export const SECTIONS: Record<string, Section> = {
  */
 export const ROLE_SECTIONS: Record<Portal, string[]> = {
   platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
-  tenant_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
+  tenant_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'cache', 'latency', 'audit', 'settings'],
-  client: ['console', 'dashboard', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'simulation', 'settings'],
+  client: ['console', 'dashboard', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'memory', 'simulation', 'settings'],
 }
 
 /**

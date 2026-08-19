@@ -512,13 +512,20 @@ REQUIRED_SECTIONS: dict[str, frozenset[str]] = {
     # borrowing the platform operator's. `approvals` is the one that makes it a portal
     # rather than a copy — deciding its tenant's gates is the authority §7.1 moved
     # here, and this row is what stops it being moved back out.
-    "tenant_admin": frozenset({"dashboard", "approvals", "governance", "audit"}),
+    # `llmops` and `memory` joined after 7.7 and 7.5: the prompt registry is keyed
+    # per tenant now (it was keyed on the prompt key alone, so a tenant admin
+    # would have been shown another tenant's active version), and memory gained
+    # the write, the correction and the forget. Required here so neither can be
+    # quietly unmounted back to the state that made them unsafe.
+    "tenant_admin": frozenset(
+        {"dashboard", "approvals", "governance", "audit", "llmops", "memory"}
+    ),
     "ai_team": frozenset({"console", "harness", "evals", "memory", "rag", "guardrails"}),
     "devops": frozenset({"stack", "patch", "security", "redteam", "latency"}),
     # `approvals` on the client is read-only and is still required: a user whose run
     # trips the HIGH-risk gate had no screen at all that told them what happened to it.
     "client": frozenset(
-        {"console", "dashboard", "savings", "forecast", "risk", "approvals"}
+        {"console", "dashboard", "savings", "forecast", "risk", "approvals", "memory"}
     ),
 }
 

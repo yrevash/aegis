@@ -8,6 +8,7 @@ import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
+import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
@@ -217,6 +218,16 @@ export function StackMount(): ReactElement {
             <h1 className="t-hero text-foreground">Tech Stack &amp; Versions</h1>
           </div>
           <StackVersions token={session?.token ?? null} />
+          {/*
+            Pipeline health lives here as well as under `jobs`, because `GET /jobs` is
+            `require_admin_or_ai_team` and devops is neither — so the section that
+            carries the panel is one they get a 403 on. `GET /platform/pipeline` admits
+            any authenticated principal and narrows every figure to their own scope, so
+            the people who actually operate the pipeline can read it from a section that
+            is already theirs, rather than from a nav entry that would promise a control
+            and deliver a refusal.
+          */}
+          <PipelineHealthPanel />
         </div>
       </TooltipProvider>
     </BackendGate>
