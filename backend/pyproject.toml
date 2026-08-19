@@ -136,6 +136,14 @@ guardrails = [
     # Runtime model: ``python -m spacy download en_core_web_sm`` (not a PyPI dep).
     "aegis[pii]",
 ]
+# Web search for the research sub-agent (phase-05 §5.6). The provider client is pinned
+# in the aegis package, where the seam that wraps it lives; the backend declares the
+# extra so a deployment that wants live external evidence gets it. Without it — or
+# without a ``TAVILY_API_KEY`` — the research path degrades to the internal corpus and
+# reports the degradation; it does not fail and it does not pretend.
+websearch = [
+    "aegis[websearch]",
+]
 # The MCP tool-server facade (app/mcp): exposes the adapter tool registry over a
 # real Model Context Protocol stdio server, preserving allowlist/audit/risk gates.
 # The code targets the 2.x API (``FastMCP`` handlers); 1.x is NOT compatible, hence

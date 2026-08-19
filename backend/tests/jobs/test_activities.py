@@ -26,7 +26,12 @@ import asyncio
 
 import pytest
 from aegis.jobs import Document, JobRun, JobStatus
-from aegis.jobs.stages import INGEST_STAGES, register_stage_handler
+from aegis.jobs.stages import (
+    INGEST_STAGES,
+    register_stage_handler,
+    remaining_stages,
+    stage_names,
+)
 from sqlalchemy import func, select
 from temporalio.exceptions import ApplicationError
 
@@ -144,6 +149,53 @@ async def test_running_a_stage_twice_commits_once(wired_jobs, stage_log, stage):
     assert stage_log.stages() == [stage]
     document = await _document(wired_jobs, document_id)
     assert document.completed_stage == stage
+
+
+async def test_running_an_earlier_stage_does_not_move_completed_stage_backwards(
+    wired_jobs, stage_log
+):
+    """``completed_stage`` is a high-water mark, and a stage running out of order is one.
+
+    Two executions can walk one document — ``app.jobs.control.requeue_job`` mints a fresh
+    workflow id and cancels nothing — so ``embed`` can genuinely arrive at a row that has
+    already committed ``graph``. The ``IS DISTINCT FROM`` guard blocks re-writing the
+    *same* stage and nothing else, so before the fix this wrote ``completed_stage='embed'``
+    and :func:`aegis.jobs.stages.remaining_stages` put ``index`` and ``graph`` back on the
+    queue for a document that had already finished them.
+
+    The handler's own work still commits: it ran, and hiding that would be the opposite
+    mistake. Only the marker holds.
+    """
+    await seed_tenants(wired_jobs, TENANT_A)
+    document_id = await seed_document(wired_jobs, TENANT_A, sha=_SHA_A)
+    register_recording_handlers(stage_log)
+    for stage in stage_names():
+        await run_stage(
+            StageInput(
+                tenant_id=TENANT_A,
+                workflow_id="ingest:7:1",
+                document_id=document_id,
+                stage=stage,
+            )
+        )
+    assert (await _document(wired_jobs, document_id)).completed_stage == "graph"
+
+    outcome = await run_stage(
+        StageInput(
+            tenant_id=TENANT_A,
+            workflow_id="ingest:7:1:second-execution",
+            document_id=document_id,
+            stage="embed",
+        )
+    )
+
+    assert outcome.committed is True, "the handler ran, so its transaction did commit"
+    document = await _document(wired_jobs, document_id)
+    assert document.completed_stage == "graph", (
+        "completed_stage moved backwards, so remaining_stages will re-run index and graph "
+        "on a document that already completed them"
+    )
+    assert remaining_stages(document.completed_stage) == ()
 
 
 async def test_claiming_a_run_twice_produces_one_job_row(wired_jobs, stage_log):

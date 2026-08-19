@@ -64,6 +64,9 @@ ToolDefsFn = Callable[[str], list[dict[str, Any]]]
 RiskFn = Callable[[str], RiskLevel]
 RenderPromptFn = Callable[..., str]
 RosterFn = Callable[[], Any]
+#: Provider of the adapter's SUB-agent roster (the fan-out team). Returns a sequence of
+#: ``SubAgentSpec``-shaped entries; ``None``/absent ⇒ no team, every turn is SINGLE.
+SubAgentRosterFn = Callable[[], Any]
 TenantFn = Callable[[], int | None]
 AuditFn = Callable[..., Awaitable[Any]]
 #: Embed one query string for memory recall; returns ``None`` when unavailable.
@@ -130,6 +133,22 @@ class AgentConfig:
             reasoning about the iteration budget).
         default_persona_id: The persona id a run falls back to when the request names
             none. Neutral by default; the host wires its adapter's default persona.
+        team_enabled: Master switch for the adaptive multi-agent fan-out. ``False``
+            forces every turn SINGLE whatever the classifier or the user asked for.
+        max_parallel_agents: The platform cap on team width. A user's explicit width is
+            **narrowed** by this and never widened past it — ``Custom`` mode is not a
+            way around a budget cap, so the clamp lives where the cap is read.
+        max_concurrent_agents: How many sub-agents may hold a gateway slot at once
+            (the semaphore over the fan-out). Lower than ``max_parallel_agents`` on
+            purpose: width is what the user asked for, concurrency is what the gateway
+            can take.
+        subagent_max_steps: The hard step cap on one sub-agent's ReAct loop — the
+            guarantee it terminates.
+        subagent_timeout_s: The per-sub-agent wall clock. Exceeding it is a **designed**
+            terminal state (``timeout``), not an error: the agent is named as omitted
+            and its siblings finish.
+        team_wall_clock_s: The whole fan-out's wall clock. Whatever has not landed by
+            then is omitted, and the synthesis says so.
     """
 
     gate_min_risk: RiskLevel = RiskLevel.HIGH
@@ -149,6 +168,17 @@ class AgentConfig:
     agentic_retrieval_enabled: bool = True
     agentic_retrieval_max_rounds: int = 2
     answer_cache_enabled: bool = True
+    #: Adaptive multi-agent (phase 5). ``team_enabled`` is the master switch;
+    #: ``max_parallel_agents`` is the platform cap a manual width is clamped against;
+    #: the rest bound one sub-agent's loop and the fan-out's wall clock. A fan-out is
+    #: additionally impossible unless the host wires ``AgentDeps.subagent_roster`` —
+    #: the mechanism is core-owned, the roster's CONTENT is the adapter's.
+    team_enabled: bool = True
+    max_parallel_agents: int = 4
+    max_concurrent_agents: int = 3
+    subagent_max_steps: int = 4
+    subagent_timeout_s: float = 45.0
+    team_wall_clock_s: float = 90.0
 
     def as_dict(self) -> dict[str, Any]:
         """Return the effective knob values as a plain JSON-friendly dict.
@@ -169,6 +199,12 @@ class AgentConfig:
             "agentic_retrieval_enabled": self.agentic_retrieval_enabled,
             "agentic_retrieval_max_rounds": self.agentic_retrieval_max_rounds,
             "answer_cache_enabled": self.answer_cache_enabled,
+            "team_enabled": self.team_enabled,
+            "max_parallel_agents": self.max_parallel_agents,
+            "max_concurrent_agents": self.max_concurrent_agents,
+            "subagent_max_steps": self.subagent_max_steps,
+            "subagent_timeout_s": self.subagent_timeout_s,
+            "team_wall_clock_s": self.team_wall_clock_s,
         }
 
 
@@ -268,3 +304,10 @@ class AgentDeps:
     #: ``None`` keeps that degraded behaviour for test fakes; the host wires the
     #: gateway embedder. Best-effort: a failure degrades to recency, never fails a run.
     embed_query: EmbedQueryFn | None = None
+    #: The **sub-agent** roster the adaptive fan-out draws its team from — the adapter's
+    #: declaration of which sub-agents exist, what each is for, and which tools each may
+    #: reach. Deliberately ``None`` by default and deliberately NOT defaulted to a core
+    #: roster: the core owns the fan-out *mechanism*, a roster is domain *content*, and
+    #: inventing one here would make every host fan out to agents it never declared.
+    #: ``None`` ⇒ no team is possible and every turn is SINGLE, whatever was asked.
+    subagent_roster: SubAgentRosterFn | None = None

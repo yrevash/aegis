@@ -7,9 +7,20 @@ false. The old sentence — *"API only, no local cross-encoder, because the depl
 16 GB, no-GPU machine"* — treated "local cross-encoder" as a synonym for "GPU and a heavy
 model". It is not. `fastembed`'s ONNX ``TextCrossEncoder`` needs no GPU and pulls no torch,
 and the checkpoint we ship is 33M parameters / ~130 MB. The deploy machine was never the
-obstacle; the belief that it was kept a **+12.1 pp recall@5** improvement switched off, which
+obstacle; the belief that it was kept the second retrieval stage switched off entirely, which
 is the most expensive kind of documentation defect — a reader inherits the sentence and with
 it the wrong decision.
+
+**What the second stage is worth, external result and ours, side by side.** The +12.1 pp
+recall@5 figure this docstring used to state flatly is **not ours**: it is the BEIR-style
+cross-encoder result reported for `jinaai/jina-reranker-v1-tiny-en`, on their benchmarks and
+their passage lengths. Our own ablation (``runs/eval-goldset-20260819.json``, n=53, A3 → A4)
+moves **recall@6 by +0.009** — one case — because both arms see the same 20-candidate pool
+and reranking cannot put into the top 6 what recall never retrieved. What it buys us is
+**ordering**: **MRR@20 0.557 → 0.686 (+12.9 pp)** and nDCG@10 up with it. That is the honest
+claim, and it is a good one — the answer moves toward rank 1, which is what the generator
+reads first — but it is a different claim from "+12.1 pp recall", and n=53 cannot defend a
+one-case recall delta either way.
 
 Since task 4.9 the primary reranker is :mod:`aegis.retrieval.local_reranker`, and this module
 is what runs **behind** it: when the local model cannot load or dies mid-query, the pipeline

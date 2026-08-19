@@ -109,6 +109,8 @@ async def run_agent(
     on_terminal: OnTerminalFn | None = None,
     default_tier: str | None = None,
     parked_runs: ParkedRunRegistry | None = None,
+    depth_mode: str | None = None,
+    requested_fanout: int | None = None,
 ) -> AsyncIterator[Any]:
     """Run one query end-to-end, yielding the ordered stream of stamped events.
 
@@ -136,6 +138,14 @@ async def run_agent(
         parked_runs: The parked-run handle registry a gated run registers into; defaults
             to the process-wide registry. A host that owns its own registry (so an
             out-of-band resumer can wipe it to simulate a fresh worker) injects it here.
+        depth_mode: The user's REQUESTED width — ``"auto"`` (default: the depth
+            classifier decides), ``"single"`` or ``"team"``. This is the field Phase 6's
+            composer mode control writes to; an explicit value is honoured exactly and
+            the classifier is skipped rather than overruled after the fact. Only the
+            tenant's own budget may refuse a run.
+        requested_fanout: An explicit team width (``Custom`` mode). Clamped DOWN by
+            ``max_parallel_agents`` and never up — a cap the user could widen would not
+            be a cap.
 
     Yields:
         Stamped events in wire order (validated by the injected ``stamp``).
@@ -191,6 +201,9 @@ async def run_agent(
             # Long-term memory seeds (all None/0 on the single-shot path → nodes inert).
             "session_id": session_id,
             "memory_subject": memory_subject,
+            # The user's requested width (None → auto → the classifier decides).
+            "depth_mode": depth_mode,
+            "requested_fanout": requested_fanout,
             "turn_index": 0,
             "messages": [],
             "tool_calls": [],

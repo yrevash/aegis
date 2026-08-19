@@ -50,10 +50,20 @@ class RunStatus(StrEnum):
 
 
 class GuardStage(StrEnum):
-    """Which rail stage produced a verdict — input or output."""
+    """Which rail stage produced a verdict.
+
+    ``INPUT`` and ``OUTPUT`` are the two ends of a turn. ``TOOL_RESULT`` is the
+    third, and it is the one that used to be missing: a tool pulls arbitrary
+    third-party content (a web search result, a scraped page, a record from a
+    system nobody here controls) straight into an agent's context, where it is read
+    by the model as instructions-adjacent text. Screening the user and screening
+    the answer leaves that whole surface unguarded, which is OWASP LLM01 exactly.
+    """
 
     INPUT = "input"
     OUTPUT = "output"
+    #: A tool's output, screened **before** it is allowed into any agent's context.
+    TOOL_RESULT = "tool_result"
 
 
 class ApprovalDecision(StrEnum):

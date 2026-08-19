@@ -114,6 +114,50 @@ _KNOB_SPECS: tuple[_KnobSpec, ...] = (
         "str",
         "The persona id a run falls back to when the request names none.",
     ),
+    _KnobSpec(
+        "team_enabled",
+        "bool",
+        "Master switch for the adaptive multi-agent fan-out. Off = every turn runs "
+        "single-pass, whatever the classifier or the user asked for.",
+    ),
+    _KnobSpec(
+        "max_parallel_agents",
+        "int",
+        "Platform cap on team width. A user's explicit width is narrowed by this and "
+        "never widened past it.",
+        minimum=1,
+        maximum=8,
+    ),
+    _KnobSpec(
+        "max_concurrent_agents",
+        "int",
+        "How many sub-agents may hold a gateway slot at once (the semaphore over the "
+        "fan-out).",
+        minimum=1,
+        maximum=8,
+    ),
+    _KnobSpec(
+        "subagent_max_steps",
+        "int",
+        "Hard step cap on one sub-agent's bounded ReAct loop — the guarantee it "
+        "terminates.",
+        minimum=1,
+        maximum=10,
+    ),
+    _KnobSpec(
+        "subagent_timeout_s",
+        "float",
+        "Per-sub-agent wall clock. Exceeding it is a DESIGNED terminal state: the agent "
+        "is named as omitted and its siblings finish.",
+        minimum=1.0,
+    ),
+    _KnobSpec(
+        "team_wall_clock_s",
+        "float",
+        "Wall clock for the whole fan-out. Whatever has not landed by then is omitted, "
+        "and the synthesis says so.",
+        minimum=1.0,
+    ),
 )
 
 _DEFAULTS: dict[str, Any] = AgentConfig().as_dict()

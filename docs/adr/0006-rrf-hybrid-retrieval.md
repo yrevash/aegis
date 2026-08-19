@@ -78,6 +78,13 @@ lite paths:
   it cannot merge two recall lists, it can only reorder one, so it was never an alternative
   to RRF and the two now compose (RRF fuses, the cross-encoder reorders what RRF produced).
   The false half was "needs a GPU or a heavy model": `fastembed`'s ONNX `TextCrossEncoder`
-  needs neither, and phase 4 D6 measured a 33M-parameter one at ~74 ms over a 20-candidate
-  pool on the 16 GB / no-GPU box. It is now the reranker after RRF, with the LLM-as-reranker
-  as its loud fallback (`aegis.retrieval.local_reranker`).
+  needs neither. **The number this ADR carried was the wrong one, by 20x.** Phase 4 D6
+  measured a 33M-parameter cross-encoder at **p50 1.44 s (p95 1.55 s) over a 20-candidate
+  pool of 400-word chunks** on the 16 GB / no-GPU box (`spikes/rerank_bench.py`, recorded in
+  `docs/dev_new_docs_v2/phase-04-ingestion.md` under D6). ~72 ms is the **per-passage**
+  constant, not the pool figure — a cross-encoder's cost is linear in pool size, so quoting
+  the per-passage number for a 20-candidate pool understates the call by the pool size. This
+  is the same class of error D6 was raised to correct (its own estimate said 150–400 ms), and
+  it is corrected here so a reader who inherits this decision inherits the measurement rather
+  than the estimate. It is still the reranker after RRF, with the LLM-as-reranker as its loud
+  fallback (`aegis.retrieval.local_reranker`) — `recall_top_k` is the latency lever.

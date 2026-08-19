@@ -69,6 +69,12 @@ retrieval = [
 # after any rebuild; `ParsedDocument.parser` records which version produced a document.
 ingestion = ["docling[rapidocr]==2.120.3"]
 gateway = ["litellm>=1.52"]
+# Web search for the research sub-agent (`aegis.websearch`). Optional on purpose: a
+# box with no key degrades to internal-only evidence and SAYS SO (ERROR log + a
+# `web_search` event), rather than returning an empty result set that looks like a
+# clean search. `tavily-python` is imported lazily through `aegis.core.require`, so
+# nothing here is paid for until a search actually runs.
+websearch = ["tavily-python>=0.5"]
 # Embeddings persist as JSON of record (list[float]); ANN search runs in the embedded
 # vector store, so the data layer needs only SQLAlchemy — pgvector was removed.
 data = ["sqlalchemy[asyncio]>=2.0"]
@@ -123,7 +129,7 @@ media = [
     "presidio-image-redactor>=0.0.53",
     "pillow>=10.0",
 ]
-all = ["aegis[redis,nemo,pii,postgres,retrieval,ingestion,ml,forecast,media,gateway,data,governance,observability,phoenix,agent]"]
+all = ["aegis[redis,nemo,pii,postgres,retrieval,ingestion,ml,forecast,media,gateway,websearch,data,governance,observability,phoenix,agent]"]
 # `aegis[postgres]` (asyncpg) is a hard requirement of the test suite, not an optional
 # extra of it: every database-backed test runs against a real cluster over a
 # `NOSUPERUSER NOBYPASSRLS` role, because the RLS policies this package installs are

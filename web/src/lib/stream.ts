@@ -21,8 +21,15 @@ export type Role = 'admin' | 'ai_team' | 'devops' | 'client'
 /** Terminal status of a query run. */
 export type RunStatus = 'completed' | 'blocked' | 'awaiting_approval' | 'error'
 
-/** Which guardrail rail produced a verdict. */
-export type GuardStage = 'input' | 'output'
+/**
+ * Which guardrail rail produced a verdict.
+ *
+ * `tool_result` mirrors `GuardStage.TOOL_RESULT` in aegis/src/aegis/core/types.py:
+ * a tool's output screened *before* it reaches any agent's context (web-search
+ * content in particular), so a planted instruction in a third-party page is
+ * blocked and shown rather than read by the model.
+ */
+export type GuardStage = 'input' | 'output' | 'tool_result'
 
 /** Outcome of a guardrail check. */
 export type GuardVerdict = 'pass' | 'block' | 'redact'
@@ -122,7 +129,7 @@ export interface Reasoning extends BaseEvent {
   text: string
 }
 
-/** An input or output rail produced a verdict. */
+/** An input, output or tool-result rail produced a verdict. */
 export interface Guardrail extends BaseEvent {
   type: 'guardrail'
   stage: GuardStage

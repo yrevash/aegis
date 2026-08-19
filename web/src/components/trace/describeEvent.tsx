@@ -28,7 +28,22 @@ import {
 
 import type { Signal } from '@/config/signals'
 import { signalForEvent } from '@/config/signals'
-import type { StreamEvent } from '@/lib/stream'
+import type { GuardStage, StreamEvent } from '@/lib/stream'
+
+/**
+ * How each rail stage is named in the trace.
+ *
+ * A `Record<GuardStage, string>`, so adding a stage to the union in `@/lib/stream`
+ * is a type error here until it is given a label. The previous
+ * `stage === 'input' ? 'Input' : 'Output'` silently rendered every non-input stage
+ * as "Output" — which would have shown a tool-result rail firing on a web page as
+ * an output rail firing on the answer.
+ */
+const GUARD_STAGE_LABEL: Record<GuardStage, string> = {
+  input: 'Input',
+  output: 'Output',
+  tool_result: 'Tool result',
+}
 
 /** Presentation for a single trace row. */
 export interface TraceDescriptor {
@@ -70,7 +85,7 @@ export function describeEvent(event: StreamEvent): TraceDescriptor {
         signal: event.verdict === 'block' ? 'block' : event.verdict === 'redact' ? 'risk' : 'ok',
         icon:
           event.verdict === 'redact' ? Eraser : event.verdict === 'pass' ? ShieldCheck : Ban,
-        title: `${event.stage === 'input' ? 'Input' : 'Output'} guardrail${layer} · ${event.verdict}`,
+        title: `${GUARD_STAGE_LABEL[event.stage]} guardrail${layer} · ${event.verdict}`,
         detail,
       }
     }

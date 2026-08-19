@@ -3304,10 +3304,14 @@ async def requeue_job(
     **The admission-controlled path.** The tenant's concurrency cap and its budget
     pre-authorisation are evaluated before any workflow is started, so a refusal leaves
     nothing behind in the orchestrator to reconcile later.
+
+    **A job that has not finished is refused with a 409.** A re-queue starts a second
+    execution and cancels nothing, so re-queueing a live run would leave two workflows
+    walking one document. Cancel, then re-queue.
     """
     from aegis.jobs import AdmissionError, JobNotVisibleError
 
-    from app.jobs.control import MissingDocumentError
+    from app.jobs.control import JobNotRequeueableError, MissingDocumentError
     from app.jobs.control import requeue_job as _requeue
 
     tenant_id = _scope_tenant(auth, None)
@@ -3316,6 +3320,10 @@ async def requeue_job(
     except JobNotVisibleError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=exc.reason
+        ) from exc
+    except JobNotRequeueableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=exc.reason
         ) from exc
     except MissingDocumentError as exc:
         raise HTTPException(

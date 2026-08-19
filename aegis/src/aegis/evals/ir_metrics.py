@@ -19,6 +19,12 @@ The k values are the ones this codebase actually runs at
 * **nDCG@10** — computed for recognisability and **flagged as degenerate here**: with
   single-gold binary relevance nDCG@10 collapses to ``1/log2(1+rank)``, which carries
   almost the same information as MRR. It earns its place only on the multi-span subset.
+  It is also the one metric here whose first implementation was **wrong** — it returned
+  values above 1 (up to 1.631) because a span duplicated across overlapping chunks was
+  paid for once per rank against an ideal counted once per span. :func:`ndcg_at_k` says
+  what it does now; the corrected column is in ``runs/eval-goldset-20260819.json`` and the
+  correction note is in ``docs/dev_new_docs_v2/phase-04-ingestion.md``. Nothing else in
+  the artifact moved: the comparisons run on ``recall_20``/``recall_6``.
 
 ## Why the statistics are here at all
 
@@ -105,23 +111,55 @@ def reciprocal_rank(hit_ranks: Sequence[Sequence[int]], k: int) -> float:
 
 
 def ndcg_at_k(hit_ranks: Sequence[Sequence[int]], k: int) -> float:
-    """Position-discounted gain over binary relevance.
+    """Position-discounted gain over the required spans, bounded at ``1``.
+
+    Two properties of ``hit_ranks`` make the textbook one-liner wrong here, and both are
+    handled explicitly rather than hoped away:
+
+    * **A span can occupy several consecutive ranks.** Chunks overlap by 60 words, so a
+      span straddling a boundary is genuinely inside two or three neighbouring chunks and
+      :func:`~aegis.evals.ablation` reports every one of them. Summing a gain per *rank*
+      while dividing by an ideal counted per *span* is what produced ``nDCG@10 = 1.63``
+      for a single gold span found at ranks 1 and 2. Each span is therefore credited
+      **once, at its earliest rank**.
+    * **A single chunk can hold several spans.** The gain at that rank is then graded —
+      the number of spans it is the earliest hit for — and the ideal is built from the
+      same grades, which is what keeps a two-span chunk at rank 1 scoring exactly ``1.0``
+      instead of overflowing.
+
+    The ideal ranking is those grades sorted descending at ranks ``1..n``, **plus one
+    grade-1 item for every span that was never found within ``k``** — so partial recall
+    is paid for in the denominator rather than forgiven by it. Truncated at ``k``, as
+    nDCG@k always is.
 
     Args:
-        hit_ranks: As :func:`recall_at_k`.
+        hit_ranks: One sequence of 1-based ranks per *required span* — the positions in
+            the ranked list whose chunk contains that span (empty when it was never
+            retrieved).
         k: The cut-off.
 
     Returns:
-        nDCG@k in ``[0, 1]``. The ideal ranking puts every required span in the first
-        positions, so the denominator is the DCG of ``min(len(hit_ranks), k)`` hits at
-        ranks 1..n. Degenerate for single-gold cases — see the module docstring.
+        nDCG@k in ``[0, 1]``. Degenerate for the single-gold single-rank case, where it
+        collapses to ``1/log2(1 + rank)`` — see the module docstring.
     """
     if not hit_ranks or k <= 0:
         return 0.0
-    relevant = sorted({rank for ranks in hit_ranks for rank in ranks if rank <= k})
-    gain = sum(1.0 / math.log2(1 + rank) for rank in relevant)
-    ideal_hits = min(len(hit_ranks), k)
-    ideal = sum(1.0 / math.log2(1 + rank) for rank in range(1, ideal_hits + 1))
+    # One rank per span: its earliest hit inside the cut-off. ``None`` for a span the
+    # arm never retrieved, which becomes a term in the denominator and none in the
+    # numerator.
+    best = [min((rank for rank in ranks if rank <= k), default=None) for ranks in hit_ranks]
+    grades: dict[int, int] = {}
+    for rank in best:
+        if rank is not None:
+            grades[rank] = grades.get(rank, 0) + 1
+    gain = sum(count / math.log2(1 + rank) for rank, count in grades.items())
+    ideal_grades = sorted(grades.values(), reverse=True) + [1] * sum(
+        1 for rank in best if rank is None
+    )
+    ideal = sum(
+        grade / math.log2(2 + position)
+        for position, grade in enumerate(ideal_grades[:k])
+    )
     return gain / ideal if ideal else 0.0
 
 

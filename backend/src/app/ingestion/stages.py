@@ -419,7 +419,9 @@ def _chunk_meta(
     Everything a citation needs and nothing a query has to re-derive: where the text sits
     in the document (ordinal, section, word span), where it sits on the page (spans, each
     with the union of its blocks' boxes), the prefix that will be folded into the text by
-    ``enrich``, the content-addressed id the dense index is keyed by, and which parser
+    ``enrich``, the id the dense index is keyed by
+    (:meth:`~aegis.retrieval.chunker.ChunkPiece.indexed_id` — the content address plus the
+    ordinal, so identical text under one heading path cannot collide), and which parser
     produced it — because chunks from two Docling versions are not interchangeable.
 
     Args:
@@ -440,7 +442,11 @@ def _chunk_meta(
         "prefix": chunk.prefix,
         "word_start": chunk.word_start,
         "word_count": chunk.word_count,
-        "content_id": chunk.content_id(),
+        # ``indexed_id``, not ``content_id``: the ordinal is folded in so two chunks with
+        # identical text under one heading path cannot claim one key in the vector store.
+        # The key stays stable across a re-chunk (deterministic chunking → same ordinals),
+        # which is what makes the ``index`` stage a re-publish rather than a duplication.
+        "content_id": chunk.indexed_id(),
         "source": document.filename,
         "parser": parser,
         "page_no": chunk.page_no,
@@ -767,7 +773,19 @@ async def enrich_stage(
 
     The prefix was built at chunk time, because the document context it needs is not
     reachable from a chunk afterwards; this stage is where it becomes part of the text
-    that is actually embedded and indexed. Measured value: Context@5 33.3% → 55.0%.
+    that is actually embedded and indexed.
+
+    **Whose measurement, and what ours says.** "Context@5 33.3% → 55.0%" is the **ECIR 2026
+    field-ablation result** (``arXiv:2601.11863``), on their corpus — it is the evidence the
+    prefix's *shape* was chosen from (see :mod:`aegis.retrieval.chunker`) and it is theirs,
+    not a number this pipeline produced. **Our own A1 → A2 ablation moves recall@6 by
+    −3.8 pp** (0.774 → 0.736; recall@20 0.906 → 0.896) on a 53-case gold set over four PDFs
+    — a decline, not a gain, and one n=53 cannot distinguish from noise in either direction
+    (``runs/eval-goldset-20260819.json``). The prefix is kept because it is what makes a
+    chunk self-describing for a citation and for the graph extractor, and because the
+    external evidence for its *shape* is stronger than our 53 cases are against it — not
+    because we measured it helping retrieval here. Saying otherwise on a slide is the
+    defect this paragraph exists to prevent.
 
     Args:
         session: The scoped session, inside this stage's transaction.

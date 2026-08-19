@@ -494,6 +494,107 @@ class Guardrails:
             return advisories[0]
         return primary
 
+    async def check_tool_result(
+        self,
+        text: str | MediaPayload,
+        *,
+        tool_name: str | None = None,
+        emitter: AegisEmitter | None = None,
+    ) -> GuardResult:
+        """Screen a tool's output **before** it is allowed into any agent's context.
+
+        The third rail stage (:attr:`~aegis.core.types.GuardStage.TOOL_RESULT`). It is
+        deliberately the *input* chain — schema → PII → injection → content-safety →
+        topical → custom ``input_rails`` — and not a new pipeline: a web page, a
+        scraped record or a search snippet is untrusted text arriving from outside,
+        which is exactly what the inbound rails were built to judge. Injection
+        screening is the point. Text that a model will read as instructions-adjacent
+        context is the OWASP LLM01 surface, and a tool result is the one place that
+        text arrives without a human having typed it.
+
+        This runs over the *whole* result string, so a rail that redacts hands back
+        redacted text: callers must use :attr:`GuardResult.text`, not the string they
+        passed in, or the redaction did not happen.
+
+        Args:
+            text: The tool's output — text, or a :class:`~aegis.media.MediaPayload`
+                (an image a tool returned is screened by the media chain, fail-closed).
+            tool_name: Optional name of the tool that produced ``text``. Recorded in
+                the rationale so a console shows *which* tool was carrying the
+                payload, rather than an anonymous block.
+            emitter: Optional AG-UI emitter for the injection ``guardrail_cache``
+                and ``guardrail_media`` events.
+
+        Returns:
+            A :class:`GuardResult`. ``BLOCK`` means the content must not reach the
+            agent's context at all; ``REDACT`` means use ``result.text``; ``FLAG`` is
+            advisory and does not stop the content.
+        """
+        payload = as_payload(text)
+        if payload.kind is not MediaKind.TEXT:
+            result = await self._screen_media(payload, self._input_rails, emitter=emitter)
+        else:
+            raw = text if isinstance(text, str) else payload.text  # type: ignore[union-attr]
+            primary, advisories = await self._screen_input(raw, emitter=emitter)
+            result = (
+                advisories[0]
+                if primary.verdict is GuardVerdict.PASS and advisories
+                else primary
+            )
+        return self._attribute_tool(result, tool_name)
+
+    @staticmethod
+    def _attribute_tool(result: GuardResult, tool_name: str | None) -> GuardResult:
+        """Name the tool in the rationale so a verdict is never anonymous."""
+        if not tool_name:
+            return result
+        return result.model_copy(update={"reason": f"[tool:{tool_name}] {result.reason}"})
+
+    async def stream_check_tool_result_agui(
+        self,
+        text: str | MediaPayload,
+        emitter: AegisEmitter,
+        *,
+        tool_name: str | None = None,
+    ) -> GuardResult:
+        """Run the tool-result rail, streaming an AG-UI guardrail verdict.
+
+        The same shape :meth:`stream_check_input_agui` emits, stamped
+        ``stage="tool_result"`` so the console can render the rail firing *inside* a
+        tool call rather than at the edges of the turn. A blocked tool result that
+        streams nothing is the defect this stage exists to prevent: the run would
+        simply look like a search that found nothing.
+
+        Args:
+            text: The tool's output to screen.
+            emitter: The AG-UI emitter for streaming events.
+            tool_name: Optional name of the tool that produced ``text``.
+
+        Returns:
+            The :class:`GuardResult`; ``BLOCK`` means the content is not fit for context.
+        """
+        from aegis.core import stream_names
+        from aegis.core.types import GuardStage
+
+        async with emitter.step("guard_tool_result", SpanKind.GUARDRAIL):
+            t0 = time.monotonic()
+            result = await self.check_tool_result(text, tool_name=tool_name, emitter=emitter)
+            elapsed = round((time.monotonic() - t0) * 1000, 3)
+            await emitter.custom(
+                stream_names.GUARDRAIL_VERDICT,
+                {
+                    "stage": GuardStage.TOOL_RESULT.value,
+                    "tool": tool_name,
+                    "verdict": result.verdict.value,
+                    "rules": [result.layer] if result.layer else [],
+                    "rationale": result.reason,
+                    "redactions": result.redactions,
+                    "per_rail_timing_ms": {"total": elapsed},
+                    "spanKind": SpanKind.GUARDRAIL.value,
+                },
+            )
+        return result
+
     async def _screen_grounding(
         self, text: str, contexts: list[str] | None
     ) -> GuardResult | None:

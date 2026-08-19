@@ -34,6 +34,7 @@ export const STREAM_NAMES = {
   VOICE_TRANSCRIPT: 'voice_transcript',
   VISION_SCREEN: 'vision_screen',
   VISION_ANALYSIS: 'vision_analysis',
+  WEB_SEARCH: 'web_search',
 } as const
 
 /** The canonical set of every known stream name (mirrors the Python `ALL`). */

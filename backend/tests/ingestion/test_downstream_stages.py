@@ -17,6 +17,8 @@ embedded, published and extracted from are the texts a real ingest produces.
 
 from __future__ import annotations
 
+import hashlib
+
 import pgsupport
 import pytest
 from aegis.governance.models import Budget, BudgetScope, BudgetWindow
@@ -29,7 +31,9 @@ from app.core.security import TENANT_ADMIN, create_access_token
 from app.data import Tenant, User, get_sessionmaker, set_tenant_scope
 from app.ingestion.stages import (
     IngestDependencies,
+    chunk_stage,
     embed_stage,
+    enrich_stage,
     graph_stage,
     index_stage,
     set_ingest_dependencies,
@@ -65,6 +69,41 @@ class _CountingEmbed:
     def embedded(self) -> list[str]:
         """Every text this embedder was asked for, in order."""
         return [text for batch in self.batches for text in batch]
+
+
+class _ContentAddressedEmbed:
+    """An embedder whose vector is a pure function of the text it was given.
+
+    :class:`_CountingEmbed` proves *how many* vectors were written; this proves **which**.
+    The vector is derived from a digest of the text alone — no counter, no position, no
+    call order — so ``vector_of(chunk.content)`` is a claim about that chunk and nothing
+    else. Reversing the pairing inside a batch, or handing every chunk the batch's last
+    vector, changes what lands on the row and cannot change what this function says the
+    row should hold.
+
+    Two distinct digests can only collide with probability 2**-64 apiece, so a passing
+    assertion is not an accident of a 1000-bucket hash.
+    """
+
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    @staticmethod
+    def vector_of(text: str) -> list[float]:
+        """Return the one vector this embedder will ever return for ``text``."""
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        # Scaled into [0, 1) so the value survives the ``jsonb`` column as a float rather
+        # than coming back as an integer — the column is the embedding of record, not a
+        # place to smuggle a 64-bit integer through.
+        return [
+            int.from_bytes(digest[0:8], "big") / 2**64,
+            int.from_bytes(digest[8:16], "big") / 2**64,
+        ]
+
+    async def __call__(self, texts: list[str]) -> list[list[float]]:
+        """Return one content-derived vector per text, recording the batch."""
+        self.batches.append(list(texts))
+        return [self.vector_of(text) for text in texts]
 
 
 class _RecordingPublisher:
@@ -234,6 +273,84 @@ async def test_embed_writes_one_vector_per_chunk_and_re_running_leaves_one(
     assert [chunk.embedding for chunk in again] == [chunk.embedding for chunk in embedded]
 
 
+async def test_embed_stores_each_chunks_own_vector_and_not_its_neighbours(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """The pairing, asserted — the failure ``embed_stage``'s own docstring names.
+
+    ``EmbeddingCountMismatch`` catches a provider that returns the *wrong number* of
+    vectors. It cannot catch a provider (or a ``zip``) that returns the right number in
+    the wrong order, and that is the worse bug: every chunk ends up holding its
+    neighbour's meaning, every dense hit is off by one passage, and nothing downstream —
+    not the row count, not the vector width, not the re-run test — can see it. Reversing
+    the pairing inside each batch passed the whole suite before this test existed; so did
+    giving every chunk the last vector of its batch.
+
+    The only assertion that closes it is the one the docstring implies: what is on the row
+    equals what the embedder returns for **that row's own text**.
+    """
+    embed = _ContentAddressedEmbed()
+    set_ingest_dependencies(IngestDependencies(store=store, embed=embed))
+    await _seed_tenant()
+    document_id = await _chunked_document(client, parsed_artifact, store)
+
+    await _run("embed", document_id)
+
+    chunks = await _chunks(document_id)
+    assert len(chunks) > 1, "one chunk cannot mis-pair, so this fixture proves nothing"
+    # Distinct texts, or a reversed pairing would be indistinguishable from a correct one.
+    assert len({chunk.content for chunk in chunks}) == len(chunks)
+    for chunk in chunks:
+        assert chunk.embedding == pytest.approx(
+            _ContentAddressedEmbed.vector_of(chunk.content)
+        ), (
+            f"chunk {chunk.id} (ordinal {chunk.meta['ordinal']}) holds a vector that is "
+            "not the embedding of its own text"
+        )
+    # And the mis-pairing that is easiest to introduce is ruled out by name: no chunk
+    # holds the vector of the chunk before or after it in reading order.
+    for earlier, later in zip(chunks, chunks[1:], strict=False):
+        assert earlier.embedding != later.embedding
+
+
+async def test_embed_pairs_correctly_across_a_batch_boundary(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """The same property with the batch size forced down, so several batches really run.
+
+    ``_EMBED_BATCH`` is 64 and the fixture may not exceed it, in which case the test above
+    exercises exactly one batch and says nothing about the ``start`` arithmetic that slices
+    the next one. Here the batch is 3, so the loop runs many times and an off-by-one in the
+    slice — a batch re-embedded, a batch skipped, a batch's vectors written at the previous
+    batch's offset — lands on a row and is read back.
+    """
+    embed = _ContentAddressedEmbed()
+    set_ingest_dependencies(IngestDependencies(store=store, embed=embed))
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("app.ingestion.stages._EMBED_BATCH", 3, raising=True)
+    try:
+        await _seed_tenant()
+        document_id = await _chunked_document(client, parsed_artifact, store)
+
+        await _run("embed", document_id)
+    finally:
+        monkey.undo()
+
+    chunks = await _chunks(document_id)
+    assert len(embed.batches) == -(-len(chunks) // 3), "the batching did not partition"
+    # Every text embedded exactly once, in reading order, across the batch boundaries.
+    assert [text for batch in embed.batches for text in batch] == [
+        chunk.content for chunk in chunks
+    ]
+    for chunk in chunks:
+        assert chunk.embedding == pytest.approx(
+            _ContentAddressedEmbed.vector_of(chunk.content)
+        ), (
+            f"chunk {chunk.id} (ordinal {chunk.meta['ordinal']}) holds a vector that is "
+            "not the embedding of its own text"
+        )
+
+
 async def test_embed_refuses_a_provider_that_returns_the_wrong_number_of_vectors(
     client, db, wired, store, temporal, parsed_artifact
 ) -> None:
@@ -290,6 +407,60 @@ async def test_index_publishes_every_chunk_under_a_tenant_scoped_stable_id(
     # A second run publishes the same ids, which is what makes it an overwrite.
     await _handler(db, index_stage, document_id, "index")
     assert [item.id for item in publisher.calls[1]] == [item.id for item in published]
+
+
+async def test_re_chunking_then_re_indexing_publishes_the_same_ids_under_new_row_ids(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """The content-addressing claim, on the only path where it can be observed.
+
+    Publishing twice without re-chunking proves nothing: the ``chunks`` rows never moved,
+    so ``meta['content_id']`` and the database primary key are equally constant and the
+    two are indistinguishable. The property the ``index`` docstring actually claims — "a
+    re-publish of unchanged text is an overwrite of the same key rather than a duplicate"
+    — only has teeth after a **re-chunk**, because ``chunk_stage`` is delete-then-insert
+    and mints a fresh primary key for every chunk. That is task 4.13's re-index path, and
+    it is what this runs.
+
+    So: chunk, index, re-chunk, index again. The primary keys must all have changed (or
+    the test is the blind one again) and every published id must be identical.
+    """
+    publisher = _RecordingPublisher()
+    set_ingest_dependencies(IngestDependencies(store=store, publish=publisher))
+    await _seed_tenant()
+    document_id = await _chunked_document(client, parsed_artifact, store)
+    before = await _chunks(document_id)
+
+    await _run("index", document_id)
+
+    # Re-chunk through the handler: ``run_stage`` would short-circuit a committed stage,
+    # and the delete-then-insert underneath is exactly what this test needs to happen.
+    await _handler(db, chunk_stage, document_id, "chunk")
+    # ``enrich`` too, because the re-index path runs it and because ``chunk`` writes the
+    # bare body: without it the comparison below would be enriched text against raw text.
+    await _handler(db, enrich_stage, document_id, "enrich")
+    after = await _chunks(document_id)
+    assert [chunk.id for chunk in after] != [chunk.id for chunk in before], (
+        "the re-chunk reused its primary keys, so this test cannot tell a content-addressed "
+        "id from a row id — which is the exact blindness it exists to remove"
+    )
+    assert not ({chunk.id for chunk in after} & {chunk.id for chunk in before})
+    assert [chunk.content for chunk in after] == [
+        chunk.content for chunk in before
+    ], "the fixture re-chunked to different text; the ids below would differ for that reason"
+
+    await _handler(db, index_stage, document_id, "index")
+
+    first, second = publisher.calls[0], publisher.calls[1]
+    assert len(second) == len(first) == len(before)
+    assert [item.id for item in second] == [item.id for item in first], (
+        "a re-index after a re-chunk published new ids, so the store now holds two copies "
+        "of every chunk of this document"
+    )
+    # Not a row id in disguise: no published id ends in a primary key from either run.
+    row_ids = {str(chunk.id) for chunk in [*before, *after]}
+    assert not ({item.id.split(":", 1)[1] for item in second} & row_ids)
+    assert len({item.id for item in second}) == len(second), "two chunks share an id"
 
 
 # ── graph ────────────────────────────────────────────────────────────────────

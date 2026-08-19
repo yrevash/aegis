@@ -26,7 +26,12 @@ Public surface:
   :class:`ApprovalOutcome` / :class:`ParkedRunRegistry` — the ``/approval`` rendezvous,
   with :class:`GateHandedOffError` / :class:`ResumeFailedError` as its exactly-once
   hand-off signals.
-- :class:`RouterDecision` / :func:`route_query` — the supervisor router.
+- :class:`RouterDecision` / :func:`route_query` — the supervisor router, and
+  :func:`decide_depth` / :class:`DepthPolicy` — the width classifier and the seam an
+  explicit user width is honoured through.
+- :class:`SubAgentSpec` / :func:`run_subagent` — one bounded sub-agent that PROPOSES
+  risky actions rather than taking them; :func:`run_team` / :func:`synthesise` — the
+  concurrent fan-out inside one node and the merge that names its omissions.
 - :class:`AgentState` — the typed graph state.
 - :mod:`aegis.agent.events` — the wire-event dict builders.
 """
@@ -55,8 +60,20 @@ from .deps import (
 from .graph import build_agent
 from .harness import harness_config, run_summary
 from .orchestrator import ResumeFailedError, resume_parked_run, run_agent
-from .router import RouterDecision, classify_deterministic, load_roster, route_query
+from .router import (
+    Depth,
+    DepthDecision,
+    DepthMode,
+    DepthPolicy,
+    RouterDecision,
+    classify_deterministic,
+    decide_depth,
+    load_roster,
+    route_query,
+)
 from .state import AgentState
+from .subagent import SubAgentResult, SubAgentSpec, SubAgentStatus, run_subagent
+from .team import SharedRetrievalPool, TeamOutcome, TeamTask, run_team, synthesise
 from .topology import GraphTopology, TopologyEdge, TopologyNode, graph_topology
 
 __all__ = [
@@ -65,6 +82,10 @@ __all__ = [
     "AgentState",
     "ApprovalOutcome",
     "ApprovalRegistry",
+    "Depth",
+    "DepthDecision",
+    "DepthMode",
+    "DepthPolicy",
     "GateHandedOffError",
     "GraphTopology",
     "MemoryDeps",
@@ -72,12 +93,19 @@ __all__ = [
     "ParkedRunRegistry",
     "ResumeFailedError",
     "RouterDecision",
+    "SharedRetrievalPool",
+    "SubAgentResult",
+    "SubAgentSpec",
+    "SubAgentStatus",
+    "TeamOutcome",
+    "TeamTask",
     "ToolOutcome",
     "TopologyEdge",
     "TopologyNode",
     "UnknownApprovalError",
     "build_agent",
     "classify_deterministic",
+    "decide_depth",
     "events",
     "get_approval_registry",
     "get_parked_runs",
@@ -89,5 +117,8 @@ __all__ = [
     "risk_rank",
     "route_query",
     "run_agent",
+    "run_subagent",
     "run_summary",
+    "run_team",
+    "synthesise",
 ]

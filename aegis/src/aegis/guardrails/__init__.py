@@ -73,6 +73,37 @@ async def check_output(
     ).check_output(text)
 
 
+async def check_tool_result(
+    text: str | MediaPayload,
+    *,
+    tool_name: str | None = None,
+    completer: ChatCompleter | None = None,
+    vision_completer: ChatCompleter | None = None,
+) -> GuardResult:
+    """Screen a tool's output with a fresh :class:`Guardrails` pipeline.
+
+    The third rail stage (:attr:`~aegis.core.types.GuardStage.TOOL_RESULT`): run this
+    over anything a tool returns *before* it is put into an agent's context. Web
+    search content is the case that matters — it is arbitrary third-party text that
+    the model reads as context, and nothing else in the turn screens it.
+
+    Args:
+        text: The tool's output — text, or a :class:`~aegis.media.MediaPayload`.
+        tool_name: Optional name of the tool that produced ``text``, recorded in the
+            rationale.
+        completer: Optional chat completer for model-based injection detection.
+            If None, only deterministic injection signatures are checked.
+        vision_completer: Optional vision-capable completer for the image-injection
+            screen (image payloads fail closed without one).
+
+    Returns:
+        A GuardResult; BLOCK means the content must not reach the agent's context.
+    """
+    return await Guardrails(
+        completer=completer, vision_completer=vision_completer
+    ).check_tool_result(text, tool_name=tool_name)
+
+
 async def run_guards(
     input_text: str, output_text: str, *, completer: ChatCompleter | None = None
 ) -> tuple[GuardResult, GuardResult]:
@@ -105,6 +136,7 @@ __all__ = [
     "check_grounding",
     "check_input",
     "check_output",
+    "check_tool_result",
     "content_safety",
     "grounding",
     "media_rail",

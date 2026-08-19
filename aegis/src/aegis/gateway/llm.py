@@ -14,7 +14,13 @@ vision), :func:`embed` (text) or :func:`transcribe` (audio), which route by
   bills per audio-minute (see :class:`~aegis.gateway.routing.BillingUnit`), so
   those units are carried end to end rather than ledgered as ``$0.00``;
 - tool calls are parsed into typed :class:`~aegis.gateway.types.ToolCallResult`
-  objects.
+  objects;
+- the per-role fallback chain a chat call may traverse is bounded before the call
+  leaves: by the tenant's tier (:func:`model_allowlist` — a chain never promotes
+  to a model the tenant is not entitled to) and by an in-process circuit breaker
+  (a deployment that fails repeatedly is skipped for a cooldown, so a fan-out of
+  N agents does not each pay a dead deployment's timeout). Every resulting
+  downgrade is logged at ERROR and emitted as a :class:`FallbackEvent`.
 
 Budget/rate governance and observability are **injected hooks** (see
 :func:`configure`), each defaulting to a documented no-op so this module has no
@@ -33,8 +39,11 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Iterator
+import time
+from collections import deque
+from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -62,23 +71,31 @@ from aegis.gateway.types import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "GATEWAY_FALLBACK",
     "BudgetExceededError",
     "CostSource",
+    "FallbackEvent",
+    "FallbackReason",
+    "FallbackSink",
     "GatewayConfig",
     "GenAIOperation",
     "GovernanceHook",
     "LLMResult",
+    "ModelUnavailableError",
     "ObservabilitySink",
     "ToolCallResult",
     "TranscriptionResult",
     "TranscriptionSegment",
     "Usage",
+    "breaker_status",
     "call_saving_usd",
     "complete",
     "configure",
     "count_images",
     "embed",
+    "fallback_events",
     "last_trace_id",
+    "model_allowlist",
     "optimization_config",
     "optimization_summary",
     "record_call",
@@ -273,6 +290,10 @@ def configure(
     observability: ObservabilitySink | None = None,
     fallbacks: dict[ModelRole, list[ModelRole]] | None = None,
     baseline_role: ModelRole | None = None,
+    fallback_sink: FallbackSink | None = None,
+    allowed_roles: Iterable[ModelRole] | None = None,
+    breaker_threshold: int | None = None,
+    breaker_cooldown_seconds: float | None = None,
 ) -> None:
     """Wire the gateway's injected hooks and optimization knobs.
 
@@ -293,9 +314,24 @@ def configure(
         baseline_role: Override for the frontier-baseline role the savings calc
             prices actual spend against (takes precedence over
             ``GATEWAY_BASELINE_ROLE``).
+        fallback_sink: Hook notified of every degradation (see
+            :class:`FallbackSink`). The ERROR log and :func:`fallback_events`
+            happen with or without it — this is the channel that puts a
+            degradation on the host's event stream.
+        allowed_roles: The process-wide default model allowlist — the roles a
+            fallback chain may reach. ``None`` (the default) is unrestricted, so
+            existing behaviour is unchanged; per-request tier bounds belong in
+            :func:`model_allowlist`, which wins over this.
+        breaker_threshold: Consecutive failures on one deployment before its
+            breaker opens (default 3, env ``GATEWAY_BREAKER_THRESHOLD``).
+        breaker_cooldown_seconds: How long an open breaker skips a deployment
+            before letting one probe through (default 30s, env
+            ``GATEWAY_BREAKER_COOLDOWN_SECONDS``).
     """
     global _config, _governance, _observability
     global _fallbacks_override, _baseline_role_override
+    global _fallback_sink, _allowed_roles_override
+    global _breaker_threshold_override, _breaker_cooldown_override
     if config is not None:
         _config = config
     if governance is not None:
@@ -306,6 +342,14 @@ def configure(
         _fallbacks_override = fallbacks
     if baseline_role is not None:
         _baseline_role_override = baseline_role
+    if fallback_sink is not None:
+        _fallback_sink = fallback_sink
+    if allowed_roles is not None:
+        _allowed_roles_override = frozenset(allowed_roles)
+    if breaker_threshold is not None:
+        _breaker_threshold_override = breaker_threshold
+    if breaker_cooldown_seconds is not None:
+        _breaker_cooldown_override = breaker_cooldown_seconds
 
 
 def _get_config() -> GatewayConfig:
@@ -346,6 +390,434 @@ def _effective_fallbacks() -> dict[ModelRole, list[ModelRole]]:
 def _effective_baseline_role() -> ModelRole:
     """Return the active frontier-baseline role (host override wins over env)."""
     return _baseline_role_override if _baseline_role_override is not None else baseline_role()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fallback that survives a fan-out: a circuit breaker, a visible event, and a
+# chain bounded by the tenant's tier (phase 5 §5.8).
+#
+# There is exactly ONE fallback chain in this module — ``_effective_fallbacks()``
+# above — and this section does not add a second. It decides, per call, WHICH
+# members of that one chain are eligible before the call is handed to LiteLLM,
+# and it makes the outcome observable:
+#
+#   * the **breaker** removes a deployment that has failed repeatedly, so a fan-out
+#     of N concurrent agents does not each independently pay a dead deployment's
+#     full timeout;
+#   * the **tier bound** removes a role the tenant is not entitled to, so a cheap
+#     tenant is never silently promoted to an expensive model (that is a spend
+#     decision taken on their behalf, and it lands in their usage ledger);
+#   * every downgrade emits a :class:`FallbackEvent` and logs at ERROR, because a
+#     silent downgrade is a system that keeps answering while nobody learns the
+#     answer got worse.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: CustomEvent name for a gateway fallback/degradation. Kept here (rather than in
+#: ``aegis.core.stream_names``) because the gateway has no emitter of its own: the
+#: host observes fallbacks through :func:`configure(fallback_sink=...)` and streams
+#: them under whatever name it registers.
+GATEWAY_FALLBACK = "gateway_fallback"
+
+
+class FallbackReason(StrEnum):
+    """Why a call did not run on the deployment the role normally routes to."""
+
+    #: The primary's breaker is open — it failed repeatedly and is in cooldown.
+    CIRCUIT_OPEN = "circuit_open"
+    #: LiteLLM answered from a fallback deployment: the primary errored upstream.
+    UPSTREAM_ERROR = "upstream_error"
+    #: Every deployment in the chain is degraded — the call was refused, loudly.
+    ALL_DEGRADED = "all_degraded"
+    #: The role itself is outside the tenant's tier — refused before any spend.
+    OUTSIDE_TIER = "outside_tier"
+
+
+@dataclass(frozen=True)
+class FallbackEvent:
+    """One visible degradation: what was asked for, what happened, and why.
+
+    ``taken_deployment`` is ``None`` when nothing was taken — i.e. the chain was
+    exhausted and the call failed loudly rather than succeeding expensively.
+    """
+
+    role: ModelRole
+    failed_deployment: str
+    taken_deployment: str | None
+    reason: FallbackReason
+    considered: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the event as a plain JSON-safe payload (wire/stream shape)."""
+        return {
+            "event": GATEWAY_FALLBACK,
+            "role": self.role.value,
+            "failed_deployment": self.failed_deployment,
+            "taken_deployment": self.taken_deployment,
+            "reason": self.reason.value,
+            "considered": list(self.considered),
+        }
+
+
+class ModelUnavailableError(RuntimeError):
+    """Every deployment this role may reach is unavailable — fail loud, not wide.
+
+    Raised instead of quietly promoting the call to a model outside the tenant's
+    tier (a spend decision taken on their behalf) or of paying a known-dead
+    deployment's timeout again.
+    """
+
+    def __init__(
+        self,
+        role: ModelRole,
+        *,
+        reason: FallbackReason,
+        considered: tuple[str, ...],
+    ) -> None:
+        """Record which role was refused, why, and which deployments were weighed."""
+        self.role = role
+        self.reason = reason
+        self.considered = considered
+        super().__init__(
+            f"No model available for role {role.value} ({reason.value}); "
+            f"considered={list(considered)}"
+        )
+
+
+class FallbackSink(Protocol):
+    """Host hook notified of every gateway degradation (default: a no-op).
+
+    The ERROR log and the in-process ring buffer (:func:`fallback_events`) happen
+    whether or not a host injects one — this sink is the *additional* channel that
+    puts the degradation on the run's event stream.
+    """
+
+    def fallback(self, event: FallbackEvent) -> None:
+        """Handle one degradation event. Must not raise (failures are logged)."""
+        ...
+
+
+#: Consecutive failures on one deployment before its breaker opens.
+_DEFAULT_BREAKER_THRESHOLD = 3
+#: How long an open breaker stays open before one probe is allowed through.
+_DEFAULT_BREAKER_COOLDOWN_SECONDS = 30.0
+#: How many degradation events are retained in-process for the console/harness.
+_FALLBACK_EVENT_RING = 64
+
+_fallback_sink: FallbackSink | None = None
+_breaker_threshold_override: int | None = None
+_breaker_cooldown_override: float | None = None
+_allowed_roles_override: frozenset[ModelRole] | None = None
+_fallback_events: deque[FallbackEvent] = deque(maxlen=_FALLBACK_EVENT_RING)
+
+#: The in-flight tenant's model allowlist. A ``ContextVar`` rather than a global
+#: because a fan-out runs many calls concurrently in one process: each sub-agent
+#: task inherits the context of the request that spawned it, so the bound travels
+#: with the tenant instead of being whatever the last request happened to set.
+_allowed_roles_var: ContextVar[frozenset[ModelRole] | None] = ContextVar(
+    "aegis_gateway_allowed_roles", default=None
+)
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var, falling back to ``default`` on anything unparseable."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _effective_breaker_threshold() -> int:
+    """Return the consecutive-failure count that opens a breaker (override wins)."""
+    if _breaker_threshold_override is not None:
+        return max(1, _breaker_threshold_override)
+    try:
+        return max(1, int(os.environ.get("GATEWAY_BREAKER_THRESHOLD", _DEFAULT_BREAKER_THRESHOLD)))
+    except (TypeError, ValueError):
+        return _DEFAULT_BREAKER_THRESHOLD
+
+
+def _effective_breaker_cooldown() -> float:
+    """Return the seconds an open breaker waits before allowing a probe."""
+    if _breaker_cooldown_override is not None:
+        return max(0.0, _breaker_cooldown_override)
+    return max(
+        0.0,
+        _env_float("GATEWAY_BREAKER_COOLDOWN_SECONDS", _DEFAULT_BREAKER_COOLDOWN_SECONDS),
+    )
+
+
+def _effective_allowed_roles() -> frozenset[ModelRole] | None:
+    """Return the roles the in-flight caller may reach, or ``None`` for all.
+
+    The context-scoped bound (see :func:`model_allowlist`) wins over the process
+    default set by :func:`configure`; ``None`` at both levels means unrestricted,
+    which is the standalone default and preserves every pre-existing behaviour.
+    """
+    scoped = _allowed_roles_var.get()
+    if scoped is not None:
+        return scoped
+    return _allowed_roles_override
+
+
+@contextmanager
+def model_allowlist(roles: Iterable[ModelRole] | None) -> Iterator[None]:
+    """Bound every gateway call in this context to ``roles`` (the tenant's tier).
+
+    Bounds :func:`complete` — the call path that owns the fallback chain. Embedding
+    and transcription have exactly one deployment each and no chain to escape
+    through, so they are deliberately not gated here rather than being gated
+    somewhere a caller would have to guess about.
+
+    Args:
+        roles: The roles the tenant's tier entitles them to, or ``None`` to lift
+            the bound for this context.
+
+    Yields:
+        ``None`` — the bound applies for the duration of the ``with`` block, in
+        this task and in every task spawned from it.
+    """
+    token = _allowed_roles_var.set(frozenset(roles) if roles is not None else None)
+    try:
+        yield
+    finally:
+        _allowed_roles_var.reset(token)
+
+
+def _now() -> float:
+    """Return the monotonic clock the breaker measures cooldowns on (test seam)."""
+    return time.monotonic()
+
+
+@dataclass
+class _BreakerState:
+    """One deployment's health: consecutive failures and when it was opened."""
+
+    consecutive_failures: int = 0
+    opened_at: float | None = None
+
+
+_breakers: dict[str, _BreakerState] = {}
+
+
+def _is_available(deployment: str) -> bool:
+    """Return whether ``deployment`` may be called now.
+
+    An open breaker becomes available again once the cooldown has elapsed — that
+    call is the probe. It is a probe and not a reopening: a single failure while
+    open restarts the cooldown, and a single success closes the breaker.
+    """
+    state = _breakers.get(deployment)
+    if state is None or state.opened_at is None:
+        return True
+    return (_now() - state.opened_at) >= _effective_breaker_cooldown()
+
+
+def _record_deployment_failure(deployment: str, *, role: ModelRole, reason: str) -> None:
+    """Count one failure against ``deployment``, opening its breaker at threshold."""
+    state = _breakers.setdefault(deployment, _BreakerState())
+    state.consecutive_failures += 1
+    threshold = _effective_breaker_threshold()
+    if state.consecutive_failures >= threshold:
+        state.opened_at = _now()
+        logger.error(
+            "Circuit breaker OPEN for deployment %s (role=%s): %s consecutive "
+            "failures (threshold=%s, reason=%s). Skipping it for %.0fs; the next "
+            "call after that is a probe.",
+            deployment,
+            role.value,
+            state.consecutive_failures,
+            threshold,
+            reason,
+            _effective_breaker_cooldown(),
+        )
+
+
+def _record_deployment_success(deployment: str) -> None:
+    """Close ``deployment``'s breaker: a success resets the consecutive count."""
+    state = _breakers.get(deployment)
+    if state is None:
+        return
+    if state.opened_at is not None:
+        logger.info(
+            "Circuit breaker CLOSED for deployment %s: probe succeeded.", deployment
+        )
+    _breakers.pop(deployment, None)
+
+
+def breaker_status() -> dict[str, dict[str, Any]]:
+    """Return the live per-deployment breaker state (for a dashboard / the harness).
+
+    A degraded deployment nobody can see is the same defect as a silent fallback,
+    so the state is readable rather than only inferable from logs.
+    """
+    now = _now()
+    cooldown = _effective_breaker_cooldown()
+    return {
+        deployment: {
+            "consecutive_failures": state.consecutive_failures,
+            "degraded": state.opened_at is not None
+            and (now - state.opened_at) < cooldown,
+            "cooldown_remaining_seconds": (
+                max(0.0, cooldown - (now - state.opened_at))
+                if state.opened_at is not None
+                else 0.0
+            ),
+        }
+        for deployment, state in _breakers.items()
+    }
+
+
+def fallback_events() -> list[dict[str, Any]]:
+    """Return the recent degradation events, oldest first (bounded ring buffer)."""
+    return [event.as_dict() for event in _fallback_events]
+
+
+def _emit_fallback(event: FallbackEvent) -> None:
+    """Log at ERROR, retain, and hand the degradation to the injected sink.
+
+    The log and the ring happen unconditionally: this control is never silent
+    just because no host wired a sink.
+    """
+    logger.error(
+        "Gateway fallback (%s): role=%s failed_deployment=%s taken=%s considered=%s",
+        event.reason.value,
+        event.role.value,
+        event.failed_deployment,
+        event.taken_deployment or "<none — call refused>",
+        list(event.considered),
+    )
+    _fallback_events.append(event)
+    if _fallback_sink is None:
+        return
+    try:
+        _fallback_sink.fallback(event)
+    except Exception:  # noqa: BLE001 - a sink is observation, never a control path
+        logger.warning("Fallback sink raised; degradation still logged.", exc_info=True)
+
+
+def _role_chain(role: ModelRole) -> list[ModelRole]:
+    """Return ``role`` followed by its configured fallbacks, de-duplicated."""
+    ordered: list[ModelRole] = []
+    for candidate in (role, *_effective_fallbacks().get(role, [])):
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
+
+
+def _resolve_chain(role: ModelRole) -> tuple[ModelRole, list[ModelRole]]:
+    """Return the (primary, fallbacks) roles this call may actually use.
+
+    Applies, in order: the tenant's tier bound (a chain may never promote out of
+    it), then the circuit breaker (skip what is known dead). Emits a visible event
+    when the result is not the role's normal primary.
+
+    Raises:
+        ModelUnavailableError: When no deployment in tier is available. Failing
+            loudly is the point — succeeding on a model the tenant is not entitled
+            to would put an unauthorised charge in their ledger.
+    """
+    allowed = _effective_allowed_roles()
+    chain = _role_chain(role)
+    considered = tuple(model_for(candidate) for candidate in chain)
+    primary_deployment = model_for(role)
+
+    in_tier = [candidate for candidate in chain if allowed is None or candidate in allowed]
+    if not in_tier:
+        _emit_fallback(
+            FallbackEvent(
+                role=role,
+                failed_deployment=primary_deployment,
+                taken_deployment=None,
+                reason=FallbackReason.OUTSIDE_TIER,
+                considered=considered,
+            )
+        )
+        raise ModelUnavailableError(
+            role, reason=FallbackReason.OUTSIDE_TIER, considered=considered
+        )
+
+    healthy = [candidate for candidate in in_tier if _is_available(model_for(candidate))]
+    if not healthy:
+        _emit_fallback(
+            FallbackEvent(
+                role=role,
+                failed_deployment=primary_deployment,
+                taken_deployment=None,
+                reason=FallbackReason.ALL_DEGRADED,
+                considered=tuple(model_for(candidate) for candidate in in_tier),
+            )
+        )
+        raise ModelUnavailableError(
+            role,
+            reason=FallbackReason.ALL_DEGRADED,
+            considered=tuple(model_for(candidate) for candidate in in_tier),
+        )
+
+    primary, *rest = healthy
+    if primary is not role:
+        # Why the role's own deployment is not being used decides the reason:
+        # the tier refused it (a downgrade the tenant is entitled to) or the
+        # breaker knows it is dead. Reporting one as the other would be a lie in
+        # the only record anybody reads.
+        reason = (
+            FallbackReason.OUTSIDE_TIER
+            if role not in in_tier
+            else FallbackReason.CIRCUIT_OPEN
+        )
+        _emit_fallback(
+            FallbackEvent(
+                role=role,
+                failed_deployment=primary_deployment,
+                taken_deployment=model_for(primary),
+                reason=reason,
+                considered=tuple(model_for(candidate) for candidate in in_tier),
+            )
+        )
+    return primary, rest
+
+
+def _attribute_response(
+    *,
+    role: ModelRole,
+    primary_role: ModelRole,
+    fallback_roles: list[ModelRole],
+    response_model: str,
+) -> None:
+    """Credit or fault the deployment that actually answered.
+
+    LiteLLM traverses the ``fallbacks`` chain internally, so the only evidence of
+    an in-LiteLLM fallback is the responding model id. The inference is deliberately
+    strict: it counts as a fallback ONLY when the responding id exactly matches one
+    of the fallback deployments this call passed. Anything else (a provider echoing
+    a different string, an unknown id) is credited to the primary rather than
+    fabricated into a failure nobody observed.
+    """
+    primary_deployment = model_for(primary_role)
+    answered = (response_model or "").removeprefix("openai/")
+    if answered == primary_deployment or not answered:
+        _record_deployment_success(primary_deployment)
+        return
+    taken = next(
+        (model_for(candidate) for candidate in fallback_roles if model_for(candidate) == answered),
+        None,
+    )
+    if taken is None:
+        # Not a deployment we offered — no evidence the primary failed.
+        _record_deployment_success(primary_deployment)
+        return
+    _record_deployment_failure(
+        primary_deployment, role=role, reason=FallbackReason.UPSTREAM_ERROR.value
+    )
+    _record_deployment_success(taken)
+    _emit_fallback(
+        FallbackEvent(
+            role=role,
+            failed_deployment=primary_deployment,
+            taken_deployment=taken,
+            reason=FallbackReason.UPSTREAM_ERROR,
+            considered=(primary_deployment, *(model_for(c) for c in fallback_roles)),
+        )
+    )
 
 _ssl_configured = False
 
@@ -393,6 +865,31 @@ async def _bounded_acompletion(
     if timeout is not None and timeout > 0:
         return await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=timeout)
     return await litellm.acompletion(**kwargs)
+
+
+async def _attempt(
+    litellm: Any,  # noqa: ANN401 - third-party module handle
+    kwargs: dict[str, Any],
+    *,
+    timeout: float | None,
+    role: ModelRole,
+    primary_role: ModelRole,
+) -> Any:  # noqa: ANN401
+    """Run one bounded completion, faulting the chosen deployment if it raises.
+
+    An exception here means the whole chain LiteLLM was given is exhausted. The
+    failure is counted against the deployment **this gateway selected** — the one
+    it is responsible for choosing again next time — and not against the fallbacks,
+    because an opaque transport error carries no evidence of how far LiteLLM got,
+    and a breaker opened on a guess is a control that lies.
+    """
+    try:
+        return await _bounded_acompletion(litellm, kwargs, timeout=timeout)
+    except Exception as exc:
+        _record_deployment_failure(
+            model_for(primary_role), role=role, reason=type(exc).__name__
+        )
+        raise
 
 
 def _estimate_cost(
@@ -637,7 +1134,10 @@ def optimization_config() -> dict[str, Any]:
 
     Reflects the live, host-overridable configuration: the role → model map, the
     per-role fallback chains, the wall-clock timeout, the default output-token
-    cap, and the frontier-baseline role/model the savings calc prices against.
+    cap, the frontier-baseline role/model the savings calc prices against, the
+    tier bound on what a chain may reach (``None`` = unrestricted), and the
+    circuit-breaker settings plus its live per-deployment state — so a degraded
+    deployment is a visible fact and not something only the logs know.
     """
     config = _get_config()
     return {
@@ -650,6 +1150,14 @@ def optimization_config() -> dict[str, Any]:
         "max_output_tokens": config.max_output_tokens,
         "baseline_role": _effective_baseline_role().value,
         "baseline_model": model_for(_effective_baseline_role()),
+        "allowed_roles": (
+            sorted(r.value for r in allowed) if (allowed := _effective_allowed_roles()) else None
+        ),
+        "breaker": {
+            "threshold": _effective_breaker_threshold(),
+            "cooldown_seconds": _effective_breaker_cooldown(),
+            "state": breaker_status(),
+        },
     }
 
 
@@ -867,6 +1375,9 @@ async def complete(
 
     Raises:
         BudgetExceededError: When the injected governance hook refuses the call.
+        ModelUnavailableError: When every deployment this role may reach — after
+            the tenant's tier bound and the circuit breaker — is unavailable. The
+            call fails loudly rather than succeeding on a model outside the tier.
     """
     gov_ctx = _governance.get_context()
     if gov_ctx is not None:
@@ -874,8 +1385,12 @@ async def complete(
         await _governance.enforce(gov_ctx)
 
     config = _get_config()
+    # Which of the role's ONE chain (`_effective_fallbacks`) this call may use:
+    # bounded by the tenant's tier, minus whatever the breaker knows is dead.
+    # Raises rather than promoting out of tier or re-paying a known-dead timeout.
+    primary_role, fallback_roles = _resolve_chain(role)
     litellm = _litellm()
-    model = _provider_model(role)
+    model = _provider_model(primary_role)
     # Measured, not guessed: how many images this call actually sends (0 for every
     # text-only chat, so nothing about an existing call site changes).
     images = count_images(messages)
@@ -902,7 +1417,7 @@ async def complete(
     if response_format:
         kwargs["response_format"] = response_format
 
-    fallbacks = [_provider_model(r) for r in _effective_fallbacks().get(role, [])]
+    fallbacks = [_provider_model(r) for r in fallback_roles]
     if fallbacks:
         kwargs["fallbacks"] = fallbacks
 
@@ -917,7 +1432,7 @@ async def complete(
 
     async with _observability.span(
         GenAIOperation.CHAT,
-        model_for(role),
+        model_for(primary_role),
         temperature=temperature,
         max_tokens=max_tokens_effective,
     ) as span:
@@ -934,20 +1449,20 @@ async def complete(
             cost, cost_source = _resolve_cost(
                 litellm,
                 response,
-                role,
+                primary_role,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 images=images,
             )
             record_call(
-                model_for(role),
+                model_for(primary_role),
                 cost,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 images=images,
-                role=role,
+                role=primary_role,
             )
-            response_model = getattr(response, "model", None) or model_for(role)
+            response_model = getattr(response, "model", None) or model_for(primary_role)
             _observability.set_usage(
                 span,
                 input_tokens=prompt_tokens,
@@ -973,8 +1488,20 @@ async def complete(
             )
             return message, usage, response_model
 
-        response = await _bounded_acompletion(litellm, kwargs, timeout=outer_timeout)
+        response = await _attempt(
+            litellm,
+            kwargs,
+            timeout=outer_timeout,
+            role=role,
+            primary_role=primary_role,
+        )
         message, usage, response_model = await _account(response)
+        _attribute_response(
+            role=role,
+            primary_role=primary_role,
+            fallback_roles=fallback_roles,
+            response_model=response_model,
+        )
         content = message.content or ""
 
         # One corrective re-ask when structured JSON was requested but the reply
@@ -996,8 +1523,20 @@ async def complete(
                     {"role": "user", "content": _JSON_REASK_NUDGE},
                 ],
             }
-            response = await _bounded_acompletion(litellm, reask_kwargs, timeout=outer_timeout)
+            response = await _attempt(
+                litellm,
+                reask_kwargs,
+                timeout=outer_timeout,
+                role=role,
+                primary_role=primary_role,
+            )
             message, usage, response_model = await _account(response)
+            _attribute_response(
+                role=role,
+                primary_role=primary_role,
+                fallback_roles=fallback_roles,
+                response_model=response_model,
+            )
             content = message.content or ""
 
         return LLMResult(

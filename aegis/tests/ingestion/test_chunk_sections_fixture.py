@@ -19,6 +19,8 @@ import pytest
 from aegis.ingestion import BlockKind, ParsedDocument
 from aegis.retrieval.chunker import DocumentContext, chunk_prefix, chunk_sections
 
+from .conftest import fixture_pdf, slow_fixtures
+
 pytest.importorskip("docling", reason="the 'ingestion' extra is not installed")
 
 #: Blocks that contribute no body text, mirroring the chunker's own rule.
@@ -184,3 +186,38 @@ def test_the_prefix_is_the_same_string_the_helper_builds(chunks):
     )
     for chunk in chunks:
         assert chunk.prefix == chunk_prefix(context, chunk.section)
+
+
+@slow_fixtures
+def test_the_repetitive_census_report_needs_the_ordinal_in_the_store_key():
+    """The chunk-id collision, on the document it actually happens on.
+
+    ``census-income-tables.pdf`` reprints a continued table's furniture — the
+    "(Populations in thousands…)" header and "Footnotes available at end of table." —
+    under one continued-table heading path. Those chunks are byte-identical *and*
+    same-section, so they share a :meth:`~aegis.retrieval.chunker.ChunkPiece.content_id`.
+    The ingestion ``chunk`` stage writes every piece as its own row and does not call
+    :func:`~aegis.retrieval.chunker.dedup_pieces`, and ``index_stage`` keys the knowledge
+    store by ``meta['content_id']`` — so before ``indexed_id`` existed, 20 of this
+    document's 182 rows published under an id another row also claimed, and the loser's
+    ordinal, page number and boxes (everything a citation resolves through) were the
+    winner's.
+
+    Gated because the fixture is 67 pages of tables and parses in minutes. It is asserted
+    rather than described because "we could not reproduce it" was the wrong answer once
+    already.
+    """
+    from aegis.ingestion import parse_pdf  # noqa: PLC0415 - only under the slow gate
+
+    document = parse_pdf(fixture_pdf("census-income-tables.pdf"))
+    # Exactly how ``app.ingestion.stages.chunk_stage`` calls it: production defaults.
+    pieces = chunk_sections(document, context=DocumentContext.from_parsed(document))
+
+    assert len(pieces) > 100, "the fixture changed; this document is the repetitive one"
+    content_ids = {piece.content_id() for piece in pieces}
+    assert len(content_ids) < len(pieces), (
+        "the content-address collision no longer reproduces on this fixture — if the "
+        "parser or the chunker changed, re-derive the claim rather than deleting it"
+    )
+    # And the id the store is actually keyed by is one per chunk.
+    assert len({piece.indexed_id() for piece in pieces}) == len(pieces)

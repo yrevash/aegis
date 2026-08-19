@@ -52,6 +52,12 @@ OPS_DIAGNOSE = "ops_diagnose"
 OPS_GATE_DECISION = "ops_gate_decision"
 #: The release outcome (promoted | staged_for_approval | rejected, version id, eval delta).
 OPS_RELEASE = "ops_release"
+#: A web-search run (aegis.websearch): provider, cache hit/miss, result count, the
+#: number of hits the TOOL_RESULT rail blocked, and — when the run degraded — the
+#: reason. This event is emitted on EVERY outcome, including "no API key", because a
+#: degraded search that emits nothing is indistinguishable from a search that found
+#: nothing, and that indistinguishability is the defect it exists to remove.
+WEB_SEARCH = "web_search"
 
 ALL: frozenset[str] = frozenset(
     {REASONING, GUARDRAIL_VERDICT, GUARDRAIL_CACHE, GUARDRAIL_MEDIA, SHAP_EXPLANATION,
@@ -59,7 +65,8 @@ ALL: frozenset[str] = frozenset(
      VISION_SCREEN, VISION_ANALYSIS,
      CONFORMAL_INTERVAL,
      ML_MODEL, RETRIEVAL_CITATIONS, RETRIEVAL_CACHE, ROUTING, MEMORY_RECALL, MEMORY_WRITE,
-     MEMORY_CACHE, MODEL_CALL, EVAL_RESULT, OPS_DIAGNOSE, OPS_GATE_DECISION, OPS_RELEASE}
+     MEMORY_CACHE, MODEL_CALL, EVAL_RESULT, OPS_DIAGNOSE, OPS_GATE_DECISION, OPS_RELEASE,
+     WEB_SEARCH}
 )
 
 

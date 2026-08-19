@@ -40,7 +40,46 @@ def full_run(run_id: str = "run-full") -> list[dict[str, Any]]:
     """
     payloads = [
         events.run_started("trace-abcdef"),
-        events.routing(role="qa", reason="default", used_llm=False),
+        events.routing(
+            role="team",
+            reason="3 sub-questions detected, fanning out to 3 agents",
+            used_llm=False,
+            depth="team",
+            fanout=3,
+            decided_by="auto",
+        ),
+        # The concurrent fan-out: one lifecycle beat per lane, then the merge that
+        # names the agent that did NOT make it. A projection that has never folded
+        # these has never been proved against a multi-agent run.
+        events.agent_status(
+            agent_id="research",
+            role="research",
+            label="Research agent",
+            status="started",
+            detail="find what changed in the regulation",
+        ),
+        events.agent_status(
+            agent_id="policy",
+            role="policy",
+            label="Policy agent",
+            status="timeout",
+            detail="timed out after 45s",
+        ),
+        events.synthesis(
+            contributing=[
+                {"agent_id": "research", "role": "research", "label": "Research agent"}
+            ],
+            omitted=[
+                {
+                    "agent_id": "policy",
+                    "role": "policy",
+                    "label": "Policy agent",
+                    "status": "timeout",
+                    "reason": "timed out after 45s",
+                }
+            ],
+            summary="Synthesised from 1 of 2 agents; the policy agent timed out.",
+        ),
         events.guardrail(GuardStage.INPUT, GuardVerdict.PASS, "clean"),
         events.memory(recalled_fact_count=2, recalled_message_count=3, tokens_used=40),
         events.node_started("retrieve", "Retrieving"),

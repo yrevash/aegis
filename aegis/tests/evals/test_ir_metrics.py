@@ -75,6 +75,49 @@ def test_ndcg_is_not_degenerate_once_a_case_has_two_spans():
     assert ndcg_at_k(((2,), (5,)), 10) == pytest.approx(gain / ideal)
 
 
+def test_ndcg_credits_a_span_once_when_chunk_overlap_puts_it_at_two_ranks():
+    """The 1.63 defect, asserted. A 60-word overlap genuinely puts a boundary-straddling
+    span inside two neighbouring chunks, so ``hit_ranks`` reports both. Summing a gain
+    per *rank* against an ideal counted per *span* scored 1.631 for a single gold span
+    found at ranks 1 and 2 — a "quality" above perfect, shipped in the artifact.
+    """
+    # One span, found at ranks 1 and 2. Perfect retrieval, and no better than perfect.
+    assert ndcg_at_k(((1, 2),), 10) == 1.0
+    # The duplicate must not improve on the earliest rank either.
+    assert ndcg_at_k(((3, 4, 5),), 10) == pytest.approx(1 / math.log2(4))
+    assert ndcg_at_k(((3,),), 10) == ndcg_at_k(((3, 4, 5),), 10)
+
+
+def test_ndcg_is_bounded_by_one_however_the_spans_are_distributed():
+    """Neither duplicated ranks nor several spans inside one chunk can exceed 1.0."""
+    # Two spans, both inside the chunk at rank 1: graded gain 2, ideal gain 2.
+    assert ndcg_at_k(((1,), (1,)), 10) == 1.0
+    # The same two spans one chunk lower, both duplicated by the overlap.
+    assert ndcg_at_k(((3, 4), (3, 4)), 10) == pytest.approx(1 / math.log2(4))
+    for case in (((1, 2),), ((1,), (1,)), ((1, 2), (1, 2), (2, 3)), ((1,), (2,), (1, 2))):
+        assert ndcg_at_k(case, 10) <= 1.0, case
+
+
+def test_ndcg_pays_for_a_span_it_never_found():
+    """Partial recall is charged in the denominator, not forgiven by it.
+
+    One span at rank 2, one never retrieved: the ideal ranking has *two* items, so the
+    unfound span costs the arm the whole second term. An ideal built only from what was
+    found would score this the same as a single-span case.
+    """
+    ideal = 1 / math.log2(2) + 1 / math.log2(3)
+    assert ndcg_at_k(PARTIAL, 10) == pytest.approx((1 / math.log2(3)) / ideal)
+    assert ndcg_at_k(PARTIAL, 10) < ndcg_at_k(((2,),), 10)
+    # Everything required, nothing retrieved.
+    assert ndcg_at_k(((), ()), 10) == 0.0
+
+
+def test_ndcg_ignores_hits_beyond_the_cut_off_without_crediting_them():
+    """A span at rank 11 is not found at nDCG@10, and is charged as unfound."""
+    assert ndcg_at_k(((11,),), 10) == 0.0
+    assert ndcg_at_k(((2,), (11,)), 10) == pytest.approx(ndcg_at_k(((2,), ()), 10))
+
+
 def test_wilson_interval_matches_published_values():
     # The textbook worked example: 40/50 = 0.80 → roughly 0.67–0.89.
     interval = wilson_interval(40, 50)

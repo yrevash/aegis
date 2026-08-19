@@ -807,8 +807,10 @@ change ships the read arm complete and the corpus it reads arrives with the stag
 > **Verdict: ship it, and say the number out loud.** 1.44 s is not "a person does not notice".
 > But it is not 1.44 s *added*: it replaces an LLM call that graded the same twenty passages
 > (~12k prompt tokens through the gateway), which is neither faster, nor free, nor
-> reproducible across two eval runs. What we bought is +12.1 pp recall@5, a per-query cost of
-> zero, and a deterministic order. What it costs on the **Windows demo box is unmeasured** —
+> reproducible across two eval runs. What we bought — **on our own gold set, not on
+> T2-RAGBench** — is **MRR@20 +12.9 pp** and recall@6 +0.009: a better-ordered answer, a
+> per-query cost of zero, and a deterministic order. The "+12.1 pp recall@5" belongs to the
+> external benchmark and is quoted as external wherever it appears (task 4.11, point 3). What it costs on the **Windows demo box is unmeasured** —
 > re-run `spikes/rerank_bench.py` there, as 4.0 did for Docling.
 >
 > **Three findings the plan did not anticipate:**
@@ -1476,15 +1478,36 @@ itself is not a check. Corpus: 519 naive windows / 774 structural chunks.
 
 | arm | what changed | recall@20 | recall@6 | precision@6 | MRR@20 | nDCG@10 |
 |---|---|---|---|---:|---:|---:|
-| **A0** | naive: text layer + fixed windows, dense only | 0.934 (0.85–0.98) | 0.755 (0.62–0.85) | 0.138 | 0.568 | 0.642 |
-| **A1** | + layout-aware parse and structural chunking | 0.906 (0.80–0.96) | 0.774 (0.64–0.87) | 0.135 | 0.533 | 0.613 |
-| **A2** | + enriched chunk prefix (D7) | 0.896 (0.80–0.96) | 0.736 (0.60–0.84) | 0.129 | 0.563 | 0.625 |
-| **A3** | + hybrid recall (vector + graph + BM25, RRF) | 0.915 (0.80–0.96) | 0.821 (0.71–0.91) | 0.145 | 0.557 | 0.633 |
-| **A4** | = shipped: A3 + local cross-encoder rerank | 0.915 (0.80–0.96) | 0.830 (0.71–0.91) | 0.151 | **0.686** | 0.752 |
-| **L1** | A4 − graph arm | **0.972 (0.90–1.00)** | **0.849 (0.73–0.92)** | 0.154 | 0.692 | 0.760 |
-| **L2** | A4 − BM25 arm | 0.821 (0.71–0.91) | 0.764 (0.62–0.85) | 0.135 | 0.643 | 0.693 |
+| **A0** | naive: text layer + fixed windows, dense only | 0.934 (0.85–0.98) | 0.755 (0.62–0.85) | 0.138 | 0.568 | 0.619 |
+| **A1** | + layout-aware parse and structural chunking | 0.906 (0.80–0.96) | 0.774 (0.64–0.87) | 0.135 | 0.533 | 0.595 |
+| **A2** | + enriched chunk prefix (D7) | 0.896 (0.80–0.96) | 0.736 (0.60–0.84) | 0.129 | 0.563 | 0.613 |
+| **A3** | + hybrid recall (vector + graph + BM25, RRF) | 0.915 (0.80–0.96) | 0.821 (0.71–0.91) | 0.145 | 0.557 | 0.622 |
+| **A4** | = shipped: A3 + local cross-encoder rerank | 0.915 (0.80–0.96) | 0.830 (0.71–0.91) | 0.151 | **0.686** | 0.732 |
+| **L1** | A4 − graph arm | **0.972 (0.90–1.00)** | **0.849 (0.73–0.92)** | 0.154 | 0.692 | 0.740 |
+| **L2** | A4 − BM25 arm | 0.821 (0.71–0.91) | 0.764 (0.62–0.85) | 0.135 | 0.643 | 0.681 |
 
-n = 53; Wilson 95%. Paired deltas, bootstrap 95% CI and exact McNemar:
+n = 53; Wilson 95%.
+
+> **[CORRECTED] 2026-08-19 — the nDCG@10 column, and nothing else.** The first version of
+> this table shipped nDCG values **above 1.0**: every arm had 1–3 cases over the ceiling, the
+> worst at **1.631** for a single gold span found at ranks 1 and 2. `ndcg_at_k` summed a gain
+> per *retrieved rank* while dividing by an ideal counted per *required span*, and chunks
+> overlap by 60 words — so a span straddling a boundary sits in two or three neighbouring
+> chunks and was paid for two or three times. The metric now credits each span **once, at its
+> earliest rank**, grades a rank by how many spans it is the earliest hit for, and builds the
+> ideal from those grades plus one grade-1 item per span never found. It is bounded at 1 and
+> still charges for partial recall.
+>
+> **Only the nDCG@10 column moved. Every per-case rank in the re-run is bit-identical to the
+> original artifact**, and `recall@20`, `recall@6`, `precision@6` and `MRR@20` are unchanged
+> to the last digit. The four numbered conclusions below — and every paired comparison in the
+> table that follows — are computed on `recall_20` and `recall_6` only, so **none of the four
+> overturned claims is affected**: A0 is still the strong baseline, the prefix still costs
+> 3.8 pp, the reranker still buys ordering rather than reach, and the graph arm is still a
+> net negative. Nothing here is a reason to re-litigate them. Artifact regenerated at the
+> same path from the same gold set (`gold_set_hash` unchanged).
+
+Paired deltas, bootstrap 95% CI and exact McNemar:
 
 | comparison | Δ recall@6 | 95% CI | discordant | p |
 |---|---:|---|---|---:|
@@ -1519,7 +1542,7 @@ embedder (`text-embedding-3-large`, 8191 tokens) does not have this ceiling — 
 recall@6 by **+0.009** (5 discordant, 3 favouring A4). The recall@20 → recall@6 gap is
 **−9.4 pp for A3 and −8.5 pp for A4**: reranking recovers **0.9 pp** of what truncating 20
 candidates to 6 costs. What it *does* buy is **ordering**: MRR@20 **0.557 → 0.686 (+12.9 pp)**
-and nDCG@10 **0.633 → 0.752**. So the 1.44 s/query measured in D6 buys a better-ordered
+and nDCG@10 **0.622 → 0.732** (corrected — see the note under the table). So the 1.44 s/query measured in D6 buys a better-ordered
 answer, not a materially more complete one, and D6's "+12.1 pp recall@5" should be read as an
 external result we did not reproduce rather than as ours. **A4's recall@20 is identical to
 A3's by construction** — a reranker reorders the pool and cannot add to it — which is why this

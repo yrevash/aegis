@@ -23,6 +23,7 @@ did not reach a tenant is an assertion about this path and not about a coinciden
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -35,6 +36,7 @@ from aegis.retrieval.types import (
     TENANT_METADATA_KEY,
     GraphEdge,
     GraphNode,
+    RetrievalOrigin,
     RetrievalScope,
     scoped_graph,
 )
@@ -178,6 +180,76 @@ async def test_the_graph_arm_does_not_return_another_tenants_entity_labels() -> 
     # Non-vacuity: this scope's *own* node survives, so the filter is not simply
     # emptying the graph.
     assert [node.label for node in recall.nodes] == ["Tenant A Ltd"]
+
+
+class _RagWhoseGraphModeFails:
+    """A LightRAG whose ``local`` (graph) query raises and whose ``naive`` one works.
+
+    The realistic shape of a graph outage: Neo4j is unreachable or the graph store is
+    mid-migration, while the vector index — a different store entirely — is fine.
+    """
+
+    async def aquery(self, query: str, param: object) -> object:
+        if getattr(param, "mode", None) == "local":
+            raise RuntimeError("Neo4j is unreachable")
+        return SimpleNamespace(
+            context="",
+            raw_data={
+                "data": {
+                    "chunks": [
+                        {
+                            "id": "v1",
+                            "content": "Tenant A's own dense passage.",
+                            "file_path": f"t{_TENANT_A}::terms.pdf",
+                        }
+                    ]
+                }
+            },
+        )
+
+
+class _RagWhoseVectorModeFails:
+    """A LightRAG whose ``naive`` (dense) query raises. There is no recall without it."""
+
+    async def aquery(self, query: str, param: object) -> object:
+        if getattr(param, "mode", None) == "naive":
+            raise RuntimeError("the vector index is gone")
+        return SimpleNamespace(context="", raw_data={"data": {"chunks": []}})
+
+
+async def test_a_failing_graph_arm_still_answers_from_the_vector_list(caplog) -> None:
+    """The claim the docstring used to make without any code behind it.
+
+    ``recall_ranked`` said it "falls back cleanly if a mode errors" and had no
+    ``try``/``except`` in its body, so a Neo4j outage took the *whole* query down —
+    including the dense arm, which was healthy and which our own ablation says is the
+    stronger of the two (L1, the arm without the graph, beats A4 on every metric). The
+    fallback is now real: vector list only, nothing from the graph, and an ERROR on the
+    way past so the outage is visible rather than inferred from thin results.
+    """
+    with caplog.at_level(logging.ERROR):
+        recall = await _backend(_RagWhoseGraphModeFails()).recall_ranked(
+            "what is happening?", top_k=10, scope=RetrievalScope(tenant_id=_TENANT_A)
+        )
+
+    assert [list(lst.origins) for lst in recall.lists] == [[RetrievalOrigin.VECTOR]]
+    assert [c.text for lst in recall.lists for c in lst.candidates] == [
+        "Tenant A's own dense passage."
+    ]
+    # No graph slice invented for the viz out of a query that never ran.
+    assert recall.nodes == [] and recall.edges == []
+    assert any("graph arm failed" in record.message for record in caplog.records), (
+        "a graph outage was swallowed silently, which looks identical to a thin "
+        "neighbourhood"
+    )
+
+
+async def test_a_failing_vector_arm_is_not_swallowed() -> None:
+    """The other half of the rule: an empty answer must never be reported as a good one."""
+    with pytest.raises(RuntimeError, match="vector index"):
+        await _backend(_RagWhoseVectorModeFails()).recall_ranked(
+            "what is happening?", top_k=10, scope=RetrievalScope(tenant_id=_TENANT_A)
+        )
 
 
 async def test_a_graph_element_with_no_provenance_is_shown_to_no_tenant() -> None:

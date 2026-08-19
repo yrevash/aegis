@@ -166,8 +166,10 @@ class Retriever:
     config: RetrievalConfig = field(default_factory=RetrievalConfig)
     #: The **local ONNX cross-encoder** used for second-stage reranking, injected like every
     #: other collaborator. ``None`` means this retriever reranks through the API reranker —
-    #: which is a legitimate configuration but a materially worse one (+12.1 pp recall@5 is
-    #: what the local encoder buys), so the composition roots
+    #: which is a legitimate configuration but a worse-ordered one (our A3 → A4 ablation
+    #: puts the local encoder at **MRR@20 +12.9 pp** and recall@6 +0.009 — it reorders the
+    #: pool, it does not widen it; the +12.1 pp recall@5 figure quoted elsewhere is
+    #: T2-RAGBench's, not ours), so the composition roots
     #: (:func:`build_default_retriever`, :func:`aegis.retrieval.memory.build_lite_retriever`)
     #: wire one in and only ``local_rerank_enabled=False`` takes it back out. Constructing
     #: it is free; the weights load on the first query that uses it.

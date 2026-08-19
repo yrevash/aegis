@@ -37,3 +37,11 @@ def _reset_gateway_state(monkeypatch):
     monkeypatch.setattr(llm_mod, "_tally", llm_mod._UsageTally())
     monkeypatch.setattr(llm_mod, "_fallbacks_override", None)
     monkeypatch.setattr(llm_mod, "_baseline_role_override", None)
+    # Fallback-survival state (phase 5 §5.8): the breaker is in-process, so a test
+    # that opens one must not hand a degraded deployment to the next test.
+    monkeypatch.setattr(llm_mod, "_breakers", {})
+    monkeypatch.setattr(llm_mod, "_fallback_events", llm_mod.deque(maxlen=64))
+    monkeypatch.setattr(llm_mod, "_fallback_sink", None)
+    monkeypatch.setattr(llm_mod, "_allowed_roles_override", None)
+    monkeypatch.setattr(llm_mod, "_breaker_threshold_override", None)
+    monkeypatch.setattr(llm_mod, "_breaker_cooldown_override", None)

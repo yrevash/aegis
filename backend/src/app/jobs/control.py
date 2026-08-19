@@ -37,12 +37,14 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from aegis.jobs import (
+    TERMINAL_STATUSES,
     Document,
     JobNotVisibleError,
     JobRun,
     admit,
 )
 from aegis.jobs import cancel_job as _cancel_job_row
+from aegis.jobs.cancel import JobNotCancellableError
 from aegis.jobs.stages import DEFAULT_QUEUE
 from aegis.settings import resolve
 from sqlalchemy import select
@@ -58,6 +60,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "ESTIMATE_PER_MB_KEY",
     "JobRow",
+    "JobNotRequeueableError",
     "MissingDocumentError",
     "cancel_job",
     "estimate_ingest_usd",
@@ -75,6 +78,28 @@ _BYTES_PER_MB = 1024 * 1024
 
 #: How many jobs a single list call returns at most.
 _LIST_LIMIT = 200
+
+
+class JobNotRequeueableError(JobNotCancellableError):
+    """The job has not reached a terminal state, so re-queueing it would fork it (a **409**).
+
+    A re-queue mints a **fresh** ``workflow_id`` and does not cancel what is already
+    running (see :func:`requeue_job` for why the fresh id is the right choice). Those two
+    facts together mean that re-queueing a ``PENDING``, ``RUNNING`` or ``RECONCILING`` job
+    starts a *second* execution walking the *same* document while the first is still
+    walking it — two workflows, two stage sequences, one row. That is precisely the
+    concurrency that can drive ``documents.completed_stage`` out of order, and no amount
+    of care inside a single stage prevents it, because the hazard is between two
+    executions and not inside one.
+
+    So the refusal is here, at the only place that creates the second execution. The
+    tenant's remedy is the one it already has: cancel the run, then re-queue it — which is
+    also the only order in which "resume from ``completed_stage``" means anything.
+
+    A subclass of :class:`aegis.jobs.JobNotCancellableError` so the route's existing 409
+    mapping covers it: both errors say "this job's lifecycle state forbids what you
+    asked", and a caller that wants to catch one wants to catch the other.
+    """
 
 
 class MissingDocumentError(LookupError):
@@ -218,12 +243,20 @@ async def requeue_job(
 ) -> JobRow:
     """Admit and re-start the ingestion behind an existing job row.
 
-    The new execution gets a fresh workflow id. Reusing the old one would collide with the
-    unique ``job_runs.workflow_id`` and the claim activity's ``ON CONFLICT DO NOTHING``
-    would then leave the *old*, terminal row in place while new work ran against it — a
-    row saying ``FAILED`` over a live execution. A new id gives the new attempt its own
-    honest row, and the document's ``completed_stage`` is what makes it a resume rather
-    than a restart.
+    **Only a terminal job may be re-queued**, and that is the first thing checked. The new
+    execution gets a fresh workflow id — reusing the old one would collide with the unique
+    ``job_runs.workflow_id`` and the claim activity's ``ON CONFLICT DO NOTHING`` would then
+    leave the *old*, terminal row in place while new work ran against it, a row saying
+    ``FAILED`` over a live execution. But a fresh id also means this function does not, and
+    cannot, replace a running execution: it *adds* one. Re-queueing a job that has not
+    finished would therefore put two workflows on one document, each committing stages the
+    other has already committed and each moving ``documents.completed_stage`` — which is
+    exactly the concurrency that can drive that column out of order. The gate closes that
+    at the source; :func:`app.jobs.activities.run_stage` makes the bump monotonic so that
+    the same hazard arriving by any other route cannot un-do committed progress either.
+
+    A finished job's ``completed_stage`` is what makes the re-queue a resume rather than a
+    restart.
 
     Args:
         job_id: The row whose document should be ingested again.
@@ -235,6 +268,7 @@ async def requeue_job(
 
     Raises:
         JobNotVisibleError: No such job under this tenant (a 403).
+        JobNotRequeueableError: The job has not finished yet (a 409).
         MissingDocumentError: The job names no document, or it is gone (a 404).
         AdmissionDeniedError: The tenant is at its in-flight cap (a 429).
         BudgetExceededError: The estimate does not fit the remaining budget (a 429).
@@ -255,6 +289,16 @@ async def requeue_job(
             raise JobNotVisibleError(
                 f"job {job_id} is not this tenant's to re-queue (no such row under "
                 f"tenant {tenant_id})"
+            )
+        # Only a *finished* job can be re-queued. Below this line a second execution is
+        # started against the same document under a new workflow id, and nothing cancels
+        # the first — so without this check a double click on "retry" puts two workflows
+        # on one document, each running stages the other has already run.
+        if job.status not in TERMINAL_STATUSES:
+            raise JobNotRequeueableError(
+                f"job {job_id} is still {job.status.value} and cannot be re-queued; "
+                "re-queueing it would start a second execution over the same document "
+                "while the first is still running. Cancel it first."
             )
         document_id = (job.payload or {}).get("document_id")
         document = (

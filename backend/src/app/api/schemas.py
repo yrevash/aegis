@@ -363,6 +363,75 @@ class RoutingEvent(_BaseEvent):
         default=False,
         description="Whether the cheap-LLM tiebreak was consulted (else deterministic).",
     )
+    depth: str = Field(
+        default="single",
+        description=(
+            "How WIDE the turn runs: 'single' (one lane) or 'team' (a concurrent "
+            "fan-out of `fanout` sub-agents)."
+        ),
+    )
+    fanout: int = Field(
+        default=0,
+        description="How many sub-agents a team turn fans out to (0 for single).",
+    )
+    decided_by: str = Field(
+        default="auto",
+        description=(
+            "Who decided the width — 'auto' (the depth classifier), 'user' (an explicit "
+            "mode; honoured exactly), 'tenant_default' (team disabled or no roster) or "
+            "'platform_cap' (the user's width was narrowed by max_parallel_agents). The "
+            "trace must never show a width with no explanation."
+        ),
+    )
+
+
+class AgentStatus(_BaseEvent):
+    """One sub-agent's lifecycle beat in a concurrent fan-out (additive).
+
+    Emitted by each lane of the multi-agent team through its own scoped writer, so a
+    fan-out produces interleaved beats from every agent running at once. ``timeout`` is
+    a **designed** terminal state, not an error: the run degrades gracefully, names the
+    omitted agent in the ``synthesis`` event, and finishes.
+    """
+
+    type: Literal["agent_status"] = "agent_status"
+    agent_id: str = Field(description="Stable id of the sub-agent this beat belongs to.")
+    role: str = Field(description="The sub-agent's kind, e.g. 'research' | 'knowledge'.")
+    label: str = Field(description="Human label for the agent's lane in the console.")
+    status: str = Field(
+        description=(
+            "queued | started | thinking | acting | done | failed | timeout — the "
+            "lane's current state."
+        )
+    )
+    detail: str = Field(default="", description="Short human detail for this beat.")
+
+
+class SynthesisEvent(_BaseEvent):
+    """The fan-out's merge, naming which agents contributed **and which were omitted**.
+
+    Partial failure otherwise reads as a bug: one agent times out, its card sits
+    spinning, and the audience concludes the system is broken. Naming the omission and
+    its terminal state is what turns that into visible, graceful degradation — so the
+    omitted list is a first-class field here, never an absence the client must infer.
+    """
+
+    type: Literal["synthesis"] = "synthesis"
+    contributing: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="The agents whose findings are in the answer (agent_id/role/label).",
+    )
+    omitted: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "The agents that produced nothing usable, each with its terminal status and "
+            "reason (e.g. timed out at 45 s)."
+        ),
+    )
+    summary: str = Field(
+        default="",
+        description="The honest one-liner, e.g. 'Synthesised from 3 of 4 agents; …'.",
+    )
 
 
 class MemoryEvent(_BaseEvent):
@@ -405,7 +474,9 @@ StreamEvent = Annotated[
     | BudgetExceeded
     | Reflection
     | MemoryEvent
-    | RoutingEvent,
+    | RoutingEvent
+    | AgentStatus
+    | SynthesisEvent,
     Field(discriminator="type"),
 ]
 """Any event the frontend may receive over the `/query` SSE stream."""

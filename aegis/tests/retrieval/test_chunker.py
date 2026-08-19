@@ -208,3 +208,35 @@ def test_dedup_pieces_content_id_is_stable_and_section_aware():
     assert same.content_id() != other.content_id()
     # Deterministic across calls.
     assert same.content_id() == _piece("identical body text here", 9).content_id()
+
+
+def test_indexed_id_separates_two_chunks_whose_text_and_section_are_identical():
+    """The store key carries per-chunk identity; the dedup key deliberately does not.
+
+    ``content_id`` is a content *address*: two pieces with the same section and the same
+    body are one passage, which is what :func:`dedup_pieces` and the ingestion ledger need
+    and why the ordinal must stay out of it. But the ``index`` stage keys a global store by
+    that id, and the ingestion ``chunk`` stage does not de-duplicate — so byte-identical
+    repeated boilerplate under one heading path (a continued table's "Footnotes available
+    at end of table.") writes two rows that claim one key, and the second row's ordinal,
+    page and boxes — everything a citation resolves through — are overwritten by the first
+    row's. Measured on ``census-income-tables.pdf``: 182 chunks, 162 distinct
+    ``content_id``, 20 rows lost (see ``test_chunk_sections_fixture``).
+    """
+    first = _piece("footnotes available at end of table.", 77)
+    second = _piece("footnotes available at end of table.", 89)
+
+    # The dedup key is unchanged, and must stay unchanged: it is what makes the two one
+    # passage for de-duplication purposes.
+    assert first.content_id() == second.content_id()
+    # The store key is not.
+    assert first.indexed_id() != second.indexed_id()
+    # Still a pure function of (ordinal, section, body) — a re-chunk of the same document
+    # is deterministic, so the same text at the same ordinal re-publishes over itself
+    # rather than duplicating, which is what the ``index`` stage relies on.
+    assert first.indexed_id() == _piece("footnotes available at end of table.", 77).indexed_id()
+    # Section still matters, exactly as it does for the content address.
+    assert (
+        ChunkPiece(text="identical body", ordinal=3, section="A").indexed_id()
+        != ChunkPiece(text="identical body", ordinal=3, section="B").indexed_id()
+    )

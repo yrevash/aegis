@@ -101,6 +101,19 @@ class AgentState(TypedDict, total=False):
         cost_usd: Accumulated USD cost across model calls (reducer-summed delta).
         status: Terminal run status value (see ``RunStatus``).
         blocked: Whether an input rail blocked the run.
+        depth_mode: The user's REQUESTED width (``auto`` | ``single`` | ``team``) — the
+            field Phase 6's composer mode control writes to. ``None``/absent → ``auto``,
+            i.e. the depth classifier decides. An explicit value is honoured exactly.
+        requested_fanout: An explicit team width from the user (``Custom`` mode). It is
+            clamped DOWN by ``max_parallel_agents`` and never up.
+        team_fanout: The EFFECTIVE width the router settled on (0 for a single-pass
+            run), written by ``route`` and read by ``plan_team``.
+        team_tasks: One ``{agent_id, task}`` row per dispatched sub-agent. Plain dicts
+            because state is checkpointed and a checkpoint is no place for live objects.
+        team_results: One serialised ``SubAgentResult`` per lane — including the lanes
+            that timed out or were cut short, which are terminal states, not absences.
+        team_degraded: Set when a team turn found no usable roster and fell back to the
+            single-pass pipeline (the honest signal for the fallback edge).
     """
 
     run_id: str
@@ -140,3 +153,14 @@ class AgentState(TypedDict, total=False):
     cost_usd: Annotated[float, operator.add]
     status: str
     blocked: bool
+    # ── The adaptive fan-out (phase 5) ────────────────────────────────────────
+    # All last-write-wins, and all safe as such: exactly one node writes each of
+    # them, and the fan-out itself runs INSIDE ``run_team`` rather than as parallel
+    # LangGraph branches — which is precisely why the accumulators above still work
+    # untouched (the node returns one summed delta).
+    depth_mode: str | None
+    requested_fanout: int | None
+    team_fanout: int
+    team_tasks: list[dict[str, Any]]
+    team_results: list[dict[str, Any]]
+    team_degraded: bool

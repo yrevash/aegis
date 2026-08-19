@@ -163,6 +163,34 @@ class ChunkPiece:
         """Return the stable content-addressed id for this chunk (section + body)."""
         return _content_id(_normalise(self.contextualized()))
 
+    def indexed_id(self) -> str:
+        """Return the id this chunk is published into the knowledge store under.
+
+        :meth:`content_id` plus the chunk's **ordinal**, and the two differ for exactly
+        one reason: a content address is a statement that two identical texts are one
+        thing, which is right for de-duplication and wrong for a primary key.
+
+        This is live on a shipped fixture rather than hypothetical. ``chunk_sections`` at
+        the production defaults over ``census-income-tables.pdf`` yields **182 chunks
+        under 162 distinct** :meth:`content_id` values — repeated table furniture
+        ("Footnotes available at end of table.", the "(Populations in thousands…)"
+        header) reprinted under one continued-table heading path. The ingestion ``chunk``
+        stage does **not** call :func:`dedup_pieces` — it writes every piece as a row —
+        so nothing upstream removes them, and the ``index`` stage then keys a global
+        store by that id. The *text* lost is a duplicate; what is lost is the row identity
+        behind it — ordinal, page number, bounding boxes — which is exactly what a
+        citation resolves through.
+
+        The ordinal is deliberately **not** folded into :meth:`content_id`:
+        :func:`dedup_pieces` and the ingestion ledger key off that value, so salting it
+        would silently disable exact-duplicate detection.
+
+        Still a pure function of ``(ordinal, section, body)``, so a re-chunk of an
+        unchanged document re-publishes over itself rather than duplicating — the
+        property the ``index`` stage depends on.
+        """
+        return _content_id(f"{self.ordinal}\x00{_normalise(self.contextualized())}")
+
 
 def _strip_frontmatter(text: str) -> str:
     """Drop a leading ``---``-delimited YAML frontmatter block, if present."""

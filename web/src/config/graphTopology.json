@@ -31,6 +31,24 @@
       "terminal": true
     },
     {
+      "id": "plan_team",
+      "label": "Plan the team",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "run_team",
+      "label": "Run agents concurrently",
+      "entry": false,
+      "terminal": false
+    },
+    {
+      "id": "synthesize",
+      "label": "Synthesise findings",
+      "entry": false,
+      "terminal": false
+    },
+    {
       "id": "retrieve",
       "label": "Agentic retrieval",
       "entry": false,
@@ -142,6 +160,16 @@
       "conditional": true
     },
     {
+      "source": "plan_team",
+      "target": "recall_memory",
+      "conditional": true
+    },
+    {
+      "source": "plan_team",
+      "target": "run_team",
+      "conditional": true
+    },
+    {
       "source": "recall_memory",
       "target": "retrieve",
       "conditional": false
@@ -168,12 +196,27 @@
     },
     {
       "source": "route",
+      "target": "plan_team",
+      "conditional": true
+    },
+    {
+      "source": "route",
       "target": "recall_memory",
       "conditional": true
     },
     {
+      "source": "run_team",
+      "target": "synthesize",
+      "conditional": false
+    },
+    {
       "source": "stream",
       "target": "persist_memory",
+      "conditional": false
+    },
+    {
+      "source": "synthesize",
+      "target": "gate",
       "conditional": false
     }
   ]

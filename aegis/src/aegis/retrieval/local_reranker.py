@@ -8,11 +8,21 @@
 **onnxruntime**, which needs no GPU and pulls no torch, and the model this module ships is
 33M parameters / ~130 MB on disk. A machine that can hold Neo4j's JVM can hold that.
 
-The value is the reason to bother: **+12.1 pp recall@5 and +17.2 pp MRR@3**, which on the
-T2-RAGBench anchor is worth roughly 5.5x what per-chunk LLM enrichment is worth — and it is
-paid per *query* rather than per *chunk*. Running it locally also removes the per-query
-gateway call the LLM reranker made, which is real money against a fixed credit budget, and
-makes the ordering **deterministic**, which is what lets an eval be re-run and compared.
+The value, **external result first and labelled as external**: +12.1 pp recall@5 and
++17.2 pp MRR@3 is the published T2-RAGBench anchor for a cross-encoder of this class, worth
+roughly 5.5x what per-chunk LLM enrichment is worth there — on their corpus, not ours.
+
+**Our own ablation says something narrower and more useful.** Arms A3 → A4 (the only
+difference is this reranker) over the 53-case gold set move **recall@6 by +0.009** — one
+case — because both arms are handed the same 20-candidate pool and a reranker cannot
+retrieve what recall missed; it can only reorder. What it moves is the *order*: **MRR@20
+0.557 → 0.686, +12.9 pp**, and nDCG@10 0.622 → 0.732
+(``runs/eval-goldset-20260819.json``). That is the claim to make — the answer moves toward
+rank 1, which is the passage the generator reads first and the citation a human checks —
+and it is not the same claim as "+12.1 pp recall". Running it locally also removes the
+per-query gateway call the LLM reranker made, which is real money against a fixed credit
+budget, and makes the ordering **deterministic**, which is what lets an eval be re-run and
+compared at all.
 
 ## What it costs, measured — and it is not what the phase doc predicted
 

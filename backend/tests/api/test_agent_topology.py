@@ -32,6 +32,11 @@ REAL_NODE_IDS = {
     "route",
     "answer_memory",
     "recall_memory",
+    # The adaptive multi-agent lane: allocate the width, run the agents concurrently
+    # INSIDE ``run_team`` (an asyncio.gather in one node, not a subgraph), then merge.
+    "plan_team",
+    "run_team",
+    "synthesize",
     "retrieve",
     "plan",
     "gate",
@@ -62,7 +67,7 @@ async def test_topology_serves_every_real_node_with_its_label(client):
     body = resp.json()
 
     served = {n["id"] for n in body["nodes"]}
-    assert served == REAL_NODE_IDS, "served topology must be the real 14-node graph"
+    assert served == REAL_NODE_IDS, "served topology must be the real 17-node graph"
     # Labels come from the ONE table the ``_timed`` wrapper streams from.
     for node in body["nodes"]:
         assert node["label"] == NODE_LABELS[node["id"]]

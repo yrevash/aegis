@@ -214,19 +214,82 @@ def reflection(
     }
 
 
-def routing(*, role: str, reason: str, used_llm: bool = False) -> dict[str, Any]:
+def routing(
+    *,
+    role: str,
+    reason: str,
+    used_llm: bool = False,
+    depth: str = "single",
+    fanout: int = 0,
+    decided_by: str = "auto",
+) -> dict[str, Any]:
     """Build a ``routing`` payload — the supervisor's visible specialist hand-off.
 
     Emitted once by the ``route`` node right after the input rail: it names the
     specialist role the turn was dispatched to (``qa`` → the full pipeline, ``memory``
     → the memory specialist), why, and whether the cheap-LLM tiebreak was consulted.
     Purely additive — a client that does not know this variant simply ignores it.
+
+    It also carries the turn's **width**: ``depth`` (single | team), ``fanout`` (how
+    many sub-agents) and ``decided_by`` (auto | user | tenant_default | platform_cap),
+    so the trace reads *"TEAM ×3 — you selected Team mode"* or *"SINGLE — single-intent
+    query, answering in one pass"*. **Never a width with no explanation.**
     """
     return {
         "type": "routing",
         "role": role,
         "reason": reason,
         "used_llm": used_llm,
+        "depth": depth,
+        "fanout": fanout,
+        "decided_by": decided_by,
+    }
+
+
+def agent_status(
+    *,
+    agent_id: str,
+    role: str,
+    label: str,
+    status: str,
+    detail: str = "",
+) -> dict[str, Any]:
+    """Build an ``agent_status`` payload — one sub-agent's lifecycle beat.
+
+    Emitted by :func:`aegis.agent.subagent.run_subagent` through its own scoped writer,
+    so a fan-out produces interleaved beats from every concurrent lane. ``status`` is
+    one of ``started`` | ``thinking`` | ``acting`` | ``done`` | ``failed`` | ``timeout``
+    — and ``timeout`` is a **designed** terminal state, not an error.
+    """
+    return {
+        "type": "agent_status",
+        "agent_id": agent_id,
+        "role": role,
+        "label": label,
+        "status": status,
+        "detail": detail,
+    }
+
+
+def synthesis(
+    *,
+    contributing: list[dict[str, Any]],
+    omitted: list[dict[str, Any]],
+    summary: str,
+) -> dict[str, Any]:
+    """Build a ``synthesis`` payload naming who contributed **and who did not**.
+
+    Partial failure otherwise reads as a bug: one agent times out, its card sits
+    spinning, and the audience concludes the thing is broken. Naming the omitted agent
+    and its terminal state turns that into visible, graceful degradation — which is
+    only true if it is designed, so the omission is a first-class field here rather
+    than an absence the client has to infer.
+    """
+    return {
+        "type": "synthesis",
+        "contributing": contributing,
+        "omitted": omitted,
+        "summary": summary,
     }
 
 

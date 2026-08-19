@@ -60,7 +60,7 @@ from typing import Any
 from aegis.jobs.facts import collect_stage_facts
 from aegis.jobs.models import Document, JobRun, JobStatus
 from aegis.jobs.scope import tenant_activity
-from aegis.jobs.stages import stage_handler, stage_spec
+from aegis.jobs.stages import INGEST_STAGES, stage_handler, stage_spec
 from aegis.retrieval.corpus import bump_corpus_version
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -346,6 +346,43 @@ def _validated_updates(stage: str, updates: Mapping[str, Any]) -> dict[str, Any]
     return dict(updates)
 
 
+#: Every stage's position in the pipeline, for the monotonic ``completed_stage`` bump
+#: below. Derived from :data:`aegis.jobs.INGEST_STAGES` so a stage added to the pipeline
+#: is ordered by the pipeline's own declaration and not by a second list here.
+_STAGE_POSITION = {spec.name: index for index, spec in enumerate(INGEST_STAGES)}
+
+
+def _furthest_stage(committed: str | None, ran: str) -> str:
+    """Return whichever of ``committed`` and ``ran`` is later in the pipeline.
+
+    ``documents.completed_stage`` is a **high-water mark**, not "the last stage that
+    happened to run". :func:`aegis.jobs.stages.remaining_stages` resumes from it, so
+    moving it backwards does not merely mislabel the row — it puts every stage after the
+    earlier name back on the queue. Driving a document to ``graph`` and then running
+    ``embed`` (which :func:`app.jobs.control.requeue_job` can arrange, by starting a
+    second execution over a document a first is still walking) would re-run ``index`` and
+    ``graph`` on a document that had already finished them.
+
+    Args:
+        committed: The value already on the row, read under its lock. ``None`` when
+            nothing has committed yet.
+        ran: The stage that just committed. Already validated against the pipeline by the
+            caller, so it always has a position.
+
+    Returns:
+        The further-along stage name. An unrecognised ``committed`` — the stage set
+        changed under a live row — is treated as behind everything, because a name this
+        build cannot place is a name :func:`remaining_stages` would refuse anyway, and
+        replacing it with one the pipeline declares is the only outcome that leaves the
+        row resumable.
+    """
+    if committed is None:
+        return ran
+    if _STAGE_POSITION.get(committed, -1) >= _STAGE_POSITION[ran]:
+        return committed
+    return ran
+
+
 @activity.defn(name=RUN_STAGE)
 @tenant_activity
 async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
@@ -363,7 +400,9 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
        two attempts would both read "not yet done" and both run the handler;
     4. run the registered handler, which does its own writes on this same session;
     5. apply the handler's column updates **and** the ``completed_stage`` bump in one
-       guarded ``UPDATE``;
+       guarded ``UPDATE`` — the bump **monotonic** (:func:`_furthest_stage`), because the
+       column is the high-water mark a resume walks from and a stage that ran out of
+       order must not put the stages after it back on the queue;
     6. append the stage's entry to the durable run record — but **only if step 5 changed a
        row**, so the log records work and never a replay.
 
@@ -392,7 +431,12 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
             str(exc), type="UnknownStage", non_retryable=True
         ) from exc
     document = await _load_document(session, inp.document_id, lock=True)
-    if document.completed_stage == inp.stage:
+    # Read *before* the handler runs. The handler shares this session, so anything it
+    # flushes can expire the loaded row's attributes, and re-reading them afterwards is
+    # an implicit lazy load in an async context. The row is locked, so this value is the
+    # one the guarded UPDATE below is entitled to compare against.
+    committed_stage = document.completed_stage
+    if committed_stage == inp.stage:
         logger.info(
             "stage %s already committed for document %s (workflow %s) — replay, no-op",
             inp.stage,
@@ -423,13 +467,31 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
         )
     duration_ms = int((time.monotonic() - started) * 1000)
     columns = _validated_updates(inp.stage, updates)
+    # The bump is **monotonic**. The guard below blocks re-writing the *same* stage but
+    # says nothing about an *earlier* one, and ``completed_stage`` is what a resume walks
+    # from — so an out-of-order attempt must still commit its handler's columns and its
+    # log entry while leaving the high-water mark where it was. The row was locked at step
+    # 2, so the value compared against here cannot have moved underneath this.
+    furthest = _furthest_stage(committed_stage, inp.stage)
+    if furthest != inp.stage:
+        logger.warning(
+            "stage %s ran for document %s (workflow %s) after %s had already committed; "
+            "its output is kept but completed_stage stays at %s — moving it back would "
+            "re-queue every stage after %s",
+            inp.stage,
+            inp.document_id,
+            inp.workflow_id,
+            furthest,
+            furthest,
+            inp.stage,
+        )
     result = await session.execute(
         update(Document)
         .where(
             Document.id == inp.document_id,
             Document.completed_stage.is_distinct_from(inp.stage),
         )
-        .values(**columns, completed_stage=inp.stage)
+        .values(**columns, completed_stage=furthest)
     )
     job_id = (
         await session.execute(

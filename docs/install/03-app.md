@@ -24,7 +24,7 @@ explicitly rather than letting it pick whatever is on PATH.
 | Key | Notes |
 |---|---|
 | `GENAILAB_API_KEY` | the model gateway — **currently `replace-me`** |
-| `TRAVILY_API_KEY` | Tavily, for the research agent (Phase 5). Note the spelling already in the file |
+| `TAVILY_API_KEY` | Tavily, for the research agent (Phase 5). The file used to say `TRAVILY_API_KEY` — a name nothing read, which is why search never worked. Only `TAVILY_API_KEY` is read now; unset is fine and degrades loudly to internal-only |
 | `NEO4J_PASSWORD` | from step 2 |
 | `POSTGRES_DSN` / `POSTGRES_ADMIN_DSN` | written for you by `db-roles.ps1` |
 

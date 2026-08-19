@@ -215,6 +215,68 @@ async def test_requeue_inside_the_cap_starts_exactly_one_workflow(
     assert temporal.started[0].startswith(f"ingest:{_TENANT_A}:{document_id}:")
 
 
+@pytest.mark.parametrize(
+    "status", [JobStatus.PENDING, JobStatus.RUNNING, JobStatus.RECONCILING]
+)
+async def test_requeueing_a_job_that_has_not_finished_is_refused_with_409(
+    client, db, temporal, status
+) -> None:
+    """A re-queue *adds* an execution; it does not replace one.
+
+    The new run gets a fresh ``workflow_id`` (it has to — the old one is unique and its row
+    is the previous attempt's) and nothing here cancels the old execution. So re-queueing a
+    live job puts **two** workflows on one document, each committing stages the other has
+    already committed and each writing ``documents.completed_stage`` — which is the
+    concurrency that can move that column out of order. The refusal is at the only place
+    that creates the second execution, and the assertion that matters is that the
+    orchestrator was never called.
+    """
+    await _seed_tenants()
+    document_id = await _seed_document(_TENANT_A, size_bytes=1024, sha="a" * 64)
+    live = await _seed_job(
+        _TENANT_A,
+        document_id=document_id,
+        status=status,
+        workflow_id="wf-live",
+    )
+
+    res = await client.post(
+        f"/jobs/{live}/requeue",
+        headers=_headers(tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A),
+    )
+
+    assert res.status_code == 409, res.text
+    assert status.value in res.json()["detail"]
+    assert temporal.started == [], (
+        "a second workflow was started over a document a first is still walking"
+    )
+
+
+async def test_a_cancelled_job_can_still_be_requeued(client, db, temporal) -> None:
+    """The remedy the 409 points at has to actually work.
+
+    Cancel-then-requeue is the supported path for a run a tenant wants restarted, so the
+    terminal check must admit ``CANCELLED`` as readily as ``FAILED`` — otherwise the gate
+    would have replaced a correctness bug with a dead end.
+    """
+    await _seed_tenants()
+    document_id = await _seed_document(_TENANT_A, size_bytes=1024, sha="a" * 64)
+    cancelled = await _seed_job(
+        _TENANT_A,
+        document_id=document_id,
+        status=JobStatus.CANCELLED,
+        workflow_id="wf-cancelled",
+    )
+
+    res = await client.post(
+        f"/jobs/{cancelled}/requeue",
+        headers=_headers(tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A),
+    )
+
+    assert res.status_code == 200, res.text
+    assert len(temporal.started) == 1
+
+
 # ── (b) A job over budget never starts a workflow ────────────────────────────
 
 

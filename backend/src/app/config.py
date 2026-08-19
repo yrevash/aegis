@@ -212,6 +212,24 @@ class Settings(BaseSettings):
     # never withheld. Flip ``grounding_block`` to hard-block ungrounded answers.
     grounding_block: bool = Field(default=False)
 
+    # ── Web search (research sub-agent; phase-05 §5.6) ───────────────────────
+    # NOTE THE SPELLING. ``backend/.env`` shipped ``TRAVILY_API_KEY`` — a name nothing
+    # in this codebase ever read, which is exactly why web search never worked. Only
+    # ``TAVILY_API_KEY`` is read, here and in ``aegis.websearch.tavily.API_KEY_ENV``.
+    #
+    # Empty is a supported posture: ``aegis.websearch.WebSearch`` degrades the research
+    # path to the internal corpus, logs at ERROR and emits a ``web_search`` event with
+    # ``status=degraded_no_key``. It never returns an empty result set that reads like a
+    # clean search — that indistinguishability is the defect the seam exists to remove.
+    tavily_api_key: str = Field(default="")
+    # How long a cached search stays warm, in seconds, and how many searches the cache
+    # may hold. The cache lives in Memurai/Redis; the cap is plan 02's R8 (an unbounded
+    # cache of arbitrary web pages is the quickest route to memory pressure on a 16 GB
+    # box). A warm cache is also what makes the phase-05 budget arithmetic hold: a
+    # rehearsed demo query costs zero provider calls the second time.
+    web_search_cache_ttl_seconds: int = Field(default=3600)
+    web_search_cache_max_entries: int = Field(default=512)
+
     # ── Observability ────────────────────────────────────────────────────────
     phoenix_enabled: bool = Field(default=True)
 

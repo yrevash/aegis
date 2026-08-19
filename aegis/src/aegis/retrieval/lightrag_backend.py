@@ -405,9 +405,31 @@ class LightRAGBackend:
           nodes/edges it touched.
 
         Reciprocal Rank Fusion then combines them (plus the pipeline's BM25 list), so
-        graph traversal is a first-class contributor to the final ranking — the graph is
-        genuinely *used*, not decorative. The graph slice for the live viz comes from the
-        graph query. Falls back cleanly to a single ``mix`` list if a mode errors.
+        graph traversal is a **fused** contributor to the final ranking rather than a
+        display-only side channel. The graph slice for the live viz comes from the graph
+        query.
+
+        **How much the graph arm is worth, measured rather than asserted.** This docstring
+        used to say the graph was "genuinely used, not decorative", which is a statement
+        about the wiring being read as a statement about the value. Our own ablation says
+        the opposite about the value: arm **L1 (A4 minus the graph arm) beats the shipped
+        A4 on every metric** — recall@20 0.915 → 0.972, recall@6 0.830 → 0.849, MRR@20
+        0.686 → 0.692 (``runs/eval-goldset-20260819.json``, n=53, neither delta
+        significant at n=53). The graph arm is kept because it is what the entity/relation
+        view is drawn from and because a 53-case gold set cannot defend a small
+        difference — **not** because it was shown to improve retrieval. The external
+        result the design came from (LightRAG, ``arXiv:2410.05779``) is theirs, on their
+        corpora, and is cited as theirs.
+
+        **If the graph query fails, the vector arm still answers.** A ``local``-mode error
+        is logged at ERROR and the recall is returned with the vector list alone — no
+        graph list, no nodes, no edges. It is not silently re-issued as a ``mix`` query:
+        ``mix`` is LightRAG's own pre-fused blend, so substituting it would put a
+        differently-constructed list under the same origin tag and make the arm's
+        contribution unattributable, which is precisely what the ablation above measures.
+        Degrading to vector-only is also, on our numbers, the arm that scores higher. A
+        ``naive``-mode error is **not** caught: there is no recall without the dense list,
+        and pretending otherwise would return an empty answer as a successful one.
 
         Args:
             query: The user query.
@@ -415,15 +437,32 @@ class LightRAGBackend:
             scope: The request's retrieval scope; applied to both lists.
 
         Returns:
-            A :class:`RankedRecall` with the vector and graph ranked lists and the
-            touched graph nodes/edges.
+            A :class:`RankedRecall` with the vector list, the graph list when the graph
+            query succeeded, and the touched graph nodes/edges.
+
+        Raises:
+            Exception: Whatever the dense (``naive``) query raises, unchanged.
         """
         rag = await self._ensure()
         vector = await self._context(rag, query, mode="naive", top_k=top_k, scope=scope)
-        graph = await self._context(rag, query, mode="local", top_k=top_k, scope=scope)
         vector_list = RankedList(
             origins=(RetrievalOrigin.VECTOR,), candidates=vector.candidates
         )
+        try:
+            graph = await self._context(
+                rag, query, mode="local", top_k=top_k, scope=scope
+            )
+        except Exception:
+            # Loud, and with the query on it: a graph arm that has quietly stopped
+            # contributing looks exactly like a graph arm that found nothing, and the
+            # difference is a broken Neo4j versus a thin neighbourhood.
+            logger.exception(
+                "the graph arm failed for query %r (tenant %s); answering on the vector "
+                "list alone — the entity/relation view will be empty for this query",
+                query,
+                scope.tenant_id,
+            )
+            return RankedRecall(lists=[vector_list], nodes=[], edges=[])
         graph_list = RankedList(
             origins=(RetrievalOrigin.GRAPH,), candidates=graph.candidates
         )

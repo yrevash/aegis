@@ -49,11 +49,16 @@ Source of truth: `HKUDS/LightRAG` `lightrag/lightrag.py`, `lightrag/base.py`,
 ## Reranker — local ONNX cross-encoder, LLM-as-reranker behind it (phase 4, D6)
 
 **This section used to say a local cross-encoder was "off the table" because the platform
-runs on a 16 GB, no-GPU machine. That reason was wrong**, and it kept a measured +12.1 pp
-recall@5 / +17.2 pp MRR@3 improvement switched off. A cross-encoder does not imply a GPU:
-`fastembed`'s `TextCrossEncoder` runs on **onnxruntime** with no torch, and the checkpoint we
-ship (`jinaai/jina-reranker-v1-tiny-en`) is 33M parameters and ~130 MB. Measured on the
-16 GB M3: 0.14 s to load, ~74 ms p50 to rerank a 20-candidate pool, +134 MB RSS. The
+runs on a 16 GB, no-GPU machine. That reason was wrong**, and it kept the second retrieval
+stage switched off. A cross-encoder does not imply a GPU: `fastembed`'s `TextCrossEncoder`
+runs on **onnxruntime** with no torch, and the checkpoint we ship
+(`jinaai/jina-reranker-v1-tiny-en`) is 33M parameters and ~130 MB. The +12.1 pp recall@5 /
++17.2 pp MRR@3 figures are **T2-RAGBench's**, not ours; our own A3 → A4 ablation moves
+recall@6 by +0.009 and **MRR@20 by +12.9 pp** (`runs/eval-goldset-20260819.json`) — the
+reranker buys ordering, not reach, because both arms see the same 20-candidate pool.
+Measured on the 16 GB M3: 0.43 s warm load, **p50 1.44 s / p95 1.55 s to rerank a
+20-candidate pool of 400-word chunks** (~72 ms is the *per-passage* constant, not the pool
+figure — quoting it for a pool of 20 understates the call 20x), +134 MB RSS. The
 constraint that is real is the **query clock**, and that is what the model size is chosen
 against — see `docs/dev_new_docs_v2/phase-04-ingestion.md` §D6 for the numbers and
 `spikes/rerank_bench.py` to reproduce them.

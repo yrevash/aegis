@@ -36,9 +36,7 @@ durable Postgres saver stays a host/backend concern wired at the composition roo
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import random
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -47,7 +45,6 @@ from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
-from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import RetryPolicy, interrupt
@@ -66,8 +63,27 @@ from .deps import (
     risk_at_least,
     risk_rank,
 )
-from .router import load_roster, route_query
+from .retry import call_with_retry
+from .router import (
+    Depth,
+    DepthMode,
+    DepthPolicy,
+    decide_depth,
+    load_roster,
+    route_query,
+)
 from .state import AgentState
+from .subagent import SubAgentResult, SubAgentStatus
+from .team import (
+    SharedRetrievalPool,
+    TeamOutcome,
+    TeamTask,
+    build_team,
+    plan_team_tasks,
+    run_team,
+    synthesis_note,
+    synthesise,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +104,9 @@ NODE_LABELS: dict[str, str] = {
     "answer_memory": "Answer from memory",
     "recall_memory": "Recall memory",
     "persist_memory": "Persist memory",
+    "plan_team": "Plan the team",
+    "run_team": "Run agents concurrently",
+    "synthesize": "Synthesise findings",
     "retrieve": "Agentic retrieval",
     "plan": "Reason & plan",
     "gate": "Risk gate",
@@ -126,10 +145,17 @@ def _sentences(text: str) -> list[str]:
 SPECIALIST_NODES: dict[str, str] = {
     "qa": "recall_memory",  # the full retrieve -> plan -> gate -> act pipeline
     "memory": "answer_memory",  # answers from long-term memory, skipping RAG/tools
+    # The adaptive fan-out. NOT a roster role an adapter declares — the router writes
+    # it when the depth classifier (or the user's explicit width) says TEAM, which is
+    # why it is absent from every roster and still must be dispatchable.
+    "team": "plan_team",
 }
 
 #: The role used when the roster names one the graph cannot dispatch.
 _FALLBACK_ROLE = "qa"
+
+#: The pseudo-role the router writes for a fan-out turn (see ``SPECIALIST_NODES``).
+_TEAM_ROLE = "team"
 
 
 def _route_specialist(state: AgentState) -> str:
@@ -202,25 +228,17 @@ def _route_reflect(state: AgentState) -> str:
         (action failed/insufficient and the iteration budget still allows it), or
         ``"generate"`` to compose the final answer (goal met or budget exhausted).
     """
+    if _is_team_run(state):
+        return "generate"
     return "plan" if state.get("reflect_retry") else "generate"
 
 
+def _is_team_run(state: AgentState) -> bool:
+    """Whether this turn is a fan-out run (``route`` wrote the ``team`` role)."""
+    return state.get("agent_role") == _TEAM_ROLE
+
+
 _NodeBody = Callable[[AgentState], Awaitable[dict[str, Any]]]
-
-
-def _should_retry(policy: RetryPolicy, exc: Exception) -> bool:
-    """Return whether ``policy`` classifies ``exc`` as retryable.
-
-    Honours all three shapes LangGraph's :class:`~langgraph.types.RetryPolicy` accepts for
-    ``retry_on``: a callable predicate (the default ``default_retry_on``, which admits
-    only transient classes), a single exception type, or a sequence of them.
-    """
-    retry_on = policy.retry_on
-    if callable(retry_on) and not isinstance(retry_on, type):
-        return bool(retry_on(exc))
-    if isinstance(retry_on, type):
-        return isinstance(exc, retry_on)
-    return isinstance(exc, tuple(retry_on))
 
 
 async def _call_with_retry(
@@ -235,34 +253,14 @@ async def _call_with_retry(
     an extra, permanently unpaired node record with ``duration_ms: None``. Retrying only
     the body keeps the start/finish pair exactly one-to-one with the node execution, and
     the measured duration spans every attempt (which is the honest wall clock).
+
+    The retry mechanism itself lives in :mod:`aegis.agent.retry` because the sub-agent
+    loop needs the same policy honoured the same way; this wrapper is only the
+    node-shaped adapter over it.
     """
-    if policy is None:
-        return await body(state)
-    attempt = 1
-    interval = policy.initial_interval
-    while True:
-        try:
-            return await body(state)
-        except GraphBubbleUp:
-            # Interrupts/commands are control flow, never failures — never retry them.
-            raise
-        except Exception as exc:  # noqa: BLE001 - re-raised unless provably transient
-            if attempt >= policy.max_attempts or not _should_retry(policy, exc):
-                raise
-            delay = min(interval, policy.max_interval)
-            if policy.jitter:
-                delay += random.uniform(0, 1)
-            logger.warning(
-                "Node %s attempt %d/%d failed (%s); retrying in %.2fs",
-                node,
-                attempt,
-                policy.max_attempts,
-                exc,
-                delay,
-            )
-            await asyncio.sleep(delay)
-            interval = min(interval * policy.backoff_factor, policy.max_interval)
-            attempt += 1
+    return await call_with_retry(
+        lambda: body(state), policy=policy, label=f"Node {node}"
+    )
 
 
 def _timed(
@@ -432,6 +430,17 @@ def build_agent(
         writer = get_stream_writer()
         roster = _resolve_roster(deps)
         decision = await route_query(state["query"], roster, complete=deps.complete)
+        # WIDTH, decided second and separately from WHICH specialist. The classifier
+        # runs only in AUTO; an explicit width from the user is honoured exactly and
+        # the classifier is SKIPPED rather than overruled after the fact, so a user who
+        # asked for one lane never pays for the cheap call they were avoiding.
+        depth = await decide_depth(
+            state["query"],
+            policy=_depth_policy(deps, state),
+            complete=deps.complete,
+            role_is_default=decision.role == roster.default_role,
+        )
+        decision = decision.with_depth(depth)
         set_span_attributes(
             {
                 semconv.ROUTER_ROLE: decision.role,
@@ -456,10 +465,166 @@ def build_agent(
                     role=decision.role,
                     reason=decision.reason,
                     used_llm=decision.used_llm,
+                    depth=decision.depth.value,
+                    fanout=decision.fanout,
+                    decided_by=decision.decided_by,
                 )
             )
             await _record_route_audit(deps, state, decision)
-        return {"agent_role": decision.role, "route_reason": decision.reason}
+        # A TEAM turn is dispatched to the fan-out rather than to the roster specialist.
+        # The specialist role is kept on ``route_reason`` (which names it) — nothing
+        # downstream of here needs it, and ``agent_role`` is what the graph dispatches
+        # on, so overloading it is what keeps the dispatch table the single source.
+        role = _TEAM_ROLE if decision.depth is Depth.TEAM else decision.role
+        return {
+            "agent_role": role,
+            "route_reason": decision.reason,
+            "team_fanout": decision.fanout,
+        }
+
+    async def plan_team(state: AgentState) -> dict[str, Any]:
+        """Turn the effective width into one sub-task per roster agent.
+
+        The width is already decided — by the classifier in Auto, or by the user in an
+        explicit mode — so this node only allocates it. One cheap model call splits the
+        query; a deterministic fallback gives every agent the whole query framed by its
+        own remit, which is a working team rather than a degraded one.
+
+        A roster that cannot field at least two agents degrades **loudly** onto the qa
+        pipeline rather than fanning out to one agent and calling it a team.
+        """
+        writer = get_stream_writer()
+        width = max(2, int(state.get("team_fanout") or 0))
+        specs = build_team(deps, width)
+        if len(specs) < 2:
+            logger.warning(
+                "Team dispatch asked for %d agents but the roster fielded %d; "
+                "falling back to the single-pass pipeline.",
+                width,
+                len(specs),
+            )
+            writer(
+                events.reasoning(
+                    "No sub-agent team is available for this run; answering in one pass."
+                )
+            )
+            return {"agent_role": _FALLBACK_ROLE, "team_degraded": True}
+        tasks = await plan_team_tasks(
+            state["query"], specs, deps=deps, retry=_MODEL_RETRY
+        )
+        for task in tasks:
+            writer(
+                events.agent_status(
+                    agent_id=task.spec.agent_id,
+                    role=task.spec.role,
+                    label=task.spec.label,
+                    status="queued",
+                    detail=task.task,
+                )
+            )
+        return {
+            # Plain dicts, not the specs: state is checkpointed, and a checkpoint is not
+            # the place to keep live objects. ``run_team`` re-reads the roster by id.
+            "team_tasks": [
+                {"agent_id": t.spec.agent_id, "task": t.task} for t in tasks
+            ],
+            "team_degraded": False,
+        }
+
+    async def run_team_node(state: AgentState) -> dict[str, Any]:
+        """Run every sub-agent concurrently and fan in to ONE state delta.
+
+        The gather lives here, inside a single node, which is what lets the node return
+        one summed ``{prompt_tokens, completion_tokens, cost_usd}`` and leaves the
+        existing ``operator.add`` reducers untouched.
+
+        Every HIGH-risk thing any lane wanted arrives as ``tool_calls`` and flows into
+        the graph's ONE ``gate → approval → act`` path. No lane executed any of it.
+        """
+        writer = get_stream_writer()
+        planned = list(state.get("team_tasks") or [])
+        by_id = {
+            spec.agent_id: spec
+            for spec in build_team(deps, config.max_parallel_agents)
+        }
+        tasks = [
+            TeamTask(spec=by_id[item["agent_id"]], task=item["task"])
+            for item in planned
+            if item.get("agent_id") in by_id
+        ]
+        # ONE retrieval for the run, shared by every lane (Amendment A's supply-side
+        # rule): four agents must not retrieve the tenant's chunks four times.
+        pool = SharedRetrievalPool(deps, state["query"], _retrieval_scope(state))
+        outcome = await run_team(
+            tasks,
+            deps=deps,
+            persona=_persona(state),
+            writer=writer,
+            pool=pool,
+            working_memory=state.get("working_memory", ""),
+            trace_id=state.get("trace_id"),
+            retry=_MODEL_RETRY,
+        )
+        if outcome.budget_error is not None:
+            # Captured from a gathered task and re-raised only AFTER fan-in, so the
+            # siblings still finished and the orchestrator's existing handler ends the
+            # run cleanly as blocked. The tenant's own cap is the one thing that may
+            # refuse a run.
+            raise outcome.budget_error
+        return {
+            "team_results": [r.as_dict() for r in outcome.results],
+            "tool_calls": outcome.proposed_actions,
+            **outcome.totals(),
+        }
+
+    async def synthesize(state: AgentState) -> dict[str, Any]:
+        """Merge the lanes into one answer, naming contributors **and omissions**.
+
+        Emitted with no ``agent_id``: this is supervisor-level work after fan-in, and a
+        stale identity here would put the merge inside somebody's lane.
+        """
+        writer = get_stream_writer()
+        outcome = _outcome_from_state(state)
+        text, result = await synthesise(
+            state["query"],
+            outcome,
+            deps=deps,
+            persona=_persona(state),
+            working_memory=state.get("working_memory", ""),
+            retry=_MODEL_RETRY,
+        )
+        writer(
+            events.synthesis(
+                contributing=[
+                    {"agent_id": r.agent_id, "role": r.role, "label": r.label}
+                    for r in outcome.contributing
+                ],
+                omitted=[
+                    {
+                        "agent_id": r.agent_id,
+                        "role": r.role,
+                        "label": r.label,
+                        "status": r.status.value,
+                        "reason": r.error or "returned nothing usable",
+                    }
+                    for r in outcome.omitted
+                ],
+                summary=synthesis_note(outcome),
+            )
+        )
+        update: dict[str, Any] = {
+            "answer": text,
+            # The merged findings become the run's context, so if the gate approves a
+            # proposed action the existing ``generate`` node grounds the final answer in
+            # what the agents actually found rather than in nothing.
+            "context": "\n\n".join(
+                f"[{r.label}] {r.findings.strip()}" for r in outcome.contributing
+            ),
+        }
+        if result is not None:
+            update["_telemetry"] = _telemetry(result)
+            update.update(_accrue(result.usage))
+        return update
 
     async def answer_memory(state: AgentState) -> dict[str, Any]:
         """Memory specialist: answer "what do you know about me" DIRECTLY from memory.
@@ -942,8 +1107,20 @@ def build_agent(
         # Self-repair master switch: when disabled, the reflect node still runs and
         # reports the outcome but NEVER routes back to plan (a single linear pass).
         will_retry = config.self_repair_enabled and (not done) and budget_left
+        # A team run has no ``plan`` round to go back TO — its answer came from the
+        # fan-out and the synthesis, not from the planner — so re-planning would drop
+        # the synthesis and answer the question a second time, single-pass. The loop is
+        # therefore closed here rather than at the edge alone, so the reported decision
+        # and the routed decision cannot disagree.
+        if _is_team_run(state):
+            will_retry = False
 
-        if done:
+        if _is_team_run(state):
+            reason = (
+                "team run: the synthesis is the answer; the self-repair loop does not "
+                "re-plan a fan-out."
+            )
+        elif done:
             reason = "goal met: every action succeeded."
         elif not config.self_repair_enabled:
             reason = (
@@ -1140,6 +1317,25 @@ def build_agent(
     # byte-for-byte identical to today when memory is inactive (BACKWARD-COMPAT).
     builder.add_node("recall_memory", recall_memory)
     builder.add_node("persist_memory", persist_memory)
+    # The adaptive fan-out. Three nodes, one lane of the graph: allocate the width,
+    # run the agents concurrently INSIDE ``run_team``, merge. It lands on the existing
+    # gate → approval → act tail, so the human gate is still the only way a
+    # consequential action happens and there is still exactly one of it.
+    builder.add_node(
+        "plan_team",
+        _timed("plan_team", NODE_LABELS["plan_team"], retry=_MODEL_RETRY)(plan_team),
+    )
+    # Deliberately NO retry policy: retrying a whole fan-out re-runs every lane that
+    # already succeeded, at N times the cost, to recover one that did not. The per-lane
+    # retry inside ``run_subagent`` is the right granularity, and it is already wired.
+    builder.add_node(
+        "run_team",
+        _timed("run_team", NODE_LABELS["run_team"], SpanKind.AGENT)(run_team_node),
+    )
+    builder.add_node(
+        "synthesize",
+        _timed("synthesize", NODE_LABELS["synthesize"], retry=_MODEL_RETRY)(synthesize),
+    )
     builder.add_node(
         "retrieve",
         _timed(
@@ -1185,6 +1381,18 @@ def build_agent(
     # Memory specialist finalises through the SAME output rail + stream + persist tail as
     # qa, so the answer is guarded and the turn is still written to long-term memory.
     builder.add_edge("answer_memory", "guard_output")
+    # plan_team → run_team, unless the roster could not field a team: that degrades
+    # onto the qa pipeline (loudly, with a reasoning event) rather than pretending a
+    # single agent is a fan-out.
+    builder.add_conditional_edges(
+        "plan_team",
+        lambda s: "recall_memory" if s.get("team_degraded") else "run_team",
+        {"run_team": "run_team", "recall_memory": "recall_memory"},
+    )
+    builder.add_edge("run_team", "synthesize")
+    # The team path joins the EXISTING tail at the gate: one gate, always, whatever
+    # proposed the action. This edge is the whole security argument of the phase.
+    builder.add_edge("synthesize", "gate")
     builder.add_edge("recall_memory", "retrieve")
     builder.add_edge("retrieve", "plan")
     builder.add_conditional_edges(
@@ -1220,6 +1428,78 @@ def build_agent(
 
     _warn_unroutable_specialists(deps)
     return builder.compile(checkpointer=checkpointer or InMemorySaver())
+
+
+def _depth_policy(deps: AgentDeps, state: AgentState) -> DepthPolicy:
+    """Build the width policy for this turn from the request and the tenant's config.
+
+    This is the seam Phase 6's composer mode control writes to: it sets ``depth_mode``
+    (and, in Custom, ``requested_fanout``) on the run, and the rule is one line —
+    ``effective_depth = user_mode if user_mode != AUTO else classifier_decision``.
+
+    **The failure default is SINGLE on both paths.** An unreadable mode resolves to
+    :attr:`DepthMode.SINGLE`, not to AUTO: a settings resolver that cannot be read must
+    not hand the decision to a classifier, because the manual path must never introduce
+    a second, more permissive default than the automatic one.
+
+    Team availability is read from the roster itself, not from a flag: a host that has
+    not declared sub-agents cannot fan out, whatever anybody asked for.
+    """
+    raw = state.get("depth_mode")
+    if raw is None:
+        mode = DepthMode.AUTO
+    else:
+        try:
+            mode = DepthMode(str(raw))
+        except ValueError:
+            logger.warning(
+                "Unknown depth mode %r on run %s; defaulting to SINGLE.",
+                raw,
+                state.get("run_id"),
+            )
+            mode = DepthMode.SINGLE
+    requested = state.get("requested_fanout")
+    return DepthPolicy(
+        mode=mode,
+        requested_fanout=int(requested) if requested else None,
+        max_parallel_agents=deps.config.max_parallel_agents,
+        team_enabled=deps.config.team_enabled,
+        # Read from the roster itself, not from a flag: a host that never declared
+        # sub-agents cannot fan out, whatever anybody asked for.
+        available_agents=len(build_team(deps, deps.config.max_parallel_agents)),
+    )
+
+
+def _outcome_from_state(state: AgentState) -> TeamOutcome:
+    """Rebuild the fan-out's results from the checkpointed ``team_results`` rows.
+
+    ``run_team`` writes plain dicts to state (a checkpoint is no place for live
+    objects); the synthesis needs them back as results so ``contributing``/``omitted``
+    is computed in ONE place rather than re-derived from raw dicts here.
+    """
+    results = []
+    for row in state.get("team_results") or []:
+        try:
+            status = SubAgentStatus(row.get("status", SubAgentStatus.OK.value))
+        except ValueError:  # pragma: no cover - defensive against a hand-edited row
+            status = SubAgentStatus.FAILED
+        results.append(
+            SubAgentResult(
+                agent_id=str(row.get("agent_id", "")),
+                role=str(row.get("role", "")),
+                label=str(row.get("label", "")),
+                status=status,
+                findings=str(row.get("findings", "") or ""),
+                proposed_actions=list(row.get("proposed_actions") or []),
+                tool_calls=list(row.get("tool_calls") or []),
+                steps=int(row.get("steps", 0) or 0),
+                error=row.get("error"),
+                prompt_tokens=int(row.get("prompt_tokens", 0) or 0),
+                completion_tokens=int(row.get("completion_tokens", 0) or 0),
+                cost_usd=float(row.get("cost_usd", 0.0) or 0.0),
+            )
+        )
+    return TeamOutcome(results=results)
 
 
 def _resolve_roster(deps: AgentDeps) -> Any:  # noqa: ANN401 - AgentRoster duck-type

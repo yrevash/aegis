@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from aegis.agent.events import (
+    agent_status,
     approval_queued,
     approval_required,
     budget_exceeded,
@@ -33,6 +34,7 @@ from aegis.agent.events import (
     routing,
     run_finished,
     run_started,
+    synthesis,
     token,
     tool_call,
     tool_result,
@@ -42,6 +44,7 @@ from pydantic import TypeAdapter
 from app.api.schemas import StreamEvent
 
 __all__ = [
+    "agent_status",
     "approval_queued",
     "approval_required",
     "budget_exceeded",
@@ -58,6 +61,7 @@ __all__ = [
     "run_finished",
     "run_started",
     "stamp",
+    "synthesis",
     "token",
     "tool_call",
     "tool_result",
