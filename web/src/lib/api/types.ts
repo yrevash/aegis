@@ -30,6 +30,14 @@ export type FineRole = 'platform_admin' | 'tenant_admin' | 'ai_team' | 'devops' 
  * platform admin (every tenant) from a tenant admin (pinned to one), so a
  * tenant admin's own-tenant-only governance view renders as if it were the whole
  * platform.
+ *
+ * `user_id` is who the caller is, and it is a **separate fact from `tenant_id`**: a
+ * platform principal has no tenant and still has a user id. It is the JWT's `sub`
+ * claim, echoed by the server rather than re-derived, and it is the id the
+ * `/memory/*` endpoints authorise a non-admin's `user:<id>` subject against. Reading
+ * it here rather than decoding the bearer in the browser is what keeps the console's
+ * subject and the server's check the same value — the first time a client-side
+ * derivation disagreed, the rail would 403 and look like its own bug.
  */
 export interface LoginResponse {
   token: string
@@ -38,6 +46,12 @@ export interface LoginResponse {
   tenant_id: number | null
   /** Fine RBAC tier — `platform_admin` / `tenant_admin` for an admin. */
   fine_role: FineRole
+  /**
+   * The caller's user id — the JWT `sub`, and the `user:<id>` the memory endpoints
+   * authorise against. Null only when no users row backs the principal; never a
+   * statement about its tenant.
+   */
+  user_id: number | null
 }
 
 /** Body for `POST /query` (the response is the SSE stream, not JSON). */

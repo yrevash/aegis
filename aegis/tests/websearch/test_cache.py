@@ -9,6 +9,7 @@ import pytest
 from aegis.core.config import AegisMode
 from aegis.websearch.cache import (
     INDEX_KEY,
+    SUPERSEDED_INDEX_KEYS,
     CachedWebResults,
     InMemoryWebSearchCache,
     RedisWebSearchCache,
@@ -178,3 +179,36 @@ def test_non_full_modes_get_the_in_memory_backend_with_a_warning(mode, caplog):
         cache = make_web_search_cache(mode)
     assert isinstance(cache, InMemoryWebSearchCache)
     assert any("in-memory" in r.getMessage() for r in caplog.records)
+
+
+def test_a_superseded_index_set_is_dropped_once_on_construction():
+    """A cache-version bump must not leave an index nobody owns behind.
+
+    The value keys retire safely on their own TTL, and the new prefix cannot read
+    them. The index *set* has no TTL, so without this it would keep its stale members
+    for the life of the store — bounded, harmless, and still an orphan.
+    """
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def delete(self, key: str) -> int:
+            self.deleted.append(key)
+            return 1
+
+    client = _Recorder()
+    RedisWebSearchCache(client)
+
+    assert client.deleted == list(SUPERSEDED_INDEX_KEYS)
+    assert INDEX_KEY not in client.deleted, "the live index must never be dropped"
+
+
+def test_a_store_that_refuses_the_cleanup_still_yields_a_usable_cache():
+    """Cleanup is best effort: it must never be the reason a cache cannot be built."""
+
+    class _Refuses:
+        def delete(self, key: str) -> int:
+            raise RuntimeError("DEL refused")
+
+    RedisWebSearchCache(_Refuses())  # must not raise

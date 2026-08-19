@@ -10,6 +10,30 @@
 import type { ApprovalDecision } from '@/lib/api/types'
 import type { StreamEvent } from '@/lib/stream'
 
+/**
+ * Everything one run needs to start — the turn, and the conversation it belongs to.
+ *
+ * `sessionId` is the field this repo spent a phase without. `QueryRequest.session_id`
+ * has always existed backend-side and both memory nodes gate on it
+ * (`if deps.memory is None or state.get("session_id") is None: return {}`), but the
+ * body the console posted was `{ query, persona }` — so every live run recalled
+ * nothing and persisted nothing while the product claimed multi-turn memory. It is a
+ * request field rather than a fifth positional argument precisely so the next thing
+ * the run needs cannot be forgotten at four call sites.
+ */
+export interface RunRequest {
+  /** The user's turn. */
+  query: string
+  /** Adapter persona id; scopes data and tools. Null for the caller's default. */
+  persona: string | null
+  /**
+   * The conversation this turn belongs to, or null for a deliberately single-shot
+   * run. The same id is `memory_session.id` and `chat_sessions.id`, so the recall
+   * and the transcript agree on what a conversation is.
+   */
+  sessionId?: string | null
+}
+
 /** Callbacks a transport invokes as a run progresses. */
 export interface RunHandlers {
   /** One decoded stream event. */

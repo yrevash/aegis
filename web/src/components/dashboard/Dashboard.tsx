@@ -16,6 +16,7 @@ import { useMetricsSeries } from '@/state/useMetrics'
 import type { Role } from '@/lib/stream'
 
 import DashboardCharts from './DashboardCharts'
+import { MyBudgetTile } from './MyBudgetTile'
 import { costSavedTrend, reductionPct, sessionSavedDelta } from './overview'
 import { formatUsd } from './roi'
 import { RoiPanel } from './RoiPanel'
@@ -187,6 +188,10 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
         </BentoTile>
 
         <BentoTile span={4} reveal index={4}>
+          <MyBudgetTile token={token} />
+        </BentoTile>
+
+        <BentoTile span={4} reveal index={5}>
           <StatCard
             label="Cache hit"
             value={cacheHit != null ? cacheHit * 100 : null}

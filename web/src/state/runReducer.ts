@@ -10,18 +10,23 @@
 import type { Signal } from '@/config/signals'
 import { signalForEvent } from '@/config/signals'
 import type {
+  AgentStatus,
   ApprovalQueued,
   ApprovalRequired,
   BudgetExceeded,
   Guardrail,
   GraphEdge,
   GraphNode,
+  MemoryEvent,
   NodeFinished,
   NodeStarted,
   Provenance,
+  Reflection,
+  RoutingEvent,
   ScoredSource,
   StreamEvent,
   StreamEventType,
+  SynthesisEvent,
   ToolCall,
   ToolResult,
 } from '@/lib/stream'
@@ -82,6 +87,34 @@ export interface RunState {
   toolCalls: ToolCall[]
   /** Tool results received. */
   toolResults: ToolResult[]
+  /**
+   * Every round of the bounded self-repair loop, in order. The trace renders these
+   * beside the node timeline: "round 2 of 3 — the tool failed, replanning" is the
+   * agent visibly correcting itself, which no other event in the protocol shows.
+   */
+  reflections: Reflection[]
+  /**
+   * The supervisor's routing decision for this run, or null on a run that never
+   * routed. Carries `decided_by`, so the trace can always name whether the
+   * classifier, the user, the tenant default or the platform cap chose the width.
+   */
+  routing: RoutingEvent | null
+  /**
+   * The turn's long-term memory recall, or null. **Null is the honest default and
+   * means memory did not run**, which is the case for every run that carries no
+   * `session_id` — so a surface must render its absence as "single-shot", never as
+   * "recalled nothing".
+   */
+  memory: MemoryEvent | null
+  /**
+   * Every sub-agent lifecycle beat of a fan-out, in arrival order. Kept as the raw
+   * ordered log rather than a per-agent map: the agent panel allocates one card when
+   * a lane first appears and must never reflow, and a reducer that pre-grouped them
+   * would decide that layout on the panel's behalf.
+   */
+  agentStatuses: AgentStatus[]
+  /** The fan-out's merge — who contributed and who was omitted — or null. */
+  synthesis: SynthesisEvent | null
   /** Accumulated answer text. */
   answer: string
   /** The active approval gate, or null once resolved/terminal. */
@@ -137,6 +170,11 @@ export const initialRunState: RunState = {
   guardrails: [],
   toolCalls: [],
   toolResults: [],
+  reflections: [],
+  routing: null,
+  memory: null,
+  agentStatuses: [],
+  synthesis: null,
   answer: '',
   approval: null,
   approvalQueued: null,
@@ -163,6 +201,17 @@ const edgeKey = (e: GraphEdge): string => `${e.source}->${e.target}:${e.relation
  */
 function signalForRunEvent(type: StreamEventType): Signal {
   if (type === 'node_finished' || type === 'reasoning') return 'agent'
+  // The phase-5 additive events: the self-repair loop, the hand-off and the fan-out
+  // are all agent reasoning, and memory recall is a retrieval of durable context.
+  if (
+    type === 'reflection' ||
+    type === 'routing' ||
+    type === 'agent_status' ||
+    type === 'synthesis'
+  ) {
+    return 'agent'
+  }
+  if (type === 'memory') return 'graph'
   return signalForEvent(type)
 }
 
@@ -187,6 +236,11 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
         approvalQueued: null,
         provenance: null,
         budgetExceeded: null,
+        reflections: [],
+        routing: null,
+        memory: null,
+        agentStatuses: [],
+        synthesis: null,
       }
 
     case 'node_started':
@@ -240,6 +294,29 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
 
     case 'tool_result':
       return { ...next, toolResults: [...state.toolResults, event] }
+
+    case 'reflection':
+      return {
+        ...next,
+        phase: 'streaming',
+        reflections: [...state.reflections, event],
+      }
+
+    case 'routing':
+      return { ...next, phase: 'streaming', routing: event }
+
+    case 'memory':
+      return { ...next, memory: event }
+
+    case 'agent_status':
+      return {
+        ...next,
+        phase: 'streaming',
+        agentStatuses: [...state.agentStatuses, event],
+      }
+
+    case 'synthesis':
+      return { ...next, synthesis: event }
 
     case 'approval_required':
       return { ...next, phase: 'awaiting_approval', approval: event, awaitedApproval: true }

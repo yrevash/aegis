@@ -278,6 +278,111 @@ export interface BudgetExceeded extends BaseEvent {
   message: string
 }
 
+/**
+ * One round of the bounded self-repair loop (Reflexion-style).
+ *
+ * Emitted by the `reflect` node once per planning round: it judges whether the goal
+ * is met from the executed {@link ToolResult} outcomes and decides whether to loop
+ * back to `plan` or finalise. It has been on the wire since phase 5 and was dropped
+ * on the floor by a reducer that had no branch for it — the agent repairing itself
+ * is the single most demoable thing it does, and it was invisible.
+ */
+export interface Reflection extends BaseEvent {
+  type: 'reflection'
+  /** 1-based planning round this reflection follows (hard-capped). */
+  iteration: number
+  /** The configured iteration budget (hard cap on planning rounds). */
+  max_iterations: number
+  /** Whether the goal was judged met (all actions ok). */
+  done: boolean
+  /** Whether the agent loops back to plan for another round. */
+  will_retry: boolean
+  /** Demoable explanation of the self-repair decision. */
+  reason: string
+}
+
+/**
+ * The supervisor's routing decision — the visible hand-off.
+ *
+ * `decided_by` is what keeps the trace honest: the width shown always names whether
+ * the classifier, the user, the tenant default or the platform cap chose it. A width
+ * with no explanation is exactly the kind of number an audience stops trusting.
+ */
+export interface RoutingEvent extends BaseEvent {
+  type: 'routing'
+  /** The specialist role the turn was dispatched to. */
+  role: string
+  /** Demoable explanation of the routing decision. */
+  reason: string
+  /** Whether the cheap-LLM tiebreak was consulted (else deterministic). */
+  used_llm: boolean
+  /** How WIDE the turn runs: 'single' (one lane) or 'team' (a fan-out). */
+  depth: string
+  /** How many sub-agents a team turn fans out to (0 for single). */
+  fanout: number
+  /** Who chose the width: 'auto' | 'user' | 'tenant_default' | 'platform_cap'. */
+  decided_by: string
+}
+
+/**
+ * One sub-agent's lifecycle beat in a concurrent fan-out.
+ *
+ * `status: 'timeout'` is a **designed** terminal state, not an error: the run degrades
+ * gracefully, names the omitted agent in {@link SynthesisEvent}, and finishes. A card
+ * that renders it as a stuck spinner is reading the protocol wrong.
+ */
+export interface AgentStatus extends BaseEvent {
+  type: 'agent_status'
+  /** Stable id of the sub-agent this beat belongs to. */
+  agent_id: string
+  /** The sub-agent's kind, e.g. 'research' | 'knowledge'. */
+  role: string
+  /** Human label for the agent's lane in the console. */
+  label: string
+  /** queued | started | thinking | acting | done | failed | timeout. */
+  status: string
+  /** Short human detail for this beat. */
+  detail: string
+}
+
+/** One agent's line in a {@link SynthesisEvent} roster (agent_id/role/label + status). */
+export type SynthesisMember = Record<string, unknown>
+
+/**
+ * The fan-out's merge, naming which agents contributed **and which were omitted**.
+ *
+ * The omitted list is a first-class field rather than an absence the client infers:
+ * partial failure that is not named reads as a bug, and naming it is what turns a
+ * timed-out lane into visible, graceful degradation.
+ */
+export interface SynthesisEvent extends BaseEvent {
+  type: 'synthesis'
+  /** The agents whose findings are in the answer. */
+  contributing: SynthesisMember[]
+  /** The agents that produced nothing usable, each with its terminal status. */
+  omitted: SynthesisMember[]
+  /** The honest one-liner, e.g. 'Synthesised from 3 of 4 agents; …'. */
+  summary: string
+}
+
+/**
+ * Long-term memory recall for one turn — the proof a follow-up was remembered.
+ *
+ * Emitted once by `recall_memory`, and **only** when the run carries a `session_id`.
+ * That is why it gets its own visible line rather than a trace row: its absence is
+ * the observable difference between a console that has multi-turn memory and one
+ * that merely claims to.
+ */
+export interface MemoryEvent extends BaseEvent {
+  type: 'memory'
+  /** Semantic facts recalled into working memory. */
+  recalled_fact_count: number
+  /** Episodic/raw turns recalled into working memory. */
+  recalled_message_count: number
+  /** Token size of the assembled working-memory block. */
+  tokens_used: number
+}
+
 /** Any event the frontend may receive over the `/query` SSE stream. */
 export type StreamEvent =
   | RunStarted
@@ -292,6 +397,11 @@ export type StreamEvent =
   | ApprovalQueued
   | Provenance
   | BudgetExceeded
+  | Reflection
+  | RoutingEvent
+  | AgentStatus
+  | SynthesisEvent
+  | MemoryEvent
   | AnswerChunk
   | RunFinished
   | ErrorEvent

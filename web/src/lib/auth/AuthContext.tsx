@@ -44,6 +44,15 @@ export interface Session {
    * `admin` for both.
    */
   fineRole: FineRole
+  /**
+   * Who the caller is, from `POST /auth/login` — the same value the token carries as
+   * its `sub` claim, and the identity `/memory/*` authorises a subject against.
+   *
+   * Separate from `tenantId`: a platform principal has no tenant and a real user id.
+   * `null` only for the back-compat demo principals that are not backed by a `users`
+   * row, and for a session stored before this field existed.
+   */
+  userId: number | null
 }
 
 /**
@@ -78,6 +87,10 @@ function readStoredSession(): Session | null {
       ...stored,
       tenantId: stored.tenantId ?? null,
       fineRole: stored.fineRole ?? fallbackFineRole(stored.role),
+      // A session stored before `userId` existed rehydrates without one. Null is the
+      // honest answer — the surfaces that need it withhold themselves and say why,
+      // rather than guessing an id and asking the server to refuse it.
+      userId: stored.userId ?? null,
     }
   } catch {
     return null
@@ -98,8 +111,15 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   }, [])
 
   const signIn = useCallback(async (username: string, password: string): Promise<Session> => {
-    const { role, token, tenant_id, fine_role } = await apiLogin({ username, password })
-    const next: Session = { role, token, username, tenantId: tenant_id, fineRole: fine_role }
+    const { role, token, tenant_id, fine_role, user_id } = await apiLogin({ username, password })
+    const next: Session = {
+      role,
+      token,
+      username,
+      tenantId: tenant_id,
+      fineRole: fine_role,
+      userId: user_id,
+    }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
     } catch {

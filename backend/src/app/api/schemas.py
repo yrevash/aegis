@@ -615,6 +615,18 @@ class LoginResponse(BaseModel):
     platform. It is the value :func:`aegis.governance.security.principal_role`
     already derives for the JWT, echoed rather than re-derived, so the wire and the
     token can never disagree.
+
+    ``user_id`` is **who the caller is**, and it is a separate fact from ``tenant_id``.
+    A platform principal has no tenant and still has a user id; the two are not two
+    readings of one value, and treating "no tenant" as "no user" is the exact shape of
+    conflation the sealed :data:`~aegis.retrieval.types.TenantScope` type was introduced
+    to remove. It is echoed from the same principal ``_mint_token`` encodes as the JWT's
+    ``sub`` claim, so there is one source of truth for the caller's identity — which
+    matters because the ``/memory/*`` endpoints authorise a non-admin against the
+    ``user:<id>`` subject derived from that claim. A browser that had to recover the id
+    by decoding the token itself would be re-deriving, client-side, a value the server
+    can simply state; the first time the two disagreed, the console would send a subject
+    the server refuses and the 403 would look like a bug in the memory rail.
     """
 
     role: Role
@@ -625,6 +637,14 @@ class LoginResponse(BaseModel):
         description=(
             "Fine RBAC tier: 'platform_admin' / 'tenant_admin' for an admin, else "
             "the coarse role's own string."
+        ),
+    )
+    user_id: int | None = Field(
+        default=None,
+        description=(
+            "The caller's user id — the JWT's `sub` claim, and the id the /memory/* "
+            "subject `user:<id>` is authorised against. None only when no users row "
+            "backs the principal; never a statement about its tenant."
         ),
     )
 

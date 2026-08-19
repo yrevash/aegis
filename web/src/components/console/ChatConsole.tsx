@@ -22,7 +22,7 @@ import { ApprovalSpotlight } from './ApprovalSpotlight'
 import { AssistantBot } from './AssistantBot'
 import { Composer } from './Composer'
 import { MemoryRail } from './MemoryRail'
-import { memorySubjectFromToken } from './memorySubject'
+import { memorySubjectOf } from './memorySubject'
 import { beatFromSignal } from './motion'
 import { ReasoningLane } from './ReasoningLane'
 import { ResultTabs } from './ResultTabs'
@@ -249,7 +249,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   const approval = chat.live?.run.approval ?? null
   // The subject `/memory/*` is keyed on — read from the bearer's own claim, so the rail
   // asks for the one record this sign-in is allowed to see.
-  const memorySubject = memorySubjectFromToken(token)
+  const memorySubject = memorySubjectOf(auth)
 
   return (
     <div className="grid min-h-[70vh] gap-4 lg:grid-cols-[13rem_minmax(0,1fr)] xl:grid-cols-[13rem_minmax(0,1fr)_21rem]">

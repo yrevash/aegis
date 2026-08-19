@@ -12,22 +12,21 @@ import { getAuthToken } from './authToken'
 import { postApproval } from './client'
 import { API_BASE } from './config'
 import { readSSEStream } from './sse'
-import type { RunController, RunHandlers } from './transport'
+import type { RunController, RunHandlers, RunRequest } from './transport'
 
 /**
  * Begin a run and return its controller.
  *
- * @param query - The user query.
- * @param persona - Optional adapter persona id.
+ * @param request - The turn, its persona, and the conversation it belongs to.
  * @param token - Bearer token for RBAC, or null to use the stored session token.
  * @param handlers - Run lifecycle callbacks.
  */
 export function startRun(
-  query: string,
-  persona: string | null,
+  request: RunRequest,
   token: string | null,
   handlers: RunHandlers,
 ): RunController {
+  const { query, persona, sessionId = null } = request
   const controller = new AbortController()
   // Per-call token wins; else fall back to the signed-in session's token.
   const bearer = token ?? getAuthToken()
@@ -38,7 +37,9 @@ export function startRun(
     const res = await fetch(`${API_BASE}/query`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ query, persona }),
+      // `session_id` is what turns the memory nodes from pass-throughs into a
+      // recall; omitting it is why memory was dark in the live product.
+      body: JSON.stringify({ query, persona, session_id: sessionId }),
       signal: controller.signal,
     })
     if (!res.ok || res.body === null) {

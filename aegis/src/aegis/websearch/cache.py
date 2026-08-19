@@ -56,6 +56,13 @@ KEY_PREFIX = "aegis:websearch:v2"
 #: The sorted-set that indexes this cache's own keys so the cap can be enforced.
 INDEX_KEY = f"{KEY_PREFIX}:index"
 
+#: Index keys from superseded cache versions. Their *entries* expire on their own
+#: TTL, but the sorted set holding them carries none — so bumping the prefix leaves
+#: a set of stale members behind forever in any store that ran the old code. Small
+#: and bounded, and still a key nobody owns; :meth:`RedisSearchCache.__init__`
+#: deletes them once. Add the old prefix here whenever :data:`KEY_PREFIX` moves.
+SUPERSEDED_INDEX_KEYS: tuple[str, ...] = ("aegis:websearch:v1:index",)
+
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -176,6 +183,31 @@ class RedisWebSearchCache:
         """
         self._client = client
         self._max_entries = max(1, max_entries)
+        self._drop_superseded_indexes()
+
+    def _drop_superseded_indexes(self) -> None:
+        """Delete index sets left behind by an earlier :data:`KEY_PREFIX`.
+
+        A cache-version bump retires the value keys safely — they expire on their own
+        TTL and the new prefix cannot read them — but the index *set* has no TTL, so
+        the old one would linger with stale members for as long as the store lives.
+        Bounded and harmless, and still an orphan nobody owns.
+
+        Best-effort by design: a store that refuses the delete is not a reason to fail
+        constructing a cache, so the failure is logged and swallowed. It is also
+        idempotent — a second construction deletes nothing and says nothing.
+        """
+        for stale in SUPERSEDED_INDEX_KEYS:
+            try:
+                if self._client.delete(stale):
+                    logger.info("Dropped the superseded web-search index %s.", stale)
+            except Exception:  # noqa: BLE001 - a cleanup must never block a cache
+                logger.warning(
+                    "Could not drop the superseded web-search index %s; it is bounded "
+                    "and harmless, but it will linger.",
+                    stale,
+                    exc_info=True,
+                )
 
     def get(self, key: str) -> str | None:
         """Return the cached value for ``key`` or ``None`` (Redis expires it for us)."""

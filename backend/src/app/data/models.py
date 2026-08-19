@@ -18,11 +18,15 @@ name within **one** MetaData — a ``chunks`` on this ``Base`` could not referen
 ``documents`` on that one, so the relationship would have been a naming convention the
 database never checked.
 
-The table that still belongs to the platform stays here on its own :class:`Base`:
-``Approval`` (agent HITL). Its ``tenant_id`` is a plain indexed column (no cross-package
+The tables that still belong to the platform stay here on their own :class:`Base`:
+``Approval`` (agent HITL) and the console's chat transcript (``ChatSession`` /
+``ChatMessage``). Their ``tenant_id`` is a plain indexed column (no cross-package
 foreign key to the now-separate ``aegis.governance`` ``tenants`` table — mirroring how
 ``aegis.memory`` isolates at the query/RLS layer); the belt-and-suspenders tenant scoping
-+ Postgres RLS provide the isolation, not a DDL foreign key.
++ Postgres RLS provide the isolation, not a DDL foreign key. Both chat tables are
+registered in :data:`aegis.governance.rls._TENANT_SCOPED_TABLES` in the same change that
+declares them — a tenant-scoped table that arrives without a policy looks governed from
+the outside and leaks silently, which is the gap Phase 4's audit found five times.
 
 Both metadatas (this ``Base`` and ``AegisBase``) are created by ``app.data.session.bootstrap``.
 """
@@ -48,7 +52,7 @@ from aegis.governance.models import (
 from aegis.jobs.models import Chunk
 from aegis.ops.models import EvalResult, PromptStatus, PromptVersion
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import String, func
+from sqlalchemy import ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = [
@@ -60,6 +64,8 @@ __all__ = [
     "Budget",
     "BudgetScope",
     "BudgetWindow",
+    "ChatMessage",
+    "ChatSession",
     "Chunk",
     "EvalResult",
     "JsonB",
@@ -144,6 +150,70 @@ class Approval(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     decided_at: Mapped[datetime | None] = mapped_column(default=None)
     decided_by: Mapped[str | None] = mapped_column(String(255), default=None)
+
+
+class ChatSession(Base):
+    """One console conversation — the transcript's thread record (task 6.2).
+
+    **Its ``id`` is deliberately the same string as** ``memory_session.id``. The console
+    mints one id, sends it as ``QueryRequest.session_id``, and both the transcript here
+    and :class:`aegis.memory.stores.MemorySession` key off it — so "what did we say" and
+    "what do you remember" can never disagree about which conversation is meant. That is
+    also why the primary key is a ``String(64)`` rather than a native ``uuid``: a uuid
+    column here and a varchar there would be the same identity in two types, and one of
+    the two joins would have to cast.
+
+    It is a **separate table** from ``memory_session`` rather than a widening of it. That
+    row is the memory subsystem's own working state (rolling summary, turn counter,
+    subject) and belongs to :mod:`aegis.memory`; overloading it as the chat store would
+    make the console's transcript a hostage of the memory tier's retention policy — the
+    forgetting sweep archives memory rows on purpose, and a user's chat history must not
+    disappear because a consolidation job decided a fact was stale.
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Plain indexed column, as on ``Approval``: isolation is the app-level predicate
+    # plus the ``tenant_isolation`` RLS policy, not a cross-package DDL foreign key.
+    tenant_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    user_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    title: Mapped[str] = mapped_column(String(255), default="New chat")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    last_active_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), index=True
+    )
+
+
+class ChatMessage(Base):
+    """One turn of a console conversation, in order (task 6.2).
+
+    ``run_id`` links an assistant turn back to the run that produced it, so the trace,
+    the cost ledger and the transcript are one story rather than three. It is ``None``
+    on a user turn, which has no run of its own.
+
+    ``tenant_id`` is carried on the row rather than reached through
+    :class:`ChatSession`: an RLS predicate that has to join to find the owner makes the
+    join the boundary instead of the row, and a parent's policy does not protect what is
+    reached another way. Same reasoning as ``chunks`` vs ``documents``.
+    """
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), index=True
+    )
+    tenant_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    turn_index: Mapped[int] = mapped_column(default=0)
+    role: Mapped[str] = mapped_column(String(32), default="user")
+    content: Mapped[str] = mapped_column(Text())
+    run_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_chat_messages_session_turn", "session_id", "turn_index"),
+    )
 
 
 # ``Chunk`` / ``EvalResult`` / ``PromptStatus`` / ``PromptVersion`` are imported from

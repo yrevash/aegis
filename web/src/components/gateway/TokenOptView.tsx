@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { getGatewayOptimization } from '@/lib/api/client'
+import { getModels, type ModelRow } from '@/lib/api/console'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { GatewayOptimizationResponse } from '@/lib/api/platform'
 
@@ -27,6 +28,26 @@ function usd(value: number | null | undefined): string {
 /** Format a 0–1 share as a whole percent, tolerating a null (unmetered) reading. */
 function pct(value: number | null | undefined): string {
   return value == null ? '—' : `${Math.round(value * 100)}%`
+}
+
+/** What one billing unit of a role costs, in the unit that role is actually billed in.
+ *
+ * Not "per 1k tokens": `GET /models` carries the role's own `billing_unit`, and a
+ * column headed per-1k-tokens would have been quietly wrong for the voice role (billed
+ * per audio minute) and the vision role (billed per image). An absent row renders a
+ * dash — the price is unknown, which is a different statement from free.
+ */
+function priceLabel(row: ModelRow | undefined): string {
+  if (row == null) return '—'
+  const unit =
+    row.billing_unit === 'audio_minutes'
+      ? '/min'
+      : row.billing_unit === 'images'
+        ? '/image'
+        : '/1k in'
+  const out =
+    row.output_cost_usd_per_1k > 0 ? ` · $${row.output_cost_usd_per_1k.toFixed(4)}/1k out` : ''
+  return `$${row.input_cost_usd.toFixed(4)}${unit}${out}`
 }
 
 /**
@@ -45,6 +66,10 @@ function TokenOptView(): ReactElement {
   const token = session?.token ?? null
   const [data, setData] = useState<GatewayOptimizationResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // `GET /models` is the priced view of the same routing table this screen already
+  // shows unpriced. Loaded separately and allowed to fail: the routing map is the
+  // page, and a missing price renders as a dash rather than taking the page down.
+  const [priced, setPriced] = useState<Map<string, ModelRow>>(new Map())
 
   useEffect(() => {
     // Wait for the persisted session; firing now would send no bearer.
@@ -59,6 +84,13 @@ function TokenOptView(): ReactElement {
       })
       .catch(() => {
         if (alive) setError('Could not load the gateway optimization. Is the backend running?')
+      })
+    getModels(token)
+      .then((m) => {
+        if (alive) setPriced(new Map(m.rows.map((row) => [row.role, row])))
+      })
+      .catch(() => {
+        if (alive) setPriced(new Map())
       })
     return () => {
       alive = false
@@ -213,6 +245,7 @@ function TokenOptView(): ReactElement {
                       <tr className="border-b border-border text-left text-muted-foreground">
                         <th className="px-4 py-2 font-medium">role</th>
                         <th className="px-4 py-2 font-medium">model</th>
+                        <th className="px-4 py-2 font-medium">unit cost</th>
                         <th className="px-4 py-2 font-medium">fallback chain</th>
                       </tr>
                     </thead>
@@ -231,6 +264,9 @@ function TokenOptView(): ReactElement {
                               </span>
                             </td>
                             <td className="px-4 py-2 font-mono text-muted-foreground">{model}</td>
+                            <td className="px-4 py-2 font-mono text-[0.72rem] text-muted-foreground">
+                              {priceLabel(priced.get(role))}
+                            </td>
                             <td className="px-4 py-2">
                               {chain.length > 0 ? (
                                 <span className="flex flex-wrap items-center gap-1 font-mono text-[0.72rem] text-muted-foreground">

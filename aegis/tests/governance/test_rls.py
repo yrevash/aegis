@@ -219,6 +219,8 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         "settings",
         # host-owned
         "approvals",
+        "chat_messages",
+        "chat_sessions",
     }
     # ``tenants`` is keyed by ``id``, so a policy filtering on ``tenant_id`` would not
     # compile there — it is correctly absent. ``chunks`` used to be listed here for the

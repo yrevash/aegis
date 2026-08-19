@@ -842,6 +842,38 @@ async def _safe_audit(
         logger.warning("Audit write failed for action %s", action, exc_info=True)
 
 
+async def _safe_chat_turn(
+    session_id: str,
+    *,
+    role: str,
+    content: str,
+    tenant_id: int | None,
+    run_id: str | None = None,
+) -> None:
+    """Append one turn to the chat transcript, never breaking the run if it fails.
+
+    ``POST /query`` is the only writer of ``chat_messages`` (task 6.2): a client that
+    could post its own transcript could post one that never happened, so there is no
+    ``POST /sessions/{id}/messages`` and the run that produced the answer is its only
+    author. Best-effort for the same reason :func:`_safe_audit` is — a failed
+    bookkeeping row must not take down the thing being recorded.
+    """
+    from app.data.chat import append_chat_turn
+
+    try:
+        await append_chat_turn(
+            session_id,
+            role=role,
+            content=content,
+            tenant_id=tenant_id,
+            run_id=run_id,
+        )
+    except Exception:  # noqa: BLE001 - the transcript is best-effort at the edge
+        logger.warning(
+            "Chat transcript write failed for session %s", session_id, exc_info=True
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -861,14 +893,17 @@ async def login(req: LoginRequest) -> LoginResponse:
         ctx,
         payload={"role": ctx.fine_role, "tenant_id": ctx.tenant_id},
     )
-    # ``fine_role`` is echoed from the principal (the same value ``_mint_token`` puts
-    # on the JWT), never re-derived here — a second derivation is a second chance to
-    # disagree with the token the browser will send back.
+    # ``fine_role`` and ``user_id`` are echoed from the principal (the same values
+    # ``_mint_token`` puts on the JWT), never re-derived here — a second derivation is a
+    # second chance to disagree with the token the browser will send back. ``user_id`` in
+    # particular is what the ``/memory/*`` subject check authorises against, so a browser
+    # must not have to recover it by decoding the bearer itself.
     return LoginResponse(
         role=ctx.role,
         token=token,
         tenant_id=ctx.tenant_id,
         fine_role=ctx.fine_role,
+        user_id=ctx.user_id,
     )
 
 
@@ -1132,8 +1167,21 @@ async def query(
     # can enforce budgets/rates and write the usage ledger for this run (§3.3).
     governance = await _resolve_governance(auth)
 
+    # The chat transcript's tenant, resolved exactly as every scoped read resolves it.
+    # ``None`` here can only have come from ALL_TENANTS; a principal that resolves to no
+    # authority at all simply gets no transcript, because refusing the *run* over a
+    # bookkeeping row would be the wrong trade.
+    try:
+        chat_tenant: int | None = tenant_filter(auth.tenant_scope())
+        transcript = req.session_id
+    except UntenantedPrincipalError:
+        chat_tenant, transcript = None, None
+    if transcript is not None:
+        await _safe_chat_turn(transcript, role="user", content=req.query, tenant_id=chat_tenant)
+
     async def event_source() -> AsyncIterator[ServerSentEvent]:
         token = set_governance_context(governance)
+        answer: list[str] = []
         try:
             async for event in run_agent(
                 req.query,
@@ -1145,6 +1193,16 @@ async def query(
                 memory_subject=memory_subject,
             ):
                 _update_dashboards(event, graph_store, metrics, persona)
+                if event.type == "token":
+                    answer.append(event.text)
+                elif event.type == "run_finished" and transcript is not None:
+                    await _safe_chat_turn(
+                        transcript,
+                        role="assistant",
+                        content="".join(answer),
+                        tenant_id=chat_tenant,
+                        run_id=event.run_id,
+                    )
                 yield ServerSentEvent(event=event.type, data=event.model_dump_json())
         finally:
             reset_governance_context(token)
@@ -3668,5 +3726,7 @@ async def upload_document(
 # complete for ``tests/api/test_route_coverage.py``, which reads it from here — see
 # ``app.api.ingest_log.mount`` for why it is a merge rather than ``include_router``.
 from app.api.ingest_log import mount as _mount_ingest_log  # noqa: E402 - see above
+from app.api.routes_console import mount as _mount_console  # noqa: E402 - see above
 
 _mount_ingest_log(router)
+_mount_console(router)

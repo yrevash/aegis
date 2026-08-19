@@ -15,6 +15,7 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 
+import { ChatThreadsPanel } from './ChatThreadsPanel'
 import { EpisodicSessionsPanel } from './EpisodicSessionsPanel'
 import { LoadingRow } from './StateRow'
 import { PanelHeader } from './PanelHeader'
@@ -182,6 +183,15 @@ function MemoryView({ token }: { token: string | null }): ReactElement {
         </form>
       </div>
 
+
+      {/* The caller's own chat threads. Not gated on the subject picker: a chat is
+          keyed by the person who had it, not by the subject the store is keyed on,
+          and it is how an operator finds a session id worth inspecting. */}
+      <Card>
+        <CardBody>
+          <ChatThreadsPanel token={token} />
+        </CardBody>
+      </Card>
 
       {subject === '' ? (
         <Card>

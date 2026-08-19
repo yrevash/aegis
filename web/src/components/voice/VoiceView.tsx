@@ -120,7 +120,9 @@ function VoiceView(): ReactElement {
     // handler refuses to run without it too.
     if (!input) return
     setAgentRun({ answer: '', status: 'running', error: null })
-    startRun(input, null, token, {
+    // A voice turn is deliberately single-shot: the transcript is the input, and
+    // there is no thread for it to belong to.
+    startRun({ query: input, persona: null, sessionId: null }, token, {
       onEvent: (event) => {
         if (event.type === 'token') {
           setAgentRun((prev) =>

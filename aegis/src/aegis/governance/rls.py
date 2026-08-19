@@ -152,8 +152,14 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     # :data:`_PLATFORM_BASELINE_TABLES` as well: a NULL-tenant row here is the platform
     # baseline every tenant is entitled to *read*, and none may write.
     "settings",
-    # host-owned (app.data.models) — the durable agent approvals inbox
+    # host-owned (app.data.models) — the durable agent approvals inbox, and the
+    # console's chat transcript. ``chat_messages`` carries its own ``tenant_id`` rather
+    # than reaching one through ``chat_sessions``, for the reason spelled out on
+    # ``chunks`` above: a predicate that has to join to find the owner makes the join
+    # the boundary instead of the row.
     "approvals",
+    "chat_messages",
+    "chat_sessions",
 )
 
 #: Tables where a row with a NULL ``tenant_id`` is a **platform baseline every tenant
