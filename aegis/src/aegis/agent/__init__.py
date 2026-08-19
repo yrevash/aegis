@@ -72,7 +72,13 @@ from .router import (
     route_query,
 )
 from .state import AgentState
-from .subagent import SubAgentResult, SubAgentSpec, SubAgentStatus, run_subagent
+from .subagent import (
+    SubAgentResult,
+    SubAgentSpec,
+    SubAgentStatus,
+    resolve_system_prompt,
+    run_subagent,
+)
 from .team import SharedRetrievalPool, TeamOutcome, TeamTask, run_team, synthesise
 from .topology import GraphTopology, TopologyEdge, TopologyNode, graph_topology
 
@@ -117,6 +123,7 @@ __all__ = [
     "risk_rank",
     "route_query",
     "run_agent",
+    "resolve_system_prompt",
     "run_subagent",
     "run_summary",
     "run_team",

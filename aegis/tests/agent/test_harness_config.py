@@ -102,6 +102,71 @@ def test_every_knob_carries_a_doc_string():
         assert knob["doc"] and isinstance(knob["doc"], str)
 
 
+#: What each declared knob ``type`` promises about the effective value's Python type.
+_PYTHON_TYPE = {
+    "bool": (bool,),
+    "int": (int,),
+    "float": (int, float),
+    "str": (str,),
+    "enum": (str,),
+}
+
+
+def test_every_knob_declares_the_type_its_value_actually_has():
+    """A knob whose declared type disagrees with its value renders a broken control.
+
+    The bijection above catches a knob with no spec; this catches a knob with the wrong
+    one — which is the same defect discovered one screen later.
+    """
+    for knob in harness_config()["knobs"]:
+        assert knob["type"] in _PYTHON_TYPE, f"{knob['key']}: unknown type {knob['type']}"
+        if knob["value"] is None:
+            assert knob.get("nullable") is True, (
+                f"{knob['key']} has a null value but is not declared nullable"
+            )
+            continue
+        assert isinstance(knob["value"], _PYTHON_TYPE[knob["type"]]), (
+            f"{knob['key']} is declared {knob['type']} but its value is "
+            f"{type(knob['value']).__name__}"
+        )
+        assert not isinstance(knob["value"], bool) or knob["type"] == "bool"
+
+
+def test_every_numeric_knob_is_bounded_and_the_bounds_admit_the_default():
+    """An unbounded numeric knob is a slider with no ends — untunable in a UI.
+
+    Added with phase 5's six team knobs, which is exactly when "every new knob gets a
+    ``_KnobSpec``" stops being free: a width, a concurrency, a step cap and two wall
+    clocks are all numbers somebody will want to turn on the day.
+    """
+    for knob in harness_config()["knobs"]:
+        if knob["type"] not in {"int", "float"}:
+            continue
+        assert "minimum" in knob, f"{knob['key']} declares no minimum"
+        if knob["value"] is not None:
+            assert knob["value"] >= knob["minimum"]
+            if "maximum" in knob:
+                assert knob["minimum"] <= knob["maximum"]
+                assert knob["value"] <= knob["maximum"]
+
+
+def test_the_team_knobs_are_all_present_and_tunable():
+    """The six knobs phase 5 added, named — so removing one fails here, not in a demo."""
+    by_key = {k["key"]: k for k in harness_config()["knobs"]}
+    for key in (
+        "team_enabled",
+        "max_parallel_agents",
+        "max_concurrent_agents",
+        "subagent_max_steps",
+        "subagent_timeout_s",
+        "team_wall_clock_s",
+    ):
+        assert key in by_key, f"{key} has no _KnobSpec; the harness cannot render it"
+    assert by_key["team_enabled"]["type"] == "bool"
+    assert by_key["max_parallel_agents"]["maximum"] == 8
+    assert by_key["subagent_timeout_s"]["type"] == "float"
+
+
 # ── gate_min_risk genuinely changes whether the run pauses ────────────────────
 
 

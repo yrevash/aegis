@@ -83,10 +83,26 @@ class PIIMatch(BaseModel):
 
 
 class InjectionVerdict(BaseModel):
-    """Structured output of the prompt-injection / jailbreak classifier."""
+    """Structured output of the prompt-injection / jailbreak classifier.
+
+    ``injection`` and ``checked`` are two different facts and conflating them is what
+    made a dead gateway tell a judge their question looked like an attack. The screen
+    fails closed either way — ``injection=True`` blocks — but only ``checked=True``
+    means a screen actually reached a verdict *about the text*. ``checked=False`` is
+    "we could not look", and every surface that renders a refusal must say so.
+    """
 
     injection: bool
     reason: str = Field(description="Human-readable rationale, shown in the trace panel.")
+    checked: bool = Field(
+        default=True,
+        description=(
+            "Whether the screen actually ran and judged the text. False means the "
+            "classifier was unreachable or answered unintelligibly and the request was "
+            "refused unchecked — a statement about this deployment, never about the "
+            "input."
+        ),
+    )
 
 
 class FormatCheck(BaseModel):

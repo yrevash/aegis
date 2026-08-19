@@ -31,6 +31,21 @@ const VERDICT_META: Record<
 }
 
 /**
+ * Rail layers whose raw name would read as an accusation, and what to show instead.
+ *
+ * `injection_unavailable` is the backend's way of saying "the prompt-injection screen
+ * could not be completed, so the request was refused unexamined" — a fact about the
+ * deployment, not a finding about the user's text. Rendering the bare token beside a
+ * BLOCK badge would read as `INJECTION`, which is the accusation the separate layer
+ * exists to avoid making.
+ *
+ * @see aegis/src/aegis/guardrails/pipeline.py — `INJECTION_UNAVAILABLE_LAYER`
+ */
+const LAYER_LABEL: Record<string, string> = {
+  injection_unavailable: 'injection · screen unavailable',
+}
+
+/**
  * The guardrail glass box: every rail verdict, its layer (pii / injection /
  * schema…), and — when a rail redacted — the before→after masked diff so the
  * jury sees exactly what was caught and how it was neutralised. A running
@@ -113,7 +128,7 @@ function GuardrailRow({ entry }: { entry: GuardrailEntry }): ReactElement {
         />
         <span className="font-mono text-[0.7rem] tracking-wide text-foreground uppercase">
           {entry.stage}
-          {entry.layer ? ` · ${entry.layer}` : ''}
+          {entry.layer ? ` · ${LAYER_LABEL[entry.layer] ?? entry.layer}` : ''}
         </span>
         <Badge variant={meta.variant} className="ml-auto uppercase">
           {meta.label}

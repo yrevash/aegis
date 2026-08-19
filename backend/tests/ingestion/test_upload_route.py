@@ -29,7 +29,7 @@ from __future__ import annotations
 import pgsupport
 import pytest
 from aegis.governance.models import Budget, BudgetScope, BudgetWindow, UsageLedger
-from aegis.jobs import Document, JobStatus
+from aegis.jobs import Document, JobRun, JobStatus
 from aegis.settings.spec import spec_for
 from sqlalchemy import select
 
@@ -346,3 +346,265 @@ async def test_a_malformed_document_date_is_refused_rather_than_guessed(
     assert res.status_code == 400
     assert "ISO date" in res.json()["detail"]
     assert temporal.started == []
+
+
+# ── The way back for a document whose ingest never started (audit C, C3) ─────
+
+
+class _RefusingTemporalClient:
+    """A Temporal that is not there — the state a cold demo box is actually in."""
+
+    def __init__(self) -> None:
+        self.started: list[str] = []
+
+    async def start_workflow(self, *args: object, **kwargs: object) -> object:
+        """Refuse every start, the way an unreachable orchestrator does."""
+        raise RuntimeError("the durable-job orchestrator (Temporal) is not reachable")
+
+
+async def test_a_document_whose_ingest_never_started_can_be_started_by_re_uploading(
+    client, db, temporal, store
+) -> None:
+    """One flaky moment at upload time must not kill the file permanently.
+
+    With Temporal down, ``POST /documents`` stores the bytes, fails to start the workflow
+    and returns 503. Afterwards the document was unreachable by every route the platform
+    has: the ``(tenant_id, content_sha256)`` dedup refused the identical bytes,
+    ``GET /jobs`` showed no row (no execution ever claimed it), and
+    ``POST /jobs/{id}/requeue`` therefore had nothing to act on. FAILED forever, short of
+    editing the database.
+    """
+    from app.jobs.client import set_temporal_client
+
+    await _seed_tenants()
+
+    # The orchestrator is down at the moment of upload.
+    set_temporal_client(_RefusingTemporalClient())  # type: ignore[arg-type]
+    refused = await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+    assert refused.status_code == 503, refused.text
+    assert "not reachable" in refused.json()["detail"]
+
+    rows = await _documents(_TENANT_A)
+    assert len(rows) == 1
+    assert rows[0].status is JobStatus.FAILED
+    document_id = rows[0].id
+
+    # Temporal comes back. The tenant re-sends the same file — the only remedy a person
+    # holding the document can reach without being told about a new endpoint.
+    set_temporal_client(temporal)  # type: ignore[arg-type]
+    again = await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+
+    assert again.status_code == 200, again.text
+    body = again.json()
+    assert body["document_id"] == document_id, "no second row: this is the same document"
+    assert body["created"] is False
+    assert body["restarted"] is True
+    assert body["status"] == "pending"
+    assert temporal.started == [f"ingest:{_TENANT_A}:{document_id}"], (
+        "the stuck document's ingest must actually have been started"
+    )
+
+    rows = await _documents(_TENANT_A)
+    assert len(rows) == 1
+    assert rows[0].status is JobStatus.PENDING
+    assert rows[0].error is None, "the stale failure reason must not outlive the restart"
+
+
+async def test_the_restart_is_idempotent_and_forks_no_second_execution(
+    client, db, temporal, store
+) -> None:
+    """A second re-upload while the restarted ingest is live must start nothing.
+
+    The guard is durable state — FAILED *and* no ``job_runs`` row — and starting the
+    execution is what stops it holding. Reusing the same workflow id rather than minting a
+    fresh nonce is the second lock: the orchestrator refuses a duplicate rather than
+    letting two workflows walk one document.
+    """
+    from app.jobs.client import set_temporal_client
+
+    await _seed_tenants()
+
+    set_temporal_client(_RefusingTemporalClient())  # type: ignore[arg-type]
+    await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+
+    set_temporal_client(temporal)  # type: ignore[arg-type]
+    first = await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+    second = await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+
+    assert first.json()["restarted"] is True
+    assert second.json()["restarted"] is False, "the second call must be an ordinary dedup"
+    assert "no second ingest" in second.json()["detail"]
+    assert len(temporal.started) == 1, "a second execution was forked over one document"
+    assert len(await _documents(_TENANT_A)) == 1
+
+
+async def test_a_healthy_document_is_never_re_ingested_by_a_duplicate_upload(
+    client, db, temporal, store
+) -> None:
+    """The escape hatch must not become a way to re-parse a working document.
+
+    Parsing is CPU-bound at a second a page and embedding is billed. The guard is
+    deliberately narrow — only a FAILED document that owns no job run at all — and this
+    is the assertion that keeps it narrow.
+    """
+    await _seed_tenants()
+
+    await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+    rows = await _documents(_TENANT_A)
+    async with get_sessionmaker()() as session:
+        await set_tenant_scope(session, _TENANT_A)
+        document = (
+            await session.execute(select(Document).where(Document.id == rows[0].id))
+        ).scalar_one()
+        # A stage died: FAILED, but with a job run behind it, so ``/jobs`` shows it and
+        # ``POST /jobs/{id}/requeue`` is the right remedy.
+        document.status = JobStatus.FAILED
+        document.error = "the embed stage failed: RBAC: access denied"
+        session.add(
+            JobRun(
+                tenant_id=_TENANT_A,
+                job_type="ingest",
+                workflow_id=document.workflow_id,
+                status=JobStatus.FAILED,
+                payload={"document_id": document.id},
+            )
+        )
+        await session.commit()
+
+    again = await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+
+    assert again.json()["restarted"] is False
+    assert len(temporal.started) == 1, (
+        "a failed *stage* is re-queued through /jobs, not by re-uploading the file"
+    )
+
+
+# ── GET /documents: the corpus, tenant-scoped (audit C, C7) ──────────────────
+
+
+async def test_a_tenant_can_list_the_documents_it_has_ingested(
+    client, db, temporal, store
+) -> None:
+    """"Show me what you have ingested" must have an endpoint behind it.
+
+    The route table had ``POST /documents`` and ``GET /documents/{id}/ingest`` and
+    nothing between them, so the only way to look at a document was to already know its
+    id — which a jury asking the question does not.
+    """
+    await _seed_tenants()
+
+    first = await _upload(
+        client,
+        tenant_id=_TENANT_A,
+        username="a-admin",
+        user_id=_USER_A,
+        data=_PDF,
+        doc_type="policy",
+        doc_date="2019-04-01",
+    )
+    second = await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_OTHER_PDF
+    )
+
+    listed = await client.get(
+        "/documents",
+        headers=_headers(tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A),
+    )
+
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()["rows"]
+    assert {row["document_id"] for row in rows} == {
+        first.json()["document_id"],
+        second.json()["document_id"],
+    }
+    by_id = {row["document_id"]: row for row in rows}
+    row = by_id[first.json()["document_id"]]
+    assert row["filename"] == "filing.pdf"
+    assert row["status"] == "pending"
+    assert row["doc_type"] == "policy"
+    assert row["doc_date"] == "2019-04-01"
+    assert row["size_bytes"] == len(_PDF)
+    # Not guessed before the parse runs, exactly as the upload response reports them.
+    assert row["title"] is None
+    assert row["page_count"] is None
+
+
+async def test_the_corpus_listing_never_crosses_a_tenant_boundary(
+    client, db, temporal, store
+) -> None:
+    """Tenant B must not see tenant A's documents, over the unprivileged role.
+
+    Asserted against the scratch cluster's ``NOSUPERUSER NOBYPASSRLS`` connection, so
+    ``tenant_isolation`` is genuinely enforced against the reader rather than being a
+    ``WHERE`` clause the test wrote for itself.
+    """
+    await _seed_tenants()
+
+    await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+
+    theirs = await client.get(
+        "/documents",
+        headers=_headers(tenant_id=_TENANT_B, username="b-admin", user_id=_USER_B),
+    )
+
+    assert theirs.status_code == 200
+    assert theirs.json()["rows"] == [], "tenant B saw tenant A's corpus"
+
+
+async def test_an_untenanted_principal_gets_an_empty_corpus_not_everyones(
+    client, db, temporal, store
+) -> None:
+    """The `None`-conflation that caused five cross-tenant leaks must not come back.
+
+    ``None if admin else auth.tenant_id`` reaches the platform admin's unrestricted value
+    down the *unprivileged* branch for any principal whose ``users.tenant_id`` is NULL —
+    the shape ``app.seed`` mints for the "client" platform principal. The sealed
+    ``TenantScope`` separates the two, and this asserts the separation on the new route.
+    """
+    async with get_sessionmaker()() as session:
+        await pgsupport.seed(
+            session,
+            Tenant(id=_TENANT_A, name="Tenant A"),
+            User(id=_USER_A, username="a-admin", role=Role.ADMIN, tenant_id=_TENANT_A),
+            User(id=99, username="rogue", role=Role.CLIENT, tenant_id=None),
+            Budget(
+                tenant_id=_TENANT_A,
+                scope_type=BudgetScope.TENANT,
+                scope_id=_TENANT_A,
+                window=BudgetWindow.DAY,
+                usd_cap=_USD_CAP,
+            ),
+        )
+        await session.commit()
+
+    await _upload(
+        client, tenant_id=_TENANT_A, username="a-admin", user_id=_USER_A, data=_PDF
+    )
+
+    token = create_access_token(
+        user_id=99, username="rogue", role="client", tenant_id=None
+    )
+    rogue = await client.get(
+        "/documents", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert rogue.status_code == 200
+    assert rogue.json()["rows"] == [], (
+        "a principal bound to no tenant read every tenant's corpus"
+    )

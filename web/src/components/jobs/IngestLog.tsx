@@ -9,6 +9,7 @@ import {
   Share2,
   Table2,
   TriangleAlert,
+  XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
@@ -201,7 +202,12 @@ function StageStrip({ stages }: { stages: IngestStage[] }): ReactElement {
                   {stage.name}
                 </span>
               </span>
-              <span className="font-mono text-xs text-muted-foreground">
+              <span
+                className={cn(
+                  'font-mono text-xs',
+                  stage.state === 'failed' ? 'text-block-ink' : 'text-muted-foreground',
+                )}
+              >
                 {stage.state === 'completed' ? ms(stage.duration_ms) : stage.state}
               </span>
             </div>
@@ -228,10 +234,18 @@ function StageStrip({ stages }: { stages: IngestStage[] }): ReactElement {
   )
 }
 
-/** The state marker for one stage — done, in flight, or still owed. */
+/**
+ * The state marker for one stage — done, in flight, broken, or still owed.
+ *
+ * `failed` is its own marker rather than sharing the queued circle. A failed run used to
+ * render the stage it died in exactly like the stages that never started, so the only
+ * stage the screen named was the last one that *succeeded* — and a reader concluded that
+ * one was broken.
+ */
 function StateIcon({ state }: { state: StageState }): ReactElement {
   if (state === 'completed') return <CheckCircle2 className="size-4 text-ok" />
   if (state === 'running') return <Loader2 className="size-4 animate-spin text-agent" />
+  if (state === 'failed') return <XCircle className="size-4 text-block" />
   return <Circle className="size-4 text-muted-foreground/50" />
 }
 

@@ -8,6 +8,17 @@ Security posture — **fail closed**: if the classifier errors or returns someth
 we cannot parse as a clear "no", the input is treated as *unsafe*. An ambiguous
 guard is a blocked guard, per "no unguarded path to the model, ever".
 
+**Failing closed is not the same as accusing the caller**, and this module keeps the two
+apart in the type. Every verdict carries :attr:`~aegis.core.types.InjectionVerdict.checked`
+alongside ``injection``: ``checked=True`` means a screen looked at the text and reached
+this verdict about it, ``checked=False`` means no screen could be completed and the
+request was refused unexamined. Both block. Only the first is a finding. The distinction
+exists because the failure mode it prevents was measured: with no model gateway
+configured, *every* question came back to the user as "Prompt injection blocked", which
+tells a person their own words looked like an attack when the true fault is a dead
+upstream. :func:`aegis.guardrails.pipeline.Guardrails.check_input` reads the flag to
+choose which of the two things it says, and the console renders the difference.
+
 Verified against the ``aegis.core.interfaces.ChatCompleter`` protocol (async,
 returns str, accepts ``response_format={"type": "json_object"}``), August 2026.
 """
@@ -74,9 +85,19 @@ def _parse_verdict(raw: str) -> InjectionVerdict:
     # Ambiguous or unparseable → fail closed. Notably a reply that merely *begins*
     # with "no" ("No doubt this is a prompt injection attempt.") is ambiguous, not a
     # benign verdict, and lands here.
+    #
+    # ``checked=False``: the screen ran but reached no verdict *about the text*, so the
+    # block is a fact about the classifier and not an accusation against the caller. It
+    # is the same class of outcome as the classifier being unreachable, and it must read
+    # as one — see :data:`_UNCHECKED_REASON`'s neighbours in this module.
     return InjectionVerdict(
         injection=True,
-        reason="Classifier response was unparseable; blocked as a precaution.",
+        checked=False,
+        reason=(
+            "the prompt-injection screen could not be completed: the classifier's reply "
+            "was unparseable as a verdict, so the request was refused unchecked. "
+            "Nothing about your input was flagged."
+        ),
     )
 
 
@@ -346,8 +367,11 @@ async def classify_injection(text: str, *, completer: ChatCompleter) -> Injectio
         completer: An async chat-completion callable returning the assistant's text.
 
     Returns:
-        An :class:`InjectionVerdict`. On any completer error the call fails closed
-        and returns ``injection=True``.
+        An :class:`InjectionVerdict`. On any completer error the call fails closed and
+        returns ``injection=True`` **with** ``checked=False``: the request is refused,
+        and the verdict says the refusal is a fact about the classifier rather than a
+        finding about the text. Telling a caller their question looked like an attack
+        when the real fault is a dead upstream is the one thing this rail must never do.
     """
     messages = [
         {"role": "system", "content": _CLASSIFIER_SYSTEM_PROMPT},
@@ -355,10 +379,17 @@ async def classify_injection(text: str, *, completer: ChatCompleter) -> Injectio
     ]
     try:
         raw = await completer(messages, response_format={"type": "json_object"})
-    except Exception:  # noqa: BLE001 - any completer failure must fail closed
+    except Exception as exc:  # noqa: BLE001 - any completer failure must fail closed
         logger.warning("Injection classifier call failed; failing closed.", exc_info=True)
         return InjectionVerdict(
-            injection=True, reason="Injection classifier unavailable; blocked as a precaution."
+            injection=True,
+            checked=False,
+            reason=(
+                "the prompt-injection screen could not be run: the classifier is "
+                f"unreachable ({type(exc).__name__}). The request was refused unchecked "
+                "because this rail fails closed. Nothing about your input was flagged — "
+                "restore the model gateway and retry."
+            ),
         )
     return _parse_verdict(raw)
 

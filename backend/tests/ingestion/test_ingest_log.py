@@ -29,6 +29,7 @@ from app.core.security import TENANT_ADMIN, create_access_token
 from app.data import Tenant, User, get_sessionmaker, set_tenant_scope
 from app.ingestion.progress import (
     COMPLETED,
+    FAILED,
     QUEUED,
     RUNNING,
     ingest_progress,
@@ -250,14 +251,42 @@ def test_exactly_one_stage_is_running_and_it_is_the_next_one_owed() -> None:
     }
 
 
-def test_a_failed_job_has_no_running_stage() -> None:
-    """The stage it died in did not commit, so calling it running would be the lie."""
+def test_a_failed_job_has_no_running_stage_but_does_name_the_one_that_broke() -> None:
+    """The stage it died in did not commit, so calling it running would be the lie.
+
+    It is not ``queued`` either, and that half was the audit's finding (C2): with
+    ``embed`` failing, ``embed``, ``index`` and ``graph`` all rendered ``queued`` —
+    identical, though two of the three had never been attempted — so the only stage the
+    log named was ``enrich``, the last one that *succeeded*, and every reader concluded
+    ``enrich`` was broken.
+    """
     stages = project_stages(
         completed_stage="enrich", status="failed", events_by_stage={}
     )
 
     assert RUNNING not in {stage.state for stage in stages}
-    assert _stage_map(stages)["embed"] == QUEUED
+    assert _stage_map(stages) == {
+        "parse": COMPLETED,
+        "chunk": COMPLETED,
+        "enrich": COMPLETED,
+        "embed": FAILED,
+        "index": QUEUED,
+        "graph": QUEUED,
+    }
+
+
+def test_a_document_whose_workflow_never_started_blames_no_stage() -> None:
+    """A FAILED document with no execution behind it attempted nothing.
+
+    ``POST /documents`` stores the bytes and then starts the workflow; when the start
+    fails the row is closed FAILED with the reason on it and **no** ``job_runs`` row is
+    ever written. Marking ``parse`` as failed there would invent an attempt nobody made.
+    """
+    stages = project_stages(
+        completed_stage=None, status="failed", events_by_stage={}, started=False
+    )
+
+    assert {stage.state for stage in stages} == {QUEUED}
 
 
 def test_an_event_can_never_promote_a_stage_the_row_has_not_committed() -> None:
@@ -580,3 +609,113 @@ async def test_the_endpoint_serves_the_projection_and_is_tenant_scoped(
     )
 
     assert other.status_code == 404, other.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A failed ingest, read the way a tenant reads it (audit C, C2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_a_failed_ingest_names_the_stage_that_broke_and_why(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """The tenant-visible body must blame ``embed``, not ``enrich``, and say why.
+
+    Measured on the cold demo path with ``embed`` failing:
+
+    * the terminal entry read ``"ingest failed at enrich"`` — and enrich **succeeded**;
+    * ``embed`` rendered ``queued``, identical to ``index`` and ``graph``, which never ran;
+    * the real cause (``litellm.APIError: RBAC: access denied``) appeared nowhere, because
+      what reached the row was Temporal's wrapper, ``"Activity task failed"``.
+
+    The same response body already renders per-table failures well
+    (``"reason": "the summary call failed: …"``). This asserts the stage failure now reads
+    the same way.
+    """
+    _wire(store)
+    await _seed_tenants()
+    data, artifact = parsed_artifact
+    body = await _upload(client, data)
+    document_id = body["document_id"]
+    store.put_artifact(
+        tenant_id=_TENANT, sha256=body["content_sha256"], payload=artifact
+    )
+    await _start(document_id)
+    for stage in ("chunk", "enrich"):
+        await _run(stage, document_id=document_id)
+
+    # The workflow's own close-out, carrying the string its ``except`` now builds.
+    await finish_ingest(
+        FinishInput(
+            tenant_id=_TENANT,
+            workflow_id=f"ingest:{_TENANT}:{document_id}",
+            document_id=document_id,
+            status="failed",
+            error="the embed stage failed: litellm.APIError: RBAC: access denied",
+        )
+    )
+
+    progress = await _progress(document_id)
+
+    # 1. The failing stage is distinguishable from the stages that never ran.
+    assert _states(progress) == {
+        "parse": COMPLETED,
+        "chunk": COMPLETED,
+        "enrich": COMPLETED,
+        "embed": FAILED,
+        "index": QUEUED,
+        "graph": QUEUED,
+    }
+
+    # 2. The terminal log line names ``embed``, and does not read as "enrich broke".
+    terminal = [entry for entry in progress.entries if entry.kind == INGEST_FINISHED_EVENT]
+    assert len(terminal) == 1
+    message = terminal[0].message
+    assert "in the embed stage" in message, message
+    assert "failed at enrich" not in message, message
+
+    # 3. The underlying error is there, not Temporal's wrapper.
+    assert "RBAC: access denied" in message
+    assert "RBAC: access denied" in (progress.error or "")
+
+    # 4. The seq gap is the pipeline's shape, not lost rows. ``seq`` is the stage's
+    #    1-based index in INGEST_STAGES and the close-out's is one past the last, so
+    #    chunk=2, enrich=3, close-out=7 — and 4/5/6 are embed/index/graph never having
+    #    committed one. (parse=1 is absent here only because this test seeds the parse
+    #    artifact instead of running the stage.) Contiguity was never the contract;
+    #    replay stability is. See the module docstring.
+    seqs = [entry.seq for entry in progress.entries]
+    assert seqs == [2, 3, 7], (
+        "seq is the stage's index in INGEST_STAGES, so the gaps are stages that never "
+        "committed — see the module docstring"
+    )
+
+
+def test_the_workflow_reports_the_root_cause_not_temporals_wrapper() -> None:
+    """``str(exc)`` on a failed activity is ``"Activity task failed"`` and nothing else.
+
+    That wrapper is what reached ``documents.error``, ``job_runs.error`` and the ingest
+    log, so a tenant whose embed stage died of ``litellm.APIError: RBAC: access denied``
+    was told only that an activity failed. The cause lives one link down the chain.
+    """
+    from temporalio.exceptions import ActivityError, ApplicationError
+
+    from app.jobs.flows.ingest import _root_reason
+
+    cause = ApplicationError("litellm.APIError: RBAC: access denied", type="APIError")
+    wrapper = ActivityError(
+        "Activity task failed",
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="worker",
+        activity_type="aegis_run_stage",
+        activity_id="1",
+        retry_state=None,
+    )
+    wrapper.__cause__ = cause
+
+    unwrapped = _root_reason(wrapper)
+    assert "RBAC: access denied" in unwrapped
+    assert "Activity task failed" not in unwrapped
+    # An exception with no chain still yields something readable rather than "".
+    assert _root_reason(RuntimeError("plain")) == "plain"

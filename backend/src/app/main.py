@@ -60,6 +60,16 @@ Every autonomous action is uncertainty-bounded (conformal prediction), explainab
 #: wedged activity cannot hold the process open indefinitely.
 _WORKER_DRAIN_SECONDS = 10.0
 
+#: First retry delay after the worker dies. Short, because the overwhelmingly common cause
+#: is "the developer had not started Temporal yet", and the recovery should feel immediate
+#: once they do.
+_WORKER_RETRY_MIN_SECONDS = 1.0
+
+#: The retry ceiling. Doubling stops here so a long outage costs one dial every half
+#: minute — often enough that recovery is picked up while a person is still watching,
+#: rare enough that a genuinely absent orchestrator is not hammered.
+_WORKER_RETRY_MAX_SECONDS = 30.0
+
 _CORS_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -93,6 +103,77 @@ def _supervise(task: asyncio.Task[None], name: str) -> None:
             logger.error("Background task %s stopped unexpectedly.", name)
 
     task.add_done_callback(_done)
+
+
+async def run_worker_supervised(stop: asyncio.Event) -> None:
+    """Run the Temporal worker, and keep re-running it until ``stop`` is set.
+
+    **The defect this replaces.** ``start_worker_task`` created the worker as a bare task
+    and :func:`_supervise` logged its death. With Temporal down at boot that produced one
+    ERROR line and then a permanently dead substrate: starting Temporal afterwards did not
+    bring the worker back, because nothing was left to try. The API meanwhile went on
+    accepting uploads into a queue with no consumer, and ``/health`` went on saying ``ok``.
+
+    **Both halves of the fix live here.** The loop is the *supervision*: a capped
+    exponential backoff, retried for as long as the process lives, so an orchestrator that
+    comes back is picked up without a restart. :mod:`app.jobs.health` is the *surface*: the
+    state this loop writes is what ``GET /health`` and ``GET /ready`` report, so the outage
+    is visible while it lasts rather than only in a log line nobody tailed. Restarting
+    without reporting would hide the outage; reporting without restarting would name a
+    problem that needs a process bounce to clear.
+
+    The connection is dialled *before* the workers are built, and deliberately: it is the
+    step that actually fails, and doing it here means "we are connected" is a fact this
+    function established rather than one it assumed. The cached client is dropped on
+    failure so the next attempt genuinely re-dials instead of re-finding a dead singleton.
+
+    Args:
+        stop: The lifespan's shutdown event. Set it and this returns after the workers
+            have drained; it is also the thing waited on between retries, so shutdown
+            during a backoff is immediate rather than up to 30 seconds late.
+    """
+    from app.jobs.client import get_temporal_client, reset_temporal_client
+    from app.jobs.health import (
+        WORKER_DOWN,
+        WORKER_RUNNING,
+        WORKER_STARTING,
+        WORKER_STOPPED,
+        note_worker_restart,
+        set_worker_state,
+    )
+    from app.jobs.worker import run_workers
+
+    delay = _WORKER_RETRY_MIN_SECONDS
+    attempt = 0
+    while not stop.is_set():
+        if attempt:
+            note_worker_restart()
+        attempt += 1
+        try:
+            set_worker_state(WORKER_STARTING)
+            await get_temporal_client()
+            set_worker_state(WORKER_RUNNING)
+            delay = _WORKER_RETRY_MIN_SECONDS  # a good connect forgets the old backoff
+            await run_workers(stop)
+            set_worker_state(WORKER_STOPPED)
+            return
+        except asyncio.CancelledError:
+            set_worker_state(WORKER_STOPPED)
+            raise
+        except Exception as exc:  # noqa: BLE001 - a dead worker must be retried, not fatal
+            reset_temporal_client()
+            set_worker_state(WORKER_DOWN, detail=str(exc))
+            logger.error(
+                "Temporal worker is down; retrying in %.0fs. %s",
+                delay,
+                exc,
+                exc_info=True,
+            )
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay)
+        except TimeoutError:
+            delay = min(delay * 2, _WORKER_RETRY_MAX_SECONDS)
+    set_worker_state(WORKER_STOPPED)
 
 
 async def _run_memory_sweeper(stop: asyncio.Event) -> None:
@@ -242,14 +323,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The durable job substrate (§3.2): the Temporal worker, as an asyncio task in this
     # process — the in-process launch mode, identical in code path to
     # ``python -m app.jobs.worker``. Gated on the real stores because every activity
-    # writes to the record tables, and supervised like the sweepers: a worker that cannot
-    # reach Temporal must show up as an ERROR in the log, not as a substrate that looks
-    # present and silently runs nothing. The API keeps serving either way.
+    # writes to the record tables.
+    #
+    # **Supervised means restarted, not merely mourned.** It used to be a bare task whose
+    # death was logged once; with Temporal down at boot that left a permanently dead
+    # substrate that starting Temporal afterwards could not revive, while ``/health`` went
+    # on saying ok. :func:`run_worker_supervised` re-runs it with backoff and publishes its
+    # state to :mod:`app.jobs.health`, which ``/health`` and ``/ready`` now report. The API
+    # keeps serving either way — but it no longer claims to be fine while it is not.
     worker_task: asyncio.Task[None] | None = None
     if settings.stores_enabled and settings.temporal_worker_inprocess:
         from app.ingestion.reindex import register_corpus_reindex_handler
         from app.ingestion.stages import register_ingest_handlers
-        from app.jobs.worker import start_worker_task
 
         # The composition root: this is where the *work* of the ingest stages is bound to
         # the substrate that runs them. It is here rather than inside ``run_workers``
@@ -262,8 +347,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # it. Without this line every cadence tick raises rather than recording a
         # ``succeeded`` re-index that rebuilt nothing.
         register_corpus_reindex_handler()
-        worker_task = start_worker_task(sweeper_stop)
-        _supervise(worker_task, "temporal-worker")
+        worker_task = asyncio.create_task(
+            run_worker_supervised(sweeper_stop), name="temporal-worker"
+        )
+        # Still supervised by the done-callback as well: the retry loop handles the worker
+        # dying, and this catches the retry loop itself dying — a bug in the supervisor
+        # would otherwise be the one silent failure the supervisor cannot report.
+        _supervise(worker_task, "temporal-worker-supervisor")
 
     # Warm the ML spine off the hot path: load the artifact (or train it from the
     # real domain frame if absent) in a worker thread so the first live query never

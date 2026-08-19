@@ -79,6 +79,44 @@ _BOOKKEEPING_TIMEOUT = timedelta(seconds=60)
 #: than after a long backoff on work that has not started.
 _BOOKKEEPING_RETRY = RetryPolicy(maximum_attempts=3)
 
+#: How deep to walk an exception's ``__cause__`` chain looking for the real message. A
+#: bound, not a guess: the chain here is at most ``ActivityError → ApplicationError →
+#: (rarely) its own cause``, and an unbounded walk would hang on a self-referential chain
+#: rather than fail.
+_CAUSE_DEPTH = 5
+
+
+def _root_reason(exc: BaseException) -> str:
+    """Return the deepest non-empty message in ``exc``'s cause chain.
+
+    **Why this exists.** ``str(exc)`` on the exception a failed activity raises into a
+    workflow is Temporal's own wrapper text: ``"Activity task failed"``. Every word true,
+    and it is the *only* thing the tenant was told — the actual cause
+    (``litellm.APIError: RBAC: access denied``) lived one link down the ``__cause__``
+    chain and reached no row, no log line and no screen. A caller who cannot see why an
+    ingest failed cannot fix it, and the platform's own table-summary failures already do
+    this properly (``"the summary call failed: …"``); this is the stage-level equivalent.
+
+    Deterministic and stdlib-only, so it is safe inside a workflow body.
+
+    Args:
+        exc: The exception the stage loop raised.
+
+    Returns:
+        The most specific message available, falling back to the outermost one when the
+        chain carries nothing better.
+    """
+    best = str(exc).strip() or type(exc).__name__
+    cursor: BaseException | None = exc
+    for _ in range(_CAUSE_DEPTH):
+        cursor = getattr(cursor, "cause", None) or getattr(cursor, "__cause__", None)
+        if cursor is None:
+            break
+        message = str(cursor).strip()
+        if message:
+            best = message
+    return best
+
 
 @workflow.defn(name=INGEST_WORKFLOW)
 class IngestWorkflow:
@@ -128,8 +166,15 @@ class IngestWorkflow:
         )
 
         stages_run: list[str] = []
+        # Which stage is being attempted right now. The ``except`` below is outside the
+        # loop, so without this the workflow knows *that* a stage failed and not *which*,
+        # and the close-out could only name ``completed_stage`` — the last stage that
+        # **succeeded**. That is how "ingest failed at enrich" came to be written about a
+        # run in which enrich succeeded and embed died.
+        attempting: str | None = None
         try:
             for spec in remaining_stages(start.completed_stage, INGEST_STAGES):
+                attempting = spec.name
                 outcome: StageOutcome = await workflow.execute_activity(
                     RUN_STAGE,
                     StageInput(
@@ -156,7 +201,18 @@ class IngestWorkflow:
                 )
                 stages_run.append(outcome.stage)
         except Exception as exc:
-            await self._finish(params, workflow_id, "failed", str(exc))
+            # The two things the tenant actually needs, in the one string that reaches
+            # ``documents.error``, the ``job_runs`` row and the ingest log: *which* stage
+            # died, and *why*. Shaped like the per-table failures the same response body
+            # already renders well ("the summary call failed: …"), because that shape was
+            # the one part of this surface a reader could act on.
+            stage = attempting or start.completed_stage or "an unnamed stage"
+            await self._finish(
+                params,
+                workflow_id,
+                "failed",
+                f"the {stage} stage failed: {_root_reason(exc)}",
+            )
             raise
 
         await self._finish(params, workflow_id, "succeeded", None)

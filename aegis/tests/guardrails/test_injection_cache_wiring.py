@@ -120,7 +120,9 @@ async def test_cache_emits_miss_then_hit_stream_event() -> None:
         p["value"] for p in _payloads(sink1.frames)
         if p.get("name") == stream_names.GUARDRAIL_CACHE
     ]
-    assert cache_events1 == [{"event": "miss", "layer": "injection", "injection": False}]
+    assert cache_events1 == [
+        {"event": "miss", "layer": "injection", "injection": False, "checked": True}
+    ]
 
     sink2 = CaptureSink()
     em2 = AegisEmitter(thread_id="t", run_id="r2", sink=sink2)
@@ -129,7 +131,9 @@ async def test_cache_emits_miss_then_hit_stream_event() -> None:
         p["value"] for p in _payloads(sink2.frames)
         if p.get("name") == stream_names.GUARDRAIL_CACHE
     ]
-    assert cache_events2 == [{"event": "hit", "layer": "injection", "injection": False}]
+    assert cache_events2 == [
+        {"event": "hit", "layer": "injection", "injection": False, "checked": True}
+    ]
     assert completer.calls == 1  # only the first (miss) call reached the LLM
 
 

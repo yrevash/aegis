@@ -145,6 +145,10 @@ class RunEvent(AegisBase):
         # partitioned parent PostgreSQL creates the matching index on every partition,
         # including ones created later.
         Index("ix_run_events_run_seq", "run_id", "seq"),
+        # "Show me what THIS agent did in this run" — the per-agent log (§5.4). Without
+        # it the projection is a scan of every partition the run touched, which is the
+        # cost a partitioned table charges for a filter its indexes do not cover.
+        Index("ix_run_events_run_agent", "run_id", "agent_id"),
         Index("ix_run_events_tenant_ts", "tenant_id", "ts"),
         Index("ix_run_events_trace", "trace_id"),
         # The irreversible decision, made at creation because it cannot be made later.

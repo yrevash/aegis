@@ -37,6 +37,26 @@ resume arithmetic still owes — and only when the row says the job is ``RUNNING
 ``FAILED`` one has none either: the stage it died in is *not* marked completed, because it
 did not commit, and calling it "running" would be the log's one chance to lie.
 
+**And what "failed" means, which used not to be sayable at all.** That same first-owed
+stage on a ``FAILED`` run is :data:`FAILED`, not :data:`QUEUED`. The distinction is the
+whole readability of this screen: with ``embed`` failing, the log used to render ``embed``
+exactly as it rendered ``index`` and ``graph`` — three stages all reading ``queued``, two
+of which genuinely never ran — while the only stage *named* anywhere was ``enrich``, the
+last one that succeeded ("ingest failed at enrich"). The correct reading of that screen
+was "enrich is broken", and it was wrong. A document that is ``FAILED`` with no
+``job_runs`` row is the one exception and gets no failed stage: nothing was ever
+attempted, and the reason is on ``documents.error`` (see :func:`project_stages`).
+
+**Why the ``seq`` numbers in ``entries`` skip.** They are not a counter. A stage event's
+``seq`` is that stage's index in :data:`aegis.jobs.INGEST_STAGES` (1-based) and the
+close-out's is one past the last — so on the six-stage pipeline ``parse``…``graph`` are
+1–6 and the terminal entry is 7, *always*, whatever actually ran. A run that died in
+``embed`` therefore reads 1, 2, 3, 7: the missing 4, 5 and 6 are not lost rows, they are
+``embed``, ``index`` and ``graph`` never having committed one. The property this buys is
+replay stability — a resumed run re-writing a stage writes the number it wrote before
+instead of appending a later-looking entry — and it is worth more than contiguity. See
+:mod:`app.jobs.ingest_log` for the write side.
+
 The graph half (4.12b) reads ``chunks.meta``, which is where ``graph_stage`` writes its
 extractions, and aggregates it in PostgreSQL rather than in Python: a 200-page document is
 hundreds of chunks each carrying dozens of entities, and pulling that into the API process
@@ -61,6 +81,7 @@ from app.jobs.ingest_log import INGEST_FINISHED_EVENT, INGEST_STAGE_EVENT
 
 __all__ = [
     "COMPLETED",
+    "FAILED",
     "QUEUED",
     "RUNNING",
     "CorpusView",
@@ -72,8 +93,10 @@ __all__ = [
     "RelationView",
     "StageProgress",
     "TableView",
+    "DocumentSummary",
     "UnknownDocumentError",
     "ingest_progress",
+    "list_documents",
     "project_stages",
 ]
 
@@ -83,17 +106,33 @@ COMPLETED = "completed"
 #: The one stage a worker is inside right now, if the job row says it is running.
 RUNNING = "running"
 
-#: A stage that has not run — whether it is waiting on a queue slot or on a failure
-#: being re-queued. Deliberately one word rather than two states: the difference is the
-#: *job's* status, which the projection reports separately, and splitting it here would
-#: put the same fact in two places that could then disagree.
+#: A stage that has not run and is waiting — on a queue slot, or on a failed run being
+#: re-queued. Deliberately one word for both, because the difference is the *job's*
+#: status, which the projection reports separately.
 QUEUED = "queued"
+
+#: The stage a failed run stopped in. **Not** the same as :data:`QUEUED`, and the audit
+#: caught exactly why: with ``embed`` failing, the log showed ``embed`` as ``queued`` —
+#: character-for-character what ``index`` and ``graph`` showed, which genuinely never ran.
+#: A reader had no way to tell "this is where it broke" from "this never started", so the
+#: only stage named anywhere was ``enrich`` (the last one that *succeeded*), and the
+#: conclusion a reader drew was that enrich is broken. It is not.
+#:
+#: Derived, never stored: the pipeline is ordered and ``completed_stage`` is the last
+#: stage that committed, so on a ``FAILED`` document the first stage still owed is by
+#: construction the one the run died in.
+FAILED = "failed"
 
 #: How many distinct entities / relations / tables the projection carries. The log is a
 #: screen, not an export: a document with nine thousand entities must not turn one poll
 #: into a nine-thousand-row response, and the totals beside these lists are exact
 #: regardless of where the list is cut.
 _DETAIL_LIMIT = 40
+
+#: How many documents one corpus listing returns at most. A cap, not a page: the console
+#: shows a tenant's recent corpus, and an uncapped ``SELECT`` over ``documents`` is a scan
+#: whose cost grows with the tenant's success.
+_LIST_LIMIT = 200
 
 
 class UnknownDocumentError(LookupError):
@@ -115,7 +154,7 @@ class StageProgress:
 
     Attributes:
         name: The stage name, as ``completed_stage`` spells it.
-        state: :data:`COMPLETED`, :data:`RUNNING` or :data:`QUEUED`.
+        state: :data:`COMPLETED`, :data:`RUNNING`, :data:`FAILED` or :data:`QUEUED`.
         queue: The task queue it runs on — where the concurrency limit that made it wait
             actually lives.
         at: When it committed, from its ``run_events`` row. ``None`` for a stage that has
@@ -313,6 +352,7 @@ def project_stages(
     completed_stage: str | None,
     status: JobStatus | str,
     events_by_stage: Mapping[str, Mapping[str, Any]],
+    started: bool = True,
 ) -> tuple[StageProgress, ...]:
     """Turn one durable ``completed_stage`` value into the whole pipeline's state.
 
@@ -320,14 +360,29 @@ def project_stages(
     resumed document neither claims un-run stages nor re-reports committed ones as
     pending — is provable without a database, a worker or an orchestrator.
 
+    **The first owed stage gets its own state, and that is the point of this function.**
+    On a ``RUNNING`` job it is the stage a worker is inside; on a ``FAILED`` one it is the
+    stage the run died in. Both were previously collapsed into ``queued`` for the failed
+    case, which made the stage that broke indistinguishable from the stages that never
+    started — so the *only* stage the log named was the last one that succeeded, and every
+    reader concluded that stage was the broken one.
+
     Args:
         completed_stage: ``documents.completed_stage``. ``None`` means nothing has
             committed yet.
         status: The document's status, which decides whether the next owed stage is being
-            worked on or is merely owed.
+            worked on, is where the run stopped, or is merely owed.
         events_by_stage: The per-stage ``run_events`` entries, keyed by stage name. Used
             **only** to decorate stages the row already says are complete; an event can
             never promote a stage.
+        started: Whether an execution ever actually began this pipeline — ``job_runs`` has
+            a row with a ``started_at``. It separates the two ways a document can be
+            ``FAILED``: a run that died *in* a stage (so that stage is
+            :data:`FAILED`), and a document whose workflow could never be started at all,
+            where no stage was ever attempted and calling one of them ``failed`` would
+            invent an attempt that never happened. Defaults to ``True`` because every
+            caller that has a status to report also has a run behind it; the upload-time
+            start failure is the exception, and it is the one that passes ``False``.
 
     Returns:
         Every stage of :data:`aegis.jobs.INGEST_STAGES`, in order.
@@ -339,6 +394,7 @@ def project_stages(
     owed = {spec.name for spec in remaining_stages(completed_stage)}
     value = status.value if isinstance(status, JobStatus) else str(status)
     running_now = value == JobStatus.RUNNING.value
+    failed_now = value == JobStatus.FAILED.value and started
     first_owed = next((spec.name for spec in INGEST_STAGES if spec.name in owed), None)
     out: list[StageProgress] = []
     for spec in INGEST_STAGES:
@@ -356,7 +412,12 @@ def project_stages(
                 )
             )
             continue
-        state = RUNNING if running_now and spec.name == first_owed else QUEUED
+        state = QUEUED
+        if spec.name == first_owed:
+            if running_now:
+                state = RUNNING
+            elif failed_now:
+                state = FAILED
         out.append(StageProgress(name=spec.name, state=state, queue=spec.task_queue))
     return tuple(out)
 
@@ -458,6 +519,100 @@ SELECT coalesce(s.label, rel.src) AS source,
  LIMIT :limit
 """
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentSummary:
+    """One document as a corpus listing shows it — no per-document sub-queries.
+
+    Deliberately **not** an :class:`IngestProgress` with the detail removed. That
+    projection costs five statements per document (events, corpus totals, tables,
+    entities, relations); rendering a hundred-document corpus through it would be five
+    hundred round trips to answer "what have I ingested?". This is one row of one query,
+    and a caller who wants the stage-by-stage account follows ``document_id`` to
+    ``GET /documents/{id}/ingest``.
+
+    Attributes:
+        document_id: The row.
+        filename: The name it was uploaded under.
+        title: Derived by the parse; ``None`` until it has run.
+        status: The row's :class:`aegis.jobs.JobStatus`, as its string.
+        completed_stage: The last stage that committed, or ``None``.
+        page_count: Pages, once the parse has run.
+        chunk_count: Chunks, once the chunk stage has run.
+        parse_confidence: D-parse's score in [0, 1], or ``None``.
+        size_bytes: How large the document is.
+        doc_type: The tenant's own classification, or ``None``.
+        doc_date: The date the document is *about*, or ``None``.
+        workflow_id: The execution ingesting it, when one was started.
+        error: Why it failed, when it did — already naming the stage (see
+            :func:`_finished_message`).
+        created_at: When it was uploaded.
+    """
+
+    document_id: int
+    filename: str
+    title: str | None
+    status: str
+    completed_stage: str | None
+    page_count: int | None
+    chunk_count: int | None
+    parse_confidence: float | None
+    size_bytes: int
+    doc_type: str | None
+    doc_date: object | None
+    workflow_id: str | None
+    error: str | None
+    created_at: datetime | None
+
+
+async def list_documents(
+    session: AsyncSession, *, tenant_id: int | None, limit: int = _LIST_LIMIT
+) -> tuple[DocumentSummary, ...]:
+    """Return a tenant's documents, newest first — the corpus, as a list.
+
+    **The endpoint behind "show me what you have ingested".** Until this existed the
+    route table had ``POST /documents`` and ``GET /documents/{id}/ingest`` and nothing in
+    between, so the only way to look at a document was to already know its id.
+
+    Scoping is the same two layers every governed read here carries and in the same
+    order: the app-level ``tenant_id`` predicate, over a session whose RLS scope the
+    caller bound. ``tenant_id`` is ``None`` **only** for platform staff, and only because
+    :func:`aegis.retrieval.types.tenant_filter` will not produce that value from anything
+    but the explicit :data:`~aegis.retrieval.types.ALL_TENANTS` authority — which is the
+    conflation that caused five cross-tenant leaks and is now unreachable by accident.
+
+    Args:
+        session: A session with the caller's tenant scope already bound.
+        tenant_id: The app-level filter, or ``None`` for the platform-wide read.
+        limit: How many rows at most. Clamped by the caller.
+
+    Returns:
+        The documents, newest first, ties broken by id so the order is total.
+    """
+    statement = select(Document).order_by(Document.created_at.desc(), Document.id.desc())
+    if tenant_id is not None:
+        statement = statement.where(Document.tenant_id == tenant_id)
+    rows = (await session.execute(statement.limit(limit))).scalars().all()
+    return tuple(
+        DocumentSummary(
+            document_id=row.id,
+            filename=row.filename,
+            title=row.title,
+            status=row.status.value,
+            completed_stage=row.completed_stage,
+            page_count=row.page_count,
+            chunk_count=row.chunk_count,
+            parse_confidence=row.parse_confidence,
+            size_bytes=row.size_bytes,
+            doc_type=row.doc_type,
+            doc_date=row.doc_date,
+            workflow_id=row.workflow_id,
+            error=row.error,
+            created_at=row.created_at,
+        )
+        for row in rows
+    )
 
 
 async def _load_document(
@@ -581,10 +736,7 @@ def _log_entries(events: Sequence[RunEvent]) -> tuple[LogEntry, ...]:
             if summary:
                 message = f"{message} — {summary}"
         elif event.event_type == INGEST_FINISHED_EVENT:
-            reached = payload.get("completed_stage") or "no stage"
-            message = f"ingest {payload.get('status')} at {reached}"
-            if payload.get("error"):
-                message = f"{message}: {payload['error']}"
+            message = _finished_message(payload)
         else:
             message = event.event_type
         out.append(
@@ -597,6 +749,39 @@ def _log_entries(events: Sequence[RunEvent]) -> tuple[LogEntry, ...]:
             )
         )
     return tuple(out)
+
+
+def _finished_message(payload: Mapping[str, Any]) -> str:
+    """Render the terminal entry so it names the stage that *failed*, not the last good one.
+
+    ``"ingest failed at enrich"`` was written about a run in which enrich succeeded and
+    ``embed`` died: ``completed_stage`` is the last stage that **committed**, and reading
+    it as "where it failed" inverts the fact. On the ordered pipeline the failing stage is
+    the one *after* the last committed one, which this derives rather than storing a
+    second, disagreeable copy of.
+
+    Args:
+        payload: The ``ingest_finished`` event body — ``status``, ``completed_stage`` and
+            the failure ``error``.
+
+    Returns:
+        One line for the log tail.
+    """
+    status = str(payload.get("status") or "finished")
+    reached = payload.get("completed_stage")
+    error = payload.get("error")
+    if status != JobStatus.FAILED.value:
+        return f"ingest {status} after {reached or 'no stage'}"
+
+    failing = next(
+        (spec.name for spec in remaining_stages(reached) if spec.name), None
+    )
+    where = (
+        f"in the {failing} stage" if failing else "after the last stage"
+    )
+    completed = f" (completed through {reached})" if reached else " (nothing committed)"
+    line = f"ingest failed {where}{completed}"
+    return f"{line}: {error}" if error else line
 
 
 def _took(duration_ms: Any) -> str:  # noqa: ANN401 - a wire value of unknown shape
@@ -727,6 +912,13 @@ async def ingest_progress(
             completed_stage=document.completed_stage,
             status=document.status,
             events_by_stage=by_stage,
+            # A document can be FAILED without any stage ever having been attempted: the
+            # upload stored the bytes and the orchestrator refused to start the workflow.
+            # ``job_runs`` is the durable record of an execution having begun, so its
+            # absence is what distinguishes "died in parse" from "never got as far as
+            # parse" — and marking a stage ``failed`` in the second case would invent an
+            # attempt nobody made.
+            started=job is not None and job.started_at is not None,
         ),
         parse=_parse_view(document, by_stage.get("parse", {}).get("detail", {})),
         corpus=CorpusView(

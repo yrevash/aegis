@@ -182,3 +182,49 @@ async def test_two_parses_never_run_at_the_same_time(
     assert stage_log.peak_by_queue[DEFAULT_QUEUE] >= 2, (
         "nothing ran concurrently anywhere, so the CPU-queue assertion above is vacuous"
     )
+
+
+async def test_a_failed_stage_is_recorded_by_name_with_its_real_cause(
+    temporal_env, wired_jobs, stage_log
+):
+    """The row must say *which* stage died and *why* — audit C, C2.
+
+    Measured on the cold demo path with ``embed`` failing: ``documents.error`` and the
+    tenant-visible ingest log carried ``"Activity task failed"``, Temporal's own wrapper.
+    The real cause (``litellm.APIError: RBAC: access denied``) was one link down the
+    ``__cause__`` chain and reached nothing, and the only stage named anywhere was
+    ``enrich`` — the last one that **succeeded** — so the log read "ingest failed at
+    enrich" about a run in which enrich was fine.
+    """
+    from aegis.jobs.stages import register_stage_handler
+    from temporalio.exceptions import ApplicationError
+
+    await seed_tenants(wired_jobs, TENANT_A)
+    document_id = await seed_document(wired_jobs, TENANT_A, sha="c" * 64)
+    register_recording_handlers(stage_log)
+
+    async def _embed_denied(session, *, tenant_id, document_id, stage):  # noqa: ANN001
+        raise ApplicationError(
+            "litellm.APIError: RBAC: access denied", type="APIError", non_retryable=True
+        )
+
+    register_stage_handler("embed", _embed_denied)
+
+    with pytest.raises(Exception):  # noqa: B017 - the workflow re-raises whatever failed
+        await _run_workflows(
+            temporal_env, [IngestParams(tenant_id=TENANT_A, document_id=document_id)]
+        )
+
+    async with wired_jobs() as session:
+        document = (
+            await session.execute(select(Document).where(Document.id == document_id))
+        ).scalar_one()
+
+    assert document.status is JobStatus.FAILED
+    # The three stages before embed really did commit, so the failure is genuinely
+    # *between* enrich and embed and the naming below is not trivially right.
+    assert document.completed_stage == "enrich"
+    error = document.error or ""
+    assert "the embed stage failed" in error, error
+    assert "RBAC: access denied" in error, error
+    assert error != "Activity task failed"

@@ -1803,6 +1803,13 @@ class DocumentUploadResponse(BaseModel):
         description="True when these bytes were new and an ingest was started; false "
         "when an identical document already existed and no second ingest was started."
     )
+    restarted: bool = Field(
+        default=False,
+        description="True when these bytes matched a document that had been stored but "
+        "whose ingest was never started (the orchestrator was unreachable at upload "
+        "time), and this call started it. No second row and no second execution: the "
+        "stored document's own first ingest finally begins.",
+    )
     title: str | None = Field(
         default=None, description="Derived from the parse; null until it has run."
     )

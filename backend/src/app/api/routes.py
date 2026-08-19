@@ -36,7 +36,7 @@ from aegis.retrieval.types import (
     tenant_filter,
 )
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.exc import SQLAlchemyError
 from sse_starlette import EventSourceResponse, ServerSentEvent
@@ -789,22 +789,54 @@ def get_ml_predict() -> Callable[[dict[str, Any]], MLExplainResponse]:
 
 async def _safe_audit(
     action: str,
-    actor: str | None,
+    principal: AuthContext,
     *,
     payload: dict[str, Any],
     model: str | None = None,
     trace_id: str | None = None,
     approved_by: str | None = None,
+    tenant_id: int | None = None,
 ) -> None:
-    """Write an audit row, never letting a logging failure break the request."""
+    """Write an audit row attributed to a tenant, never breaking the request if it fails.
+
+    **This used to take an actor string and nothing else**, and called
+    :func:`~aegis.governance.audit.record_audit` without a ``tenant_id``. That function's
+    fallback reads the per-request governance context, which these HTTP paths do not set —
+    so every row this API wrote landed with ``audit_log.tenant_id = NULL``. ``GET /audit``
+    scopes a tenant-admin's read with ``WHERE tenant_id = :tenant``, so the trail measured
+    eleven recorded events and returned **zero rows** to either tenant admin, two lines
+    below a payload that carried ``"tenant_id": 1``. Governance is a scored area and its
+    evidence was invisible to the people it is evidence for.
+
+    Taking the **principal** rather than its username is what fixes it structurally: the
+    actor and the tenant now come from one object, so they cannot be threaded
+    inconsistently, and a new call site cannot forget the tenant because there is no
+    signature in which it is absent.
+
+    Args:
+        action: The action performed (``"documents.upload"``, ``"jobs.cancel"``…).
+        principal: The authenticated caller. Supplies both the actor and — unless
+            overridden — the owning tenant.
+        payload: Structured details of the action.
+        model: The model deployment involved, if any.
+        trace_id: The OTel trace id correlating this action to its spans.
+        approved_by: The human who approved at the HITL gate, if any.
+        tenant_id: The tenant the action was performed **on**, when that is not the
+            caller's own — a platform admin creating a tenant, provisioning a user into
+            one, or setting another tenant's budget. The row belongs to the tenant the
+            action affected, because that is who has to be able to read it. ``None``
+            (the default) means "the caller's own tenant", which for platform staff is
+            correctly ``None``: a platform-wide action belongs to no tenant's trail.
+    """
     try:
         await record_audit(
             action=action,
-            actor=actor,
+            actor=principal.username,
             model=model,
             trace_id=trace_id,
             payload=payload,
             approved_by=approved_by,
+            tenant_id=tenant_id if tenant_id is not None else principal.tenant_id,
         )
     except Exception:  # noqa: BLE001 - audit is best-effort at the edge
         logger.warning("Audit write failed for action %s", action, exc_info=True)
@@ -826,7 +858,7 @@ async def login(req: LoginRequest) -> LoginResponse:
     token = _mint_token(ctx)
     await _safe_audit(
         "auth.login",
-        ctx.username,
+        ctx,
         payload={"role": ctx.fine_role, "tenant_id": ctx.tenant_id},
     )
     # ``fine_role`` is echoed from the principal (the same value ``_mint_token`` puts
@@ -876,12 +908,68 @@ async def platform_capabilities() -> CapabilitiesResponse:
 
 @router.get("/health", tags=["platform"])
 async def health() -> dict[str, str]:
-    """Public liveness probe — the frontend boot probe and load balancers hit this.
+    """Public **liveness** probe — the frontend boot probe and load balancers hit this.
 
     Unauthenticated by design (no user, no tenant, no DB touch) so it answers even
     when auth or the database is unavailable.
+
+    ``status`` is deliberately still ``ok`` whenever this process is serving: that is what
+    liveness *means*, and a restart is not the remedy for an absent orchestrator. What it
+    no longer does is stop there. ``worker`` names the durable substrate's real state
+    (``running`` / ``down`` / ``starting`` / ``disabled`` / ``stopped``), because this
+    endpoint answering ``{"status": "ok"}`` while every uploaded document queued behind a
+    dead worker is the exact shape of the lie the audit caught. Readiness — the question a
+    load balancer should actually route on — is :func:`ready`.
     """
-    return {"status": "ok", "product": PRODUCT_NAME, "version": PRODUCT_VERSION}
+    from app.jobs.health import worker_health
+
+    return {
+        "status": "ok",
+        "product": PRODUCT_NAME,
+        "version": PRODUCT_VERSION,
+        "worker": worker_health().state,
+    }
+
+
+@router.get("/ready", tags=["platform"])
+async def ready() -> JSONResponse:
+    """Public **readiness** probe: can this process actually do the work it accepts?
+
+    Separate from :func:`health` because they answer different questions and conflating
+    them is how a platform ends up green while its substrate is dead. Liveness asks "is
+    this process serving?" — restarting it is the remedy when the answer is no. Readiness
+    asks "can it complete the work it will accept?", and the remedy when *that* answer is
+    no is to start the thing it depends on, not to bounce the API.
+
+    Returns **503** with the same body when the in-process Temporal worker was meant to be
+    running and is not, so a load balancer drains this instance and a human reads
+    ``worker.detail`` — which by then has been translated from the SDK's tonic transport
+    string into the address that was dialled and the command that fixes it.
+
+    A worker in the ``disabled`` state is **ready**: a deployment that never intended to
+    run one in this process is not failing, and answering 503 for it would make this probe
+    useless in exactly the configuration the offline demo ships.
+    """
+    from app.jobs.health import worker_health
+
+    snapshot = worker_health()
+    body = {
+        "ready": snapshot.ready,
+        "product": PRODUCT_NAME,
+        "version": PRODUCT_VERSION,
+        "worker": {
+            "state": snapshot.state,
+            "detail": snapshot.detail,
+            "since": snapshot.since.isoformat() if snapshot.since else None,
+            "restarts": snapshot.restarts,
+        },
+    }
+    return JSONResponse(
+        content=body,
+        status_code=(
+            status.HTTP_200_OK if snapshot.ready else status.HTTP_503_SERVICE_UNAVAILABLE
+        ),
+    )
 
 
 @router.get("/about", response_model=AboutResponse, tags=["platform"])
@@ -1036,7 +1124,7 @@ async def query(
     memory_subject = memory_subject_for(auth.user_id, persona)
     await _safe_audit(
         "query.start",
-        auth.username,
+        auth,
         payload={"persona": persona, "query_chars": len(req.query)},
     )
     # Resolve the caller's tenant/user + effective caps once, then bind the governance
@@ -1155,7 +1243,7 @@ async def ml_explain(
         HTTPException: 503 when no trained ML artifact is available to serve.
     """
     await _safe_audit(
-        "ml.explain", auth.username, payload={"features": sorted(req.features)}
+        "ml.explain", auth, payload={"features": sorted(req.features)}
     )
     try:
         return await asyncio.to_thread(predict, req.features)
@@ -1321,7 +1409,7 @@ async def approvals_decision(
     )
     await _safe_audit(
         "approval.decision",
-        auth.username,
+        auth,
         payload={
             "approval_id": approval_id,
             "decision": req.decision.value,
@@ -1351,7 +1439,7 @@ async def approval(
     )
     await _safe_audit(
         "approval.decision",
-        auth.username,
+        auth,
         payload={
             "approval_id": req.approval_id,
             "decision": req.decision.value,
@@ -1398,7 +1486,10 @@ async def admin_create_tenant(
     except DuplicateTenantError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await _safe_audit(
-        "admin.tenant.create", auth.username, payload={"tenant_id": row.id, "name": row.name}
+        "admin.tenant.create",
+        auth,
+        payload={"tenant_id": row.id, "name": row.name},
+        tenant_id=row.id,
     )
     return row
 
@@ -1448,13 +1539,14 @@ async def admin_create_user(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await _safe_audit(
         "admin.user.create",
-        auth.username,
+        auth,
         payload={
             "user_id": row.id,
             "username": row.username,
             "role": req.role.value,
             "tenant_id": tenant_id,
         },
+        tenant_id=tenant_id,
     )
     return row
 
@@ -1500,8 +1592,9 @@ async def admin_set_user_role(
         )
     await _safe_audit(
         "admin.user.role_set",
-        auth.username,
+        auth,
         payload={"user_id": user_id, "role": req.role.value, "tenant_id": scope},
+        tenant_id=scope,
     )
     return row
 
@@ -1591,16 +1684,18 @@ async def admin_budgets_upsert(
         # authorization failure rather than letting it escape as a 500.
         await _safe_audit(
             "admin.budget.upsert.denied",
-            auth.username,
+            auth,
             payload={"scope_type": req.scope_type, "scope_id": req.scope_id},
+            tenant_id=owning_tenant,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
         ) from exc
     await _safe_audit(
         "admin.budget.upsert",
-        auth.username,
+        auth,
         payload={"scope_type": req.scope_type, "scope_id": req.scope_id},
+        tenant_id=owning_tenant,
     )
     return row
 
@@ -2087,7 +2182,7 @@ async def memory_forget(
 
     await _safe_audit(
         "memory.forget",
-        auth.username,
+        auth,
         payload={"subject": subject, "deleted": counts, "scope": "subject"},
     )
     return MemoryForgetResponse(
@@ -2151,7 +2246,7 @@ async def memory_delete_fact(
 
     await _safe_audit(
         "memory.forget",
-        auth.username,
+        auth,
         payload={"subject": subject, "fact_id": fact_id, "scope": "fact"},
     )
     return MemoryFactDeleteResponse(fact_id=fact_id, deleted=deleted)
@@ -2350,7 +2445,7 @@ async def ops_diagnose(
         await session.commit()
     await _safe_audit(
         "ops.diagnose",
-        auth.username,
+        auth,
         payload={
             "prompt_key": req.prompt_key,
             "draft_version_id": result.draft_version_id,
@@ -2414,7 +2509,7 @@ async def ops_release(
         ) from exc
     await _safe_audit(
         "ops.release",
-        auth.username,
+        auth,
         payload={
             "draft_version_id": req.draft_version_id,
             "outcome": result.outcome,
@@ -2454,7 +2549,7 @@ async def ops_rollback(
         await session.commit()
     await _safe_audit(
         "ops.rollback",
-        auth.username,
+        auth,
         payload={
             "prompt_key": req.prompt_key,
             "reverted": reverted is not None,
@@ -2536,7 +2631,7 @@ async def ops_release_decide(
         )
     await _safe_audit(
         "ops.release.decide",
-        auth.username,
+        auth,
         payload={
             "approval_id": approval_id,
             "approved": req.approved,
@@ -2806,7 +2901,7 @@ async def redteam_run(
     report = await run_redteam()
     await _safe_audit(
         "redteam.run",
-        auth.username,
+        auth,
         payload={
             "attacks_total": report.attacks_total,
             "block_rate": round(report.block_rate, 4),
@@ -2901,7 +2996,7 @@ async def voice_transcribe(
     transcription = result.transcription
     await _safe_audit(
         "voice.transcribe",
-        auth.username,
+        auth,
         payload={
             "filename": file.filename,
             "bytes": len(data),
@@ -3016,7 +3111,7 @@ async def vision_analyse(
 
     await _safe_audit(
         "vision.analyse",
-        auth.username,
+        auth,
         payload={
             "filename": req.filename,
             "declared_mime": req.mime_type,
@@ -3332,7 +3427,10 @@ async def requeue_job(
     except AdmissionError as exc:
         raise _admission_refusal(exc) from exc
     await _safe_audit(
-        "jobs.requeue", auth.username, payload={"job_id": job_id, "tenant_id": tenant_id}
+        "jobs.requeue",
+        auth,
+        payload={"job_id": job_id, "tenant_id": tenant_id},
+        tenant_id=tenant_id,
     )
     return JobActionResponse(
         job=_job_row(row), detail=f"Job {job_id} re-queued from stage {row.completed_stage}."
@@ -3371,7 +3469,10 @@ async def cancel_job(
             status_code=status.HTTP_409_CONFLICT, detail=exc.reason
         ) from exc
     await _safe_audit(
-        "jobs.cancel", auth.username, payload={"job_id": job_id, "tenant_id": tenant_id}
+        "jobs.cancel",
+        auth,
+        payload={"job_id": job_id, "tenant_id": tenant_id},
+        tenant_id=tenant_id,
     )
     return JobActionResponse(
         job=_job_row(row), detail=f"Job {job_id} cancelled by {auth.username}."
@@ -3422,6 +3523,15 @@ async def upload_document(
     parsing is CPU-bound at roughly a second a page and embedding is billed, so a
     duplicate that slipped through would cost real minutes on a single-slot queue and
     real money against a $100 budget.
+
+    **And it is also the way out.** One case is not a duplicate at all: a document that
+    is ``FAILED`` with no ``job_runs`` row was stored and then never ingested, because
+    the orchestrator could not be reached at upload time (the 503 below). Re-sending its
+    bytes starts that first ingest — ``created: false``, ``restarted: true``, no second
+    row, the same workflow id. Without it the file was permanently stranded: refused by
+    the dedup, absent from ``GET /jobs`` (nothing ever claimed it), and therefore beyond
+    ``POST /jobs/{id}/requeue``. Admission runs on this path exactly as on the create
+    path, because it is the same billable work starting.
 
     **Admission runs before the workflow starts.** A tenant at its in-flight cap, or
     without the budget to finish the run, gets a **429** carrying the reason and naming
@@ -3501,7 +3611,7 @@ async def upload_document(
 
     await _safe_audit(
         "documents.upload",
-        auth.username,
+        auth,
         payload={
             "document_id": outcome.document_id,
             "tenant_id": tenant_id,
@@ -3509,16 +3619,27 @@ async def upload_document(
             "bytes": outcome.size_bytes,
             "sha256": outcome.content_sha256,
             "created": outcome.created,
+            # A restart is a real ingest starting against real budget, so it is an audited
+            # event and not a footnote on a duplicate upload.
+            "restarted": outcome.restarted,
         },
+        tenant_id=tenant_id,
     )
-    detail = (
-        f"Ingest {outcome.workflow_id} started for {outcome.filename}."
-        if outcome.created
-        else (
+    if outcome.created:
+        detail = f"Ingest {outcome.workflow_id} started for {outcome.filename}."
+    elif outcome.restarted:
+        # The way back out of the stuck state. Said in full, because the caller is a
+        # person who was told "stored but its ingest could not be started" some time ago
+        # and is re-sending the file to find out whether that is still true.
+        detail = (
+            f"Document {outcome.document_id} had been stored but its ingest had never "
+            f"started; it has now begun as {outcome.workflow_id}."
+        )
+    else:
+        detail = (
             f"Identical bytes were already uploaded as document {outcome.document_id}; "
             "no second ingest was started."
         )
-    )
     return DocumentUploadResponse(
         document_id=outcome.document_id,
         filename=outcome.filename,
@@ -3527,6 +3648,7 @@ async def upload_document(
         status=outcome.status,
         workflow_id=outcome.workflow_id,
         created=outcome.created,
+        restarted=outcome.restarted,
         title=outcome.title,
         doc_type=outcome.doc_type,
         doc_date=outcome.doc_date,

@@ -170,6 +170,7 @@ def _coerce_spec(entry: Any, index: int, config: Any) -> SubAgentSpec | None:  #
                 role=str(entry.role),
                 label=str(getattr(entry, "label", "") or entry.role),
                 system_prompt=str(getattr(entry, "system_prompt", "") or ""),
+                prompt_key=str(getattr(entry, "prompt_key", "") or ""),
                 tool_allowlist=frozenset(getattr(entry, "tool_allowlist", ()) or ()),
                 model_role=getattr(entry, "model_role", ModelRole.CHEAP),
             )
@@ -184,6 +185,7 @@ def _coerce_spec(entry: Any, index: int, config: Any) -> SubAgentSpec | None:  #
         role=spec.role,
         label=spec.label,
         system_prompt=spec.system_prompt,
+        prompt_key=spec.prompt_key,
         tool_allowlist=spec.tool_allowlist,
         model_role=spec.model_role,
         max_steps=min(spec.max_steps, config.subagent_max_steps),

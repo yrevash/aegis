@@ -349,6 +349,7 @@ class AgentDeps(_AegisAgentDeps):
             current_tenant_id=_current_tenant_id,
             record_audit=_default_record_audit,
             embed_query=_default_embed_query,
+            active_prompt=_default_active_prompt,
         )
 
 
@@ -443,6 +444,21 @@ def _default_render_system_prompt(
             return f"{base}\n\n{extra_context.strip()}"
         return base
     return render_system_prompt(get_persona(persona_id), extra_context=extra_context)
+
+
+def _default_active_prompt(prompt_key: str) -> tuple[str, dict[str, Any], int] | None:
+    """Return the LLM-Ops registry's ACTIVE version for ``prompt_key``, or ``None``.
+
+    The sub-agent half of the seam :func:`_default_render_system_prompt` already is for
+    the persona prompt, and deliberately the **same** process-wide active cache: a
+    sub-agent's system prompt is improved by promoting a version through the existing
+    eval gate, not by editing a string in a roster file. ``None`` (nothing active, or an
+    empty cache) means the adapter's shipped ``SubAgentSpec.system_prompt`` is the floor
+    — so a registry outage degrades to the shipped prompt rather than to none.
+    """
+    from app.ops import registry
+
+    return registry.get_cached_active(prompt_key)
 
 
 def _default_agent_roster() -> Any:  # noqa: ANN401 - adapter AgentRoster duck-type

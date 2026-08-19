@@ -509,6 +509,13 @@ def build_agent(
                 )
             )
             return {"agent_role": _FALLBACK_ROLE, "team_degraded": True}
+        # The user's durable facts, selected by the ADAPTER through the same
+        # ``deps.memory.assemble`` the single-pass path uses (§5.9c). The fan-out lane
+        # never reaches the ``recall_memory`` node — ``route`` dispatches it straight
+        # here — so without this every sub-agent would run blind to everything the
+        # platform knows about the person asking, which would make the four-agent run a
+        # DOWNGRADE on the one it replaced.
+        memory_delta = await _recall(state)
         tasks = await plan_team_tasks(
             state["query"], specs, deps=deps, retry=_MODEL_RETRY
         )
@@ -523,6 +530,7 @@ def build_agent(
                 )
             )
         return {
+            **memory_delta,
             # Plain dicts, not the specs: state is checkpointed, and a checkpoint is not
             # the place to keep live objects. ``run_team`` re-reads the roster by id.
             "team_tasks": [
@@ -571,10 +579,18 @@ def build_agent(
             # run cleanly as blocked. The tenant's own cap is the one thing that may
             # refuse a run.
             raise outcome.budget_error
+        totals = outcome.totals()
         return {
             "team_results": [r.as_dict() for r in outcome.results],
             "tool_calls": outcome.proposed_actions,
-            **outcome.totals(),
+            # The SAME numbers, twice on purpose and never double-counted: the plain keys
+            # are the one summed delta the ``operator.add`` reducers fold into the run,
+            # and ``_telemetry`` is popped by ``_timed`` (never written to state) so the
+            # node's ``node_finished`` reports the fan-out's spend instead of zero. That
+            # is what makes the per-agent harness records RECONCILE against a number on
+            # the wire rather than against a total only the reducers can see.
+            "_telemetry": {"model": None, **totals},
+            **totals,
         }
 
     async def synthesize(state: AgentState) -> dict[str, Any]:
@@ -842,6 +858,21 @@ def build_agent(
         golden single-shot trace is byte-for-byte unchanged. When active it assembles the
         working-memory block, writes it (+ recalled ids) into state, and emits ONE
         ``memory`` glass-box event. Best-effort: a store failure degrades to no recall.
+
+        The body is :func:`_recall` because the fan-out lane needs the SAME recall: a
+        sub-agent that cannot see the user's durable facts is a worse agent than the
+        single one it replaced, and a second recall path is how the two would drift.
+        """
+        return await _recall(state)
+
+    async def _recall(state: AgentState) -> dict[str, Any]:
+        """Assemble the user's working memory for this turn (the ONE recall path).
+
+        Called by the ``recall_memory`` node on the single-pass path and by ``plan_team``
+        on the fan-out path. The selection is the **adapter's** — ``deps.memory.assemble``
+        reaches ``memory_spec.render_profile`` / ``select_skills`` — so there is exactly
+        one selector in the codebase, for the same reason there is one tool-allowlist
+        intersection.
         """
         if deps.memory is None or state.get("session_id") is None:
             return {}

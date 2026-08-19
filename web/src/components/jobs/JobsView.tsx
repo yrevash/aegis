@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useState, type ReactElement } from 'r
 import { Badge } from '@/components/primitives/badge'
 import { Card } from '@/components/primitives/card'
 import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
+import { CorpusPanel } from '@/components/jobs/CorpusPanel'
 import { IngestLog } from '@/components/jobs/IngestLog'
 import { UploadPanel } from '@/components/jobs/UploadPanel'
 import { cancelJob, getJobs, JobsApiError, requeueJob, type JobRunRow } from '@/lib/api/jobs'
@@ -82,6 +83,12 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
   // Which job's ingest log is expanded. One at a time: the log polls while its document
   // is still being read, and six open panels would be six polls saying the same thing.
   const [openJob, setOpenJob] = useState<number | null>(null)
+  // Which document the corpus panel opened directly. A document whose ingest never
+  // started owns no job row, so it is reachable *only* this way — which is the whole
+  // reason `GET /documents` exists beside `GET /jobs`.
+  const [openDocument, setOpenDocument] = useState<number | null>(null)
+  // Bumped after an upload so the corpus listing reloads with the jobs table.
+  const [corpusKey, setCorpusKey] = useState(0)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'refused' | 'error'; text: string } | null>(
     null,
   )
@@ -135,7 +142,29 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
   return (
     <div className="flex flex-col gap-4">
       {/* The front door: an upload is what puts a document into this queue at all. */}
-      <UploadPanel token={token} onUploaded={() => void refresh()} />
+      <UploadPanel
+        token={token}
+        onUploaded={() => {
+          void refresh()
+          setCorpusKey((n) => n + 1)
+        }}
+      />
+
+      {/* What this tenant has actually ingested — the answer to "show me your corpus".
+          Read from `documents`, not from the job queue, so a document whose ingest never
+          started is visible here even though it owns no job row. */}
+      <CorpusPanel
+        token={token}
+        reloadKey={corpusKey}
+        onOpen={(documentId) =>
+          setOpenDocument(openDocument === documentId ? null : documentId)
+        }
+      />
+      {openDocument !== null ? (
+        <div className="rounded-2xl border border-border bg-surface-2/40 p-4">
+          <IngestLog documentId={openDocument} token={token} />
+        </div>
+      ) : null}
 
       <Card className="gap-0 p-0">
         <div className="flex flex-wrap items-center justify-between gap-3 p-5">

@@ -21,6 +21,7 @@ a host that stamps its own event models.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -218,6 +219,131 @@ def _etype(ev: Any) -> Any:  # noqa: ANN401 - event type discriminator
     return _get(ev, "type")
 
 
+#: The ``agent_status`` values that end a lane. The last one a lane emits is its
+#: terminal state; ``timeout`` is a DESIGNED one, not an error.
+_TERMINAL_AGENT_STATUS = frozenset({"done", "failed", "timeout"})
+
+
+def _agent_records(agent_events: list[Any]) -> list[dict[str, Any]]:
+    """Fold the agent-stamped slice of the stream into ONE record per sub-agent.
+
+    Same fold, one dimension down: a lane emits ``node_started``/``node_finished`` (its
+    model, tokens, cost and duration), ``agent_status`` beats, ``reasoning`` and its
+    ``tool_call``/``tool_result`` pairs — all of them stamped with its ``agent_id``, so
+    the record for one agent is a projection of exactly what that agent streamed.
+
+    A proposed HIGH-risk action shows here as a tool call with ``ok`` still ``None``:
+    the lane asked, and the absence of a result in this lane is the honest signal that
+    **nothing ran here**. It runs, or does not, at the main graph's one human gate.
+
+    Args:
+        agent_events: The events carrying an ``agent_id``, in stream order.
+
+    Returns:
+        One record per agent, in the order the agents first appear on the wire.
+    """
+    grouped: dict[str, list[Any]] = {}
+    for event in agent_events:
+        grouped.setdefault(str(_get(event, "agent_id")), []).append(event)
+    return [_one_agent(agent_id, evs) for agent_id, evs in grouped.items()]
+
+
+def _one_agent(agent_id: str, events: list[Any]) -> dict[str, Any]:
+    """Fold one lane's events into its harness record."""
+    beats = [e for e in events if _etype(e) == "agent_status"]
+    terminal = [b for b in beats if _get(b, "status") in _TERMINAL_AGENT_STATUS]
+    finished = [e for e in events if _etype(e) == "node_finished"]
+    last = finished[-1] if finished else None
+    tools: list[dict[str, Any]] = []
+    by_call: dict[Any, dict[str, Any]] = {}
+    for event in events:
+        etype = _etype(event)
+        if etype == "tool_call":
+            rec = {
+                "call_id": _get(event, "call_id"),
+                "tool": _get(event, "tool"),
+                "args": _get(event, "args", {}),
+                "risk": _get(event, "risk"),
+                "ok": None,
+                "summary": None,
+            }
+            tools.append(rec)
+            by_call[rec["call_id"]] = rec
+        elif etype == "tool_result":
+            rec = by_call.get(_get(event, "call_id"))
+            if rec is None:
+                continue
+            rec["ok"] = _get(event, "ok")
+            rec["summary"] = _get(event, "summary")
+    return {
+        "agent_id": agent_id,
+        "role": next((_get(b, "role") for b in beats if _get(b, "role")), None),
+        "label": next((_get(b, "label") for b in beats if _get(b, "label")), None),
+        "task": next(
+            (_get(b, "detail") for b in beats if _get(b, "status") == "started"), None
+        ),
+        "status": _get(terminal[-1], "status") if terminal else (
+            _get(beats[-1], "status") if beats else None
+        ),
+        "detail": _get(terminal[-1], "detail") if terminal else None,
+        "steps": sum(1 for b in beats if _get(b, "status") == "thinking"),
+        "model": _get(last, "model") if last is not None else None,
+        "duration_ms": _get(last, "duration_ms") if last is not None else None,
+        "prompt_tokens": _get(last, "prompt_tokens", 0) if last is not None else 0,
+        "completion_tokens": _get(last, "completion_tokens", 0) if last is not None else 0,
+        "cost_usd": _get(last, "cost_usd", 0.0) if last is not None else 0.0,
+        "reasoning": [_get(e, "text") for e in events if _etype(e) == "reasoning"],
+        "tools": tools,
+        "event_count": len(events),
+    }
+
+
+def _team_totals(
+    agents: list[dict[str, Any]], nodes: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Sum the per-agent records and check them against the fan-out node's own delta.
+
+    The reconciliation is the point. ``run_team`` reports ONE summed
+    ``{prompt_tokens, completion_tokens, cost_usd}`` on its ``node_finished`` — the same
+    delta the graph's ``operator.add`` reducers fold into the run — so summing the lanes'
+    records back up has to give that number. When it does not, an agent's spend went
+    somewhere the run never counted, and ``reconciles`` says so instead of the two
+    disagreeing quietly on different screens.
+
+    Returns:
+        ``None`` when the run had no fan-out. Otherwise the summed per-agent usage plus
+        ``node`` (the fan-out node's own reported delta) and ``reconciles``, which is
+        ``None`` when no fan-out node reported one.
+    """
+    if not agents:
+        return None
+    summed = {
+        "agent_count": len(agents),
+        "prompt_tokens": sum(int(a["prompt_tokens"] or 0) for a in agents),
+        "completion_tokens": sum(int(a["completion_tokens"] or 0) for a in agents),
+        "cost_usd": sum(float(a["cost_usd"] or 0.0) for a in agents),
+    }
+    fanout = [n for n in nodes if n.get("node") == "run_team"]
+    node = fanout[-1] if fanout else None
+    if node is None:
+        return {**summed, "node": None, "reconciles": None}
+    reported = {
+        "prompt_tokens": int(node.get("prompt_tokens") or 0),
+        "completion_tokens": int(node.get("completion_tokens") or 0),
+        "cost_usd": float(node.get("cost_usd") or 0.0),
+    }
+    return {
+        **summed,
+        "node": reported,
+        "reconciles": (
+            summed["prompt_tokens"] == reported["prompt_tokens"]
+            and summed["completion_tokens"] == reported["completion_tokens"]
+            and math.isclose(summed["cost_usd"], reported["cost_usd"], rel_tol=1e-9,
+                             abs_tol=1e-12)
+        ),
+    }
+
+
 def run_summary(events: Iterable[Any]) -> dict[str, Any]:
     """Fold the emitted event stream into one structured per-run record.
 
@@ -236,9 +362,28 @@ def run_summary(events: Iterable[Any]) -> dict[str, Any]:
         ``gate`` (gated?/risk tier/action/approval resolution); ``tools`` (call joined to
         its result); ``iterations`` (each bounded self-repair reflection); ``memory``;
         the reassembled ``answer``; ``totals`` (usage + summed node duration);
-        and ``outcome`` (the terminal ``run_finished`` usage/status).
+        ``outcome`` (the terminal ``run_finished`` usage/status); ``agents`` (§5.9a —
+        ONE record per sub-agent, each with that agent's own model, tokens, cost,
+        duration, reasoning and tool calls); and ``team`` (the summed per-agent usage
+        and whether it **reconciles** with the fan-out node's own delta).
+
+        Everything a sub-agent emitted is in its own record and nowhere else: the
+        run-level lists are the supervisor's. A single-pass run carries no
+        ``agent_id`` anywhere, so its record is byte-for-byte what it always was, with
+        ``agents == []`` and ``team is None``.
     """
     events = list(events)
+
+    # §5.9a — the agent dimension. Every event a sub-agent emits is stamped with its
+    # ``agent_id`` at the writer seam (§5.4), so folding the record per agent is a
+    # PARTITION of the same stream rather than a second source: what a lane emitted
+    # belongs to that lane's record, and what carries no identity is supervisor /
+    # graph-level work. That is also why the run-level record below is unchanged for
+    # every single-pass run — nothing on that path carries an ``agent_id``.
+    agent_events = [e for e in events if _get(e, "agent_id")]
+    if agent_events:
+        events = [e for e in events if not _get(e, "agent_id")]
+    agents = _agent_records(agent_events)
 
     run_id = next((_get(e, "run_id") for e in events if _get(e, "run_id")), None)
     started = [e for e in events if _etype(e) == "run_started"]
@@ -404,6 +549,8 @@ def run_summary(events: Iterable[Any]) -> dict[str, Any]:
         "run_id": run_id,
         "trace_id": trace_id,
         "status": status,
+        "agents": agents,
+        "team": _team_totals(agents, nodes),
         "nodes": nodes,
         "reasoning": reasoning,
         "guardrails": guardrails,

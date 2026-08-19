@@ -47,6 +47,55 @@ logger = logging.getLogger(__name__)
 
 _MODULE_ID = "guardrails"
 
+#: The rail name a *finding* is filed under: a screen ran, looked at the text, and judged
+#: it an injection attempt.
+INJECTION_LAYER = "injection"
+
+#: The rail name an **unchecked** refusal is filed under. A distinct value rather than a
+#: flag inside the reason string, because the console keys its label off ``layer`` and the
+#: two outcomes must not share one. See :func:`_injection_block`.
+INJECTION_UNAVAILABLE_LAYER = "injection_unavailable"
+
+
+def _injection_block(verdict: InjectionVerdict, redacted: str) -> GuardResult:
+    """Render an ``injection=True`` verdict as the BLOCK the caller is shown.
+
+    **The whole point of this function is that it has two branches.** A verdict with
+    ``checked=True`` is a finding — a screen read the text and judged it an attack, and
+    saying so is exactly right. A verdict with ``checked=False`` is *not* a finding: no
+    screen could be completed, the rail fails closed, and the request was refused
+    unexamined. Rendering the second as the first is what made a deployment with no model
+    gateway tell every user that their question was a prompt-injection attempt — the
+    worst sentence this system can produce, because it is an accusation and it is false.
+
+    Both are still a :attr:`~aegis.core.types.GuardVerdict.BLOCK`: failing closed is not
+    negotiable and is not what changes here. What changes is the sentence, and the
+    ``layer`` the console groups and labels it by.
+
+    Args:
+        verdict: The injection verdict, whose ``checked`` flag selects the branch.
+        redacted: The PII-redacted text the rail saw, carried onto the result.
+
+    Returns:
+        The BLOCK :class:`~aegis.core.types.GuardResult` to return to the caller.
+    """
+    if verdict.checked:
+        return GuardResult(
+            verdict=GuardVerdict.BLOCK,
+            reason=f"Prompt injection blocked: {verdict.reason}",
+            text=redacted,
+            layer=INJECTION_LAYER,
+        )
+    return GuardResult(
+        verdict=GuardVerdict.BLOCK,
+        reason=(
+            "Request refused unchecked — the prompt-injection screen is unavailable, "
+            f"not triggered: {verdict.reason}"
+        ),
+        text=redacted,
+        layer=INJECTION_UNAVAILABLE_LAYER,
+    )
+
 
 def _default_injection_cache() -> InjectionCache:
     """Build the injection cache the mode calls for, degrading loudly, never raising.
@@ -252,7 +301,13 @@ class Guardrails:
                 await self._emit_injection_cache(emitter, event="hit", verdict=verdict)
                 return verdict
         verdict = await classify_injection(text, completer=self._completer)
-        self._cache_set(key, verdict.model_dump_json())
+        # **Only a verdict is cached.** A ``checked=False`` result is not one: it says the
+        # screen could not be completed, and storing it would make one dead-gateway moment
+        # outlive the outage — the same question would keep being refused, from cache,
+        # long after the classifier came back, with no call left to notice the recovery.
+        # An outage must cost a retry, never become a permanent answer.
+        if verdict.checked:
+            self._cache_set(key, verdict.model_dump_json())
         await self._emit_injection_cache(emitter, event="miss", verdict=verdict)
         return verdict
 
@@ -307,7 +362,15 @@ class Guardrails:
 
         await emitter.custom(
             stream_names.GUARDRAIL_CACHE,
-            {"event": event, "layer": "injection", "injection": verdict.injection},
+            {
+                "event": event,
+                "layer": INJECTION_LAYER,
+                "injection": verdict.injection,
+                # Carried beside ``injection`` so a reader of the raw stream can tell a
+                # cached *finding* from a cached "we could not check" without re-reading
+                # the prose. They are different facts; see :class:`InjectionVerdict`.
+                "checked": verdict.checked,
+            },
         )
 
     async def _screen_topical(self, text: str) -> GuardResult | None:
@@ -358,15 +421,7 @@ class Guardrails:
         redacted, kinds = pii.redact(text)
         verdict = await self._detect_injection_cached(redacted, emitter=emitter)
         if verdict.injection:
-            return (
-                GuardResult(
-                    verdict=GuardVerdict.BLOCK,
-                    reason=f"Prompt injection blocked: {verdict.reason}",
-                    text=redacted,
-                    layer="injection",
-                ),
-                [],
-            )
+            return (_injection_block(verdict, redacted), [])
         safety = await screen_content(redacted, completer=self._completer)
         if safety.unsafe:
             reason = f"Unsafe content blocked ({safety.label() or 'hazard'}): {safety.reason}"

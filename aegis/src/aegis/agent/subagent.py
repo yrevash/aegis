@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -58,6 +59,8 @@ __all__ = [
     "SubAgentResult",
     "SubAgentSpec",
     "SubAgentStatus",
+    "agent_node_id",
+    "resolve_system_prompt",
     "run_subagent",
 ]
 
@@ -97,8 +100,13 @@ class SubAgentSpec:
             the ``run_events.agent_id`` column. Unique within a run.
         role: The agent's kind (``research`` | ``knowledge`` | ``data`` | ``policy`` …).
         label: Human label for the lane's card in the console.
-        system_prompt: The floor prompt. §5.9 promotes this to a registry ``prompt_key``;
-            the adapter's string remains the floor when no ACTIVE version exists.
+        system_prompt: The **floor** prompt — the adapter's shipped string. The lane
+            actually sends the registry's ACTIVE version for :attr:`prompt_key` when one
+            exists (§5.9b), and this when it does not, exactly as the main persona
+            prompt already behaves.
+        prompt_key: The LLM-Ops registry key this agent's system prompt is versioned
+            under. Empty ⇒ the derived default ``subagent:<role>``, so a roster entry
+            gets a registry identity without having to remember to declare one.
         tool_allowlist: The tool names this agent may reach. Intersected with the
             persona's allowlist — never a widening of it.
         model_role: Which model tier this agent runs on. ``CHEAP`` for the agents that
@@ -111,10 +119,51 @@ class SubAgentSpec:
     role: str
     label: str
     system_prompt: str
+    prompt_key: str = ""
     tool_allowlist: frozenset[str] = frozenset()
     model_role: ModelRole = ModelRole.CHEAP
     max_steps: int = 4
     timeout_s: float = 45.0
+
+    @property
+    def registry_key(self) -> str:
+        """Return the ``prompt_key`` this agent's system prompt is versioned under.
+
+        Derived from the role when the roster entry names none, so every sub-agent is
+        addressable by the LLM-Ops loop by construction rather than by discipline.
+        """
+        return self.prompt_key or f"subagent:{self.role}"
+
+
+def resolve_system_prompt(spec: SubAgentSpec, deps: AgentDeps) -> tuple[str, int | None]:
+    """Return ``(system_prompt, version)`` for one lane: registry ACTIVE, else the floor.
+
+    The same resolution order the main persona prompt already uses — an ACTIVE
+    :class:`~aegis.ops.models.PromptVersion` wins, and the adapter's shipped string is
+    the floor. It is read through the injected ``deps.active_prompt`` seam rather than by
+    importing :mod:`aegis.ops` (which pulls SQLAlchemy) so ``aegis.agent`` stays
+    import-light, and every failure mode — no seam, no active version, a blank version,
+    a raising registry — resolves to the floor. **A registry outage degrades to the
+    shipped prompt, never to none.**
+    """
+    reader = deps.active_prompt
+    if reader is None:
+        return spec.system_prompt, None
+    try:
+        active = reader(spec.registry_key)
+    except Exception:  # noqa: BLE001 - a registry read must never be why a lane dies
+        logger.warning(
+            "Prompt registry read failed for %s; using the adapter floor",
+            spec.registry_key,
+            exc_info=True,
+        )
+        return spec.system_prompt, None
+    if not active:
+        return spec.system_prompt, None
+    prompt, _config, version = active
+    if not str(prompt or "").strip():
+        return spec.system_prompt, None
+    return str(prompt), int(version)
 
 
 @dataclass
@@ -131,6 +180,10 @@ class SubAgentResult:
         tool_calls: The within-ceiling calls this agent actually executed, with outcomes.
         steps: How many loop iterations ran.
         error: The failure detail for a non-``OK`` status (never ``None`` when failed).
+        model: The model this lane's calls actually resolved to (the last one seen),
+            so the per-agent harness record names it rather than the run's.
+        prompt_version: The registry version whose prompt was sent, or ``None`` when the
+            adapter floor was used.
         prompt_tokens / completion_tokens / cost_usd: This lane's own spend, summed by
             the fan-out node into ONE delta so the existing ``operator.add`` reducers
             keep working untouched.
@@ -145,6 +198,8 @@ class SubAgentResult:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     steps: int = 0
     error: str | None = None
+    model: str | None = None
+    prompt_version: int | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
@@ -166,6 +221,8 @@ class SubAgentResult:
             "tool_calls": list(self.tool_calls),
             "steps": self.steps,
             "error": self.error,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "cost_usd": self.cost_usd,
@@ -267,6 +324,58 @@ async def run_subagent(
             the orchestrator's existing handler ends the run cleanly as ``blocked``.
     """
     result = SubAgentResult(agent_id=spec.agent_id, role=spec.role, label=spec.label)
+    # The lane is a unit of work, so it reports itself as one: a node_started /
+    # node_finished pair through the lane's own writer. That pair is what carries this
+    # agent's model, tokens, cost and duration on the WIRE, which is what lets
+    # ``run_summary`` fold one record per sub-agent out of the same events the client
+    # saw (§5.9a) instead of out of a second bookkeeping path. It reuses the existing
+    # event variants rather than inventing a per-agent one — the ``agent_id`` the
+    # scoped writer stamps is what separates a lane's pair from the graph's.
+    node = agent_node_id(spec.agent_id)
+    writer(events.node_started(node, spec.label))
+    started = time.perf_counter()
+    try:
+        return await _guarded(spec, task, deps=deps, persona=persona, writer=writer,
+                              context=context, working_memory=working_memory,
+                              trace_id=trace_id, retry=retry, result=result)
+    finally:
+        writer(
+            events.node_finished(
+                node,
+                spec.label,
+                int(round((time.perf_counter() - started) * 1000)),
+                model=result.model,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                cost_usd=result.cost_usd,
+            )
+        )
+
+
+def agent_node_id(agent_id: str) -> str:
+    """Return the ``node`` id one sub-agent's lane reports its work under.
+
+    Namespaced so a lane's node record can never collide with a graph node's, and so a
+    reader that only has the node id (rather than the stamped ``agent_id``) can still
+    tell the two apart.
+    """
+    return f"agent:{agent_id}"
+
+
+async def _guarded(
+    spec: SubAgentSpec,
+    task: str,
+    *,
+    deps: AgentDeps,
+    persona: str,
+    writer: WriterFn,
+    context: str,
+    working_memory: str,
+    trace_id: str | None,
+    retry: Any,  # noqa: ANN401 - langgraph RetryPolicy | None
+    result: SubAgentResult,
+) -> SubAgentResult:
+    """Run the lane's loop under its wall clock, turning every failure into a result."""
     writer(
         events.agent_status(
             agent_id=spec.agent_id,
@@ -382,8 +491,9 @@ async def _loop(
     """
     definitions = allowed_tool_definitions(spec, deps, persona)
     allowed = {_tool_name(d) for d in definitions}
+    base_prompt, result.prompt_version = resolve_system_prompt(spec, deps)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(spec, working_memory)},
+        {"role": "system", "content": _system_prompt(spec, base_prompt, working_memory)},
         {"role": "user", "content": _user_prompt(task, context)},
     ]
 
@@ -416,6 +526,7 @@ async def _loop(
                 label=f"Sub-agent {spec.agent_id}",
             )
             _accrue(result, completion.usage)
+            result.model = getattr(completion, "model", None) or result.model
             for sentence in _sentences(completion.content or ""):
                 writer(events.reasoning(sentence))
 
@@ -558,15 +669,20 @@ def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _system_prompt(spec: SubAgentSpec, working_memory: str) -> str:
-    """Compose the lane's system prompt: the spec's floor + the user's durable facts.
+def _system_prompt(spec: SubAgentSpec, base_prompt: str, working_memory: str) -> str:
+    """Compose the lane's system prompt: the resolved base + the user's durable facts.
+
+    ``base_prompt`` is the registry's ACTIVE version for this agent when one exists and
+    the adapter's floor when it does not (:func:`resolve_system_prompt`) — the same
+    resolution order the main persona prompt uses, so a sub-agent's prompt improves by
+    promotion through the eval gate rather than by an edit to this file.
 
     The memory block is the SAME one the main graph assembled through the adapter's
     selector — a sub-agent that cannot see the user's durable facts would be a worse
     agent than the single one it replaced, and re-selecting it here would be a second
     selector in the codebase.
     """
-    parts = [spec.system_prompt.strip()]
+    parts = [base_prompt.strip() or spec.system_prompt.strip()]
     if working_memory.strip():
         parts.append(f"What you know about this user:\n{working_memory.strip()}")
     parts.append(

@@ -1,4 +1,10 @@
-"""``GET /documents/{id}/ingest`` — the live ingest log (tasks 4.12 and 4.12b).
+"""The tenant's documents, read: the corpus listing and one document's live ingest log.
+
+Two endpoints — ``GET /documents`` and ``GET /documents/{id}/ingest`` (tasks 4.12 and
+4.12b) — because they are the read side of the same noun and they scope identically.
+The listing is here rather than beside ``POST /documents`` for the reason the whole module
+exists: :mod:`app.api.routes` is past 3,500 lines, and a reader looking for what a tenant
+can *see* about its documents should find both answers in one place.
 
 A **new module rather than a 3,300th line of** :mod:`app.api.routes`, and its own
 ``APIRouter`` merged into that one at the bottom of it by :func:`mount`, so the served
@@ -35,6 +41,8 @@ per-token; an ingest emits one event per stage, six of them, over minutes.
 
 from __future__ import annotations
 
+from datetime import date
+
 from aegis.retrieval.types import UntenantedPrincipalError, tenant_filter
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -42,12 +50,25 @@ from pydantic import BaseModel, Field
 from app.api.routes import AuthContext, require_auth
 from app.data import get_sessionmaker, set_tenant_scope
 from app.ingestion.progress import (
+    DocumentSummary,
     IngestProgress,
     UnknownDocumentError,
     ingest_progress,
+    list_documents,
 )
 
-__all__ = ["IngestProgressResponse", "ingest_router", "mount"]
+__all__ = [
+    "DocumentRow",
+    "DocumentsResponse",
+    "IngestProgressResponse",
+    "ingest_router",
+    "mount",
+]
+
+#: Upper bound on how many documents one ``GET /documents`` call may return. Clamped at
+#: the boundary rather than trusted from the query string: an unbounded ``limit`` on a
+#: tenant-scoped scan is a denial-of-service knob handed to whoever holds a token.
+_DOCUMENTS_LIMIT_MAX = 200
 
 ingest_router = APIRouter()
 
@@ -171,6 +192,111 @@ class IngestProgressResponse(BaseModel):
     tables: list[TableModel] = Field(default_factory=list)
     graph: GraphModel
     entries: list[LogEntryModel] = Field(default_factory=list)
+
+
+class DocumentRow(BaseModel):
+    """One document in the corpus listing — a row, not a whole ingest log."""
+
+    document_id: int
+    filename: str
+    title: str | None = None
+    status: str = Field(description="pending | running | succeeded | failed | cancelled.")
+    completed_stage: str | None = Field(
+        default=None, description="The last stage that committed, or null."
+    )
+    page_count: int | None = None
+    chunk_count: int | None = None
+    parse_confidence: float | None = Field(
+        default=None, description="D-parse's score in [0, 1]; null before the parse runs."
+    )
+    size_bytes: int
+    doc_type: str | None = None
+    doc_date: date | None = None
+    workflow_id: str | None = None
+    error: str | None = Field(
+        default=None,
+        description="Why it failed, naming the stage that failed and the underlying "
+        "cause — not the orchestrator's wrapper.",
+    )
+    created_at: str | None = Field(default=None, description="ISO 8601 UTC upload time.")
+
+
+class DocumentsResponse(BaseModel):
+    """Body for `GET /documents` — this tenant's corpus, newest first."""
+
+    rows: list[DocumentRow] = Field(default_factory=list)
+
+
+def _document_row(summary: DocumentSummary) -> DocumentRow:
+    """Render one projected summary onto the wire model."""
+    return DocumentRow(
+        document_id=summary.document_id,
+        filename=summary.filename,
+        title=summary.title,
+        status=summary.status,
+        completed_stage=summary.completed_stage,
+        page_count=summary.page_count,
+        chunk_count=summary.chunk_count,
+        parse_confidence=summary.parse_confidence,
+        size_bytes=summary.size_bytes,
+        doc_type=summary.doc_type,
+        doc_date=summary.doc_date,  # type: ignore[arg-type] - a date or None off the row
+        workflow_id=summary.workflow_id,
+        error=summary.error,
+        created_at=_iso(summary.created_at),
+    )
+
+
+@ingest_router.get(
+    "/documents",
+    response_model=DocumentsResponse,
+    tags=["ingestion"],
+)
+async def list_tenant_documents(
+    limit: int = _DOCUMENTS_LIMIT_MAX,
+    auth: AuthContext = Depends(require_auth),
+) -> DocumentsResponse:
+    """List this tenant's documents, newest first — the corpus, as a list.
+
+    **The endpoint that was missing.** The route table had ``POST /documents`` and
+    ``GET /documents/{id}/ingest`` and nothing between them, so "show me what you have
+    ingested for this tenant" could only be answered by someone who already knew a
+    document id. A corpus you cannot enumerate is a corpus you cannot demonstrate.
+
+    **Scoped through the sealed type, not through ``tenant_id or None``.** The authority
+    comes from :meth:`~app.api.routes.AuthContext.tenant_scope` and is turned into a
+    filter by :func:`aegis.retrieval.types.tenant_filter`, so the platform-wide ``None``
+    is reachable *only* from the explicit ``ALL_TENANTS`` authority. The expression this
+    replaces — ``None if admin else auth.tenant_id`` — produced that same ``None`` down
+    the unprivileged branch for any principal whose ``users.tenant_id`` is NULL, which is
+    the conflation behind the five cross-tenant leaks commit ``907b7f2`` closed. A
+    principal bound to no tenant gets an **empty list** rather than everyone's corpus.
+
+    The session's ``tenant_isolation`` policy enforces the same scope a second time in the
+    database, so a mistake in the predicate above runs into a policy rather than into a
+    tenant's documents.
+
+    Args:
+        limit: How many rows at most, clamped to ``[1, 200]``.
+        auth: The authenticated principal. Platform staff see every tenant's documents;
+            everybody else sees their own.
+
+    Returns:
+        The rows, newest first. Empty is an honest answer and never an error: a tenant
+        that has uploaded nothing has nothing here.
+    """
+    capped = max(1, min(limit, _DOCUMENTS_LIMIT_MAX))
+    try:
+        tenant_id = tenant_filter(auth.tenant_scope())
+    except UntenantedPrincipalError:
+        # Not a 403: this is a *listing*, and "you are bound to no tenant, so no corpus is
+        # yours" is exactly an empty list. Raising here would make an un-tenanted staff
+        # account's console error rather than show it the truth.
+        return DocumentsResponse(rows=[])
+    async with get_sessionmaker()() as session:
+        await set_tenant_scope(session, tenant_id)
+        rows = await list_documents(session, tenant_id=tenant_id, limit=capped)
+    return DocumentsResponse(rows=[_document_row(row) for row in rows])
 
 
 def _iso(value: object) -> str | None:

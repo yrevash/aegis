@@ -137,6 +137,12 @@ export interface DocumentUpload {
   workflow_id: string | null
   /** False when identical bytes were already uploaded — no second ingest was started. */
   created: boolean
+  /**
+   * True when the bytes matched a document that was stored but never ingested (the
+   * orchestrator was unreachable at upload time) and this call finally started it.
+   * Re-uploading the file is the way out of that state; there is no second row.
+   */
+  restarted: boolean
   title: string | null
   doc_type: string | null
   doc_date: string | null
@@ -181,11 +187,58 @@ export async function uploadDocument(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The corpus listing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One document in this tenant's corpus. Mirrors `DocumentRow`. */
+export interface DocumentRow {
+  document_id: number
+  filename: string
+  title: string | null
+  /** 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'. */
+  status: string
+  completed_stage: string | null
+  page_count: number | null
+  chunk_count: number | null
+  /** D-parse's own score in [0, 1]; null before the parse has run. */
+  parse_confidence: number | null
+  size_bytes: number
+  doc_type: string | null
+  doc_date: string | null
+  workflow_id: string | null
+  /** Why it failed — naming the stage and the underlying cause, not a wrapper. */
+  error: string | null
+  created_at: string | null
+}
+
+/** Response from `GET /documents`. */
+export interface DocumentsResponse {
+  rows: DocumentRow[]
+}
+
+/**
+ * List this tenant's documents, newest first (`GET /documents`).
+ *
+ * The answer to "show me what you have ingested". Tenant-scoped in the backend through
+ * the sealed `TenantScope` type, so a principal bound to no tenant gets an empty list
+ * rather than everybody's corpus.
+ */
+export async function getDocuments(token: string | null): Promise<DocumentsResponse> {
+  return jobsRequest<DocumentsResponse>('/documents', { method: 'GET' }, token)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The live ingest log (phase 4 §4.12 / §4.12b)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** What a stage is doing right now. Mirrors `app/ingestion/progress.py`. */
-export type StageState = 'completed' | 'running' | 'queued'
+/**
+ * What a stage is doing right now. Mirrors `app/ingestion/progress.py`.
+ *
+ * `failed` is the stage a failed run stopped in, and it is deliberately distinct from
+ * `queued`: collapsing them made the stage that broke render identically to the stages
+ * that never ran, so the only stage the log could name was the last one that succeeded.
+ */
+export type StageState = 'completed' | 'running' | 'failed' | 'queued'
 
 /** One stage of the six-stage ingest pipeline. */
 export interface IngestStage {

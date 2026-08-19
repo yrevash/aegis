@@ -22,12 +22,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import pgsupport
 import pytest
 from sqlalchemy import func, select
 
 from app.adapter.memory_spec import FACT_EXTRACTION_PROMPT
 from app.core.security import MEMBER, PLATFORM_ADMIN, TENANT_ADMIN, create_access_token
-from app.data import AuditLog, get_sessionmaker
+from app.data import AuditLog, Tenant, get_sessionmaker
 from app.memory.config import MemoryConfig
 from app.memory.consolidate import enqueue_consolidation, sweep_pending
 from app.memory.stores import (
@@ -249,8 +250,20 @@ def _headers(role: str, *, tenant_id=None, user_id=None, username="x") -> dict[s
 
 
 async def _seed_memory() -> None:
-    """Seed subject A (user:11, tenant 1) and subject B (user:22, tenant 2)."""
+    """Seed subject A (user:11, tenant 1) and subject B (user:22, tenant 2).
+
+    The two ``tenants`` rows are real rows, not an assumption. The memory tables carry a
+    ``tenant_id`` without a foreign key, so this fixture used to name tenants 1 and 2
+    without either existing — which was harmless only for as long as nothing else in the
+    request wrote a genuinely tenant-owned row. ``audit_log.tenant_id`` **is** a foreign
+    key, and now that ``/memory/forget``'s audit row is attributed to the acting tenant
+    (audit C, C4) the insert needs the tenant to exist, exactly as it does in production
+    where a JWT's tenant comes from the ``users`` table.
+    """
     async with get_sessionmaker()() as s:
+        await pgsupport.seed(
+            s, Tenant(id=1, name="Memory tenant A"), Tenant(id=2, name="Memory tenant B")
+        )
         s.add_all(
             [
                 MemoryFact(

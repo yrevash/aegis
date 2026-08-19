@@ -67,6 +67,11 @@ RosterFn = Callable[[], Any]
 #: Provider of the adapter's SUB-agent roster (the fan-out team). Returns a sequence of
 #: ``SubAgentSpec``-shaped entries; ``None``/absent ⇒ no team, every turn is SINGLE.
 SubAgentRosterFn = Callable[[], Any]
+#: Synchronous read of the LLM-Ops registry's ACTIVE prompt version for a ``prompt_key``
+#: — ``(system_prompt, config, version)`` or ``None`` when nothing is active. A host
+#: binds :func:`aegis.ops.registry.get_cached_active` here; the seam exists because
+#: ``aegis.ops`` pulls SQLAlchemy and ``aegis.agent`` must stay import-light.
+ActivePromptFn = Callable[[str], "tuple[str, dict[str, Any], int] | None"]
 TenantFn = Callable[[], int | None]
 AuditFn = Callable[..., Awaitable[Any]]
 #: Embed one query string for memory recall; returns ``None`` when unavailable.
@@ -311,3 +316,11 @@ class AgentDeps:
     #: inventing one here would make every host fan out to agents it never declared.
     #: ``None`` ⇒ no team is possible and every turn is SINGLE, whatever was asked.
     subagent_roster: SubAgentRosterFn | None = None
+    #: The LLM-Ops registry read for a sub-agent's system prompt (§5.9b). Bound host-side
+    #: to ``aegis.ops.registry.get_cached_active`` — the SAME process-wide active cache
+    #: the main persona prompt already resolves through, so improving a sub-agent's
+    #: prompt is promoting a version through the existing eval gate rather than editing a
+    #: string in a file. ``None`` (or a miss, or a raise) ⇒ the adapter's shipped
+    #: ``SubAgentSpec.system_prompt`` is the floor, exactly as the main prompt behaves:
+    #: a registry outage degrades to the shipped prompt, never to none.
+    active_prompt: ActivePromptFn | None = None
