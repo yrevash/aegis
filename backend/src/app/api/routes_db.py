@@ -347,7 +347,27 @@ class OverviewOut(_Model):
     free_form_reason: str = Field(serialization_alias="freeFormReason")
 
 
-class BrowseIn(_Model):
+class _RequestModel(_Model):
+    """Base for a **body** model: an unrecognised field is a 422, never a shrug.
+
+    Pydantic's default is to drop an unknown key in silence and answer 200, and in this
+    project that default has swallowed a request field four separate times
+    (``session_id``, ``depth_mode``, ``agent_id``, ``actions``) — each time presenting
+    as "the backend ignored what I sent", with nothing in any log.
+    ``tests/api/test_request_models_forbid_extras.py`` asserts the rule over every model
+    whose name ends in ``Request``; these two are named ``…In``, so they sat outside it
+    until the published OpenAPI document made the gap visible — ``additionalProperties``
+    was not ``false`` on exactly these two of the API's thirty-two request bodies, which
+    is now itself asserted in ``tests/api/test_openapi_snapshot.py``.
+
+    ``populate_by_name`` is inherited, so both the camelCase wire name and the Python
+    name are still accepted; only a name that is neither is refused.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class BrowseIn(_RequestModel):
     """Body of ``POST /database/browse``."""
 
     table: str
@@ -360,7 +380,7 @@ class BrowseIn(_Model):
     exact_count: bool = Field(default=False, validation_alias="exactCount")
 
 
-class InspectionIn(_Model):
+class InspectionIn(_RequestModel):
     """Body of ``POST /database/inspections/{inspection_id}``."""
 
     limit: int | None = None

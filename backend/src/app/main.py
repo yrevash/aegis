@@ -19,9 +19,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from aegis.governance.schema import SchemaDriftError
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.routing import BaseRoute
 
+from app.api.openapi import API_PREFIX, INFRA_PATHS, build_openapi
 from app.api.routes import router
 from app.api.routes_analytics import mount as _mount_analytics
 from app.api.routes_db import mount as _mount_db
@@ -581,8 +583,60 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(router)
+    # §8.6 — the version boundary. Every product route is served under ``/v1``; the
+    # three infrastructure probes stay at the root and are served at exactly one path
+    # each. See ``app.api.openapi`` for why the probes are the exception.
+    #
+    # The split is done here, at the composition root, rather than by giving ``router``
+    # a prefix: the control planes attach themselves by extending ``router.routes``
+    # (``app.api.ingest_log.mount`` explains why it is not ``include_router``), and an
+    # ``APIRouter(prefix=...)`` applies its prefix only to routes declared *on* it — so
+    # a prefix there would have versioned ``app.api.routes`` and silently left every
+    # mounted plane at the root. Both routers below share the route objects with
+    # ``router`` and neither mutates them, so ``tests/api/test_route_coverage.py`` goes
+    # on reading the unprefixed table it was written against.
+    versioned, infra = _split_infra_probes(router)
+    app.include_router(versioned, prefix=API_PREFIX)
+    app.include_router(infra)
+    # The served document, with the ``StreamEvent`` union published into it (§8.8).
+    # ``backend/openapi.json`` is a committed snapshot of exactly this.
+    app.openapi = lambda: build_openapi(app)  # type: ignore[method-assign]
     return app
+
+
+def _split_infra_probes(source: APIRouter) -> tuple[APIRouter, APIRouter]:
+    """Split one router into the versioned surface and the unversioned probes.
+
+    Args:
+        source: The single router every route in this API is registered on.
+
+    Returns:
+        ``(versioned, infra)`` — the product routes, and the ``/health`` / ``/ready``
+        / ``/readyz`` probes, as two routers over the *same* route objects.
+
+    Raises:
+        RuntimeError: When a path in :data:`~app.api.openapi.INFRA_PATHS` is not
+            actually served. The set names the URLs a load balancer is configured
+            with; an entry that stopped existing would move a probe under ``/v1``
+            without one test noticing, so the mismatch is fatal at import time.
+    """
+
+    def _is_probe(route: BaseRoute) -> bool:
+        return getattr(route, "path", None) in INFRA_PATHS
+
+    versioned = APIRouter()
+    versioned.routes.extend(r for r in source.routes if not _is_probe(r))
+    infra = APIRouter()
+    infra.routes.extend(r for r in source.routes if _is_probe(r))
+
+    served = {getattr(r, "path", None) for r in infra.routes}
+    missing = sorted(INFRA_PATHS - served)
+    if missing:
+        raise RuntimeError(
+            f"these infrastructure probes are declared unversioned but no longer "
+            f"served: {missing}. A load balancer is dialling them at the root."
+        )
+    return versioned, infra
 
 
 app = create_app()

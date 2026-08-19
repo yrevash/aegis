@@ -342,11 +342,21 @@ function RedteamView(): ReactElement {
             />
             <StatCard
               label="Attacks that got through"
-              value={`${run_.attacksTotal - run_.attacksBlocked}`}
+              value={`${run_.attacksTotal - run_.attacksBlocked - run_.attacksUnchecked}`}
               icon={ShieldAlert}
-              tone={run_.attacksTotal === run_.attacksBlocked ? 'ok' : 'block'}
+              tone={
+                run_.attacksTotal === run_.attacksBlocked + run_.attacksUnchecked ? 'ok' : 'block'
+              }
             />
             <StatCard label="Block rate" value={pct(run_.blockRate)} icon={Swords} tone="neutral" />
+            {run_.attacksUnchecked > 0 ? (
+              <StatCard
+                label="Refused without being examined"
+                value={`${run_.attacksUnchecked}`}
+                icon={AlertTriangle}
+                tone="block"
+              />
+            ) : null}
             <StatCard
               label="Benign controls wrongly blocked"
               value={`${run_.falsePositives}/${run_.controlsTotal}`}
@@ -363,7 +373,9 @@ function RedteamView(): ReactElement {
               </p>
               <p className="text-[0.72rem] text-muted-foreground">
                 {run_.mode === 'live'
-                  ? 'Live run: the model-backed injection, content-safety and topical layers ran, and the calls are in the usage ledger.'
+                  ? run_.tenantId == null
+                    ? 'Live run against the platform’s own rails: the model-backed injection, content-safety and topical layers ran. There is no tenant to bill, so these calls are not in the usage ledger and the cost below is the estimate, not a charge.'
+                    : 'Live run: the model-backed injection, content-safety and topical layers ran, and the calls are in this tenant’s usage ledger.'
                   : 'Offline run: no model was called, so this measures the deterministic signatures alone — not the whole stack.'}{' '}
                 Judged against a {pct(run_.minBlockRate)} block-rate floor and a{' '}
                 {pct(run_.maxFalsePositiveRate)} false-positive ceiling. Suite{' '}

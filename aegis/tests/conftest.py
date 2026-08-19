@@ -356,6 +356,26 @@ async def _clone(template: PostgresTemplate) -> PostgresScratch:
     )
 
 
+# ── The vector-store declaration this test process makes out loud (§8.4) ──────
+#
+# ``aegis.memory``'s index and ``aegis.retrieval``'s backends no longer invent an
+# ephemeral Chroma engine for a caller that configured none — a silent downgrade to a
+# non-durable store is the worst failure a first-attempt integration can have, because
+# everything keeps working and nothing is kept. A test process genuinely does want the
+# ephemeral engine, so it asks for it here, once, exactly as a host asks at startup.
+# Session-scoped and autouse: the declaration is process state, not per-test state, and
+# the tests that prove the seams raise clear it themselves.
+@pytest.fixture(scope="session", autouse=True)
+def _ephemeral_vector_stores() -> Iterator[None]:
+    """Declare the ephemeral in-process vector engine for the whole test session."""
+    from aegis.memory import MemoryVectorIndex, set_default_index
+    from aegis.retrieval import ChromaVectorStore, configure_vector_store
+
+    configure_vector_store(ChromaVectorStore.local)
+    set_default_index(MemoryVectorIndex.local())
+    yield
+
+
 @pytest.fixture(scope="session")
 def pg_template() -> Iterator[PostgresTemplate]:
     """Provision the session's template database and unprivileged role, then destroy them.

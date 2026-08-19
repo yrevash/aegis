@@ -145,12 +145,12 @@ async def test_health_reports_the_worker_and_ready_refuses_when_it_is_down(clien
         worker_health_mod.WORKER_DOWN, detail="the durable-job orchestrator is not reachable"
     )
 
-    health = await client.get("/health")
+    health = await client.get("http://test/health")
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
     assert health.json()["worker"] == "down"
 
-    ready = await client.get("/ready")
+    ready = await client.get("http://test/ready")
     assert ready.status_code == 503
     body = ready.json()
     assert body["ready"] is False
@@ -161,7 +161,7 @@ async def test_health_reports_the_worker_and_ready_refuses_when_it_is_down(clien
 async def test_ready_is_200_for_a_deployment_that_runs_no_worker(client):
     """``disabled`` is not a failure: the offline demo ships exactly that shape."""
     worker_health_mod.set_worker_state(worker_health_mod.WORKER_DISABLED)
-    ready = await client.get("/ready")
+    ready = await client.get("http://test/ready")
     assert ready.status_code == 200
     assert ready.json()["ready"] is True
 
@@ -169,4 +169,4 @@ async def test_ready_is_200_for_a_deployment_that_runs_no_worker(client):
 async def test_ready_needs_no_token(client):
     """A readiness probe a load balancer cannot call is not a readiness probe."""
     worker_health_mod.set_worker_state(worker_health_mod.WORKER_RUNNING)
-    assert (await client.get("/ready")).status_code == 200
+    assert (await client.get("http://test/ready")).status_code == 200

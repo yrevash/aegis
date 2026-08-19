@@ -1,7 +1,7 @@
 import Link from 'next/link'
 
 import { AegisLockup } from '@/components/brand/AegisLockup'
-import { API_BASE } from '@/lib/api/config'
+import { API_BASE, API_ORIGIN } from '@/lib/api/config'
 
 /**
  * Closing band: the mark in ink-on-white, a last way into the console, and the
@@ -16,7 +16,7 @@ export function LandingFooter() {
         {/* These are backend routes, not console pages — resolve them against the
             API origin so they work whether the API is same-origin or on :8000. */}
         <nav className="flex flex-wrap items-center gap-x-7 gap-y-2 font-mono text-[0.72rem] text-muted-foreground">
-          <a href={`${API_BASE}/docs`} className="transition-colors hover:text-foreground">
+          <a href={`${API_ORIGIN}/docs`} className="transition-colors hover:text-foreground">
             API docs
           </a>
           <a href={`${API_BASE}/about`} className="transition-colors hover:text-foreground">

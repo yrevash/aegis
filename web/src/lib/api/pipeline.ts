@@ -14,7 +14,15 @@
  * is platform-staff only. Rendering that as "request failed" would hide a governance
  * decision behind a network error.
  *
+ * **Why `getPipelines` is here too.** `GET /pipelines` is not a health figure — it is the
+ * declaration the health figures are read against (§8.12): three pipelines, their stages,
+ * the module that owns each stage and what each emits, served from `aegis.pipelines` and
+ * verified against the code before it is served. The pipeline page consumes both in one
+ * poll, so they share this module's bearer-preserving `call`.
+ *
  * @see backend/src/app/api/routes_health.py
+ * @see backend/src/app/api/routes_pipelines.py
+ * @see aegis/src/aegis/pipelines/spec.py
  * @see aegis/src/aegis/core/cache_stats.py
  */
 
@@ -154,6 +162,56 @@ export interface CacheStatsResponse {
   not_recorded: NotRecorded[]
 }
 
+/**
+ * Where a stage's output goes, and therefore what may be asked of it.
+ *
+ * `run_event` is committed to `run_events` in the transaction that did the work, so it
+ * can be read back an hour later. `stream` reaches the browser on the SSE stream and is
+ * then gone. `result` is a field on the returned object. The distinction is the reason
+ * this page can show ingest stage percentiles and cannot show a query's node timings.
+ */
+export type EmissionChannel = 'run_event' | 'stream' | 'result'
+
+/** One thing a stage emits, on one channel. */
+export interface Emission {
+  channel: EmissionChannel
+  /** The event type, or a dotted field path on the returned object. */
+  name: string
+  detail: string
+}
+
+/** One declared stage of one pipeline. */
+export interface PipelineStage {
+  name: string
+  label: string
+  /** The dotted module that implements it. */
+  owner: string
+  summary: string
+  /** True when it runs only under a configuration or a route. */
+  optional: boolean
+  emits: Emission[]
+}
+
+/** One declared pipeline — retrieval, agent or ingestion. */
+export interface PipelineDeclaration {
+  name: string
+  title: string
+  summary: string
+  entrypoint: string
+  /** The table its stage transitions commit to, or null when it persists nothing. */
+  durable_record: string | null
+  stages: PipelineStage[]
+  /** What this pipeline does not record, in its own words. */
+  limits: string[]
+}
+
+/** Body of `GET /pipelines`. */
+export interface PipelinesResponse {
+  pipelines: PipelineDeclaration[]
+  /** The channel legend, served rather than restated in the browser. */
+  channels: Record<string, string>
+}
+
 /** A pipeline-health call that kept the server's own explanation. */
 export class PipelineApiError extends ApiError {
   constructor(status: number, method: string, path: string, detail?: string) {
@@ -198,6 +256,17 @@ export async function getPipelineHealth(
 /** The live per-cache counters (devops / platform admin / AI team). */
 export async function getCacheStats(token: string | null): Promise<CacheStatsResponse> {
   return call<CacheStatsResponse>('/platform/caches', token)
+}
+
+/**
+ * The three pipeline declarations (§8.12).
+ *
+ * Read by this page rather than restated in it: the ingest stage list rendered beside
+ * the timings comes from here, so a stage that has never run shows as unmeasured
+ * instead of vanishing from a vocabulary derived only from the rows that exist.
+ */
+export async function getPipelines(token: string | null): Promise<PipelinesResponse> {
+  return call<PipelinesResponse>('/pipelines', token)
 }
 
 /** The sentence to show a person when one of these calls fails. */

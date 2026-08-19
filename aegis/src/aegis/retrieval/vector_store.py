@@ -51,7 +51,7 @@ import hashlib
 import re
 import threading
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -494,3 +494,81 @@ def _ephemeral_database(chroma: Any, config: Any, settings: Any) -> str:  # noqa
         database = f"aegis-{uuid.uuid4().hex}"
         _ADMIN.create_database(database, config.DEFAULT_TENANT)
     return database
+
+
+# ─────────────────────────────────────────────────────────────────────────── seam
+# The process-wide vector-store choice — configured out loud, never guessed.
+#
+# Phase 8 §8.4. ``InMemoryKnowledgeBackend`` used to build ``ChromaVectorStore.local()``
+# for any caller that handed it none, which meant a host that simply forgot to wire a
+# durable store got a *working-looking* system whose vectors evaporated on restart, with
+# no log line and no error to follow. That is the one failure mode a first-attempt
+# integration cannot recover from, so the default is gone: a component that needs a store
+# and was given none now asks here, and this raises unless the process said which engine
+# it wants.
+#
+# A **factory**, not a store instance, on purpose: every backend must own its own Chroma
+# database (see :func:`_ephemeral_database`), so handing them one shared instance would
+# silently merge two corpora into one collection namespace. The factory is called once
+# per component that needs a store.
+_STORE_FACTORY: Callable[[], ChromaVectorStore] | None = None
+
+
+class VectorStoreNotConfiguredError(RuntimeError):
+    """No vector store was configured, and the component that needs one will not guess.
+
+    Raised by :func:`new_default_store` — and, through it, by any component built without
+    an explicit ``vector_store=``. It is deliberately a hard failure: the alternative
+    (an ephemeral in-process index) is indistinguishable from a working deployment until
+    the first restart loses every vector.
+    """
+
+
+def configure_vector_store(factory: Callable[[], ChromaVectorStore] | None) -> None:
+    """Declare which vector store components build when they are handed none.
+
+    Call once at host startup, next to the other ``configure_*`` seams. The two honest
+    choices are both explicit::
+
+        configure_vector_store(lambda: ChromaVectorStore.local(path=settings.path))  # durable
+        configure_vector_store(ChromaVectorStore.local)                              # ephemeral
+
+    Args:
+        factory: A zero-argument callable returning a fresh
+            :class:`ChromaVectorStore`; ``None`` clears the declaration (the next
+            component that needs a store raises :class:`VectorStoreNotConfiguredError`).
+    """
+    global _STORE_FACTORY  # noqa: PLW0603 - a single deliberate configuration seam
+    _STORE_FACTORY = factory
+
+
+def reset_vector_store() -> None:
+    """Clear the configured factory (test teardown; the next use raises again)."""
+    configure_vector_store(None)
+
+
+def new_default_store() -> ChromaVectorStore:
+    """Build a fresh store from the configured factory, or fail loud.
+
+    Returns:
+        A new :class:`ChromaVectorStore` from the factory given to
+        :func:`configure_vector_store`.
+
+    Raises:
+        VectorStoreNotConfiguredError: If nothing was configured. The message names the
+            call to make and both honest values for it — a skipped step has to point at
+            its own fix, because the integrator has nothing else to go on.
+    """
+    if _STORE_FACTORY is None:
+        raise VectorStoreNotConfiguredError(
+            "aegis.retrieval has no vector store configured, so this component has no "
+            "index to write to. Call "
+            "aegis.retrieval.configure_vector_store(lambda: ChromaVectorStore.local("
+            "path=...)) at startup for a DURABLE on-disk store, or "
+            "configure_vector_store(ChromaVectorStore.local) to choose the EPHEMERAL "
+            "in-process engine explicitly (dev/tests/offline evals) — or pass "
+            "vector_store=... to this component. It used to build the ephemeral store "
+            "for you, which made a forgotten call look exactly like a working system "
+            "until a restart lost every vector."
+        )
+    return _STORE_FACTORY()

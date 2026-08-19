@@ -60,6 +60,7 @@ from aegis.memory.stores import (
 from aegis.memory.stream import stream_add, stream_assemble, stream_forget
 from aegis.memory.vector_ops import (
     MemoryVectorIndex,
+    VectorStoreNotConfiguredError,
     get_default_index,
     reset_default_index,
     set_default_index,
@@ -71,6 +72,7 @@ from aegis.memory.working import (
 )
 
 __all__ = [
+    "VectorStoreNotConfiguredError",
     "BACKEND_MEMORY",
     "BACKEND_REDIS",
     "AssembledMemory",

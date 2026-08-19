@@ -1,775 +1,357 @@
 /**
- * Endpoint request/response contracts — a faithful TypeScript mirror of the
- * non-streaming Pydantic models in `backend/src/app/api/schemas.py`.
+ * Endpoint request/response contracts — **derived from the backend, not mirrored**.
+ *
+ * This file used to be 775 hand-written lines restating 1,598 lines of Pydantic, and
+ * the drift it invited was not hypothetical: `schemas.py` and this file have been
+ * edited together in one change more than once, by hand, each time relying on somebody
+ * remembering both sides. One example of what that cost, found the moment generation
+ * replaced the mirror: `CreateBudgetRequest` was declared as an alias of `Budget`, so
+ * the console's type for the `POST /v1/admin/budgets` body carried an `id` the server
+ * has never accepted.
+ *
+ * Every name below is now an alias of a type generated from `backend/openapi.json`
+ * (§8.7), which is itself a snapshot-tested projection of the FastAPI route table. The
+ * chain — Pydantic field → OpenAPI document → `generated/schema.d.ts` → this alias →
+ * the call site — has a failing test at every link, so a field that changes shape in
+ * Python cannot reach the console as a silent `undefined`.
+ *
+ * **The aliases are kept rather than importing `components['schemas'][…]` at 60 call
+ * sites**, and deliberately: they are the console's vocabulary, several of them differ
+ * in name from the Python class (`Tenant` is `TenantRow`, `UsageModelRow` is
+ * `UsageByModel`), and a rename on the Python side should land here, once, as a
+ * one-line change under review — not as 60 broken imports.
+ *
+ * To change anything here, change the Python and regenerate:
+ *
+ *   backend/.venv/bin/python scripts/build_openapi.py
+ *   cd web && npm run gen:api
  *
  * @see backend/src/app/api/schemas.py
+ * @see web/src/lib/api/generated/schema.d.ts
  */
 
-import type { GraphEdge, GraphNode, Role, ShapFeature } from '@/lib/stream'
+import type { components } from '@/lib/api/generated/schema'
+
+/** Every model the published OpenAPI document declares. */
+type Schemas = components['schemas']
+
+/**
+ * A response type **as it is actually sent**, with every property present.
+ *
+ * OpenAPI's `required` list means "the client may not omit this", and a Pydantic field
+ * with a `default=` is therefore not required — on the way *in*. On the way *out* there
+ * is no way in: FastAPI serialises a response model with every field set, defaults
+ * included (`response_model_exclude_unset` is off everywhere in this API), so a reader
+ * of a response never sees the key missing. Generating straight from `required` would
+ * hand the console `points?: BurndownPoint[]` for a field the server always sends, and
+ * ~60 call sites would grow an `?? []` that can never fire — noise that hides the
+ * genuinely optional values behind it.
+ *
+ * So responses are mapped: every property is made present, recursively, with arrays and
+ * tuples preserved. `| null` survives untouched, because a null a server really sends is
+ * a fact about the value, not about whether the key is there.
+ *
+ * Request types are deliberately **not** mapped: for a body, `default=` really does mean
+ * the caller may leave it out.
+ */
+type Sent<T> = T extends readonly unknown[]
+  ? { [K in keyof T]: Sent<T[K]> }
+  : T extends object
+    ? { [K in keyof T]-?: Sent<T[K]> }
+    : T
+
+/** A generated type with one or more properties replaced by a narrower one. */
+type Narrowed<T, N> = Omit<T, keyof N> & N
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** Body for `POST /auth/login`. */
-export interface LoginRequest {
-  username: string
-  password: string
-}
+export type LoginRequest = Schemas['LoginRequest']
 
 /**
  * The fine RBAC tier the backend derives from the coarse role + tenancy
- * (`aegis.governance.security.principal_role`). `role` collapses both admin tiers
- * to `admin`; this is the value that tells them apart. Non-admin roles are their
- * own tier, so this is a superset of `Role`.
+ * (`aegis.governance.security.principal_role`). `role` collapses both admin tiers to
+ * `admin`; this is the value that tells them apart, so it is a superset of `Role`.
+ *
+ * **One of four types on this page that are still written by hand**, with
+ * `AuditOutcome`, `BudgetScope` and `BudgetWindow`. Each is a closed set the backend
+ * documents in prose and types as `str` — `LoginResponse.fine_role` is
+ * `fine_role: str = Field(description="'platform_admin' / 'tenant_admin' …")` — so the
+ * published schema says `string` and generating from it would *widen* the console's
+ * type rather than pin it. The fix is to type those four fields as literals in Python
+ * (three of them live in `aegis.governance.types`, which another lane owns this
+ * session); until then this narrowing is the console's own claim and is labelled as
+ * one. A wrong value here fails at the call site, not silently.
  */
 export type FineRole = 'platform_admin' | 'tenant_admin' | 'ai_team' | 'devops' | 'client'
 
 /**
- * Response from `POST /auth/login`. `token` is now a signed JWT (stored and sent
- * as a Bearer token); `role` scopes the served portal and `tenant_id` pins the
- * session to its tenant for multi-tenant governance.
- *
- * `fine_role` is the admin sub-tier — without it the browser cannot tell a
- * platform admin (every tenant) from a tenant admin (pinned to one), so a
- * tenant admin's own-tenant-only governance view renders as if it were the whole
- * platform.
- *
- * `user_id` is who the caller is, and it is a **separate fact from `tenant_id`**: a
- * platform principal has no tenant and still has a user id. It is the JWT's `sub`
- * claim, echoed by the server rather than re-derived, and it is the id the
- * `/memory/*` endpoints authorise a non-admin's `user:<id>` subject against. Reading
- * it here rather than decoding the bearer in the browser is what keeps the console's
- * subject and the server's check the same value — the first time a client-side
- * derivation disagreed, the rail would 403 and look like its own bug.
+ * Response from `POST /auth/login`. `token` is a signed JWT (stored and sent as a
+ * Bearer token); `role` scopes the served portal, `tenant_id` pins the session to its
+ * tenant, `fine_role` is the admin sub-tier, and `user_id` is the JWT `sub` the
+ * `/memory/*` endpoints authorise a non-admin's `user:<id>` subject against.
  */
-export interface LoginResponse {
-  token: string
-  role: Role
-  /** The tenant this session belongs to, or null (platform scope). */
-  tenant_id: number | null
-  /** Fine RBAC tier — `platform_admin` / `tenant_admin` for an admin. */
-  fine_role: FineRole
-  /**
-   * The caller's user id — the JWT `sub`, and the `user:<id>` the memory endpoints
-   * authorise against. Null only when no users row backs the principal; never a
-   * statement about its tenant.
-   */
-  user_id: number | null
-}
+export type LoginResponse = Narrowed<Sent<Schemas['LoginResponse']>, { fine_role: FineRole }>
 
-/** Body for `POST /query` (the response is the SSE stream, not JSON). */
-export interface QueryRequest {
-  query: string
-  /** Adapter persona id; scopes data + tools. */
-  persona?: string | null
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// The run
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Body for `POST /query`. The response is the SSE stream of `StreamEvent`s, not JSON —
+ * see `sse.ts` for the reader and `@/lib/stream` for the union.
+ */
+export type QueryRequest = Schemas['QueryRequest']
 
 /** Body for `GET /graph` — the current context graph for the viz. */
-export interface GraphResponse {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-}
+export type GraphResponse = Sent<Schemas['GraphResponse']>
 
 /** Body for `POST /ml/explain`. */
-export interface MLExplainRequest {
-  /** Feature name → value for one prediction. */
-  features: Record<string, number | string>
-}
+export type MLExplainRequest = Schemas['MLExplainRequest']
 
-/** Response from `POST /ml/explain`. */
-export interface MLExplainResponse {
-  prediction: number | string
-  conformal_interval: [number, number] | null
-  conformal_confidence: number | null
-  /** Conformal interval width (upper − lower); the deferral signal, or null. */
-  interval_width: number | null
-  /** Conformal prediction-set size (classification; 1 = singleton), or null. */
-  prediction_set_size: number | null
-  shap_attribution: ShapFeature[]
-  /**
-   * Model features the caller did not supply, imputed with the training median
-   * (numeric) or mode (categorical). The spine reports them rather than answering
-   * confidently about a row nobody asked about — so an explanation of `{}` is
-   * honestly labelled as the training-median baseline, not as a real case.
-   */
-  imputed_features?: string[]
-  /** Keys the caller sent that are not model features, and were ignored. */
-  unknown_features?: string[]
-  /** How the training frame was sourced: `provided` | `spec_provider` | `synthetic`. */
-  data_source?: string
-}
+/** Response from `POST /ml/explain` — the conformalised, SHAP-explained prediction. */
+export type MLExplainResponse = Sent<Schemas['MLExplainResponse']>
 
 /** Body for `GET /metrics` — live figures for the efficiency dashboard. */
-export interface MetricsResponse {
-  cache_hit_rate: number
-  small_model_share: number
-  cost_per_1k_queries_usd: number
-  /**
-   * A measured **grounding proxy**, not an eval-harness/LLM-judge score: the
-   * fraction of completed runs that both finished cleanly and retrieved backing
-   * context (touched at least one knowledge-graph node before answering). Null
-   * before any run.
-   */
-  quality_score: number | null
-  /** Effective role → model map. */
-  routing: Record<string, string>
-  /**
-   * Cumulative USD saved versus running every query on the frontier model —
-   * the headline efficiency win. The backend tallies this from small-model
-   * routing only; cache hits bypass the tally, so caching is not counted here.
-   */
-  cost_saved_usd: number
-  /** What the same workload would have cost on the frontier model, in USD. */
-  baseline_cost_usd: number
-  /**
-   * Measured chat completions served since the backend process started (the
-   * gateway usage tally). Not a per-day figure — the honest process-wide count
-   * of LLM calls; resets on restart.
-   */
-  total_calls: number
-  /**
-   * Count of human-gate approvals cleared to the terminal APPROVED state (from
-   * the durable approvals store). 0 when none — never fabricated.
-   */
-  actions_approved: number
-  /**
-   * 95th-percentile whole-run duration in milliseconds, from the backend's
-   * per-process latency window. Null before any run is recorded — an honest
-   * empty state, not a fabricated zero.
-   */
-  p95_latency_ms: number | null
-}
+export type MetricsResponse = Sent<Schemas['MetricsResponse']>
 
-/** Whether a paused action was approved or rejected by the human gate. */
-export type ApprovalDecision = 'approve' | 'reject'
+// ─────────────────────────────────────────────────────────────────────────────
+// Approvals
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Body for `POST /approval` — resolve a paused action. */
-export interface ApprovalRequest {
-  approval_id: string
-  decision: ApprovalDecision
-}
+/** A human's decision at the approval gate. */
+export type ApprovalDecision = Schemas['ApprovalDecision']
 
-/** Response from `POST /approval`. */
-export interface ApprovalResponse {
-  approval_id: string
-  accepted: boolean
-}
+/** Body for `POST /approvals/{id}` — resolve a paused gate. */
+export type ApprovalRequest = Schemas['ApprovalRequest']
+
+/** Response from `POST /approvals/{id}`. */
+export type ApprovalResponse = Sent<Schemas['ApprovalResponse']>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Governance: the audit trail, tenants, users, budgets
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One row of the append-only audit trail. */
+export type AuditLogRow = Narrowed<Sent<Schemas['AuditLogRow']>, { outcome: AuditOutcome }>
 
 /**
- * One row of the append-only audit trail (admin-only).
- * Mirrors the `AuditLog` record surfaced by `GET /audit` on the backend.
+ * Whether an audited action was refused or ran. Derived server-side by
+ * `aegis.governance.audit.classify_outcome` — there is no verdict column on the trail.
+ *
+ * Hand-written for the reason given on {@link FineRole}: `AuditLogRow.outcome` is typed
+ * `str` in `aegis.governance.types`.
  */
-export interface AuditLogRow {
-  id: number
-  /** ISO 8601 timestamp of when the action was recorded. */
-  ts: string
-  action: string
-  actor: string | null
-  model: string | null
-  trace_id: string | null
-  approved_by: string | null
-  /**
-   * `'blocked' | 'completed'`, classified by the server from the action name — there
-   * is no verdict column on the trail. It travels with the row so the word a reader
-   * sees is the word `?outcome=` selected by; deriving it again in the browser is how
-   * the two would drift apart.
-   */
-  outcome: AuditOutcome
-}
-
-/** The two words an audit row's outcome can be. */
 export type AuditOutcome = 'blocked' | 'completed'
 
-/** Response from `GET /audit` — newest-first list of audit rows. */
-export interface AuditLogResponse {
-  rows: AuditLogRow[]
-}
+/** Response from `GET /audit` — the filtered trail. */
+export type AuditLogResponse = Narrowed<
+  Sent<Schemas['AuditLogResponse']>,
+  { rows: AuditLogRow[] }
+>
 
-// ── Admin: tenants, users, budgets, usage (multi-tenant governance) ─────────
-
-/** A tenant (enterprise client). */
-export interface Tenant {
-  id: number
-  name: string
-  status: string
-  created_at: string
-}
+/** One tenant. */
+export type Tenant = Sent<Schemas['TenantRow']>
 
 /** Response from `GET /admin/tenants`. */
-export interface TenantsResponse {
-  rows: Tenant[]
-}
+export type TenantsResponse = Sent<Schemas['AdminTenantsResponse']>
 
-/** A user within a tenant. */
-export interface AdminUser {
-  id: number
-  username: string
-  email: string | null
-  role: string
-  tenant_id: number | null
-  is_active: boolean
-}
+/** One user, as the admin surfaces list them. */
+export type AdminUser = Sent<Schemas['AdminUserRow']>
 
 /** Response from `GET /admin/users`. */
-export interface UsersResponse {
-  rows: AdminUser[]
-}
+export type UsersResponse = Sent<Schemas['AdminUsersResponse']>
 
-/** Which entity a budget caps. */
+/**
+ * Which level a budget binds at.
+ *
+ * Hand-written for the reason given on {@link FineRole}: `BudgetRow.scope_type` is
+ * typed `str` in `aegis.governance.types`.
+ */
 export type BudgetScope = 'tenant' | 'user'
 
-/** The rolling window a budget resets on. */
+/**
+ * The window a budget's caps reset over.
+ *
+ * Hand-written for the reason given on {@link FineRole}: `BudgetRow.window` is typed
+ * `str` in `aegis.governance.types`.
+ */
 export type BudgetWindow = 'day' | 'month'
 
-/** A hierarchical spend / rate cap. */
-export interface Budget {
-  id?: number
-  scope_type: BudgetScope
-  scope_id: number
-  window: BudgetWindow
-  token_cap: number | null
-  usd_cap: number | null
-  rpm: number | null
-  tpm: number | null
-}
+/** One configured budget, as stored. */
+export type Budget = Narrowed<
+  Sent<Schemas['BudgetRow']>,
+  { scope_type: BudgetScope; window: BudgetWindow }
+>
 
 /** Response from `GET /admin/budgets`. */
-export interface BudgetsResponse {
-  rows: Budget[]
-}
-
-/** Body for `POST /admin/budgets`. */
-export type CreateBudgetRequest = Budget
+export type BudgetsResponse = Narrowed<
+  Sent<Schemas['AdminBudgetsResponse']>,
+  { rows: Budget[] }
+>
 
 /**
- * Body for `POST /admin/tenants` — onboard a client (platform admin only).
+ * Body for `POST /admin/budgets` — an upsert, keyed on `(scope_type, scope_id)`.
  *
- * `usd_cap` is **required**, mirroring `TenantCreateRequest` on the backend: an
- * absent `budgets` row means uncapped, so a tenant created without one would spend
- * without limit and the omission would surface as a bill rather than as an error.
- * The route answers 422 for a missing or zero cap.
+ * **Not `Budget`.** It was declared as an alias of it until this file was generated,
+ * which gave the console a body type carrying an `id` the server has never accepted.
  */
-export interface CreateTenantRequest {
-  name: string
-  usd_cap: number
-  window: BudgetWindow
-}
+export type CreateBudgetRequest = Narrowed<
+  Schemas['BudgetUpsertRequest'],
+  { scope_type: BudgetScope; window?: BudgetWindow }
+>
 
-/**
- * Body for `POST /admin/users` — provision a user with a role and a password.
- *
- * `tenant_id` is only the platform admin's to choose. A tenant admin's own tenant is
- * pinned server-side, and naming another tenant is a 403 — so the form never offers
- * them the field.
- */
-export interface CreateUserRequest {
-  username: string
-  role: Role
-  tenant_id: number | null
-  email: string | null
-  password: string
-}
+/** Body for `POST /admin/tenants`. */
+export type CreateTenantRequest = Schemas['TenantCreateRequest']
 
-// ── DevOps: tech stack + patch check (supply-chain transparency) ────────────
+/** Body for `POST /admin/users`. */
+export type CreateUserRequest = Schemas['AdminUserCreateRequest']
 
-/** One dependency in the running Aegis stack. */
-export interface StackComponent {
-  name: string
-  category: 'runtime' | 'backend' | 'frontend' | 'infra'
-  /** The installable package / image name. */
-  package: string
-  /** Resolved version, or null when it could not be determined. */
-  version: string | null
-  /** Which Aegis module this component powers, or null for shared infra. */
-  aegis_module: string | null
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Platform posture: the stack, patches, risk, savings, usage
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Response from `GET /stack` — the full software bill of materials. */
-export interface StackResponse {
-  /** ISO 8601 timestamp the stack was inventoried. */
-  generated_at: string
-  components: StackComponent[]
-}
+/** One component of the running stack, with its declared and detected versions. */
+export type StackComponent = Sent<Schemas['StackComponent']>
 
-/** One package's freshness verdict from the patch check. */
-export interface PatchResult {
-  name: string
-  installed: string | null
-  latest: string | null
-  status: 'current' | 'outdated' | 'unknown'
-  note?: string
-}
+/** Response from `GET /platform/stack`. */
+export type StackResponse = Sent<Schemas['StackResponse']>
 
-/** Response from `POST /stack/patch-check` — installed vs latest per package. */
-export interface PatchCheckResponse {
-  /** ISO 8601 timestamp the check ran. */
-  checked_at: string
-  /** Whether the registry could be reached (false ⇒ results are best-effort). */
-  online: boolean
-  note: string
-  results: PatchResult[]
-}
+/** One dependency's patch verdict. */
+export type PatchResult = Sent<Schemas['PatchResult']>
 
-// ── Client: risk map + savings (value + assurance) ──────────────────────────
+/** Response from `GET /platform/patches`. */
+export type PatchCheckResponse = Sent<Schemas['PatchCheckResponse']>
 
-/**
- * One entry on the risk map (OWASP-Agentic-aligned). Carries **two** points on
- * the same 1..5 grid — where the risk sits with no control (`likelihood` ×
- * `impact`) and where the Aegis control leaves it (`residual_*`). `residual` is
- * derived server-side from the residual point, never authored beside it.
- */
-export interface RiskEntry {
-  id: string
-  title: string
-  category: string
-  /** Inherent 1..5 likelihood, before the control. */
-  likelihood: number
-  /** Inherent 1..5 impact, before the control. */
-  impact: number
-  /** 1..5 likelihood left after the control — the axis controls actually move. */
-  residual_likelihood: number
-  /** 1..5 impact left after the control — moves only if the blast radius shrinks. */
-  residual_impact: number
-  /** Short client-facing name of the control, e.g. 'Human approval gate'. */
-  control_name: string
-  /** One plain-language sentence: what the control does. */
-  mitigation: string
-  /** Real file/module implementing the control — auditor provenance, not client copy. */
-  control_ref: string
-  /** Residual band, derived from `residual_likelihood × residual_impact`. */
-  residual: 'low' | 'medium' | 'high'
-}
+/** One risk in the platform risk map. */
+export type RiskEntry = Sent<Schemas['RiskEntry']>
 
-/** Response from `GET /risk-map` — the agent-risk heat-map + its scale. */
-export interface RiskMapResponse {
-  /** ISO 8601 timestamp the map was generated. */
-  generated_at: string
-  note: string
-  scale: {
-    likelihood: number[]
-    impact: number[]
-  }
-  risks: RiskEntry[]
-}
+/** Response from `GET /platform/risk`. */
+export type RiskMapResponse = Sent<Schemas['RiskMapResponse']>
 
-/** One contributor to the total savings. */
-export interface SavingsBreakdownRow {
-  source: string
-  saved_usd: number
-  explanation: string
-}
+/** One line of the savings breakdown. */
+export type SavingsBreakdownRow = Sent<Schemas['SavingsBreakdownRow']>
 
-/** Response from `GET /savings` — baseline vs actual spend and what drove it. */
-export interface SavingsResponse {
-  /** ISO 8601 timestamp the figures were computed. */
-  generated_at: string
-  baseline_cost_usd: number
-  actual_cost_usd: number
-  saved_usd: number
-  /** Fraction saved vs baseline, 0..1. */
-  saved_pct: number
-  note: string
-  breakdown: SavingsBreakdownRow[]
-}
+/** Response from `GET /savings` — the measured efficiency win. */
+export type SavingsResponse = Sent<Schemas['SavingsResponse']>
 
-/** Per-model usage roll-up row. */
-export interface UsageModelRow {
-  model: string
-  cost_usd: number
-  tokens: number
-}
+/** Usage aggregated for one model. */
+export type UsageModelRow = Sent<Schemas['UsageByModel']>
 
-/** One point on the usage cost trend. */
-export interface UsageSeriesPoint {
-  ts: string
-  cost_usd: number
-}
+/** One point of the usage time series. */
+export type UsageSeriesPoint = Sent<Schemas['UsageSeriesPoint']>
 
-/** Response from `GET /admin/usage` — spend + tokens by model, plus a trend. */
-export interface UsageResponse {
-  total_prompt_tokens: number
-  total_completion_tokens: number
-  total_cost_usd: number
-  by_model: UsageModelRow[]
-  series: UsageSeriesPoint[]
-}
+/** Response from `GET /admin/usage`. */
+export type UsageResponse = Sent<Schemas['AdminUsageResponse']>
 
-/** One branded Aegis module, paired with its honest underlying tech. */
-export interface AegisModuleRow {
-  name: string
-  tech: string
-  summary: string
-  module_path: string
-  category: 'runtime' | 'knowledge' | 'trust' | 'ops' | 'platform'
-  status: 'live' | 'optional'
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Product identity
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Response from the public `GET /platform/capabilities` — the module manifest. */
-export interface CapabilitiesResponse {
-  product: string
-  tagline: string
-  module_count: number
-  modules: AegisModuleRow[]
-}
+/** One Aegis module in the capabilities manifest — branded name + honest tech. */
+export type AegisModuleRow = Sent<Schemas['AegisModuleRow']>
 
-/**
- * Response from the public `GET /platform/public-metrics`.
- *
- * Ratios and counts only — the absolute cost figures and the routing map stay
- * behind auth on `/metrics`. `p95_latency_ms` is null until runs are recorded,
- * which the UI renders as an honest "not yet measured", never a fabricated 0.
- */
-export interface PublicMetricsResponse {
-  cache_hit_rate: number
-  small_model_share: number
-  total_calls: number
-  actions_approved: number
-  p95_latency_ms: number | null
-}
+/** Response from `GET /platform/capabilities`. */
+export type CapabilitiesResponse = Sent<Schemas['CapabilitiesResponse']>
 
-/** One executable node of the agent graph, as served by `GET /agent/topology`. */
-export interface AgentTopologyNode {
-  /** Stable node id — exactly the name carried on `node_started`/`node_finished`. */
-  id: string
-  /** Human label the node's stream events carry. */
-  label: string
-  /** The graph's entrypoint routes straight here. */
-  entry: boolean
-  /** A run can finish at this node. */
-  terminal: boolean
-}
+/** Response from `GET /public/metrics` — the unauthenticated landing figures. */
+export type PublicMetricsResponse = Sent<Schemas['PublicMetricsResponse']>
 
-/** One directed edge between two executable nodes of the agent graph. */
-export interface AgentTopologyEdge {
-  source: string
-  target: string
-  /** True when the edge is a branch of a conditional router, not a fixed edge. */
-  conditional: boolean
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// The agent graph
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Response from `GET /agent/topology` — the agent graph's real node/edge shape,
- * read off the compiled LangGraph by `aegis.agent.graph_topology`.
- *
- * The console's orchestration map renders from this instead of a hand-written DAG,
- * so the published picture cannot drift from the graph that actually runs.
- */
-export interface AgentTopologyResponse {
-  nodes: AgentTopologyNode[]
-  edges: AgentTopologyEdge[]
-}
+/** One node of the served agent topology. */
+export type AgentTopologyNode = Sent<Schemas['AgentTopologyNode']>
 
-// ── Aegis Voice — POST /voice/transcribe ────────────────────────────────────
+/** One edge of the served agent topology. */
+export type AgentTopologyEdge = Sent<Schemas['AgentTopologyEdge']>
 
-/**
- * One time-aligned segment of a transcript.
- *
- * `confidence` is `null` whenever the provider reports none — which is the case
- * for the fleet's hosted Whisper deployment today. The UI renders that as
- * "not reported"; it must never be substituted with a derived number.
- */
-export interface VoiceSegmentRow {
-  index: number
-  /** Seconds from the start of the WHOLE recording (chunk offsets added back). */
-  start: number | null
-  end: number | null
-  text: string
-  /** Provider-reported confidence in [0,1], or null when none was reported. */
-  confidence: number | null
-  /** Which chunk of a split recording produced it. */
-  chunk: number
-}
+/** Response from `GET /agent/topology` — the real compiled graph, never a drawing. */
+export type AgentTopologyResponse = Sent<Schemas['AgentTopologyResponse']>
 
-/**
- * Response from `POST /voice/transcribe`.
- *
- * `transcript` is evidence for the operator. `agent_input` is the only text that
- * may be forwarded to the agent: it is `null` on a block, and on a redact it is
- * the *redacted* string. Sending `transcript` instead would bypass the rails.
- */
-export interface VoiceTranscribeResponse {
-  transcript: string
-  language: string | null
-  duration_seconds: number | null
-  segments: VoiceSegmentRow[]
-  /** Whether ANY segment carries a reported confidence (drives the honest label). */
-  has_confidence: boolean
-  model: string
-  chunk_count: number
-  /** One honest line on whether the recording was split, and why. */
-  chunking: string
-  cost_usd: number
-  audio_seconds_billed: number
-  /**
-   * The full text rail stack's verdict on the transcript. Spelled out here rather
-   * than reusing `@/lib/stream`'s `GuardVerdict`, which predates the additive
-   * `flag` member and would silently narrow this field.
-   */
-  verdict: 'pass' | 'block' | 'redact' | 'flag'
-  verdict_reason: string
-  verdict_layer: string | null
-  redactions: string[]
-  controls_run: string[]
-  controls_skipped: string[]
-  agent_input: string | null
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Voice
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Aegis Vision — POST /vision/analyse ─────────────────────────────────────
+/** One transcribed segment. */
+export type VoiceSegmentRow = Sent<Schemas['VoiceSegmentRow']>
 
-/** The ordered stages of one analysis. The order IS the security control. */
-export type VisionStage =
-  | 'hygiene'
-  | 'injection_screen'
-  | 'image_pii'
-  | 'vision_model'
-  | 'output_rails'
+/** Response from `POST /voice/transcribe`. */
+export type VoiceTranscribeResponse = Sent<Schemas['VoiceTranscribeResponse']>
 
-/**
- * What one control decided, or why it decided nothing.
- *
- * `not_run` and `failed_closed` are deliberately distinct: "the operator did not
- * enable the image-PII rail" and "the injection screen had no completer, so the
- * image was blocked rather than passed" are different statements about coverage.
- * A UI that renders them the same way is lying about one of them.
- */
-export type VisionControlOutcome =
-  | 'passed'
-  | 'blocked'
-  | 'redacted'
-  | 'not_run'
-  | 'failed_closed'
+// ─────────────────────────────────────────────────────────────────────────────
+// Vision
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** One control's line in the audit record. */
-export interface VisionControlReport {
-  stage: VisionStage
-  outcome: VisionControlOutcome
-  detail: string
-}
+/** The ordered stages of one image analysis — the order **is** the security control. */
+export type VisionStage = Schemas['VisionStage']
 
-/** One rectangle of personal data found burned into the pixels (source-image space). */
-export interface VisionPIIRegion {
-  /** Presidio entity kind, e.g. 'EMAIL_ADDRESS'. Never the recognised value. */
-  entity_type: string
-  left: number
-  top: number
-  width: number
-  height: number
-  score: number | null
-}
+/** What one vision control decided. */
+export type VisionControlOutcome = Schemas['ControlOutcome']
 
-/** What payload hygiene measured about the image — facts, not claims. */
-export interface VisionImageFacts {
-  /** Attacker-controlled and kept only so a mismatch is visible. */
-  declared_mime: string
-  /** Derived from magic bytes — the only one anything downstream should believe. */
-  sniffed_mime: string | null
-  byte_size: number | null
-  width: number | null
-  height: number | null
-  provenance: string
-}
+/** One control's verdict within a vision analysis. */
+export type VisionControlReport = Sent<Schemas['ControlReport']>
 
-/** Billable accounting for the analysis call. */
-export interface VisionUsage {
-  model: string
-  prompt_tokens: number
-  completion_tokens: number
-  images: number
-  cost_usd: number
-  /** 'provider' | 'estimated' | 'unpriced' — an unpriced $0 is not a real $0. */
-  cost_source: string
-}
+/** One redacted region of an image. */
+export type VisionPIIRegion = Sent<Schemas['PIIRegion']>
 
-/**
- * The image-injection screen's verdict — the differentiator.
- *
- * `screened: false` means no vision model actually looked at the image, so the
- * block is a fail-closed one. Rendering that as "we looked and it was clean" is
- * the single worst thing this surface could do.
- */
-export interface VisionScreenVerdict {
-  injection: boolean
-  contains_text: boolean
-  reason: string
-  screened: boolean
-}
+/** What is known about the image itself. */
+export type VisionImageFacts = Sent<Schemas['ImageFacts']>
 
-/** What the existing text output rails decided about the model's answer. */
-export interface VisionOutputRailVerdict {
-  verdict: string
-  reason: string
-  layer: string | null
-  redactions: string[]
-}
+/** Token/cost usage for one vision call. */
+export type VisionUsage = Sent<Schemas['VisionUsage']>
 
-/** The full, itemised result of one image analysis (mirrors `aegis.vision.VisionAnalysis`). */
-export interface VisionAnalysis {
-  outcome: 'answered' | 'blocked'
-  question: string
-  /** Empty unless `outcome` is 'answered' — a blocked run carries no model text. */
-  answer: string
-  blocked_stage: VisionStage | null
-  blocked_reason: string
-  screen: VisionScreenVerdict | null
-  /** Entity kinds only — never the recognised values. */
-  pii_entities: string[]
-  pii_regions: VisionPIIRegion[]
-  image: VisionImageFacts | null
-  /** One line per control, in execution order, INCLUDING the ones that did not run. */
-  controls: VisionControlReport[]
-  usage: VisionUsage
-  output: VisionOutputRailVerdict | null
-}
+/** The injection screen's verdict on rendered text. */
+export type VisionScreenVerdict = Sent<Schemas['ScreenVerdict']>
+
+/** The output rail's verdict on the model's answer. */
+export type VisionOutputRailVerdict = Sent<Schemas['OutputRailVerdict']>
+
+/** One complete image analysis, controls included. */
+export type VisionAnalysis = Sent<Schemas['VisionAnalysis']>
 
 /** Body for `POST /vision/analyse`. */
-export interface VisionAnalyseRequest {
-  /** The image bytes, base64-encoded. A `data:` URL is accepted too. */
-  image_base64: string
-  /** Declared content type — verified against magic bytes by the backend. */
-  mime_type: string
-  question: string
-  filename?: string | null
-}
+export type VisionAnalyseRequest = Schemas['VisionAnalyseRequest']
 
 /** Response from `POST /vision/analyse`. */
-export interface VisionAnalyseResponse {
-  analysis: VisionAnalysis
-  /** One line: which controls ran, and which did not. */
-  coverage: string
-}
+export type VisionAnalyseResponse = Sent<Schemas['VisionAnalyseResponse']>
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Forecast (`GET /forecast/...`) — mirrors aegis.forecast.types
+// Forecasting
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Which kind of band `lo`/`hi` are. `conformal` bounds are calibrated on
- * out-of-sample errors from chronologically earlier windows; `parametric` bounds
- * are the fitted model's own predictive distribution and hold only as far as its
- * residual assumptions do. Never render one as the other.
- */
-export type ForecastIntervalMethod = 'conformal' | 'parametric'
+/** How a forecast's interval was produced: calibrated on residuals, or parametric. */
+export type ForecastIntervalMethod = Schemas['ForecastResult']['interval_method']
 
-/** One observed point of the input history. */
-export interface ForecastSeriesPoint {
-  ts: string
-  value: number
-}
+/** One observed point of the history a forecast was fitted on. */
+export type ForecastSeriesPoint = Sent<Schemas['SeriesPoint']>
 
-/** One forecast step: the point prediction and its interval bounds. */
-export interface ForecastHorizonPoint {
-  ts: string
-  point: number
-  lo: number
-  hi: number
-  step: number
-}
+/** One forecast point, with its interval. */
+export type ForecastHorizonPoint = Sent<Schemas['HorizonPoint']>
 
-/**
- * Accuracy and interval coverage MEASURED on chronologically held-out windows.
- *
- * `requested_coverage` is an input echoed back; `empirical_coverage` is the only
- * coverage number that is evidence. Rendering the first as though it were the
- * second is the exact overclaim this surface exists to prevent.
- */
-export interface ForecastBacktest {
-  windows: number
-  horizon: number
-  n_points: number
-  smape: number
-  mape: number | null
-  mae: number
-  requested_coverage: number
-  empirical_coverage: number
-  coverage_meets_request: boolean
-  interval_method: ForecastIntervalMethod
-}
+/** The honest backtest behind a forecast. */
+export type ForecastBacktest = Sent<Schemas['BacktestReport']>
 
-/** One candidate model's backtest score — losers included, so selection is auditable. */
-export interface ForecastCandidate {
-  model: string
-  smape: number
-  mape: number | null
-  mae: number
-  empirical_coverage: number
-  selected: boolean
-}
+/** One candidate model's score in the selection. */
+export type ForecastCandidate = Sent<Schemas['CandidateScore']>
 
-/** A candidate that could not be scored, with the real reason it was dropped. */
-export interface ForecastExcludedModel {
-  model: string
-  reason: string
-}
+/** A candidate that was excluded, and why. */
+export type ForecastExcludedModel = Sent<Schemas['ExcludedModel']>
 
-/** A horizon-indexed forecast plus everything needed to discount it. */
-export interface ForecastResult {
-  series_id: string
-  label: string
-  unit: string | null
-  /** Provenance: 'usage_ledger' | 'adapter' | … — never let a demo pass as live. */
-  data_source: string
-  freq: string
-  season_length: number
-  history_points: number
-  history: ForecastSeriesPoint[]
-  horizon: number
-  points: ForecastHorizonPoint[]
-  model: string
-  selection_metric: string
-  candidates: ForecastCandidate[]
-  excluded_models: ForecastExcludedModel[]
-  interval_method: ForecastIntervalMethod
-  interval_method_detail: string
-  requested_level: number
-  backtest: ForecastBacktest
-  model_selected_on_backtest_windows: boolean
-  generated_at: string
-}
+/** One produced forecast. */
+export type ForecastResult = Sent<Schemas['ForecastResult']>
 
-/** One step of a projected budget burn-down. */
-export interface ForecastBurndownPoint {
-  ts: string
-  step: number
-  increment: number
-  cumulative: number
-  cumulative_lo: number
-  cumulative_hi: number
-  over_budget: boolean
-}
+/** One point of a budget burndown. */
+export type ForecastBurndownPoint = Sent<Schemas['BurndownPoint']>
 
-/**
- * A cap, the spend against it so far, and where the forecast says it lands.
- *
- * `cumulative_bounds_are_calibrated` is always false: summed marginal conformal
- * bounds are an envelope, not a calibrated interval on a cumulative total.
- */
-export interface ForecastBurndown {
-  scope: 'tenant' | 'user'
-  scope_id: number | null
-  window: string
-  limit_usd: number | null
-  spent_usd: number
-  projected_total_usd: number
-  projected_total_lo: number
-  projected_total_hi: number
-  cumulative_bounds_are_calibrated: boolean
-  exhaustion_ts: string | null
-  exhaustion_step: number | null
-  exhausted_within_horizon: boolean
-  headroom_usd: number | null
-  interval_method: ForecastIntervalMethod
-  points: ForecastBurndownPoint[]
-}
+/** The budget burndown a forecast implies. */
+export type ForecastBurndown = Sent<Schemas['BudgetBurndown']>
 
-/** Why a forecast was NOT produced — a first-class outcome, not an error page. */
-export interface ForecastRefusal {
-  code: 'insufficient_history' | 'degenerate_series' | 'fit_failed' | 'extra_missing'
-  reason: string
-  have: number | null
-  need: number | null
-}
+/** A refusal to forecast, naming what was missing rather than inventing a line. */
+export type ForecastRefusal = Sent<Schemas['ForecastRefusal']>
 
-/** Body for every `GET /forecast/...` route: a forecast **or** a stated refusal. */
-export interface ForecastResponse {
-  available: boolean
-  forecast: ForecastResult | null
-  burndown: ForecastBurndown | null
-  refusal: ForecastRefusal | null
-}
+/** Response from `GET /forecast`. */
+export type ForecastResponse = Sent<Schemas['ForecastResponse']>

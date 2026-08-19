@@ -44,6 +44,12 @@ cd web && npm run build && npm test
 
 # Generated API reference -> docs/api/ (git-ignored)
 backend/.venv/bin/python scripts/build_api_docs.py
+
+# The HTTP contract -> backend/openapi.json (COMMITTED, snapshot-tested), and the
+# TypeScript client generated from it. Run both after changing any route, request
+# model, response model or StreamEvent variant; the suites fail if you do not.
+backend/.venv/bin/python scripts/build_openapi.py
+cd web && npm run gen:api
 ```
 
 Install and run: `./scripts/bootstrap.sh && ./scripts/dev-native.sh`, then
@@ -105,6 +111,16 @@ These are invariants, not preferences. Each one has a reason and most have a tes
   release first.
 - **`CHANGELOG.md`** — Keep a Changelog format. Anything that changes a contract
   gets an entry.
+- **Every HTTP route lives under `/v1`.** The prefix is applied once, in
+  `app.main.create_app`; route modules declare bare paths and the console gets the
+  segment from `web/src/lib/api/config.ts`. The three infrastructure probes —
+  `/health`, `/ready`, `/readyz` — stay at the root and are served at exactly one
+  path each, because a liveness URL that moves with the API version 404s halfway
+  through a rollout.
+- **Request models carry `extra="forbid"`.** Pydantic's default drops an unknown
+  field in silence and answers 200; that has swallowed a request field four times
+  in this project. The published schema shows it as `additionalProperties: false`
+  and `backend/tests/api/test_openapi_snapshot.py` asserts it for every body.
 - **Postgres, not SQLite, in tests.** SQLite does not enforce foreign keys without
   a per-connection pragma and has no row security at all, so a suite running on it
   reports tenant-isolation guarantees that are never actually checked.

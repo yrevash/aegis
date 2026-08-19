@@ -280,11 +280,13 @@ artifact → a freshly trained fallback, so a missing artifact never crashes a r
 **Smoke-test by hand:**
 
 ```bash
+# /health is an infrastructure probe and is deliberately NOT versioned.
 curl -s localhost:8000/health
-TOKEN=$(curl -s -X POST localhost:8000/auth/login \
+# Every product route is under /v1.
+TOKEN=$(curl -s -X POST localhost:8000/v1/auth/login \
   -H 'content-type: application/json' \
   -d '{"username":"admin","password":"demo"}' | python -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-curl -s localhost:8000/platform/capabilities -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8000/v1/platform/capabilities -H "Authorization: Bearer $TOKEN"
 ```
 
 The capabilities response is the twelve-module manifest — a quick proof that the branded

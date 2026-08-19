@@ -50,6 +50,18 @@ Every guide is also rendered to HTML beside its Markdown, built by
 pillars), the AG-UI streaming spine, the whole-platform diagram, the module map with each
 module's install extra, and the honest debt list. Per-module depth lives in `teaching/`.
 
+**Looking up a signature?** That is the generated reference, and it is deliberately not
+committed — it would go stale between the commit that changes a signature and the commit
+that remembers to rebuild it. Build it when you need it:
+
+```bash
+backend/.venv/bin/python scripts/build_api_docs.py   # -> docs/api/, git-ignored
+open docs/api/index.html
+```
+
+What is *promised* is a different question, and the answer is
+[`../aegis/PUBLIC.md`](../aegis/PUBLIC.md), not this reference.
+
 ### `architecture/` — subsystem deep dives
 
 | File | Subject |
@@ -110,6 +122,10 @@ seam that changes on the day.
 |---|---|
 | [`../README.md`](../README.md) | Repository overview, the stack table, and the module manifest |
 | [`../INSTALL.md`](../INSTALL.md) | The long-form setup manual and the full environment-variable reference |
+| [`../SKILL.md`](../SKILL.md) | **The retargeting procedure** — the ten adapter pieces, the order, and the check after each step. Replaces the old `adapter/SWAP.md` |
+| [`../AGENTS.md`](../AGENTS.md) | Instructions for coding agents: layout, commands, the six boundaries, and how to verify |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | Keep-a-Changelog history and the versioning policy |
+| [`../aegis/PUBLIC.md`](../aegis/PUBLIC.md) | The public API boundary: what is Stable, what is Provisional, what is internal, and why |
 | [`../aegis/README.md`](../aegis/README.md) | The importable package's own README |
 | [`../web/README.md`](../web/README.md) | Console-specific quick reference, including its honest caveats |
 | [`../backend/README.md`](../backend/README.md) | Backend quick reference |

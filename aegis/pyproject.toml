@@ -145,6 +145,23 @@ all = ["aegis[redis,nemo,pii,postgres,retrieval,ingestion,ml,forecast,media,gate
 # security at all, so a suite running on it reported tenant-isolation and
 # spend-attribution guarantees that were never actually being checked.
 dev = ["aegis[postgres]", "ruff>=0.7", "pytest>=8.3", "pytest-asyncio>=0.24"]
+# The executable conformance suite (`pytest --pyargs aegis.conformance`) — the one
+# command an integrator runs to prove they wired their adapter correctly. It ships
+# inside the package rather than beside it, so it is installable and runnable from a
+# wheel with nothing copied. Only pytest: every check is synchronous and touches no
+# database, queue or gateway, deliberately — it is run BEFORE any of those work, which
+# is when a wiring mistake is cheapest to fix. `aegis[agent]` is a genuine prerequisite
+# of the roster check (it reads the graph's dispatch table) and is not duplicated here,
+# because an integration with no agent has no roster to check.
+conformance = ["pytest>=8.3"]
+
+# The conformance suite is distributed as a pytest plugin, so `--aegis-adapter` exists
+# in any environment where aegis is installed and an integrator adds nothing to their
+# own conftest.py. The plugin is loaded by every pytest run in that environment and is
+# deliberately inert: one namespaced option and one header line, and nothing at all
+# happens unless the conformance checks are collected.
+[project.entry-points.pytest11]
+aegis_conformance = "aegis.conformance.plugin"
 
 [tool.ruff]
 line-length = 100

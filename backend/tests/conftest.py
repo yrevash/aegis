@@ -232,6 +232,23 @@ def build_fake_deps(
     )
 
 
+# ── The vector-store declaration this test process makes out loud (§8.4) ──────
+#
+# ``aegis.memory``'s index and ``aegis.retrieval``'s backends no longer invent an
+# ephemeral Chroma engine for a caller that configured none. The ASGI transport these
+# tests use does not run the app lifespan, so the declaration ``app.main`` makes at
+# startup never happens here — the test process makes its own, once, and gets exactly
+# the engine it wants instead of the one a leaf used to guess.
+@pytest.fixture(scope="session", autouse=True)
+def _ephemeral_vector_stores():
+    """Declare the ephemeral in-process vector engine for the whole test session."""
+    from aegis.memory import MemoryVectorIndex, set_default_index
+    from aegis.retrieval import ChromaVectorStore, configure_vector_store
+
+    configure_vector_store(ChromaVectorStore.local)
+    set_default_index(MemoryVectorIndex.local())
+
+
 @pytest.fixture
 def make_deps():
     """Return the :func:`build_fake_deps` factory."""
@@ -432,8 +449,15 @@ async def client():
     app.dependency_overrides[api_routes.get_graph_store] = lambda: graph_store
     app.dependency_overrides[api_routes.get_metrics_store] = lambda: metrics_store
 
+    # Pinned to the **versioned API root** (§8.6), so a test writes ``/query`` and
+    # reaches ``/v1/query``: httpx joins a relative path onto the base URL's own path.
+    # The alternative — rewriting some 900 call sites — would have spelled the version
+    # segment 900 times and made moving it a 900-line change. The three unversioned
+    # infrastructure probes are dialled absolutely (``http://test/health``) by the
+    # handful of tests that assert on them, which is the point: reaching one from a
+    # test now says out loud that it is not part of the versioned surface.
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test/v1") as c:
         yield c
     app.dependency_overrides.clear()
 

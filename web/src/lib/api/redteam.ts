@@ -101,6 +101,8 @@ export interface RedteamReport {
   overall: {
     attacksTotal: number
     attacksBlocked: number
+    /** Refused because a rail could not run — stopped, but nothing was learned. */
+    attacksUnchecked: number
     blockRate: number
     controlsTotal: number
     falsePositives: number
@@ -111,6 +113,8 @@ export interface RedteamReport {
   /** Which rail stopped how many attacks, most active first. */
   rails: { layer: string; blocks: number }[]
   blocked: RedteamProbe[]
+  /** The probes a rail refused without examining them. */
+  unchecked: RedteamProbe[]
   leaked: RedteamProbe[]
   falsePositiveDetail: RedteamProbe[]
   attacks: RedteamProbe[]
@@ -127,6 +131,12 @@ export interface RedteamRun {
   initiatedBy: string
   attacksTotal: number
   attacksBlocked: number
+  /**
+   * Attacks refused because a rail was unavailable rather than because it found
+   * anything. Deliberately outside `attacksBlocked`: a dead screen refuses everything,
+   * and a 100% block rate earned that way is the harness reporting its own outage.
+   */
+  attacksUnchecked: number
   blockRate: number
   controlsTotal: number
   falsePositives: number

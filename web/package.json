@@ -2,13 +2,15 @@
   "name": "aegis-web",
   "version": "0.1.0",
   "private": true,
-  "description": "Aegis console — Next.js (App Router) rebuild on the TailAdmin design base, restyled to the Aegis signal-palette design system. Light theme only.",
+  "description": "Aegis console \u2014 Next.js (App Router) rebuild on the TailAdmin design base, restyled to the Aegis signal-palette design system. Light theme only.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --import ./tests/register.mjs --test 'tests/**/*.test.mjs'"
+    "test": "node --import ./tests/register.mjs --test 'tests/**/*.test.mjs'",
+    "gen:api": "node scripts/gen-api-types.mjs",
+    "gen:api:check": "node scripts/gen-api-types.mjs --check"
   },
   "dependencies": {
     "@radix-ui/react-scroll-area": "^1.2.18",
@@ -34,6 +36,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.4.6",
+    "openapi-typescript": "7.13.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2"
   }

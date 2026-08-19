@@ -21,7 +21,12 @@
  * exercises it directly under `node --test`.
  */
 
-import type { Budget, BudgetScope, BudgetWindow, FineRole } from '@/lib/api/types'
+import type {
+  BudgetScope,
+  BudgetWindow,
+  CreateBudgetRequest,
+  FineRole,
+} from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 
 /** The tier operating a form — the only thing that decides which fields exist. */
@@ -273,8 +278,16 @@ export function hasAnyCap(draft: BudgetDraft): boolean {
   return [draft.usdCap, draft.tokenCap, draft.rpm, draft.tpm].some((v) => v.trim() !== '')
 }
 
-/** The `POST /admin/budgets` body for a draft that passed {@link checkBudgetDraft}. */
-export function budgetBody(draft: BudgetDraft): Budget {
+/**
+ * The `POST /admin/budgets` body for a draft that passed {@link checkBudgetDraft}.
+ *
+ * Typed as the **request**, not as the stored row. It used to return `Budget`, whose
+ * hand-written `id?: number` was optional for exactly this call site — so one type
+ * described both a stored row (which always has an id) and a create body (which may
+ * never carry one), and neither accurately. Generating from the OpenAPI document
+ * separated them: `BudgetUpsertRequest` has no `id` at all.
+ */
+export function budgetBody(draft: BudgetDraft): CreateBudgetRequest {
   return {
     scope_type: draft.scopeType,
     scope_id: positiveIntOrNull(draft.scopeId) ?? 0,

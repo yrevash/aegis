@@ -357,6 +357,33 @@ class Settings(BaseSettings):
         default=True, validation_alias="AEGIS_SUPERSET_SSL_VERIFY"
     )
 
+    # ── The database console (§7.9) ──────────────────────────────────────────
+    # OFF by default and off in every environment that does not deliberately turn it on.
+    # This is the only surface in the product that reads the data layer directly, so the
+    # kill switch is the first control, not the last.
+    #
+    # There is deliberately NO settings-catalogue key for any of this. §7.16 row 4 puts a
+    # database browse at ``readable_by: platform``, and
+    # ``aegis/tests/settings/test_forbidden_controls.py`` asserts that no key containing
+    # ``sql``, ``database.``, ``db.query`` or ``schema.browse`` exists — so the console is
+    # deployment configuration a tenant cannot reach, never a tenant-writable setting.
+    db_console_enabled: bool = Field(
+        default=False, validation_alias="AEGIS_DB_CONSOLE_ENABLED"
+    )
+    # The console's OWN DSN. It must name the read-only role provisioned by
+    # ``python -m aegis.dbadmin`` — never ``POSTGRES_DSN``, which holds
+    # INSERT/UPDATE/DELETE, and never the owner DSN, which on a stock cluster bypasses
+    # every RLS policy. ``aegis.dbadmin.runner.verify_posture`` re-reads the connection's
+    # privileges before every query and refuses to serve one that can write, so a DSN
+    # pointed at the wrong role is a refusal on the first request rather than a hole.
+    db_console_dsn: str = Field(default="", validation_alias="AEGIS_DB_CONSOLE_DSN")
+    # The planner cost above which a read is refused before it runs, turning "timed out
+    # after 10s" into "this would scan 40M rows, here is the plan". Per deployment,
+    # because the ceiling that is right for a laptop is wrong for a production corpus.
+    db_console_max_plan_cost: float = Field(
+        default=5_000_000.0, validation_alias="AEGIS_DB_CONSOLE_MAX_PLAN_COST"
+    )
+
     # ── App ──────────────────────────────────────────────────────────────────
     app_env: str = Field(default="dev")
     log_level: str = Field(default="INFO")

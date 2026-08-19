@@ -16,6 +16,7 @@ import type { AdminUser } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 
 import { AdminControls } from './AdminControls'
+import { SeatsPanel } from './SeatsPanel'
 import { adminTier } from './adminForms'
 import {
   PORTAL_ROLES,
@@ -364,6 +365,16 @@ export function RolesAccessMount(): ReactElement {
             onUsersChanged={() => setRosterKey((n) => n + 1)}
           />
           <RolesAccess token={session?.token ?? null} reloadKey={rosterKey} />
+          {/*
+            §7.8. The roster above says which coarse role a user holds; this says what
+            their seat narrows it to. They belong on one screen because an operator
+            answering "what can this person do?" needs both halves, and a permission
+            answer split across two pages is one nobody trusts.
+          */}
+          <SeatsPanel
+            token={session?.token ?? null}
+            tenantId={session?.tenantId ?? null}
+          />
         </div>
       </TooltipProvider>
     </BackendGate>

@@ -44,6 +44,24 @@ the tree is listed here.
   Output goes to `docs/api/` and is git-ignored: committed generated docs go
   stale between the commit that changes a signature and the commit that remembers
   to rebuild, and they bury real diffs in review noise.
+- **`backend/openapi.json`** — the HTTP contract, committed and snapshot-tested
+  (`backend/tests/api/test_openapi_snapshot.py`, `scripts/build_openapi.py`). An
+  API change that nobody reviewed now fails CI instead of surprising an
+  integrator. Unlike `docs/api/`, this one is committed on purpose: the console's
+  build reads it.
+- **The `StreamEvent` union, published as a schema.** Twenty variants,
+  discriminated on the `type` carried *inside* the frame's `data` payload, served
+  in `components.schemas` and declared as the `text/event-stream` response of
+  `POST /v1/query`. The product's primary interface existed only as Pydantic
+  classes plus a hand-written TypeScript mirror; a consumer outside this repo
+  could not validate a single frame.
+- **A generated TypeScript client** — `web/src/lib/api/generated/schema.d.ts`,
+  produced by `npm run gen:api` from `backend/openapi.json`, with
+  `web/tests/api/generatedSchema.test.mjs` failing if regenerating would change
+  it. `web/src/lib/api/types.ts` is now 68 aliases of generated types instead of
+  775 hand-written lines mirroring Pydantic. The hand-written runtime layer —
+  the SSE reader, `ApiError`, the one-shot 401 sign-out — is kept and composes on
+  top of it.
 - **`AGENTS.md`** — repo-root agent instructions, per the Linux Foundation spec.
   Commands, boundaries, and where to find the retargeting procedure.
 - **`SKILL.md` (`retarget-aegis`)** — the authoritative procedure for pointing
@@ -66,6 +84,14 @@ the tree is listed here.
 
 ### Changed
 
+- **Every HTTP route moved under `/v1`** — the version boundary that lets the API
+  promise anything at all, the counterpart of `PUBLIC.md` for the interface an
+  integrator actually consumes. **Breaking for any caller outside this repo:**
+  `POST /query` is now `POST /v1/query`. The three infrastructure probes
+  deliberately did **not** move and are served at exactly one path each —
+  `/health`, `/ready`, `/readyz` — because a liveness URL that moves with the API
+  version starts 404-ing halfway through a rollout. The console followed in one
+  place (`web/src/lib/api/config.ts`).
 - `chunks` became a tenant-scoped table.
 - `aegis.core.__all__` gained the three deprecation names above.
 

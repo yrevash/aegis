@@ -48,7 +48,7 @@ def _ctx(role: Role) -> AuthContext:
 
 async def test_health_is_public_and_reports_identity(client):
     # No auth, no DB fixture — the probe must answer even when auth/DB are down.
-    resp = await client.get("/health")
+    resp = await client.get("http://test/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"

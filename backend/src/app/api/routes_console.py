@@ -858,6 +858,14 @@ async def put_setting(
         HTTPException: 404 unknown key; 403 role or scope refused; 409 a weakening of a
             tighten-only key; 422 an illegal value; 503 the store is unreadable.
     """
+    if key.startswith("agent."):
+        # §7.8: the seat's narrowing check, after the resolver's own role/scope rules
+        # rather than instead of them. ``write_setting`` below still decides everything
+        # it decided before — this can only take a capability away, never grant one, so
+        # a tenant admin cannot reach a key their role could not already write.
+        from app.api.routes import _require_seat
+
+        await _require_seat(auth, "seat.can_change_agent_mode")
     tenant_id = _scope(auth)
     try:
         scope = SettingScope(req.scope)

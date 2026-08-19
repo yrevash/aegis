@@ -37,6 +37,7 @@ function runOf(overrides) {
     initiatedBy: 'devops',
     attacksTotal: 28,
     attacksBlocked: 23,
+    attacksUnchecked: 0,
     blockRate: 23 / 28,
     controlsTotal: 8,
     falsePositives: 0,
@@ -120,4 +121,22 @@ test('a delta of zero reads as no change, not as +0', () => {
   assert.equal(points(0), 'no change')
   assert.equal(points(0.04), '+4 pts')
   assert.equal(points(-0.04), '−4 pts')
+})
+
+test('a run with a probe nothing examined refuses to call itself coverage', () => {
+  // The measured case: a live owasp-full run scored 28/28 and PASSED with one probe
+  // refused by an unavailable classifier. The screen must not repeat that sentence.
+  const note = verdictNote(
+    runOf({ attacksBlocked: 27, attacksUnchecked: 1, blockRate: 27 / 28, passed: true }),
+  )
+  assert.match(note, /refused without being examined/)
+  assert.doesNotMatch(note, /benign controls passed/)
+})
+
+test('the headline says how many probes went unexamined rather than hiding them', () => {
+  const text = headline(
+    runOf({ mode: 'live', attacksBlocked: 27, attacksTotal: 28, attacksUnchecked: 1 }),
+  )
+  assert.match(text, /blocked 27 of 28/)
+  assert.match(text, /1 more were refused without being examined/)
 })

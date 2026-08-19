@@ -9,7 +9,7 @@
  * that call's own error, which is more precise than a stale global flag.
  */
 
-import { API_BASE, HEALTH_PATH } from './config'
+import { API_ORIGIN, HEALTH_PATH } from './config'
 
 /** Whether the backend answered the boot probe. */
 export type BackendStatus = 'reachable' | 'unreachable'
@@ -36,7 +36,7 @@ async function pingBackend(fetchImpl: typeof fetch, timeoutMs: number): Promise<
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   try {
-    const res = await fetchImpl(`${API_BASE}${HEALTH_PATH}`, {
+    const res = await fetchImpl(`${API_ORIGIN}${HEALTH_PATH}`, {
       method: 'GET',
       signal: ctrl.signal,
     })

@@ -103,7 +103,7 @@ async def test_readyz_refuses_on_down_and_tolerates_unknown(client, monkeypatch)
         "_components",
         lambda: _fixed([_component("redis", "unknown", required=True)]),
     )
-    ok = await client.get("/readyz")
+    ok = await client.get("http://test/readyz")
     assert ok.status_code == 200
     assert ok.json()["status"] == "ready"
     assert ok.json()["failing"] == []
@@ -118,7 +118,7 @@ async def test_readyz_refuses_on_down_and_tolerates_unknown(client, monkeypatch)
             ]
         ),
     )
-    refused = await client.get("/readyz")
+    refused = await client.get("http://test/readyz")
     assert refused.status_code == 503
     # The optional dependency being down is reported but never gates: with Neo4j down,
     # hybrid retrieval keeps working on the vector and BM25 arms.

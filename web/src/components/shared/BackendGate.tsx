@@ -4,7 +4,7 @@ import { PlugZap } from 'lucide-react'
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 
 import { probeBackend, type BackendStatus } from '@/lib/api/health'
-import { API_BASE } from '@/lib/api/config'
+import { API_BASE, API_ORIGIN } from '@/lib/api/config'
 
 /**
  * The one honest "there is no backend" state, shared by every portal surface.
@@ -29,7 +29,9 @@ export function BackendUnavailable({ detail }: { detail?: string }): ReactElemen
             'This surface renders measured data only. Start the Aegis backend and reload — nothing here is simulated while it is down.'}
         </p>
         <p className="mt-2 font-mono text-[0.7rem] text-muted-foreground/80">
-          {API_BASE === '' ? 'same-origin API' : API_BASE}
+          {/* The versioned base is what every call actually uses; an empty origin
+              means same-origin, and `/v1` alone would read as a path, not a target. */}
+          {API_ORIGIN === '' ? `same-origin API (${API_BASE})` : API_BASE}
         </p>
       </div>
     </div>

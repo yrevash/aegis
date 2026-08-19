@@ -12,7 +12,10 @@
  *
  * 2. **A 100% block rate is a finding, not a trophy.** A red team that reports
  *    everything blocked is either over-blocking or testing nothing, and the report has
- *    the evidence to say which: the false-positive rate over the benign controls. So
+ *    the evidence to say which: the false-positive rate over the benign controls, and
+ *    `attacksUnchecked` — the probes a rail refused *without examining them* because
+ *    the screen was unavailable. A live `owasp-full` run scored 28/28 with one of the
+ *    28 being a classifier timeout, so the third case is measured, not theoretical. So
  *    `verdictNote` says which one it is instead of showing a green tick.
  *
  * 3. **What changed since last time.** A block rate on its own is unreadable — 82% is
@@ -86,27 +89,44 @@ export function compareRuns(run: RedteamRun, previous: RedteamRun | null): RunCo
  * is about the stack. The two are different claims about different things and the
  * screen must not blur them.
  */
-export function headline(run: Pick<RedteamRun, 'mode' | 'attacksBlocked' | 'attacksTotal'>): string {
+export function headline(
+  run: Pick<RedteamRun, 'mode' | 'attacksBlocked' | 'attacksTotal' | 'attacksUnchecked'>,
+): string {
   const subject =
     run.mode === 'live' ? 'The full rail stack blocked' : 'The deterministic signatures blocked'
-  return `${subject} ${run.attacksBlocked} of ${run.attacksTotal} attacks`
+  const sentence = `${subject} ${run.attacksBlocked} of ${run.attacksTotal} attacks`
+  const unchecked = run.attacksUnchecked ?? 0
+  if (unchecked === 0) return sentence
+  return `${sentence} (${unchecked} more were refused without being examined)`
 }
 
 /**
  * What the pass/fail verdict actually means, including when it means nothing good.
  *
  * A perfect block rate is reported as a finding: with benign controls being blocked it
- * is over-blocking, and with no attacks at all it is a battery that tested nothing.
- * Only a perfect run that let every benign control through has earned the sentence.
+ * is over-blocking, with no attacks at all it is a battery that tested nothing, and
+ * with probes that no rail ever examined it is partly the harness measuring its own
+ * outage. Only a perfect run that examined every probe and let every benign control
+ * through has earned the sentence.
  */
 export function verdictNote(
   run: Pick<
     RedteamRun,
-    'attacksTotal' | 'blockRate' | 'falsePositiveRate' | 'controlsTotal' | 'passed'
+    | 'attacksTotal'
+    | 'attacksUnchecked'
+    | 'blockRate'
+    | 'falsePositiveRate'
+    | 'controlsTotal'
+    | 'passed'
   >,
 ): string {
   if (run.attacksTotal === 0) {
     return 'No attacks ran, so this reports nothing. A block rate over an empty battery is not a result.'
+  }
+  const unchecked = run.attacksUnchecked ?? 0
+  if (unchecked > 0) {
+    const plural = unchecked === 1 ? 'probe was' : 'probes were'
+    return `${unchecked} ${plural} refused without being examined — a rail was unavailable, so that much of this run measures the outage rather than the rails. Restore the screen and re-run before quoting this number.`
   }
   if (run.blockRate === 1) {
     if (run.falsePositiveRate > 0) {
