@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { AuditMount } from '@/components/admin/AuditLog'
+import { AnalyticsMount } from '@/components/analytics/AnalyticsView'
 import { ApprovalsMount } from '@/components/approval/ApprovalInbox'
 import { RolesAccessMount } from '@/components/admin/RolesAccess'
 import { CacheMount } from '@/components/cache/CacheView'
@@ -20,7 +21,7 @@ import { JobsMount } from '@/components/jobs/JobsView'
 import { HarnessMount } from '@/components/harness/HarnessView'
 import { LatencyMount } from '@/components/latency/LatencyView'
 import { MLOpsMount } from '@/components/ml/MLOpsView'
-import { MemoryMount } from '@/components/memory/MemoryView'
+import { MemoryControlMount } from '@/components/memoryctl/MemoryControlView'
 import { LLMOpsMount } from '@/components/ops/LLMOpsView'
 import { RagMount } from '@/components/retrieval/RagView'
 import { RedteamMount } from '@/components/redteam/RedteamView'
@@ -60,13 +61,14 @@ export default async function SectionPage({
   const role = coarseRoleFor(portal)
   const def = SECTIONS[section]
   if (def.console) return <ConsoleMount role={role} />
+  if (section === 'analytics') return <AnalyticsMount />
   if (section === 'approvals') return <ApprovalsMount />
   if (section === 'harness') return <HarnessMount role={role} />
   if (section === 'mlops') return <MLOpsMount />
   if (section === 'llmops') return <LLMOpsMount />
   if (section === 'evals') return <EvalsMount />
   if (section === 'forecast') return <ForecastMount role={role} />
-  if (section === 'memory') return <MemoryMount />
+  if (section === 'memory') return <MemoryControlMount />
   if (section === 'rag') return <RagMount role={role} />
   if (section === 'graph') return <GraphMount role={role} />
   if (section === 'cache') return <CacheMount />

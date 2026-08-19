@@ -97,10 +97,35 @@ FACT_EXTRACTION_PROMPT: str = (
 def memory_subject_for(user_id: str | int | None, persona_id: str | None = None) -> str | None:
     """Resolve the memory subject a run is scoped to (the app-level isolation key).
 
-    Defaults to the authenticated user (``"user:<id>"``). A domain may instead scope
-    memory to a business entity (e.g. the customer a persona is acting on); here we key
-    on the user so each operator has their own durable memory. Returns ``None`` when
-    there is no subject (anonymous / single-shot) → memory stays inert.
+    **This function is THE adapter seam for memory scoping, and it is load-bearing
+    twice.** It decides the app-level isolation key that every memory query filters on —
+    ``WHERE subject_id = …`` is the primary, NULL-safe isolator for the whole subsystem,
+    with tenant RLS underneath it as the belt — and it decides *what a memory is about*,
+    which is a domain statement, not an infrastructure one.
+
+    Defaults to the authenticated user (``"user:<id>"``). A domain that scopes memory to
+    a **business entity** rather than a person — the account, the case, the vehicle, the
+    customer a persona is acting on behalf of — changes this one function and nothing
+    else, which is exactly why nothing outside it may compose the key itself.
+
+    Every consumer therefore goes through it rather than around it:
+
+    * ``POST /query`` (:mod:`app.api.routes`) resolves the subject a run recalls and
+      persists under;
+    * the read surfaces (``/memory/facts``, ``/profile``, ``/sessions``, ``/writes``)
+      authorise "is this the caller's own subject?" against its output;
+    * the control plane (:mod:`app.api.routes_memory`) builds the whole set of subjects a
+      principal may write, correct or erase by mapping it over the users in that
+      principal's sealed tenant scope — so a domain change reshapes the picker, the
+      write path and every scope check together;
+    * the browser never composes it at all. ``GET /memory/subjects`` hands the console
+      opaque strings, and the console echoes one back. (``components/console/
+      memorySubject.ts`` is the one exception — the rail derives its own key from the
+      login response's ``user_id`` — and it says in its own docstring that it must change
+      when this does.)
+
+    Returns ``None`` when there is no subject (anonymous / single-shot) → memory stays
+    inert, which is a real answer rather than a failure.
 
     Args:
         user_id: The authenticated user's id (or ``None``).

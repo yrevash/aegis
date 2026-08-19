@@ -23,6 +23,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.api.routes_analytics import mount as _mount_analytics
+from app.api.routes_health import mount as _mount_health
+from app.api.routes_llmops import mount as _mount_llmops
+from app.api.routes_memory import mount as _mount_memory
 from app.api.routes_redteam import mount as _mount_redteam
 from app.config import get_settings
 from app.observability import init_observability
@@ -33,6 +37,26 @@ from app.observability import init_observability
 # table stays one table. ``mount`` is idempotent, so moving it there later is a
 # one-line change that cannot double-register anything in the meantime.
 _mount_redteam(router)
+
+# Embedded analytics (Apache Superset). Same shape, same reason, same idempotent mount.
+# Nothing in that module runs until its first request: Superset is optional, and a
+# deployment without it must boot and behave exactly as it did before.
+_mount_analytics(router)
+
+# The per-tenant prompt control plane (§7.7) — the surface the tenant-keyed registry
+# read path made safe to build. Same shape, same reason, same idempotent mount.
+_mount_llmops(router)
+
+# The memory control plane (§7.5) — the write, the correction and the retention horizon
+# that the read-only ``/memory/*`` surfaces in ``app.api.routes`` never had. Same shape,
+# same reason, same idempotent mount.
+_mount_memory(router)
+
+# Pipeline health, /readyz and the live cache counters (§7.10 / §7.10b / §7.14). Same
+# shape and the same idempotent mount: the routes land on ``router`` itself, so the
+# served table stays one table, and nothing in that module dials a dependency until a
+# request asks it to.
+_mount_health(router)
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +242,38 @@ async def _run_memory_sweeper(stop: asyncio.Event) -> None:
             continue
 
 
+async def _run_memory_retention(stop: asyncio.Event) -> None:
+    """Enforce the memory retention horizon on a timer until ``stop`` is set.
+
+    The other half of the memory sweeper's job, and deliberately a separate task from
+    it: consolidation drains a queue every minute and must stay cheap, while retention
+    is a bounded set of DELETEs that only has anything to do once a day. Running them
+    on one clock would either sweep retention sixty times an hour for nothing or slow
+    consolidation to retention's cadence.
+
+    This is what makes retention a *policy* rather than a button somebody remembers to
+    press. :func:`app.api.routes_memory.sweep_retention_everywhere` is the same function
+    ``POST /memory/retention/sweep`` calls, so the timer and the operator can never
+    enforce two different horizons. Every error is logged and swallowed — a transient
+    database blip must never kill the task, and a deletion that did not happen is
+    strictly safer than one that half did.
+    """
+    from app.api.routes_memory import sweep_retention_everywhere
+
+    period = get_settings().memory_retention_sweep_interval_seconds
+    while not stop.is_set():
+        try:
+            removed = await sweep_retention_everywhere()
+            if any(removed.values()):
+                logger.info("Memory retention swept %s", removed)
+        except Exception:  # noqa: BLE001 - the sweeper must survive transient errors
+            logger.warning("Memory retention sweep failed", exc_info=True)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=period)
+        except TimeoutError:
+            continue
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialise observability and (optionally) the database schema on startup.
@@ -314,6 +370,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sweeper_stop = asyncio.Event()
     sweeper_task: asyncio.Task[None] | None = None
     memory_sweeper_task: asyncio.Task[None] | None = None
+    retention_task: asyncio.Task[None] | None = None
     if settings.stores_enabled:
         from app.data import run_sla_sweeper
 
@@ -327,6 +384,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             _run_memory_sweeper(sweeper_stop)
         )
         _supervise(memory_sweeper_task, "memory-consolidation-sweeper")
+        # The retention horizon (§7.5). Memory is the one subsystem built entirely to
+        # keep things — supersession instead of overwrite, a soft prune instead of a
+        # delete, an append-only write log — so without this task the store grows for
+        # the life of the deployment and "how long do you keep what I said" has no
+        # honest answer. Same posture again: real stores only.
+        retention_task = asyncio.create_task(_run_memory_retention(sweeper_stop))
+        _supervise(retention_task, "memory-retention-sweeper")
 
     # The durable job substrate (§3.2): the Temporal worker, as an asyncio task in this
     # process — the in-process launch mode, identical in code path to
@@ -382,6 +446,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if (
             sweeper_task is not None
             or memory_sweeper_task is not None
+            or retention_task is not None
             or worker_task is not None
         ):
             sweeper_stop.set()
@@ -389,6 +454,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             sweeper_task.cancel()
         if memory_sweeper_task is not None:
             memory_sweeper_task.cancel()
+        if retention_task is not None:
+            retention_task.cancel()
         if worker_task is not None:
             # Not cancelled outright: ``run_workers`` reacts to the stop event with a
             # graceful ``Worker.shutdown``, which lets an in-flight activity finish its

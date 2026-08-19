@@ -27,7 +27,13 @@ class Settings(BaseSettings):
     """Typed application configuration."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        # Fields carrying an explicit ``validation_alias`` (the ``AEGIS_SUPERSET_*``
+        # block) must still be constructible by their Python name — a test that builds
+        # ``Settings(superset_enabled=True)`` should not have to know the env spelling.
+        populate_by_name=True,
     )
 
     # ── Model gateway ────────────────────────────────────────────────────────
@@ -105,6 +111,29 @@ class Settings(BaseSettings):
     memory_sweeper_interval_seconds: float = Field(default=60.0)
     # Max PENDING consolidation jobs drained per sweep pass.
     memory_sweeper_batch: int = Field(default=10)
+
+    # ── Long-term memory RETENTION (phase 7 §7.5) ────────────────────────────
+    # The horizon past which stored memory is genuinely deleted. Everything else in
+    # the memory subsystem is built to keep — supersession instead of overwrite, a
+    # soft prune instead of a delete, an append-only write log — which is right for
+    # auditability and leaves the store growing forever. These two numbers are the
+    # only thing in the product that shrinks it.
+    #
+    # **These are the platform FLOOR, not the last word.** ``app.api.routes_memory``
+    # resolves them through the settings catalogue first so a tenant can hold data
+    # for less time than the platform's default without a deploy; these values are
+    # what it falls back to while the catalogue entries (``memory.retention_days`` /
+    # ``memory.closed_fact_retention_days``) do not yet exist. Zero disables that
+    # half of the sweep entirely — a legal hold is a real, sayable state.
+    #
+    # Raw conversation turns (and the sessions left empty when they go).
+    memory_retention_days: int = Field(default=90)
+    # Facts that are ALREADY superseded or invalidated. A valid fact is never swept.
+    memory_closed_fact_retention_days: int = Field(default=30)
+    # How often the in-process retention task enforces those horizons (seconds). Daily:
+    # the horizons are measured in days, so a tighter cadence only re-runs DELETEs that
+    # match nothing. Separate from the consolidation sweeper's minute clock on purpose.
+    memory_retention_sweep_interval_seconds: float = Field(default=86400.0)
 
     # ── Durable job substrate (Temporal; docs/dev_new_docs_v2/phase-03) ──────
     # Temporal orchestrates execution (retries, timers, resumability, cancellation);
@@ -282,6 +311,51 @@ class Settings(BaseSettings):
     # transient failure can never disable every spend cap. Set to ``True`` to opt
     # into soft/fail-open enforcement (caps become best-effort ceilings).
     budget_fail_open: bool = Field(default=False)
+
+    # ── Embedded analytics (Apache Superset) ─────────────────────────────────
+    # Superset is OPTIONAL and Aegis degrades: off by default, never touched at boot,
+    # and a deployment without it differs only in that one page explains itself. The
+    # variables carry an ``AEGIS_`` prefix because Superset reads ``SUPERSET_*`` names
+    # of its own (``SUPERSET_CONFIG_PATH``, ``SUPERSET_HOME``, ``SUPERSET_SECRET_KEY``)
+    # and the two processes are expected to run on the same host.
+    #
+    # Turn the feature on. Off means the analytics page says so and names this variable.
+    superset_enabled: bool = Field(default=False, validation_alias="AEGIS_SUPERSET_ENABLED")
+    # Where Superset is served, e.g. ``http://localhost:8088``.
+    superset_base_url: str = Field(default="", validation_alias="AEGIS_SUPERSET_BASE_URL")
+    # The Superset service account Aegis signs in as to MINT GUEST TOKENS, and for
+    # nothing else. This credential never leaves the backend process: a Superset admin
+    # JWT in a tenant's browser is the whole BI instance, every tenant's rows included.
+    superset_username: str = Field(default="", validation_alias="AEGIS_SUPERSET_USERNAME")
+    superset_password: str = Field(default="", validation_alias="AEGIS_SUPERSET_PASSWORD")
+    # Superset's auth provider name — ``db`` for the local metadata-DB accounts that
+    # ``superset fab create-admin`` produces.
+    superset_provider: str = Field(default="db", validation_alias="AEGIS_SUPERSET_PROVIDER")
+    # The tenant column every tenant-scoped Superset dataset carries. Named once, and
+    # used by BOTH isolation layers: the guest token's row-level-security clause and the
+    # filter Aegis welds into the query context it builds.
+    superset_tenant_column: str = Field(
+        default="tenant_id", validation_alias="AEGIS_SUPERSET_TENANT_COLUMN"
+    )
+    # Path to the JSON board catalogue — the finite set of questions Aegis will ask
+    # Superset. Unset means no boards, which the page reports as itself.
+    superset_boards: str = Field(default="", validation_alias="AEGIS_SUPERSET_BOARDS")
+    # Whether ``EMBEDDED_SUPERSET`` is expected to work on this instance. Separate from
+    # ``superset_enabled`` on purpose: the 6.1.0 wheel has already shipped three broken
+    # paths, and the embed being one of them must cost the iframe and not the charts.
+    superset_embed_enabled: bool = Field(
+        default=False, validation_alias="AEGIS_SUPERSET_EMBED_ENABLED"
+    )
+    # Seconds a minted guest token is asked to live. Short: it is the only Superset
+    # credential that ever reaches a browser.
+    superset_guest_token_ttl_seconds: int = Field(
+        default=300, validation_alias="AEGIS_SUPERSET_GUEST_TOKEN_TTL_SECONDS"
+    )
+    # Whether to verify Superset's TLS certificate. Only meaningful for an https base
+    # URL; the localhost deployment this was written against is plain http.
+    superset_ssl_verify: bool = Field(
+        default=True, validation_alias="AEGIS_SUPERSET_SSL_VERIFY"
+    )
 
     # ── App ──────────────────────────────────────────────────────────────────
     app_env: str = Field(default="dev")

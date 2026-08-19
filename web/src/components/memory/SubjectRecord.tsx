@@ -1,7 +1,7 @@
 'use client'
 
-import { Brain, MessagesSquare } from 'lucide-react'
-import { useState, type ReactElement } from 'react'
+import { MessagesSquare } from 'lucide-react'
+import type { ReactElement } from 'react'
 
 import {
   getMemoryFacts,
@@ -9,13 +9,8 @@ import {
   getMemorySessions,
   getMemoryWrites,
 } from '@/lib/api/client'
-import { useAuth } from '@/lib/auth/AuthContext'
-import { Button } from '@/components/primitives/button'
 import { Card, CardBody } from '@/components/ui/Card'
-import { TooltipProvider } from '@/components/primitives/tooltip'
-import { BackendGate } from '@/components/shared/BackendGate'
 
-import { ChatThreadsPanel } from './ChatThreadsPanel'
 import { EpisodicSessionsPanel } from './EpisodicSessionsPanel'
 import { LoadingRow } from './StateRow'
 import { PanelHeader } from './PanelHeader'
@@ -36,14 +31,29 @@ import {
 /**
  * Everything the platform holds on ONE subject: the summary hero, the semantic
  * facts / structured profile / episodic sessions / write-log panels, and the
- * recall trace. Split from {@link MemoryView} so the four `/memory/*` reads are
- * only ever issued for a subject the operator actually asked for.
+ * recall trace — the **read** half of the memory control plane.
+ *
+ * It is a component rather than a screen so the four `/memory/*` reads are only ever
+ * issued for a subject the operator actually chose. The picker, the write, the
+ * correction and the erasure live in `@/components/memoryctl`, which mounts this
+ * underneath them: a record you can read and a record you can change are one screen,
+ * and splitting them would put the evidence on a different page from the button.
  */
-function SubjectPanels({ token, subject }: { token: string | null; subject: string }): ReactElement {
-  const facts = useAsync(() => getMemoryFacts(token, subject, true), [token, subject])
-  const profile = useAsync(() => getMemoryProfile(token, subject), [token, subject])
-  const sessions = useAsync(() => getMemorySessions(token, subject), [token, subject])
-  const writes = useAsync(() => getMemoryWrites(token, subject), [token, subject])
+export function SubjectPanels({
+  token,
+  subject,
+  refreshKey = 0,
+}: {
+  token: string | null
+  subject: string
+  /** Bump to re-read after a write — a corrected fact must not still read as the old one. */
+  refreshKey?: number
+}): ReactElement {
+  const deps = [token, subject, refreshKey]
+  const facts = useAsync(() => getMemoryFacts(token, subject, true), deps)
+  const profile = useAsync(() => getMemoryProfile(token, subject), deps)
+  const sessions = useAsync(() => getMemorySessions(token, subject), deps)
+  const writes = useAsync(() => getMemoryWrites(token, subject), deps)
 
   const factRows = facts.state.status === 'ready' ? facts.state.data.rows : []
   const sessionRows = sessions.state.status === 'ready' ? sessions.state.data.rows : []
@@ -132,109 +142,5 @@ function SubjectPanels({ token, subject }: { token: string | null; subject: stri
       {/* Flagship recall trace — the "Why did it recall this?" expander. */}
       <RecallDebugPanel token={token} subject={subject} />
     </div>
-  )
-}
-
-/**
- * Memory (§4.3) — "what the agent knows about this subject". The one control on
- * the surface names the subject; everything below is that subject's record. The
- * honest tier machinery (semantic / episodic / structured, bitemporal,
- * relevance × recency × importance) lives one layer down in tooltips and detail
- * popovers.
- *
- * A faithful Next.js port of `frontend/src/components/memory/MemoryView.tsx`
- * onto the web app's Card/Badge components and shared library.
- */
-function MemoryView({ token }: { token: string | null }): ReactElement {
-  // The backend exposes no "list known subjects" route — memory is keyed by an
-  // arbitrary subject string the caller supplies — so the picker is a free-text
-  // field rather than a dropdown of ids the console would have to invent.
-  const [draft, setDraft] = useState('')
-  const [subject, setSubject] = useState('')
-
-  return (
-    <div className="space-y-6">
-      {/* Section header + the one control on the surface: the subject picker. */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="eyebrow mb-1">long-term memory · Postgres + pgvector</p>
-          <h1 className="t-hero text-foreground">Memory</h1>
-        </div>
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            setSubject(draft.trim())
-          }}
-        >
-          <label className="eyebrow" htmlFor="memory-subject">
-            subject
-          </label>
-          <input
-            id="memory-subject"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="subject id"
-            className="h-9 rounded-md border border-input bg-surface px-3 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          />
-          <Button type="submit" size="sm" variant="outline" disabled={draft.trim() === ''}>
-            Load
-          </Button>
-        </form>
-      </div>
-
-
-      {/* The caller's own chat threads. Not gated on the subject picker: a chat is
-          keyed by the person who had it, not by the subject the store is keyed on,
-          and it is how an operator finds a session id worth inspecting. */}
-      <Card>
-        <CardBody>
-          <ChatThreadsPanel token={token} />
-        </CardBody>
-      </Card>
-
-      {subject === '' ? (
-        <Card>
-          <CardBody>
-            <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
-              <Brain className="size-8 text-muted-foreground/50" />
-              <div>
-                <p className="text-sm font-medium text-foreground">No subject selected</p>
-                <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                  Memory is keyed by subject. Enter the subject id you want to inspect — the
-                  facts, profile, sessions and write-log below are read straight from the store
-                  for that subject alone.
-                </p>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-      ) : (
-        <SubjectPanels token={token} subject={subject} />
-      )}
-    </div>
-  )
-}
-
-/** Client entry for the Memory section — gated on a reachable backend. */
-export function MemoryMount(): ReactElement {
-  // The `/memory/*` accessors are RBAC-scoped: hand the view the real session
-  // bearer, and hold it back until the persisted session has been restored.
-  const { session, hydrated } = useAuth()
-
-  if (!hydrated) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
-      </div>
-    )
-  }
-
-  return (
-    <BackendGate>
-      <TooltipProvider>
-        <MemoryView token={session?.token ?? null} />
-      </TooltipProvider>
-    </BackendGate>
   )
 }

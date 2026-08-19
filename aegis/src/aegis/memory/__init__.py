@@ -29,8 +29,14 @@ from aegis.memory.consolidate import (
     prune_forgotten,
     sweep_pending,
 )
-from aegis.memory.crud import forget_fact, get_fact, list_facts
+from aegis.memory.crud import add_fact, correct_fact, forget_fact, get_fact, list_facts
 from aegis.memory.recall import RecallBundle, load_raw_window, recall
+from aegis.memory.retention import (
+    RetentionPolicy,
+    RetentionSweep,
+    apply_retention,
+    retention_preview,
+)
 from aegis.memory.scoring import (
     ForgetPolicy,
     RecallCandidate,
@@ -86,10 +92,15 @@ __all__ = [
     "MemoryWriteLog",
     "RecallBundle",
     "RecallCandidate",
+    "RetentionPolicy",
+    "RetentionSweep",
     "WriteOp",
+    "add_fact",
+    "apply_retention",
     "assemble_working_memory",
     "build_working_text",
     "consolidate",
+    "correct_fact",
     "enqueue_consolidation",
     "forget_fact",
     "get_default_index",
@@ -104,6 +115,7 @@ __all__ = [
     "recency_decay",
     "reset_default_index",
     "resolve_spec",
+    "retention_preview",
     "score_candidates",
     "set_default_index",
     "set_default_spec",

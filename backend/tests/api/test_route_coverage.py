@@ -85,6 +85,32 @@ _AUTH_GUARDS = frozenset(
         # analysis — which is the opposite of what a guard named ``require_*`` means.
         "require_redteam_operator",
         "require_redteam_reader",
+        # The embedded-analytics guard. It admits every authenticated principal — the
+        # narrowing is the board's audience and the caller's sealed tenant scope, both
+        # enforced in the handlers — but it is still built from ``require_auth``, and
+        # without it named here its routes would classify **public** and vanish from
+        # this analysis entirely.
+        "require_analytics_reader",
+        # The memory control plane's administrator guard (§7.5). It gates the retention
+        # sweep, which hard-deletes rows across every subject in a tenant; everything
+        # else in that module authorises per subject instead, because a person writing
+        # their own memory is the capability the task exists to add. Built from
+        # ``require_auth``, so without it named here its route would classify **public**
+        # and drop out of this analysis entirely — for a route that deletes data.
+        "require_memory_admin",
+        # The prompt control plane's guard (§7.7). Built from ``require_auth`` and
+        # refuses a client or plain member outright; unlisted, its five routes would
+        # classify **public** and drop out of this analysis entirely — the failure mode
+        # this set exists to prevent.
+        "require_llmops_operator",
+        # The pipeline-health control plane's two guards (§7.10). ``require_infra_reader``
+        # refuses anyone who is not platform staff — the component table and the cache
+        # counters are process-wide and unscopeable. ``require_pipeline_reader`` admits
+        # every authenticated principal and narrows the reads with ``_scope_tenant``
+        # instead. Both are built from ``require_auth``, and without them named here
+        # their routes would classify **public** and drop out of this analysis entirely.
+        "require_infra_reader",
+        "require_pipeline_reader",
         # ``require_roles(...)`` returns a closure named ``_dep``; it is only ever
         # built from ``require_auth``, so its presence marks an authenticated route.
         "_dep",
@@ -516,16 +542,13 @@ UNREACHABLE_BY_DESIGN: dict[tuple[str, str], str] = {
     # :func:`test_allowlist_is_neither_stale_nor_wrong` as loudly as omitting a real
     # one fails the reachability test.
     ("GET", "/admin/usage"): "superseded in the UI by the GET /governance/dashboard aggregate",
-    # ── Right-to-erasure writes (phase 7 §6 owns the memory control plane) ───
-    # The only hard deletes in the product. Exposing them from a read-only
-    # inspector without a confirmation flow and an audit-visible trail would be
-    # worse than leaving them API-only; the memory control plane in phase 7 is
-    # where they get a screen.
-    ("POST", "/memory/forget"): "phase 7 §6 — GDPR erasure needs a confirmation flow, not a button",
-    (
-        "DELETE",
-        "/memory/facts/{}",
-    ): "phase 7 §6 — GDPR erasure needs a confirmation flow, not a button",
+    # The two right-to-erasure writes that sat here — POST `/memory/forget` and DELETE
+    # `/memory/facts/{id}` — are gone because §7.5 built the confirmation flow their
+    # entries were waiting on: `components/memoryctl` names the row counts each one will
+    # remove before the button is pressed and shows the receipt afterwards. The allowlist
+    # cannot rot in that direction either — leaving them would fail
+    # :func:`test_allowlist_is_neither_stale_nor_wrong` as loudly as omitting a real one
+    # fails the reachability test.
     # ── The raw ledger-spend projection ──────────────────────────────────────
     # `ForecastView` deliberately serves the *decision* surface instead: an admin
     # gets `GET /forecast/budget` (the same projection burned down against the

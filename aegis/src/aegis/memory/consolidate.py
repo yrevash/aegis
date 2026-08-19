@@ -390,7 +390,16 @@ def _write_log(
     after: dict[str, Any],
     reason: str | None,
     trace_id: str | None,
+    model: str | None = None,
 ) -> None:
+    """Append one row to the fact-write audit trail.
+
+    ``model`` names **who decided the write** and defaults to the consolidation
+    model role, because until the memory control plane existed every write here was
+    a model's. An explicit value is what an operator- or subject-initiated write
+    passes (``"operator:<username>"``), so ``GET /memory/writes`` can say *a person
+    wrote this* rather than attributing a human correction to the cheap model.
+    """
     session.add(
         MemoryWriteLog(
             subject_id=subject_id,
@@ -400,7 +409,7 @@ def _write_log(
             before=before,
             after=after,
             reason=reason,
-            model=_MODEL_TAG,
+            model=model or _MODEL_TAG,
             trace_id=trace_id,
         )
     )
