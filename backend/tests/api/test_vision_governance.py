@@ -218,20 +218,42 @@ async def test_every_paid_vision_call_lands_in_the_usage_ledger(
     assert [r.prompt_tokens for r in rows] == [400, 812]
 
 
-async def test_an_unscoped_principal_is_still_a_clean_no_op(
+async def test_a_platform_principals_spend_is_recorded_under_a_null_tenant(
     client, user_headers, db, fake_litellm, passing_rails
 ):
-    """Binding the context must not start governing the ungoverned demo principal.
+    """Platform spend is uncapped but **not invisible** — the task 9.2 decision.
 
-    The demo/platform operators carry no tenant, so ``_resolve_governance`` yields an
-    empty context and the chokepoint enforces nothing and writes nothing — unchanged.
+    This test previously asserted that a tenantless principal wrote *zero* rows, and
+    that was the defect rather than the design: ``_governed`` returned ``None`` for a
+    context whose ``tenant_id`` was ``None``, which spelled "platform work" and "nobody
+    bound anything" identically. Two paid vision calls then existed nowhere — not on the
+    token dashboard, not in a usage rollup, not reconcilable against the provider's
+    invoice.
+
+    The two halves are now separate, and this pins both:
+
+    * **capped** — no, and deliberately: a USD ceiling is a promise to a principal, and
+      there is no ``budgets`` row for "nobody". Charging it to some tenant would corrupt
+      that tenant's own budget screen;
+    * **recorded** — yes, under ``tenant_id IS NULL``, which is exactly what makes the
+      money countable.
     """
     resp = await client.post("/vision/analyse", headers=user_headers, json=_body())
 
     assert resp.status_code == 200, resp.text
     async with get_sessionmaker()() as session:
-        rows = (await session.execute(select(UsageLedger))).scalars().all()
-    assert rows == []
+        rows = list(
+            (
+                await session.execute(select(UsageLedger).order_by(UsageLedger.id))
+            ).scalars()
+        )
+    assert len(rows) == 2, "platform spend must be ledgered, not invisible"
+    assert [r.tenant_id for r in rows] == [None, None], (
+        "platform work must never be billed to a tenant that did not do it"
+    )
+    # The money is real, and the rows say so.
+    assert all(r.cost_usd > 0 for r in rows)
+    assert [r.images for r in rows] == [1, 1]
 
 
 # ── enforcement ─────────────────────────────────────────────────────────────

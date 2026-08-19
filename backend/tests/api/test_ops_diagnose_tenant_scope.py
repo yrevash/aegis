@@ -116,6 +116,49 @@ async def test_diagnose_uses_the_callers_tenant_not_the_platform(db, client, mon
     registry.clear_cache()
 
 
+async def test_a_tenant_over_its_cap_cannot_run_a_diagnose_pass(db, client, monkeypatch):
+    """The optimizer spends, so the optimizer is admission-controlled (tasks 9.2/9.6).
+
+    ``/ops/diagnose`` drove live ``complete`` calls with **no governance context bound at
+    all**: not capped, and not written to ``usage_ledger`` either, which made the LLM-Ops
+    loop the one paid surface that could not appear on a usage rollup. The route now
+    binds the sealed tenant it already runs under, and refuses up front with the same
+    ``X-Admission-Gate: budget`` 429 the job substrate and the red-team route use.
+
+    ``seen == []`` is the assertion that matters: a route that called the model and then
+    noticed the cap would satisfy the status code and not the point of having one.
+    """
+    from aegis.governance import Budget, BudgetScope, BudgetWindow, UsageLedger
+
+    registry.clear_cache()
+    await _seed()
+    async with get_sessionmaker()() as session:
+        await pgsupport.seed(
+            session,
+            Budget(
+                tenant_id=_TENANT,
+                scope_type=BudgetScope.TENANT,
+                scope_id=_TENANT,
+                window=BudgetWindow.DAY,
+                usd_cap=0.01,
+            ),
+            UsageLedger(tenant_id=_TENANT, cost_usd=5.0),
+        )
+        await session.commit()
+
+    seen: list[str] = []
+    monkeypatch.setattr("app.core.llm.complete", _optimizer(seen))
+
+    resp = await client.post(
+        "/ops/diagnose", json={"prompt_key": PK}, headers=_admin_headers()
+    )
+
+    assert resp.status_code == 429, resp.text
+    assert resp.headers["X-Admission-Gate"] == "budget"
+    assert seen == [], "an over-budget tenant reached the optimizer"
+    registry.clear_cache()
+
+
 async def test_the_body_cannot_name_a_tenant(db, client):
     """The isolation key is never client-supplied — the body has no field for it."""
     await _seed()

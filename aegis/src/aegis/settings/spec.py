@@ -713,6 +713,24 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         ),
     ),
     SettingSpec(
+        key="jobs.max_inflight.reindex",
+        type_=int,
+        default=1,
+        writable_by=frozenset({PLATFORM_ADMIN}),
+        readable_by=_OPERATORS,
+        merge=MergeRule.TIGHTEN_ONLY,
+        bounds=(1, 8),
+        stricter=Strictness.LOWER,
+        description=(
+            "How many corpus re-indexes one tenant may have in flight. One, because a "
+            "re-index re-embeds every ingested document the tenant has — the single "
+            "largest piece of billable background work the platform performs, and it "
+            "fires on a schedule rather than because anybody asked for it. Without this "
+            "entry admission would raise UnknownSettingError rather than default to "
+            "unlimited, which is the fail-closed direction but not a usable one."
+        ),
+    ),
+    SettingSpec(
         key="jobs.estimated_cost_usd.ingest_per_mb",
         type_=float,
         default=0.5,

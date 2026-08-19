@@ -53,6 +53,7 @@ from aegis.jobs.admission import (
     AdmissionError,
     BudgetExceededError,
     admit,
+    check_budget,
     max_inflight_key,
 )
 from aegis.jobs.cancel import (
@@ -122,6 +123,7 @@ __all__ = [
     "UnregisteredStageError",
     "activity_session_factory",
     "admit",
+    "check_budget",
     "cancel_job",
     "clear_stage_handlers",
     "collect_stage_facts",

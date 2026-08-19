@@ -32,6 +32,14 @@ Standalone usage::
 
 from __future__ import annotations
 
+from aegis.gateway.limiter import (
+    LocalSlotLimiter,
+    NoSlotLimiter,
+    RedisSlotLimiter,
+    SlotLimiter,
+    SlotUnavailableError,
+    lease_seconds_for,
+)
 from aegis.gateway.llm import (
     GatewayConfig,
     GovernanceHook,
@@ -40,6 +48,7 @@ from aegis.gateway.llm import (
     configure,
     embed,
     last_trace_id,
+    limiter_status,
     optimization_config,
     optimization_summary,
     record_call,
@@ -62,7 +71,12 @@ __all__ = [
     "GatewayConfig",
     "GovernanceHook",
     "LLMResult",
+    "LocalSlotLimiter",
+    "NoSlotLimiter",
     "ObservabilitySink",
+    "RedisSlotLimiter",
+    "SlotLimiter",
+    "SlotUnavailableError",
     "ToolCallResult",
     "TranscriptionResult",
     "TranscriptionSegment",
@@ -71,6 +85,8 @@ __all__ = [
     "configure",
     "embed",
     "last_trace_id",
+    "lease_seconds_for",
+    "limiter_status",
     "optimization_config",
     "optimization_summary",
     "record_call",

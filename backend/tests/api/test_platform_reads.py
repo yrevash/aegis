@@ -51,7 +51,7 @@ def fitted_spine(monkeypatch):
     from app.ml.spec import resolve_spec
 
     model = TrustworthyModel.train(
-        resolve_spec(), training_frame(num_requests=200), path=None
+        resolve_spec(), training_frame(num_records=200), path=None
     )
     monkeypatch.setattr(ml, "_MODEL", model)
     return model

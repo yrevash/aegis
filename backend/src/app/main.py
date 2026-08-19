@@ -269,6 +269,14 @@ async def _run_memory_sweeper(stop: asyncio.Event) -> None:
     interval (or until ``stop`` fires). Every error is logged and swallowed so a
     transient database blip never kills the sweeper. Bound to the live LLM ``complete``
     and the retrieval embedding function, exactly like the request-path consolidation.
+
+    **And governed like the request path too, since task 9.2** — which it was not
+    before: this loop binds the live completer and the real embedder on a sixty-second
+    timer, and it bound no governance context at all, so every consolidation it drained
+    spent a tenant's money against no cap and left no ledger row. The context
+    is bound *per job* inside :func:`~aegis.memory.consolidate.sweep_pending`, because
+    one drain covers several tenants and this loop is in no position to know whose work
+    it is about to run.
     """
     settings = get_settings()
     period = settings.memory_sweeper_interval_seconds
@@ -356,6 +364,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     init_observability(app)
     settings = get_settings()
+
+    # What is actually bounding model concurrency in this process, said out loud at boot
+    # (task 9.3). The word that matters is ``scope``: ``fleet`` means the leases live in
+    # a store every process shares, ``process`` means this interpreter only, and
+    # ``unlimited`` means nothing is holding the line. An operator reading a number
+    # without that word would assume the strongest of the three.
+    from aegis.gateway import limiter_status
+
+    logger.info("Model-call limiter: %s", limiter_status())
     if settings.db_bootstrap:
         try:
             from app.data.session import bootstrap
@@ -415,8 +432,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # of them drift apart. Every infra value is passed for the same reason.
     #
     # Honest infra, unchanged: a non-dev full-stores deployment REQUIRES a usable
-    # embedded vector store (in-process, file-backed under ``VECTOR_STORE_PATH``) and
-    # refuses to boot without one, exactly like Postgres/Redis. A dev/lite process gets
+    # Qdrant node (``QDRANT_URL``) and refuses to boot
+    # without one, exactly like Postgres/Redis — an embedded store is single-process
+    # and cannot serve ``--workers>1``. A dev/lite process gets
     # the EPHEMERAL engine because this call asks for it — and ``from_env`` logs which
     # one it chose, at WARNING, so a non-durable process is never a quiet one.
     from aegis import Aegis
@@ -428,6 +446,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await Aegis.from_env(
         adapter="app.adapter",
         mode="full" if (settings.stores_enabled and not settings.is_dev) else "lite",
+        # One value serves both LightRAG and Aegis (QDRANT_URL), so there is one
+        # number to set rather than two to drift apart. Full-stores boot refuses
+        # without it rather than falling back to an embedded store.
+        vector_store_url=settings.qdrant_url,
         vector_store_path=settings.vector_store_path,
         database_url=settings.postgres_dsn,
         redis_url=settings.redis_url,

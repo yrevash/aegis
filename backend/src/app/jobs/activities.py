@@ -57,6 +57,7 @@ from collections.abc import Awaitable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from aegis.gateway import BudgetExceededError as GatewayBudgetExceededError
 from aegis.jobs.facts import collect_stage_facts
 from aegis.jobs.models import Document, JobRun, JobStatus
 from aegis.jobs.scope import tenant_activity
@@ -233,6 +234,43 @@ async def _load_document(
     return document
 
 
+async def _reauthorise_budget(
+    session: AsyncSession, inp: StageInput, document: Document
+) -> None:
+    """Re-run the budget gate at the moment the work actually starts.
+
+    Args:
+        session: The scoped session supplied by ``@tenant_activity``.
+        inp: The claim argument, carrying the tenant.
+        document: The already-loaded row, so this costs no second query.
+
+    Raises:
+        ApplicationError: Non-retryable, ``type="BudgetExceeded"``, carrying admission's
+            own reason. Non-retryable because a budget refusal is not fixed by trying
+            again in ten seconds — it needs an administrator or a window roll, and each
+            retry would re-read the same rows to reach the same answer.
+    """
+    from aegis.jobs.admission import BudgetExceededError as AdmissionBudgetError
+    from aegis.jobs.admission import check_budget
+
+    from app.jobs.control import estimate_ingest_usd
+
+    try:
+        await check_budget(
+            session,
+            tenant_id=inp.tenant_id,
+            estimated_cost_usd=await estimate_ingest_usd(
+                session,
+                size_bytes=document.size_bytes or 0,
+                tenant_id=inp.tenant_id,
+            ),
+        )
+    except AdmissionBudgetError as exc:
+        raise ApplicationError(
+            exc.reason, type="BudgetExceeded", non_retryable=True
+        ) from exc
+
+
 @activity.defn(name=START_INGEST)
 @tenant_activity
 async def start_ingest(
@@ -272,9 +310,21 @@ async def start_ingest(
         upload), and the id of the ``job_runs`` row.
 
     Raises:
-        ApplicationError: If the document is not visible under this tenant's scope.
+        ApplicationError: If the document is not visible under this tenant's scope, or
+            (non-retryable, ``type="BudgetExceeded"``) if the tenant can no longer afford
+            the run that was admitted at the edge.
     """
     document = await _load_document(session, inp.document_id)
+    # Admission, the second time (task 9.6). The edge admitted this job; the work starts
+    # here, later, after a queue — and in between, the budget window can roll, another
+    # job can spend what was left, or an administrator can lower the cap. Re-running the
+    # budget gate at the moment work actually begins is what makes admission a property
+    # of the *run* rather than of the request that queued it.
+    #
+    # The concurrency half is deliberately not re-run: by this point the worker pool has
+    # already enforced it (this activity holds a slot because one was free), and a job
+    # counting its own freshly-claimed row against its own cap would deny itself.
+    await _reauthorise_budget(session, inp, document)
     now = _now()
     claim = pg_insert(JobRun).values(
         tenant_id=inp.tenant_id,
@@ -421,8 +471,10 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
 
     Raises:
         ApplicationError: Non-retryable, if the stage name is not one this pipeline
-            declares, if the document is not visible under this tenant's scope, or if no
-            handler is registered for the stage. None of the three is fixed by retrying.
+            declares, if the document is not visible under this tenant's scope, if no
+            handler is registered for the stage, or (``type="BudgetExceeded"``) if the
+            tenant's cap refused a model call the handler made. None of the four is
+            fixed by retrying.
     """
     try:
         spec = stage_spec(inp.stage)
@@ -456,15 +508,28 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
     # here so a handler never has to know whether the substrate, a test or the re-index
     # loop is calling it — outside this scope reporting is a no-op.
     with collect_stage_facts() as facts:
-        updates = await _run_with_heartbeat(
-            handler(
-                session,
-                tenant_id=inp.tenant_id,
-                document_id=inp.document_id,
-                stage=inp.stage,
-            ),
-            spec.heartbeat_seconds,
-        )
+        try:
+            updates = await _run_with_heartbeat(
+                handler(
+                    session,
+                    tenant_id=inp.tenant_id,
+                    document_id=inp.document_id,
+                    stage=inp.stage,
+                ),
+                spec.heartbeat_seconds,
+            )
+        except GatewayBudgetExceededError as exc:
+            # A first-class job outcome, not a surprise on the invoice (task 9.2). The
+            # tenant hit a cap *during* the stage — `@tenant_activity` binds their
+            # governance context, so the gateway enforces on every call a handler makes
+            # — and the honest end for this run is a job that failed for a reason
+            # somebody can act on. Non-retryable: three retries would be three more
+            # partial stages, each paid for and each refused at the same cap.
+            raise ApplicationError(
+                f"the {inp.stage!r} stage was refused by the tenant's budget: {exc}",
+                type="BudgetExceeded",
+                non_retryable=True,
+            ) from exc
     duration_ms = int((time.monotonic() - started) * 1000)
     columns = _validated_updates(inp.stage, updates)
     # The bump is **monotonic**. The guard below blocks re-writing the *same* stage but

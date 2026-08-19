@@ -41,6 +41,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 from temporalio.client import Client, WorkflowHandle
+from temporalio.exceptions import ApplicationError
 
 from app.config import get_settings
 from app.jobs.activities import _now, _run_id
@@ -65,6 +66,7 @@ __all__ = [
     "ReindexHandler",
     "UnregisteredReindexError",
     "clear_reindex_handler",
+    "estimate_reindex_usd",
     "register_reindex_handler",
     "reindex_handler",
     "request_reindex",
@@ -282,6 +284,72 @@ async def request_reindex(
     )
 
 
+async def estimate_reindex_usd(
+    session: AsyncSession, *, tenant_id: int | None
+) -> float:
+    """Return the pre-authorisation estimate for re-indexing a tenant's whole corpus.
+
+    Deliberately the **ingest** rate applied to the corpus's own bytes, rather than a
+    second per-re-index figure in the catalogue. Two reasons, and they point the same
+    way: a re-index runs the same stages over the same bytes (minus ``parse``, which is
+    replayed from the stored artifact), so the ingest rate is the honest unit; and a
+    second number would let the figure a tenant is refused by drift from the figure on
+    their budgets screen, which is the drift :mod:`aegis.jobs.admission` exists to
+    prevent.
+
+    Skipping ``parse`` makes this an **over**-estimate, and over-estimating is the
+    stricter direction the catalogue already declares for this rate: it refuses a run
+    that might have fitted, where under-estimating admits one that cannot finish.
+
+    Args:
+        session: The scoped session — so the sum sees this tenant's documents and no
+            others, and the catalogue rate resolves under this tenant's overrides.
+        tenant_id: The tenant whose corpus would be rebuilt.
+
+    Returns:
+        The estimated USD cost of one full re-index.
+    """
+    from app.jobs.control import estimate_ingest_usd  # noqa: PLC0415 - avoids a cycle
+
+    corpus_bytes = await session.scalar(
+        select(func.coalesce(func.sum(Document.size_bytes), 0)).where(
+            Document.status == JobStatus.SUCCEEDED
+        )
+    )
+    return await estimate_ingest_usd(
+        session, size_bytes=int(corpus_bytes or 0), tenant_id=tenant_id
+    )
+
+
+async def _admit_reindex(session: AsyncSession, *, tenant_id: int | None) -> None:
+    """Put a scheduled re-index through the same two gates an upload passes.
+
+    Args:
+        session: The scoped session supplied by ``@tenant_activity``.
+        tenant_id: The tenant whose corpus would be rebuilt.
+
+    Raises:
+        ApplicationError: Non-retryable, carrying the refusal's own reason.
+    """
+    from aegis.jobs import AdmissionError, admit  # noqa: PLC0415 - local, import-light
+
+    estimate = await estimate_reindex_usd(session, tenant_id=tenant_id)
+    try:
+        await admit(
+            session,
+            tenant_id=tenant_id,
+            job_type=REINDEX_JOB_TYPE,
+            estimated_cost_usd=estimate,
+        )
+    except AdmissionError as exc:
+        logger.warning(
+            "re-index cadence for tenant %s refused: %s", tenant_id, exc.reason
+        )
+        raise ApplicationError(
+            exc.reason, type=type(exc).__name__, non_retryable=True
+        ) from exc
+
+
 @activity.defn(name=REQUEST_REINDEX)
 @tenant_activity
 async def request_tenant_reindex(
@@ -304,6 +372,13 @@ async def request_tenant_reindex(
     Returns:
         The workflow id of the execution this request folded into, or ``None`` when the
         tenant has no ingested document to re-index.
+
+    Raises:
+        ApplicationError: Non-retryable, when admission refuses this tenant's re-index.
+            A refusal is not a bug and retrying it would not clear it — the next cadence
+            tick is the retry — so it fails visibly in the orchestrator's history rather
+            than silently skipping, which is what "invisible backpressure is the same
+            defect as a silent fallback" means for a job nobody is watching.
     """
     indexed = await session.scalar(
         select(func.count())
@@ -317,6 +392,13 @@ async def request_tenant_reindex(
             inp.tenant_id,
         )
         return None
+    # The gate this path never had (task 9.6). A re-index re-runs every stage but
+    # ``parse`` over the tenant's whole corpus — it is the largest embedding bill the
+    # platform generates — and it fires on a **schedule**, so nobody is at a keyboard to
+    # be told no. Upload and re-queue both pass through ``admit`` before an execution
+    # exists; a cadence tick that did not was a way into the worker pool, and into the
+    # tenant's budget, that skipped both gates entirely.
+    await _admit_reindex(session, tenant_id=inp.tenant_id)
     handle = await request_reindex(
         await get_temporal_client(), tenant_id=inp.tenant_id, reason=inp.reason
     )

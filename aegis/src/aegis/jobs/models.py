@@ -271,7 +271,7 @@ class Chunk(AegisBase):
     """One retrievable passage of an ingested document, plus its embedding-of-record.
 
     This table is the **lexical** arm of retrieval. Dense search runs on the vector store
-    (:class:`aegis.retrieval.vector_store.ChromaVectorStore`); ``embedding`` here is the
+    (:class:`aegis.retrieval.vector_store.QdrantVectorStore`); ``embedding`` here is the
     durable JSON source-of-record that index rebuilds replay from, not a search index —
     this cluster has no ``pgvector`` and nothing in the pipeline assumes one.
 

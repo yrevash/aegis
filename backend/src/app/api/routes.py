@@ -55,7 +55,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.exc import SQLAlchemyError
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
-from app.adapter import DEFAULT_PERSONA_ID, get_persona
+from app.adapter import DEFAULT_PERSONA_ID, get_persona, persona_for_role
 from app.agent import AgentDeps, decide_approval, get_approval_registry, run_agent
 from app.api.schemas import (
     AboutResponse,
@@ -156,6 +156,7 @@ from app.capabilities import (
 from app.config import get_settings
 from app.core.governance import (
     GovernanceContext,
+    governed,
     reset_governance_context,
     set_governance_context,
 )
@@ -202,6 +203,8 @@ from app.platform import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; keeps ``temporalio`` off the import
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from app.jobs.control import JobRow
 
 logger = logging.getLogger(__name__)
@@ -242,9 +245,10 @@ class AuthContext:
           already derives for an un-tenanted ``Role.ADMIN``.
         * an un-tenanted **operational** role (``ai_team`` / ``devops``). These are the
           staff accounts ``app.seed`` provisions with ``tenant_id=None`` on purpose, and
-          the codebase already draws exactly this line one screen up in
-          :func:`_persona_for`: ``Role.CLIENT`` is the self-scoped business/end-user role,
-          every other role is ``operations_lead``.
+          the codebase already draws exactly this line: ``Role.CLIENT`` is the
+          self-scoped business/end-user role and every other role is operational. Which
+          *persona* each of them adopts is the domain's to say — see
+          :func:`_persona_for`.
 
         ``Role.CLIENT`` is therefore never platform staff however its row is shaped —
         which is the whole of gap A1: ``app.seed`` mints a ``client``-role principal with
@@ -299,12 +303,95 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 def _persona_for(role: Role) -> str:
-    """Return the default persona for a coarse role.
+    """Return the persona a principal holding ``role`` adopts, **through the seam**.
 
-    A ``client`` gets the self-scoped ``client`` persona; every operational role
-    (``admin`` / ``ai_team`` / ``devops``) gets the full ``operations_lead`` persona.
+    RBAC roles are the platform's; *which persona a role adopts* is the domain's, and
+    this function used to decide it here by returning one of two hardcoded persona ids
+    — the shipped domain's, spelled out in core source. That made the retargeting
+    procedure self-defeating: its step 5 tells the integrator to re-voice ``PERSONAS``
+    and ``DEFAULT_PERSONA_ID``, and doing so made every authenticated request resolve to
+    a persona id that no longer existed — ``get_persona`` raised ``KeyError`` on sign-in
+    — while the adapter suite, the agent suite, the conformance suite and ruff all
+    stayed green, because none of them go through the login path. ``app.api`` is also on
+    ``SKILL.md``'s do-not-touch list, so the procedure forbade fixing what it had broken.
+
+    The mapping now lives with the personas it names, in
+    :data:`app.adapter.personas.PERSONA_BY_ROLE`, and a missing entry raises there with
+    the exact edit to make rather than a bare ``KeyError`` several frames later.
+
+    Args:
+        role: The authenticated principal's coarse RBAC role.
+
+    Returns:
+        The persona id, always a key of the adapter's ``PERSONAS``.
     """
-    return "client" if role is Role.CLIENT else "operations_lead"
+    return persona_for_role(role)
+
+
+async def _login_lookup(session: AsyncSession, username: str) -> tuple[Any, int]:
+    """Read the ``users`` row for ``username``, and whether anybody is provisioned at all.
+
+    **The one read that legitimately precedes a tenant**, and therefore the one the
+    fail-closed RLS posture has to be taught about (§9.5). With ``RLS_FAIL_CLOSED=true``
+    a session that has bound no tenant scope reads zero rows, and this session cannot
+    bind one — the row it is fetching is what *tells* the platform which tenant the
+    caller belongs to. Left alone, every credential would come back "wrong".
+
+    Two ways out, and this takes the narrower one. The wide one is to bind the *platform*
+    scope here, which widens every statement in the transaction. The narrow one is
+    :func:`aegis.governance.rls.login_function_statements`' ``SECURITY DEFINER``
+    functions, which widen the policy **for the duration of one call** and can only ever
+    return the rows for the exact username passed. See that function for exactly what
+    they can see and why it is the same thing the login path sees today.
+
+    Off Postgres, and under the fail-open posture, this is the ORM query it has always
+    been. There is no fallback between the two: which path runs is decided by the
+    posture, not by whether a function happened to be found, because a login that
+    quietly degrades to a query returning nothing is the failure being avoided.
+
+    Args:
+        session: The open session.
+        username: The submitted username. Never interpolated — it is a bind parameter to
+            the function, exactly as it was to the ``WHERE`` clause.
+
+    Returns:
+        ``(row_or_None, provisioned_count)``. The count is only meaningful when the row
+        is ``None``; it is what distinguishes "wrong username" from "never seeded", and
+        it is read through the same widened window for the same reason.
+    """
+    from aegis.governance.rls import (  # noqa: PLC0415 - keeps SQLAlchemy off imports
+        LOGIN_LOOKUP_FUNCTION,
+        USERS_PROVISIONED_FUNCTION,
+        rls_fail_closed,
+    )
+    from sqlalchemy import func, select, text  # noqa: PLC0415 - same
+
+    from app.data import User  # noqa: PLC0415 - DB is optional at boot
+
+    if rls_fail_closed() and session.get_bind().dialect.name == "postgresql":
+        row = (
+            await session.execute(
+                select(User).from_statement(
+                    text(f"SELECT * FROM {LOGIN_LOOKUP_FUNCTION}(:username)")
+                ),
+                {"username": username},
+            )
+        ).scalars().first()
+        if row is not None:
+            return row, 1
+        seeded = (
+            await session.execute(text(f"SELECT {USERS_PROVISIONED_FUNCTION}()"))
+        ).scalar_one()
+        return None, int(bool(seeded))
+    row = (
+        await session.execute(select(User).where(User.username == username))
+    ).scalars().first()
+    if row is not None:
+        return row, 1
+    provisioned = (
+        await session.execute(select(func.count()).select_from(User))
+    ).scalar_one()
+    return None, int(provisioned)
 
 
 async def _authenticate(username: str, password: str) -> AuthContext | None:
@@ -327,19 +414,11 @@ async def _authenticate(username: str, password: str) -> AuthContext | None:
         HTTPException: 503 when the credentials could not be checked at all — an
             unreachable database, or a ``users`` table with no rows in it.
     """
-    from sqlalchemy import func, select  # noqa: PLC0415 - keeps SQLAlchemy off imports
-
-    from app.data import User, get_sessionmaker  # noqa: PLC0415 - DB is optional at boot
+    from app.data import get_sessionmaker  # noqa: PLC0415 - DB is optional at boot
 
     try:
         async with get_sessionmaker()() as session:
-            row = (
-                await session.execute(select(User).where(User.username == username))
-            ).scalars().first()
-            if row is None:
-                provisioned = (
-                    await session.execute(select(func.count()).select_from(User))
-                ).scalar_one()
+            row, provisioned = await _login_lookup(session, username)
     except (SQLAlchemyError, OSError) as exc:
         logger.error(  # noqa: TRY400 - the traceback is carried by exc_info
             "Login cannot be verified: the identity store is unreachable.", exc_info=True
@@ -663,8 +742,13 @@ async def _require_seat(auth: AuthContext, key: str) -> None:
 async def _resolve_governance(auth: AuthContext) -> GovernanceContext:
     """Build the per-request governance context (tenant/user + effective caps).
 
-    An unscoped principal (no tenant — the demo/platform operators) yields an empty
-    context, so the LiteLLM chokepoint enforces nothing and the ledger stays untouched.
+    An unscoped principal (no tenant — the demo/platform operators) yields a context
+    carrying only the role. The LiteLLM chokepoint caps nothing for it, because a USD
+    ceiling needs a principal who agreed to one and there is no ``budgets`` row for
+    "nobody" — but since task 9.2 it **does** ledger the spend, under a NULL tenant, so
+    platform work is visible and countable rather than invisible. See
+    ``app.core.llm._governed``.
+
     A tenant-bound principal gets its nearest-binding caps (user clamped to tenant).
     """
     if auth.tenant_id is None:
@@ -676,6 +760,50 @@ async def _resolve_governance(auth: AuthContext) -> GovernanceContext:
         role=auth.role,
         limits=limits,
     )
+
+
+async def refuse_if_over_budget(
+    *, tenant_id: int | None, user_id: int | None, because: str
+) -> None:
+    """Refuse a spending request up front, with the 429 the job substrate promises.
+
+    **The one admission verdict this API renders**, shared by every path that is about to
+    spend money on a caller's behalf — ``POST /query``, the red-team route, and anything
+    added later. It exists because the alternative had already happened twice: each path
+    grew its own idea of what a refused spend looks like, and a tenant at a cap got a 429
+    from one, a mid-stream error event from another, and a 500 from a third.
+
+    The gate is :func:`aegis.governance.enforce_governance` — the *same* function the
+    gateway calls on every model call — run **before** the response begins. That ordering
+    is the whole point on a streaming route: once the first SSE frame is out, the status
+    code is spent, and a cap discovered on call six of a fan-out can only produce a
+    half-answer that has already been paid for.
+
+    Args:
+        tenant_id: The tenant that would be billed. ``None`` (platform work) is not
+            capped — see :func:`_resolve_governance` — so this is a no-op for it.
+        user_id: The acting user, whose own sub-cap is checked inward of the tenant's.
+        because: One clause explaining what this particular caller was about to spend on,
+            appended to the cap's own message so the refusal names both the limit and the
+            work it refused.
+
+    Raises:
+        HTTPException: 429, carrying ``X-Admission-Gate: budget``.
+    """
+    if tenant_id is None:
+        return
+    from aegis.gateway import BudgetExceededError
+
+    from app.data.governance import enforce_governance
+
+    try:
+        await enforce_governance(tenant_id=tenant_id, user_id=user_id)
+    except BudgetExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"{exc}. {because}",
+            headers={"X-Admission-Gate": "budget"},
+        ) from exc
 
 
 async def _resolve_model_choice(auth: AuthContext) -> str | None:
@@ -1329,6 +1457,15 @@ async def query(
     # context inside the streaming task so the LiteLLM chokepoint (core.llm.complete)
     # can enforce budgets/rates and write the usage ledger for this run (§3.3).
     governance = await _resolve_governance(auth)
+    # No pre-flight budget gate here, and that is a decision rather than an omission
+    # (task 9.6). ``/query`` is an SSE stream, and it is already admission-controlled by
+    # a different and equally binding mechanism: the context bound below reaches the
+    # gateway chokepoint, which enforces *before* the first model call, so an over-cap
+    # tenant reaches the provider zero times and the run ends on a terminal
+    # ``budget_exceeded`` event with ``status=blocked``. Converting that to a 429 would
+    # buy a nicer status code and cost the frontend a contract it already renders — and
+    # the thing a gate exists to prevent, spend, is prevented either way.
+    #
     # The tenant's chosen deployment, validated against the platform's allowed set
     # BEFORE the stream opens, so a refusal is an HTTP status and not a half-sent
     # SSE stream that has already been charged for.
@@ -2972,7 +3109,12 @@ async def ops_evals(
     )
 
 
-@router.post("/ops/diagnose", response_model=OpsDiagnoseResponse, tags=["ops"])
+@router.post(
+    "/ops/diagnose",
+    response_model=OpsDiagnoseResponse,
+    tags=["ops"],
+    responses={429: {"model": AdmissionRefusedResponse}},
+)
 async def ops_diagnose(
     req: OpsDiagnoseRequest,
     auth: AuthContext = Depends(require_admin_or_ai_team),
@@ -2997,15 +3139,30 @@ async def ops_diagnose(
     from app.ops.diagnose import diagnose
 
     scoped = _scope_tenant(auth, None)
-    async with get_sessionmaker()() as session:
-        result = await diagnose(
-            session,
-            prompt_key=req.prompt_key,
-            complete=complete,
-            limit=req.limit,
-            tenant_id=scoped,
-        )
-        await session.commit()
+    # The optimizer spends, so the optimizer is governed (task 9.2). This route drove
+    # live ``complete`` calls with **no governance context bound at all** — neither
+    # capped nor ledgered — which made the LLM-Ops loop the one paid surface that could
+    # not appear on a usage rollup. The tenant is the one the pass is already sealed to,
+    # so the money follows the work; platform staff resolve to ``None`` and are recorded
+    # under a NULL tenant rather than billed to somebody.
+    await refuse_if_over_budget(
+        tenant_id=scoped,
+        user_id=auth.user_id,
+        because=(
+            "A diagnose pass clusters failures and drafts a rewrite with a model, so it "
+            "is refused rather than started on a budget that cannot finish it."
+        ),
+    )
+    with governed(tenant_id=scoped, user_id=auth.user_id, role=auth.role):
+        async with get_sessionmaker()() as session:
+            result = await diagnose(
+                session,
+                prompt_key=req.prompt_key,
+                complete=complete,
+                limit=req.limit,
+                tenant_id=scoped,
+            )
+            await session.commit()
     await _safe_audit(
         "ops.diagnose",
         auth,
@@ -3024,7 +3181,12 @@ async def ops_diagnose(
     )
 
 
-@router.post("/ops/release", response_model=OpsReleaseResponse, tags=["ops"])
+@router.post(
+    "/ops/release",
+    response_model=OpsReleaseResponse,
+    tags=["ops"],
+    responses={429: {"model": AdmissionRefusedResponse}},
+)
 async def ops_release(
     req: OpsReleaseRequest,
     auth: AuthContext = Depends(require_admin_or_ai_team),
@@ -3046,6 +3208,17 @@ async def ops_release(
 
     eval_fn = make_eval_fn(complete)
     tenant_id = auth.tenant_id
+    # Governed for the same reason ``/ops/diagnose`` is: ``make_eval_fn`` generates an
+    # answer under the candidate prompt and judges it with a model, once per regression
+    # case, and none of that spend was capped or ledgered before task 9.2.
+    await refuse_if_over_budget(
+        tenant_id=tenant_id,
+        user_id=auth.user_id,
+        because=(
+            "The release gate generates and judges an answer per regression case, so it "
+            "is refused rather than started on a budget that cannot finish it."
+        ),
+    )
 
     async def approval_enqueue(*, prompt_key, draft_version_id, risk, reason) -> str:  # noqa: ANN001
         return await enqueue_release_approval(
@@ -3057,16 +3230,17 @@ async def ops_release(
         )
 
     try:
-        async with get_sessionmaker()() as session:
-            result = await release(
-                session,
-                draft_version_id=req.draft_version_id,
-                eval_fn=eval_fn,
-                approval_enqueue=approval_enqueue,
-                autonomy=req.autonomy,
-                margin=req.margin,
-            )
-            await session.commit()
+        with governed(tenant_id=tenant_id, user_id=auth.user_id, role=auth.role):
+            async with get_sessionmaker()() as session:
+                result = await release(
+                    session,
+                    draft_version_id=req.draft_version_id,
+                    eval_fn=eval_fn,
+                    approval_enqueue=approval_enqueue,
+                    autonomy=req.autonomy,
+                    margin=req.margin,
+                )
+                await session.commit()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)

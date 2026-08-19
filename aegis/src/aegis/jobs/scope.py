@@ -295,21 +295,19 @@ def _bind_scope_on_every_transaction(session: AsyncSession, tenant_id: int | Non
 
     Args:
         session: The activity's session.
-        tenant_id: The scope to bind, or ``None`` for platform scope (which writes the
-            empty string, exactly as ``set_tenant_scope`` does).
+        tenant_id: The scope to bind, or ``None`` for platform scope (which asserts
+            ``app.tenant_all='on'``, exactly as ``set_tenant_scope`` does — the two
+            share :data:`~aegis.governance.rls.SCOPE_BINDING_SQL` so there is one
+            definition of what "bound" means, and the scope auditor sees both).
     """
-    from sqlalchemy import event, text  # noqa: PLC0415 - local: aegis.jobs.scope stays import-light
+    # One definition of "re-bind on every transaction", shared with every other path
+    # that commits more than once — see the helper for why that shape is the auditor's
+    # most common real finding.
+    from aegis.governance.rls import (  # noqa: PLC0415 - local: aegis.jobs.scope stays import-light
+        bind_scope_for_session,
+    )
 
-    value = "" if tenant_id is None else str(tenant_id)
-
-    def _on_begin(_session: Any, _transaction: Any, connection: Any) -> None:  # noqa: ANN401
-        if connection.dialect.name != "postgresql":
-            return
-        connection.execute(
-            text("SELECT set_config('app.tenant_id', :tid, true)"), {"tid": value}
-        )
-
-    event.listen(session.sync_session, "after_begin", _on_begin)
+    bind_scope_for_session(session, tenant_id)
 
 
 def _scoped_call(
@@ -337,6 +335,9 @@ def _scoped_call(
                 "@tenant_activity(allow_platform_scope=True) if that is genuinely what "
                 "this activity does."
             )
+        from aegis.governance.context import (  # noqa: PLC0415 - local: see module docstring
+            governed,
+        )
         from aegis.governance.rls import (  # noqa: PLC0415 - local: see module docstring
             set_tenant_scope,
         )
@@ -349,7 +350,12 @@ def _scoped_call(
             # keeps the shared seam in aegis.governance.rls on the normal path rather
             # than reachable only through an event handler.
             await set_tenant_scope(session, tenant_id)
-            result = await fn(*args, **kwargs, **{_SESSION_KEYWORD: session})
+            # ...and the *billing* scope, from the same field, for the same reason. An
+            # activity that embeds a corpus spends real money at the gateway, and the
+            # gateway can only cap and ledger what a bound governance context names. Two
+            # scopes, one source: the tenant on the activity's own argument.
+            with governed(tenant_id=tenant_id):
+                result = await fn(*args, **kwargs, **{_SESSION_KEYWORD: session})
             # One commit, after the body returns: the stage commit rule. The activity's
             # output and its completed_stage bump land together or not at all.
             await session.commit()

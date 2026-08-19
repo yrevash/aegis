@@ -156,6 +156,9 @@ _STRICTER_END: dict[str, Strictness] = {
     "guardrails.input.max_chars": Strictness.LOWER,
     # Fewer concurrent jobs is a smaller share of the shared worker pool.
     "jobs.max_inflight.ingest": Strictness.LOWER,
+    # And fewer concurrent re-indexes is a smaller share of the same pool — plus a
+    # smaller share of the embedding bill, since a re-index re-embeds a whole corpus.
+    "jobs.max_inflight.reindex": Strictness.LOWER,
     # Over-estimating refuses a job that might have fitted; under-estimating admits one
     # that cannot finish. The higher figure is the one that refuses.
     "jobs.estimated_cost_usd.ingest_per_mb": Strictness.HIGHER,

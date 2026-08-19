@@ -29,8 +29,8 @@ SQLAlchemy, so a workflow still imports from here inside
 rather than paying for the ORM's import graph on every workflow task; what this module's
 own discipline buys is that nothing in it can *misbehave* when it is re-executed.)
 
-Two concurrency numbers, not one
---------------------------------
+Three concurrency numbers, and each bounds something different
+--------------------------------------------------------------
 
 :class:`QueueSpec` exists because *per-stage* policy and *per-worker* policy are
 different numbers and conflating them is a known way to lose a box. A Docling parse
@@ -39,6 +39,22 @@ peaks around 2.2 GB; two concurrently would exhaust a 16 GB machine. So ``parse`
 ``max_concurrent_activities=1``, while ``embed`` runs on :data:`IO_QUEUE`, which is
 network-bound and runs wide. The queue carries the concurrency policy; the stage merely
 names the queue it belongs on.
+
+``max_concurrent_activities`` bounds **one worker process**, and that is the reason it
+cannot be the last word on model concurrency: two worker processes are two copies of it,
+and what the model provider rate-limits is the sum. So it composes with two others rather
+than competing with them, and the three nest:
+
+* ``agent.team.max_parallel`` (catalogue, ``TIGHTEN_ONLY``, platform-capped) bounds how
+  wide **one turn** fans out, for **one tenant**;
+* ``max_concurrent_activities`` bounds how many activities **one process** runs at once,
+  which is a statement about that box's RAM;
+* :mod:`aegis.gateway.limiter` bounds how many provider calls the **whole fleet** has in
+  flight, because that is the only one of the three the provider itself has an opinion
+  about. Its state lives in Redis precisely so that adding a worker does not multiply it.
+
+The first two are inputs to the arithmetic — users × fan-out, workers × activity slots —
+and the third is the ceiling that arithmetic is held under.
 
 The stage handler registry
 --------------------------

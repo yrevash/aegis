@@ -65,6 +65,7 @@ __all__ = [
     "AdmissionError",
     "BudgetExceededError",
     "admit",
+    "check_budget",
     "max_inflight_key",
 ]
 
@@ -295,10 +296,18 @@ async def _spent_usd(
     return float(total or 0.0)
 
 
-async def _check_budget(
+async def check_budget(
     session: AsyncSession, *, tenant_id: int | None, estimated_cost_usd: float
 ) -> None:
     """Refuse a job the tenant's remaining budget cannot cover.
+
+    **Public, and callable on its own, because admission has to hold twice** (task 9.6).
+    The edge admits a job; the work starts later, on a worker, after a queue. Between
+    those two moments the window can roll, another job can spend the rest of the budget,
+    or an administrator can lower the cap — so the substrate re-runs *this* gate when the
+    work actually begins. It re-runs only this one: the concurrency half is already
+    enforced at that point by the worker pool itself (an activity waits for a slot), and
+    re-checking it there would have the job counting its own row against its own cap.
 
     The cap comes from the ``budgets`` table and from nowhere else — the same rows
     :func:`aegis.governance.enforcement.enforce_governance` charges against at the
@@ -403,6 +412,6 @@ async def admit(
         ValueError: If ``estimated_cost_usd`` is negative.
     """
     await _check_concurrency(session, tenant_id=tenant_id, job_type=job_type)
-    await _check_budget(
+    await check_budget(
         session, tenant_id=tenant_id, estimated_cost_usd=estimated_cost_usd
     )

@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from aegis.core.models import ModelRole
+from aegis.gateway.limiter import NoSlotLimiter, SlotLimiter
 from aegis.gateway.routing import (
     baseline_role,
     is_routable_role,
@@ -95,6 +96,7 @@ __all__ = [
     "embed",
     "fallback_events",
     "last_trace_id",
+    "limiter_status",
     "model_allowlist",
     "optimization_config",
     "optimization_summary",
@@ -281,6 +283,27 @@ class _NoOpObservability:
 _config: GatewayConfig | None = None
 _governance: GovernanceHook = _NoOpGovernance()
 _observability: ObservabilitySink = _NoOpObservability()
+#: The fourth injected hook: how many provider calls may be in flight at once, and over
+#: what — one process or the whole fleet. Defaults to :class:`~aegis.gateway.limiter.
+#: NoSlotLimiter`, which bounds nothing and reports ``scope="unlimited"``, for the same
+#: reason the governance hook defaults to a no-op: a library that silently throttled its
+#: caller would be a surprise. A host installs a real one through :func:`configure`.
+_limiter: SlotLimiter = NoSlotLimiter()
+
+
+def limiter_status() -> dict[str, Any]:
+    """Return what the model-call limiter is actually bounding, and how it is doing.
+
+    The ``scope`` in this payload is the honest one: ``fleet`` only when the installed
+    limiter holds its state somewhere every process can see it, ``process`` for a
+    semaphore local to this interpreter, ``unlimited`` when nothing is installed, and
+    ``fleet (degraded)`` while the shared store cannot be reached. It is exported so a
+    platform surface renders that word rather than a number whose reach it has assumed.
+
+    Returns:
+        The installed limiter's live counters.
+    """
+    return _limiter.status()
 
 
 def configure(
@@ -288,6 +311,7 @@ def configure(
     config: GatewayConfig | None = None,
     governance: GovernanceHook | None = None,
     observability: ObservabilitySink | None = None,
+    limiter: SlotLimiter | None = None,
     fallbacks: dict[ModelRole, list[ModelRole]] | None = None,
     baseline_role: ModelRole | None = None,
     fallback_sink: FallbackSink | None = None,
@@ -309,6 +333,10 @@ def configure(
         config: Connection + call-safety settings.
         governance: Budget/rate governance hook.
         observability: Span + usage instrumentation sink.
+        limiter: How many provider calls may be in flight at once. Pass
+            :class:`~aegis.gateway.limiter.RedisSlotLimiter` for a bound that holds
+            across every process in the pool; :class:`~aegis.gateway.limiter.
+            LocalSlotLimiter` bounds this interpreter only and reports itself as such.
         fallbacks: Override for the role → fallback-chain map used when a
             primary deployment errors.
         baseline_role: Override for the frontier-baseline role the savings calc
@@ -328,7 +356,7 @@ def configure(
             before letting one probe through (default 30s, env
             ``GATEWAY_BREAKER_COOLDOWN_SECONDS``).
     """
-    global _config, _governance, _observability
+    global _config, _governance, _observability, _limiter
     global _fallbacks_override, _baseline_role_override
     global _fallback_sink, _allowed_roles_override
     global _breaker_threshold_override, _breaker_cooldown_override
@@ -338,6 +366,8 @@ def configure(
         _governance = governance
     if observability is not None:
         _observability = observability
+    if limiter is not None:
+        _limiter = limiter
     if fallbacks is not None:
         _fallbacks_override = fallbacks
     if baseline_role is not None:
@@ -959,23 +989,36 @@ async def _attempt(
     outright. The failure still propagates to *this* caller unchanged, and it is
     still logged, because not arming a control is not a reason to go quiet about it.
     """
-    try:
-        return await _bounded_acompletion(litellm, kwargs, timeout=timeout)
-    except Exception as exc:
-        deployment = model_for(primary_role)
-        if _is_deployment_evidence(exc):
-            _record_deployment_failure(deployment, role=role, reason=type(exc).__name__)
-        else:
-            logger.warning(
-                "Gateway call to %s failed with a REQUEST-side error (%s: %s); the "
-                "circuit breaker is NOT armed. This failure is evidence about the "
-                "request, not about the deployment, and faulting a shared deployment "
-                "for it would degrade every other tenant in this process.",
-                deployment,
-                type(exc).__name__,
-                exc,
-            )
-        raise
+    # The fleet-wide slot is held for the provider round trip and nothing else — not the
+    # governance reads before it, not the ledger write after it. Holding it any wider
+    # would count database time against a limit that exists to protect the model
+    # provider. The re-ask path calls this function again and so takes a second slot,
+    # correctly: it is a second call to the provider.
+    #
+    # Acquired OUTSIDE the try, deliberately: a :class:`SlotUnavailableError` is this
+    # platform's own refusal and carries no evidence whatever about the deployment, so
+    # it must not reach the branch below that can arm a breaker shared by every tenant.
+    async with _limiter.slot():
+        try:
+            return await _bounded_acompletion(litellm, kwargs, timeout=timeout)
+        except Exception as exc:
+            deployment = model_for(primary_role)
+            if _is_deployment_evidence(exc):
+                _record_deployment_failure(
+                    deployment, role=role, reason=type(exc).__name__
+                )
+            else:
+                logger.warning(
+                    "Gateway call to %s failed with a REQUEST-side error (%s: %s); the "
+                    "circuit breaker is NOT armed. This failure is evidence about the "
+                    "request, not about the deployment, and faulting a shared "
+                    "deployment for it would degrade every other tenant in this "
+                    "process.",
+                    deployment,
+                    type(exc).__name__,
+                    exc,
+                )
+            raise
 
 
 def _estimate_cost(
@@ -1467,6 +1510,9 @@ async def complete(
 
     Raises:
         BudgetExceededError: When the injected governance hook refuses the call.
+        SlotUnavailableError: When no model-call slot came free within the limiter's
+            wait budget — the fleet is saturated, and queueing forever would be
+            indistinguishable from losing the request.
         ModelUnavailableError: When every deployment this role may reach — after
             the tenant's tier bound and the circuit breaker — is unavailable. The
             call fails loudly rather than succeeding on a model outside the tier.
@@ -1665,10 +1711,17 @@ async def embed(texts: list[str]) -> list[list[float]]:
         # the ``timeout`` kwarg caps the upstream, and the outer ``wait_for`` is a
         # hard backstop so a hung embeddings endpoint (on the hot retrieval path)
         # can never block a run indefinitely.
-        response = await asyncio.wait_for(
-            litellm.aembedding(model=model, input=texts, timeout=timeout, **_base_kwargs()),
-            timeout=timeout + 5.0,
-        )
+        # Under the same fleet-wide slot as a generation call, and for the same reason:
+        # a re-index embedding a whole corpus and five users asking questions are the
+        # same twenty round trips to the same provider, and a limit that only counted
+        # one of them would be exhausted by the other.
+        async with _limiter.slot():
+            response = await asyncio.wait_for(
+                litellm.aembedding(
+                    model=model, input=texts, timeout=timeout, **_base_kwargs()
+                ),
+                timeout=timeout + 5.0,
+            )
         usage_obj = getattr(response, "usage", None)
         prompt_tokens = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
         # The configured embedding deployment is a custom gateway id that is NOT in
@@ -1819,9 +1872,10 @@ async def transcribe(
                 kwargs["prompt"] = prompt
             # Bounded exactly like ``embed``: the ``timeout`` kwarg caps the
             # upstream and the outer ``wait_for`` is a hard backstop.
-            response = await asyncio.wait_for(
-                litellm.atranscription(**kwargs), timeout=timeout + 5.0
-            )
+            async with _limiter.slot():
+                response = await asyncio.wait_for(
+                    litellm.atranscription(**kwargs), timeout=timeout + 5.0
+                )
 
         text = str(_transcription_field(response, "text") or "")
         detected_language = _transcription_field(response, "language")

@@ -115,14 +115,46 @@ class _SettingsGatewayConfig:
 
 
 def _governed(ctx: GovernanceContext | None) -> GovernanceContext | None:
-    """Return the context iff the request is tenant-governed, else ``None``.
+    """Return the bound governance context, or ``None`` when nothing is bound.
 
-    Enforcement and ledgering are fully gated behind a bound tenant: an unscoped
-    request (no governance context, the default for every existing flow and the
-    offline demo) skips the database entirely and behaves exactly as before.
+    **What changed here, and why (task 9.2).** This gate used to return ``None`` for a
+    context whose ``tenant_id`` was ``None``, which collapsed two different things into
+    one: "nobody is governing this call" and "this call is platform work owned by no
+    tenant". The consequence was that a platform-scoped red-team run — dozens of live
+    model calls — wrote **zero** ``usage_ledger`` rows, and the money it spent existed
+    nowhere in the system.
+
+    The two halves are now separated, because they answer to different constraints:
+
+    * **The cap needs a principal.** A USD ceiling is a promise made to somebody who
+      agreed to it, and there is no ``budgets`` row for "nobody". Charging platform work
+      to an arbitrary tenant would corrupt the figure on that tenant's own budget screen,
+      which is the one number :mod:`aegis.jobs.admission` exists to keep single and true.
+      So :func:`aegis.governance.enforcement.enforce_governance` still returns
+      immediately for a tenantless context, and it does so without opening a session.
+    * **The ledger needs only a call.** ``usage_ledger.tenant_id`` is nullable, so
+      platform spend is recordable, and recording it is what makes it *visible* —
+      countable on the usage rollup, reconcilable against a provider invoice, and
+      impossible to mistake for zero.
+
+    A call with **no context at all** stays a complete no-op: that is the offline/lite
+    path where there is no database to write to, and widening it would make every unit
+    test with a fake completer reach for a session.
+
+    **What does bound platform work, then**, since no USD cap does: the same two controls
+    that bound a tenant's, neither of which needs a principal to name. Admission's
+    concurrency gate counts platform rows explicitly (``jobs.max_inflight.{job_type}``
+    matches ``tenant_id IS NULL`` rather than skipping it — see
+    :func:`aegis.jobs.admission._tenant_clause`), and the fleet-wide model-call limiter
+    (:mod:`aegis.gateway.limiter`) bounds how fast any of it can spend. The ledger rows
+    are what make the total *reviewable* afterwards, which is the part that was missing.
+
+    Args:
+        ctx: The context bound by the edge, or ``None``.
+
+    Returns:
+        ``ctx`` when anything is bound — tenant or platform — and ``None`` otherwise.
     """
-    if ctx is None or ctx.tenant_id is None:
-        return None
     return ctx
 
 
@@ -137,7 +169,10 @@ class _GovernanceHook:
         """Raise :class:`BudgetExceededError` if the principal is over any cap.
 
         Reads the authoritative ``Budget`` rows and ``UsageLedger`` sums for the
-        tenant→user path. A real budget breach always propagates. An
+        tenant→user path. A **platform-scoped** context (``tenant_id is None``) is
+        returned uncapped and without a database round trip — see :func:`_governed` for
+        why a cap needs a principal and the ledger does not; the spend is still
+        recorded by :meth:`record`. A real budget breach always propagates. An
         enforcement **error** (e.g. a database blip) fails **CLOSED** by
         default — the call is denied rather than silently uncapped, so a
         transient failure can never disable every spend cap. Set
@@ -209,6 +244,57 @@ class _GovernanceHook:
         )
 
 
+def _build_limiter() -> gateway.SlotLimiter:
+    """Choose the model-call limiter this deployment can honestly claim to hold.
+
+    Three outcomes, and the difference between them is reported rather than assumed:
+
+    * **No limit configured** (``GATEWAY_MAX_CONCURRENT_CALLS=0``) →
+      :class:`~aegis.gateway.limiter.NoSlotLimiter`, whose scope reads ``unlimited``.
+    * **Real stores** → :class:`~aegis.gateway.limiter.RedisSlotLimiter`, whose leases
+      live in the Redis this platform already runs, so the API process and every
+      ``python -m app.jobs.worker`` share **one** count. This is the only configuration
+      in which the number means what a reader assumes it means.
+    * **Stores off** (the offline/lite profile, which has no Redis) →
+      :class:`~aegis.gateway.limiter.LocalSlotLimiter`, which bounds this interpreter and
+      says ``process`` on the platform surface. Correct for a one-process demo and
+      visibly *not* a fleet claim for anyone else — a per-process semaphore presented as
+      a global limit is worse than no limiter at all, because it promises a bound it
+      cannot hold.
+
+    The lease length is derived from ``llm_timeout_seconds`` rather than configured
+    separately: a slot held materially longer than one call timeout is held by a process
+    that is no longer running, and a second number here could be set shorter than the
+    call it must outlast.
+
+    Returns:
+        The limiter to install on the gateway.
+    """
+    settings = get_settings()
+    limit = settings.gateway_max_concurrent_calls
+    if limit < 1:
+        logger.warning(
+            "GATEWAY_MAX_CONCURRENT_CALLS=%d: model calls are UNBOUNDED. Five users "
+            "asking four-agent questions is twenty simultaneous provider calls.",
+            limit,
+        )
+        return gateway.NoSlotLimiter()
+    lease = gateway.lease_seconds_for(settings.llm_timeout_seconds)
+    if settings.stores_enabled and settings.redis_url:
+        return gateway.RedisSlotLimiter.from_url(
+            settings.redis_url,
+            limit=limit,
+            lease_seconds=lease,
+            wait_seconds=settings.gateway_slot_wait_seconds,
+        )
+    logger.warning(
+        "No shared store is configured, so the model-call limit of %d bounds THIS "
+        "PROCESS only (scope='process'). A second process would double it.",
+        limit,
+    )
+    return gateway.LocalSlotLimiter(limit)
+
+
 # Wire the injected hooks once, at import time — every existing call site
 # (`from app.core.llm import complete`, etc.) then goes through the real gateway
 # with this platform's config/governance bound in, and the standalone
@@ -217,4 +303,5 @@ gateway.configure(
     config=_SettingsGatewayConfig(),
     governance=_GovernanceHook(),
     observability=OtelObservabilitySink(),
+    limiter=_build_limiter(),
 )

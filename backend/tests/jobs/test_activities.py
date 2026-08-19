@@ -352,6 +352,53 @@ async def test_an_unknown_stage_name_is_never_written_to_the_row(wired_jobs, sta
     assert (await _document(wired_jobs, document_id)).completed_stage is None
 
 
+async def test_a_stage_refused_by_the_tenants_budget_fails_the_job_once(
+    wired_jobs, stage_log
+):
+    """A cap tripped mid-stage is a job outcome with a reason, not a surprise invoice.
+
+    Two halves, and both matter (tasks 9.2/9.6):
+
+    * ``@tenant_activity`` binds the tenant's governance context, so the gateway
+      *enforces* on the calls a stage handler makes — the ``embed`` stage embeds every
+      chunk of the document, and until 9.2 that spend was capped by nothing;
+    * a breach ends the job **non-retryably**. The default is three retries, and each one
+      would re-run the stage, pay for it again and meet the same cap — three times the
+      bill for the same refusal.
+    """
+    from aegis.gateway import BudgetExceededError
+
+    await seed_tenants(wired_jobs, TENANT_A)
+    document_id = await seed_document(wired_jobs, TENANT_A, sha=_SHA_A)
+    attempts = {"n": 0}
+
+    async def broke(session, *, tenant_id, document_id, stage):
+        attempts["n"] += 1
+        raise BudgetExceededError(
+            scope="tenant", scope_id=tenant_id, limit_type="usd_cap", limit=1.0, used=2.0
+        )
+
+    register_stage_handler("parse", broke)
+
+    with pytest.raises(ApplicationError) as raised:
+        await run_stage(
+            StageInput(
+                tenant_id=TENANT_A,
+                workflow_id="ingest:7:1",
+                document_id=document_id,
+                stage="parse",
+            )
+        )
+
+    assert raised.value.type == "BudgetExceeded"
+    assert raised.value.non_retryable is True, "each retry pays again for the same refusal"
+    assert "usd_cap" in str(raised.value)
+    assert attempts["n"] == 1
+    # And nothing was recorded as progress, so a later re-queue does not skip the stage
+    # that was never actually performed.
+    assert (await _document(wired_jobs, document_id)).completed_stage is None
+
+
 async def test_a_handler_cannot_move_a_document_to_another_tenant(wired_jobs, stage_log):
     await seed_tenants(wired_jobs, TENANT_A, TENANT_B)
     document_id = await seed_document(wired_jobs, TENANT_A, sha=_SHA_A)
