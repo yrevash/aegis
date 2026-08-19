@@ -34,6 +34,13 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from aegis.core.cache_stats import (
+    CACHE_ANSWER,
+    record_hit,
+    record_miss,
+    record_store,
+    register_cache,
+)
 from aegis.retrieval.cache import RedisLike
 from aegis.retrieval.vectors import cosine_similarity
 
@@ -88,6 +95,15 @@ class AnswerCache:
         self._ttl = ttl_seconds
         self._threshold = similarity_threshold
         self._ns = namespace
+        # ``backend="none"`` is the honest label for a cache built without a client: it
+        # always misses, and reporting it as a Redis cache with a 0% hit rate would
+        # blame the cache for a store that was never wired.
+        register_cache(
+            CACHE_ANSWER,
+            backend="redis" if client is not None else "none",
+            ttl_seconds=self._ttl,
+            threshold=self._threshold,
+        )
 
     def _index_key(self, scope: str) -> str:
         """Return the per-scope index SET key (partitions entries by scope)."""
@@ -118,6 +134,7 @@ class AnswerCache:
             The best-matching :class:`AnswerCacheHit`, or ``None`` on a miss.
         """
         if self._client is None:
+            record_miss(CACHE_ANSWER)
             return None
         members = await self._client.smembers(self._index_key(scope))
         best_entry: dict | None = None
@@ -134,7 +151,9 @@ class AnswerCache:
                 best_score = score
                 best_entry = entry
         if best_entry is None:
+            record_miss(CACHE_ANSWER)
             return None
+        record_hit(CACHE_ANSWER)
         return AnswerCacheHit(
             answer=best_entry.get("answer", ""),
             query=best_entry.get("query", ""),
@@ -174,6 +193,7 @@ class AnswerCache:
         }
         await self._client.set(key, json.dumps(entry), ex=self._ttl)
         await self._client.sadd(self._index_key(scope), key)
+        record_store(CACHE_ANSWER)
 
     @classmethod
     def from_url(cls, url: str, **kwargs: object) -> AnswerCache:

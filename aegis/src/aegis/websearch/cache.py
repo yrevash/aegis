@@ -33,6 +33,15 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
+from aegis.core.cache_stats import (
+    CACHE_WEB_SEARCH,
+    note_size,
+    record_eviction,
+    record_hit,
+    record_miss,
+    record_store,
+    register_cache,
+)
 from aegis.core.config import AegisMode
 from aegis.websearch.types import WebSearchResult
 
@@ -151,24 +160,43 @@ class InMemoryWebSearchCache:
         """Create an empty cache bounded to ``max_entries`` insertion-ordered entries."""
         self._max_entries = max(1, max_entries)
         self._data: dict[str, tuple[float, str]] = {}
+        register_cache(
+            CACHE_WEB_SEARCH,
+            backend="in_memory",
+            ttl_seconds=DEFAULT_TTL_SECONDS,
+            capacity=self._max_entries,
+        )
+        note_size(CACHE_WEB_SEARCH, 0)
 
     def get(self, key: str) -> str | None:
-        """Return the cached value for ``key``, or None when absent or expired."""
+        """Return the cached value for ``key``, or None when absent or expired.
+
+        An expired entry is a **miss**, and the sweep that drops it is not an
+        eviction: the cap did not force it out, its own TTL ran. Counting it as one
+        would make the eviction figure mean two different things at once.
+        """
         entry = self._data.get(key)
         if entry is None:
+            record_miss(CACHE_WEB_SEARCH)
             return None
         expires_at, value = entry
         if expires_at <= time.time():
             self._data.pop(key, None)
+            note_size(CACHE_WEB_SEARCH, len(self._data))
+            record_miss(CACHE_WEB_SEARCH)
             return None
+        record_hit(CACHE_WEB_SEARCH)
         return value
 
     def set(self, key: str, value: str, *, ttl: int = DEFAULT_TTL_SECONDS) -> None:
         """Store ``value`` under ``key``, evicting the oldest entry past the cap."""
         self._data.pop(key, None)
         self._data[key] = (time.time() + ttl, value)
+        record_store(CACHE_WEB_SEARCH)
         while len(self._data) > self._max_entries:
             self._data.pop(next(iter(self._data)))
+            record_eviction(CACHE_WEB_SEARCH)
+        note_size(CACHE_WEB_SEARCH, len(self._data))
 
 
 class RedisWebSearchCache:
@@ -183,6 +211,12 @@ class RedisWebSearchCache:
         """
         self._client = client
         self._max_entries = max(1, max_entries)
+        register_cache(
+            CACHE_WEB_SEARCH,
+            backend="redis",
+            ttl_seconds=DEFAULT_TTL_SECONDS,
+            capacity=self._max_entries,
+        )
         self._drop_superseded_indexes()
 
     def _drop_superseded_indexes(self) -> None:
@@ -210,14 +244,24 @@ class RedisWebSearchCache:
                 )
 
     def get(self, key: str) -> str | None:
-        """Return the cached value for ``key`` or ``None`` (Redis expires it for us)."""
+        """Return the cached value for ``key`` or ``None`` (Redis expires it for us).
+
+        A TTL expiry arrives here as an absent key, so it is counted as a miss and
+        never as an eviction — nothing in this process saw the store drop it.
+        """
         value = self._client.get(key)
-        return value.decode() if isinstance(value, bytes) else value
+        decoded = value.decode() if isinstance(value, bytes) else value
+        if decoded is None:
+            record_miss(CACHE_WEB_SEARCH)
+        else:
+            record_hit(CACHE_WEB_SEARCH)
+        return decoded
 
     def set(self, key: str, value: str, *, ttl: int = DEFAULT_TTL_SECONDS) -> None:
         """Store ``value`` with a TTL and trim the index back to the cap."""
         self._client.setex(key, ttl, value)
         self._client.zadd(INDEX_KEY, {key: time.time()})
+        record_store(CACHE_WEB_SEARCH)
         self._trim()
 
     def _trim(self) -> None:
@@ -231,6 +275,10 @@ class RedisWebSearchCache:
         keys = [k.decode() if isinstance(k, bytes) else k for k in stale]
         self._client.delete(*keys)
         self._client.zrem(INDEX_KEY, *keys)
+        # The cap forced these out; that is exactly what an eviction is, and it is the
+        # one this repo can count — the index set is ours, so the trim is observable
+        # where a store-side TTL expiry is not.
+        record_eviction(CACHE_WEB_SEARCH, len(keys))
 
 
 def make_web_search_cache(

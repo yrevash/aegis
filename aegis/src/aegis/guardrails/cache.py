@@ -3,6 +3,11 @@
 In-memory is returned ONLY when the mode is ``lite``/``auto``. In ``full`` mode a
 real Redis client must be supplied; its absence raises rather than silently
 degrading. There is no ``except -> in-memory`` path.
+
+Both backends count their own hits and misses into :mod:`aegis.core.cache_stats`, on
+the branch that decided them. This cache never expires and never evicts — one text has
+one stable verdict — so it reports no TTL, no cap and no eviction count, which is a
+different statement from reporting zeros.
 """
 
 from __future__ import annotations
@@ -10,6 +15,14 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol
 
+from aegis.core.cache_stats import (
+    CACHE_INJECTION,
+    note_size,
+    record_hit,
+    record_miss,
+    record_store,
+    register_cache,
+)
 from aegis.core.config import AegisMode
 
 logger = logging.getLogger(__name__)
@@ -31,16 +44,24 @@ class InMemoryInjectionCache:
     """A process-local dict cache (lite/tests only — non-durable)."""
 
     def __init__(self) -> None:
-        """Initialise an empty cache."""
+        """Initialise an empty cache and register it as this process's instance."""
         self._data: dict[str, str] = {}
+        register_cache(CACHE_INJECTION, backend="in_memory")
 
     def get(self, key: str) -> str | None:
-        """Return the cached value for ``key`` or ``None``."""
-        return self._data.get(key)
+        """Return the cached value for ``key`` or ``None``, counting the verdict."""
+        value = self._data.get(key)
+        if value is None:
+            record_miss(CACHE_INJECTION)
+        else:
+            record_hit(CACHE_INJECTION)
+        return value
 
     def set(self, key: str, value: str) -> None:
         """Store ``value`` under ``key``."""
         self._data[key] = value
+        record_store(CACHE_INJECTION)
+        note_size(CACHE_INJECTION, len(self._data))
 
 
 def make_injection_cache(
@@ -71,12 +92,19 @@ class _RedisInjectionCache:
     def __init__(self, client: Any) -> None:  # noqa: ANN401
         """Wrap a redis client exposing sync ``get``/``set``."""
         self._client = client
+        register_cache(CACHE_INJECTION, backend="redis")
 
     def get(self, key: str) -> str | None:
-        """Return the cached value for ``key`` or ``None``."""
+        """Return the cached value for ``key`` or ``None``, counting the verdict."""
         value = self._client.get(key)
-        return value.decode() if isinstance(value, bytes) else value
+        decoded = value.decode() if isinstance(value, bytes) else value
+        if decoded is None:
+            record_miss(CACHE_INJECTION)
+        else:
+            record_hit(CACHE_INJECTION)
+        return decoded
 
     def set(self, key: str, value: str) -> None:
         """Store ``value`` under ``key``."""
         self._client.set(key, value)
+        record_store(CACHE_INJECTION)

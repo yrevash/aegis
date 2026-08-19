@@ -42,6 +42,14 @@ import re
 from datetime import UTC, datetime
 from typing import Protocol
 
+from aegis.core.cache_stats import (
+    CACHE_RETRIEVAL_EXACT,
+    CACHE_RETRIEVAL_SEMANTIC,
+    record_hit,
+    record_miss,
+    record_store,
+    register_cache,
+)
 from aegis.retrieval.models import CacheProvenance, RetrievalResult
 from aegis.retrieval.types import RetrievalOrigin, RetrievalScope
 from aegis.retrieval.vectors import cosine_similarity
@@ -101,6 +109,20 @@ class SemanticCache:
         self._ttl = ttl_seconds
         self._threshold = similarity_threshold
         self._ns = namespace
+        # Both tiers are registered separately because they are separately decided: the
+        # exact tier is one GET on a digest, the semantic tier is a cosine scan, and a
+        # single blended hit rate over the two would hide which of them is doing the
+        # work. Only the semantic tier has a threshold; the exact tier reports none
+        # rather than borrowing it.
+        register_cache(
+            CACHE_RETRIEVAL_EXACT, backend="redis", ttl_seconds=self._ttl
+        )
+        register_cache(
+            CACHE_RETRIEVAL_SEMANTIC,
+            backend="redis",
+            ttl_seconds=self._ttl,
+            threshold=self._threshold,
+        )
 
     def _partition(self, scope: RetrievalScope) -> str:
         """Return the keyspace segment that isolates ``scope``'s entries.
@@ -181,9 +203,11 @@ class SemanticCache:
         key = self._entry_key(query, scope)
         raw = await self._client.get(key)
         if raw is None:
+            record_miss(CACHE_RETRIEVAL_EXACT)
             return None
         entry = json.loads(raw)
         self._verify_scope(entry, scope, key)
+        record_hit(CACHE_RETRIEVAL_EXACT)
         return self._load_result(entry, kind=_KIND_EXACT)
 
     async def get_semantic(
@@ -221,7 +245,9 @@ class SemanticCache:
                 best_score = score
                 best_entry = entry
         if best_entry is None:
+            record_miss(CACHE_RETRIEVAL_SEMANTIC)
             return None
+        record_hit(CACHE_RETRIEVAL_SEMANTIC)
         return self._load_result(best_entry, kind=_KIND_NEAR)
 
     async def set(
@@ -253,6 +279,11 @@ class SemanticCache:
         }
         await self._client.set(key, json.dumps(entry), ex=self._ttl)
         await self._client.sadd(self._index_key(scope), key)
+        # One write populates both tiers — the entry key and the scope's index — so it
+        # is counted against both rather than attributed to whichever tier is listed
+        # first.
+        record_store(CACHE_RETRIEVAL_EXACT)
+        record_store(CACHE_RETRIEVAL_SEMANTIC)
 
     @staticmethod
     def _load_result(entry: dict, *, kind: str) -> RetrievalResult:

@@ -28,6 +28,7 @@
  */
 
 import {
+  AreaChart,
   Brain,
   Coins,
   Cpu,
@@ -114,6 +115,14 @@ export const SECTIONS: Record<string, Section> = {
     icon: LayoutDashboard,
     hint: 'value at a glance',
     tooltip: 'Operations & value at a glance',
+  },
+  analytics: {
+    id: 'analytics',
+    label: 'Analytics',
+    icon: AreaChart,
+    hint: 'Apache Superset',
+    tooltip:
+      'Aegis Analytics — Superset\'s charts rendered inside Aegis, never in another portal: the backend builds the query, mints a short-lived guest token, and every row is narrowed to your tenant by a WHERE clause the browser cannot remove · Apache Superset',
   },
   savings: {
     id: 'savings',
@@ -370,13 +379,22 @@ export const SECTIONS: Record<string, Section> = {
  *     get a 403 where the nav promised a control.
  *   - `simulation` stays where it tells the isolation story and is not propagated: it
  *     is a demo artefact, not an operator tool.
+ *
+ * `analytics` is on the three portals whose principals *act* on it, and the acting is
+ * real: an operator chooses the board and the window, and — where the deployment has
+ * embedded dashboards — explores inside one. It is withheld from `ai_team` and `devops`
+ * for the standard reason: neither builds nor decides anything from a tenant's business
+ * board, and their operational surfaces (`harness`, `evals`, `latency`, `stack`) already
+ * carry the measurements they act on. `client` keeps it under the record exception —
+ * its own tenant's numbers are its own, and the backend narrows every row to that
+ * tenant with a clause the browser cannot reach.
  */
 export const ROLE_SECTIONS: Record<Portal, string[]> = {
-  platform_admin: ['dashboard', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
-  tenant_admin: ['dashboard', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
+  platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
+  tenant_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
-  devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit', 'settings'],
-  client: ['console', 'dashboard', 'approvals', 'savings', 'forecast', 'risk', 'simulation', 'settings'],
+  devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'cache', 'latency', 'audit', 'settings'],
+  client: ['console', 'dashboard', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'simulation', 'settings'],
 }
 
 /**

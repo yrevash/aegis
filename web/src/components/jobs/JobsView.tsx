@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useState, type ReactElement } from 'r
 import { Badge } from '@/components/primitives/badge'
 import { Card } from '@/components/primitives/card'
 import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
+import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { CorpusPanel } from '@/components/jobs/CorpusPanel'
 import { IngestLog } from '@/components/jobs/IngestLog'
 import { UploadPanel } from '@/components/jobs/UploadPanel'
@@ -359,6 +360,11 @@ export function JobsMount(): ReactElement {
             the parse&rsquo;s own confidence in itself, and the graph as it is extracted.
           </p>
         </div>
+        {/* The pipeline before the queue. §7.10 is an aggregation over exactly the
+            rows this page then lists — depth, the oldest pending job, the failure
+            count, the per-stage timings the ingest already commits — so it belongs
+            above them rather than on a page of its own that reads the same tables. */}
+        <PipelineHealthPanel />
         <JobsView token={session?.token ?? null} />
       </div>
     </BackendGate>

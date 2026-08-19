@@ -133,3 +133,52 @@ async def probe_vector_store(path: str, *, client: Any | None = None) -> Depende
         # /readyz is polled, so a probe that leaks a handle per call eventually exhausts
         # the file descriptors of the store it is supposed to be reporting on.
         await _aclose(owned)
+
+
+async def probe_neo4j(
+    uri: str,
+    *,
+    user: str = "",
+    password: str = "",
+    driver: Any | None = None,  # noqa: ANN401 - any driver object
+) -> DependencyStatus:
+    """Ask the Neo4j driver to verify connectivity and report the answer.
+
+    The fourth probe, and the one that was missing while the graph arm was already a
+    hard part of hybrid retrieval: with Neo4j down, retrieval keeps working on the
+    vector and BM25 arms and every dashboard stayed green, so the degradation was
+    invisible to everything except the answer quality.
+
+    ``verify_connectivity()`` is the driver's own round trip — it dials the server and
+    runs the handshake — so a ``up`` here is a real answer from a real database, not a
+    URI that parsed. Nothing is written and no query is run: this is a reachability
+    probe, and a probe with side effects is a probe nobody dares run often.
+
+    Args:
+        uri: The bolt URI (e.g. ``bolt://localhost:7687``).
+        user: The username, for the basic-auth tuple.
+        password: The password.
+        driver: An optional injected driver for testing. When ``None`` the real driver
+            is built through :func:`aegis.core.lazy.require` and closed again here.
+
+    Returns:
+        DependencyStatus with status "up" or "down".
+    """
+    owned = None
+    try:
+        graph_driver = driver
+        if graph_driver is None:
+            neo4j = require("aegis[retrieval]", "neo4j")
+            graph_driver = owned = neo4j.GraphDatabase.driver(
+                uri, auth=(user, password)
+            )
+        result = graph_driver.verify_connectivity()
+        if inspect.isawaitable(result):
+            await result
+        return DependencyStatus(name="neo4j", status="up")
+    except Exception as exc:  # noqa: BLE001 - a probe reports failure, never raises
+        return DependencyStatus(name="neo4j", status="down", detail=str(exc))
+    finally:
+        # Only close what this probe opened; the sync driver's ``close`` is picked up by
+        # ``_aclose`` exactly like Chroma's, and an injected driver belongs to its owner.
+        await _aclose(owned)
