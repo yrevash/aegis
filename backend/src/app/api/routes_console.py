@@ -635,8 +635,10 @@ class SettingRow(BaseModel):
     **``control.effective`` is not decoration.** ``False`` means nothing in the system
     reads this key yet, and ``control.inert_reason`` says what would change that. Six
     keys once saved, wrote an audit row and badged themselves "Your setting" while
-    changing nothing whatsoever; four now bind, and the two that still do not
-    (``agent.model``, ``agent.mode``) say so here. A screen that renders an
+    changing nothing whatsoever; five now bind — ``agent.model`` most recently, against
+    the platform's allowed-deployment set (§7.16 row 6), whose ``control.choices`` are a
+    projection of the very set the server validates a write against — and the one that
+    still does not (``agent.mode``) says so here. A screen that renders an
     ``effective=False`` control as though a write to it took effect re-creates the
     defect on the client side of a wire that is now telling the truth.
     """

@@ -31,10 +31,16 @@ from app.core.security import create_access_token
 def _request_models() -> dict[str, type[BaseModel]]:
     """Every ``*Request`` Pydantic model the API's two schema modules declare."""
     import app.main  # noqa: F401 - routes_console may only be reached through the app
-    from app.api import routes_console, routes_redteam, schemas
+    from app.api import (
+        routes_analytics,
+        routes_console,
+        routes_memory,
+        routes_redteam,
+        schemas,
+    )
 
     found: dict[str, type[BaseModel]] = {}
-    for module in (schemas, routes_console, routes_redteam):
+    for module in (schemas, routes_console, routes_redteam, routes_analytics, routes_memory):
         for name in dir(module):
             if not name.endswith("Request"):
                 continue
@@ -48,8 +54,8 @@ def test_every_request_model_forbids_a_field_it_does_not_carry() -> None:
     """The rule, over the real class objects rather than a list somebody maintains.
 
     Drop ``model_config = ConfigDict(extra="forbid")`` from any request model in
-    ``app.api.schemas``, ``app.api.routes_console`` or ``app.api.routes_redteam``
-    and this names it.
+    ``app.api.schemas``, ``app.api.routes_console``, ``app.api.routes_redteam``,
+    ``app.api.routes_analytics`` or ``app.api.routes_memory`` and this names it.
     """
     models = _request_models()
     assert len(models) >= 17, f"the discovery found too few models to be trusted: {models}"

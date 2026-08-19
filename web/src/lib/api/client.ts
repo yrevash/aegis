@@ -42,10 +42,18 @@ import type {
 } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 import type {
+  MemoryFactCorrectionRequest,
+  MemoryFactDeleteResponse,
+  MemoryFactWriteRequest,
+  MemoryFactWriteResponse,
   MemoryFactsResponse,
+  MemoryForgetResponse,
   MemoryMessagesResponse,
   MemoryProfileResponse,
+  MemoryRetentionResponse,
+  MemoryRetentionSweepResponse,
   MemorySessionsResponse,
+  MemorySubjectsResponse,
   MemoryWritesResponse,
   RecallDebugResponse,
 } from '@/lib/api/memory'
@@ -370,6 +378,95 @@ export async function getRecallDebug(
 ): Promise<RecallDebugResponse> {
   const params = new URLSearchParams({ subject, query })
   return request<RecallDebugResponse>(`/memory/recall_debug?${params.toString()}`, { method: 'GET' }, token)
+}
+
+// ── Memory control plane: the write, the correction, the forget, the horizon ──
+//
+// Every one of these takes the subject as an opaque string the server handed us, never
+// one this file composed. `getMemorySubjects` is the only place a subject enters the
+// browser, and the server derives each one from the caller's own sealed identity.
+
+/** List the subjects this sign-in may manage — itself, or its tenant's people. */
+export async function getMemorySubjects(
+  token: string | null,
+): Promise<MemorySubjectsResponse> {
+  return request<MemorySubjectsResponse>('/memory/subjects', { method: 'GET' }, token)
+}
+
+/**
+ * Write one durable fact by hand.
+ *
+ * The backend screens `text` through the full input rail **before** it is stored, so a
+ * 422 here is the guardrails refusing to keep something — its `detail` is the reason and
+ * is worth showing verbatim. Omit `subject` to write about yourself.
+ */
+export async function writeMemoryFact(
+  token: string | null,
+  body: MemoryFactWriteRequest,
+): Promise<MemoryFactWriteResponse> {
+  return request<MemoryFactWriteResponse>(
+    '/memory/facts',
+    { method: 'POST', body: JSON.stringify(body) },
+    token,
+  )
+}
+
+/** Correct one fact. The old row is superseded, not overwritten — history survives. */
+export async function correctMemoryFact(
+  token: string | null,
+  factId: number,
+  body: MemoryFactCorrectionRequest,
+): Promise<MemoryFactWriteResponse> {
+  return request<MemoryFactWriteResponse>(
+    `/memory/facts/${factId}`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+    token,
+  )
+}
+
+/** Delete one fact outright. A real delete: the row is gone, not flagged. */
+export async function deleteMemoryFact(
+  token: string | null,
+  factId: number,
+): Promise<MemoryFactDeleteResponse> {
+  return request<MemoryFactDeleteResponse>(
+    `/memory/facts/${factId}`,
+    { method: 'DELETE' },
+    token,
+  )
+}
+
+/** Erase everything held about a subject, and report the counts it removed. */
+export async function forgetMemorySubject(
+  token: string | null,
+  subject: string,
+): Promise<MemoryForgetResponse> {
+  return request<MemoryForgetResponse>(
+    `/memory/forget?subject=${encodeURIComponent(subject)}`,
+    { method: 'POST' },
+    token,
+  )
+}
+
+/** The retention horizons in force, and what is already sitting past them. */
+export async function getMemoryRetention(
+  token: string | null,
+  subject?: string | null,
+): Promise<MemoryRetentionResponse> {
+  const q = subject ? `?subject=${encodeURIComponent(subject)}` : ''
+  return request<MemoryRetentionResponse>(`/memory/retention${q}`, { method: 'GET' }, token)
+}
+
+/** Apply retention now, instead of waiting for the daily task. Administrators only. */
+export async function sweepMemoryRetention(
+  token: string | null,
+  subject?: string | null,
+): Promise<MemoryRetentionSweepResponse> {
+  return request<MemoryRetentionSweepResponse>(
+    '/memory/retention/sweep',
+    { method: 'POST', body: JSON.stringify({ subject: subject ?? null }) },
+    token,
+  )
 }
 
 // ── LLM-Ops: the self-improvement loop (prompts / evals / releases) ──────────

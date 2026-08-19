@@ -168,6 +168,54 @@ async def test_budget_upsert_and_list(client, db):
     assert rows[0]["token_cap"] == 9000
 
 
+async def test_a_user_sub_cap_above_the_tenant_cap_is_refused_over_http(client, db):
+    """§7.16 row 2 at the surface an operator actually touches.
+
+    The screen renders the server's ``detail`` verbatim, so the sentence *is* the
+    product here: a 422 saying "invalid" would leave a tenant admin to guess which cap
+    and whose figure they collided with. What must never happen again is a 200 — the row
+    saved, \$500 read back, \$50 enforced.
+    """
+    await _seed_two_tenants()
+    hdr = _headers(TENANT_ADMIN, tenant_id=1)
+    tenant_cap = await client.post(
+        "/admin/budgets",
+        json={"scope_type": "tenant", "scope_id": 1, "window": "day", "usd_cap": 50.0},
+        headers=hdr,
+    )
+    assert tenant_cap.status_code == 200, tenant_cap.text
+
+    refused = await client.post(
+        "/admin/budgets",
+        json={"scope_type": "user", "scope_id": 11, "window": "day", "usd_cap": 500.0},
+        headers=hdr,
+    )
+    assert refused.status_code == 422, refused.text
+    detail = refused.json()["detail"]
+    assert "$500.00" in detail and "$50.00" in detail and "tenant 1" in detail
+
+    # And nothing was stored: the only cap in tenant 1 is still the tenant's own.
+    rows = (await client.get("/admin/budgets", headers=hdr)).json()["rows"]
+    assert [(r["scope_type"], r["usd_cap"]) for r in rows] == [("tenant", 50.0)]
+
+
+async def test_lowering_a_tenant_cap_narrows_the_sub_cap_it_now_overrides(client, db):
+    """The ordering hazard, over HTTP: the sub-cap moves with the cap that binds it."""
+    await _seed_two_tenants()
+    hdr = _headers(TENANT_ADMIN, tenant_id=1)
+    for body in (
+        {"scope_type": "tenant", "scope_id": 1, "window": "day", "usd_cap": 1000.0},
+        {"scope_type": "user", "scope_id": 11, "window": "day", "usd_cap": 500.0},
+        {"scope_type": "tenant", "scope_id": 1, "window": "day", "usd_cap": 50.0},
+    ):
+        written = await client.post("/admin/budgets", json=body, headers=hdr)
+        assert written.status_code == 200, written.text
+
+    rows = (await client.get("/admin/budgets", headers=hdr)).json()["rows"]
+    stored = {(r["scope_type"], r["scope_id"]): r["usd_cap"] for r in rows}
+    assert stored == {("tenant", 1): 50.0, ("user", 11): 50.0}
+
+
 async def test_tenant_admin_cannot_set_other_tenant_budget(client, db):
     await _seed_two_tenants()
     resp = await client.post(

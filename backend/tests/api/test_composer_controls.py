@@ -28,12 +28,19 @@ from __future__ import annotations
 
 import pgsupport
 import pytest
+from aegis.gateway.routing import tenant_selectable_deployments
 from aegis.settings.models import Setting
 from sqlalchemy import select
 
 from app.api.schemas import Role
 from app.core.security import create_access_token
 from app.data import Tenant, User, get_sessionmaker, set_tenant_scope
+
+#: A real deployment from the platform's allowed set. ``agent.model`` used to accept any
+#: string because nothing validated it and nothing read it; it now carries a domain the
+#: platform declares (§7.16 row 6), so an arbitrary value here would be testing the
+#: refusal rather than the scope resolution these tests are about.
+_CHOSEN_MODEL = tenant_selectable_deployments()[1]
 
 pytestmark = pytest.mark.asyncio
 
@@ -167,19 +174,185 @@ async def test_a_setting_reports_the_scope_that_decided_it(client, db):
     assert before.json()["value"] == "default"
 
     written = await client.put(
-        "/settings/agent.model", headers=user, json={"value": "aegis-fast", "scope": "user"}
+        "/settings/agent.model", headers=user, json={"value": _CHOSEN_MODEL, "scope": "user"}
     )
     assert written.status_code == 200, written.text
-    assert (written.json()["value"], written.json()["source"]) == ("aegis-fast", "user")
+    assert (written.json()["value"], written.json()["source"]) == (_CHOSEN_MODEL, "user")
 
     after = await client.get("/settings/agent.model", headers=user)
-    assert (after.json()["value"], after.json()["source"]) == ("aegis-fast", "user")
+    assert (after.json()["value"], after.json()["source"]) == (_CHOSEN_MODEL, "user")
 
     # The list surface answers with the same pair, so a screen and a single-key read
     # cannot disagree about what is in force.
     rows = {row["key"]: row for row in (await client.get("/settings", headers=user)).json()["rows"]}
-    assert (rows["agent.model"]["value"], rows["agent.model"]["source"]) == ("aegis-fast", "user")
+    assert (rows["agent.model"]["value"], rows["agent.model"]["source"]) == (_CHOSEN_MODEL, "user")
     assert rows["agent.mode"]["source"] == "platform"
+
+
+async def test_a_model_a_tenant_may_not_select_is_refused_by_the_server(client, db):
+    """§7.16 row 6: *"a UI enum is not enforcement"*, asserted where the curl lands.
+
+    Three shapes, all refused by the catalogue's own validation rather than by anything
+    this route re-checks: a model that does not exist, a real deployment the platform
+    keeps for itself (the injection classifier's own tier), and a bare provider name.
+    The refusal names the set, so the operator is told what they *may* pick.
+    """
+    await _seed_two_tenants()
+    user = _headers(tenant_id=1, user_id=12, username="a-user", role="client")
+
+    for refused in ("a-model-nobody-approved", "genailab-maas-gpt-4o-mini", "gpt-4o"):
+        written = await client.put(
+            "/settings/agent.model", headers=user, json={"value": refused, "scope": "user"}
+        )
+        assert written.status_code == 422, f"{refused} was accepted: {written.text}"
+        assert _CHOSEN_MODEL in written.json()["detail"]
+
+    # Nothing was stored on the way through: the key still resolves to the platform's.
+    after = await client.get("/settings/agent.model", headers=user)
+    assert (after.json()["value"], after.json()["source"]) == ("default", "platform")
+
+
+async def test_the_control_offers_exactly_the_platforms_allowed_set(client, db):
+    """The enum a screen renders is the server's set, not a list beside it.
+
+    If the two were separate declarations, this is the assertion that would catch them
+    drifting — and drift is the whole failure mode row 6 names, because the day the
+    dropdown says more than the validator accepts is the day the control starts lying.
+    """
+    await _seed_two_tenants()
+    user = _headers(tenant_id=1, user_id=12, username="a-user", role="client")
+    controls = {c["key"]: c for c in (await client.get("/settings", headers=user)).json()["rows"]}
+    descriptor = controls["agent.model"]["control"]
+    assert descriptor["control"] == "select"
+    assert descriptor["choices"] == ["default", *tenant_selectable_deployments()]
+    assert descriptor.get("inert_reason") is None
+    assert descriptor["effective"] is True
+
+
+async def test_a_selected_model_is_what_the_run_routes_and_prices(client, db, monkeypatch):
+    """The resolved preference reaches the gateway, and the ledger follows it there.
+
+    Asserted through the route's own resolution seam and the gateway's real routing
+    functions — never a live call (the key is ``replace-me`` and every call 403s). What
+    would regress here is the seam being wired but not entered: a preference that
+    resolves, validates, and then routes nothing is ``agent.model`` inert again with
+    more code.
+    """
+    from aegis.core.models import ModelRole
+    from aegis.gateway.routing import model_for, selected_deployment, unit_cost
+
+    from app.api.routes import AuthContext, _resolve_model_choice
+
+    await _seed_two_tenants()
+    user = _headers(tenant_id=1, user_id=12, username="a-user", role="client")
+    written = await client.put(
+        "/settings/agent.model", headers=user, json={"value": _CHOSEN_MODEL, "scope": "user"}
+    )
+    assert written.status_code == 200, written.text
+
+    auth = AuthContext(
+        username="a-user",
+        role=Role.CLIENT,
+        persona="",
+        fine_role="client",
+        tenant_id=1,
+        user_id=12,
+    )
+    chosen = await _resolve_model_choice(auth)
+    assert chosen == _CHOSEN_MODEL
+
+    platform_model = model_for(ModelRole.GENERATION)
+    assert chosen != platform_model, "the fixture picked the default; it proves nothing"
+    with selected_deployment(chosen):
+        assert model_for(ModelRole.GENERATION) == chosen
+        # …and the cost is the chosen model's, not the tier it replaced.
+        assert unit_cost(
+            ModelRole.GENERATION, prompt_tokens=1000, deployment=model_for(ModelRole.GENERATION)
+        ) != unit_cost(ModelRole.GENERATION, prompt_tokens=1000, deployment=platform_model)
+    assert model_for(ModelRole.GENERATION) == platform_model
+
+
+async def test_a_preference_the_platform_has_withdrawn_refuses_the_run(client, db, monkeypatch):
+    """A row that was legal when written must not take effect after a withdrawal.
+
+    The run is refused, naming the preference — not quietly served on the platform's
+    model under the tenant's chosen name, which would tell them a model is in force that
+    is not. This is the second of row 6's two gates and the only one that can fire.
+    """
+    from fastapi import HTTPException
+
+    from app.api.routes import AuthContext, _resolve_model_choice
+
+    await _seed_two_tenants()
+    user = _headers(tenant_id=1, user_id=12, username="a-user", role="client")
+    assert (
+        await client.put(
+            "/settings/agent.model", headers=user, json={"value": _CHOSEN_MODEL, "scope": "user"}
+        )
+    ).status_code == 200
+
+    # The platform withdraws it from the tenant-selectable set after the fact.
+    import aegis.gateway.routing as routing
+
+    monkeypatch.setitem(
+        routing._FLEET,
+        _CHOSEN_MODEL,
+        routing.Deployment(
+            _CHOSEN_MODEL,
+            routing._FLEET[_CHOSEN_MODEL].role,
+            routing._FLEET[_CHOSEN_MODEL].input_rate,
+            routing._FLEET[_CHOSEN_MODEL].output_rate,
+            tenant_selectable=False,
+        ),
+    )
+    auth = AuthContext(
+        username="a-user",
+        role=Role.CLIENT,
+        persona="",
+        fine_role="client",
+        tenant_id=1,
+        user_id=12,
+    )
+    with pytest.raises(HTTPException) as caught:
+        await _resolve_model_choice(auth)
+    assert caught.value.status_code == 409
+    assert _CHOSEN_MODEL in caught.value.detail
+
+
+async def test_the_guardrail_completer_runs_on_a_role_no_tenant_may_redirect(monkeypatch):
+    """§7.16 row 7 held against row 6, at the wiring that actually decides it.
+
+    ``aegis.gateway.routing`` reserves the roles the host's safety layers call, but the
+    reservation is only true if the host really calls one of them. This reads the role
+    off ``app.guardrails._gateway_completer`` — the single place the rails reach the
+    gateway — rather than trusting the constant. Point that completer at ``GENERATION``
+    and this fails, which is precisely the day a tenant's model becomes the model their
+    own injection classifier is run on.
+    """
+    from aegis.gateway.routing import guardrail_reserved_roles
+
+    from app.guardrails import _gateway_completer
+
+    seen: list[object] = []
+
+    async def _fake_complete(role, messages, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        seen.append(role)
+
+        class _R:
+            content = "{}"
+
+        return _R()
+
+    import app.core.llm as core_llm
+
+    monkeypatch.setattr(core_llm, "complete", _fake_complete)
+    await _gateway_completer([{"role": "user", "content": "hi"}])
+
+    assert seen and seen[0] in guardrail_reserved_roles(), (
+        f"the guardrail completer runs on {seen[0]!r}, which a tenant may redirect with "
+        "agent.model; the injection classifier would then be judged by the model it is "
+        "supposed to be judging"
+    )
 
 
 async def test_a_preference_is_invisible_to_another_tenant(client, db):
@@ -194,7 +367,7 @@ async def test_a_preference_is_invisible_to_another_tenant(client, db):
     mine = _headers(tenant_id=1, user_id=12, username="a-user", role="client")
     theirs = _headers(tenant_id=2, user_id=22, username="b-user", role="client")
 
-    await client.put("/settings/agent.model", headers=mine, json={"value": "aegis-fast"})
+    await client.put("/settings/agent.model", headers=mine, json={"value": _CHOSEN_MODEL})
 
     stranger = await client.get("/settings/agent.model", headers=theirs)
     assert stranger.status_code == 200, stranger.text

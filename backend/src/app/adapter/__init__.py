@@ -20,7 +20,8 @@ Exposed surface (the domain seam described in ``docs/learn/50-run-and-extend.md`
   :class:`ToolContext`, :class:`InMemoryRecordStore`.
 * **personas** (piece 5) — :data:`PERSONAS`, :data:`DEFAULT_PERSONA_ID`,
   :func:`get_persona`, :class:`Persona`.
-* **prompts** (piece 6) — :data:`SYSTEM_PROMPTS`, :func:`render_system_prompt`.
+* **prompts** (piece 6) — :data:`SYSTEM_PROMPTS`, :func:`render_system_prompt`,
+  :data:`PLATFORM_FLOOR` / :func:`render_platform_floor` (the half no tenant may edit).
 * **roster** (piece 8) — :func:`agent_roster`, :class:`AgentRoster`,
   :class:`RosterSpecialist`, and the fan-out team :func:`sub_agent_roster`.
 * **corpus** (piece 9) — :func:`load_seed_corpus`.
@@ -63,7 +64,12 @@ from app.adapter.personas import (
     Persona,
     get_persona,
 )
-from app.adapter.prompts import SYSTEM_PROMPTS, render_system_prompt
+from app.adapter.prompts import (
+    PLATFORM_FLOOR,
+    SYSTEM_PROMPTS,
+    render_platform_floor,
+    render_system_prompt,
+)
 from app.adapter.roster import (
     AgentRoster,
     RosterSpecialist,
@@ -130,6 +136,7 @@ __all__ = [
     "latent_resolution_hours",
     "load_seed_corpus",
     "ml_spec",
+    "render_platform_floor",
     "render_system_prompt",
     "run_tool",
     "schema",
@@ -137,5 +144,6 @@ __all__ = [
     "tool_definitions_for",
     "training_frame",
     "tools_for",
+    "PLATFORM_FLOOR",
     "SYSTEM_PROMPTS",
 ]
