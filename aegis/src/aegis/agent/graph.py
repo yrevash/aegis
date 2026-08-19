@@ -63,7 +63,8 @@ from .deps import (
     risk_at_least,
     risk_rank,
 )
-from .retry import call_with_retry
+from .rails import screen_tool_result
+from .retry import call_with_retry, transient_only
 from .router import (
     Depth,
     DepthMode,
@@ -480,6 +481,12 @@ def build_agent(
             "agent_role": role,
             "route_reason": decision.reason,
             "team_fanout": decision.fanout,
+            # The router's own model calls (the role tiebreak and the width classifier)
+            # are billable calls made on the tenant's behalf. They used to be spent and
+            # then discarded, so the run reported less than it cost; a total that
+            # under-reports is a cap that under-enforces.
+            **_accrue(decision.usage),
+            "_telemetry": {"model": None, **_accrue(decision.usage)},
         }
 
     async def plan_team(state: AgentState) -> dict[str, Any]:
@@ -516,9 +523,10 @@ def build_agent(
         # platform knows about the person asking, which would make the four-agent run a
         # DOWNGRADE on the one it replaced.
         memory_delta = await _recall(state)
-        tasks = await plan_team_tasks(
+        plan = await plan_team_tasks(
             state["query"], specs, deps=deps, retry=_MODEL_RETRY
         )
+        tasks = plan.tasks
         for task in tasks:
             writer(
                 events.agent_status(
@@ -537,6 +545,10 @@ def build_agent(
                 {"agent_id": t.spec.agent_id, "task": t.task} for t in tasks
             ],
             "team_degraded": False,
+            # The planner's own cheap call. Reported here, on the node that made it, so
+            # a fan-out's total is the whole fan-out and not just its lanes.
+            **_accrue(plan.usage),
+            "_telemetry": {"model": None, **_accrue(plan.usage)},
         }
 
     async def run_team_node(state: AgentState) -> dict[str, Any]:
@@ -1053,38 +1065,84 @@ def build_agent(
             "gate_risk": top_risk.value,
         }
 
-    def _gated_call(state: AgentState) -> dict[str, Any]:
-        """Return the representative (highest-risk) call for the gate."""
-        calls = state.get("tool_calls", [])
-        return max(calls, key=lambda c: risk_rank(deps.tool_risk(c["name"])), default={})
+    def _gated_calls(state: AgentState) -> list[dict[str, Any]]:
+        """Return **every** call this gate authorises, highest-risk first.
+
+        Not the representative one. ``run_team`` aggregates the proposals of *all* the
+        lanes into ``tool_calls``, so three lanes proposing three distinct HIGH-risk
+        writes used to produce one dialog naming one action — and ``act`` then executed
+        all three. The human read one sentence and authorised three consequential
+        writes, which is the phase's central safety claim being false under fan-out.
+
+        Ordering is by risk so the representative fields (``action``/``args``, which
+        the wire schema and the console still read) name the worst of them.
+        """
+        calls = list(state.get("tool_calls", []))
+        return sorted(
+            calls, key=lambda c: risk_rank(deps.tool_risk(c["name"])), reverse=True
+        )
 
     async def approval(state: AgentState) -> dict[str, Any]:
         """Human-in-the-loop gate: pause via ``interrupt`` until a decision.
+
+        **One gate, and it enumerates everything that will run.** The chosen shape is
+        approve-all-with-the-full-list rather than one interrupt per call: a per-call
+        gate would multiply the interrupt/resume rendezvous the orchestrator, the
+        durable approvals row, the park/resume path and the console are all built
+        around, for no safety the enumerated list does not already give. What matters
+        is that the set the human is shown and the set that executes are *the same
+        set*, which is enforced structurally — the node returns the ids it rendered and
+        ``act`` will run nothing else.
 
         No events are emitted before ``interrupt`` because the node re-executes on
         resume; the orchestrator emits ``approval_required`` from the interrupt
         value exactly once.
         """
-        call = _gated_call(state)
+        calls = _gated_calls(state)
+        actions = [
+            {
+                "id": call.get("id", ""),
+                "name": call.get("name", "unknown"),
+                "args": call.get("args", {}),
+                "risk": deps.tool_risk(call["name"]).value,
+                "agent_id": call.get("agent_id"),
+            }
+            for call in calls
+        ]
+        head = calls[0] if calls else {}
         decision = interrupt(
             {
-                "action": call.get("name", "unknown"),
-                "args": call.get("args", {}),
+                # The representative, kept for the fields the wire schema already has.
+                "action": head.get("name", "unknown"),
+                "args": head.get("args", {}),
                 "risk": state.get("gate_risk", RiskLevel.LOW.value),
-                "rationale": state.get("gate_reason", "Approval required."),
+                # The full list, twice: structured for a client that can render it, and
+                # spelled out in the rationale — which IS on the wire and IS what the
+                # approval dialog and the durable inbox row show today — so no human
+                # can approve this gate while reading about only one of its actions.
+                "actions": actions,
+                "rationale": _gate_rationale(state, actions),
             }
         )
         return {
             "approved": bool(decision.get("approved")),
             "approver": decision.get("approver"),
+            # Exactly what was rendered. ``act`` executes this and nothing else.
+            "approved_call_ids": [a["id"] for a in actions],
         }
 
     async def act(state: AgentState) -> dict[str, Any]:
-        """Execute the approved (or low-risk) tool calls, auditing each."""
+        """Execute the approved (or low-risk) tool calls, auditing each.
+
+        A gated run executes **only** the calls the approval node enumerated in the
+        interrupt payload. That is not belt-and-braces: it is what makes "the human
+        authorised what ran" a property of the code rather than of the two node bodies
+        happening to iterate the same list.
+        """
         writer = get_stream_writer()
         persona = _persona(state)
         results: list[dict[str, Any]] = []
-        for call in state.get("tool_calls", []):
+        for call in _authorised_calls(state):
             risk = deps.tool_risk(call["name"])
             writer(events.tool_call(call["id"], call["name"], call["args"], risk))
             # One TOOL span per execution so the trace shows each action as a
@@ -1111,6 +1169,13 @@ def build_agent(
                 except Exception as exc:  # noqa: BLE001 - surface any tool failure as an event
                     ok, summary = False, f"Tool error: {exc}"
                 tool_span.set_attribute(semconv.TOOL_OK, bool(ok))
+            # §5.7: the tool's output is third-party text that is about to be pasted
+            # into ``generate``'s prompt. It is screened first, by the SAME function a
+            # sub-agent lane screens its own tool results with.
+            allowed, summary = await screen_tool_result(
+                str(summary), tool_name=call["name"], deps=deps, writer=writer
+            )
+            ok = bool(ok) and allowed
             writer(events.tool_result(call["id"], ok, summary))
             results.append({"call_id": call["id"], "ok": ok, "summary": summary})
         return {"tool_results": results}
@@ -1307,9 +1372,11 @@ def build_agent(
         return {"status": RunStatus.COMPLETED.value}
 
     # Transient-failure policy for the nodes whose bodies are a network call to the
-    # model gateway. LangGraph's ``default_retry_on`` already limits this to transient
-    # classes (connection/timeout/5xx), so a deterministic failure still surfaces
-    # immediately instead of being retried three times.
+    # model gateway. The predicate is ``aegis.agent.retry.transient_only``, NOT
+    # LangGraph's stock ``default_retry_on``: the stock one is a *deny* list that
+    # returns ``True`` for every class it has not heard of, which meant the tenant's own
+    # ``BudgetExceededError`` — a refusal, not a fault — was retried three times per
+    # model call, and twelve times across a 4-lane fan-out, all of it past the cap.
     #
     # Deliberately NOT applied to:
     #   ``act``      - executes real, externally-visible tool actions. Exactly-once is
@@ -1317,7 +1384,7 @@ def build_agent(
     #                  here could update a request's status twice.
     #   ``approval`` - re-executes on resume by design; a retry would re-interrupt.
     #   memory nodes - already best-effort with their own degrade-to-nothing path.
-    _MODEL_RETRY = RetryPolicy(max_attempts=3)
+    _MODEL_RETRY = RetryPolicy(max_attempts=3, retry_on=transient_only)
 
     # ── Wiring ───────────────────────────────────────────────────────────────
     # Every node body is wrapped to time it and emit node_started/node_finished.
@@ -1604,6 +1671,52 @@ async def _recall_vector(deps: AgentDeps, state: AgentState) -> list[float] | No
         return None
 
 
+def _gate_rationale(state: AgentState, actions: list[dict[str, Any]]) -> str:
+    """Return the gate's rationale, **enumerating every action** it would authorise.
+
+    The structured ``actions`` list is the machine-readable half; this is the half that
+    reaches a human today, because ``rationale`` is already on the wire event, already
+    rendered by the approval dialog, and already persisted on the durable inbox row. A
+    fan-out's gate that says only "Proposed action is high-risk" while three writes are
+    queued behind it is a dialog that misrepresents its own consequence.
+    """
+    base = state.get("gate_reason") or "Approval required."
+    if len(actions) <= 1:
+        return base
+    lines = [
+        f"- {a['name']}({_render_args(a['args'])}) [{a['risk']}"
+        + (f", proposed by {a['agent_id']}]" if a.get("agent_id") else "]")
+        for a in actions
+    ]
+    return (
+        f"{base} Approving runs all {len(actions)} of these actions:\n" + "\n".join(lines)
+    )
+
+
+def _render_args(args: Any) -> str:  # noqa: ANN401 - tool args mapping
+    """Render tool arguments compactly for the gate's human-readable action list."""
+    if not isinstance(args, dict) or not args:
+        return ""
+    return ", ".join(f"{k}={v!r}" for k, v in args.items())
+
+
+def _authorised_calls(state: AgentState) -> list[dict[str, Any]]:
+    """Return the tool calls ``act`` is permitted to execute.
+
+    Ungated (every proposal below ``gate_min_risk``): all of them, exactly as before.
+    Gated: **only** the ids the ``approval`` node enumerated in the interrupt payload,
+    so the set that executes cannot drift from the set the human was shown. A gated
+    state with no recorded ids can only be a resume from a checkpoint written before
+    this key existed; it executes nothing rather than guessing, because guessing here
+    is precisely the defect.
+    """
+    calls = list(state.get("tool_calls", []))
+    if not state.get("gated"):
+        return calls
+    authorised = set(state.get("approved_call_ids") or [])
+    return [c for c in calls if c.get("id") in authorised]
+
+
 def _accrue(usage: Any) -> dict[str, Any]:  # noqa: ANN401
     """Return ONE model call's token/cost contribution as a state delta.
 
@@ -1613,11 +1726,16 @@ def _accrue(usage: Any) -> dict[str, Any]:  # noqa: ANN401
     reading the running total and returning ``total + delta`` is correct only while
     no two nodes ever run in the same superstep, and silently loses one branch's
     spend the moment anything runs in parallel.
+
+    ``None`` — a node that made no model call this time round — contributes nothing at
+    all rather than three zero keys, so callers can accrue unconditionally.
     """
+    if usage is None:
+        return {}
     return {
-        "prompt_tokens": int(usage.prompt_tokens),
-        "completion_tokens": int(usage.completion_tokens),
-        "cost_usd": float(usage.cost_usd),
+        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "cost_usd": float(getattr(usage, "cost_usd", 0.0) or 0.0),
     }
 
 

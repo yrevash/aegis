@@ -142,8 +142,8 @@ async def test_a_failed_task_planner_gives_every_agent_the_whole_query():
         raise RuntimeError("cheap model down")
 
     specs = [_spec("research"), _spec("knowledge")]
-    tasks = await plan_team_tasks("the question", specs, deps=_deps(complete=boom))
-    assert [t.task for t in tasks] == ["the question", "the question"]
+    plan = await plan_team_tasks("the question", specs, deps=_deps(complete=boom))
+    assert [t.task for t in plan.tasks] == ["the question", "the question"]
 
 
 async def test_a_short_planner_reply_is_a_non_answer_not_a_partial_team():
@@ -151,8 +151,8 @@ async def test_a_short_planner_reply_is_a_non_answer_not_a_partial_team():
         return LLMResult(content="only one line", tool_calls=[], usage=Usage(), model="m")
 
     specs = [_spec("research"), _spec("knowledge")]
-    tasks = await plan_team_tasks("the question", specs, deps=_deps(complete=one_line))
-    assert [t.task for t in tasks] == ["the question", "the question"]
+    plan = await plan_team_tasks("the question", specs, deps=_deps(complete=one_line))
+    assert [t.task for t in plan.tasks] == ["the question", "the question"]
 
 
 # ── The fan-out never cancels a sibling ──────────────────────────────────────

@@ -152,8 +152,9 @@ class AgentConfig:
         subagent_timeout_s: The per-sub-agent wall clock. Exceeding it is a **designed**
             terminal state (``timeout``), not an error: the agent is named as omitted
             and its siblings finish.
-        team_wall_clock_s: The whole fan-out's wall clock. Whatever has not landed by
-            then is omitted, and the synthesis says so.
+        team_wall_clock_s: The whole fan-out's wall clock, and a backstop **above** the
+            per-lane bounds, never a tighter deadline competing with them. Whatever has
+            not landed by then is omitted, and the synthesis says so.
     """
 
     gate_min_risk: RiskLevel = RiskLevel.HIGH
@@ -183,7 +184,15 @@ class AgentConfig:
     max_concurrent_agents: int = 3
     subagent_max_steps: int = 4
     subagent_timeout_s: float = 45.0
-    team_wall_clock_s: float = 90.0
+    #: The whole fan-out's wall clock, and a **backstop above** the per-lane bounds
+    #: rather than a second, tighter deadline competing with them. The shipped numbers
+    #: have to fit inside it or lanes get cut by the team clock before their own fires,
+    #: and the synthesis then says "was cut short" about an agent that in fact timed out:
+    #: ``max_parallel_agents / max_concurrent_agents`` = 2 waves × ``subagent_timeout_s``
+    #: (90s) + ``_STAGGER_S`` × 3 (0.75s) + the shared pool's own 20s = 110.75s worst
+    #: case. 90.0 did not fit; 120.0 does, with the arithmetic written down so the next
+    #: change to any of the four numbers can be checked against it.
+    team_wall_clock_s: float = 120.0
 
     def as_dict(self) -> dict[str, Any]:
         """Return the effective knob values as a plain JSON-friendly dict.
@@ -316,6 +325,20 @@ class AgentDeps:
     #: inventing one here would make every host fan out to agents it never declared.
     #: ``None`` ⇒ no team is possible and every turn is SINGLE, whatever was asked.
     subagent_roster: SubAgentRosterFn | None = None
+    #: The ``TOOL_RESULT`` rail: screen a tool's output **before** it enters any agent's
+    #: context (§5.7). A tool result is third-party text arriving without a human having
+    #: typed it, which is the OWASP LLM01 surface — and until this seam existed the only
+    #: caller of the rail in the whole codebase was web search, so a poisoned record,
+    #: row or summary from any other tool was pasted verbatim into the generation prompt
+    #: and into every lane's transcript.
+    #:
+    #: ``None`` does **not** mean unscreened: the rail is deliberately the *inbound*
+    #: chain (see ``Guardrails.check_tool_result``), so the graph falls back to
+    #: ``check_input`` — which every host and every fake already wires — and a deployment
+    #: cannot end up with tool results screened by nothing simply by not knowing about a
+    #: new field. A host binds ``guardrails.check_tool_result`` here to additionally get
+    #: the tool named in the verdict's rationale.
+    check_tool_result: GuardFn | None = None
     #: The LLM-Ops registry read for a sub-agent's system prompt (§5.9b). Bound host-side
     #: to ``aegis.ops.registry.get_cached_active`` — the SAME process-wide active cache
     #: the main persona prompt already resolves through, so improving a sub-agent's

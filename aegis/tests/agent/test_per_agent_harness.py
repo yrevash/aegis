@@ -129,6 +129,42 @@ async def test_the_per_agent_totals_reconcile_with_the_runs_summed_delta():
     assert _one(events, "run_finished")["prompt_tokens"] >= team["prompt_tokens"]
 
 
+async def test_the_run_reports_every_model_call_it_actually_made():
+    """``>=`` is satisfied by an under-report, which is the shape of the defect.
+
+    The team planner's split and the depth classifier's width call were both spent and
+    then discarded: the run's reported total was short by exactly what they cost on
+    every fan-out, and a total that under-reports is a cap that under-enforces. So the
+    claim is stated as an identity against what the gateway was actually asked for,
+    which no amount of silently-dropped usage can satisfy.
+    """
+    deps, _ = build_team_deps(roster=_roster(4), lane_behaviour={"data": _use_a_cheap_tool})
+    inner = deps.complete
+    spent = Usage()
+
+    async def metering_complete(role, messages, **kwargs):  # noqa: ANN001, ANN003
+        nonlocal spent
+        result = await inner(role, messages, **kwargs)
+        spent = Usage(
+            prompt_tokens=spent.prompt_tokens + result.usage.prompt_tokens,
+            completion_tokens=spent.completion_tokens + result.usage.completion_tokens,
+            cost_usd=spent.cost_usd + result.usage.cost_usd,
+        )
+        return result
+
+    deps.complete = metering_complete
+    events = await _drive(deps, DEMO_QUERY)
+    finished = _one(events, "run_finished")
+
+    assert spent.prompt_tokens > 0, "no model call was made; the test would be vacuous"
+    assert finished["prompt_tokens"] == spent.prompt_tokens, (
+        f"the gateway was asked to spend {spent.prompt_tokens} prompt tokens and the "
+        f"run reports {finished['prompt_tokens']}"
+    )
+    assert finished["completion_tokens"] == spent.completion_tokens
+    assert finished["cost_usd"] == pytest.approx(spent.cost_usd)
+
+
 async def test_a_lanes_events_are_in_its_own_record_and_not_the_runs():
     """Four readable lanes, not one blurred stream."""
     deps, _ = build_team_deps(roster=_roster(4), lane_behaviour={"data": _use_a_cheap_tool})

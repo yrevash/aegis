@@ -83,6 +83,9 @@ class AgentState(TypedDict, total=False):
         gate_risk: The risk level of the gated action.
         approved: The human decision once the gate resolves.
         approver: Who approved/rejected at the gate.
+        approved_call_ids: The ids of the tool calls the approval dialog ENUMERATED and
+            the human authorised. ``act`` executes these and nothing else on a gated
+            run, so a fan-out cannot execute proposals the gate never showed.
         answer: The final answer text (post output-rail).
         session_id: The conversation/session id for multi-turn memory (None → the
             single-shot path; both memory nodes no-op and the topology is unchanged).
@@ -140,6 +143,7 @@ class AgentState(TypedDict, total=False):
     gate_risk: str
     approved: bool
     approver: str | None
+    approved_call_ids: list[str]
     answer: str
     session_id: str | None
     memory_subject: str | None

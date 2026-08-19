@@ -191,6 +191,15 @@ export interface ApprovalRequired extends BaseEvent {
   risk: RiskLevel
   /** Why the gate triggered (risk/uncertainty). */
   rationale: string
+  /**
+   * Every call this one approval authorises, highest risk first.
+   *
+   * A fan-out can have several sub-agents each propose a consequential write in one
+   * turn, and `action` names only the representative — so a dialog that renders
+   * `action` alone would be asking the person to authorise more than it shows them.
+   * Render this list. A single-action run carries one entry.
+   */
+  actions: { id: string; name: string; args: Record<string, unknown>; risk: RiskLevel }[]
 }
 
 /** A streamed chunk of the final answer text. */

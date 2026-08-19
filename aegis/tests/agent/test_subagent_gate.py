@@ -24,7 +24,7 @@ from aegis.agent.subagent import (
     allowed_tool_definitions,
     run_subagent,
 )
-from aegis.core.types import RiskLevel
+from aegis.core.types import GuardResult, GuardVerdict, RiskLevel
 from aegis.gateway.types import BudgetExceededError, LLMResult, ToolCallResult, Usage
 
 pytestmark = pytest.mark.anyio
@@ -84,11 +84,18 @@ def _deps(
     async def unreachable(*_a, **_k):  # pragma: no cover - not used by these tests
         raise AssertionError("not part of the sub-agent path")
 
+    async def check_input(text: str) -> GuardResult:
+        # NOT ``unreachable``: a sub-agent's tool results go through the TOOL_RESULT
+        # rail (§5.7), which falls back to the inbound rail when no dedicated one is
+        # wired. A fake that raised here would be testing the rail's degrade path
+        # instead of the loop.
+        return GuardResult(verdict=GuardVerdict.PASS, reason="clean", text=text)
+
     return (
         AgentDeps(
             complete=complete,
             retrieve=unreachable,
-            check_input=unreachable,
+            check_input=check_input,
             check_output=unreachable,
             tool_definitions_for=tool_definitions_for,
             run_tool=run_tool,
@@ -177,12 +184,29 @@ async def test_the_gate_floor_is_what_decides_not_the_tool_name():
 
 
 async def test_tools_are_the_spec_allowlist_intersected_with_the_personas():
-    deps, _ = _deps(completions=[_reply("done")], tool_names=("add_case_note",))
-    spec = _spec(tool_allowlist=frozenset({"update_request_status", "add_case_note"}))
+    """Both halves, in one shape neither half alone can satisfy.
+
+    The earlier version of this test built a persona strictly NARROWER than the spec, so
+    the persona half decided the answer by itself: deleting the ``spec.tool_allowlist``
+    filter from ``allowed_tool_definitions`` left it green, and the whole suite with it.
+    A test that names a property has to fail when either half of it is removed, so the
+    two allowlists here overlap **partially** and each contributes one exclusion:
+
+    * ``read_request`` is the persona's and not the spec's — only the spec filter drops it;
+    * ``escalate`` is the spec's and not the persona's — only the persona half drops it.
+    """
+    deps, _ = _deps(
+        completions=[_reply("done")],
+        tool_names=("read_request", "update_request_status", "add_case_note"),
+    )
+    spec = _spec(
+        tool_allowlist=frozenset({"update_request_status", "add_case_note", "escalate"})
+    )
     definitions = allowed_tool_definitions(spec, deps, "client")
-    # The persona only offers add_case_note; the spec asked for two. The intersection
-    # is one — a sub-agent can narrow its persona's reach, never widen it.
-    assert [d["function"]["name"] for d in definitions] == ["add_case_note"]
+    assert [d["function"]["name"] for d in definitions] == [
+        "update_request_status",
+        "add_case_note",
+    ]
 
 
 async def test_a_tool_outside_the_intersection_is_refused_not_run():
@@ -265,21 +289,83 @@ async def test_the_step_cap_terminates_a_tool_hungry_agent():
 # ── The structural tripwire ──────────────────────────────────────────────────
 
 
-def test_the_subagent_module_cannot_reach_interrupt():
-    """``interrupt`` must not be imported or called anywhere a gathered task runs.
+#: Every module in ``aegis.agent`` that code inside a gathered sub-agent task can
+#: reach. Derived by EXCLUSION rather than listed, so a module added to the package
+#: tomorrow is guarded by default: the tripwire's previous version named two files, and
+#: a lane that reached ``interrupt`` through any third module would not have been seen.
+#: The graph builds the ``approval`` node and the orchestrator detects its interrupt;
+#: those two are the whole legitimate surface, so nothing else in the package is exempt.
+_MAY_INTERRUPT = frozenset({"graph.py", "orchestrator.py"})
+
+
+def _gathered_task_modules() -> list[Path]:
+    """Return the package files a gathered task can execute."""
+    package = Path(__file__).resolve().parents[3] / "aegis/src/aegis/agent"
+    return sorted(
+        path
+        for path in package.glob("*.py")
+        if path.name not in _MAY_INTERRUPT and path.name != "__init__.py"
+    )
+
+
+def _interrupt_reaches(tree: ast.AST) -> str | None:
+    """Return why ``tree`` can reach ``interrupt``, or ``None`` when it cannot.
+
+    Three shapes, because the earlier version caught only the first two and the third
+    walked straight past it::
+
+        from langgraph.types import interrupt   # ImportFrom  — was caught
+        interrupt(value)                        # Call(Name)  — was caught
+        import langgraph.types as _lt           # Import      — was NOT caught
+        _lt.interrupt(value)                    # Attribute   — was NOT caught
+        getattr(_lt, "interrupt")(value)        # getattr     — was NOT caught
+
+    So: no ``import langgraph…`` module-object import at all in these files (the
+    ``from langgraph.x import Name`` form the retry policy legitimately needs is still
+    allowed, minus ``interrupt`` itself), and the identifier ``interrupt`` may not
+    appear as a name, an attribute, or a getattr string anywhere in them.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and "interrupt" in {a.name for a in node.names}:
+            return "imports interrupt"
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "langgraph" or alias.name.startswith("langgraph."):
+                    return (
+                        f"imports the langgraph module object ({alias.name!r}), which is "
+                        "an attribute path to interrupt()"
+                    )
+        if isinstance(node, ast.Name) and node.id == "interrupt":
+            return "names interrupt"
+        if isinstance(node, ast.Attribute) and node.attr == "interrupt":
+            return "reaches .interrupt through an attribute"
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and any(
+                isinstance(arg, ast.Constant) and arg.value == "interrupt"
+                for arg in node.args
+            )
+        ):
+            return "reaches interrupt through getattr"
+    return None
+
+
+def test_no_module_a_gathered_task_runs_can_reach_interrupt():
+    """``interrupt`` must be unreachable from anywhere a gathered task executes.
 
     An AST check rather than a grep: it cannot be fooled by the word appearing in a
-    docstring (this module's docstring is full of it) and it fails on the *shape* —
-    an import or a call — which is the only shape that could actually pause a lane.
+    docstring (these modules' docstrings are full of it) and it fails on the *shape*,
+    which is the only thing that could actually pause a lane.
     """
-    for module in ("subagent.py", "team.py"):
-        path = Path(__file__).resolve().parents[3] / "aegis/src/aegis/agent" / module
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                assert "interrupt" not in {a.name for a in node.names}, (
-                    f"{module} imports interrupt; a gathered task must never pause "
-                    "the graph — sub-agents propose, the main graph's one gate acts."
-                )
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                assert node.func.id != "interrupt", f"{module} calls interrupt()"
+    modules = _gathered_task_modules()
+    assert {p.name for p in modules} >= {"subagent.py", "team.py", "retry.py", "rails.py"}, (
+        f"the tripwire is not scanning the fan-out's own modules: {modules}"
+    )
+    for path in modules:
+        finding = _interrupt_reaches(ast.parse(path.read_text(encoding="utf-8")))
+        assert finding is None, (
+            f"aegis/agent/{path.name} {finding}; a gathered task must never pause the "
+            "graph — sub-agents propose, the main graph's one gate acts."
+        )

@@ -16,9 +16,11 @@ proposals to the existing ``tool_calls`` state key and changes nothing about the
 
 Three rules govern the gather itself:
 
-1. **``return_exceptions=True``, always.** One agent's failure must never cancel its
-   siblings — that is the whole difference between graceful degradation and a run that
-   dies because one lane hit a slow provider.
+1. **A lane's failure is a value, never a raise.** One agent's failure must never cancel
+   its siblings — that is the whole difference between graceful degradation and a run
+   that dies because one lane hit a slow provider. Each lane is its own task and is
+   waited on individually, so the wall clock can cut a lane that is still running and
+   can never erase the result — or the ``BudgetExceededError`` — of one that finished.
 2. **The node returns ONE summed delta.** Because the gather is inside a node, the node
    contributes a single ``{prompt_tokens, completion_tokens, cost_usd}`` and the
    existing ``operator.add`` reducers keep working untouched.
@@ -32,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from aegis.core.models import ModelRole
@@ -51,6 +53,7 @@ from .subagent import (
 __all__ = [
     "SharedRetrievalPool",
     "TeamOutcome",
+    "TeamPlan",
     "TeamTask",
     "build_team",
     "plan_team_tasks",
@@ -75,6 +78,22 @@ class TeamTask:
 
     spec: SubAgentSpec
     task: str
+
+
+@dataclass(frozen=True)
+class TeamPlan:
+    """The dispatched sub-tasks **and what deciding them cost**.
+
+    The planner's split is one cheap model call per team turn, made on the tenant's
+    behalf. It used to be spent and thrown away: the usage never left
+    :func:`_split_query`, so the run's reported total — and therefore every budget check
+    downstream of it — was short by exactly the planner's spend on every fan-out. A
+    model call the totals cannot see is a model call the cap cannot stop, so the usage
+    comes back with the tasks rather than being an optional thing a caller may ask for.
+    """
+
+    tasks: list[TeamTask]
+    usage: Any = None
 
 
 @dataclass
@@ -214,7 +233,45 @@ def build_team(deps: AgentDeps, width: int) -> list[SubAgentSpec]:
         for index, entry in enumerate(entries)
         if (spec := _coerce_spec(entry, index, deps.config)) is not None
     ]
-    return specs[: max(0, width)]
+    return _with_unique_ids(specs)[: max(0, width)]
+
+
+def _with_unique_ids(specs: list[SubAgentSpec]) -> list[SubAgentSpec]:
+    """Return ``specs`` with every ``agent_id`` distinct, renaming collisions loudly.
+
+    ``agent_id`` is the key the fan-out's result slots, the per-agent harness records
+    and the ``run_events.agent_id`` column are all keyed by. Two roster rows sharing one
+    collapsed both lanes onto the *second* spec — the first row's remit was silently
+    discarded, the same result object landed in ``outcome.results`` twice, and every
+    total it carried was counted twice. It was the one malformed-roster case that did
+    not warn.
+
+    A collision is repaired rather than dropped: the roster declared two distinct remits
+    and both are work the tenant asked for, so the second keeps its remit under a
+    suffixed id. Only the id is invented, and the warning says so.
+    """
+    seen: set[str] = set()
+    unique: list[SubAgentSpec] = []
+    for spec in specs:
+        agent_id = spec.agent_id
+        if agent_id in seen:
+            suffix = 2
+            while f"{agent_id}-{suffix}" in seen:
+                suffix += 1
+            renamed = f"{agent_id}-{suffix}"
+            logger.warning(
+                "Sub-agent roster declares agent_id %r more than once; the %r entry "
+                "runs as %r so both lanes keep their own remit and neither is "
+                "double-counted.",
+                agent_id,
+                spec.role,
+                renamed,
+            )
+            spec = replace(spec, agent_id=renamed)  # noqa: PLW2901
+            agent_id = renamed
+        seen.add(agent_id)
+        unique.append(spec)
+    return unique
 
 
 async def plan_team_tasks(
@@ -223,19 +280,22 @@ async def plan_team_tasks(
     *,
     deps: AgentDeps,
     retry: Any = None,  # noqa: ANN401 - langgraph RetryPolicy | None
-) -> list[TeamTask]:
-    """Turn the query + the chosen agents into one sub-task each.
+) -> TeamPlan:
+    """Turn the query + the chosen agents into one sub-task each, and report the cost.
 
     One cheap model call, with a **deterministic fallback**: when the model is absent,
     fails, or returns something unreadable, every agent gets the original query framed
     by its own remit. That fallback is a working team, not a degraded one — which is
-    why the model call is allowed to be best-effort.
+    why the model call is allowed to be best-effort. Best-effort is not the same as
+    free, so the call's usage rides back on the :class:`TeamPlan` even when its answer
+    was discarded: the tenant was billed for the attempt either way.
     """
     fallback = [TeamTask(spec=spec, task=query) for spec in specs]
     if not specs:
-        return []
+        return TeamPlan(tasks=[])
+    usage: Any = None
     try:
-        lines = await call_with_retry(
+        lines, usage = await call_with_retry(
             lambda: _split_query(query, specs, deps),
             policy=retry,
             label="Team planner",
@@ -245,21 +305,21 @@ async def plan_team_tasks(
     except Exception:  # noqa: BLE001 - the planner must never be why a run dies
         logger.warning("Team task planner failed; using the whole query per agent",
                        exc_info=True)
-        return fallback
+        return TeamPlan(tasks=fallback)
     if not lines:
-        return fallback
+        return TeamPlan(tasks=fallback, usage=usage)
     tasks: list[TeamTask] = []
     for index, spec in enumerate(specs):
         tasks.append(
             TeamTask(spec=spec, task=lines[index] if index < len(lines) else query)
         )
-    return tasks
+    return TeamPlan(tasks=tasks, usage=usage)
 
 
 async def _split_query(
     query: str, specs: Sequence[SubAgentSpec], deps: AgentDeps
-) -> list[str]:
-    """Ask one cheap model for one sub-task per agent; return them in roster order."""
+) -> tuple[list[str], Any]:
+    """Ask one cheap model for one sub-task per agent; return ``(lines, usage)``."""
     menu = "\n".join(f"{i + 1}. {s.role} — {s.label}" for i, s in enumerate(specs))
     result = await deps.complete(
         ModelRole.CHEAP,
@@ -277,12 +337,13 @@ async def _split_query(
             {"role": "user", "content": query},
         ],
     )
+    usage = getattr(result, "usage", None)
     lines = [
         line.strip(" -•\t")
         for line in (getattr(result, "content", "") or "").splitlines()
         if line.strip()
     ]
-    return lines if len(lines) >= len(specs) else []
+    return (lines if len(lines) >= len(specs) else []), usage
 
 
 async def run_team(
@@ -353,25 +414,54 @@ async def run_team(
         slots[task.spec.agent_id] = result
         return result
 
-    coros = [_lane(i, t) for i, t in enumerate(tasks)]
-    gathered = asyncio.gather(*coros, return_exceptions=True)
-    try:
-        raw = await asyncio.wait_for(gathered, timeout=deps.config.team_wall_clock_s)
-    except TimeoutError:
+    # One task per lane, waited on INDIVIDUALLY rather than through a single
+    # ``wait_for(gather(...))``. That shape looks equivalent and is not: a wall-clock
+    # timeout cancels the gather, and with it every result and every exception the
+    # lanes had already produced — including the tenant's ``BudgetExceededError``. The
+    # run then completed, billed, past a cap the platform had already refused. Waiting
+    # per task means the wall clock can cut a lane that is still running and cannot
+    # erase one that has already finished.
+    lanes = [
+        asyncio.create_task(_lane(index, task), name=f"lane:{task.spec.agent_id}")
+        for index, task in enumerate(tasks)
+    ]
+    _done, pending = await asyncio.wait(lanes, timeout=deps.config.team_wall_clock_s)
+    if pending:
         logger.warning(
-            "Team wall clock of %.0fs elapsed; finishing with the lanes that landed",
+            "Team wall clock of %.0fs elapsed; cutting %d lane(s) and finishing with "
+            "the ones that landed",
             deps.config.team_wall_clock_s,
+            len(pending),
         )
-        raw = []
+        for task in pending:
+            task.cancel()
+        # Awaited so each cut lane runs its own ``CancelledError`` handler and records a
+        # terminal state before the synthesis reads it.
+        await asyncio.gather(*pending, return_exceptions=True)
+        # The lane only knows it was cancelled; the fan-out knows WHY. Naming the cause
+        # here is the difference between a synthesis that says "was cut short (cancelled
+        # mid-run)" — which reads like a bug — and one that says the wall clock elapsed.
+        by_lane = dict(zip(lanes, tasks, strict=True))
+        for task in pending:
+            slot = slots[by_lane[task].spec.agent_id]
+            if slot.status is SubAgentStatus.CANCELLED:
+                slot.error = (
+                    f"the team's wall clock of {deps.config.team_wall_clock_s:g}s "
+                    "elapsed before this agent finished"
+                )
 
     outcome = TeamOutcome(results=[slots[t.spec.agent_id] for t in tasks])
-    for item in raw:
-        # ``return_exceptions=True`` means a failure arrives as a VALUE. The tenant's own
-        # cap is the only one that may end the run, and it does so after fan-in — so the
-        # siblings still finish and the orchestrator's existing handler still sees it.
+    for task in lanes:
+        # A lane's failure is a VALUE here, never a raise: one lane must never cancel a
+        # sibling. The tenant's own cap is the only one that may end the run, and it does
+        # so after fan-in — so the siblings still finish and the orchestrator's existing
+        # handler still sees it.
+        if task.cancelled():
+            continue
+        item = task.exception()
         if isinstance(item, BudgetExceededError):
             outcome.budget_error = outcome.budget_error or item
-        elif isinstance(item, BaseException):
+        elif item is not None:
             logger.warning("A sub-agent lane raised %r after fan-in", item)
     return outcome
 

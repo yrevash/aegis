@@ -20,22 +20,52 @@ from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 from langgraph.errors import GraphBubbleUp
-from langgraph.types import RetryPolicy
+from langgraph.types import RetryPolicy, default_retry_on
 
-__all__ = ["call_with_retry", "should_retry"]
+from aegis.gateway.types import BudgetExceededError
+
+__all__ = ["NEVER_RETRY", "call_with_retry", "should_retry", "transient_only"]
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+#: Failures that are **decisions**, not faults, and must never be attempted again.
+#:
+#: LangGraph's ``default_retry_on`` is a *deny* list — it names a handful of classes it
+#: refuses (``ValueError``, ``TypeError``, ``ArithmeticError`` …) and returns ``True``
+#: for everything it has never heard of. A tenant's budget refusal is something it has
+#: never heard of, so under the stock predicate an exhausted cap was retried three
+#: times per model call and, under a 4-lane fan-out, produced twelve gateway calls
+#: *past* the refusal. A cap is not a transient failure; retrying it is spending money
+#: the tenant has already been told they do not have.
+NEVER_RETRY: tuple[type[BaseException], ...] = (BudgetExceededError,)
+
+
+def transient_only(exc: BaseException) -> bool:
+    """Return whether ``exc`` is a *provably* transient failure worth another attempt.
+
+    The predicate every model-call :class:`~langgraph.types.RetryPolicy` in this package
+    is built with. It is ``default_retry_on`` with the deny list's hole closed: anything
+    in :data:`NEVER_RETRY` is refused outright, whatever LangGraph would have said.
+    """
+    if isinstance(exc, NEVER_RETRY):
+        return False
+    return bool(default_retry_on(exc))
 
 
 def should_retry(policy: RetryPolicy, exc: Exception) -> bool:
     """Return whether ``policy`` classifies ``exc`` as retryable.
 
     Honours all three shapes LangGraph's :class:`~langgraph.types.RetryPolicy` accepts for
-    ``retry_on``: a callable predicate (the default ``default_retry_on``, which admits
-    only transient classes), a single exception type, or a sequence of them.
+    ``retry_on``: a callable predicate, a single exception type, or a sequence of them.
+
+    :data:`NEVER_RETRY` is checked **first and unconditionally**, so a caller that
+    hands in a policy built elsewhere (a host's, or LangGraph's stock default) still
+    cannot spend a tenant's exhausted cap three more times.
     """
+    if isinstance(exc, NEVER_RETRY):
+        return False
     retry_on = policy.retry_on
     if callable(retry_on) and not isinstance(retry_on, type):
         return bool(retry_on(exc))
@@ -51,6 +81,10 @@ async def call_with_retry(
     label: str,
 ) -> T:
     """Await ``factory()`` under ``policy``, retrying only provably transient failures.
+
+    "Provably transient" is enforced here rather than assumed of ``policy``: see
+    :data:`NEVER_RETRY`, which :func:`should_retry` refuses ahead of whatever the
+    policy's own predicate would have allowed.
 
     Args:
         factory: A zero-argument callable returning the awaitable to attempt. It is

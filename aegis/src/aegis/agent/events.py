@@ -127,8 +127,17 @@ def approval_required(
     args: dict[str, Any],
     risk: RiskLevel,
     rationale: str,
+    actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build an ``approval_required`` payload for the human-in-the-loop gate."""
+    """Build an ``approval_required`` payload for the human-in-the-loop gate.
+
+    ``action``/``args``/``risk`` describe the **representative** (highest-risk) call and
+    are unchanged. ``actions`` is every call this one gate authorises: a fan-out
+    aggregates the proposals of all its lanes into a single gate, so a payload that
+    named only the representative described one write while three would run. The
+    ``rationale`` spells the same list out in prose, because that is the field a
+    dialog and the durable inbox row already render.
+    """
     return {
         "type": "approval_required",
         "approval_id": approval_id,
@@ -136,6 +145,7 @@ def approval_required(
         "args": args,
         "risk": risk.value,
         "rationale": rationale,
+        "actions": list(actions or []),
     }
 
 

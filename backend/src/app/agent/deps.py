@@ -343,6 +343,8 @@ class AgentDeps(_AegisAgentDeps):
             tool_risk=_default_tool_risk,
             render_system_prompt=_default_render_system_prompt,
             agent_roster=_default_agent_roster,
+            subagent_roster=_default_subagent_roster,
+            check_tool_result=_default_check_tool_result,
             config=config,
             memory=MemoryDeps.default(),
             answer_cache=_default_answer_cache(settings),
@@ -466,6 +468,35 @@ def _default_agent_roster() -> Any:  # noqa: ANN401 - adapter AgentRoster duck-t
     from app.agent.router import load_roster
 
     return load_roster()
+
+
+def _default_subagent_roster() -> Any:  # noqa: ANN401 - sequence of SubAgentSpec
+    """Return the adapter's SUB-agent roster — the team a wide turn fans out across.
+
+    Without this binding ``subagent_roster`` stayed ``None`` in the composition root,
+    which made ``decide_depth``'s ``available_agents`` zero, the ceiling lower than
+    ``min_fanout``, and **every** turn in the shipped application resolve SINGLE with
+    ``decided_by='tenant_default'``. The mechanism was complete and unreachable: only
+    tests that injected their own roster ever fanned out. The roster's *content* stays
+    where domain content belongs — ``app.adapter.roster`` — and this is only the wire.
+    """
+    from app.adapter import sub_agent_roster
+
+    return sub_agent_roster()
+
+
+async def _default_check_tool_result(text: str) -> Any:  # noqa: ANN401 - GuardResult
+    """Screen one tool's output on the ``TOOL_RESULT`` rail before it reaches context.
+
+    Binds the guardrail pipeline's third stage to ``AgentDeps.check_tool_result``. It is
+    the inbound chain (schema → PII → injection → content-safety → topical), which is
+    exactly right: a record, row or summary a tool returns is untrusted text arriving
+    without a human having typed it — the OWASP LLM01 surface — and until this binding
+    existed the only caller of the rail in the whole application was web search.
+    """
+    from app.guardrails import check_tool_result
+
+    return await check_tool_result(text)
 
 
 async def _default_embed_query(query: str) -> list[float] | None:

@@ -22,7 +22,7 @@ Exposed surface (the domain seam described in ``docs/learn/50-run-and-extend.md`
   :func:`get_persona`, :class:`Persona`.
 * **prompts** (piece 6) — :data:`SYSTEM_PROMPTS`, :func:`render_system_prompt`.
 * **roster** (piece 8) — :func:`agent_roster`, :class:`AgentRoster`,
-  :class:`RosterSpecialist`.
+  :class:`RosterSpecialist`, and the fan-out team :func:`sub_agent_roster`.
 * **corpus** (piece 9) — :func:`load_seed_corpus`.
 
 Two pieces are deliberately *not* re-exported here, because their consumer binds to
@@ -64,7 +64,12 @@ from app.adapter.personas import (
     get_persona,
 )
 from app.adapter.prompts import SYSTEM_PROMPTS, render_system_prompt
-from app.adapter.roster import AgentRoster, RosterSpecialist, agent_roster
+from app.adapter.roster import (
+    AgentRoster,
+    RosterSpecialist,
+    agent_roster,
+    sub_agent_roster,
+)
 from app.adapter.schema import (
     Customer,
     Document,
@@ -128,6 +133,7 @@ __all__ = [
     "render_system_prompt",
     "run_tool",
     "schema",
+    "sub_agent_roster",
     "tool_definitions_for",
     "training_frame",
     "tools_for",

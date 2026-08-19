@@ -236,7 +236,17 @@ class ToolResult(_BaseEvent):
 
 
 class ApprovalRequired(_BaseEvent):
-    """The run paused at the human-in-the-loop gate (bounded autonomy)."""
+    """The run paused at the human-in-the-loop gate (bounded autonomy).
+
+    ``actions`` is every call this one approval authorises, and it exists because a
+    fan-out made ``action`` insufficient: several sub-agents can each propose a
+    consequential write in one turn, and the gate that used to name the highest-risk
+    one would then have executed all of them on the strength of a dialog naming one.
+    Informed consent needs the human to read the actions that will run.
+
+    ``action``/``args``/``risk`` remain the representative — the highest-risk call —
+    so a client written before this field keeps working and shows something true.
+    """
 
     type: Literal["approval_required"] = "approval_required"
     approval_id: str
@@ -244,6 +254,13 @@ class ApprovalRequired(_BaseEvent):
     args: dict = Field(default_factory=dict)
     risk: RiskLevel
     rationale: str = Field(description="Why the gate triggered (risk/uncertainty).")
+    actions: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Every call this approval authorises, highest risk first. A single-action "
+            "run carries one entry; approving executes exactly this list and nothing else."
+        ),
+    )
 
 
 class AnswerChunk(_BaseEvent):

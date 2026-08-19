@@ -21,7 +21,13 @@ consequential action without passing the one gate**, and there is exactly one ga
 audit rather than one per lane. The enforcement is in code (:func:`_partition_calls`),
 never in a prompt, and this module deliberately does not import ``interrupt`` at all.
 
-Two more invariants, both enforced here rather than hoped for:
+Three more invariants, all enforced here rather than hoped for:
+
+* **Every tool result this lane executes is screened before it enters the lane's own
+  context** (:func:`aegis.agent.rails.screen_tool_result`, the ``TOOL_RESULT`` rail).
+  A record a tool returns is third-party text the model reads as instructions-adjacent
+  context; it is the OWASP LLM01 surface, and it is screened by the same function the
+  main graph's ``act`` uses.
 
 * **Tools are the spec's allowlist intersected with the persona's**, and the persona
   half comes from ``deps.tool_definitions_for(persona)`` — which is the host's
@@ -53,6 +59,7 @@ from aegis.observability import SpanKind, semconv, span
 
 from . import events
 from .deps import AgentDeps, risk_at_least
+from .rails import screen_tool_result
 from .retry import call_with_retry
 
 __all__ = [
@@ -642,6 +649,13 @@ async def _execute(
         except Exception as exc:  # noqa: BLE001 - a tool failure is a result, not a crash
             ok, summary = False, f"Tool error: {exc}"
         tool_span.set_attribute(semconv.TOOL_OK, ok)
+    # §5.7: the tool's own output is third-party text this lane is about to read as
+    # context. It is screened BEFORE it is streamed or fed back to the model, so a
+    # poisoned record cannot reach either the transcript or the console verbatim.
+    allowed, summary = await screen_tool_result(
+        summary, tool_name=call.name, deps=deps, writer=writer
+    )
+    ok = ok and allowed
     writer(events.tool_result(call.id or "", ok, summary))
     result.tool_calls.append(
         {

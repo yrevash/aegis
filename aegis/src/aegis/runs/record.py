@@ -38,6 +38,7 @@ from aegis.runs.models import Run, RunEvent
 from aegis.runs.partitions import partition_name_for
 
 __all__ = [
+    "TEAM_AGENT_ID",
     "RunEventRecord",
     "RunHeader",
     "RunPartitionMissingError",
@@ -56,6 +57,14 @@ __all__ = [
 #: reader reconstructing the stream from the log must get back what was sent, not what
 #: this module chose to model.
 _PROMOTED = ("trace_id", "agent_id", "span_id")
+
+#: The ``runs.agent_id`` of a run whose events came from more than one lane.
+#:
+#: Not a roster id, and deliberately not one: a fan-out belongs to the team, and naming
+#: any single lane in the run header would caption a four-agent run with one agent's
+#: name. Per-lane attribution lives where it is correct — ``run_events.agent_id``, one
+#: row per event — and this column answers the different question the runs list asks.
+TEAM_AGENT_ID = "team"
 
 
 class RunPartitionMissingError(RuntimeError):
@@ -184,6 +193,7 @@ def apply_event(header: RunHeader, record: RunEventRecord) -> RunHeader:
       ``node_finished``. That matches :func:`aegis.agent.harness.run_summary`, which is
       what the live UI shows, and it is the figure the gateway actually metered; summing
       nodes would double-count a cached answer and miss any usage outside a node.
+    * **``agent_id`` is the run's single lane, or :data:`TEAM_AGENT_ID`.** See below.
     * **``duration_ms`` is the sum of the node durations**, which is also what
       ``run_summary`` reports. Wall-clock ``finished_at - started_at`` is a different
       quantity — it includes however long a human took at an approval gate — and calling
@@ -204,8 +214,16 @@ def apply_event(header: RunHeader, record: RunEventRecord) -> RunHeader:
         "event_count": header.event_count + 1,
         "last_seq": max(header.last_seq, record.seq),
     }
-    if record.agent_id and header.agent_id is None:
-        changes["agent_id"] = record.agent_id
+    if record.agent_id and header.agent_id != TEAM_AGENT_ID:
+        # First lane wins ONLY while there is one lane. A fan-out emits from four, and
+        # taking whichever happened to be scheduled first made a four-agent run's header
+        # claim it was the research agent's — a caption that is wrong for three quarters
+        # of the run, on the row the console lists runs from. A second, different id
+        # means the run belongs to the team, not to a lane.
+        if header.agent_id is None:
+            changes["agent_id"] = record.agent_id
+        elif header.agent_id != record.agent_id:
+            changes["agent_id"] = TEAM_AGENT_ID
     if record.trace_id and header.trace_id is None:
         changes["trace_id"] = record.trace_id
     if header.started_at is None or record.ts < header.started_at:

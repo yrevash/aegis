@@ -246,6 +246,8 @@ async def run_agent(
                 args = dict(interrupt_value.get("args", {}))
                 risk = RiskLevel(interrupt_value.get("risk", RiskLevel.LOW.value))
                 rationale = str(interrupt_value.get("rationale", ""))
+                # Every call this ONE gate authorises, not just the representative.
+                actions = [dict(a) for a in (interrupt_value.get("actions") or [])]
 
                 # The registration above is live only for as long as THIS generator is:
                 # between it and the ``wait`` below sit an await plus three yields, and a
@@ -296,6 +298,7 @@ async def run_agent(
                             args=args,
                             risk=risk,
                             rationale=rationale,
+                            actions=actions,
                         )
                     )
                     try:

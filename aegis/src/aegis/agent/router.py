@@ -24,6 +24,7 @@ becomes a transparent pass-through to the existing pipeline. The adapter-backed
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -37,6 +38,35 @@ logger = logging.getLogger(__name__)
 
 # A ``qa``-only roster the core falls back to when no roster is available.
 _QA_ONLY_ROLE = "qa"
+
+
+@dataclass(frozen=True)
+class _Spend:
+    """The three accrual fields of a ``Usage``, summed across the router's own calls.
+
+    A plain value rather than a gateway ``Usage`` so this module keeps importing nothing
+    heavy; ``aegis.agent.graph._accrue`` only ever reads these three attributes.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+def _sum_usage(*usages: Any) -> Any:  # noqa: ANN401 - Usage duck-types
+    """Return the total of every non-``None`` usage, or ``None`` when there was none."""
+    present = [u for u in usages if u is not None]
+    if not present:
+        return None
+    if len(present) == 1:
+        return present[0]
+    return _Spend(
+        prompt_tokens=sum(int(getattr(u, "prompt_tokens", 0) or 0) for u in present),
+        completion_tokens=sum(
+            int(getattr(u, "completion_tokens", 0) or 0) for u in present
+        ),
+        cost_usd=sum(float(getattr(u, "cost_usd", 0.0) or 0.0) for u in present),
+    )
 
 
 class Depth(StrEnum):
@@ -119,6 +149,10 @@ class DepthDecision:
             mode), ``tenant_default`` (team disabled / no roster), or ``platform_cap``
             (the user's width was narrowed by ``max_parallel_agents``).
         used_llm: Whether the one cheap-model call was spent on this decision.
+        usage: The ``Usage`` of that call, or ``None`` when no model was consulted.
+            Carried out of here rather than discarded because the classifier's call is
+            the tenant's money: an unreported model call is spend the run's own total
+            does not know about, and a budget that cannot see a call cannot cap it.
     """
 
     depth: Depth = Depth.SINGLE
@@ -126,6 +160,7 @@ class DepthDecision:
     reason: str = ""
     decided_by: str = "auto"
     used_llm: bool = False
+    usage: Any = None
 
 
 @dataclass(frozen=True)
@@ -141,6 +176,8 @@ class RouterDecision:
             every failure path.
         fanout: How many sub-agents a ``TEAM`` turn fans out to (``0`` for SINGLE).
         decided_by: Who decided the width — see :class:`DepthDecision`.
+        usage: The ``Usage`` of any model call this decision spent (the tiebreak, and
+            the width classifier once :meth:`with_depth` has folded it in), or ``None``.
     """
 
     role: str
@@ -149,6 +186,7 @@ class RouterDecision:
     depth: Depth = Depth.SINGLE
     fanout: int = 0
     decided_by: str = "auto"
+    usage: Any = None
 
     def with_depth(self, decision: DepthDecision) -> RouterDecision:
         """Return a copy carrying ``decision``'s width, folding its reason into ours.
@@ -165,6 +203,7 @@ class RouterDecision:
             fanout=decision.fanout,
             decided_by=decision.decided_by,
             used_llm=self.used_llm or decision.used_llm,
+            usage=_sum_usage(self.usage, decision.usage),
         )
 
 
@@ -309,24 +348,37 @@ async def route_query(
             reason=f"{reason}; no tiebreak model, defaulted to {default_role}",
             used_llm=False,
         )
+    usage: Any = None
     try:
-        picked = await _llm_tiebreak(query, roster, complete)
+        picked, usage = await _llm_tiebreak(query, roster, complete)
     except Exception:  # noqa: BLE001 - a tiebreak failure must never fail the run
         logger.warning("Router LLM tiebreak failed; defaulting", exc_info=True)
         picked = None
     if picked in roster.roles():
         return RouterDecision(
-            role=picked, reason=f"{reason}; cheap-LLM tiebreak chose {picked}", used_llm=True
+            role=picked,
+            reason=f"{reason}; cheap-LLM tiebreak chose {picked}",
+            used_llm=True,
+            usage=usage,
         )
     return RouterDecision(
         role=default_role,
         reason=f"{reason}; tiebreak inconclusive, defaulted to {default_role}",
         used_llm=True,
+        usage=usage,
     )
 
 
-async def _llm_tiebreak(query: str, roster: Any, complete: CompleteFn) -> str | None:  # noqa: ANN401
-    """Ask a cheap model to pick a role from the roster; return a bare role id or ``None``.
+async def _llm_tiebreak(
+    query: str,
+    roster: Any,  # noqa: ANN401 - AgentRoster duck-type
+    complete: CompleteFn,
+) -> tuple[str | None, Any]:
+    """Ask a cheap model to pick a role; return ``(role_id_or_None, usage)``.
+
+    The usage comes back with the answer because this is a real, billable model call and
+    the run's total has to include it — a call the totals cannot see is a call the
+    tenant's cap cannot stop.
 
     The prompt is a closed menu of role ids + descriptions and asks for one token back.
     The reply is normalised to a known role id; anything unrecognised — **or ambiguous** —
@@ -354,27 +406,28 @@ async def _llm_tiebreak(query: str, roster: Any, complete: CompleteFn) -> str | 
         {"role": "user", "content": query},
     ]
     result = await complete(ModelRole.CHEAP, messages)
+    usage = getattr(result, "usage", None)
     reply = (getattr(result, "content", "") or "").strip().lower()
     if not reply:
-        return None
+        return None, usage
 
     roles = list(roster.roles())
     # 1. The asked-for shape: the bare role id (optionally quoted/punctuated).
     bare = reply.strip("\"'`.,:;! \t\n")
     for role in roles:
         if bare == role.lower():
-            return role
+            return role, usage
     # 2. Otherwise: exactly one role mentioned on word boundaries, else no answer.
     mentioned = [role for role in roles if _phrase_present(role.lower(), reply)]
     if len(mentioned) == 1:
-        return mentioned[0]
+        return mentioned[0], usage
     if len(mentioned) > 1:
         logger.warning(
             "Router tiebreak reply named %d roles (%s); treating as inconclusive",
             len(mentioned),
             ", ".join(mentioned),
         )
-    return None
+    return None, usage
 
 
 # ── The depth classifier: how WIDE, not which specialist ──────────────────────
@@ -392,6 +445,12 @@ _SINGLE_WORD_CEILING = 12
 #: At or above this word count a query is long enough that the deterministic pass
 #: hands it to the cheap model rather than guessing.
 _AMBIGUOUS_WORD_FLOOR = 20
+
+#: How long the one cheap-model width call may take before the turn gives up and runs
+#: SINGLE. A classifier that has not answered in this long has already cost more than
+#: the fan-out it was sizing would have saved, and its failure mode is the cheap, safe
+#: one — so the deadline is short on purpose.
+_CLASSIFIER_TIMEOUT_S = 2.0
 
 #: Phrases that make a query *explicitly* multi-part. These are conjunction-of-tasks
 #: markers, not topic words, so they cannot fire on a long single-intent question.
@@ -453,7 +512,9 @@ def _explicit_decision(policy: DepthPolicy) -> DepthDecision | None:
     ``Fast`` never pays for the cheap-model call it is trying to avoid. The one thing
     the platform may do to a manual choice is NARROW it: a user who pins 6 against a
     cap of 4 gets 4, and the event says ``platform_cap`` so the screen can say why.
-    Widening is never available to the user — that is what a cap means.
+    Widening is never available to the user — that is what a cap means, and it is why an
+    explicit width *below* ``min_fanout`` resolves to SINGLE rather than being rounded
+    up to the smallest team.
     """
     if policy.mode is DepthMode.AUTO:
         return None
@@ -464,14 +525,40 @@ def _explicit_decision(policy: DepthPolicy) -> DepthDecision | None:
             reason="you selected a single-agent run",
             decided_by="user",
         )
-    requested = policy.requested_fanout or policy.ceiling
+    requested = policy.requested_fanout
+    if requested is None:
+        # Team with no explicit width: the platform's own default, which is the ceiling.
+        # Deliberately NOT ``requested or ceiling``: a falsy check on an ``int | None``
+        # turned an explicit ×0 — the narrowest thing a user can ask for — into the
+        # widest team the tenant allows.
+        fanout = _clamp_fanout(policy.ceiling, policy)
+        return DepthDecision(
+            depth=Depth.TEAM,
+            fanout=fanout,
+            reason=f"you selected Team mode (×{fanout})",
+            decided_by="user",
+        )
+    if requested < policy.min_fanout:
+        # Below the floor is a request to run NARROWER than a team, and the one thing
+        # the platform may never do to a manual choice is widen it. Rounding ×1 (or ×0)
+        # up to ``min_fanout`` and reporting ``decided_by="user"`` charged somebody for
+        # agents they explicitly declined to ask for.
+        return DepthDecision(
+            depth=Depth.SINGLE,
+            fanout=0,
+            reason=(
+                f"you selected Team ×{requested}, which is narrower than the "
+                f"{policy.min_fanout} agents a team needs; answering in one pass"
+            ),
+            decided_by="user",
+        )
     fanout = _clamp_fanout(requested, policy)
-    if policy.requested_fanout is not None and fanout < policy.requested_fanout:
+    if fanout < requested:
         return DepthDecision(
             depth=Depth.TEAM,
             fanout=fanout,
             reason=(
-                f"you selected Team ×{policy.requested_fanout}, narrowed to ×{fanout} "
+                f"you selected Team ×{requested}, narrowed to ×{fanout} "
                 f"by the platform cap of {policy.ceiling}"
             ),
             decided_by="platform_cap",
@@ -604,8 +691,21 @@ async def decide_depth(
             fanout=0,
             reason="ambiguous width and no classifier model; answering in one pass",
         )
+    usage: Any = None
     try:
-        width = await _llm_width(query, policy, complete)
+        # Bounded. "SINGLE on every failure path" has to include the path where the
+        # model never answers at all: without this the classifier could hang the run
+        # before a single token streamed, which is the worst failure of the three
+        # (a wrong width costs money; a hang costs the demo).
+        width, usage = await asyncio.wait_for(
+            _llm_width(query, policy, complete), timeout=_CLASSIFIER_TIMEOUT_S
+        )
+    except TimeoutError:
+        logger.warning(
+            "Depth classifier did not answer within %.1fs; defaulting to SINGLE",
+            _CLASSIFIER_TIMEOUT_S,
+        )
+        width = None
     except Exception:  # noqa: BLE001 - and it must never be why a run gets expensive
         logger.warning("Depth classifier model call failed; defaulting to SINGLE",
                        exc_info=True)
@@ -616,6 +716,7 @@ async def decide_depth(
             fanout=0,
             reason="classifier judged this a single-intent query, answering in one pass",
             used_llm=True,
+            usage=usage,
         )
     clamped = _clamp_fanout(width, policy)
     return DepthDecision(
@@ -623,11 +724,14 @@ async def decide_depth(
         fanout=clamped,
         reason=f"classifier split this into {clamped} sub-questions, fanning out",
         used_llm=True,
+        usage=usage,
     )
 
 
-async def _llm_width(query: str, policy: DepthPolicy, complete: CompleteFn) -> int | None:
-    """Ask one cheap model for a width; return an int, or ``None`` for "not a number".
+async def _llm_width(
+    query: str, policy: DepthPolicy, complete: CompleteFn
+) -> tuple[int | None, Any]:
+    """Ask one cheap model for a width; return ``(int_or_None, usage)``.
 
     The reply is normalised to the first integer in it, exactly like the role tiebreak
     normalises to a bare role id: the classifier never trusts free text, and anything
@@ -646,9 +750,10 @@ async def _llm_width(query: str, policy: DepthPolicy, complete: CompleteFn) -> i
         {"role": "user", "content": query},
     ]
     result = await complete(ModelRole.CHEAP, messages)
+    usage = getattr(result, "usage", None)
     reply = (getattr(result, "content", "") or "").strip()
     match = re.search(r"\d+", reply)
     if match is None:
         logger.warning("Depth classifier reply %r carried no number; SINGLE", reply)
-        return None
-    return int(match.group())
+        return None, usage
+    return int(match.group()), usage

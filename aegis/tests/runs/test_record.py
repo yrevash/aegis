@@ -15,7 +15,13 @@ from datetime import UTC, datetime
 import pytest
 
 from aegis.core.types import RunStatus
-from aegis.runs.record import RunEventRecord, RunHeader, apply_event, fold_events
+from aegis.runs.record import (
+    TEAM_AGENT_ID,
+    RunEventRecord,
+    RunHeader,
+    apply_event,
+    fold_events,
+)
 
 from ._stream import every_event_type_covered, full_run
 
@@ -30,6 +36,9 @@ def _records(events, ts=_TS):  # noqa: ANN001, ANN202 - list[dict] -> list[RunEv
             seq=event["seq"],
             ts=ts,
             payload=event,
+            # Promoted exactly as ``_record_from_event`` promotes it in production; a
+            # helper that dropped ``agent_id`` would fold a fan-out as if it had none.
+            agent_id=event.get("agent_id"),
             trace_id=event.get("trace_id"),
         )
         for event in events
@@ -126,3 +135,33 @@ def test_started_at_is_the_earliest_event_not_the_first_folded():
     early = RunEventRecord("token", 5, datetime(2026, 8, 1, tzinfo=UTC), {"type": "token"})
     late = RunEventRecord("token", 6, datetime(2026, 8, 2, tzinfo=UTC), {"type": "token"})
     assert fold_events("r", [late, early]).started_at == early.ts
+
+
+# ── The run header's agent_id, under a fan-out ───────────────────────────────
+
+
+def test_a_multi_agent_runs_header_does_not_claim_a_single_lane():
+    """``runs.agent_id`` used to be whichever lane happened to emit first.
+
+    The runs list captions a run with that column, so a four-agent run was labelled the
+    research agent's — a caption that is wrong for three quarters of it, chosen by task
+    scheduling. Per-lane attribution belongs to ``run_events.agent_id``, one row per
+    event; this column answers the different question "whose run was this".
+    """
+    events = full_run("run-team")
+    lanes = {e["agent_id"] for e in events if e.get("agent_id")}
+    assert len(lanes) > 1, "fixture must carry more than one lane"
+
+    header = fold_events("run-team", _records(events))
+    assert header.agent_id == TEAM_AGENT_ID
+    assert header.agent_id not in lanes
+
+
+def test_a_single_agent_runs_header_still_names_that_agent():
+    """The mirror image: 'team' must not become the answer for every run with a lane."""
+    events = [e for e in full_run("run-solo") if e.get("agent_id") in (None, "research")]
+    lanes = {e["agent_id"] for e in events if e.get("agent_id")}
+    assert lanes == {"research"}, lanes
+
+    header = fold_events("run-solo", _records(events))
+    assert header.agent_id == "research"
