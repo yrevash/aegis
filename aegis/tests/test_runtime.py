@@ -178,6 +178,11 @@ async def test_one_call_brings_up_what_the_ten_configures_did() -> None:
     assert "aegis.memory.set_default_index" in ephemeral
     assert "aegis.retrieval.configure_vector_store" in ephemeral
     assert "EPHEMERAL" in aegis.describe()
+    # And it names where the choice came from. ``mode="lite"`` was an argument, not a
+    # variable, so a report saying "AEGIS_MODE" would send the reader to a variable
+    # nobody set — the record has to be right about its own provenance or it is noise.
+    index_seam = next(s for s in aegis.seams if s.target == "aegis.memory.set_default_index")
+    assert "caller override" in index_seam.source
 
 
 async def test_a_host_session_factory_reaches_governance_ops_and_jobs() -> None:
@@ -252,17 +257,53 @@ async def test_full_mode_names_the_unset_jwt_secret_and_its_value_shape(
 
 
 async def test_full_mode_refuses_to_invent_a_session_factory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any  # noqa: ANN401 - pathlib.Path
+    tmp_path: Any,  # noqa: ANN401 - pathlib.Path
 ) -> None:
-    """It will not build an engine from ``AEGIS_DATABASE_URL``; it names the parameter."""
+    """It will not build an engine from the DSN it was told about; it names the parameter.
+
+    Also the path a host with its own config names takes: every infra value arrives as a
+    keyword rather than through a second, duplicated ``AEGIS_``-prefixed variable — which
+    is the mechanism by which two DSNs for one database drift apart.
+    """
     _fake_adapter("fake_widgets_adapter")
-    monkeypatch.setenv("AEGIS_REDIS_URL", "redis://localhost:6379/0")
-    monkeypatch.setenv("AEGIS_DATABASE_URL", "postgresql+asyncpg://localhost/x")
-    monkeypatch.setenv("AEGIS_VECTOR_STORE_PATH", str(tmp_path))
-    monkeypatch.setenv("AEGIS_JWT_SECRET", "x" * 48)
 
     with pytest.raises(MissingConfigurationError, match="session_factory"):
-        await Aegis.from_env(adapter="fake_widgets_adapter", mode="full")
+        await Aegis.from_env(
+            adapter="fake_widgets_adapter",
+            mode="full",
+            redis_url="redis://localhost:6379/0",
+            database_url="postgresql+asyncpg://localhost/x",
+            vector_store_path=str(tmp_path),
+            jwt_secret="x" * 48,
+        )
+
+
+async def test_the_gateway_report_reads_the_binding_back_not_the_argument() -> None:
+    """A host shim that already bound a governance hook must not be reported as unguarded.
+
+    ``configure`` rebinds only non-``None`` arguments, so ``governance=None`` means "leave
+    what is there" — and for the whole strangler period what is there is the host's real
+    hook, bound when ``app.core.llm`` was imported. Echoing the argument instead of the
+    binding printed ``NO budget/rate enforcement`` on every boot of a fully-governed
+    deployment.
+    """
+    import aegis.gateway as gateway
+
+    class _HostGovernance:
+        def get_context(self) -> None:
+            return None
+
+    _fake_adapter("fake_widgets_adapter")
+    gateway.configure(governance=_HostGovernance())  # the import-time shim's effect
+
+    aegis = await Aegis.from_env(adapter="fake_widgets_adapter", mode="lite")
+
+    seam = next(s for s in aegis.seams if s.target == "aegis.gateway.configure(governance=)")
+    assert seam.durable, "an already-bound host hook is enforcement, not a silent gap"
+    assert "_HostGovernance" in seam.detail
+    assert "aegis.gateway.configure(governance=)" not in {
+        s.target for s in aegis.ephemeral_seams
+    }
 
 
 # ──────────────────────────────────────────────── the second-call decision ──

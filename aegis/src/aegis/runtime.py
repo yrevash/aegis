@@ -227,6 +227,8 @@ class Aegis:
         approval_status: Any = None,  # noqa: ANN401 - host status enum, kept loose
         mode: AegisMode | str | None = None,
         vector_store_path: str | None = None,
+        database_url: str | None = None,
+        redis_url: str | None = None,
         jwt_secret: str | None = None,
         jwt_algorithm: str | None = None,
         jwt_expire_minutes: int | None = None,
@@ -279,6 +281,13 @@ class Aegis:
                 ``is_dev``) this is how it stays the single source of that truth instead
                 of duplicating it into a second variable. Recorded as ``caller override``.
             vector_store_path: Override for ``AEGIS_VECTOR_STORE_PATH``, same reasoning.
+            database_url: Override for ``AEGIS_DATABASE_URL``. It is only ever *read* —
+                to answer ``require_full_infra``'s question "is a relational store
+                configured at all" — and never dialled: the engine comes from
+                ``session_factory``, for the reason spelled out there. A host that owns
+                its own DSN setting passes it here instead of duplicating the value into
+                a second environment variable, which is how two DSNs drift apart.
+            redis_url: Override for ``AEGIS_REDIS_URL``, same reasoning.
             jwt_secret: Override for ``AEGIS_JWT_SECRET``.
             jwt_algorithm: Override for ``AEGIS_JWT_ALGORITHM``.
             jwt_expire_minutes: Override for ``AEGIS_JWT_EXPIRE_MINUTES``.
@@ -329,8 +338,13 @@ class Aegis:
         settings = CoreSettings()
         if mode is not None:
             settings = settings.model_copy(update={"mode": AegisMode(mode)})
-        if vector_store_path is not None:
-            settings = settings.model_copy(update={"vector_store_path": vector_store_path})
+        for name, value in (
+            ("vector_store_path", vector_store_path),
+            ("database_url", database_url),
+            ("redis_url", redis_url),
+        ):
+            if value is not None:
+                settings = settings.model_copy(update={name: value})
         resolved = await settings.resolve_mode()
         durable_infra = resolved is AegisMode.full
 
@@ -339,7 +353,17 @@ class Aegis:
 
         # ── 4. the seams ───────────────────────────────────────────────────────
         _wire_memory_spec(domain, module_path, seams)
-        _wire_vector_stores(settings, resolved, seams)
+        _wire_vector_stores(
+            settings,
+            resolved,
+            mode_source="caller override" if mode is not None else f"{ENV_PREFIX}MODE",
+            path_source=(
+                "caller override"
+                if vector_store_path is not None
+                else f"env {ENV_PREFIX}VECTOR_STORE_PATH"
+            ),
+            seams=seams,
+        )
         _wire_security(env, jwt_secret, jwt_algorithm, jwt_expire_minutes, durable_infra, seams)
         _wire_gateway(gateway_config, governance, observability, seams)
         _wire_governance(session_factory, set_tenant_scope, durable_infra, seams)
@@ -485,16 +509,26 @@ def _wire_memory_spec(domain: DomainAdapter, module_path: str, seams: list[Seam]
 
 
 def _wire_vector_stores(
-    settings: CoreSettings, resolved: AegisMode, seams: list[Seam]
+    settings: CoreSettings,
+    resolved: AegisMode,
+    *,
+    mode_source: str,
+    path_source: str,
+    seams: list[Seam],
 ) -> None:
     """Seams 2 and 3 — the two that used to degrade silently (§8.4).
 
-    ``full`` gets the durable on-disk engine at ``AEGIS_VECTOR_STORE_PATH``;
+    ``full`` gets the durable on-disk engine at the resolved vector-store path;
     :meth:`~aegis.core.config.CoreSettings.require_full_infra` has already raised by now
     if it is unset, so there is no branch here where a path is invented. ``lite`` gets
     the ephemeral in-process engine — the honest dev/test choice — recorded as
     ``durable=False`` so it is logged at WARNING and printed with a ``!`` rather than
     being indistinguishable from the durable case.
+
+    ``mode_source``/``path_source`` are threaded in rather than assumed, because a host
+    that owns its own config names passes both as arguments; reporting those as "read
+    from AEGIS_VECTOR_STORE_PATH" would send the next person to debug this to a variable
+    nobody set. A record that misnames where a value came from is worse than none.
 
     Both branches configure. Neither leaf has an implicit default any more, so a process
     that skipped this block would get a named error out of the first recall — but it
@@ -522,22 +556,19 @@ def _wire_vector_stores(
         configure_vector_store(lambda: ChromaVectorStore.local(path=path))
         detail = f"durable, on disk at {path}"
         durable = True
-        source = f"env {ENV_PREFIX}VECTOR_STORE_PATH"
+        source = path_source
     else:
         set_default_index(MemoryVectorIndex.local())
         configure_vector_store(ChromaVectorStore.local)
         detail = (
             "EPHEMERAL in-process engine — nothing indexed in this process survives it. "
-            f"Chosen because the resolved mode is {resolved.value}; set "
-            f"{ENV_PREFIX}MODE=full and {ENV_PREFIX}VECTOR_STORE_PATH=<dir> for a "
-            "durable store."
+            f"Chosen because the resolved mode is {resolved.value} (from {mode_source}); "
+            "a durable store needs mode=full and a vector-store path."
         )
         durable = False
-        source = f"{ENV_PREFIX}MODE={resolved.value}"
+        source = f"{mode_source}={resolved.value}"
 
-    seams.append(
-        Seam("aegis.memory.set_default_index", source, detail, durable=durable)
-    )
+    seams.append(Seam("aegis.memory.set_default_index", source, detail, durable=durable))
     seams.append(
         Seam("aegis.retrieval.configure_vector_store", source, detail, durable=durable)
     )
@@ -630,12 +661,20 @@ def _wire_gateway(
 
     ``observability`` defaults to the standalone OTel sink because that is a decision with
     no host-specific content: it emits spans, and a host that wants none can pass its own
-    no-op. ``governance`` gets no default at all — the gateway's built-in hook is
-    fail-open by construction (no enforcement whatsoever), so silently accepting it would
-    be an uncapped model spend that looks exactly like a capped one. It is recorded as a
-    non-durable seam and logged instead.
+    no-op. ``gateway_config`` and ``governance`` get no default here: ``configure`` rebinds
+    only the arguments that are not ``None``, so passing nothing deliberately *keeps*
+    whatever is already bound.
+
+    **The report reads the bindings back rather than echoing the arguments**, and that
+    distinction is the whole point of this function. Throughout the strangler period a
+    host's import-time shim is a legitimate second configurer — ``app.core.llm`` binds a
+    real governance hook the moment it is imported — so "I was passed ``governance=None``"
+    and "this process has no spend enforcement" are different facts. Reporting the first
+    as the second would have printed ``NO budget/rate enforcement`` on every boot of a
+    fully-governed deployment, which is how a warning stops being read.
     """
     import aegis.gateway as gateway
+    from aegis.gateway import llm as _gateway_state
 
     sink = observability
     sink_source = "caller"
@@ -649,17 +688,34 @@ def _wire_gateway(
             sink_source = "default"
 
     gateway.configure(config=gateway_config, governance=governance, observability=sink)
+
+    # Read back what is actually bound now, whoever bound it.
+    bound_config = _gateway_state._config
+    bound_governance = _gateway_state._governance
+    if gateway_config is not None:
+        config_source = "caller"
+    elif bound_config is not None:
+        config_source = "already bound (host import-time shim)"
+    else:
+        config_source = "env (gateway defaults)"
     seams.append(
         Seam(
             target="aegis.gateway.configure",
-            source="caller" if gateway_config is not None else "env (gateway defaults)",
-            detail=(
-                f"config={'host' if gateway_config is not None else 'env'}, "
-                f"observability={sink_source}"
-            ),
+            source=config_source,
+            detail=f"config={config_source}, observability={sink_source}",
         )
     )
-    if governance is None:
+
+    enforcing = not isinstance(bound_governance, _gateway_state._NoOpGovernance)
+    if enforcing:
+        seams.append(
+            Seam(
+                target="aegis.gateway.configure(governance=)",
+                source="caller" if governance is not None else "already bound (host shim)",
+                detail=f"{type(bound_governance).__name__} — budget/rate enforcement is on",
+            )
+        )
+    else:
         seams.append(
             Seam(
                 target="aegis.gateway.configure(governance=)",
@@ -668,14 +724,6 @@ def _wire_gateway(
                 "built-in hook is fail-open by construction. Pass governance=... to "
                 "bind spend caps.",
                 durable=False,
-            )
-        )
-    else:
-        seams.append(
-            Seam(
-                target="aegis.gateway.configure(governance=)",
-                source="host governance",
-                detail=f"{type(governance).__name__} — budget/rate enforcement is on",
             )
         )
 
