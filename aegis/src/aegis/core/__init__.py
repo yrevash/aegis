@@ -9,6 +9,11 @@ it stays cheap to install.
 from __future__ import annotations
 
 from aegis.core.config import AegisMode, CoreSettings
+from aegis.core.deprecation import (
+    AegisDeprecationWarning,
+    deprecated,
+    warn_deprecated,
+)
 from aegis.core.events import (
     AegisEvent,
     GuardrailEvent,
@@ -32,6 +37,7 @@ from aegis.core.types import (
 )
 
 __all__ = [
+    "AegisDeprecationWarning",
     "AegisEvent",
     "AegisMode",
     "ApprovalDecision",
@@ -51,7 +57,9 @@ __all__ = [
     "StepFinished",
     "StepStarted",
     "available",
+    "deprecated",
     "get",
     "register",
     "require",
+    "warn_deprecated",
 ]

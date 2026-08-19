@@ -119,14 +119,47 @@ def test_every_module_states_its_own_piece_number():
     assert not silent, f"these adapter modules state no piece number: {silent}"
 
 
+#: The authoritative retargeting procedure, at the repository root. ``SWAP.md``
+#: used to hold it; it is now a pointer, and this is what it points at.
+_SKILL_MD = _ADAPTER.parents[3] / "SKILL.md"
+
+
 def test_the_checklists_name_every_piece():
-    """``README.md`` and ``SWAP.md`` must list all ten pieces, roster and skills included.
+    """The local map and the procedure must both list all ten pieces.
 
     ``roster.py`` and ``skills/`` were both absent from every checklist, which is how
     a swap-day edit misses them entirely.
+
+    The procedure moved from ``adapter/SWAP.md`` to the root ``SKILL.md``, so this
+    now checks the document an agent is actually handed. ``adapter/README.md``
+    stays in scope as the local map of the same ten pieces.
     """
-    for doc in ("README.md", "SWAP.md"):
-        text = (_ADAPTER / doc).read_text()
+    documents = {
+        "adapter/README.md": _ADAPTER / "README.md",
+        "SKILL.md": _SKILL_MD,
+    }
+    for label, path in documents.items():
+        assert path.is_file(), f"{label} missing at {path}"
+        text = path.read_text()
         missing = [name for name in sorted(EXPECTED_MODULES) if name not in text]
         missing += [f"{name}/" for name in sorted(EXPECTED_DIRS) if f"{name}/" not in text]
-        assert not missing, f"adapter/{doc} does not name: {missing}"
+        assert not missing, f"{label} does not name: {missing}"
+
+
+def test_swap_md_stays_a_pointer_and_does_not_grow_a_second_checklist():
+    """One procedure, not two that will drift.
+
+    ``SWAP.md`` was retired to a pointer because three copies of one checklist is
+    how one of them ends up wrong — and this directory really did carry three, with
+    five different denominators between them. If a checklist reappears here, it is
+    a second source of truth again, so this fails before it can go stale.
+    """
+    swap = _ADAPTER / "SWAP.md"
+    assert swap.is_file(), "SWAP.md was deleted; adapter/README.md still links to it"
+    text = swap.read_text()
+    assert "SKILL.md" in text, "SWAP.md must point at the authoritative procedure"
+    regrown = [name for name in sorted(EXPECTED_MODULES) if name in text]
+    assert not regrown, (
+        "SWAP.md is naming adapter modules again, which means the checklist has "
+        f"grown back and there are two procedures to keep in sync: {regrown}"
+    )

@@ -61,6 +61,12 @@ dump.rdb
 .superpowers/
 .frontend-templates/
 
+# Generated API reference (regenerate with scripts/build_api_docs.py). Derived
+# entirely from the docstrings in aegis/src, so committing it would add a second
+# copy that goes stale the moment a signature changes and buries every real diff
+# in review noise. aegis/PUBLIC.md is the hand-written part, and it IS committed.
+docs/api/
+
 # Generated teaching site (regenerate with scripts/build-teaching-html.mjs).
 # The Markdown is the source of truth; the HTML is a disposable view, and the
 # vendored mermaid bundle is 3.4 MB of third-party code that does not belong in

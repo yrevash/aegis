@@ -164,19 +164,29 @@ subset of surfaces. Every claim the platform makes has a screen behind it.
 ## Pointing Aegis at a new domain
 
 Only `backend/src/app/adapter/` changes. The core reaches the domain exclusively
-through injected callables, so the seam stays isolated. Full checklist in
-`backend/src/app/adapter/SWAP.md`.
+through injected callables, so the seam stays isolated. **The full procedure —
+which file to edit, in what order, and the command that proves each step — is
+[`SKILL.md`](SKILL.md).**
 
-| File | What it defines |
-|---|---|
-| `schema.py` | Entities and enums — the shared vocabulary |
-| `ml_spec.py` | `FEATURES` / `TARGET` and the prediction narrative |
-| `generator.py` | Synthetic records: procedural draws + LLM fabrication |
-| `tools.py` | Domain actions — typed, idempotent, reversible, audited, risk-tiered |
-| `personas.py` · `prompts.py` | Personas, data scope, system prompts |
-| `corpus/` | Seed knowledge documents |
+Ten pieces: eight modules plus two content directories.
 
-Domain logic never leaks into the core.
+| # | Piece | What it defines |
+|---|---|---|
+| 1 | `schema.py` | Entities and enums — the shared vocabulary |
+| 2 | `ml_spec.py` | `FEATURES` / `TARGET`, the latent signal, and the prediction narrative |
+| 3 | `generator.py` | Synthetic records: procedural draws + LLM fabrication + templated fallback |
+| 4 | `tools.py` | Domain actions — typed, idempotent, reversible, audited, risk-tiered |
+| 5 | `personas.py` | Who is served: data scope + tool allowlist per persona |
+| 6 | `prompts.py` | The system prompt per persona (paired with 5) |
+| 7 | `memory_spec.py` | What counts as a durable fact, and who it is scoped to |
+| 8 | `roster.py` | Which specialists the supervisor may route to |
+| 9 | `corpus/` | Seed knowledge documents |
+| 10 | `skills/` | Procedural how-to-act playbooks |
+
+`__init__.py` is not a piece — it is the registry, and its `__all__` is the
+contract to keep stable. Domain logic never leaks into the core;
+`backend/tests/adapter/test_piece_manifest.py` counts the pieces on disk and
+fails if any document disagrees with it.
 
 ---
 
