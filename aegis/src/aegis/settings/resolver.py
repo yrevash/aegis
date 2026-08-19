@@ -202,7 +202,7 @@ def _merge(
         case MergeRule.TIGHTEN_ONLY:
             # The whole guarantee, in one expression: the platform layer is always one
             # of the arguments, so the fold cannot descend below it.
-            winner = candidate  # MUTATION: last scope wins, as if OVERRIDE
+            winner = strictest(spec, candidate, value)
             return (winner, scope) if winner != value else (value, source)
         case MergeRule.UNION:
             merged = list(dict.fromkeys([*value, *candidate]))
