@@ -30,6 +30,7 @@ import { MiniMeter } from '@/components/memory/MiniMeter'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { TenantRailPolicy } from '@/components/guardrails/TenantRailPolicy'
 
 /**
  * One rail in the defense-in-depth pipeline. Every field here is honest,
@@ -482,6 +483,8 @@ function GuardrailsView(): ReactElement {
       </div>
 
       <EngineIndicator signals={posture?.signals ?? null} />
+
+      <TenantRailPolicy />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
