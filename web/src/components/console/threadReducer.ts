@@ -27,13 +27,24 @@
 import type { StreamEvent } from '@/lib/stream'
 import { initialRunState, runReducer, type RunState } from '@/state/runReducer'
 
+import type { TurnAttachment } from './composerAttachment'
+
 /** One question and the run it started, in this tab. */
 export interface Turn {
   /** Client-side id; the run's own `run_id` arrives later, on `run_started`. */
   id: string
+  /** The question as the person wrote it — never the wire text an attachment extends. */
   question: string
   /** Epoch milliseconds the question was sent. */
   askedAt: number
+  /**
+   * The image screened for this turn, or null.
+   *
+   * It lives on the turn rather than in the composer because the guardrail verdict is
+   * part of what happened in this turn, and the composer has already moved on to the
+   * next question by the time the answer arrives.
+   */
+  attachment: TurnAttachment | null
   run: RunState
 }
 
@@ -90,7 +101,14 @@ export type ThreadAction =
   /** Fill in a chat's stored transcript. */
   | { kind: 'restore'; sessionId: string; turns: RestoredTurn[] }
   /** Send a question in the active chat, opening its turn. */
-  | { kind: 'ask'; sessionId: string; turnId: string; question: string; at: number }
+  | {
+      kind: 'ask'
+      sessionId: string
+      turnId: string
+      question: string
+      attachment?: TurnAttachment | null
+      at: number
+    }
   /** One stream event, routed to the turn that owns the run. */
   | { kind: 'event'; turnId: string; event: StreamEvent }
   /** The transport closed; the turn is no longer running whatever else happened. */
@@ -217,6 +235,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         id: action.turnId,
         question: action.question,
         askedAt: action.at,
+        attachment: action.attachment ?? null,
         // `running` up front, so the composer locks before `run_started` arrives.
         run: { ...initialRunState, running: true },
       }

@@ -1,6 +1,6 @@
 'use client'
 
-import { Sparkles } from 'lucide-react'
+import { ShieldAlert, ShieldCheck, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { ApprovalCard } from '@/components/approval/ApprovalCard'
@@ -21,6 +21,7 @@ import { deriveActivity } from './agentLanes'
 import { ApprovalSpotlight } from './ApprovalSpotlight'
 import { AssistantBot } from './AssistantBot'
 import { Composer } from './Composer'
+import { attachmentVerdict, type TurnAttachment } from './composerAttachment'
 import { MemoryRail } from './MemoryRail'
 import { memorySubjectOf } from './memorySubject'
 import { beatFromSignal } from './motion'
@@ -70,6 +71,43 @@ function RestoredTurnView({ turn }: { turn: RestoredTurn }): ReactElement {
   )
 }
 
+/**
+ * The vision rails' verdict on this turn's image, before the answer.
+ *
+ * It sits above everything the run produced because that is the order the rails ran in:
+ * the image was screened before the question was sent, and a refusal means the model
+ * never saw the description. Showing the verdict afterwards would tell the story
+ * backwards.
+ */
+function AttachmentChip({ attachment }: { attachment: TurnAttachment }): ReactElement {
+  const verdict = attachmentVerdict(attachment)
+  return (
+    <div
+      className={cn(
+        'flex items-start gap-2 self-end rounded-xl border px-3 py-2 text-[0.76rem] leading-snug',
+        verdict.blocked
+          ? 'border-block/50 bg-block/10 text-block-ink'
+          : 'border-border bg-surface-2/50 text-muted-foreground',
+      )}
+    >
+      {verdict.blocked ? (
+        <ShieldAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+      ) : (
+        <ShieldCheck aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element -- a local data: URL, never a remote asset */}
+      <img
+        src={attachment.previewUrl}
+        alt={attachment.filename ?? 'The attached image'}
+        className="size-8 shrink-0 rounded-md border border-border object-cover"
+      />
+      <span className="max-w-[28rem]">
+        <span className="font-medium">{verdict.label}.</span> {verdict.detail}
+      </span>
+    </div>
+  )
+}
+
 interface TurnViewProps {
   turn: Turn
   graph: GraphResponse
@@ -101,6 +139,8 @@ function TurnView({ turn, graph, metrics }: TurnViewProps): ReactElement {
   return (
     <article className="flex flex-col gap-3">
       <Question text={turn.question} meta={running ? `Sent ${sent} · running` : `Sent ${sent}`} />
+
+      {turn.attachment !== null && <AttachmentChip attachment={turn.attachment} />}
 
       {running && <TrustBar state={run} beat={beat} idle={false} />}
 
@@ -206,7 +246,16 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   const [graph, setGraph] = useState<GraphResponse>(EMPTY_GRAPH)
   const [personaId, setPersonaId] = useState(personasForRole(role)[0]?.id ?? '')
   const [decided, setDecided] = useState(false)
+  // Bumped every time a run settles. The budget line re-reads on it rather than on a
+  // timer, because a settled run is the only thing that can have moved the figure.
+  const [budgetKey, setBudgetKey] = useState(0)
   const threadEndRef = useRef<HTMLDivElement>(null)
+
+  const wasRunning = useRef(false)
+  useEffect(() => {
+    if (wasRunning.current && !chat.running) setBudgetKey((n) => n + 1)
+    wasRunning.current = chat.running
+  }, [chat.running])
 
   useEffect(() => {
     // Wait for the persisted session; firing now would send no bearer.
@@ -234,9 +283,9 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
     threadEndRef.current?.scrollIntoView({ block: 'end' })
   }, [turnCount])
 
-  const send = (question: string): void => {
+  const send = (question: string, attachment: TurnAttachment | null = null): void => {
     setDecided(false)
-    chat.ask(question, personaId)
+    chat.ask(question, personaId, attachment)
   }
 
   const handleDecision = (decision: ApprovalDecision): void => {
@@ -309,6 +358,8 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
             role={role}
             personaId={personaId}
             onPersonaChange={setPersonaId}
+            token={token}
+            budgetKey={budgetKey}
             onSend={send}
             running={chat.running}
           />

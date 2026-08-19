@@ -28,6 +28,7 @@ import { startRun } from '@/lib/api/liveTransport'
 import type { RunController } from '@/lib/api/transport'
 import type { ApprovalDecision } from '@/lib/api/types'
 
+import { questionWithAttachment, type TurnAttachment } from './composerAttachment'
 import {
   activeSession,
   initialThreadState,
@@ -80,8 +81,12 @@ export interface UseChatThread {
   live: Turn | null
   /** Whether a run is in flight (the composer is locked while it is). */
   running: boolean
-  /** Send a question in the active chat. */
-  ask: (question: string, persona: string | null) => void
+  /** Send a question in the active chat, with whatever image was screened for it. */
+  ask: (
+    question: string,
+    persona: string | null,
+    attachment?: TurnAttachment | null,
+  ) => void
   /** Open a new chat. */
   newChat: () => void
   /** Show an existing chat, loading its stored transcript the first time. */
@@ -132,10 +137,22 @@ export function useChatThread(token: string | null): UseChatThread {
       serverId: string | null,
       question: string,
       persona: string | null,
+      attachment: TurnAttachment | null,
     ): void => {
       const turnId = mintKey('turn')
-      dispatch({ kind: 'ask', sessionId: sessionKey, turnId, question, at: Date.now() })
-      controllerRef.current = startRun({ query: question, persona, sessionId: serverId }, token, {
+      dispatch({
+        kind: 'ask',
+        sessionId: sessionKey,
+        turnId,
+        question,
+        attachment,
+        at: Date.now(),
+      })
+      // The thread shows the question the person wrote; the run receives that question
+      // plus the screened description of the image, which is the only form an
+      // attachment takes on this wire. A refused image contributes nothing.
+      const query = questionWithAttachment(question, attachment)
+      controllerRef.current = startRun({ query, persona, sessionId: serverId }, token, {
         onEvent: (event) => {
           if (event.type === 'approval_required') approvalIdRef.current = event.approval_id
           dispatch({ kind: 'event', turnId, event })
@@ -155,23 +172,27 @@ export function useChatThread(token: string | null): UseChatThread {
   )
 
   const ask = useCallback(
-    (question: string, persona: string | null): void => {
+    (
+      question: string,
+      persona: string | null,
+      attachment: TurnAttachment | null = null,
+    ): void => {
       const current = activeSession(thread)
       if (current === null) return
       approvalIdRef.current = null
       setApprovalResolved(false)
 
       if (current.serverId !== null) {
-        openRun(current.id, current.serverId, question, persona)
+        openRun(current.id, current.serverId, question, persona, attachment)
         return
       }
       // First question of this chat: mint the conversation, then run in it.
       void createSession(token, question.slice(0, 80))
         .then((row) => {
           dispatch({ kind: 'bind_session', sessionId: current.id, serverId: row.id })
-          openRun(current.id, row.id, question, persona)
+          openRun(current.id, row.id, question, persona, attachment)
         })
-        .catch(() => openRun(current.id, null, question, persona))
+        .catch(() => openRun(current.id, null, question, persona, attachment))
     },
     [thread, openRun, token],
   )
