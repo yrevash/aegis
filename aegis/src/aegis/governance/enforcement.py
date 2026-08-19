@@ -174,7 +174,16 @@ def _clamp_inward(user_cap: int | float | None, tenant_cap: int | float | None):
 async def _budgets_for(
     session: AsyncSession, *, tenant_id: int | None, user_id: int | None
 ) -> list[Budget]:
-    """Return the tenant- and user-scoped budget rows for a principal (user first)."""
+    """Return the tenant- and user-scoped budget rows for a principal (user first).
+
+    **Every window, mixed together.** The result may hold a ``day`` row and a ``month``
+    row for the same scope, and the ordering is by scope only. A caller that reduces
+    this list to one number must group by ``Budget.window`` first: taking the first
+    tenant row and the first user row and comparing them was the defect
+    :func:`effective_limits` documents. :func:`enforce_governance` needs the mixture as
+    it is — it checks each row over that row's own window — which is why the grouping
+    belongs to the caller and not here.
+    """
     conds = []
     if tenant_id is not None:
         conds.append(
@@ -194,14 +203,60 @@ async def _budgets_for(
     return sorted(rows, key=lambda b: 0 if b.scope_type is BudgetScope.USER else 1)
 
 
+#: Windows narrowest-first. ``effective_limits`` reports the narrowest window that
+#: actually governs the principal, because that is the cap that bites first.
+_WINDOWS_NARROWEST_FIRST: tuple[BudgetWindow, ...] = (
+    BudgetWindow.DAY,
+    BudgetWindow.MONTH,
+)
+
+
+def _governing_window(budgets: list[Budget]) -> BudgetWindow | None:
+    """Return the narrowest window any of ``budgets`` runs over, or ``None`` if empty."""
+    present = {b.window for b in budgets}
+    return next((w for w in _WINDOWS_NARROWEST_FIRST if w in present), None)
+
+
+def _tightest(budgets: list[Budget], field: str) -> int | float | None:
+    """Return the smallest non-``None`` ``field`` across ``budgets`` (``None`` = uncapped)."""
+    caps = [getattr(b, field) for b in budgets]
+    present = [c for c in caps if c is not None]
+    return min(present) if present else None
+
+
 async def effective_limits(
-    tenant_id: int | None, user_id: int | None
+    tenant_id: int | None,
+    user_id: int | None,
+    *,
+    window: BudgetWindow | None = None,
 ) -> GovernanceLimits:
     """Resolve the nearest-binding caps for a principal (user clamped to tenant).
+
+    **Windows are never mixed.** ``_budgets_for`` returns every row for the principal,
+    across every window, and this used to take the *first* tenant row and the *first*
+    user row regardless of which window each ran over — so a tenant's ``month`` cap
+    could clamp a user's ``day`` cap and the resulting figure described no cap that
+    exists. A monthly quantity and a daily quantity are not comparable, and
+    ``min(month, day)`` is a category error however small the number it returns.
+
+    This was **a display defect, not an enforcement one**:
+    :func:`enforce_governance` reads the same rows but sums the ledger over *each row's
+    own* window, so what actually bound a call was always right. What was wrong was the
+    number the operator read — which is precisely the failure §7 exists to remove.
+
+    ``token_cap`` / ``usd_cap`` are resolved for **one** window and
+    :attr:`GovernanceLimits.window` names it, so the figure and its denominator travel
+    together. ``rpm`` / ``tpm`` are per-minute quantities that
+    :func:`enforce_governance` checks on *every* governing row whatever window that row
+    runs over, so they are resolved across all of them — the tightest binds, which is
+    what the enforcer does.
 
     Args:
         tenant_id: The tenant the principal belongs to.
         user_id: The acting user.
+        window: The accounting window to report ``token_cap``/``usd_cap`` for. Omit for
+            the narrowest window that actually governs this principal (a day cap bites
+            before a month cap), or ``day`` when nothing governs it at all.
 
     Returns:
         The merged :class:`GovernanceLimits` for the per-request context; every field
@@ -212,15 +267,22 @@ async def effective_limits(
     async with _session() as session:
         await _set_tenant_scope(session, tenant_id)
         budgets = await _budgets_for(session, tenant_id=tenant_id, user_id=user_id)
-    tenant = next((b for b in budgets if b.scope_type is BudgetScope.TENANT), None)
-    user = next((b for b in budgets if b.scope_type is BudgetScope.USER), None)
-    t = tenant or Budget()
-    u = user or Budget()
+    reported = window or _governing_window(budgets) or BudgetWindow.DAY
+    in_window = [b for b in budgets if b.window is reported]
+    tenants = [b for b in in_window if b.scope_type is BudgetScope.TENANT]
+    users = [b for b in in_window if b.scope_type is BudgetScope.USER]
+    all_tenants = [b for b in budgets if b.scope_type is BudgetScope.TENANT]
+    all_users = [b for b in budgets if b.scope_type is BudgetScope.USER]
     return GovernanceLimits(
-        token_cap=_clamp_inward(u.token_cap, t.token_cap),
-        usd_cap=_clamp_inward(u.usd_cap, t.usd_cap),
-        rpm=_clamp_inward(u.rpm, t.rpm),
-        tpm=_clamp_inward(u.tpm, t.tpm),
+        token_cap=_clamp_inward(
+            _tightest(users, "token_cap"), _tightest(tenants, "token_cap")
+        ),
+        usd_cap=_clamp_inward(
+            _tightest(users, "usd_cap"), _tightest(tenants, "usd_cap")
+        ),
+        rpm=_clamp_inward(_tightest(all_users, "rpm"), _tightest(all_tenants, "rpm")),
+        tpm=_clamp_inward(_tightest(all_users, "tpm"), _tightest(all_tenants, "tpm")),
+        window=reported.value,
     )
 
 
@@ -394,7 +456,7 @@ async def create_tenant(
     error. Requiring it here is the only place the requirement can be enforced once.
 
     The tenant admin then allocates each of their users a cap under this one; a user's
-    effective limit is clamped inward by it (see :func:`_limits_for`).
+    effective limit is clamped inward by it (see :func:`effective_limits`).
 
     Args:
         name: The unique tenant (client) name.

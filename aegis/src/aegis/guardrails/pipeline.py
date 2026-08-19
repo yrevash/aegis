@@ -193,7 +193,10 @@ class Guardrails:
         ground_answers: bool = False,
         grounding_block: bool = False,
         denylist_terms: Sequence[str] | None = None,
+        denylist_patterns: Sequence[str] | None = None,
         pii_entities: Sequence[str] | None = None,
+        pii_block: bool = False,
+        input_max_chars: int = schema.MAX_INPUT_CHARS,
         injection_cache: InjectionCache | None = None,
         vision_completer: ChatCompleter | None = None,
         media_limits: MediaLimits | None = None,
@@ -228,9 +231,22 @@ class Guardrails:
                 and outbound paths (:func:`aegis.guardrails.schema.denied_term`). The
                 host's own floor; a tenant's ``guardrails.denylist.terms`` is unioned
                 onto it per request by :meth:`with_policy`.
+            denylist_patterns: Ids from the vetted pattern library
+                (:mod:`aegis.guardrails.patterns`) screened on the same three paths.
+                **Ids, never expressions** — the platform wrote every regex in that
+                library, because one a tenant types is executed by this process on the
+                request path against attacker-influenced text. A floor too: a tenant's
+                ``guardrails.denylist.patterns`` is unioned onto it.
             pii_entities: Entity kinds to screen for **in addition to** the ones the
                 live PII engine already covers. Again a floor: a tenant's
                 ``guardrails.pii.entities`` is unioned onto it, never assigned over it.
+            pii_block: Refuse a payload carrying PII instead of redacting it and
+                continuing. Off by default (redact); a tenant may tighten it on through
+                ``guardrails.pii.block`` and can never turn it back off.
+            input_max_chars: The longest inbound query accepted, defaulting to the
+                rail's own :data:`aegis.guardrails.schema.MAX_INPUT_CHARS`. A tenant's
+                ``guardrails.input.max_chars`` may lower it and — being ``tighten_only``
+                with a bound of that same constant — can never raise it.
             vision_completer: A vision-capable completer for the image-injection
                 screen (:mod:`aegis.guardrails.media.injection`). Kept separate
                 from ``completer`` because screening pixels needs a multimodal
@@ -260,7 +276,10 @@ class Guardrails:
         self._ground_answers = ground_answers
         self._grounding_block = grounding_block
         self._denylist_terms = _clean_terms(denylist_terms)
+        self._denylist_patterns = _clean_terms(denylist_patterns)
         self._pii_entities = _clean_terms(pii_entities)
+        self._pii_block = pii_block
+        self._input_max_chars = int(input_max_chars)
         self._injection_cache = (
             injection_cache if injection_cache is not None else _default_injection_cache()
         )
@@ -285,7 +304,10 @@ class Guardrails:
             topical_block=self._topical_block,
             grounding_block=self._grounding_block,
             denylist_terms=self._denylist_terms,
+            denylist_patterns=self._denylist_patterns,
             pii_entities=self._pii_entities,
+            pii_block=self._pii_block,
+            input_max_chars=self._input_max_chars,
         )
 
     def with_policy(self, policy: GuardrailPolicy) -> Guardrails:
@@ -317,7 +339,10 @@ class Guardrails:
         clone._topical_block = policy.topical_block
         clone._grounding_block = policy.grounding_block
         clone._denylist_terms = _clean_terms(policy.denylist_terms)
+        clone._denylist_patterns = _clean_terms(policy.denylist_patterns)
         clone._pii_entities = _clean_terms(policy.pii_entities)
+        clone._pii_block = policy.pii_block
+        clone._input_max_chars = int(policy.input_max_chars)
         return clone
 
     def with_completer(self, completer: ChatCompleter | None) -> Guardrails:
@@ -513,7 +538,7 @@ class Guardrails:
         ``emitter`` (when given) receives the ``guardrail_cache`` hit/miss event for
         the model-based injection layer.
         """
-        fmt = schema.validate_input_format(text)
+        fmt = schema.validate_input_format(text, max_chars=self._input_max_chars)
         if not fmt.ok:
             return (
                 GuardResult(
@@ -521,18 +546,38 @@ class Guardrails:
                 ),
                 [],
             )
-        denied = schema.denied_term(text, self._denylist_terms)
-        if not denied.ok:
+        for check in (
+            schema.denied_term(text, self._denylist_terms),
+            schema.denied_pattern(text, self._denylist_patterns),
+        ):
+            if not check.ok:
+                return (
+                    GuardResult(
+                        verdict=GuardVerdict.BLOCK,
+                        reason=check.reason,
+                        text=text,
+                        layer="denylist",
+                    ),
+                    [],
+                )
+        redacted, kinds = pii.redact(text, entities=self._pii_entities)
+        if kinds and self._pii_block:
+            # The tenant asked for refusal rather than masking, so the rail stops here
+            # — before the injection classifier, before the model, and carrying the
+            # REDACTED text, because the reason travels into logs and a console.
             return (
                 GuardResult(
                     verdict=GuardVerdict.BLOCK,
-                    reason=denied.reason,
-                    text=text,
-                    layer="denylist",
+                    reason=(
+                        "Blocked PII on the inbound path rather than redacting it, as "
+                        f"this tenant's rails require: {', '.join(kinds)}."
+                    ),
+                    text=redacted,
+                    layer="pii",
+                    redactions=kinds,
                 ),
                 [],
             )
-        redacted, kinds = pii.redact(text, entities=self._pii_entities)
         verdict = await self._detect_injection_cached(redacted, emitter=emitter)
         if verdict.injection:
             return (_injection_block(verdict, redacted), [])
@@ -825,11 +870,17 @@ class Guardrails:
             return GuardResult(
                 verdict=GuardVerdict.BLOCK, reason=filtered.reason, text=text, layer="content"
             )
-        denied = schema.denied_term(text, self._denylist_terms)
-        if not denied.ok:
-            return GuardResult(
-                verdict=GuardVerdict.BLOCK, reason=denied.reason, text=text, layer="denylist"
-            )
+        for check in (
+            schema.denied_term(text, self._denylist_terms),
+            schema.denied_pattern(text, self._denylist_patterns),
+        ):
+            if not check.ok:
+                return GuardResult(
+                    verdict=GuardVerdict.BLOCK,
+                    reason=check.reason,
+                    text=text,
+                    layer="denylist",
+                )
         safety = await screen_content(text, completer=self._completer)
         if safety.unsafe:
             return GuardResult(
@@ -845,6 +896,17 @@ class Guardrails:
         if grounding is not None and grounding.verdict is GuardVerdict.BLOCK:
             return grounding
         redacted, kinds = pii.redact(text, entities=self._pii_entities)
+        if kinds and self._pii_block:
+            return GuardResult(
+                verdict=GuardVerdict.BLOCK,
+                reason=(
+                    "Blocked PII on the outbound path rather than redacting it, as this "
+                    f"tenant's rails require: {', '.join(kinds)}."
+                ),
+                text=redacted,
+                layer="pii",
+                redactions=kinds,
+            )
         if kinds:
             return GuardResult(
                 verdict=GuardVerdict.REDACT,

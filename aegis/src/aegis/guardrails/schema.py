@@ -37,6 +37,7 @@ from collections.abc import Sequence
 
 from aegis.core.types import FormatCheck
 from aegis.guardrails.normalize import disallowed_invisible_chars
+from aegis.guardrails.patterns import matched_pattern
 
 #: Maximum accepted length of a user query, in characters. Anything larger is a
 #: probable abuse / context-stuffing attempt rather than a genuine question.
@@ -97,23 +98,28 @@ def _disallowed_chars(text: str) -> list[str]:
     return found
 
 
-def validate_input_format(text: str) -> FormatCheck:
+def validate_input_format(text: str, *, max_chars: int = MAX_INPUT_CHARS) -> FormatCheck:
     """Validate the structural shape of an inbound user query.
 
     Args:
         text: The raw query text.
+        max_chars: The longest accepted query. Defaults to the platform's own
+            :data:`MAX_INPUT_CHARS`; a tenant may resolve something **smaller** through
+            ``guardrails.input.max_chars`` (``tighten_only``, lower is stricter), which
+            the pipeline passes here. Never larger: the resolver cannot compute a value
+            above the platform floor, so this parameter can only shrink the window.
 
     Returns:
         A :class:`FormatCheck`; ``ok`` is ``False`` (with a reason) when the text
-        is empty, over :data:`MAX_INPUT_CHARS`, or carries disallowed control
-        characters.
+        is empty, over ``max_chars``, or carries disallowed control characters.
     """
     if not text or not text.strip():
         return FormatCheck(ok=False, reason="Empty input is not a valid query.")
-    if len(text) > MAX_INPUT_CHARS:
+    limit = min(int(max_chars), MAX_INPUT_CHARS)
+    if len(text) > limit:
         return FormatCheck(
             ok=False,
-            reason=f"Input exceeds the {MAX_INPUT_CHARS}-character limit.",
+            reason=f"Input exceeds the {limit}-character limit.",
         )
     hidden = _disallowed_chars(text)
     if hidden:
@@ -195,6 +201,54 @@ def denied_term(text: str, terms: Sequence[str] | None) -> FormatCheck:
                 reason=f"Matched a denied term configured for this tenant: {term.strip()!r}.",
             )
     return FormatCheck(ok=True, reason="No denied term is present.")
+
+
+def denied_pattern(text: str, pattern_ids: Sequence[str] | None) -> FormatCheck:
+    """Screen ``text`` against the vetted patterns this tenant switched on.
+
+    The rail behind ``guardrails.denylist.patterns`` — §7.6's ``matches_pattern``
+    template. The tenant configures **ids**, never expressions: the library
+    (:mod:`aegis.guardrails.patterns`) holds the only regexes this process will run on
+    the request path, every one of them linear-time by review, because a pattern a
+    tenant types is a denial-of-service control handed to the least-trusted writer in
+    the system. The sibling of :func:`denied_term` and screened on the same three paths,
+    for the same reason: a secret that must not be typed in must not be fetched by a
+    tool or answered with either.
+
+    Args:
+        text: The text to screen.
+        pattern_ids: The tenant's resolved pattern ids (already UNION-merged across the
+            platform, tenant and user scopes). ``None``/empty disables the rail.
+
+    Returns:
+        A :class:`FormatCheck`; ``ok`` is ``False`` when a vetted pattern matched, and
+        ``reason`` names the pattern that fired — never the matched text, which is by
+        construction the secret the rail exists to keep out of logs and transcripts.
+
+        An id the library does not vet also returns ``ok=False``: a stored id that no
+        longer resolves means a rail the tenant believes is screening their traffic is
+        screening nothing, and passing the text while reporting a configured rail is the
+        exact failure :mod:`aegis.guardrails.patterns` exists to make impossible. It
+        fails **closed** and says which id it could not honour.
+    """
+    if not pattern_ids:
+        return FormatCheck(ok=True, reason="No screening patterns are configured.")
+    try:
+        spec = matched_pattern(text, pattern_ids)
+    except KeyError as exc:
+        return FormatCheck(
+            ok=False,
+            reason=(
+                "A configured screening pattern is not in the vetted library, so this "
+                f"text could not be screened; blocked rather than passed: {exc.args[0]}"
+            ),
+        )
+    if spec is None:
+        return FormatCheck(ok=True, reason="No screening pattern matched.")
+    return FormatCheck(
+        ok=False,
+        reason=f"Matched a screened pattern configured for this tenant: {spec.label}.",
+    )
 
 
 def content_filter(text: str) -> FormatCheck:

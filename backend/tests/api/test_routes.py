@@ -152,7 +152,11 @@ async def test_audit_returns_rows_admin(client, db, admin_headers):
         "model",
         "trace_id",
         "approved_by",
+        # §7.11: the outcome word the server filtered on travels with the row, so the
+        # console renders the same classification the ?outcome= filter selected by.
+        "outcome",
     }
+    assert newest["outcome"] == "completed"
 
 
 async def test_audit_reachable_by_devops(client, db):

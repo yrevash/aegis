@@ -39,6 +39,17 @@ export interface ModelCardResponse {
   training_size: number
   /** 'provided' | 'spec_provider' | 'synthetic' — how the training frame was sourced. */
   data_source: string
+  /** Rows held out from both the fit and the calibration; 0 when none was held out. */
+  test_size?: number
+  /**
+   * MEASURED coverage of the conformal interval on the held-out split — the only
+   * coverage figure that is evidence. Null when nothing was held out.
+   */
+  conformal_coverage_empirical?: number | null
+  /** The held-out accuracy metric's name: 'r2' (regression) or 'accuracy'. */
+  metric_name?: string | null
+  /** That metric's measured value on the held-out split. */
+  metric_value?: number | null
 }
 
 // ── Evals · regression-gate rollup (`GET /evals/report`) ─────────────────────

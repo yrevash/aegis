@@ -111,6 +111,12 @@ _AUTH_GUARDS = frozenset(
         # their routes would classify **public** and drop out of this analysis entirely.
         "require_infra_reader",
         "require_pipeline_reader",
+        # The report exports' guard (§7.12). It admits either a bearer or a 60-second
+        # download ticket — a browser navigation cannot set an Authorization header —
+        # and then refuses any role that may not read the report the path names. Built
+        # from ``require_auth``; unlisted, four routes that stream a tenant's whole
+        # audit trail would classify **public** and drop out of this analysis.
+        "require_report_download",
         # ``require_roles(...)`` returns a closure named ``_dep``; it is only ever
         # built from ``require_auth``, so its presence marks an authenticated route.
         "_dep",
@@ -556,15 +562,13 @@ UNREACHABLE_BY_DESIGN: dict[tuple[str, str], str] = {
     # cannot rot in that direction either — leaving them would fail
     # :func:`test_allowlist_is_neither_stale_nor_wrong` as loudly as omitting a real one
     # fails the reachability test.
-    # ── The raw ledger-spend projection ──────────────────────────────────────
-    # `ForecastView` deliberately serves the *decision* surface instead: an admin
-    # gets `GET /forecast/budget` (the same projection burned down against the
-    # configured cap) and a client gets `GET /forecast/domain`. The un-burned-down
-    # series is the top panel phase 7 adds for the platform admin.
-    ("GET", "/forecast/usage"): (
-        "phase 7 — the UI serves /forecast/budget: the same series, burned down "
-        "against the configured cap"
-    ),
+    # The raw ledger projection's entry — `GET /forecast/usage` — is gone because
+    # §7.15 built the panel it was waiting for: the admin forecast page's metric
+    # switch draws call volume from it (spend keeps coming from `/forecast/budget`,
+    # which carries the same forecast *and* the burn-down in one response). The
+    # allowlist cannot rot in that direction: leaving the entry would fail
+    # :func:`test_allowlist_is_neither_stale_nor_wrong` as loudly as omitting a real
+    # one fails the reachability test.
 }
 
 

@@ -20,6 +20,14 @@ gate + tiered approval. Diagnose is deliberately conservative and total:
   is the injected ``render_floor_prompt(prompt_key)`` (the adapter/persona baseline the
   host wires in via :func:`aegis.ops.config.configure_ops`).
 * **Injected model call.** ``complete`` is a parameter, so tests run fully offline.
+* **One tenant per pass.** ``tenant_id`` scopes the whole pass — the failing rows that are
+  read, the base prompt that is improved, and the draft that is written. It was missing,
+  so a tenant's diagnose clustered *every* tenant's failures and reasoned about the
+  **platform** prompt while that tenant's runs had been served its own. ``None`` is the
+  platform scope explicitly (the rows whose ``tenant_id`` is NULL), never "whichever row
+  came back first" — the same spelling :mod:`aegis.ops.registry`, :mod:`aegis.ops.release`
+  and :mod:`aegis.ops.gate` use. The host derives it from the sealed request scope
+  (§7.16 row 12), never from the request body.
 """
 
 from __future__ import annotations
@@ -51,6 +59,20 @@ _KNOWN_METRICS: tuple[str, ...] = (
 
 #: How many worst-offending failure critiques to show the optimizer.
 _MAX_EXAMPLES = 8
+
+
+def _tenant_clause(tenant_id: int | None) -> Any:  # noqa: ANN401 - a SQLAlchemy clause
+    """Scope an ``eval_results`` read to one tenant, ``None`` meaning the platform.
+
+    The same spelling as :func:`aegis.ops.registry._tenant_clause`, and for the same
+    reason: ``if tenant_id is not None`` would make ``None`` mean *every* tenant, so a
+    platform pass would cluster — and quote judge critiques from — other tenants' runs
+    into a prompt.
+    """
+    if tenant_id is None:
+        return EvalResult.tenant_id.is_(None)
+    return EvalResult.tenant_id == tenant_id
+
 
 _OPTIMIZER_SYSTEM = (
     "You are a prompt optimizer for an enterprise agent. You are given the agent's CURRENT "
@@ -151,6 +173,7 @@ async def diagnose(
     prompt_key: str,
     complete: Any,  # noqa: ANN401 - async complete(role, messages, ...) -> .content
     limit: int = 50,
+    tenant_id: int | None = None,
     render_floor_prompt: Callable[[str], str] | None = None,
 ) -> DiagnoseResult:
     """Cluster recent failures for ``prompt_key`` and write an improved-prompt DRAFT.
@@ -167,6 +190,9 @@ async def diagnose(
         complete: Async ``complete(role, messages, *, response_format=None) -> result``
             with ``.content: str``. Injected so tests never call real infra.
         limit: Max number of recent failing rows to consider (default 50).
+        tenant_id: The scope of the whole pass — which tenant's failures are read, whose
+            active prompt is the base, and who owns the draft. ``None`` is the
+            **platform** scope (``tenant_id IS NULL``), not "any tenant".
         render_floor_prompt: Optional ``render_floor_prompt(prompt_key) -> str`` override
             for the no-active-version floor; defaults to the value configured via
             :func:`aegis.ops.config.configure_ops`.
@@ -183,6 +209,7 @@ async def diagnose(
                 .where(
                     EvalResult.passed.is_(False),
                     EvalResult.prompt_key == prompt_key,
+                    _tenant_clause(tenant_id),
                 )
                 .order_by(EvalResult.ts.desc(), EvalResult.id.desc())
                 .limit(limit)
@@ -207,7 +234,7 @@ async def diagnose(
         # tz-aware Python bound parameter.
         window_start = min((r.id for r in rows if r.id is not None), default=None)
         totals_stmt = select(EvalResult.metric, func.count()).where(
-            EvalResult.prompt_key == prompt_key
+            EvalResult.prompt_key == prompt_key, _tenant_clause(tenant_id)
         )
         if window_start is not None:
             totals_stmt = totals_stmt.where(EvalResult.id >= window_start)
@@ -236,7 +263,7 @@ async def diagnose(
 
     # Base prompt: the active version's prompt, else the injected floor.
     floor = render_floor_prompt or config.render_floor_prompt
-    active = await registry.get_active(session, prompt_key)
+    active = await registry.get_active(session, prompt_key, tenant_id)
     if active is not None:
         base_prompt = active.system_prompt
         parent_version = active.version
@@ -300,6 +327,7 @@ async def diagnose(
         parent_version=parent_version,
         created_by="diagnose",
         notes=summary,
+        tenant_id=tenant_id,
     )
 
     return DiagnoseResult(

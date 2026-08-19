@@ -1,10 +1,17 @@
 'use client'
 
-import { CheckCircle2, Copy, Download, ListChecks, Loader2, ScrollText, Search, ShieldAlert } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import { CheckCircle2, Copy, Download, ListChecks, Loader2, ScrollText, ShieldAlert } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
-import { getAudit } from '@/lib/api/client'
+import { getAudit, getTenants } from '@/lib/api/client'
 import { BarChart } from '@/components/charts/BarChart'
+import { AuditFilterBar } from '@/components/audit/AuditFilterBar'
+import {
+  auditQueryString,
+  emptyStateFor,
+  EMPTY_AUDIT_QUERY,
+  type AuditQuery,
+} from '@/components/audit/query'
 import { CountUp } from '@/components/shared'
 import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
@@ -14,18 +21,9 @@ import { BackendGate } from '@/components/shared/BackendGate'
 import { SIGNALS, type Signal } from '@/config/signals'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
-import type { AuditLogRow } from '@/lib/api/types'
+import type { AuditLogRow, AuditOutcome, Tenant } from '@/lib/api/types'
 
-import {
-  actorsOf,
-  auditCounts,
-  eventsPerHour,
-  filterRows,
-  modelsOf,
-  resultOf,
-  rowsToCsv,
-  type AuditResult,
-} from './audit'
+import { auditCounts, eventsPerHour, rowsToCsv } from './audit'
 
 /** Load state for the audit fetch. */
 type LoadState =
@@ -47,6 +45,8 @@ function formatTime(iso: string): string {
 
 interface AuditLogProps {
   token: string | null
+  /** Tenants to offer in the selector — platform admin only; empty for everyone else. */
+  tenants?: Tenant[]
 }
 
 /**
@@ -54,18 +54,20 @@ interface AuditLogProps {
  * actor, model, trace id and approver, led by a pulse header (events, blocks,
  * approvals + a per-hour shape) so a reviewer sees the activity before the rows.
  * Backed by `GET /audit`; the rows are the real Postgres trail, not fixtures.
+ *
+ * **The filters are the server's** (§7.11). Changing one re-runs the query rather than
+ * hiding rows already on screen, so the header figures always describe the same set the
+ * table shows and a search reaches the whole trail rather than the last page of it.
  */
-export function AuditLog({ token }: AuditLogProps): ReactElement {
+export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
-  const [result, setResult] = useState<AuditResult | null>(null)
-  const [actor, setActor] = useState<string | null>(null)
-  const [model, setModel] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
+  const [query, setQuery] = useState<AuditQuery>(EMPTY_AUDIT_QUERY)
+  const search = useMemo(() => auditQueryString(query), [query])
 
   useEffect(() => {
     let alive = true
     setLoad({ status: 'loading' })
-    getAudit(token)
+    getAudit(token, search)
       .then((res) => {
         if (alive) setLoad({ status: 'ready', rows: res.rows })
       })
@@ -80,21 +82,16 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, search])
 
   const rows = load.status === 'ready' ? load.rows : NO_ROWS
   const counts = useMemo(() => auditCounts(rows), [rows])
   const perHour = useMemo(() => eventsPerHour(rows, 12), [rows])
-  const actors = useMemo(() => actorsOf(rows), [rows])
-  const models = useMemo(() => modelsOf(rows), [rows])
-  const filtered = useMemo(
-    () => filterRows(rows, { result, actor, model, search }),
-    [rows, result, actor, model, search],
-  )
+  const empty = useMemo(() => emptyStateFor(query), [query])
 
-  /** Download the currently-filtered rows as a CSV file. */
+  /** Download the rows currently on screen as a CSV file. */
   const exportCsv = (): void => {
-    const blob = new Blob([rowsToCsv(filtered)], { type: 'text/csv' })
+    const blob = new Blob([rowsToCsv(rows)], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -136,70 +133,27 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
             </InfoTip>
           </div>
 
-          {load.status === 'ready' && rows.length > 0 && (
-            <div className="ml-auto flex flex-wrap items-center gap-1.5">
-              <div className="relative">
-                <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground/60" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search actions…"
-                  aria-label="Search the audit trail"
-                  className="h-7 w-44 rounded-md border border-border bg-card pr-2 pl-7 text-[0.72rem] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </div>
-              <FilterChip active={result === null} onClick={() => setResult(null)}>
-                All
-              </FilterChip>
-              <FilterChip active={result === 'completed'} onClick={() => setResult('completed')}>
-                Completed
-              </FilterChip>
-              <FilterChip active={result === 'blocked'} onClick={() => setResult('blocked')}>
-                Blocked
-              </FilterChip>
-              {actors.length > 0 && (
-                <select
-                  value={actor ?? ''}
-                  onChange={(e) => setActor(e.target.value === '' ? null : e.target.value)}
-                  className="h-7 rounded-md border border-border bg-card px-2 font-mono text-[0.68rem] text-muted-foreground"
-                  aria-label="Filter by actor"
-                >
-                  <option value="">All actors</option>
-                  {actors.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {models.length > 0 && (
-                <select
-                  value={model ?? ''}
-                  onChange={(e) => setModel(e.target.value === '' ? null : e.target.value)}
-                  className="h-7 max-w-[10rem] rounded-md border border-border bg-card px-2 font-mono text-[0.68rem] text-muted-foreground"
-                  aria-label="Filter by model"
-                >
-                  <option value="">All models</option>
-                  {models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <button
-                type="button"
-                onClick={exportCsv}
-                title="Export the filtered rows as CSV"
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-card px-2 font-mono text-[0.68rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-              >
-                <Download className="size-3.5" /> CSV
-              </button>
-            </div>
-          )}
+          <div className="ml-auto">
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={rows.length === 0}
+              title="Export the rows on screen as CSV"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <Download aria-hidden className="size-3.5" /> CSV
+            </button>
+          </div>
         </CardHeader>
 
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
+          <AuditFilterBar
+            value={query}
+            onChange={setQuery}
+            tenants={tenants}
+            busy={load.status === 'loading'}
+          />
+
           {load.status === 'loading' && (
             <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
@@ -218,10 +172,8 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
               <span className="grid size-10 place-items-center rounded-full bg-surface-2">
                 <ScrollText className="size-5 text-muted-foreground" />
               </span>
-              <p className="text-sm font-medium text-foreground">Nothing audited yet</p>
-              <p className="max-w-xs text-xs text-muted-foreground">
-                Recorded actions appear here, newest first — each with its actor, model and trace.
-              </p>
+              <p className="text-sm font-medium text-foreground">{empty.title}</p>
+              <p className="max-w-sm text-xs text-muted-foreground">{empty.hint}</p>
             </div>
           )}
 
@@ -238,7 +190,7 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((r, i) => (
+                  {rows.map((r, i) => (
                     <tr
                       key={r.id}
                       className="animate-trace-in border-b border-border/40 align-top transition-colors last:border-0 hover:bg-surface-2/50"
@@ -261,17 +213,10 @@ export function AuditLog({ token }: AuditLogProps): ReactElement {
                         {r.approved_by ?? '—'}
                       </td>
                       <td className="py-2.5 whitespace-nowrap">
-                        <ResultDot result={resultOf(r.action)} />
+                        <ResultDot result={r.outcome} />
                       </td>
                     </tr>
                   ))}
-                  {filtered.length === 0 && (
-                    <tr>
-                      <td colSpan={COLUMNS.length} className="py-8 text-center text-sm text-muted-foreground">
-                        No rows match this filter.
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>
@@ -314,7 +259,7 @@ function HeaderStat({
 }
 
 /** Result marker — a coloured dot paired with its word (never colour alone). */
-function ResultDot({ result }: { result: AuditResult }): ReactElement {
+function ResultDot({ result }: { result: AuditOutcome }): ReactElement {
   const ok = result === 'completed'
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -349,37 +294,37 @@ function TraceChip({ traceId }: { traceId: string | null }): ReactElement {
   )
 }
 
-/** A small filter pill for the result / actor scope. */
-function FilterChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: ReactNode
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'rounded-md border px-2 py-0.5 font-mono text-[0.68rem] transition-colors',
-        active
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-border bg-card text-muted-foreground hover:bg-surface-2',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
 /** Client entry for the Audit section — gated on a reachable backend. */
 export function AuditMount(): ReactElement {
   // `GET /audit` is RBAC-scoped: hand the child the real session bearer, and hold
   // it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
+  const [tenants, setTenants] = useState<Tenant[]>([])
+
+  // The tenant selector renders for a platform admin and nobody else (§7.11). This is a
+  // convenience, not the control: `_scope_tenant` refuses a cross-tenant `tenant_id`
+  // server-side whoever asks, so an empty list here removes a picker rather than a
+  // permission. A failed roster read leaves the list empty — no picker beats a picker
+  // whose options are a guess.
+  const isPlatformAdmin = hydrated && session?.fineRole === 'platform_admin'
+  const token = session?.token ?? null
+  useEffect(() => {
+    if (!isPlatformAdmin) {
+      setTenants([])
+      return
+    }
+    let alive = true
+    getTenants(token)
+      .then((res) => {
+        if (alive) setTenants(res.rows)
+      })
+      .catch(() => {
+        if (alive) setTenants([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [isPlatformAdmin, token])
 
   if (!hydrated) {
     return (
@@ -397,7 +342,7 @@ export function AuditMount(): ReactElement {
             <p className="eyebrow mb-1">Postgres audit</p>
             <h1 className="t-hero text-foreground">Audit</h1>
           </div>
-          <AuditLog token={session?.token ?? null} />
+          <AuditLog token={token} tenants={tenants} />
         </div>
       </TooltipProvider>
     </BackendGate>

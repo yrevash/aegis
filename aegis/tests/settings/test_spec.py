@@ -95,8 +95,16 @@ def test_the_catalogue_stays_small_enough_that_every_key_is_tested():
     Not an arbitrary number — it is the point at which "seed it with what phases 6 and 7
     actually need" would have stopped being true. Raising it is fine; doing so without
     noticing is not.
+
+    Raised from 15 to 18 by §7.6, which added the three per-tenant rail controls the
+    task's closed template list names: ``guardrails.denylist.patterns``
+    (``matches_pattern``, over the vetted library), ``guardrails.input.max_chars``
+    (``max_length``) and ``guardrails.pii.block``. Each one is bound in
+    :data:`aegis.settings.guardrails.GUARDRAIL_SETTING_BINDINGS`, read by a rail, and
+    covered by the tighten-only sweep in ``test_forbidden_controls`` — which is the
+    price this ceiling exists to make somebody pay before adding a key.
     """
-    assert len(SETTING_SPECS) <= 15
+    assert len(SETTING_SPECS) <= 18
 
 
 # ── the refusals, driven ──────────────────────────────────────────────────────

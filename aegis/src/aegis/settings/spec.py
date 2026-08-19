@@ -42,6 +42,8 @@ from aegis.core.types import RiskLevel
 from aegis.gateway.routing import PLATFORM_DEFAULT, tenant_model_choices
 from aegis.governance.security import PLATFORM_ADMIN, TENANT_ADMIN
 from aegis.governance.types import Role
+from aegis.guardrails.patterns import pattern_ids
+from aegis.guardrails.schema import MAX_INPUT_CHARS
 
 __all__ = [
     "SETTING_SPECS",
@@ -258,8 +260,17 @@ class SettingSpec:
 
     @property
     def control(self) -> str:
-        """The kind of control a UI renders for this setting."""
-        return "select" if self.legal_choices else _CONTROL_BY_TYPE[self.type_]
+        """The kind of control a UI renders for this setting.
+
+        An enumerated **scalar** is a select. An enumerated **list** is not: its value
+        is a set of members, and rendering a single-valued picker for it would write a
+        string where a list belongs — so it stays the list control ("tags") and carries
+        its ``choices`` alongside, which is what lets a form constrain the chips to the
+        vetted domain without a second control kind every screen has to learn.
+        """
+        if self.legal_choices and self.type_ is not list:
+            return "select"
+        return _CONTROL_BY_TYPE[self.type_]
 
     def validate(self, value: Any) -> None:  # noqa: ANN401 - any setting value
         """Check a candidate value against this spec's type, bounds and choices.
@@ -602,6 +613,67 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         description=(
             "PII entity kinds the redaction rail screens for. A tenant may add kinds; "
             "the platform's set is a floor, not a starting point."
+        ),
+    ),
+    SettingSpec(
+        key="guardrails.pii.block",
+        type_=bool,
+        default=False,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        stricter=Strictness.HIGHER,
+        description=(
+            "Refuse a request or an answer carrying PII instead of redacting it and "
+            "carrying on. TIGHTEN_ONLY because the two outcomes are ordered and the "
+            "order is not a matter of taste: refusing is strictly more conservative "
+            "than masking, since a redaction that misses one entity still reaches the "
+            "model while a refusal reaches nothing. So a tenant whose data may not "
+            "leave the building even masked may turn it on, and once the platform has, "
+            "no tenant can turn it back off."
+        ),
+    ),
+    SettingSpec(
+        key="guardrails.denylist.patterns",
+        type_=list,
+        default=[],
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        # UNION, for the arithmetic reason: the effective set is a superset of the
+        # platform's, so a scope can only ever add a screen and never remove one.
+        # TIGHTEN_ONLY would have no meaning here (no pattern is "stricter" than
+        # another) and OVERRIDE is the rule that would let a user scope drop the
+        # tenant's screens by writing a shorter list.
+        merge=MergeRule.UNION,
+        # The legal members are the vetted library's ids, read from it rather than
+        # restated, exactly as ``agent.model`` reads the fleet: the ids a screen offers
+        # and the ids a write is validated against have to be one set. A tenant
+        # configures an **id**; the expression behind it is the platform's, because a
+        # regex a tenant types is executed by this process on the request path against
+        # attacker-influenced text — a denial-of-service control handed to the
+        # least-trusted writer in the system, dressed as a guardrail.
+        choices_source=pattern_ids,
+        description=(
+            "Secret and identifier shapes this tenant's rails screen for — API keys, "
+            "private keys, tokens, internal hostnames — chosen from the platform's "
+            "vetted pattern library by name. Additive: a tenant may switch more on and "
+            "cannot switch the platform's off."
+        ),
+    ),
+    SettingSpec(
+        key="guardrails.input.max_chars",
+        type_=int,
+        default=MAX_INPUT_CHARS,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        bounds=(500, MAX_INPUT_CHARS),
+        stricter=Strictness.LOWER,
+        description=(
+            "Longest inbound question this tenant's schema rail accepts. Shorter is "
+            "stricter — the oversized query is the context-stuffing one — so the "
+            "platform's limit is a ceiling a tenant may lower and never raise. The "
+            "upper bound IS the rail's own constant, read from it rather than restated."
         ),
     ),
     SettingSpec(

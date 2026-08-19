@@ -191,18 +191,19 @@ export async function getMetrics(token: string | null): Promise<MetricsResponse>
 }
 
 /**
- * Fetch the most recent audit-trail rows (admin-only, newest first). The bearer
- * token is required; the backend enforces the admin role.
+ * Fetch audit-trail rows (admin/devops, newest first), filtered **server-side**.
+ *
+ * `search` is the already-built query string from `auditQueryString` — every predicate
+ * runs in SQL before the row limit, so a filter finds events that are nowhere near the
+ * first page. Narrowing in the browser instead is what made "no events" and "no events
+ * on this page" the same answer. The bearer token is required; the backend enforces the
+ * role and pins the tenant to the caller's sealed scope.
  */
 export async function getAudit(
   token: string | null,
-  limit = 50,
+  search = '?limit=50',
 ): Promise<AuditLogResponse> {
-  return request<AuditLogResponse>(
-    `/audit?limit=${encodeURIComponent(limit)}`,
-    { method: 'GET' },
-    token,
-  )
+  return request<AuditLogResponse>(`/audit${search}`, { method: 'GET' }, token)
 }
 
 /** Request a SHAP + conformal explanation for a set of features. */
@@ -769,27 +770,43 @@ export async function analyseImage(
  * nine days of ledger and needs seventy-one" is the most useful thing this surface
  * can say, and an HTTP error would be discarded as a connectivity blip. Only a
  * genuinely broken request throws.
+ *
+ * `tenantId` is a *request*, not an authority: the server re-resolves the scope from
+ * the caller's own token (`_scope_tenant`) and refuses a tenant this session may not
+ * read. Omitting it means "my own scope", which for a platform admin is the aggregate
+ * across every tenant — what the admin forecast panel defaults to (§7.15).
  */
 export async function getForecastUsage(
   token: string | null,
   horizon = 14,
   metric: 'spend' | 'calls' = 'spend',
+  tenantId?: number | null,
 ): Promise<ForecastResponse> {
+  const tenant = tenantId == null ? '' : `&tenant_id=${encodeURIComponent(tenantId)}`
   return request<ForecastResponse>(
-    `/forecast/usage?horizon=${encodeURIComponent(horizon)}&metric=${encodeURIComponent(metric)}`,
+    `/forecast/usage?horizon=${encodeURIComponent(horizon)}&metric=${encodeURIComponent(metric)}${tenant}`,
     { method: 'GET' },
     token,
   )
 }
 
-/** Fetch the spend forecast projected against the tenant's cap (`GET /forecast/budget`). */
+/**
+ * Fetch the spend forecast projected against the tenant's cap (`GET /forecast/budget`).
+ *
+ * `tenantId` is a *request*, not an authority: the server re-resolves the scope from
+ * the caller's own token (`_scope_tenant`) and refuses a tenant this session may not
+ * read. Omitting it means "my own scope", which for a platform admin is the aggregate
+ * across every tenant — the admin forecast page's default (§7.15).
+ */
 export async function getForecastBudget(
   token: string | null,
   horizon = 14,
   window: 'day' | 'month' = 'month',
+  tenantId?: number | null,
 ): Promise<ForecastResponse> {
+  const tenant = tenantId == null ? '' : `&tenant_id=${encodeURIComponent(tenantId)}`
   return request<ForecastResponse>(
-    `/forecast/budget?horizon=${encodeURIComponent(horizon)}&window=${encodeURIComponent(window)}`,
+    `/forecast/budget?horizon=${encodeURIComponent(horizon)}&window=${encodeURIComponent(window)}${tenant}`,
     { method: 'GET' },
     token,
   )

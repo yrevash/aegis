@@ -146,6 +146,14 @@ _STRICTER_END: dict[str, Strictness] = {
     # A rail that hard-blocks is stricter than one that flags.
     "guardrails.topical.block": Strictness.HIGHER,
     "guardrails.grounding.block": Strictness.HIGHER,
+    # Refusing a payload that carries PII is stricter than masking it and carrying on:
+    # a redaction that misses one entity still reaches the model, a refusal reaches
+    # nothing.
+    "guardrails.pii.block": Strictness.HIGHER,
+    # A shorter accepted query is a smaller context-stuffing window, so lower is
+    # stricter — the opposite direction from the two toggles above it, which is exactly
+    # why this table is written by hand rather than read off the spec.
+    "guardrails.input.max_chars": Strictness.LOWER,
     # Fewer concurrent jobs is a smaller share of the shared worker pool.
     "jobs.max_inflight.ingest": Strictness.LOWER,
     # Over-estimating refuses a job that might have fitted; under-estimating admits one

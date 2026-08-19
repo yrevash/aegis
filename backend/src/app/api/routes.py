@@ -1505,19 +1505,67 @@ _AUDIT_LIMIT_MAX = 200
 @router.get("/audit", response_model=AuditLogResponse, tags=["audit"])
 async def audit(
     limit: int = 50,
+    tenant_id: int | None = None,
+    actor: str | None = None,
+    action_prefix: str | None = None,
+    model: str | None = None,
+    trace_id: str | None = None,
+    outcome: str | None = None,
+    q: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
     auth: AuthContext = Depends(require_admin_or_devops),
 ) -> AuditLogResponse:
-    """Return the most recent audit-log rows, newest first (admin/devops, read-only).
+    """Return audit-log rows, newest first, filtered server-side (admin/devops, read-only).
 
     DevOps legitimately needs the audit trail (the DevOps portal's Audit tab), so this
     read is open to admin *or* devops. Tenant-scoped (H2): a platform-admin sees the
     whole trail; a tenant-admin (and a tenant-scoped devops) sees only rows attributed
     to their own tenant. ``limit`` is clamped to ``[1, 200]`` so a caller cannot request
     an unbounded scan of the trail.
+
+    **The filters run in SQL, before the limit** (§7.11). The console used to fetch a
+    page and narrow it in the browser, which cannot answer any question about an event
+    older than the page — it answers "nothing found" for an event that is simply not on
+    it, which is the same answer it gives for an event that never happened.
+
+    ``tenant_id`` is the platform admin's tenant selector and goes through
+    :func:`_scope_tenant` like every other scoped read: a tenant admin naming a tenant
+    other than its own is refused with a 403 whether that tenant exists or not, so the
+    parameter cannot be used to widen a scope *or* to probe for one. The **row** filters
+    (``actor``, ``action_prefix``, ``trace_id``, ``outcome``, the time range) are ANDed
+    *underneath* that scope, so a value belonging to another tenant returns exactly what
+    a value belonging to nobody returns: ``200`` with an empty list. Another tenant's row
+    is indistinguishable from a row that does not exist — no existence oracle.
+
+    Args:
+        limit: Max rows, clamped to ``[1, 200]``.
+        tenant_id: Platform-staff tenant selector; a tenant-bound caller may only name
+            its own, and omitting it means "my tenant".
+        actor: Exact actor.
+        action_prefix: Action family, e.g. ``ops.`` or ``tool:``.
+        model: Exact model deployment.
+        trace_id: Every row of one run — the subject an incident is chased by.
+        q: Free text across action, actor, model, trace and approver.
+        outcome: ``blocked`` or ``completed``
+            (:func:`~aegis.governance.audit.classify_outcome`).
+        since: Inclusive lower bound on the timestamp.
+        until: Inclusive upper bound on the timestamp.
     """
     capped = max(1, min(limit, _AUDIT_LIMIT_MAX))
-    scoped = _scope_tenant(auth, None)
-    rows = await list_recent_audit(capped, tenant_id=scoped)
+    scoped = _scope_tenant(auth, tenant_id)
+    rows = await list_recent_audit(
+        capped,
+        tenant_id=scoped,
+        actor=actor,
+        action_prefix=action_prefix,
+        model=model,
+        trace_id=trace_id,
+        outcome=outcome,
+        query=q,
+        since=since,
+        until=until,
+    )
     return AuditLogResponse(rows=rows)
 
 
@@ -2856,15 +2904,28 @@ async def ops_diagnose(
     Runs :func:`app.ops.diagnose.diagnose` with the live ``app.core.llm.complete``
     optimizer; the rewrite is written **only as a DRAFT** (never promoted). Returns the
     draft id + failure breakdown. 503 when the stores are off.
+
+    **The pass runs in the caller's sealed tenant scope.** ``diagnose`` took no tenant, so
+    after §7.7 it read the *platform* prompt and every tenant's failing rows — while a
+    tenant's runs had been served that tenant's own prompt. ``release`` and ``gate`` were
+    already fixed because the tenant was on the draft row and on the approval row; here it
+    can only come from the principal, so it comes from :func:`_scope_tenant` and never from
+    ``req`` (§7.16 row 12). Platform staff resolve to ``None``, which is the platform scope
+    explicitly, not "any tenant".
     """
     _require_stores()
     from app.core.llm import complete
     from app.data.session import get_sessionmaker
     from app.ops.diagnose import diagnose
 
+    scoped = _scope_tenant(auth, None)
     async with get_sessionmaker()() as session:
         result = await diagnose(
-            session, prompt_key=req.prompt_key, complete=complete, limit=req.limit
+            session,
+            prompt_key=req.prompt_key,
+            complete=complete,
+            limit=req.limit,
+            tenant_id=scoped,
         )
         await session.commit()
     await _safe_audit(
@@ -2872,6 +2933,7 @@ async def ops_diagnose(
         auth,
         payload={
             "prompt_key": req.prompt_key,
+            "tenant_id": scoped,
             "draft_version_id": result.draft_version_id,
             "failures_considered": result.failures_considered,
         },

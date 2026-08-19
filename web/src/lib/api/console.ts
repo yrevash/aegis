@@ -302,6 +302,24 @@ export interface SettingControl {
   choices?: unknown[]
   /** For a tighten-only key: which direction is stricter. */
   stricter?: string
+  /**
+   * Whether anything in the system actually reads this key yet.
+   *
+   * **Not decoration, and not optional to render.** `false` means the control binds to
+   * nothing: a write is accepted, audited and resolved, and changes no run. Six keys
+   * once did that silently — `agent.gate_min_risk` was writable, tighten-only and
+   * renderable while reaching no resolver at all, which is the defect the whole
+   * settings package exists to stop. The server now declares it; a screen that draws
+   * an `effective: false` control as a live input re-creates the defect on this side of
+   * a wire that is finally telling the truth.
+   */
+  effective: boolean
+  /**
+   * Present only when `effective` is false: what would have to change for the key to
+   * bind. Written for an operator and rendered verbatim — it is the difference between
+   * "this does nothing" and "this does nothing *yet*, and here is why".
+   */
+  inert_reason?: string
 }
 
 /**

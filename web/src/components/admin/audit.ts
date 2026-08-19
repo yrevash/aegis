@@ -1,26 +1,22 @@
 /**
- * Pure derivations for the Audit surface — result classification, header
- * counts, per-hour activity buckets, actor list and row filtering. Kept free of
- * any recharts import so the logic is unit-testable; the view renders these
- * figures.
+ * Pure derivations for the Audit surface — header counts and per-hour activity
+ * buckets over the rows the server returned. Kept free of any recharts import so the
+ * logic is unit-testable; the view renders these figures.
+ *
+ * **Filtering does not live here any more.** It moved to the server (§7.11,
+ * `components/audit/query.ts`), because narrowing an already-fetched page cannot answer
+ * a question about anything older than that page. What remains is arithmetic over what
+ * came back, which is honestly what these figures are.
  */
 
-import type { AuditLogRow } from '@/lib/api/types'
-
-/** A row's coarse result — either an action that says it was blocked, or done. */
-export type AuditResult = 'blocked' | 'completed'
+import type { AuditLogRow, AuditOutcome } from '@/lib/api/types'
 
 /**
- * Honest, action-derived result label. The backend has no verdict field, so a
- * row is only ever "blocked" when the action itself says so (a guardrail block
- * or a denied tool call); everything else is neutral. No fabricated state.
+ * A row's coarse result. Classified **by the server** and carried on the row, so the
+ * word rendered here is the same word `?outcome=` selected by — re-deriving it in the
+ * browser is exactly how the label and the filter would come to disagree.
  */
-export function resultOf(action: string): AuditResult {
-  const a = action.toLowerCase()
-  return a.startsWith('guardrail') || a.includes('block') || a.includes('denied')
-    ? 'blocked'
-    : 'completed'
-}
+export type AuditResult = AuditOutcome
 
 /** Header tallies: total events loaded, blocked actions, and approved actions. */
 export interface AuditCounts {
@@ -35,7 +31,7 @@ export function auditCounts(rows: AuditLogRow[]): AuditCounts {
   let blocked = 0
   let approved = 0
   for (const r of rows) {
-    if (resultOf(r.action) === 'blocked') blocked += 1
+    if (r.outcome === 'blocked') blocked += 1
     if (r.approved_by != null && r.approved_by !== '') approved += 1
   }
   return { total: rows.length, blocked, approved }
@@ -75,47 +71,6 @@ export function eventsPerHour(rows: AuditLogRow[], hours = 12): HourBucket[] {
   return buckets
 }
 
-/** Distinct, sorted actor names present in the rows (excludes null/blank). */
-export function actorsOf(rows: AuditLogRow[]): string[] {
-  const set = new Set<string>()
-  for (const r of rows) if (r.actor) set.add(r.actor)
-  return [...set].sort((a, b) => a.localeCompare(b))
-}
-
-/** Distinct, sorted model names present in the rows (excludes null/blank). */
-export function modelsOf(rows: AuditLogRow[]): string[] {
-  const set = new Set<string>()
-  for (const r of rows) if (r.model) set.add(r.model)
-  return [...set].sort((a, b) => a.localeCompare(b))
-}
-
-/**
- * Active filter for the audit table. `null`/empty on any field means "all":
- * `result` (completed/blocked), `actor`, `model`, and a free-text `search` that
- * matches across action, actor, model, trace and approver.
- */
-export interface AuditFilter {
-  result: AuditResult | null
-  actor: string | null
-  model?: string | null
-  search?: string
-}
-
-/** Apply the result + actor + model + free-text filter to the rows (pure). */
-export function filterRows(rows: AuditLogRow[], filter: AuditFilter): AuditLogRow[] {
-  const q = (filter.search ?? '').trim().toLowerCase()
-  return rows.filter((r) => {
-    if (filter.result != null && resultOf(r.action) !== filter.result) return false
-    if (filter.actor != null && r.actor !== filter.actor) return false
-    if (filter.model != null && r.model !== filter.model) return false
-    if (q) {
-      const hay = `${r.action} ${r.actor ?? ''} ${r.model ?? ''} ${r.trace_id ?? ''} ${r.approved_by ?? ''}`.toLowerCase()
-      if (!hay.includes(q)) return false
-    }
-    return true
-  })
-}
-
 /** Serialise the (filtered) rows to a CSV string for export/download. */
 export function rowsToCsv(rows: AuditLogRow[]): string {
   const esc = (v: unknown): string => {
@@ -124,7 +79,7 @@ export function rowsToCsv(rows: AuditLogRow[]): string {
   }
   const head = ['time', 'action', 'actor', 'model', 'trace_id', 'approved_by', 'result']
   const lines = rows.map((r) =>
-    [r.ts, r.action, r.actor, r.model, r.trace_id, r.approved_by, resultOf(r.action)].map(esc).join(','),
+    [r.ts, r.action, r.actor, r.model, r.trace_id, r.approved_by, r.outcome].map(esc).join(','),
   )
   return [head.join(','), ...lines].join('\n')
 }

@@ -105,16 +105,22 @@ class GovernanceLimits:
     """Effective spend/rate caps for the current principal (nearest-binding).
 
     Attributes:
-        token_cap: Max tokens over the budget window; ``None`` means uncapped.
-        usd_cap: Max USD spend over the budget window; ``None`` means uncapped.
+        token_cap: Max tokens over :attr:`window`; ``None`` means uncapped.
+        usd_cap: Max USD spend over :attr:`window`; ``None`` means uncapped.
         rpm: Max requests per minute; ``None`` means unlimited.
         tpm: Max tokens per minute; ``None`` means unlimited.
+        window: ``'day' | 'month'`` — which window ``token_cap``/``usd_cap`` run over.
+            A cap without its window is not a quantity: ``$50`` a day and ``$50`` a
+            month are different limits, and the resolver used to be able to return one
+            while meaning the other. ``rpm``/``tpm`` are per-minute regardless and do
+            not depend on it.
     """
 
     token_cap: int | None = None
     usd_cap: float | None = None
     rpm: int | None = None
     tpm: int | None = None
+    window: str | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +204,15 @@ class AuditLogRow(BaseModel):
     trace_id: str | None = Field(default=None, description="OTel trace id correlating spans.")
     approved_by: str | None = Field(
         default=None, description="Human who approved the action at the HITL gate, if any."
+    )
+    outcome: str = Field(
+        default="completed",
+        description=(
+            "'blocked' | 'completed', DERIVED from the action name by "
+            "aegis.governance.audit.classify_outcome — there is no verdict column on "
+            "the trail. Carried on the wire so the word a reader sees and the word the "
+            "server filtered on are the same word."
+        ),
     )
 
 

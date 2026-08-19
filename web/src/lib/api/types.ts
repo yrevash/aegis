@@ -83,6 +83,17 @@ export interface MLExplainResponse {
   /** Conformal prediction-set size (classification; 1 = singleton), or null. */
   prediction_set_size: number | null
   shap_attribution: ShapFeature[]
+  /**
+   * Model features the caller did not supply, imputed with the training median
+   * (numeric) or mode (categorical). The spine reports them rather than answering
+   * confidently about a row nobody asked about — so an explanation of `{}` is
+   * honestly labelled as the training-median baseline, not as a real case.
+   */
+  imputed_features?: string[]
+  /** Keys the caller sent that are not model features, and were ignored. */
+  unknown_features?: string[]
+  /** How the training frame was sourced: `provided` | `spec_provider` | `synthetic`. */
+  data_source?: string
 }
 
 /** Body for `GET /metrics` — live figures for the efficiency dashboard. */
@@ -154,7 +165,17 @@ export interface AuditLogRow {
   model: string | null
   trace_id: string | null
   approved_by: string | null
+  /**
+   * `'blocked' | 'completed'`, classified by the server from the action name — there
+   * is no verdict column on the trail. It travels with the row so the word a reader
+   * sees is the word `?outcome=` selected by; deriving it again in the browser is how
+   * the two would drift apart.
+   */
+  outcome: AuditOutcome
 }
+
+/** The two words an audit row's outcome can be. */
+export type AuditOutcome = 'blocked' | 'completed'
 
 /** Response from `GET /audit` — newest-first list of audit rows. */
 export interface AuditLogResponse {

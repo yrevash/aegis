@@ -1,8 +1,8 @@
-"""Do the four ``guardrails.*`` settings actually reach a rail?
+"""Do the ``guardrails.*`` settings actually reach a rail?
 
-The defect these cover is not "the value is wrong", it is **"nothing reads it"**. All
-four keys were in the catalogue, writable by a tenant admin, saved, audited and badged
-"Your setting" on the settings screen, while:
+The defect these cover is not "the value is wrong", it is **"nothing reads it"**. The
+first four keys were in the catalogue, writable by a tenant admin, saved, audited and
+badged "Your setting" on the settings screen, while:
 
 * ``guardrails.grounding.block`` and ``guardrails.topical.block`` were read from the
   *host's* environment (``app.config.Settings.grounding_block``), which no tenant can
@@ -23,6 +23,11 @@ arithmetic is the same as :mod:`aegis.settings.agent`'s and is proved the same w
   and a ``UNION`` key can only ever grow;
 * an unreadable policy fails **closed**, out loud, and never to the platform default —
   the loosest configuration the tenant could have chosen.
+
+The last section covers §7.6's three additions — ``guardrails.denylist.patterns``
+(``matches_pattern``, drawn from the vetted library), ``guardrails.input.max_chars``
+(``max_length``) and ``guardrails.pii.block`` — which were written with their wire
+rather than after it, and whose claims are the same three.
 """
 
 from __future__ import annotations
@@ -240,3 +245,137 @@ async def test_an_ungoverned_request_reads_nothing_and_changes_nothing(db):
     async with db() as session:
         await session.close()  # proves no read was attempted
         assert await resolve_guardrail_policy(session, policy, tenant_id=None) == policy
+
+
+# ── §7.6's three new rail controls ──────────────────────────────────────────
+
+
+def test_the_input_ceiling_is_one_number_stated_in_three_places():
+    """The platform's character limit is a floor only while all three agree on it.
+
+    ``guardrails.input.max_chars`` is bounded *by the rail's own constant*, the policy
+    object defaults to it, and the rail enforces it. If those three drifted, a tenant
+    could be offered a "tightening" above the real limit (which the resolver would
+    happily call legal) or the fail-closed clamp would land somewhere nobody chose.
+    :mod:`aegis.guardrails.policy` is deliberately a stdlib-only leaf and so cannot
+    import the constant; this is the assertion that pays for that.
+    """
+    from aegis.guardrails.schema import MAX_INPUT_CHARS
+    from aegis.settings.spec import spec_for
+
+    spec = spec_for("guardrails.input.max_chars")
+    assert spec.bounds == (500, MAX_INPUT_CHARS)
+    assert spec.default == MAX_INPUT_CHARS
+    assert GuardrailPolicy().input_max_chars == MAX_INPUT_CHARS
+    assert Guardrails(completer=None, injection_cache=None).policy.input_max_chars == (
+        MAX_INPUT_CHARS
+    )
+
+
+async def test_a_tenant_shortens_the_accepted_query_and_cannot_lengthen_it(db):
+    """``max_length``, the third §7.6 template — and it only points one way.
+
+    Three claims, because they fail differently: the shortened ceiling reaches the
+    schema rail (the wire); a value above the platform's constant is refused by the
+    catalogue on write, which is what a ``curl`` meets rather than a disabled input; and
+    a rail handed a longer ceiling than the platform's *still* enforces the platform's,
+    so even a caller inside the process cannot widen the window.
+    """
+    from aegis.guardrails import schema
+    from aegis.guardrails.schema import MAX_INPUT_CHARS
+    from aegis.settings import SettingValueError
+
+    await _write(db, "guardrails.input.max_chars", 500)
+    host = Guardrails(completer=None, injection_cache=None)
+    tightened = await _guard_for(db, host, tenant_id=_TENANT)
+    assert tightened.policy.input_max_chars == 500
+
+    long_question = "a" * 800
+    blocked = await tightened.check_input(long_question)
+    assert blocked.verdict is GuardVerdict.BLOCK and blocked.layer == "schema", blocked
+    assert "500" in blocked.reason, blocked
+    lax = await _guard_for(db, host, tenant_id=_OTHER_TENANT)
+    assert (await lax.check_input(long_question)).verdict is not GuardVerdict.BLOCK
+
+    with pytest.raises(SettingValueError, match="outside"):
+        await _write(db, "guardrails.input.max_chars", MAX_INPUT_CHARS + 1)
+
+    # And the rail itself refuses to be widened, whatever it is handed.
+    assert schema.validate_input_format(
+        "b" * (MAX_INPUT_CHARS + 1), max_chars=MAX_INPUT_CHARS * 10
+    ).ok is False
+
+
+async def test_a_tenant_switches_on_a_vetted_pattern_and_writes_an_id_not_a_regex(db):
+    """``matches_pattern``, the second §7.6 template, and the reason it is a library.
+
+    The tenant-facing value is an **id**. What proves that is not the screen — it is
+    :meth:`SettingSpec.validate` refusing anything else on write, so the catastrophic
+    write (a nested-quantifier regex, run by this process on the request path against
+    attacker-influenced text) is refused by the same check every setting goes through
+    rather than by a form somebody can walk around with a ``curl``.
+    """
+    from aegis.settings import SettingValueError
+
+    await _write(db, "guardrails.denylist.patterns", ["aws_access_key_id"])
+    host = Guardrails(completer=None, injection_cache=None)
+    tightened = await _guard_for(db, host, tenant_id=_TENANT)
+    assert tightened.policy.denylist_patterns == ("aws_access_key_id",)
+
+    leak = "rotate this for me: AKIAIOSFODNN7EXAMPLE"
+    blocked = await tightened.check_input(leak)
+    assert blocked.verdict is GuardVerdict.BLOCK and blocked.layer == "denylist", blocked
+    assert "AWS access key id" in blocked.reason, blocked
+    assert "AKIAIOSFODNN7EXAMPLE" not in blocked.reason, (
+        "the verdict quoted the secret it exists to keep out of logs"
+    )
+    # The same secret on the way *out* is the exfiltration half of the same rail.
+    assert (await tightened.check_output(leak)).verdict is GuardVerdict.BLOCK
+
+    lax = await _guard_for(db, host, tenant_id=_OTHER_TENANT)
+    assert (await lax.check_input(leak)).verdict is not GuardVerdict.BLOCK
+
+    for refused in ("(a+)+$", "aws_access_key", "../../etc/passwd"):
+        with pytest.raises(SettingValueError, match="not among the allowed members"):
+            await _write(db, "guardrails.denylist.patterns", [refused])
+
+
+async def test_an_unvetted_pattern_id_blocks_rather_than_screening_nothing():
+    """A stored id the library no longer vets is a rail that screens nothing.
+
+    Which is the failure mode the whole module exists to prevent, so it fails closed:
+    the text is refused and the reason names the id, rather than passing while a screen
+    reports a configured rail. The catalogue cannot produce this state — the write is
+    refused above — but a library entry *withdrawn* after a tenant selected it can, and
+    that is precisely when the answer must not be "pass".
+    """
+    from aegis.guardrails import schema
+
+    check = schema.denied_pattern("nothing to see", ["a_pattern_nobody_vetted"])
+    assert check.ok is False
+    assert "a_pattern_nobody_vetted" in check.reason
+    assert schema.denied_pattern("nothing to see", []).ok is True
+
+
+async def test_a_tenant_can_refuse_pii_where_the_platform_only_redacts(db):
+    """``guardrails.pii.block``: the ordered pair (redact, refuse), tighten-only.
+
+    Refusing is strictly more conservative than masking — a redaction that misses one
+    entity still reaches the model, a refusal reaches nothing — which is why the key is
+    ``TIGHTEN_ONLY`` with ``HIGHER`` stricter rather than a preference. The tenant who
+    asked for it gets a BLOCK; the tenant who did not still gets the platform's
+    redaction, on the same text through the same process-wide pipeline.
+    """
+    await _write(db, "guardrails.pii.block", True)
+    host = Guardrails(completer=None, injection_cache=None)
+    text = "my email is ada@example.com"
+
+    tightened = await _guard_for(db, host, tenant_id=_TENANT)
+    assert tightened.policy.pii_block is True
+    blocked = await tightened.check_input(text)
+    assert blocked.verdict is GuardVerdict.BLOCK and blocked.layer == "pii", blocked
+    assert "ada@example.com" not in blocked.text, "the block handed back the raw PII"
+    assert (await tightened.check_output(text)).verdict is GuardVerdict.BLOCK
+
+    lax = await _guard_for(db, host, tenant_id=_OTHER_TENANT)
+    assert (await lax.check_input(text)).verdict is GuardVerdict.REDACT

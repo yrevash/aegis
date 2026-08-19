@@ -20,7 +20,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, String, func
+from sqlalchemy import ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from aegis.data import AegisBase, JsonB
@@ -203,6 +203,15 @@ class AuditLog(AegisBase):
     """
 
     __tablename__ = "audit_log"
+
+    # (tenant_id, ts DESC) is the driving predicate of every filtered read: GET /audit
+    # always ANDs the caller's sealed tenant scope and orders newest-first, so a
+    # standalone index on ``ts`` makes the database sort the whole trail before
+    # discarding the other tenants' rows. Declared here, so it is created with the
+    # table; ``reconcile_additive_columns`` deliberately does not install indexes on
+    # pre-existing columns, so a database that predates this line needs the index
+    # created once by hand.
+    __table_args__ = (Index("ix_audit_log_tenant_ts", "tenant_id", text("ts DESC")),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # The owning tenant for cross-tenant isolation of the trail. Additive and nullable

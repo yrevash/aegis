@@ -28,6 +28,7 @@ from app.api.routes_health import mount as _mount_health
 from app.api.routes_llmops import mount as _mount_llmops
 from app.api.routes_memory import mount as _mount_memory
 from app.api.routes_redteam import mount as _mount_redteam
+from app.api.routes_reports import mount as _mount_reports
 from app.config import get_settings
 from app.observability import init_observability
 
@@ -57,6 +58,11 @@ _mount_memory(router)
 # served table stays one table, and nothing in that module dials a dependency until a
 # request asks it to.
 _mount_health(router)
+
+# Downloadable reports (§7.12) — the four CSV exports and the short-lived download
+# ticket a browser navigation needs. Same shape and the same idempotent mount: the
+# routes land on ``router`` itself, so the served table stays one table.
+_mount_reports(router)
 
 logger = logging.getLogger(__name__)
 

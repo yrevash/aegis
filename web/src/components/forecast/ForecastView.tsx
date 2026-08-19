@@ -1,23 +1,41 @@
 'use client'
 
 import { Loader2, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { BacktestPanel } from '@/components/forecast/BacktestPanel'
 import { BurndownPanel } from '@/components/forecast/BurndownPanel'
 import { CoverageMeter } from '@/components/forecast/CoverageMeter'
+import { ExplainabilityPanel } from '@/components/forecast/ExplainabilityPanel'
+import { ExportsPanel } from '@/components/forecast/ExportsPanel'
 import { HorizonChart, HorizonLegend } from '@/components/forecast/HorizonChart'
+import { NotRecordedPanel } from '@/components/forecast/NotRecordedPanel'
 import { RefusalNotice } from '@/components/forecast/RefusalNotice'
+import { SourceLine } from '@/components/forecast/SourceLine'
+import { FORECAST_SOURCE, forecastSourceDetail } from '@/components/forecast/sources'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
-import { getForecastBudget, getForecastDomain } from '@/lib/api/client'
+import {
+  getForecastBudget,
+  getForecastDomain,
+  getForecastUsage,
+  getTenants,
+} from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import type { ForecastResponse, ForecastResult } from '@/lib/api/types'
+import type { ForecastResponse, ForecastResult, Tenant } from '@/lib/api/types'
 import type { Role } from '@/lib/portal'
 
 /** Horizons the operator may switch between, in steps of the series' own frequency. */
 const HORIZONS = [7, 14, 30] as const
+
+/** The two ledger measures. They are never drawn on one pair of axes — see below. */
+const METRICS = [
+  { id: 'spend', label: 'Spend' },
+  { id: 'calls', label: 'Calls' },
+] as const
+
+type Metric = (typeof METRICS)[number]['id']
 
 /** Provenance → an honest tone + label, so a demo series never passes as live data. */
 function sourceBadge(source: string): { tone: BadgeTone; label: string } {
@@ -37,30 +55,85 @@ function formatUnit(value: number, unit: string | null): string {
   return `${value.toFixed(2)}${unit ? ` ${unit}` : ''}`
 }
 
+/** A segmented control — the page's one interaction idiom, used three times. */
+function Segmented<T extends string | number>({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: ReadonlyArray<{ id: T; label: string }>
+  value: T
+  onChange: (next: T) => void
+  label: string
+}): ReactElement {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="flex overflow-hidden rounded-lg border border-border"
+    >
+      {options.map((option) => (
+        <button
+          key={String(option.id)}
+          type="button"
+          onClick={() => onChange(option.id)}
+          aria-pressed={value === option.id}
+          className={`tabular px-2.5 py-1.5 font-mono text-[0.72rem] transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none ${
+            value === option.id
+              ? 'bg-surface-2 font-semibold text-foreground'
+              : 'text-muted-foreground hover:bg-surface-2'
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /**
- * Forecast — the `aegis.forecast` surface.
+ * Forecast — two panels, two `Source:` lines, two different models (§7.15).
  *
- * Two series, one contract. The platform view projects the tenant's ledger spend
- * forward and burns it down against the configured cap; the client view projects
- * the domain's own demand series, read through the adapter seam so it retargets
- * with everything else. Whichever is shown, the page reports what was *measured*:
- * the achieved interval coverage, the accuracy on held-out windows and the
- * candidate models that lost.
+ * **The label is load-bearing, and this is an integrity requirement rather than a
+ * styling one.** A forecast is a *projection* and a model card is a *record*; a page
+ * that rendered them identically would invite a reader to take the SHAP attributions
+ * as an explanation of the spend line. They are not: the spend forecast is univariate
+ * over `usage_ledger` — its only input is its own history, so there is nothing to
+ * attribute — and the attributions belong to the supervised spine, a different model
+ * over a different table. Each panel therefore states where its numbers came from,
+ * and the explainability panel carries the sentence that answers the question out
+ * loud.
  *
- * When a series is too short, the page renders the refusal — the observation count,
- * the count required and the reason — instead of a chart. That is the deliberate
- * behaviour: a line drawn through nine points would look exactly like a forecast.
+ * **Every projected point is drawn as a band, never as a line.** The chart draws the
+ * conformal interval and the coverage meter reports the rate that band *achieved* on
+ * rolling-origin held-out windows beside the rate it was *asked* for — normally lower.
+ * A single confident line would be a claim this data cannot support.
+ *
+ * **Spend and calls are never on one pair of axes.** They are two measures of
+ * different scale, and a second y-axis is the fastest way to imply a relationship
+ * that was never measured; the metric switch redraws the same chart instead.
+ *
+ * The platform admin defaults to the **aggregate across every tenant** and may narrow
+ * to one; a tenant admin sees its own tenant and the selector never renders, because
+ * the server would refuse the request anyway (`_scope_tenant`). The client portal
+ * keeps the domain demand series, read through the adapter seam.
  */
 function ForecastView({ role }: { role: Role }): ReactElement {
   const { session, hydrated } = useAuth()
   const token = session?.token ?? null
+  const portal = session?.fineRole ?? null
 
   // The client portal has no tenant-admin rights and no business reading ledger
-  // spend, so it gets the domain demand series; every other portal gets the budget
+  // spend, so it gets the domain demand series; every other portal gets the ledger
   // projection, which is the surface with a decision attached to it.
-  const isBudgetView = role !== 'client'
+  const isLedgerView = role !== 'client'
+  const isPlatformAdmin = portal === 'platform_admin'
 
   const [horizon, setHorizon] = useState<number>(14)
+  const [metric, setMetric] = useState<Metric>('spend')
+  const [tenantId, setTenantId] = useState<number | null>(null)
+  const [tenants, setTenants] = useState<Tenant[]>([])
   const [data, setData] = useState<ForecastResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -68,14 +141,18 @@ function ForecastView({ role }: { role: Role }): ReactElement {
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
-    const fetcher = isBudgetView
-      ? getForecastBudget(token, horizon)
-      : getForecastDomain(token, horizon)
+    const fetcher = !isLedgerView
+      ? getForecastDomain(token, horizon)
+      : metric === 'spend'
+        ? // The burn-down response carries the same forecast *and* the projection
+          // against the cap, so the panel is one request rather than two fits.
+          getForecastBudget(token, horizon, 'month', tenantId)
+        : getForecastUsage(token, horizon, 'calls', tenantId)
     fetcher
       .then(setData)
       .catch(() => setError('Could not reach the forecast service. Is the backend running?'))
       .finally(() => setLoading(false))
-  }, [token, horizon, isBudgetView])
+  }, [token, horizon, isLedgerView, metric, tenantId])
 
   useEffect(() => {
     // Wait for the persisted session; firing now would send no bearer and 401.
@@ -83,43 +160,89 @@ function ForecastView({ role }: { role: Role }): ReactElement {
     load()
   }, [load, hydrated])
 
+  useEffect(() => {
+    // Only a platform admin may list tenants, and only a platform admin is offered
+    // the selector. A failure here is not an error on this page: the aggregate view
+    // stands on its own and the selector simply does not appear.
+    if (!hydrated || !isPlatformAdmin) return
+    let alive = true
+    getTenants(token)
+      .then((res) => {
+        if (alive) setTenants(res.rows)
+      })
+      .catch(() => {
+        if (alive) setTenants([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [token, hydrated, isPlatformAdmin])
+
   const result: ForecastResult | null = data?.forecast ?? null
-  const source = result ? sourceBadge(result.data_source) : null
+  const badge = result ? sourceBadge(result.data_source) : null
+  const scopeLabel = useMemo(() => {
+    if (!isLedgerView) return 'the domain demand series'
+    if (!isPlatformAdmin) return 'your tenant'
+    if (tenantId == null) return 'every tenant'
+    return tenants.find((t) => t.id === tenantId)?.name ?? `tenant ${tenantId}`
+  }, [isLedgerView, isPlatformAdmin, tenantId, tenants])
+
+  const sourceLine = isLedgerView
+    ? FORECAST_SOURCE
+    : 'Source: adapter (the domain records, through the swap seam) · univariate · statsforecast'
+  const sourceDetail = result
+    ? `${forecastSourceDetail(result.model, result.history_points, result.interval_method)} · ${scopeLabel}`
+    : null
 
   return (
     <TooltipProvider>
       <div className="space-y-6">
-        {/* Section header */}
         <div>
           <p className="eyebrow mb-1">statsforecast · conformal · measured coverage</p>
           <h1 className="t-hero text-foreground">Forecast</h1>
         </div>
 
-        {/* ── The forecast itself ───────────────────────────────────────────────── */}
+        {/* ── Panel 1: the projection ───────────────────────────────────────── */}
         <Card>
           <CardHeader
-            eyebrow="aegis.forecast"
-            title={result ? result.label : isBudgetView ? 'Daily spend' : 'Domain demand'}
+            eyebrow={isLedgerView ? 'aegis.forecast · platform' : 'aegis.forecast'}
+            title={result ? result.label : isLedgerView ? 'Ledger projection' : 'Domain demand'}
             actions={
-              <div className="flex items-center gap-2">
-                {source ? <Badge tone={source.tone}>{source.label}</Badge> : null}
-                <div className="flex overflow-hidden rounded-lg border border-border">
-                  {HORIZONS.map((h) => (
-                    <button
-                      key={h}
-                      type="button"
-                      onClick={() => setHorizon(h)}
-                      aria-pressed={horizon === h}
-                      className={`tabular px-2.5 py-1.5 font-mono text-[0.72rem] transition-colors ${
-                        horizon === h
-                          ? 'bg-surface-2 font-semibold text-foreground'
-                          : 'text-muted-foreground hover:bg-surface-2'
-                      }`}
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
+                {isPlatformAdmin ? (
+                  <label className="flex items-center gap-1.5">
+                    <span className="sr-only">Tenant</span>
+                    <select
+                      value={tenantId == null ? '' : String(tenantId)}
+                      onChange={(event) =>
+                        setTenantId(event.target.value === '' ? null : Number(event.target.value))
+                      }
+                      className="rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[0.72rem] text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                     >
-                      {h}
-                    </button>
-                  ))}
-                </div>
+                      <option value="">All tenants (platform)</option>
+                      {tenants.map((tenant) => (
+                        <option key={tenant.id} value={String(tenant.id)}>
+                          {tenant.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {isLedgerView ? (
+                  <Segmented
+                    label="Measure"
+                    options={METRICS}
+                    value={metric}
+                    onChange={setMetric}
+                  />
+                ) : null}
+                <Segmented
+                  label="Horizon"
+                  options={HORIZONS.map((h) => ({ id: h, label: String(h) }))}
+                  value={horizon}
+                  onChange={setHorizon}
+                />
                 <button
                   type="button"
                   onClick={load}
@@ -127,7 +250,7 @@ function ForecastView({ role }: { role: Role }): ReactElement {
                   className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
                 >
                   {loading ? (
-                    <Loader2 className="size-3.5 animate-spin" />
+                    <Loader2 className="size-3.5 motion-safe:animate-spin" />
                   ) : (
                     <RefreshCw className="size-3.5" />
                   )}
@@ -141,7 +264,7 @@ function ForecastView({ role }: { role: Role }): ReactElement {
               <p className="py-8 text-center text-sm text-danger">{error}</p>
             ) : loading && data == null ? (
               <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
+                <Loader2 className="size-4 motion-safe:animate-spin" />
                 Fitting and backtesting…
               </div>
             ) : data == null ? null : !data.available ? (
@@ -154,30 +277,53 @@ function ForecastView({ role }: { role: Role }): ReactElement {
               )
             ) : result ? (
               <>
+                <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
+                  The band is the forecast; the line through it is only its centre. Read the
+                  achieved coverage under the chart before quoting either.
+                </p>
                 <HorizonChart result={result} valueFormatter={(v) => formatUnit(v, result.unit)} />
                 <HorizonLegend result={result} valueFormatter={(v) => formatUnit(v, result.unit)} />
                 <CoverageMeter result={result} />
+                {data.burndown ? (
+                  <div className="space-y-3 border-t border-border pt-5">
+                    <p className="eyebrow">burn-down against the cap · aegis.governance</p>
+                    <BurndownPanel burndown={data.burndown} />
+                  </div>
+                ) : null}
+                <div className="space-y-3 border-t border-border pt-5">
+                  <p className="eyebrow">rolling-origin backtest · held-out accuracy</p>
+                  <BacktestPanel result={result} />
+                </div>
               </>
             ) : null}
+
+            <SourceLine source={sourceLine} detail={sourceDetail} />
           </CardBody>
         </Card>
 
-        {/* ── Budget burn-down ──────────────────────────────────────────────────── */}
-        {data?.burndown ? (
-          <Card>
-            <CardHeader eyebrow="aegis.forecast · aegis.governance" title="Budget burn-down" />
-            <CardBody>
-              <BurndownPanel burndown={data.burndown} />
-            </CardBody>
-          </Card>
+        {/* ── Panel 2: the supervised spine, which is a different model ─────── */}
+        {isLedgerView ? <ExplainabilityPanel /> : null}
+
+        {/* ── Taking the record away, and what this page will not claim ─────── */}
+        {isLedgerView ? (
+          <ExportsPanel
+            forecastFilters={{
+              tenantId,
+              metric,
+              horizon,
+              window: 'month',
+            }}
+          />
         ) : null}
 
-        {/* ── Backtest ──────────────────────────────────────────────────────────── */}
-        {result ? (
+        {isLedgerView ? (
           <Card>
-            <CardHeader eyebrow="rolling-origin backtest" title="Held-out accuracy" />
+            <CardHeader
+              eyebrow="not recorded · not shown"
+              title="What this page cannot tell you"
+            />
             <CardBody>
-              <BacktestPanel result={result} />
+              <NotRecordedPanel />
             </CardBody>
           </Card>
         ) : null}

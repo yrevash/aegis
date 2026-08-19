@@ -1,15 +1,13 @@
-"""The four per-tenant guardrail controls, as one frozen object the pipeline reads.
+"""The per-tenant guardrail controls, as one frozen object the pipeline reads.
 
 **Why this exists at all.** :class:`~aegis.guardrails.pipeline.Guardrails` is built once
 in a host's composition root, synchronously, from environment configuration. The
-catalogue keys that govern the same four behaviours — ``guardrails.grounding.block``,
-``guardrails.topical.block``, ``guardrails.denylist.terms`` and
-``guardrails.pii.entities`` — are **per tenant** and resolved **asynchronously**, and
-the tenant is not known until a request arrives. That mismatch is the whole reason those
-four keys were writable, auditable, badged "Your setting" on a settings screen, and read
-by nothing: there was no object to hand a resolved value to that was not the
-process-wide singleton, and writing one tenant's rails onto the singleton would apply
-them to every other tenant's next request.
+``guardrails.*`` catalogue keys that govern the same behaviours are **per tenant** and
+resolved **asynchronously**, and the tenant is not known until a request arrives. That
+mismatch is the whole reason four of those keys were writable, auditable, badged "Your
+setting" on a settings screen, and read by nothing: there was no object to hand a
+resolved value to that was not the process-wide singleton, and writing one tenant's
+rails onto the singleton would apply them to every other tenant's next request.
 
 :class:`GuardrailPolicy` is that object. It is the exact analogue of
 :class:`~aegis.agent.deps.AgentConfig` for the rails, and
@@ -34,11 +32,16 @@ __all__ = ["GuardrailPolicy"]
 class GuardrailPolicy:
     """What one tenant's rails do, over and above what the host wired.
 
-    Every field is *additive against the host*: the two booleans only ever turn a rail
-    from advisory to blocking (``TIGHTEN_ONLY``), and the two collections only ever grow
-    (``UNION``). There is no value of this object that makes the rails weaker than the
+    Every field is *additive against the host*, and **this class is the whole of what a
+    tenant can reach into the pipeline** — which is why §7.16 row 7 is asserted against
+    its field list rather than against a promise. The booleans only ever turn a rail
+    from advisory to blocking and the character ceiling only ever shrinks
+    (``TIGHTEN_ONLY``); the collections only ever grow (``UNION``). There is no value of
+    this object that makes the rails weaker than the
     :class:`~aegis.guardrails.pipeline.Guardrails` the host constructed, which is what
-    makes it safe to fold a tenant's writes onto a host's configuration at all.
+    makes it safe to fold a tenant's writes onto a host's configuration at all — and
+    none of them names a model, a completer or a deployment, so no tenant write can
+    point the injection classifier at a model of their own choosing.
 
     Attributes:
         topical_block: Hard-BLOCK an off-topic query instead of flagging it. Only
@@ -49,13 +52,33 @@ class GuardrailPolicy:
         denylist_terms: Extra terms whose presence is a BLOCK, screened on the inbound,
             tool-result and outbound paths. Case-insensitive substring matching, which
             is what a denylist of project codenames and client names needs.
+        denylist_patterns: Ids from :mod:`aegis.guardrails.patterns` — the vetted
+            library — whose expressions are screened on the same three paths. **Ids,
+            never expressions**: a regex a tenant types is executed by this process on
+            the request path against attacker-influenced text, so a free-form pattern
+            box is a denial-of-service control handed to the least-trusted writer in the
+            system. Unioned like the terms, and for the same reason.
         pii_entities: PII entity kinds to screen for **in addition to** the detection
             engine's own curated allowlist. Additive by construction — naming fewer
             kinds than the engine already screens cannot switch any of them off, because
             the effective set is a union and never an assignment.
+        pii_block: Refuse a payload carrying PII instead of redacting it and carrying
+            on. The strictest posture available for a tenant whose data must not reach
+            the model at all, even masked; ``False`` (redact) is the platform default
+            and a tenant may only move it to ``True``.
+        input_max_chars: The longest inbound query this tenant's rails accept. A
+            **ceiling below the platform's** :data:`aegis.guardrails.schema
+            .MAX_INPUT_CHARS`, never above it: shorter is stricter, because the
+            oversized query is the context-stuffing one. The default here is that
+            platform limit, and ``aegis/tests/settings/test_guardrail_settings.py``
+            asserts the three statements of it — this field, the catalogue key's default
+            and the rail's constant — are one number.
     """
 
     topical_block: bool = False
     grounding_block: bool = False
     denylist_terms: tuple[str, ...] = ()
+    denylist_patterns: tuple[str, ...] = ()
     pii_entities: tuple[str, ...] = ()
+    pii_block: bool = False
+    input_max_chars: int = 8_000

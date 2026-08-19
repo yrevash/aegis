@@ -1,18 +1,22 @@
-"""Binding the four guardrail controls to the catalogue — per tenant, per request.
+"""Binding the guardrail controls to the catalogue — per tenant, per request.
 
 **The gap this closes.** ``guardrails.grounding.block``, ``guardrails.topical.block``,
 ``guardrails.denylist.terms`` and ``guardrails.pii.entities`` were in the catalogue,
 were writable by a tenant admin, saved, wrote an audit row, and rendered on the settings
 screen badged "Your setting" — and *nothing read any of them*. The grounding and topical
 toggles were host-wired from environment variables that no tenant can see; the denylist
-and the PII entity set were mentioned only in docstrings. A control that saves, is
+and the PII entity set were mentioned only in docstrings. The three §7.6 keys added
+since — ``guardrails.denylist.patterns``, ``guardrails.pii.block`` and
+``guardrails.input.max_chars`` — were written against this module from their first line,
+which is the point of it: a guardrail control and the wire that makes it real arrive
+together or not at all. A control that saves, is
 audited, is badged as yours, and changes nothing is worse than an absent control,
 because the absent one does not lie about it.
 
 This module is the exact analogue of :mod:`aegis.settings.agent`, for the same reason
 and with the same shape: :class:`~aegis.guardrails.pipeline.Guardrails` is built once,
 **synchronously**, in a host's composition root, while settings resolution is **per
-tenant and async**. Honouring the four keys therefore means resolving them *per request*
+tenant and async**. Honouring the keys therefore means resolving them *per request*
 and folding them onto the pipeline the host built —
 :func:`resolve_guardrail_policy` returns a **new**
 :class:`~aegis.guardrails.policy.GuardrailPolicy`, and the host hands it to
@@ -22,12 +26,13 @@ another tenant's request is a cross-tenant leak wearing a safety control's cloth
 
 Three properties are load-bearing:
 
-* **The fold is the spec's own merge rule, never an assignment.** The two booleans fold
-  with :func:`~aegis.settings.spec.strictest` (``TIGHTEN_ONLY``) and the two collections
-  with a union (``UNION``), so what the host wired is one more layer in the chain and a
-  tenant can only ever *tighten*. A host that set ``grounding_block=True`` from its
-  environment is not loosened by a tenant who never wrote anything, and a tenant naming
-  three PII kinds cannot switch off the six the engine already screens.
+* **The fold is the spec's own merge rule, never an assignment.** The booleans and the
+  input-length ceiling fold with :func:`~aegis.settings.spec.strictest`
+  (``TIGHTEN_ONLY``) and the collections with a union (``UNION``), so what the host
+  wired is one more layer in the chain and a tenant can only ever *tighten*. A host
+  that set ``grounding_block=True`` from its environment is not loosened by a tenant who
+  never wrote anything, and a tenant naming three PII kinds cannot switch off the six
+  the engine already screens.
 * **A resolution failure fails closed, loudly.** If the tenant is known but their
   settings cannot be read we do not know what they asked for, and the platform default
   is by construction the loosest value they could have chosen. So the booleans clamp to
@@ -90,13 +95,42 @@ GUARDRAIL_SETTING_BINDINGS: tuple[_Binding, ...] = (
     _Binding(key="guardrails.topical.block", field="topical_block"),
     _Binding(key="guardrails.grounding.block", field="grounding_block"),
     _Binding(key="guardrails.denylist.terms", field="denylist_terms"),
+    _Binding(key="guardrails.denylist.patterns", field="denylist_patterns"),
     _Binding(key="guardrails.pii.entities", field="pii_entities"),
+    _Binding(key="guardrails.pii.block", field="pii_block"),
+    _Binding(key="guardrails.input.max_chars", field="input_max_chars"),
 )
+
+# §7.16 row 7, at import. Every field of the policy is a tenant control, so a field
+# with no binding is a control nobody declared and a binding with no field is a
+# control that reaches nothing — and a field NAMING a model would be the row itself:
+# pointing the injection classifier at a tenant-selected deployment disables it
+# without appearing to, because the rail still runs, still reports and passes
+# everything. The suite asserts the same two facts (``test_forbidden_controls``); this
+# is the copy that refuses to import, because a guardrail that fails at request time
+# has already failed.
+_BOUND_FIELDS = {binding.field for binding in GUARDRAIL_SETTING_BINDINGS}
+_ALL_POLICY_FIELDS = {field.name for field in dataclasses.fields(GuardrailPolicy)}
+if _BOUND_FIELDS != _ALL_POLICY_FIELDS:
+    raise ValueError(
+        "GuardrailPolicy and the catalogue bindings have drifted: "
+        f"{sorted(_BOUND_FIELDS ^ _ALL_POLICY_FIELDS)}. Every field of the policy is "
+        "reachable by a tenant write, so an unbound one is a tenant control that no "
+        "catalogue key declares, validates or audits."
+    )
+_MODEL_WORDS = ("model", "completer", "deployment", "endpoint")
+if [name for name in _ALL_POLICY_FIELDS if any(w in name for w in _MODEL_WORDS)]:
+    raise ValueError(
+        "a tenant-writable guardrail field now names a model, a completer or a "
+        f"deployment: {sorted(_ALL_POLICY_FIELDS)}. §7.16 row 7 forbids it — the "
+        "guardrail completer is deliberately separate from the answer completer, and a "
+        "classifier pointed at a tenant's model disables itself without appearing to."
+    )
 
 # Import-time coherence, in the style of the catalogue itself: a binding to a key whose
 # merge rule could produce something weaker than the host wired is a programming error
 # whose only symptom would otherwise be a guardrail that a tenant switched off.
-_POLICY_FIELDS = {field.name for field in dataclasses.fields(GuardrailPolicy)}
+_POLICY_FIELDS = _ALL_POLICY_FIELDS
 for _binding in GUARDRAIL_SETTING_BINDINGS:
     if _binding.field not in _POLICY_FIELDS:
         raise ValueError(
