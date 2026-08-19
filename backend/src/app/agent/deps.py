@@ -17,6 +17,7 @@ Nothing about the graph's behaviour changes: every existing
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -50,6 +51,8 @@ __all__ = [
     "MemoryDeps",
     "MemoryDepsProtocol",
     "ToolOutcome",
+    "deps_for_run",
+    "resolve_run_config",
     "risk_at_least",
     "risk_rank",
 ]
@@ -85,6 +88,101 @@ def _current_tenant_id() -> int | None:
         return gov.tenant_id if gov is not None else None
     except Exception:  # noqa: BLE001 - governance is optional at this seam
         return None
+
+
+def _current_user_id() -> int | None:
+    """Return the request's user id from the governance context (``None`` if unset)."""
+    try:
+        from app.core.governance import get_governance_context
+
+        gov = get_governance_context()
+        return gov.user_id if gov is not None else None
+    except Exception:  # noqa: BLE001 - governance is optional at this seam
+        return None
+
+
+async def resolve_run_config(config: AgentConfig) -> AgentConfig:
+    """Return ``config`` tightened to the floors **this request's tenant** resolved.
+
+    The host half of :func:`aegis.settings.agent.resolve_agent_config`, and the reason
+    ``agent.gate_min_risk`` stopped being a control that was writable, displayable and
+    bound nothing: :class:`AgentConfig` is built once and synchronously in
+    :meth:`AgentDeps.default`, while the settings that govern it are per tenant and
+    async. So the floors are folded on **per run**, here, where the tenant is finally
+    known — and the result is a new object, read from the governance contextvar at call
+    time, never memoised. A cached floor is a cross-tenant leak wearing a safety
+    control's clothes.
+
+    Two paths return ``config`` unchanged, and neither is a failure:
+
+    * **No tenant** — an ungoverned/offline run has no tenant layer to resolve.
+    * **No durable store** — with ``stores_enabled`` off there is no ``settings`` table,
+      no ``tenants`` table and no governance at all, so there is nothing to read. A
+      tenant bound in that mode is incoherent and is said out loud rather than assumed.
+
+    Anything else that goes wrong **fails closed** to
+    :func:`~aegis.settings.agent.strictest_agent_config` — the human gate on every tool
+    — because the platform default is the loosest value the tenant could have chosen,
+    and quietly handing back a value looser than the one they set is the exact defect
+    this seam exists to remove.
+
+    Args:
+        config: The process-wide configuration.
+
+    Returns:
+        The configuration this run must obey.
+    """
+    tenant_id = _current_tenant_id()
+    if tenant_id is None:
+        return config
+
+    from app.config import get_settings
+
+    if not get_settings().stores_enabled:
+        logger.warning(
+            "Tenant %s is bound but no durable store is configured, so its agent "
+            "settings cannot be read; the platform defaults are the only floors that "
+            "exist in this mode.",
+            tenant_id,
+        )
+        return config
+
+    from aegis.settings.agent import resolve_agent_config, strictest_agent_config
+
+    from app.data.session import get_sessionmaker, set_tenant_scope
+
+    try:
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, tenant_id)
+            resolved = await resolve_agent_config(
+                session, config, tenant_id=tenant_id, user_id=_current_user_id()
+            )
+            await session.rollback()
+    except Exception:  # noqa: BLE001 - an unreadable safety floor fails closed, loudly
+        logger.error(
+            "Could not open a session to resolve tenant %s's agent settings; failing "
+            "closed to the strictest floor rather than to the platform default.",
+            tenant_id,
+            exc_info=True,
+        )
+        return strictest_agent_config(config)
+    return resolved
+
+
+async def deps_for_run(deps: AgentDeps) -> AgentDeps:
+    """Return ``deps`` carrying the configuration **this run's tenant** resolved.
+
+    A per-run copy, so the process-wide bundle a composition root built is never mutated
+    and one tenant's resolved floor can never be handed to another tenant's run.
+
+    Args:
+        deps: The capability bundle for the run.
+
+    Returns:
+        ``deps`` when nothing changed, otherwise a copy with the resolved config.
+    """
+    config = await resolve_run_config(deps.config)
+    return deps if config == deps.config else dataclasses.replace(deps, config=config)
 
 
 @dataclass

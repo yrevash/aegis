@@ -11,6 +11,10 @@ permissions and the resolution all follow from the same declaration.
   cannot be added without a UI control appearing.
 * :mod:`aegis.settings.models` — the one ``settings`` table, scoped platform / tenant /
   user.
+* :mod:`aegis.settings.agent` — the half that makes an agent control *bind*:
+  :func:`~aegis.settings.agent.resolve_agent_config` folds a tenant's tighten-only
+  floors onto the ``AgentConfig`` a run obeys, **per run**, because the config is built
+  once and synchronously while resolution is per tenant and async.
 * :mod:`aegis.settings.resolver` — :func:`~aegis.settings.resolver.resolve`, which
   returns ``(value, source)``, and :func:`~aegis.settings.resolver.write_setting`, which
   refuses with a reason rather than storing something that will never take effect.
@@ -26,6 +30,7 @@ Requires the ``aegis[data]`` and ``aegis[governance]`` extras.
 
 from __future__ import annotations
 
+from aegis.settings.agent import resolve_agent_config, strictest_agent_config
 from aegis.settings.models import SETTINGS_TABLE, Setting, SettingScope
 from aegis.settings.resolver import (
     SettingError,
@@ -64,10 +69,12 @@ __all__ = [
     "Strictness",
     "UnknownSettingError",
     "resolve",
+    "resolve_agent_config",
     "resolve_all",
     "setting_controls",
     "setting_keys",
     "spec_for",
     "strictest",
+    "strictest_agent_config",
     "write_setting",
 ]

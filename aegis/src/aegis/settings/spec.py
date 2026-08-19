@@ -369,6 +369,24 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         ),
     ),
     SettingSpec(
+        key="agent.team.max_parallel",
+        type_=int,
+        default=4,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        bounds=(1, 16),
+        stricter=Strictness.LOWER,
+        description=(
+            "How many sub-agents one turn may fan out across. TIGHTEN_ONLY because the "
+            "cap protects two things a tenant does not own — the shared worker pool and "
+            "the platform's exposure to that tenant's spend — so a tenant may ask for "
+            "fewer agents and never more. Fewer is the safer failure. It is the CEILING "
+            "an explicit user width is narrowed to (reported as decided_by="
+            "'platform_cap'), never a second reason to shrink a width the user chose."
+        ),
+    ),
+    SettingSpec(
         key="agent.model",
         type_=str,
         default="default",

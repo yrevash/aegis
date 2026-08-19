@@ -32,7 +32,7 @@ from aegis.agent.orchestrator import resume_parked_run as _core_resume
 from aegis.agent.orchestrator import run_agent as _core_run_agent
 
 from app.agent.approvals import get_approval_registry, get_parked_runs
-from app.agent.deps import AgentDeps
+from app.agent.deps import AgentDeps, deps_for_run
 from app.api.schemas import (
     ApprovalDecision,
     ApprovalDecisionResponse,
@@ -213,6 +213,8 @@ async def run_agent(
     run_id: str | None = None,
     session_id: str | None = None,
     memory_subject: str | None = None,
+    depth_mode: str | None = None,
+    requested_fanout: int | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """Run one query end-to-end, yielding the ordered stream of ``StreamEvent``.
 
@@ -230,6 +232,14 @@ async def run_agent(
         run_id: An explicit run id; a random one is minted when omitted.
         session_id: Conversation/session id for multi-turn memory (``None`` → single-shot).
         memory_subject: The adapter-resolved subject memory is scoped to.
+        depth_mode: The user's REQUESTED width (``auto`` | ``single`` | ``team``), from
+            ``QueryRequest.depth_mode``. Forwarded verbatim: this wrapper binds seams, it
+            does not decide widths. Dropping it here — which is what this signature did
+            until Phase 6 — is why the whole override mechanism was unreachable from a
+            browser while every layer beneath it worked.
+        requested_fanout: An explicit team width (the composer's Custom mode), clamped
+            DOWN by the tenant's cap in :func:`aegis.agent.router.decide_depth` and never
+            up. Also forwarded verbatim, for the same reason.
 
     Yields:
         Validated :data:`~app.api.schemas.StreamEvent` variants in wire order.
@@ -237,6 +247,12 @@ async def run_agent(
     from app.data.session import get_agent_checkpointer
 
     deps = deps or AgentDeps.default()
+    # The tenant's own floors, folded on **here** rather than in the composition root:
+    # ``AgentConfig`` is built once and synchronously, the settings that govern it are
+    # per tenant and async, and this is the first point in a run at which the tenant is
+    # known. Without it ``agent.gate_min_risk`` was a control a tenant admin could write
+    # and nothing read. Per run, never memoised — see ``app.agent.deps.deps_for_run``.
+    deps = await deps_for_run(deps)
     # ``aclosing`` is load-bearing, not tidiness: when the SSE client disconnects, this
     # wrapper is closed at its ``yield`` and a bare ``async for`` would leave the inner
     # generator to garbage collection — deferring the gate cleanup that discards the
@@ -252,6 +268,8 @@ async def run_agent(
             run_id=run_id,
             session_id=session_id,
             memory_subject=memory_subject,
+            depth_mode=depth_mode,
+            requested_fanout=requested_fanout,
             checkpointer=get_agent_checkpointer(),
             stamp=events.stamp,
             enqueue_approval=_enqueue_gate,
@@ -459,7 +477,9 @@ async def resume_parked_run(
     else:
         # Fresh worker: no in-process handle. Rebuild the graph on the shared durable
         # checkpointer and resume from the checkpoint keyed by ``thread_id``.
-        graph = _durable_graph(deps or AgentDeps.default())
+        # Same per-tenant floors as a fresh run: a resume plans and proposes further
+        # actions, so it must gate against the tenant's floor, not the compiled default.
+        graph = _durable_graph(await deps_for_run(deps or AgentDeps.default()))
         config = {"configurable": {"thread_id": run_id}}
 
     try:
