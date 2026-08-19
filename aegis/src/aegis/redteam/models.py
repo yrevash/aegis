@@ -36,7 +36,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Index, String, func
+from sqlalchemy import Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from aegis.data import AegisBase, JsonB
@@ -88,6 +88,19 @@ class RedTeamRun(AegisBase):
 
     attacks_total: Mapped[int] = mapped_column(default=0)
     attacks_blocked: Mapped[int] = mapped_column(default=0)
+
+    #: Attacks refused because a rail **could not run**, not because it found anything
+    #: (:attr:`aegis.redteam.runner.RedTeamReport.unchecked`). Stored beside the block
+    #: count rather than folded into it: a live ``owasp-full`` run scored 28/28 and
+    #: PASSED with one of those 28 being a classifier timeout, and a history table that
+    #: cannot show the difference lets an outage read as a perfect score forever.
+    #:
+    #: ``server_default`` is not decoration — a NOT NULL column without one is exactly
+    #: what :func:`aegis.governance.schema.reconcile_additive_columns` refuses, because
+    #: the rows already stored have no correct value. Zero is correct for them: before
+    #: this column existed every neutralised probe was counted as a block.
+    attacks_unchecked: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+
     controls_total: Mapped[int] = mapped_column(default=0)
     false_positives: Mapped[int] = mapped_column(default=0)
     block_rate: Mapped[float] = mapped_column(default=0.0)

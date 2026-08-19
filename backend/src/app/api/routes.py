@@ -588,6 +588,78 @@ def _scope_tenant(auth: AuthContext, requested: int | None) -> int | None:
     return tenant_filter(scope)
 
 
+#: What a principal whose seat has had a capability revoked is told. Names the seat and
+#: the capability rather than returning a bare 403, because "your role allows this and
+#: your seat does not" is a *different* fact from "your role does not allow this", and a
+#: user who cannot tell them apart files the wrong ticket.
+_SEAT_REVOKED = (
+    "Your seat{label} does not include this. Your role allows it; a tenant "
+    "administrator has turned it off for this seat. Ask them to restore "
+    "{capability}."
+)
+
+
+async def _require_seat(auth: AuthContext, key: str) -> None:
+    """Narrow an already-admitted request by this principal's seat (§7.8).
+
+    **Call this after the coarse role guard, never instead of one.** The effective
+    permission is ``coarse_role_permits AND seat_allows``: this function's only two
+    outcomes are "carry on" and "403", so it can remove a capability and has no branch
+    that adds one. That is what makes §7.16 row 15 structural rather than a rule a
+    reviewer has to check on every new route — a tenant admin writing seat rows cannot
+    reach a capability the guard above did not already grant, whatever they write.
+
+    Platform staff carry no seat (:func:`aegis.settings.seats.seat_allows` returns
+    ``True`` before it queries), so a tenant-scoped row can never narrow a platform
+    action, and the untenanted path costs no round trip.
+
+    A store that cannot be read is **not** a refusal. These toggles default to ``True``
+    and exist to take capability away; failing closed on an unreachable settings table
+    would turn a database blip into a tenant-wide lockout of every gated action at once,
+    which is a strictly worse outcome than briefly honouring the platform default the
+    deployment ran on before seats existed. The failure is logged, never swallowed
+    silently.
+
+    Args:
+        auth: The authenticated principal, already admitted by its role guard.
+        key: One of :data:`aegis.settings.seats.SEAT_CAPABILITIES`' keys.
+
+    Raises:
+        HTTPException: 403 when the seat has this capability revoked.
+    """
+    from aegis.settings.seats import SEAT_LABEL_KEY, seat_allows
+
+    if auth.tenant_id is None:
+        return
+    from app.data.session import get_sessionmaker, set_tenant_scope
+
+    try:
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, auth.tenant_id)
+            allowed = await seat_allows(
+                session, key, tenant_id=auth.tenant_id, user_id=auth.user_id
+            )
+            if allowed:
+                return
+            from aegis.settings import resolve
+
+            label, _ = await resolve(
+                session, SEAT_LABEL_KEY, tenant_id=auth.tenant_id, user_id=auth.user_id
+            )
+    except SQLAlchemyError:
+        logger.warning(
+            "Seat check for %s could not be read; honouring the platform default.",
+            key,
+            exc_info=True,
+        )
+        return
+    named = f" '{label}'" if label else ""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=_SEAT_REVOKED.format(label=named, capability=key),
+    )
+
+
 async def _resolve_governance(auth: AuthContext) -> GovernanceContext:
     """Build the per-request governance context (tenant/user + effective caps).
 
@@ -1554,6 +1626,7 @@ async def audit(
         auth: The authenticated admin/devops principal; the sole source of the scope.
     """
     capped = max(1, min(limit, _AUDIT_LIMIT_MAX))
+    await _require_seat(auth, "seat.can_view_tenant_audit")
     scoped = _scope_tenant(auth, tenant_id)
     rows = await list_recent_audit(
         capped,
@@ -1806,6 +1879,7 @@ async def approvals_decision(
     replayed decision returns ``accepted=False`` and never double-resumes. A
     tenant-admin may only decide on its own tenant's gates (C1).
     """
+    await _require_seat(auth, "seat.can_approve")
     await _enforce_approval_tenant(approval_id, auth)
     result = await decide_approval(
         approval_id, req.decision, approver=auth.username
@@ -1836,6 +1910,7 @@ async def approval(
     ``/query`` socket instantly while still landing durably. A tenant-admin may only
     resolve its own tenant's gates (C1).
     """
+    await _require_seat(auth, "seat.can_approve")
     await _enforce_approval_tenant(req.approval_id, auth)
     result = await decide_approval(
         req.approval_id, req.decision, approver=auth.username
@@ -2613,6 +2688,7 @@ async def memory_forget(
     bitemporal invalidation). One audit row records the erasure and the row counts. A
     503 is returned when the store is unreachable — an erasure must never be faked.
     """
+    await _require_seat(auth, "seat.can_edit_memory")
     tenant_id = _authorize_subject(auth, subject)
     try:
         from sqlalchemy import delete
@@ -2682,6 +2758,7 @@ async def memory_delete_fact(
     used to probe which ids exist (:func:`_authorize_row_subject`). A 503 is returned
     when the store is unreachable — an erasure must never be faked.
     """
+    await _require_seat(auth, "seat.can_edit_memory")
     try:
         from sqlalchemy import delete, select
 
@@ -3891,6 +3968,7 @@ async def requeue_job(
     execution and cancels nothing, so re-queueing a live run would leave two workflows
     walking one document. Cancel, then re-queue.
     """
+    await _require_seat(auth, "seat.can_upload_documents")
     from aegis.jobs import AdmissionError, JobNotVisibleError
 
     from app.jobs.control import JobNotRequeueableError, MissingDocumentError
@@ -4039,6 +4117,7 @@ async def upload_document(
             the size cap, 415 when the bytes are not a PDF, 429 when admission refuses,
             503 when the orchestrator could not start the ingest.
     """
+    await _require_seat(auth, "seat.can_upload_documents")
     from aegis.jobs import AdmissionError
 
     from app.ingestion.upload import (

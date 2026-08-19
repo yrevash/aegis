@@ -760,6 +760,110 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
             "by age, at any horizon."
         ),
     ),
+    # ── Named seats (§7.8) ───────────────────────────────────────────────────
+    #
+    # Tenant sub-roles were cut; a seat is a **named grant** expressed in this same
+    # table. See :mod:`aegis.settings.seats` for the whole argument. Three properties
+    # decide the shape of every entry below and none of them is stylistic:
+    #
+    # 1. ``default=True`` + ``TIGHTEN_ONLY`` + ``stricter=LOWER`` makes a seat toggle
+    #    **revoke-only**. The platform layer is True, so a deployment that never touches
+    #    a seat behaves exactly as it did before seats existed — the coarse role guard
+    #    alone decides. A tenant admin writes False to take capability away, and the
+    #    fold means no lower scope can put it back. There is no legal value at any
+    #    tenant-reachable scope that *adds* a capability, which is §7.16 row 15 as
+    #    arithmetic rather than as a guard somebody has to remember to write.
+    # 2. ``writable_by=_TENANT_CONTROLS`` keeps ``client`` out. A business user editing
+    #    their own seat is the one thing that would make these look like self-service
+    #    permissions; even if they could, (1) means they could only revoke their own.
+    # 3. ``readable_by=_EVERY_ROLE`` because a principal is entitled to know what their
+    #    own seat permits. A capability you cannot see is one you report as a bug.
+    #
+    # Each key is read by a narrowing check at a real guard — named in
+    # :data:`aegis.settings.seats.SEAT_CAPABILITIES` — so none of them is inert.
+    SettingSpec(
+        key="seat.label",
+        type_=str,
+        default="",
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.OVERRIDE,
+        description=(
+            "The seat's name, e.g. 'Analyst' or 'Support Lead'. Descriptive only: it "
+            "grants nothing and revokes nothing. It is what makes a grant readable — "
+            "'Support Lead, cannot upload documents' is a permission review; five "
+            "booleans are not."
+        ),
+    ),
+    SettingSpec(
+        key="seat.can_upload_documents",
+        type_=bool,
+        default=True,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        stricter=Strictness.LOWER,
+        description=(
+            "Whether this seat may submit documents for ingestion. Revoke-only: turning "
+            "it off removes the capability, and no narrower scope can turn it back on."
+        ),
+    ),
+    SettingSpec(
+        key="seat.can_edit_memory",
+        type_=bool,
+        default=True,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        stricter=Strictness.LOWER,
+        description=(
+            "Whether this seat may erase or invalidate stored memory. Revoke-only. "
+            "Reading memory is unaffected — this gates the destructive half."
+        ),
+    ),
+    SettingSpec(
+        key="seat.can_approve",
+        type_=bool,
+        default=True,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        stricter=Strictness.LOWER,
+        description=(
+            "Whether this seat may resolve a paused human-approval gate. Revoke-only, "
+            "and only over gates the tenant already owns: the coarse guard runs first, "
+            "so this narrows a tenant's own authority and never reaches another "
+            "tenant's or the platform's."
+        ),
+    ),
+    SettingSpec(
+        key="seat.can_view_tenant_audit",
+        type_=bool,
+        default=True,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        stricter=Strictness.LOWER,
+        description=(
+            "Whether this seat may read the tenant's audit trail. Revoke-only. It "
+            "cannot widen the trail: the rows returned are still scoped to the "
+            "caller's own tenant by the read path, seat or no seat."
+        ),
+    ),
+    SettingSpec(
+        key="seat.can_change_agent_mode",
+        type_=bool,
+        default=True,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        stricter=Strictness.LOWER,
+        description=(
+            "Whether this seat may change how the agent behaves — every 'agent.' "
+            "control, including the model choice and the planning caps. Revoke-only, "
+            "and it narrows only what that seat could already write."
+        ),
+    ),
 )
 
 _BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in SETTING_SPECS}

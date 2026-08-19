@@ -159,6 +159,16 @@ _STRICTER_END: dict[str, Strictness] = {
     # Over-estimating refuses a job that might have fitted; under-estimating admits one
     # that cannot finish. The higher figure is the one that refuses.
     "jobs.estimated_cost_usd.ingest_per_mb": Strictness.HIGHER,
+    # §7.8's named seats. Every one is a capability toggle defaulting to True, so False
+    # — the lower value — is the one that takes the capability away. Declared here one
+    # by one rather than swept in by prefix: the whole point of this table is that it is
+    # a *second* statement, and a rule that reads "anything starting with seat." would
+    # agree with the catalogue by construction and catch nothing.
+    "seat.can_upload_documents": Strictness.LOWER,
+    "seat.can_edit_memory": Strictness.LOWER,
+    "seat.can_approve": Strictness.LOWER,
+    "seat.can_view_tenant_audit": Strictness.LOWER,
+    "seat.can_change_agent_mode": Strictness.LOWER,
 }
 
 
@@ -486,6 +496,24 @@ _NO_SUCH_KEY: tuple[tuple[int, tuple[str, ...], str], ...] = (
 )
 
 
+#: The **one** key excepted from a fragment above, named explicitly and only here.
+#:
+#: ``seat.can_view_tenant_audit`` (§7.8) contains "audit" and trips row 8's fragment,
+#: and the fragment is right to be that broad — narrowing it to ``audit.disable`` so one
+#: key fits would let the next ``audit.export_without_logging`` through unnoticed. So the
+#: fragment stays exactly as wide as it was and the exception is a named key rather than
+#: a looser rule.
+#:
+#: Why this key is not what row 8 forbids: row 8 is about the audit trail being
+#: **written**. This seat gates a *read* of it, and it is revoke-only, so the only thing
+#: any tenant-scoped writer can do with it is see *less* of a trail that is still
+#: complete. ``_safe_audit`` — the write path — consults no seat and cannot: nothing in
+#: the seat surface reaches it. That last sentence is not left as prose;
+#: ``backend/tests/api/test_seats.py`` drives an action with the seat revoked and
+#: asserts the audit row was still written.
+_ROW_8_READ_ONLY_EXCEPTIONS: frozenset[str] = frozenset({"seat.can_view_tenant_audit"})
+
+
 @pytest.mark.parametrize(
     ("row", "fragments", "why"),
     _NO_SUCH_KEY,
@@ -494,11 +522,29 @@ _NO_SUCH_KEY: tuple[tuple[int, tuple[str, ...], str], ...] = (
 def test_no_catalogue_key_exists_for_a_control_a_tenant_must_never_have(row, fragments, why):
     """Rows 2, 4, 8, 10, 12 and 14: the enforcement is that the key does not exist."""
     for spec in SETTING_SPECS:
+        if spec.key in _ROW_8_READ_ONLY_EXCEPTIONS:
+            continue
         for fragment in fragments:
             assert fragment not in spec.key.lower(), (
                 f"§7.16 row {row}: the catalogue now declares {spec.key!r}, which looks "
                 f"like {why}"
             )
+
+
+def test_the_row_8_exception_is_a_read_that_can_only_ever_be_taken_away():
+    """The exception above earns itself, or it is a hole with a comment over it.
+
+    Two properties, both checkable from here: the excepted key exists (a stale exception
+    that names nothing is how an allowlist rots), and it is revoke-only — a
+    ``tighten_only`` toggle whose platform default is ``True`` and whose stricter end is
+    ``False``. A key that could be *granted* by a tenant write would be a different
+    thing entirely and would not be excepted.
+    """
+    for key in _ROW_8_READ_ONLY_EXCEPTIONS:
+        spec = spec_for(key)
+        assert spec.merge is MergeRule.TIGHTEN_ONLY, key
+        assert spec.default is True, f"{key} must default to the coarse guard's answer"
+        assert spec.stricter is Strictness.LOWER, f"{key} must only ever be revoked"
 
 
 # ── row 2: the half that holds, asserted where it lives ──────────────────────

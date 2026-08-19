@@ -103,8 +103,18 @@ def test_the_catalogue_stays_small_enough_that_every_key_is_tested():
     :data:`aegis.settings.guardrails.GUARDRAIL_SETTING_BINDINGS`, read by a rail, and
     covered by the tighten-only sweep in ``test_forbidden_controls`` — which is the
     price this ceiling exists to make somebody pay before adding a key.
+
+    Raised from 18 to 24 by §7.8, which cut tenant sub-roles and spent the difference
+    on six ``seat.*`` keys — one label and five revoke-only capability toggles — rather
+    than on a ``tenant_roles`` table, a permission catalogue, a ``require_permission``
+    dependency and Alembic. The price was paid in the same change: each toggle is named
+    in :data:`aegis.settings.seats.SEAT_CAPABILITIES` beside the guard that reads it,
+    each is driven by a request with the seat revoked in
+    ``backend/tests/api/test_seats.py``, and all five are in ``_STRICTER_END``. Six keys
+    is the *whole* mechanism, which is the argument for the ceiling being a soft one:
+    the alternative was six days of new schema, not six fewer keys.
     """
-    assert len(SETTING_SPECS) <= 18
+    assert len(SETTING_SPECS) <= 24
 
 
 # ── the refusals, driven ──────────────────────────────────────────────────────

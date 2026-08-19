@@ -29,13 +29,23 @@ admin, scoped to their own tenant by :func:`_scope`, because a report about thei
 rails is evidence they are entitled to. The refusal is here, on the server; the screen
 also hides the button, and that is a courtesy, not the enforcement.
 
-**Money.** A live run goes through the same admission path as everything else:
-:func:`aegis.governance.enforce_governance` is called **before** the first probe so a
-tenant already at its cap is refused with a 429 rather than discovering the breach
-partway through, and the run then executes inside
+**Money.** A live run against a **tenant** goes through the same admission path as
+everything else: :func:`aegis.governance.enforce_governance` is called **before** the
+first probe so a tenant already at its cap is refused with a 429 rather than
+discovering the breach partway through, and the run then executes inside
 :func:`~aegis.governance.context.set_governance_context`, so every gateway call the
 guardrail layers make is enforced and ledgered exactly like a ``/query``. Offline is
 the default and spends nothing at all.
+
+A live run with **no** tenant — Aegis attacking its own rails — is real spend that the
+usage ledger does not record, and that is said here rather than left to be discovered.
+:func:`app.core.llm._governed` returns ``None`` for a context whose ``tenant_id`` is
+``None``, so both halves of governance (the cap and the ledger row) are gated behind a
+bound tenant by design: there is no tenant to bill and no budget row to charge against.
+The consequence is that :attr:`RedTeamRun.estimated_cost_usd` is the **only** cost
+figure a platform-scoped run has, and it is an estimate — it must not be described
+anywhere as a ledgered charge. Measured on the 2026-08-19 ``owasp-full`` live run:
+zero rows in ``usage_ledger`` for its whole 175 seconds.
 
 **What "offline" and "live" measure, said plainly.** Offline wires no completer: only
 the deterministic backstops run — injection signatures, MLCommons hazard signatures,
@@ -297,6 +307,15 @@ class RedteamRunRow(BaseModel):
     initiated_by: str = Field(default="", alias="initiatedBy")
     attacks_total: int = Field(default=0, alias="attacksTotal")
     attacks_blocked: int = Field(default=0, alias="attacksBlocked")
+    attacks_unchecked: int = Field(
+        default=0,
+        alias="attacksUnchecked",
+        description=(
+            "Attacks refused because a rail could not run rather than because it found "
+            "anything. Not part of attacksBlocked: a screen that is down stops "
+            "everything and proves nothing."
+        ),
+    )
     block_rate: float = Field(default=0.0, alias="blockRate")
     controls_total: int = Field(default=0, alias="controlsTotal")
     false_positives: int = Field(default=0, alias="falsePositives")
@@ -432,6 +451,7 @@ def _row(summary: RunSummary) -> RedteamRunRow:
         initiated_by=summary.initiated_by,
         attacks_total=summary.attacks_total,
         attacks_blocked=summary.attacks_blocked,
+        attacks_unchecked=summary.attacks_unchecked,
         block_rate=summary.block_rate,
         controls_total=summary.controls_total,
         false_positives=summary.false_positives,
@@ -619,6 +639,7 @@ async def redteam_start_run(
             "target_tenant_id": tenant_id,
             "attacks_total": report.attacks_total,
             "attacks_blocked": report.attacks_blocked,
+            "attacks_unchecked": report.attacks_unchecked,
             "block_rate": round(report.block_rate, 4),
             "false_positive_rate": round(report.false_positive_rate, 4),
             "passed": report.passed,

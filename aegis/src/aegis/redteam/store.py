@@ -57,6 +57,7 @@ class RunSummary:
     initiated_by: str
     attacks_total: int
     attacks_blocked: int
+    attacks_unchecked: int
     block_rate: float
     controls_total: int
     false_positives: int
@@ -79,6 +80,7 @@ class RunSummary:
             initiated_by=row.initiated_by,
             attacks_total=row.attacks_total,
             attacks_blocked=row.attacks_blocked,
+            attacks_unchecked=row.attacks_unchecked,
             block_rate=row.block_rate,
             controls_total=row.controls_total,
             false_positives=row.false_positives,
@@ -137,6 +139,7 @@ async def record_run(
         initiated_role=initiated_role,
         attacks_total=int(overall.get("attacksTotal", 0)),
         attacks_blocked=int(overall.get("attacksBlocked", 0)),
+        attacks_unchecked=int(overall.get("attacksUnchecked", 0)),
         controls_total=int(overall.get("controlsTotal", 0)),
         false_positives=int(overall.get("falsePositives", 0)),
         block_rate=float(overall.get("blockRate", 0.0)),
