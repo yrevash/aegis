@@ -4,7 +4,7 @@
 > embeddings were searched with the `pgvector` Postgres extension. They no longer are.
 > Embeddings persist in Postgres as a portable JSON `list[float]` — the durable
 > *source of record* — and ANN search runs in an **embedded vector store**
-> (`aegis.retrieval.vector_store.ChromaVectorStore`, an on-disk index with no server).
+> (`aegis.retrieval.vector_store.QdrantVectorStore`, one Qdrant node shared with retrieval).
 > Wherever the text below says "pgvector top-k" or "`<=>` operator", read "vector-store
 > top-k". The scoring, bitemporal, budget and assembly design is unaffected.
 

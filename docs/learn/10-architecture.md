@@ -29,7 +29,7 @@ flowchart TB
     end
 
     subgraph L4["4 · Stores and sinks"]
-        L4a["Postgres · embedded vectors · Neo4j · Redis · Arize Phoenix"]
+        L4a["Postgres · Qdrant · Neo4j · Redis · Arize Phoenix"]
     end
 
     B -->|"HTTPS · JWT bearer · SSE"| L1
@@ -61,13 +61,13 @@ The refactor pulled each capability out into `aegis/`, with three hard rules:
    `aegis.ops.configure_ops()` takes the prompt-floor renderer, the session factory and
    the host's `Approval` ORM class.
 2. **Optional dependencies are per-module extras.** `aegis[gateway]` pulls LiteLLM,
-   `aegis[retrieval]` pulls LightRAG/Neo4j/Redis/Chroma, `aegis[ml]` pulls
+   `aegis[retrieval]` pulls LightRAG/Neo4j/Redis/Qdrant, `aegis[ml]` pulls
    XGBoost/MAPIE/SHAP, and so on. `aegis.core` needs only pydantic and the standard
    library, so anything depending on it alone stays cheap to install. Isolation tests
    (`aegis/tests/*/test_isolation.py`) assert that importing a module does not drag in
    the heavyweights.
 3. **Heavy imports stay lazy.** `import aegis.retrieval` does not require
-   `chromadb`; `import aegis.ml` does not import XGBoost until you call something.
+   `qdrant_client`; `import aegis.ml` does not import XGBoost until you call something.
 
 The payoff is concrete: another team can `pip install aegis[guardrails]` and use the
 rail stack in their own service, with none of this platform attached.
@@ -82,7 +82,7 @@ flowchart TB
     OBS["aegis.observability<br/>OTel spans, gen_ai.*, Phoenix"]
     GW["aegis.gateway<br/>LiteLLM chokepoint"]
     GR["aegis.guardrails<br/>rail pipeline"]
-    RET["aegis.retrieval<br/>hybrid RAG + embedded vector store"]
+    RET["aegis.retrieval<br/>hybrid RAG + the Qdrant vector store"]
     MEM["aegis.memory<br/>3-tier long-term memory"]
     ML["aegis.ml<br/>ensemble + conformal + SHAP"]
     GOV["aegis.governance<br/>JWT · RBAC · budgets · RLS · audit"]
@@ -107,7 +107,7 @@ flowchart TB
     GOV -.->|"introspected"| SEC
 ```
 
-Notable edges: `aegis.memory` depends on `aegis.retrieval` for the embedded vector store;
+Notable edges: `aegis.memory` depends on `aegis.retrieval` for the vector store;
 `aegis.ops` depends on `aegis.evals` (one-directional — evals never imports ops);
 `aegis.redteam` is leaf-clean and imports only the guardrails; `aegis.security`
 introspects other modules rather than depending on their runtime.
@@ -181,7 +181,7 @@ flowchart LR
         PG8["LightRAG KV + doc-status stores"]
     end
 
-    subgraph QD["Embedded vector store — in-process, file-backed"]
+    subgraph QD["Qdrant — one node, shared by both vector consumers"]
         QD1["retrieval chunk vectors"]
         QD2["memory recall index, scoped by subject_id + tenant_id"]
     end
@@ -199,26 +199,34 @@ flowchart LR
     PHX["Arize Phoenix — in-process OTel collector and UI"]
 ```
 
-**An embedded vector store — neither pgvector nor a vector server.** Vector search first
+**Qdrant — one node, after a detour through pgvector and embedded stores.** Vector search first
 moved off the `pgvector` Postgres extension (which needs a privileged server-side
-`CREATE EXTENSION`), and then off a standalone vector server too. Both were blocked by
-the same constraint: the target enterprise Windows machine allows no additional server
-software. What runs now is a real ANN engine that happens to live in this process —
-Chroma's `PersistentClient` (HNSW, cosine) over a local directory for Aegis's own store,
-and LightRAG's file-backed NanoVectorDB for LightRAG's internal vectors.
+`CREATE EXTENSION`), then onto embedded stores, and — as of §9.1 — onto **Qdrant**, one
+node serving both consumers. The embedded step was driven by a real constraint (the
+target enterprise Windows machine allows no additional server *software*), and it was
+undone by checking that constraint against Qdrant v1.19.0: it ships
+`qdrant-x86_64-pc-windows-msvc.zip`, Apache-2.0, a zip with a binary — no Docker, no
+installer, no service registration. What the embedded step cost was the thing that
+mattered more: an embedded store is single-process, so `uvicorn --workers 2` could not
+work, and "scaling later is a deployment change" was aspirational rather than true.
 
 Postgres keeps the embedding as JSON *of record* — the durable source of truth — but it
 is no longer searched; `aegis/src/aegis/memory/vector_ops.py` mirrors rows into the
-vector store lazily and searches there, scoping every query by a metadata filter on
-`subject_id` and `tenant_id`. The `pgvector` and `qdrant-client` dependencies are both
-gone from the two `pyproject.toml` files. Any documentation you find claiming pgvector or
-Qdrant powers search is stale.
+vector store lazily and searches there, scoping every query by a payload filter on
+`subject_id` and `tenant_id`. The `pgvector` and `chromadb` dependencies are both gone
+from the two `pyproject.toml` files. Any documentation you find claiming pgvector or
+Chroma powers search is stale.
 
-In full-stores mode a usable vector store is still **required** — embedded does not mean
-optional. `main.py`'s lifespan opens the store at `VECTOR_STORE_PATH` on construction and
-lets the exception propagate, so an unwritable or corrupt directory fails the boot rather
-than silently falling back to RAM. Tests use an explicit in-memory engine: a real index,
-sanctioned and labelled.
+LightRAG's own vectors go to the **same node** (`QdrantVectorDBStorage`, reading the same
+`QDRANT_URL`), replacing NanoVectorDB — whose own docstring calls it a brute-force cosine
+scan held in memory, persisted by rewriting a whole JSON file. One vector engine, one
+URL, one thing to install and explain.
+
+In full-stores mode a reachable node is **required**. `aegis.runtime` dials it at boot
+and lets the exception propagate, so an unreachable Qdrant fails the boot rather than
+silently falling back to RAM — and configuring an *embedded* store while asking for more
+than one worker is refused outright, naming the worker count and the fix. Tests use the
+client's in-process mode: a real index, sanctioned and labelled.
 
 ---
 

@@ -35,10 +35,10 @@ subshell the second command lands in the first command's directory and fails on
 `cd: no such file or directory`.
 
 ```bash
-# Backend suite  (baseline: 1101 passed, 1 skipped)
+# Backend suite  (baseline: 1121 passed, 1 skipped)
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q)
 
-# Core package suite  (baseline: 2224 passed, 14 skipped)
+# Core package suite  (baseline: 2247 passed, 14 skipped)
 (cd aegis && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q)
 
 # Lint — must be clean
@@ -50,10 +50,13 @@ backend/.venv/bin/python -m ruff check aegis backend
 # Generated API reference -> docs/api/ (git-ignored)
 backend/.venv/bin/python scripts/build_api_docs.py
 
-# Conformance — thirteen checks that an adapter is wired right. No database, no
-# key, no model call, under a second. Every check descends from a wiring defect
-# this repo shipped, and every failure names the fix. Run it after any adapter
-# edit; `--aegis-adapter` is required and its absence is one usage error.
+# Conformance — fourteen checks that an adapter is wired right, and that the core
+# still knows no domain. No database, no key, no model call, under a second. Every
+# check descends from a wiring defect this repo shipped, and every failure names the
+# fix. Run it after any adapter edit AND after any core edit — check 11 reads
+# `backend/src/app/**` (minus the adapter) and `aegis/**` and fails if a
+# shipped-domain string survives there. `--aegis-adapter` is required and its
+# absence is one usage error.
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest \
     --pyargs aegis.conformance --aegis-adapter app.adapter -q)
 
@@ -63,6 +66,10 @@ backend/.venv/bin/python scripts/build_api_docs.py
 backend/.venv/bin/python scripts/build_openapi.py
 (cd web && npm run gen:api)
 ```
+
+**A fresh clone has no `backend/.venv`, so run the installer before any command
+above:** `./scripts/bootstrap.sh` (macOS/Linux) or `.\scripts\install-windows.ps1`
+(Windows). It is idempotent and needs no Docker, GPU or database.
 
 Install and run: `./scripts/bootstrap.sh && ./scripts/dev-native.sh`, then
 `cd web && npm run dev`. Windows: `.\scripts\install-windows.ps1` then
@@ -105,7 +112,15 @@ These are invariants, not preferences. Each one has a reason and most have a tes
    loudly labelled. This is the single most important rule in the codebase: a
    silent downgrade is worse than an outage because nobody goes looking.
 5. **Domain logic never leaks into the core.** It goes in
-   `backend/src/app/adapter/`. See `SKILL.md`.
+   `backend/src/app/adapter/`. See `SKILL.md`. This one is **enforced**, not merely
+   asserted: `aegis.conformance`'s core check scans every module outside the adapter
+   for the shipped domain's vocabulary — persona ids, record types, feature keys,
+   tool names, the forecast label — and fails naming the file and line. It exists
+   because a retarget rehearsal produced an integration that passed every suite and
+   was broken in four places, all of them one shipped-domain string in a core module.
+   The quarantined word list is `aegis/src/aegis/conformance/_vocabulary.py`; if you
+   change what the reference adapter calls things, update it in the same commit (the
+   check fails when a listed word no longer appears in the adapter either).
 6. **Optional dependencies go through `aegis.core.require(extra, module)`**,
    which raises naming the exact `pip install`. Never `except ImportError: pass`.
 

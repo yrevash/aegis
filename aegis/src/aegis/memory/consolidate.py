@@ -39,7 +39,7 @@ profile are refreshed at the end. Everything is dependency-injected (``complete`
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -91,21 +91,12 @@ _DECIDE_OP_PROMPT = (
 
 #: System prompt for the running-summary refresh (plain text, not JSON).
 _SUMMARY_PROMPT = (
-    "You maintain a running summary of a customer-support conversation. Merge the prior "
-    "summary with the new turns into a single concise summary that preserves durable "
-    "context (who the customer is, what they want, decisions and commitments). Return "
-    "ONLY the updated summary text."
+    "You maintain a running summary of a conversation between a user and an assistant. "
+    "Merge the prior summary with the new turns into a single concise summary that "
+    "preserves durable context (who the user is, what they want, decisions and "
+    "commitments). Return ONLY the updated summary text."
 )
 
-#: Non-membership predicate aliases → structured profile fields.
-_PROFILE_ALIASES: dict[str, str] = {
-    "prefers_channel": "preferred_channel",
-    "channel": "preferred_channel",
-    "prefers_language": "preferred_language",
-    "language": "preferred_language",
-    "name": "display_name",
-    "customer_tier": "tier",
-}
 
 
 @dataclass
@@ -229,11 +220,28 @@ def _truncate_to_tokens(text: str, max_tokens: int) -> str:
     return truncated
 
 
-def _profile_field_for(predicate: str, profile_fields: Sequence[str]) -> str | None:
-    """Map a fact predicate onto a structured-profile field, if one applies."""
-    if predicate in profile_fields:
+def _profile_field_for(predicate: str, spec: MemorySpec) -> str | None:
+    """Map a fact predicate onto a structured-profile field, if one applies.
+
+    The alias table is **the domain's**, read from the spec's optional
+    ``PROFILE_ALIASES``. It used to be a module constant here, mapping spellings like
+    one domain's own feature names onto that same domain's profile fields — core
+    knowledge of one domain's vocabulary, and therefore an alias set that silently
+    stopped matching anything the moment the domain changed. A domain that declares no
+    aliases simply gets none; nothing degrades, because an unaliased predicate that is
+    not already a profile field was never meant to write to the profile.
+
+    Args:
+        predicate: The extracted fact's predicate.
+        spec: The domain memory spec.
+
+    Returns:
+        The profile field to write, or ``None`` when the predicate maps to none.
+    """
+    if predicate in spec.PROFILE_FIELDS:
         return predicate
-    return _PROFILE_ALIASES.get(predicate)
+    aliases: Mapping[str, str] = getattr(spec, "PROFILE_ALIASES", {}) or {}
+    return aliases.get(predicate)
 
 
 async def _load_session_and_turns(
@@ -767,7 +775,7 @@ async def _update_profile(
     """
     updates: dict[str, Any] = {}
     for candidate in sorted(candidates, key=lambda c: c.confidence):
-        field = _profile_field_for(candidate.predicate, spec.PROFILE_FIELDS)
+        field = _profile_field_for(candidate.predicate, spec)
         if field is not None and candidate.object:
             updates[field] = candidate.object
     if not updates:
@@ -993,6 +1001,12 @@ async def sweep_pending(
     cannot double-run it), consolidated, then marked terminal. Returns the number of jobs
     successfully consolidated.
     """
+    # Local: keeps the governance package (and its pyjwt/argon2 dependencies) off
+    # ``aegis.memory``'s import graph, the same way ``aegis.jobs.scope`` does. Resolved
+    # once here rather than inside the loop's ``try``, where an ImportError would be
+    # swallowed as a per-job failure and read as "consolidation is broken".
+    from aegis.governance.context import governed  # noqa: PLC0415 - see above
+
     stmt = (
         select(MemoryConsolidationJob)
         .where(MemoryConsolidationJob.status == ConsolidationStatus.PENDING)
@@ -1020,16 +1034,26 @@ async def sweep_pending(
         await session.commit()
 
         try:
-            await consolidate(
-                session,
-                subject_id=job.subject_id,
-                session_id=job.session_id,
-                config=config,
-                complete=complete,
-                embed=embed,
-                tenant_id=job.tenant_id,
-                spec=spec,
-            )
+            # The job row is where this unit of work acquires an owner, so it is where
+            # the billing scope is bound. Consolidation makes live model calls —
+            # summarisation plus an embedding per fact — and the gateway can only cap
+            # and ledger what a bound governance context names. Without this the whole
+            # queue spent a tenant's money against no cap and left no ledger row, on a
+            # sixty-second timer (task 9.2).
+            #
+            # Bound per job and not per sweep, because one drain covers several tenants
+            # and the wrong tenant's cap is not better than none.
+            with governed(tenant_id=job.tenant_id):
+                await consolidate(
+                    session,
+                    subject_id=job.subject_id,
+                    session_id=job.session_id,
+                    config=config,
+                    complete=complete,
+                    embed=embed,
+                    tenant_id=job.tenant_id,
+                    spec=spec,
+                )
         except Exception as exc:  # noqa: BLE001 - queue must never crash the sweep
             await session.rollback()
             await session.execute(

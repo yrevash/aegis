@@ -37,6 +37,7 @@ from aegis.governance.context import (
     GovernanceContext,
     GovernanceLimits,
     get_governance_context,
+    governed,
     reset_governance_context,
     set_governance_context,
 )
@@ -176,6 +177,7 @@ __all__ = [
     "enforce_governance",
     "get_governance_context",
     "governance_dashboard",
+    "governed",
     "grant_serving_role",
     "hash_password",
     "list_budgets",

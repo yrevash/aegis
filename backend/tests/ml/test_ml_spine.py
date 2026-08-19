@@ -227,7 +227,7 @@ def test_domain_spine_predicts_distinctly_with_categoricals():
     from app.adapter import training_frame
 
     spec = resolve_spec()  # the real adapter spec
-    frame = training_frame(num_requests=400)
+    frame = training_frame(num_records=400)
     model = TrustworthyModel.train(spec, frame, confidence_level=0.9, path=None)
 
     easy = model.predict_explain(

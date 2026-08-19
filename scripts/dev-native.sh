@@ -24,18 +24,25 @@ fi
 if (exec 3<>/dev/tcp/localhost/7687) 2>/dev/null; then exec 3>&- 3<&-; echo "  neo4j      : UP (7687)"; else
   echo "  neo4j      : down (non-blocking — graph retrieval degrades, dashboards fine)"; fi
 
-# ── Vector store (EMBEDDED — nothing to start) ────────────────────────────────
-# The ANN engine behind retrieval + memory recall runs in-process against a local
-# directory (Chroma PersistentClient; LightRAG's own vectors sit in NanoVectorDB under
-# its working_dir). There is no server binary and no port, so there is nothing to launch
-# here — only a directory to make sure exists and is writable.
+# ── Vector store (Qdrant — one node, both consumers) ─────────────────────────
+# §9.1: the ANN engine behind retrieval + memory recall is a Qdrant node, and LightRAG's
+# QdrantVectorDBStorage writes to the same one via QDRANT_URL. It stopped being embedded
+# because an embedded store is single-process, which is what made `uvicorn --workers 2`
+# impossible. Qdrant ships as one Apache-2.0 binary in a zip (no Docker, no installer);
+# this script does not start it, it reports honestly whether it is up.
+QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+export QDRANT_URL
+if curl -fsS --max-time 2 "$QDRANT_URL/readyz" >/dev/null 2>&1 \
+  || curl -fsS --max-time 2 "$QDRANT_URL/" >/dev/null 2>&1; then
+  echo "  qdrant     : UP ($QDRANT_URL)"
+else
+  echo "  qdrant     : DOWN ($QDRANT_URL) — start ./qdrant; full stores mode will refuse to boot"
+fi
+# LightRAG still wants a local working directory for its own bookkeeping (no vectors,
+# no KV — those are Qdrant and Postgres now).
 VECTOR_STORE_PATH="${VECTOR_STORE_PATH:-$ROOT/backend/vector_storage}"
 export VECTOR_STORE_PATH
-if mkdir -p "$VECTOR_STORE_PATH" 2>/dev/null && [ -w "$VECTOR_STORE_PATH" ]; then
-  echo "  vectors    : embedded, writable ($VECTOR_STORE_PATH)"
-else
-  echo "  vectors    : NOT WRITABLE ($VECTOR_STORE_PATH) — the backend will refuse to boot"
-fi
+mkdir -p "$VECTOR_STORE_PATH" 2>/dev/null || true
 
 # ── Postgres check (started/prepared already) ────────────────────────────────
 if psql -h 127.0.0.1 -p 5432 -U postgres -d taif -tAc 'select 1' >/dev/null 2>&1; then

@@ -90,7 +90,7 @@ AEGIS_MODULES: list[AegisModule] = [
     AegisModule(
         key="memory",
         name="Aegis Memory",
-        tech="Postgres + embedded Chroma",
+        tech="Postgres + Qdrant",
         summary="Long-term memory: episodic, semantic and procedural, bitemporal, consolidated.",
         category="knowledge",
         module_path="app.memory",
@@ -106,7 +106,7 @@ AEGIS_MODULES: list[AegisModule] = [
     AegisModule(
         key="retrieval",
         name="Aegis Retrieval",
-        tech="Neo4j/LightRAG + embedded NanoVectorDB",
+        tech="Neo4j/LightRAG + Qdrant",
         summary="Hybrid RAG: vector + graph + BM25 fused via RRF, LLM rerank, spotlighting.",
         category="knowledge",
         module_path="app.retrieval.pipeline",

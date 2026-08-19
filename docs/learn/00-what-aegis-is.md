@@ -96,9 +96,9 @@ actually runs. `module_path` on each entry is import-checked by
 |---|---|---|---|
 | **Aegis Gateway** | LiteLLM | Single model chokepoint: role routing, budgets, timeout, retry, usage ledger | live |
 | **Aegis Router** | LangGraph | Multi-agent supervisor — routes a turn to the right specialist | live |
-| **Aegis Memory** | Postgres + embedded Chroma | Long-term memory: episodic, semantic and procedural, bitemporal, consolidated | live |
+| **Aegis Memory** | Postgres + Qdrant | Long-term memory: episodic, semantic and procedural, bitemporal, consolidated | live |
 | **Aegis Cache** | Redis | Semantic response cache keyed on query meaning, not exact bytes | live |
-| **Aegis Retrieval** | Neo4j/LightRAG + embedded NanoVectorDB | Hybrid RAG: vector + graph + BM25 fused via RRF, LLM rerank, spotlighting | live |
+| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | Hybrid RAG: vector + graph + BM25 fused via RRF, LLM rerank, spotlighting | live |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | Trustworthy ML: ensemble with calibrated conformal intervals and SHAP | live |
 | **Aegis Guardrails** | programmatic + NeMo Colang | Input/output rails: injection, PII, schema and content checks | live |
 | **Aegis Evals** | RAGAS-style proxies + LLM judge | Trace-level and answer evaluation of each run | live |

@@ -739,3 +739,53 @@ def _template_document(category: Category, index: int) -> tuple[str, str]:
         "and record the outcome as a case note. Escalate to Tier-2 if unresolved within SLA."
     )
     return title, body
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The demand series — what /forecast forecasts, in this domain's words
+# ─────────────────────────────────────────────────────────────────────────────
+
+DOMAIN_SERIES_LABEL = "Service requests opened per day"
+"""What the client-facing demand series measures, in the client's language.
+
+**This string used to be a constant in the core** (``app/forecast/domain.py``), which
+made it the one domain sentence no retarget ever changed: the ``/forecast`` response
+carried it to the console, the console drew it on the chart, and a pharmacy or a
+logistics deployment charted "Service requests opened per day" forever. It is a domain
+label, so it lives with the records it labels.
+"""
+
+DOMAIN_SERIES_UNIT = "requests"
+"""The unit of :func:`domain_series_events`' values, for the forecast's y-axis."""
+
+
+def domain_series_events(
+    *, num_records: int = 1400, seed: int = 11
+) -> list[tuple[datetime, float]]:
+    """Return one ``(timestamp, 1.0)`` arrival event per generated record.
+
+    The **arrival** series, deliberately, not a completion series: arrivals are the
+    quantity a client plans capacity against and the series is complete at the recent
+    end, whereas resolutions silently truncate it and bias the trend downwards for no
+    reason a reader could see.
+
+    This is the whole of the domain's contribution to ``/forecast``. The core
+    (:mod:`app.forecast`) buckets, fits, and refuses honestly; it never names a record
+    type or a timestamp field. Before this function existed it did both — it read
+    ``dataset.requests`` and ``r.created_at`` directly — so a retarget that renamed the
+    collection made ``/forecast`` raise ``AttributeError`` with nothing in any checklist
+    pointing at the file.
+
+    Args:
+        num_records: How many records to fabricate. Large enough that a daily bucket
+            over the generator's span is a countable volume rather than a sparse 0/1
+            rattle no model (and no reader) could learn from.
+        seed: RNG seed, so the demo series is identical across processes and reloads.
+
+    Returns:
+        Arrival events, unordered.
+    """
+    dataset = generate_synthetic_sync(
+        GeneratorConfig(num_requests=num_records, seed=seed, use_llm=False)
+    )
+    return [(r.created_at, 1.0) for r in dataset.requests]

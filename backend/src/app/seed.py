@@ -59,6 +59,7 @@ from sqlalchemy.exc import SQLAlchemyError
 # it is what injects this deployment's session factory and RLS scope binder into the
 # governance package (see ``app.data.governance``), so a governed write from here takes
 # the identical path a request's does.
+from app.adapter import persona_for_role
 from app.api.schemas import RiskLevel
 from app.data import (
     Budget,
@@ -680,7 +681,11 @@ async def _ensure_approval(
         rationale=spec.rationale,
         tenant_id=tenant_id,
         requested_by=requested_by,
-        persona="operations_lead",
+        # Through the seam, never a literal: this row is raised on behalf of an
+        # operational principal, and which persona that is belongs to the domain.
+        # Spelled out here it survived a retarget and parked every seeded gate under
+        # a persona the new adapter had never heard of.
+        persona=persona_for_role(Role.ADMIN),
         sla_seconds=_SEED_APPROVAL_SLA_SECONDS,
     )
     summary.record("approvals", created=not existed)

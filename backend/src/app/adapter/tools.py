@@ -403,6 +403,20 @@ class ToolSpec:
     args_model: type[BaseModel]
     handler: ToolHandler
     risk: RiskLevel
+    destructive: bool = False
+    """Whether a call overwrites state a reader would miss (MCP ``destructiveHint``)."""
+    idempotent: bool = False
+    """Whether repeating the identical call converges (MCP ``idempotentHint``).
+
+    These two are **per tool and asserted, never derived from the risk tier**, because
+    risk does not imply idempotency: appending a note is low risk and not idempotent,
+    while a gated status transition is high risk and is idempotent. They live here, on
+    the tool, rather than in a name-keyed table in ``app.mcp`` — that table was core
+    naming this domain's three tools, so a retarget silently lost every hint and the
+    MCP surface advertised a conservative guess as an assertion. The defaults are the
+    cautious reading, so a tool registered without thinking about it is never
+    advertised as safer than it is.
+    """
 
     def definition(self) -> dict:
         """Return the MCP/OpenAI ``function`` tool definition for the LLM.
@@ -431,6 +445,10 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         # customer-visible state change — it routes to the human-approval gate
         # (bounded autonomy). Assignment/notes are lower-consequence.
         risk=RiskLevel.HIGH,
+        # Overwrites the prior status (destructive in the MCP sense), but setting the
+        # same target status twice is one state.
+        destructive=True,
+        idempotent=True,
     ),
     "assign_request": ToolSpec(
         name="assign_request",
@@ -438,6 +456,9 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         args_model=AssignArgs,
         handler=assign_request,
         risk=RiskLevel.MEDIUM,
+        # Re-assigning to the same agent converges, and the previous assignee is
+        # recoverable from the timeline.
+        idempotent=True,
     ),
     "add_case_note": ToolSpec(
         name="add_case_note",
@@ -445,6 +466,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         args_model=AddNoteArgs,
         handler=add_case_note,
         risk=RiskLevel.LOW,
+        # Re-running appends a second note, so explicitly NOT idempotent.
     ),
 }
 """Name → :class:`ToolSpec` for every action tool the domain exposes."""

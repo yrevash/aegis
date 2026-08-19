@@ -198,6 +198,39 @@ async def test_platform_scope_runs_when_it_is_declared(pg_sessionmaker):
     assert seen == [""]
 
 
+async def test_the_billing_scope_is_bound_from_the_same_field_as_the_row_scope(
+    pg_sessionmaker,
+):
+    """An activity's model spend is capped and ledgered, because the tenant is bound.
+
+    The defect this pins (task 9.2): every activity bound the *row* scope and nothing
+    bound the *billing* scope, so a stage that embedded two hundred chunks did it with
+    no governance context — and the gateway caps and ledgers exactly what a bound
+    context names. Ingestion therefore spent a tenant's money against no cap and left no
+    ``usage_ledger`` row, and the volume of that grows with every document uploaded.
+
+    Both scopes now come from one field on the activity's own argument, which is what
+    makes them impossible to disagree — and what makes them survive a replay in a fresh
+    worker, where a contextvar set by the enqueuer would not exist at all.
+    """
+    from aegis.governance.context import get_governance_context
+
+    set_activity_session_factory(pg_sessionmaker)
+    seen = []
+
+    @tenant_activity
+    async def activity(inp: _Input, *, session) -> None:
+        seen.append(get_governance_context())
+
+    await activity(_Input(tenant_id=_TENANT_A, workflow_id="wf-1"))
+
+    assert seen and seen[0] is not None, "no governance context — spend is uncapped"
+    assert seen[0].tenant_id == _TENANT_A
+    # And unbound again afterwards, so the next activity on this worker — very possibly
+    # another tenant's — is not billed to this one.
+    assert get_governance_context() is None
+
+
 async def test_an_activity_with_no_session_factory_wired_says_so():
     @tenant_activity
     async def activity(inp: _Input, *, session) -> None: ...

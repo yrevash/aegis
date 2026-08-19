@@ -11,7 +11,7 @@ decorators so the schema materialises on SQLite (used by unit tests, which must 
 no Postgres) as well as on PostgreSQL. The embedding-of-record column is a portable
 ``list[float]`` stored as JSON — ``jsonb`` on PostgreSQL, ``JSON`` elsewhere — **not** a
 pgvector ``vector`` type: ANN search runs on the embedded vector store
-(:class:`aegis.retrieval.vector_store.ChromaVectorStore`), so the SQL column is only the
+(:class:`aegis.retrieval.vector_store.QdrantVectorStore`), so the SQL column is only the
 durable source-of-record that the memory mirror reads, never a search index.
 
 This module imports nothing from any host application — it is self-contained under the
@@ -45,7 +45,7 @@ class VectorColumn(TypeDecorator[list[float]]):
     ``JSON`` on every other dialect (e.g. the SQLite unit-test database). It is the
     durable *source-of-record* embedding that the memory index lazily mirrors into
     the vector store; it is **not** a search index and carries no pgvector distance operators.
-    ANN search runs on :class:`aegis.retrieval.vector_store.ChromaVectorStore`.
+    ANN search runs on :class:`aegis.retrieval.vector_store.QdrantVectorStore`.
 
     ``dim`` is retained for documentation/parity with the embedding dimensionality;
     JSON storage does not enforce it (the mirror skips off-dim rows at query time).

@@ -80,7 +80,7 @@ plus the console (`web/`) via `npm`. You never install these by hand.
 |---|---|---|
 | `data` | audit log, embeddings of record, RBAC tables | sqlalchemy, asyncpg, alembic |
 | `agent` | the LangGraph loop + gate | langgraph, langchain-core/openai |
-| `retrieval` | RAG over stores (full mode) | lightrag-hku, neo4j, redis, chromadb (embedded) |
+| `retrieval` | RAG over stores (full mode) | lightrag-hku, neo4j, redis, qdrant-client |
 | `ml` | prediction + conformal + SHAP | xgboost, scikit-learn, mapie, shap |
 | `guardrails` | input/output rails | nemoguardrails |
 | `observability` | OTel → Phoenix | opentelemetry-*, arize-phoenix |

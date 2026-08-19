@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from enum import StrEnum
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -38,19 +39,39 @@ class AegisMode(StrEnum):
 class CoreSettings(BaseSettings):
     """Core configuration, read from ``AEGIS_``-prefixed environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix=ENV_PREFIX, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX,
+        extra="ignore",
+        # ``vector_store_url`` carries an explicit ``validation_alias`` (it answers to
+        # LightRAG's ``QDRANT_URL`` as well), which would otherwise make the Python name
+        # unusable in a constructor call.
+        populate_by_name=True,
+    )
 
     mode: AegisMode = AegisMode.full
     redis_url: str | None = None
     database_url: str | None = None
-    #: Filesystem directory for the embedded vector store (Chroma's ``PersistentClient``
-    #: — the ANN engine behind retrieval + memory recall). It is a *path*, not a URL,
-    #: because the vector tier runs in-process: there is no server binary to install,
-    #: which is what makes Aegis deployable on a locked-down enterprise machine.
+    #: URL of the **Qdrant node** — the one vector engine, shared by
+    #: :mod:`aegis.retrieval` and LightRAG (§9.1). It is a *URL*, not a path, because an
+    #: embedded vector store is single-process: it is what made ``uvicorn --workers 2``
+    #: impossible, and a ceiling you can still configure your way back into is not
+    #: removed. Qdrant v1.19.0 ships a Windows zip with a single Apache-2.0 binary — no
+    #: Docker, no installer — so the locked-down target machine still runs it.
+    #:
+    #: It answers to ``QDRANT_URL`` as well as ``AEGIS_VECTOR_STORE_URL``, deliberately:
+    #: ``QDRANT_URL`` is the name LightRAG's own storage reads, and two variables for one
+    #: node is how the two consumers end up pointed at different indexes.
+    #:
     #: In full mode it is a hard dependency and must be set explicitly — leaving it unset
-    #: would mean an ephemeral in-RAM index, i.e. exactly the silent, non-durable
-    #: degradation this module exists to prevent. An in-memory store is available only as
-    #: an explicit dev/test choice (``AEGIS_MODE=lite``).
+    #: would mean an ephemeral in-process index, i.e. exactly the silent, non-durable
+    #: degradation this module exists to prevent. The in-process engine is available only
+    #: as an explicit dev/test choice (``AEGIS_MODE=lite``).
+    vector_store_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(f"{ENV_PREFIX}VECTOR_STORE_URL", "QDRANT_URL"),
+    )
+    #: LightRAG's local **working directory** (its own bookkeeping — no vectors and no
+    #: KV live here any more). Not a required backend: nothing durable depends on it.
     vector_store_path: str | None = None
 
     def _missing_backends(self) -> list[str]:
@@ -60,7 +81,7 @@ class CoreSettings(BaseSettings):
             for name, value in (
                 ("REDIS_URL", self.redis_url),
                 ("DATABASE_URL", self.database_url),
-                ("VECTOR_STORE_PATH", self.vector_store_path),
+                ("VECTOR_STORE_URL", self.vector_store_url),
             )
             if not value
         ]
@@ -122,7 +143,7 @@ class CoreSettings(BaseSettings):
         results = [
             await probe_redis(str(self.redis_url)),
             await probe_postgres(str(self.database_url)),
-            await probe_vector_store(str(self.vector_store_path)),
+            await probe_vector_store(str(self.vector_store_url)),
         ]
         down = [r for r in results if r.status == "down"]
         if down:

@@ -47,6 +47,8 @@ def _config_from_settings(settings: Settings) -> RetrievalConfig:
         neo4j_user=settings.neo4j_user,
         neo4j_password=settings.neo4j_password,
         redis_url=settings.redis_url,
+        qdrant_url=settings.qdrant_url,
+        qdrant_api_key=settings.qdrant_api_key,
         vector_store_path=settings.vector_store_path,
         stores_enabled=settings.stores_enabled,
     )
@@ -82,7 +84,7 @@ def build_default_retriever(settings: Settings | None = None) -> Retriever:
         settings: Application settings (defaults to the process singleton).
 
     Returns:
-        A `Retriever` wired to LightRAG (Neo4j + NanoVectorDB), the Redis semantic
+        A `Retriever` wired to LightRAG (Neo4j + Qdrant), the Redis semantic
         cache, the shared LLM gateway, and the local ONNX cross-encoder reranker
         (unless ``RERANK_LOCAL=false``).
     """

@@ -3,7 +3,7 @@
 # Usage: ./scripts/start.sh [safe|lite|full]   (default: lite)
 #   safe : console only, mock transport — no backend, no infra.
 #   lite : backend with NO databases (STORES=off, SQLite audit) + live console.
-#   full : backend with all stores (Postgres + Neo4j + Redis; vectors are embedded).
+#   full : backend with all stores (Postgres + Neo4j + Redis + Qdrant).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-lite}"

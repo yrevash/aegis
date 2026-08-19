@@ -15,12 +15,15 @@ Exposed surface (the domain seam described in ``docs/learn/50-run-and-extend.md`
   :func:`feature_matrix`, :func:`latent_resolution_hours`, :func:`describe_prediction`,
   :func:`training_frame`.
 * **generation** (piece 3) — :func:`generate_synthetic`, :func:`generate_synthetic_sync`,
-  :class:`GeneratorConfig`, :class:`SyntheticDataset`.
+  :class:`GeneratorConfig`, :class:`SyntheticDataset`, and the client-facing demand
+  series ``/forecast`` reads: :data:`DOMAIN_SERIES_LABEL`, :data:`DOMAIN_SERIES_UNIT`,
+  :func:`domain_series_events`.
 * **tool registry** (piece 4) — :data:`TOOL_REGISTRY`, :data:`ALLOWLIST`, :func:`run_tool`,
   :func:`tools_for`, :func:`tool_definitions_for`, :func:`is_allowed`,
   :class:`ToolContext`, :class:`InMemoryRecordStore`.
 * **personas** (piece 5) — :data:`PERSONAS`, :data:`DEFAULT_PERSONA_ID`,
-  :func:`get_persona`, :class:`Persona`.
+  :data:`PERSONA_BY_ROLE`, :func:`get_persona`, :func:`persona_for_role`,
+  :class:`Persona`.
 * **prompts** (piece 6) — :data:`SYSTEM_PROMPTS`, :func:`render_system_prompt`,
   :data:`PLATFORM_FLOOR` / :func:`render_platform_floor` (the half no tenant may edit).
 * **memory_spec** (piece 7) — the :mod:`app.adapter.memory_spec` **module** itself, not
@@ -53,7 +56,10 @@ from __future__ import annotations
 from app.adapter import memory_spec, ml_spec, schema
 from app.adapter.corpus import load_seed_corpus
 from app.adapter.generator import (
+    DOMAIN_SERIES_LABEL,
+    DOMAIN_SERIES_UNIT,
     GeneratorConfig,
+    domain_series_events,
     generate_synthetic,
     generate_synthetic_sync,
 )
@@ -69,9 +75,11 @@ from app.adapter.ml_spec import (
 )
 from app.adapter.personas import (
     DEFAULT_PERSONA_ID,
+    PERSONA_BY_ROLE,
     PERSONAS,
     Persona,
     get_persona,
+    persona_for_role,
 )
 from app.adapter.prompts import (
     PLATFORM_FLOOR,
@@ -118,9 +126,12 @@ __all__ = [
     "DEFAULT_PERSONA_ID",
     "DOMAIN_DESCRIPTION",
     "DOMAIN_ID",
+    "DOMAIN_SERIES_LABEL",
+    "DOMAIN_SERIES_UNIT",
     "FEATURES",
     "FEATURE_NAMES",
     "PERSONAS",
+    "PERSONA_BY_ROLE",
     "TARGET",
     "TOOL_REGISTRY",
     "AgentRoster",
@@ -136,6 +147,7 @@ __all__ = [
     "ToolContext",
     "agent_roster",
     "describe_prediction",
+    "domain_series_events",
     "feature_matrix",
     "features_for_request",
     "generate_synthetic",
@@ -146,6 +158,7 @@ __all__ = [
     "load_seed_corpus",
     "memory_spec",
     "ml_spec",
+    "persona_for_role",
     "render_platform_floor",
     "render_system_prompt",
     "run_tool",

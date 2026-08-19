@@ -13,6 +13,7 @@ from aegis.governance.context import (
     GovernanceContext,
     GovernanceLimits,
     get_governance_context,
+    governed,
     reset_governance_context,
     set_governance_context,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "GovernanceContext",
     "GovernanceLimits",
     "get_governance_context",
+    "governed",
     "reset_governance_context",
     "set_governance_context",
 ]

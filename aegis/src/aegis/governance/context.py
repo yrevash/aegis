@@ -13,14 +13,17 @@ convenience.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 
-from aegis.governance.types import GovernanceContext, GovernanceLimits
+from aegis.governance.types import GovernanceContext, GovernanceLimits, Role
 
 __all__ = [
     "GovernanceContext",
     "GovernanceLimits",
     "get_governance_context",
+    "governed",
     "reset_governance_context",
     "set_governance_context",
 ]
@@ -58,3 +61,40 @@ def reset_governance_context(token: Token[GovernanceContext | None]) -> None:
         token: The token returned by :func:`set_governance_context`.
     """
     _governance_context.reset(token)
+
+
+@contextmanager
+def governed(
+    *, tenant_id: int | None, user_id: int | None = None, role: Role | None = None
+) -> Iterator[GovernanceContext]:
+    """Bind a governance context for the duration of a block, and always unbind it.
+
+    The ``set``/``try``/``finally``/``reset`` quartet written out by hand at four call
+    sites, three of which are background work. It exists because the failure mode of
+    forgetting the ``finally`` is not a crash: the context simply *stays* bound, and the
+    next unit of work on that task — a different tenant's, quite possibly — is billed to
+    whoever the last one belonged to.
+
+    **This is how background work becomes governed at all.** ``enforce_governance`` and
+    the usage ledger both hang off the context bound at the gateway chokepoint, and a
+    sweeper or an activity that binds nothing spends money that is neither capped nor
+    recorded. The tenant passed here must come from the *work* — a job row, an activity
+    argument — and never from whatever happened to be bound already.
+
+    Args:
+        tenant_id: The tenant to bill and cap, or ``None`` for platform-owned work,
+            which is recorded in the ledger under a NULL tenant and capped by nothing at
+            the gateway (there is no ``budgets`` row for "nobody"; see
+            ``app.core.llm._governed``).
+        user_id: The acting user, when the work belongs to one.
+        role: The acting role, when it is known.
+
+    Yields:
+        The context that was bound, so a caller can log or assert on it.
+    """
+    ctx = GovernanceContext(tenant_id=tenant_id, user_id=user_id, role=role)
+    token = set_governance_context(ctx)
+    try:
+        yield ctx
+    finally:
+        reset_governance_context(token)

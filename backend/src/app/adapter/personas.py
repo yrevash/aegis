@@ -100,6 +100,56 @@ PERSONAS: dict[str, Persona] = {p.id: p for p in (OPERATIONS_LEAD, CLIENT)}
 DEFAULT_PERSONA_ID: str = OPERATIONS_LEAD.id
 """Persona used when a request does not specify one."""
 
+PERSONA_BY_ROLE: dict[Role, str] = {
+    Role.ADMIN: OPERATIONS_LEAD.id,
+    Role.AI_TEAM: OPERATIONS_LEAD.id,
+    Role.DEVOPS: OPERATIONS_LEAD.id,
+    Role.CLIENT: CLIENT.id,
+}
+"""Coarse RBAC role → the persona an authenticated principal of that role adopts.
+
+**This table is domain knowledge, and it used to live in the core.**
+``app/api/routes.py`` decided it with a hardcoded
+``"client" if role is Role.CLIENT else "operations_lead"``, so re-voicing
+:data:`PERSONAS` — step 5 of the retargeting procedure, which the same document
+instructs an integrator to perform — made *every* authenticated request resolve to a
+persona id that no longer existed, and ``get_persona`` raised ``KeyError`` on sign-in.
+Nothing failed until a human logged in: the adapter tests, the agent tests, the
+conformance suite and ruff all stayed green, because none of them go through the login
+path. RBAC roles are the platform's; *which persona a role adopts* is the domain's, so
+the mapping belongs here with the personas it names.
+
+Every :class:`~aegis.governance.types.Role` must appear as a key — a role with no
+persona cannot sign in — and every value must be a key of :data:`PERSONAS`. Both halves
+are asserted by ``aegis.conformance``'s persona check.
+"""
+
+
+def persona_for_role(role: Role | str) -> str:
+    """Return the persona id a principal holding ``role`` adopts.
+
+    Args:
+        role: The coarse RBAC role, as the enum or its string value.
+
+    Returns:
+        The persona id, always a key of :data:`PERSONAS`.
+
+    Raises:
+        KeyError: If ``role`` is not a known role, or the domain declares no persona
+            for it. Deliberately loud: the alternative is a request that runs under
+            some other persona's data scope and tool allowlist, which is a silent
+            authorisation change.
+    """
+    key = role if isinstance(role, Role) else Role(role)
+    persona_id = PERSONA_BY_ROLE.get(key)
+    if persona_id is None:
+        raise KeyError(
+            f"No persona is declared for role {key.value!r}. Add it to "
+            f"app.adapter.personas.PERSONA_BY_ROLE — every role the platform can "
+            f"authenticate must map to one of {sorted(PERSONAS)}."
+        )
+    return persona_id
+
 
 def get_persona(persona_id: str | None) -> Persona:
     """Return the persona for ``persona_id`` (or the default if ``None``).

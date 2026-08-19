@@ -62,6 +62,13 @@ class MemorySpec(Protocol):
         FACT_EXTRACTION_PROMPT: System prompt driving the cheap-model fact extractor.
         IMPORTANCE_HINTS: Domain guidance for the 1..10 importance (poignancy) rating.
         PROFILE_FIELDS: Ordered structured-profile fields (the always-injected human block).
+        PROFILE_ALIASES: *Optional.* Predicate spellings the extractor emits mapped onto
+            ``PROFILE_FIELDS`` entries, for the case where the model phrases an
+            attribute differently from the field that stores it. Absent means no
+            aliases, which is a domain statement and not a degraded control: an
+            unaliased predicate that is not already a profile field was never meant to
+            write to the profile. Not declared as a member below because it is
+            genuinely optional and a Protocol member is a requirement.
         FACT_TYPES: The typed kinds of durable fact the domain distils.
         SKILLS_DIR: Filesystem directory holding procedural skill markdown files.
         FactSchema: The pydantic model class for one extracted fact.

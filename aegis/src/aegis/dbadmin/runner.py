@@ -35,13 +35,16 @@ one is here because the obvious alternative was tested and failed:
    turns "timed out after 10 seconds" into "this would scan 40 million rows, here is why",
    which is a fact an operator can act on.
 
-**What binds the tenant.** :meth:`ReadOnlyRunner.run` writes both GUCs from the sealed
-:class:`~aegis.dbadmin.scope.ScopeBinding` with ``set_config(..., is_local => true)``, so
-they are scoped to the transaction and cannot survive back into the pool. The RLS policy
-underneath then engages on ``app.tenant_id`` as it does for every other connection — and
-because that policy is fail-*open* on an unset scope, it is the second layer here, never
-the first. The first is :data:`aegis.dbadmin.catalogue.TENANT_PREDICATE`, welded into the
-statement text, which returns nothing when nothing is bound.
+**What binds the tenant.** :meth:`ReadOnlyRunner.run` writes **three** GUCs from the
+sealed :class:`~aegis.dbadmin.scope.ScopeBinding` with ``set_config(..., is_local =>
+true)``, so they are scoped to the transaction and cannot survive back into the pool. Two
+are this package's own (:data:`~aegis.dbadmin.scope.TENANT_GUC` and
+:data:`~aegis.dbadmin.scope.ALL_TENANTS_GUC`); the third is
+:data:`aegis.governance.rls.PLATFORM_SCOPE_GUC`, the same authority spoken to the RLS
+policy on the base tables. The first layer is still
+:data:`aegis.dbadmin.catalogue.TENANT_PREDICATE`, welded into the statement text, which
+returns nothing when nothing is bound — the policy underneath is the second, and under
+``RLS_FAIL_CLOSED`` it now returns nothing too rather than everything.
 
 ``set_config`` rather than ``SET``: ``SET app.tenant_id = :tid`` is not executable over the
 extended protocol at all (``syntax error at or near "$1"``), and the value must never be
@@ -72,6 +75,7 @@ from aegis.dbadmin.types import (
     TableInfo,
     UnsafeRoleError,
 )
+from aegis.governance.rls import PLATFORM_SCOPE_GUC
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from sqlalchemy.ext.asyncio import AsyncConnection
@@ -457,6 +461,13 @@ class ReadOnlyRunner:
         await conn.execute(
             text("SELECT set_config(:name, :value, true)"),
             {"name": ALL_TENANTS_GUC, "value": binding.all_tenants_value},
+        )
+        # The third GUC is the same authority spoken to the layer underneath: it widens
+        # Aegis's own ``tenant_isolation`` policy for a resolved platform-wide read, and
+        # is empty for every per-tenant one. See ``ScopeBinding.platform_scope_value``.
+        await conn.execute(
+            text("SELECT set_config(:name, :value, true)"),
+            {"name": PLATFORM_SCOPE_GUC, "value": binding.platform_scope_value},
         )
 
     async def _preflight(self, conn: AsyncConnection, query: ReadQuery) -> tuple[float, str]:

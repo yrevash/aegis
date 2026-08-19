@@ -34,7 +34,7 @@ flowchart TB
     DB -->|no| WARM
     CREATE --> PROMPT
     PROMPT["stores on? → registry.refresh_cache(session)<br/>warm every ACTIVE prompt into the in-process cache"] --> QD
-    QD{"stores on AND not dev?"} -->|yes| QDB["MemoryVectorIndex.local(VECTOR_STORE_PATH)<br/>opens the store on construction — FAILS LOUD if unusable"]
+    QD{"stores on AND not dev?"} -->|yes| QDB["MemoryVectorIndex.server(QDRANT_URL)<br/>dials the node on construction — FAILS LOUD if unreachable"]
     QD -->|no| WARM
     QDB --> SW
     SW["stores on? → start two asyncio sweepers"] --> SW1["run_sla_sweeper — expires past-deadline approvals"]
@@ -267,11 +267,21 @@ flowchart TB
 The single async chokepoint for every model call. `complete(role, messages, ...)` and
 `embed(texts)` route by `ModelRole` through LiteLLM to a custom OpenAI-compatible
 provider. Per call it performs: a budget and rate check **before** spend (fail-closed on
-a DB blip unless `BUDGET_FAIL_OPEN=true`), a `max_tokens` cap, a per-call timeout plus an
-outer `asyncio.wait_for` backstop, a role fallback chain, one corrective re-ask on
-invalid structured output, a usage-ledger write, and a `gen_ai.*` OTel span. A tripped
-cap raises `BudgetExceededError`, which the orchestrator turns into a terminal
-`budget_exceeded` event.
+a DB blip unless `BUDGET_FAIL_OPEN=true`), a **fleet-wide concurrency slot**
+(`GATEWAY_MAX_CONCURRENT_CALLS`, leased in Redis so the API and every worker share one
+count), a `max_tokens` cap, a per-call timeout plus an outer `asyncio.wait_for` backstop,
+a role fallback chain, one corrective re-ask on invalid structured output, a usage-ledger
+write, and a `gen_ai.*` OTel span. A tripped cap raises `BudgetExceededError`, which the
+orchestrator turns into a terminal `budget_exceeded` event.
+
+Background work goes through the same chokepoint under the same context. `@tenant_activity`
+binds a job's tenant for billing exactly as it binds it for row visibility, and the
+consolidation sweeper binds each queued job's tenant, so ingestion, re-indexing and memory
+consolidation are capped and ledgered rather than spending invisibly on a timer.
+Platform-owned work (no tenant) is **ledgered under a NULL tenant and capped by nothing at
+the gateway** — a USD ceiling is a promise to a principal, and there is no `budgets` row
+for "nobody"; what bounds it instead is admission's concurrency gate and the fleet-wide
+slot limit.
 
 `core/models.py` holds the `ModelRole` enum (`CHEAP`, `REASONING`, `GENERATION`,
 `EMBEDDING`, `VISION`, `VOICE`) and the role → deployment-id table. Code never names a
@@ -312,7 +322,7 @@ Supporting modules: `fusion.py` (pure RRF, k=60, origin-tagged, reused by memory
 CPU-only and no torch — the old "no local cross-encoder, the target machine has 16 GB and no
 GPU" reason was simply wrong, and it cost 12 pp of recall@5 until phase 4 D6 measured it),
 `reranker.py` (LLM-as-reranker, now the **loud** fallback behind it — never a silent fall
-back to no reranking), `lightrag_backend.py` (Neo4j graph + embedded NanoVectorDB vectors + Postgres KV),
+back to no reranking), `lightrag_backend.py` (Neo4j graph + Qdrant vectors + Postgres KV),
 `chunker.py` (heading-aware), `validation.py` (write-time poisoning gate),
 `query_rewrite.py`, `agentic.py` (the bounded Self-RAG loop), `answer_cache.py`, and
 `memory.py` — the databaseless in-memory backend used when `STORES=off`.

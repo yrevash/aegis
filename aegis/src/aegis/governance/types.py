@@ -198,7 +198,7 @@ class AuditLogRow(BaseModel):
 
     id: int
     ts: str = Field(description="Record timestamp as an ISO 8601 UTC string.")
-    action: str = Field(description="The action performed, e.g. 'tool:update_request_status'.")
+    action: str = Field(description="The action performed, e.g. 'tool:<registered_name>'.")
     actor: str | None = Field(default=None, description="Principal that initiated the action.")
     model: str | None = Field(default=None, description="Model deployment id involved, if any.")
     trace_id: str | None = Field(default=None, description="OTel trace id correlating spans.")

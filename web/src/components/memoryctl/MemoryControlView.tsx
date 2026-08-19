@@ -70,7 +70,7 @@ function MemoryControl({ token }: { token: string | null }): ReactElement {
   return (
     <div className="space-y-6">
       <div>
-        <p className="eyebrow mb-1">long-term memory · Postgres + embedded Chroma</p>
+        <p className="eyebrow mb-1">long-term memory · Postgres + Qdrant</p>
         <h1 className="t-hero text-foreground">Memory</h1>
       </div>
 

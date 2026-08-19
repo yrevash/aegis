@@ -361,6 +361,66 @@ async def test_enqueue_then_sweep_marks_done(db):
         assert done.attempts == 1
 
 
+async def test_the_sweep_bills_each_job_to_the_tenant_that_owns_it(db):
+    """The drain binds a governance context per job, so its spend is capped and recorded.
+
+    The defect this pins (task 9.2). ``_run_memory_sweeper`` binds the live completer and
+    the real embedder on a sixty-second timer, and the gateway caps and ledgers exactly
+    what a bound governance context names. With nothing bound, every consolidation this
+    queue drained — one cheap extraction call, one decide-op call per candidate, an
+    embedding per fact — was uncapped and unrecorded.
+
+    Per **job**, not per sweep: one drain covers several tenants, and a context bound
+    once for the batch would bill tenant B's consolidation to tenant A.
+    """
+    from aegis.governance.context import get_governance_context
+
+    from .._seed import ensure_tenants
+
+    await ensure_tenants(db, 31)
+    cfg = MemoryConfig()
+    seen: list[int | None] = []
+
+    class _WatchingComplete(FakeComplete):
+        async def __call__(self, role, messages, *, response_format=None):
+            ctx = get_governance_context()
+            seen.append(None if ctx is None else ctx.tenant_id)
+            return await super().__call__(role, messages, response_format=response_format)
+
+    async with db() as s:
+        await add_in_fk_order(
+            s,
+            MemorySession(id="sess-31", subject_id="user:31", tenant_id=31),
+            MemoryMessage(
+                subject_id="user:31",
+                session_id="sess-31",
+                turn_index=0,
+                role="user",
+                origin=MemoryOrigin.USER,
+                content="Please contact me differently from now on.",
+                tenant_id=31,
+            ),
+        )
+        await s.commit()
+        await enqueue_consolidation(
+            s, subject_id="user:31", session_id="sess-31", tenant_id=31
+        )
+        await s.commit()
+
+        fake = _WatchingComplete(extractions=[{"facts": []}], decisions=[])
+        assert await sweep_pending(
+            s, config=cfg, complete=fake, embed=FakeEmbed(), limit=10
+        ) == 1
+
+    assert seen, "the sweep made no model call, so this test proves nothing"
+    assert set(seen) == {31}, (
+        f"consolidation spent a tenant's money under context {set(seen)} — "
+        "an unbound context is uncapped and unledgered"
+    )
+    # ...and unbound again, so the sweeper's own next iteration is not billed to tenant 31.
+    assert get_governance_context() is None
+
+
 # ------------------------------------------------- decide-op target resolution (safety)
 
 

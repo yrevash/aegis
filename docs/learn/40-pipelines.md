@@ -214,7 +214,7 @@ flowchart TB
 ```
 
 Inside each `deps.retrieve` call, the real hybrid pipeline runs: exact cache → semantic
-cache → wide recall on three arms (embedded vector search, Neo4j/LightRAG graph traversal,
+cache → wide recall on three arms (Qdrant vector search, Neo4j/LightRAG graph traversal,
 hand-rolled BM25) → **Reciprocal Rank Fusion** → LLM re-rank → **spotlighting** (the
 retrieved text is delimited and datamarked as untrusted reference material, not
 instructions) → assemble → cache write-back.

@@ -488,8 +488,8 @@ def _get_shared_store() -> Any:  # noqa: ANN401 - adapter store type
 
     Uses the **synchronous** deterministic generator: this accessor is called from
     synchronous seams *and* from inside the running agent event loop (where
-    ``asyncio.run`` would raise), and the store only needs schema-valid records with
-    their real ``resolution_hours`` label — not LLM-written prose. Seeding a real
+    ``asyncio.run`` would raise), and the store only needs schema-valid records
+    carrying the domain's real label — not LLM-written prose. Seeding a real
     store is what gives ``run_tool`` concrete records to act on, so a gated action
     changes an actual row rather than succeeding against nothing.
     """

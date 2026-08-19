@@ -7,7 +7,7 @@ soft-archives rather than deletes, and every write leaves a row in
 nothing else in the package pays: **a subject's memory grows without bound**. Two
 separate problems wear that one shape —
 
-* **cost** — every turn writes a ``memory_message`` row, and the Chroma mirror carries
+* **cost** — every turn writes a ``memory_message`` row, and the Qdrant mirror carries
   a point for each embedded one, so the store and the index grow linearly with usage
   forever; and
 * **privacy** — "we keep every word you ever typed, indefinitely, because nothing was

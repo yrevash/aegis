@@ -98,7 +98,7 @@ id** (documented so code and screen line up):
 | `llmops` | LLMOps | `trace → eval → release` | `ops/LLMOpsView.tsx` | ai_team |
 | `evals` | Evals | `RAGAS · DeepEval` | `evals/EvalsView.tsx` | ai_team |
 | `tokenopt` | Token opt | `routing · savings` | `gateway/TokenOptView.tsx` | ai_team |
-| `memory` | Memory | `embedded Chroma` | `memory/MemoryView.tsx` | ai_team |
+| `memory` | Memory | `Qdrant` | `memory/MemoryView.tsx` | ai_team |
 | `rag` | RAG | `hybrid · rerank` | `retrieval/RagView.tsx` | ai_team |
 | `graph` | Graph | `entities · relations` | `graph/GraphView.tsx` | ai_team |
 | `cache` | Cache | `semantic · TTL` | `cache/CacheView.tsx` | ai_team |

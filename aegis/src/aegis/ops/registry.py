@@ -44,6 +44,7 @@ from sqlalchemy import event, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aegis.ops.config import apply_tenant_scope
 from aegis.ops.models import PromptStatus, PromptVersion
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,14 @@ async def refresh_cache(
     Returns:
         The number of active versions loaded.
     """
+    # §9.5. The startup warm-up is a genuinely platform-wide read — it loads every
+    # tenant's active prompt into that tenant's own cache slot — and it used to make
+    # that claim by binding nothing at all, which is indistinguishable from a path that
+    # forgot to. It says so now: ``None`` is the platform scope, and under
+    # ``RLS_FAIL_CLOSED`` it is the only thing that keeps the warm-up loading anything.
+    await apply_tenant_scope(
+        session, None if tenant_id is _UNSET_TENANT else tenant_id
+    )
     stmt = select(PromptVersion).where(PromptVersion.status == PromptStatus.ACTIVE)
     if tenant_id is not _UNSET_TENANT:
         stmt = stmt.where(_tenant_clause(tenant_id))

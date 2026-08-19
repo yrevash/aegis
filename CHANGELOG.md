@@ -84,6 +84,53 @@ the tree is listed here.
 
 ### Changed
 
+- **The domain seam gained the four things the core was deciding for it** (phase 8,
+  after the retarget rehearsal). `personas.PERSONA_BY_ROLE` / `persona_for_role`
+  (the host's login path chose between two hardcoded persona ids, so re-voicing
+  `PERSONAS` — which `SKILL.md` instructs — made every sign-in raise `KeyError`);
+  `generator.DOMAIN_SERIES_LABEL` / `DOMAIN_SERIES_UNIT` / `domain_series_events`
+  (`app.forecast` read the shipped record collection by name and owned the chart's
+  client-facing title); `memory_spec.PROFILE_ALIASES` (the alias table lived in
+  `aegis.memory.consolidate` naming one domain's fields); and `ToolSpec.destructive`
+  / `ToolSpec.idempotent` (the MCP surface kept them in a table keyed by the shipped
+  domain's tool names). `MLSpecModule.training_frame`'s keyword is now `num_records`,
+  not `num_requests`: a core Protocol may not make every future domain call its rows
+  "requests". `aegis.adapter`'s sub-Protocols document all of it; the eleven top-level
+  members are unchanged, so `missing_members` and `isinstance` behave as before.
+- **`AuditEntry.action`'s example** no longer names a shipped-domain tool. The
+  committed `backend/openapi.json` and the generated TypeScript client move with it.
+
+- **One vector engine: Qdrant. Chroma deleted, not demoted** (2026-08-19, phase 9
+  §9.1). Both consumers now write to one node through `QDRANT_URL` —
+  `aegis.retrieval`'s own store and LightRAG's `QdrantVectorDBStorage`, which
+  replaces `NanoVectorDBStorage` (its own docstring calls it a brute-force cosine
+  scan held in memory, persisted by rewriting a whole JSON file). The `chromadb`
+  dependency, `ChromaVectorStore` and every construction site are gone.
+  **Breaking:** `ChromaVectorStore` → `QdrantVectorStore`, and full mode now
+  requires `AEGIS_VECTOR_STORE_URL` (also read from `QDRANT_URL`) where it
+  required `AEGIS_VECTOR_STORE_PATH`; `VECTOR_STORE_PATH` survives as LightRAG's
+  working directory only. **Existing vectors are re-ingested, not migrated** — an
+  accepted cost, paid before a demo corpus exists.
+
+  This reverses the 2026-08-15 entry below, and the reason is worth stating: that
+  decision's premise was "the target enterprise Windows machine allows no
+  additional server software", which is true of installers and Windows services
+  and *not* true of Qdrant v1.19.0 — it publishes
+  `qdrant-x86_64-pc-windows-msvc.zip`, Apache-2.0, a zip with a binary, the same
+  shape as the Superset already on the box. What the embedded choice cost was
+  decisive: an embedded store is single-process, so `uvicorn --workers 2` failed
+  in a way that looked like index corruption. Aegis now **refuses to boot** with
+  more than one worker while an embedded store is configured, naming the worker
+  count, where that number came from, and the fix. Keeping a Chroma path would
+  have left that ceiling reachable by configuration, and a ceiling you can still
+  configure your way back into is not removed. Tests and dev still need no server:
+  `qdrant_client`'s in-process mode stays available and stays named out loud.
+- **Vector search runs off the event loop** (phase 9 §9.7). The lite backend's
+  store calls — search *and* index — were synchronous on the loop thread: 13.5 ms
+  of pure CPU per query at 50k vectors, blocking every other request for that
+  long, including ones that never touch retrieval. They now run in worker threads,
+  with the per-partition fan-out gathered rather than serialised. The memory
+  index's calls were already threaded.
 - **Every HTTP route moved under `/v1`** — the version boundary that lets the API
   promise anything at all, the counterpart of `PUBLIC.md` for the interface an
   integrator actually consumes. **Breaking for any caller outside this repo:**
@@ -127,6 +174,38 @@ the tree is listed here.
   "the checklist names every piece" guarantee now applies to `SKILL.md`, the
   document an agent is actually handed, and a new check fails if `SWAP.md` grows a
   checklist back.
+
+### Fixed
+
+- **A retarget can no longer pass every suite while being broken.** `pytest --pyargs
+  aegis.conformance` is fourteen checks, not thirteen: the new one reads the **core**
+  rather than the adapter and fails when any module outside
+  `backend/src/app/adapter/` still names the shipped domain — with the file, the line
+  and the word. A fresh agent given only this repo and a one-line problem statement
+  had produced an integration that passed conformance, the adapter suite, the agent
+  suite and ruff, and was broken in four places at once, every one of them a
+  shipped-domain string in a core module.
+- **Two conformance checks could go vacuous, and one fixture could dissolve.** The
+  playbook-reachability check read string constants out of `select_skills.__code__`,
+  so hoisting the keyword table to a module constant emptied the set it reasoned over
+  and the check reported clean while verifying nothing; it now reads the module's
+  constants too, and a selector that can never return a playbook fails instead of
+  passing for lack of evidence. `backend/tests/adapter/broken_adapter/` imported the
+  *production* adapter, so its intended memory break evaporated the moment a retarget
+  re-pointed those literals (`12 failed, 1 passed` → `11 failed, 2 passed`); it is now
+  self-contained, and a test asserts it imports no domain code. The new core check is
+  built to the same rule — an empty word list, too few files scanned, a reader that
+  matches nothing, or a quarantined word the reference adapter no longer uses is a
+  failure, not a quiet pass.
+- **`SKILL.md` was wrong in six places, all found by following it literally.** Its
+  first command could not run (no `.venv` in a fresh checkout, and `scripts/bootstrap.sh`
+  was reachable only through `AGENTS.md`) — there is now a step 0. "You leave its
+  `__all__` alone" was impossible and self-contradicted twice; the contract is the
+  Protocol, and the file now says which names actually have to survive. It never said
+  that every test in the repo is red from step 1 until step 8 finishes, that
+  `tests/adapter/*` must be rewritten as part of the steps, or that step 8 includes
+  `sub_agent_roster`'s tool allowlists; and its "do not touch" list omitted
+  `app.forecast`.
 
 ---
 

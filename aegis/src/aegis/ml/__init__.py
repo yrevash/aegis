@@ -17,7 +17,7 @@ Typical lifecycle (default / module-level singleton)::
     from aegis.ml import train, predict_explain
 
     train(spec, frame, path="aegis/ml/artifacts/ml_spine.joblib")  # offline, once
-    resp = predict_explain({"priority": "urgent", "queue_depth_at_open": 12})
+    resp = predict_explain({"feature_a": "some_level", "feature_b": 12})
     resp.conformal_interval      # calibrated bounds (requested coverage)
     resp.conformal_confidence    # the coverage rate that was *requested*, e.g. 0.9
     resp.shap_attribution        # signed per-feature contributions

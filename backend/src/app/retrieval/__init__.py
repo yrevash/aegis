@@ -23,7 +23,7 @@ Public surface (the `app.retrieval` contract, unchanged since before the migrati
 * `ingest(docs, *, scope) -> IngestReport` — validated ingestion into LightRAG (Neo4j +
   vectors), with the scope's tenant stamped onto every chunk written.
 
-The pipeline (LightRAG), stores (Neo4j graph + embedded NanoVectorDB vectors + Postgres
+The pipeline (LightRAG), stores (Neo4j graph + Qdrant vectors + Postgres
 KV), reranker (a local ONNX cross-encoder, with the LLM-as-reranker via the gateway as its
 loud fallback), and semantic cache (Redis) are documented in `NOTES.md`.
 """

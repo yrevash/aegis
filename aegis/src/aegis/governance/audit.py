@@ -236,6 +236,13 @@ async def list_recent_audit(
         as an ISO 8601 UTC string.
     """
     async with _session() as session:
+        # §9.5. This read used to bind no scope at all — it relied on the app-level
+        # ``WHERE tenant_id`` below and on the policy's fail-open branch underneath it,
+        # which means a forgotten predicate here would have returned every tenant's
+        # trail with no error anywhere. The scope the caller resolved is bound, so the
+        # database enforces the same answer the WHERE clause asks for; ``None`` is the
+        # platform-admin view and now *says* so rather than being inferred from silence.
+        await _set_tenant_scope(session, tenant_id)
         stmt = (
             select(AuditLog)
             .order_by(AuditLog.ts.desc(), AuditLog.id.desc())

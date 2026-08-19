@@ -39,7 +39,7 @@ from app.api.schemas import ApprovalDecision, ApprovalRow, RiskLevel
 from app.config import get_settings
 
 from .models import Approval, ApprovalStatus
-from .session import get_sessionmaker, set_tenant_scope
+from .session import bind_scope_for_session, get_sessionmaker, set_tenant_scope
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +169,13 @@ async def enqueue_approval(
     tier = assignee_tier or settings.approval_default_tier
 
     async with get_sessionmaker()() as session:
+        # §9.5. Bound for the session's whole life, not for one transaction: this path
+        # commits and then ``refresh``es, and the GUC is transaction-local — so a
+        # one-shot ``set_tenant_scope`` would leave the refresh (and the row it returns
+        # to the caller) unscoped. The scope auditor found this exact shape in seven
+        # places; ``bind_scope_for_session`` is what closes the class rather than one of
+        # them.
+        bind_scope_for_session(session, tenant_id)
         existing = await session.get(Approval, approval_id)
         if existing is not None:
             return to_row(existing)
@@ -412,6 +419,18 @@ async def sweep_expired(now: datetime | None = None) -> list[SweepAction]:
     is marked ``EXPIRED``. Each transition is guarded on ``status == PENDING`` so it
     never races a concurrent human decision.
 
+    **It sweeps every tenant's inbox, and says so** (§9.5). The SLA is a platform
+    obligation — a gate nobody answered expires whoever it belonged to — so this is a
+    genuinely platform-wide read and write. It used to make that claim by binding no
+    scope at all and leaning on the ``tenant_isolation`` predicate's fail-open branch,
+    which is spelled identically to a path that simply forgot. Now it binds the platform
+    scope explicitly, which is what keeps the sweeper working when the posture flips.
+
+    Note that moving the sweeper to the **owner** engine would not have been a fix: the
+    policies are installed with ``FORCE ROW LEVEL SECURITY``, so a non-superuser table
+    owner is subject to them exactly like the serving role. The scope is the fix; the
+    engine is not.
+
     Args:
         now: The reference time (defaults to the current UTC time); injectable for
             deterministic tests.
@@ -422,6 +441,7 @@ async def sweep_expired(now: datetime | None = None) -> list[SweepAction]:
     cutoff = now or _now()
     actions: list[SweepAction] = []
     async with get_sessionmaker()() as session:
+        await set_tenant_scope(session, None)
         stmt = select(Approval).where(
             Approval.status == ApprovalStatus.PENDING,
             Approval.sla_deadline.is_not(None),

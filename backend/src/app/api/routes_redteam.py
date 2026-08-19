@@ -512,24 +512,21 @@ async def _admit(tenant_id: int | None, user_id: int | None) -> None:
     dies on probe 19 of 36 has already spent the money and produced a report whose
     block rate is over a truncated denominator. A 429 with the reason is the honest
     outcome, and it names the ``budget`` gate exactly as the job substrate does.
+
+    Delegated to :func:`app.api.routes.refuse_if_over_budget` since task 9.6, so that
+    "exactly as" is enforced by there being one implementation rather than two that
+    happen to agree today.
     """
-    if tenant_id is None:
-        return
-    from aegis.gateway import BudgetExceededError
+    from app.api.routes import refuse_if_over_budget
 
-    from app.data.governance import enforce_governance
-
-    try:
-        await enforce_governance(tenant_id=tenant_id, user_id=user_id)
-    except BudgetExceededError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
-                f"{exc}. A live red-team run drives dozens of model calls, so it is "
-                "refused rather than started on a budget that cannot finish it."
-            ),
-            headers={"X-Admission-Gate": "budget"},
-        ) from exc
+    await refuse_if_over_budget(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        because=(
+            "A live red-team run drives dozens of model calls, so it is refused rather "
+            "than started on a budget that cannot finish it."
+        ),
+    )
 
 
 @redteam_router.post(

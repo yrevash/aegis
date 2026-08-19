@@ -1,6 +1,19 @@
 # ADR 0009 — A server-free, embedded vector store (no Qdrant, no pgvector)
 
-- **Status:** Accepted
+> **SUPERSEDED on 2026-08-19 by phase 9 §9.1 (`docs/dev_new_docs_v2/phase-09-scale-hardening.md`).**
+> The vector tier is **Qdrant**, one node, for both consumers. This ADR's reasoning is
+> kept because its *premise* is the interesting part and it is the part that turned out
+> to be wrong: "no additional server software may be installed" was true of installers
+> and Windows services, and Qdrant v1.19.0 is neither — it publishes
+> `qdrant-x86_64-pc-windows-msvc.zip`, Apache-2.0, a zip with a binary, the same
+> operational shape as the Superset this deployment already runs. What the embedded
+> choice cost was decisive: an embedded store is **single-process**, so
+> `uvicorn --workers 2` failed in a way that looked like index corruption, and Chroma
+> could never have served LightRAG at all (there is no `chroma_impl` in LightRAG 1.5.6).
+> Chroma is deleted rather than demoted, because a ceiling you can still configure your
+> way back into is not removed. Existing vectors are re-ingested, not migrated.
+
+- **Status:** Superseded (by phase 9 §9.1, 2026-08-19)
 - **Date:** 2026-08-15
 - **Deciders:** Team
 - **Supersedes:** the vector-store half of ADR 0003 (LightRAG over GraphRAG)

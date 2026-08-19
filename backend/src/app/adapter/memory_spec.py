@@ -40,6 +40,24 @@ PROFILE_FIELDS: list[str] = [
     "notes",
 ]
 
+PROFILE_ALIASES: dict[str, str] = {
+    "prefers_channel": "preferred_channel",
+    "channel": "preferred_channel",
+    "prefers_language": "preferred_language",
+    "language": "preferred_language",
+    "name": "display_name",
+    "customer_tier": "tier",
+}
+"""Predicate spellings the extractor emits → the :data:`PROFILE_FIELDS` they write.
+
+Consolidation writes a fact into the structured profile when its predicate *is* a
+profile field, or when this table maps it onto one. The table is domain vocabulary on
+both sides — the left is how this domain's model phrases the attribute, the right is
+this domain's field name — and it lived in ``aegis.memory.consolidate`` as a core
+constant until the retarget rehearsal, where it became an alias set matching nothing
+in a domain that had never heard of a customer tier.
+"""
+
 #: Where procedural skills (how-to-act markdown) live for this domain.
 SKILLS_DIR: str = str(Path(__file__).parent / "skills")
 
@@ -199,6 +217,7 @@ __all__ = [
     "FACT_EXTRACTION_PROMPT",
     "FACT_TYPES",
     "IMPORTANCE_HINTS",
+    "PROFILE_ALIASES",
     "PROFILE_FIELDS",
     "SKILLS_DIR",
     "FactExtraction",

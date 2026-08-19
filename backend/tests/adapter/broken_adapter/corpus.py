@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
-from app.adapter.corpus import load_seed_corpus as _load_reference_corpus
+from dataclasses import dataclass
+
+_BODY = (
+    "Work items are raised by a caller, triaged by the desk and closed once the caller "
+    "confirms the outcome. An item that has had no reply for thirty days is closed with "
+    "a note recording why. Every state change is a write action and goes to the "
+    "approval gate before it is asserted as done."
+)
 
 
-def load_seed_corpus() -> list:
-    docs = _load_reference_corpus()[:2]
-    docs[1] = docs[1].model_copy(update={"id": docs[0].id})
-    return docs
+@dataclass(frozen=True)
+class SeedDoc:
+    """One seed knowledge document."""
+
+    id: str
+    title: str
+    body: str
+
+
+def load_seed_corpus() -> list[SeedDoc]:
+    """THE BREAK: two records sharing one id, so every citation on one resolves wrongly."""
+    return [
+        SeedDoc(id="kb-1", title="Lifecycle of a work item", body=_BODY),
+        SeedDoc(id="kb-1", title="Closing an item", body=_BODY),
+    ]

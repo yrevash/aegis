@@ -37,7 +37,7 @@ table.
 ## What this measures, and what it does not
 
 The corpus is held by :class:`~aegis.retrieval.memory.InMemoryKnowledgeBackend` — a real
-embedded-Chroma vector search, a real corpus-wide BM25, and a co-occurrence graph
+in-process Qdrant vector search, a real corpus-wide BM25, and a co-occurrence graph
 expansion — which is the **lite** shipped configuration, not the LightRAG/Neo4j one. The
 graph arm measured here is therefore co-occurrence expansion, and a leave-one-out result
 for it is a result about *that* arm. Said plainly rather than left to be discovered.

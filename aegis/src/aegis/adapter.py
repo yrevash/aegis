@@ -133,7 +133,7 @@ class MLSpecModule(Protocol):
     FEATURE_NAMES: list[str]
     TARGET: Any
 
-    def training_frame(self, *, num_requests: int = ..., seed: int = ...) -> pd.DataFrame:
+    def training_frame(self, *, num_records: int = ..., seed: int = ...) -> pd.DataFrame:
         """Return the labelled training frame: one column per feature, plus the target."""
         ...
 
@@ -157,8 +157,29 @@ class GeneratorModule(Protocol):
     ``asyncio.run`` raises) and from offline training, and it must therefore need no
     model call.
 
-    Consumers: the host's seed/demo routes, and ``ml_spec.training_frame``.
+    It also names the **client-facing demand series** ``/forecast`` charts, because the
+    series is the domain's records counted over time and its axis label is a sentence a
+    client reads. Both used to live in the host's forecast module, which reached into
+    the shipped domain's record collection by attribute name and owned its chart title
+    as a constant — so a retarget got an ``AttributeError`` from one and, from the
+    other, the shipped domain's sentence printed over its own data forever.
+
+    Consumers: the host's seed/demo routes, ``ml_spec.training_frame``, and the host's
+    ``/forecast`` domain series.
+
+    Attributes:
+        DOMAIN_SERIES_LABEL: What the demand series measures, in the client's language.
+        DOMAIN_SERIES_UNIT: The unit of the series' values (the chart's y-axis).
     """
+
+    DOMAIN_SERIES_LABEL: str
+    DOMAIN_SERIES_UNIT: str
+
+    def domain_series_events(
+        self, *, num_records: int = ..., seed: int = ...
+    ) -> Sequence[tuple[Any, float]]:
+        """Return ``(timestamp, value)`` events for the client-facing demand series."""
+        ...
 
     def generate_synthetic_sync(
         self,
@@ -184,6 +205,12 @@ class ToolSpecLike(Protocol):
     proposed action routes to the human approval gate (compared against
     ``AgentConfig.gate_min_risk``). A tool registered without one is not a mild
     annotation gap — it is an ungated action.
+
+    Two optional booleans are read when present and are not members here because a
+    domain may legitimately declare neither: ``destructive`` and ``idempotent``, the
+    MCP hints a client acts on. They belong on the tool because risk does not imply
+    idempotency, and the host's MCP surface kept them in a table keyed by the shipped
+    domain's tool names until a retarget renamed every key and silently lost them.
     """
 
     @property
@@ -266,9 +293,20 @@ class PersonasModule(Protocol):
     Consumers: the host's query routes, ``prompts.render_platform_floor``, and the
     retrieval scope resolver.
 
+    It also owns the **role → persona** mapping. RBAC roles belong to the platform;
+    *which persona a role adopts* is a domain statement about who is served, and while
+    the host decided it — with two persona ids written into an ``if`` in its login path
+    — re-voicing ``PERSONAS`` (step 5 of the documented retargeting procedure) made
+    every authenticated request resolve to a persona that no longer existed, and every
+    sign-in raised ``KeyError``. No test in the repository went through that path, so
+    nothing went red.
+
     Attributes:
         PERSONAS: Persona id → persona object (``.id``, ``.data_scope``, ``.prompt_key``).
         DEFAULT_PERSONA_ID: The persona a request that names none resolves to.
+        PERSONA_BY_ROLE: Coarse RBAC role (:class:`aegis.governance.types.Role`, or its
+            string value) → persona id. Every role must appear; every value must be a
+            key of ``PERSONAS``. Both are checked by ``aegis.conformance``.
     """
 
     DEFAULT_PERSONA_ID: str
@@ -278,10 +316,22 @@ class PersonasModule(Protocol):
         """Persona id → the persona object."""
         ...
 
+    @property
+    def PERSONA_BY_ROLE(self) -> Mapping[Any, str]:  # noqa: N802 - a module CONSTANT
+        """Coarse RBAC role → the persona id a principal of that role adopts."""
+        ...
+
     def get_persona(
         self, persona_id: str | None
     ) -> Any:  # noqa: ANN401 - the domain's own persona model
         """Return the persona for ``persona_id`` (the default when ``None``)."""
+        ...
+
+    def persona_for_role(
+        self,
+        role: Any,  # noqa: ANN401 - the host's RBAC role enum or its string value
+    ) -> str:
+        """Return the persona id a principal holding ``role`` adopts."""
         ...
 
 

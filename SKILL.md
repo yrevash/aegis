@@ -19,10 +19,21 @@ This document replaces the retired `adapter/SWAP.md`. It is the only retargeting
 procedure; if something else in this repo disagrees with it, this file is right
 and the other one is stale.
 
-## Before you start: get a green baseline
+## Step 0 — install, because there is no `.venv` in a fresh checkout
 
-Run this **first**, before you have changed anything. If it is not green now, you
-are about to attribute a pre-existing failure to your own edit and lose an hour.
+**Do this first. Every command below runs `backend/.venv/bin/python`, and a fresh
+clone has no `.venv` at all** — this file used to open with a command that could
+not run, and left you to guess whether that meant a broken repo.
+
+```bash
+./scripts/bootstrap.sh          # macOS / Linux
+.\scripts\install-windows.ps1   # Windows
+```
+
+It is idempotent, needs no Docker, no GPU and no database, and installs the backend
+venv with every extra plus the console's npm dependencies. Full detail, including
+the native stores the `full` run mode wants, is in `INSTALL.md`. If `bootstrap.sh`
+stops on a missing prerequisite, install that and re-run it — do not work around it.
 
 **Every command in this file is written from the repository root**, and each `cd`
 is wrapped in a subshell so a run of them one after another in one terminal works.
@@ -30,11 +41,16 @@ Without the parentheses the second command lands in the first one's directory an
 fails on `cd: no such file or directory` — which reads like a broken repo and is
 not one.
 
+## Then: get a green baseline
+
+Run this **before** you have changed anything. If it is not green now, you are about
+to attribute a pre-existing failure to your own edit and lose an hour.
+
 ```bash
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter tests/agent -q)
 ```
 
-At the time of writing this is **127 passed** in well under a minute, with **no**
+At the time of writing this is **132 passed** in well under a minute, with **no**
 database, no Neo4j, no Redis, and no API key. That is deliberate: the whole
 vertical slice runs on injected fakes, which is what makes this loop fast enough
 to run after every single step below.
@@ -42,6 +58,32 @@ to run after every single step below.
 **Write down whatever number you actually get** — not the one in this sentence,
 which will have drifted. That is your regression baseline, and it should only ever
 grow as you add tests for your own domain.
+
+## Read this before step 1: the whole suite goes red, and stays red
+
+`backend/tests/conftest.py` imports through `app.adapter`. The moment you replace
+the entity models in step 1, **every test in the repository fails at import** — a
+wall of `ImportError`, hundreds of lines, nothing to do with whether your edit was
+right. It stays that way until step 8 is finished and the registry's re-exports all
+resolve again.
+
+That is expected, it is not a signal, and it is why the per-step "Verify" commands
+below are written against **one file at a time**: those are the tests you have just
+rewritten and they are the only ones that can be meaningful mid-flight. Do not chase
+the wall, and do not "fix" it by loosening a conftest.
+
+**And the per-step verifies only mean something once you have rewritten the tests
+they run.** `backend/tests/adapter/*` is not domain-neutral scaffolding — it carries
+between 3 and 26 shipped-domain literals per file (`test_tools.py` 26,
+`test_allowlist.py` 19, `test_ml_spec.py` 13, `test_schema.py` 9, `test_generator.py`
+7, `test_registry.py` 3). **Rewriting them is part of each step, not a follow-up.**
+Two files there are the exception and must be left alone, because they check the
+*structure* rather than the domain: `test_piece_manifest.py` and
+`test_domain_adapter_protocol.py`. So is `test_conformance_suite.py`, and so is
+`broken_adapter/`, which is deliberately self-contained and imports nothing of yours.
+
+The one check that is green from your first edit to your last, and needs no
+infrastructure at all, is the conformance suite. Lean on it.
 
 ---
 
@@ -52,7 +94,27 @@ from memory — `backend/tests/adapter/test_piece_manifest.py` re-counts them on
 every run and fails if this list drifts from the filesystem.
 
 `__init__.py` is **not** one of the ten. It is the registry: the interface the
-core imports. You edit the ten; you leave its `__all__` alone.
+core imports.
+
+**You will edit it, and its `__all__`, and that is correct** — step 1 replaces the
+entity models it re-exports and step 2 renames the latent function it re-exports, so
+leaving `__all__` untouched is impossible and this file used to ask for it twice in
+the same page. What must stay stable is not the list of names, it is **the contract**:
+`aegis.adapter.DomainAdapter` and its sub-Protocols. Concretely, keep
+
+* the **nine module members** (`schema`, `ml_spec`, `generator`, `tools`, `personas`,
+  `prompts`, `memory_spec`, `roster`, `corpus`) reachable as attributes of the package,
+  plus `DOMAIN_ID` and `DOMAIN_DESCRIPTION`;
+* the **member names inside each piece** that the sub-Protocols name — `PERSONAS`,
+  `DEFAULT_PERSONA_ID`, `PERSONA_BY_ROLE`, `persona_for_role`, `TOOL_REGISTRY`,
+  `ALLOWLIST`, `run_tool`, `FEATURE_NAMES`, `TARGET`, `training_frame`,
+  `describe_prediction`, `DOMAIN_SERIES_LABEL`, `DOMAIN_SERIES_UNIT`,
+  `domain_series_events`, `agent_roster`, `sub_agent_roster`, `load_seed_corpus`,
+  and every `memory_spec` member;
+* `SyntheticDataset` as the container the generator returns and the ML spine reads.
+
+Everything else in `__all__` is yours to re-voice. `missing_members(app.adapter)` and
+the conformance suite tell you when you have dropped something that matters.
 
 Edit them in this order. The order is not arbitrary — each piece consumes the
 vocabulary the previous one defined.
@@ -83,12 +145,18 @@ work through the steps below:
     --pyargs aegis.conformance --aegis-adapter app.adapter -q)
 ```
 
-Thirteen checks, no database, no key, well under a second. Each one descends from a
+Fourteen checks, no database, no key, well under a second. Each one descends from a
 wiring mistake this repository actually shipped — a specialist with no handler node,
 a playbook the selector can never name, an ML spec that silently trained on noise —
 and each failure prints what is wrong, the edit that fixes it, what happens if you
-leave it, and the defect it came from. `pytest --pyargs aegis.conformance` with no
-`--aegis-adapter` stops with a usage error naming the flag, not with thirteen skips.
+leave it, and the defect it came from. One of the fourteen does not read your adapter at all: it reads the **core**, and
+fails if any module outside `backend/src/app/adapter/` still names the shipped
+domain — a persona id, a record type, a feature key, a chart label. That is the
+check that makes "only the adapter changes" a fact rather than a promise, and it is
+the one that would have caught all four defects a real retarget rehearsal shipped.
+
+`pytest --pyargs aegis.conformance` with no `--aegis-adapter` stops with a usage
+error naming the flag, not with fourteen skips.
 
 | # | File | You define |
 |---|---|---|
@@ -135,7 +203,10 @@ This module is the single source of truth for what is predictable. Define:
 - **the latent signal function** — shipped as `latent_resolution_hours`; rename
   it for your domain. This is the ground truth the generator samples labels
   around.
-- `features_for_request(...)`, `feature_matrix(dataset)`, `training_frame(...)`.
+- `features_for_request(...)`, `feature_matrix(dataset)`, `training_frame(*, num_records, seed)`
+  — the keyword is `num_records`, deliberately domain-neutral, because
+  `aegis.adapter.MLSpecModule` names it and a core Protocol spelling it `num_requests`
+  would force every future domain to call its rows "requests".
 - `describe_prediction(resp)` — re-voice it, because its output is injected into
   the plan as evidence and will otherwise name the old target and unit out loud
   in front of a jury.
@@ -166,8 +237,20 @@ fallback**. `generate_synthetic(config, *, complete=None)` must return a fully
 schema-valid dataset *with no LLM available at all*. On the day, this is what
 makes the system demonstrable while the model key is still being sorted out.
 
+**Also in this file: the client-facing demand series `/forecast` charts.** Three
+names, and the core reads nothing else about your records over time:
+
+- `DOMAIN_SERIES_LABEL` — the chart's title, in the client's language. It is a
+  **sentence a jury reads**; leave it and your deployment charts the shipped domain's
+  words over your data forever, silently.
+- `DOMAIN_SERIES_UNIT` — what the values are counted in.
+- `domain_series_events(*, num_records, seed)` — `(timestamp, value)` arrival events,
+  one per record. Prefer arrivals over completions: arrivals are what a client plans
+  capacity against, and the series is complete at the recent end.
+
 **Done when:** `generate_synthetic_sync(config)` returns schema-valid records
-whose labels come from `ml_spec`'s latent function, with `complete=None`.
+whose labels come from `ml_spec`'s latent function, with `complete=None`, and
+`domain_series_events()` returns events over your own records.
 
 **Verify:**
 ```bash
@@ -193,6 +276,13 @@ consequential, externally-visible write `HIGH` and the approval gate appears wit
 no engine change at all. The shipped registry is a worked example:
 `add_case_note` LOW, `assign_request` MEDIUM, `update_request_status` HIGH.
 
+Each `ToolSpec` also carries two optional booleans the MCP surface publishes as
+advisory hints: `destructive` (the call overwrites state a reader would miss) and
+`idempotent` (repeating the identical call converges). Assert them per tool — risk
+does not imply idempotency, a note-append is LOW risk and not idempotent while a
+gated status change is HIGH risk and is. Omit both and the conservative reading is
+published instead, which is safe but says less than you know.
+
 **Done when:** every action is registered with an honest risk tier, and `ALLOWLIST`
 grants each persona only what it should have.
 
@@ -214,8 +304,17 @@ Re-voice `PERSONAS`, `DEFAULT_PERSONA_ID`, `get_persona`. A persona carries **it
 data scope and its tool allowlist** — it is an authorisation object, not a
 personality.
 
+**Also re-point `PERSONA_BY_ROLE`, and this one bites the moment a human signs in.**
+Every authenticated principal resolves its persona through `persona_for_role(role)`,
+which reads that table: one entry per RBAC role (`admin`, `ai_team`, `devops`,
+`client`), each naming a persona id that exists in `PERSONAS`. Re-voice `PERSONAS`
+without it and **every login raises `KeyError`** while the adapter suite, the agent
+suite and ruff all stay green — none of them go through the login path. The core used
+to decide this itself with two persona ids hardcoded in `app/api/routes.py`, which is
+exactly how that failure was found.
+
 **Done when:** every persona id used as a key in `ALLOWLIST` exists in `PERSONAS`,
-and `DEFAULT_PERSONA_ID` names a real one.
+`DEFAULT_PERSONA_ID` names a real one, and `PERSONA_BY_ROLE` maps every role to one.
 
 ---
 
@@ -249,6 +348,10 @@ Define:
 - `memory_subject_for(user_id, persona_id)` — who memory is scoped to.
 - `render_profile(profile)` — how the profile reads back.
 - `select_skills(query, persona_id, available)` — which playbooks apply.
+- `PROFILE_ALIASES` (optional) — predicate spellings your extractor emits mapped onto
+  `PROFILE_FIELDS` entries. Absent means no aliases, which is a legitimate statement;
+  this table used to live in `aegis/memory/consolidate.py` naming the shipped domain's
+  fields, where it quietly matched nothing after a retarget.
 - `SKILLS_DIR` — where step 10 lives.
 
 **Trap:** `memory_spec` is deliberately **not** re-exported through
@@ -289,11 +392,22 @@ the `qa` pipeline and logs a warning — it does not raise. So:
 - Never declare `team` in a roster. The router writes it when the depth
   classifier chooses fan-out.
 
-**Done when:** every `role` you declare is `qa` or `memory` (or you have made a
-deliberate, reported core edit), and exactly one is `is_default`.
+**And the half of this file the checklist used to omit entirely: `sub_agent_roster()`.**
+It returns the fan-out team the `team` path dispatches, and each `SubAgentSpec` carries
+a **`tool_allowlist` of literal tool names**. The shipped `data` lane allowlists two
+tools that step 4 deletes. Nothing raises: the allowlist is intersected with the
+registry, so a stale name is silently dropped and the sub-agent runs with fewer tools
+than you think — or none. Re-point every `tool_allowlist` to names that exist in your
+`TOOL_REGISTRY`, and re-voice each spec's `label` and `system_prompt` while you are
+there; they are read by the model and shown on screen.
 
-**Verify** — run a query and read the `routing` stream event, or check the build
-warning:
+**Done when:** every `role` you declare is `qa` or `memory` (or you have made a
+deliberate, reported core edit), exactly one is `is_default`, and every name in every
+`sub_agent_roster()` `tool_allowlist` is a key of `TOOL_REGISTRY`.
+
+**Verify** — the conformance suite checks both halves (the roster's roles against the
+graph's nodes, and every sub-agent allowlist against the registry). Then run a query
+and read the `routing` stream event, or check the build warning:
 ```bash
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/agent/test_router.py -q)
 ```
@@ -326,7 +440,10 @@ and the agent acts without procedural guidance. You will read that as a prompt
 problem and spend an hour in the wrong file.
 
 So step 10 is really two edits — the `*.md` files, and the `hints` dict back in
-`memory_spec.py`.
+`memory_spec.py`. The conformance check reads that table whether you keep it inside
+`select_skills` or hoist it to a module constant, and if it can see no table at all
+it probes the selector behaviourally and fails if nothing it is given can ever reach
+a playbook.
 
 ---
 
@@ -342,7 +459,7 @@ assert isinstance(app.adapter, DomainAdapter)
 print('adapter contract: satisfied')
 ")
 
-# 1. The conformance suite — thirteen checks, no infrastructure, under a second.
+# 1. The conformance suite — fourteen checks, no infrastructure, under a second.
 #    Every one of them descends from a wiring defect this repo actually shipped,
 #    and every one fails with the fix, the consequence and the scar written out.
 #    Run it after every step above, not only here: it is the fastest signal in
@@ -350,7 +467,10 @@ print('adapter contract: satisfied')
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest \
     --pyargs aegis.conformance --aegis-adapter app.adapter -q)
 
-# 2. The adapter and the whole agent graph, on fakes. No infrastructure.
+# 2. The adapter and the whole agent graph, on fakes. No infrastructure. This is the
+#    first command that can pass again once step 8 is finished — and only once you
+#    have rewritten tests/adapter/* for your own domain, which is part of the steps
+#    above, not a follow-up.
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest tests/adapter tests/agent -q)
 
 # 3. The full backend suite.
@@ -375,21 +495,51 @@ Then train the ML spine on your new spec:
 (cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m app.ml)
 ```
 
+Read its last line. It prints the model's prediction for the lowest- and
+highest-labelled rows of **your** training frame, in **your** target's unit, and
+`distinct=False` there means the spine learned nothing — check step 3's trap, not the
+prompt. (It builds those two rows from your spec; it used to spell out the shipped
+domain's feature keys, so after any correct retarget it cried wolf every time.)
+
 ---
 
 ## Do not touch
 
 Everything outside `backend/src/app/adapter/`. Concretely: `app.agent`,
 `app.core`, `app.retrieval`, `app.memory`, `app.ml`, `app.guardrails`, `app.ops`,
-`app.eval`, `app.observability`, `app.data`, `app.mcp`, `app.api`, `app.platform`
-— and all of `aegis/`.
+`app.eval`, `app.observability`, `app.data`, `app.mcp`, `app.api`, `app.platform`,
+`app.forecast`, `app.seed` — and all of `aegis/`.
 
 If you find yourself adding a business rule to any of those, it belongs in the
 adapter. That is the entire design, and it is what makes the retarget an
 afternoon rather than a rewrite.
 
+**You do not have to take that on trust, and you should not.** The conformance
+suite's core check scans every module outside the adapter for the shipped domain's
+vocabulary and fails naming the file and the line. If it passes, no core module knows
+this domain — which also means that if you *think* you must edit a core file to
+finish, the check is the fastest way to find out whether the leak is real and where.
+
 The one sanctioned exception is the `SPECIALIST_NODES` edit in step 8, and it must
 be reported rather than done quietly.
+
+## The console is not covered by any of the above — and it names this domain
+
+`web/` is outside the adapter and outside the conformance check, which scans Python.
+Four console files carry shipped-domain literals today and **will show the old
+domain's words on screen after an otherwise perfect retarget**:
+
+| File | What it names |
+|---|---|
+| `web/src/config/personas.ts` | the two persona ids, and the three tool names in its prose |
+| `web/src/components/ops/opsShared.ts` | `PROMPT_KEY`, and the tool names in two prompt strings |
+| `web/src/components/sim/SimulationView.tsx` | the persona id it drives the scripted demo with |
+| `web/src/components/ml/MLOpsView.tsx` | a literal ML feature row — the same defect as the trainer's old sanity probe |
+
+Re-voice those four by hand as part of your retarget, and say in your report that you
+did. The real fix is for the API to serve the persona list and the feature spec so the
+console reads them like everything else; there is no such endpoint yet, and inventing
+one mid-retarget is not the moment.
 
 ## What to report when you are done
 

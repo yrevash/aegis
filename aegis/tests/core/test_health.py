@@ -38,13 +38,13 @@ class _DownPostgres:
 
 
 class _OkVectorStore:
-    def list_collections(self) -> list[str]:
+    def get_collections(self) -> list[str]:
         return []
 
 
 class _DownVectorStore:
-    def list_collections(self) -> None:
-        raise OSError("vector store directory unreadable")
+    def get_collections(self) -> None:
+        raise OSError("vector store node unreachable")
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_probe_postgres_down() -> None:
 
 @pytest.mark.asyncio
 async def test_probe_vector_store_up() -> None:
-    s = await probe_vector_store("/var/aegis/vectors", client=_OkVectorStore())
+    s = await probe_vector_store("http://localhost:6333", client=_OkVectorStore())
     assert isinstance(s, DependencyStatus)
     assert s.name == "vector_store"
     assert s.status == "up"
@@ -85,9 +85,9 @@ async def test_probe_vector_store_up() -> None:
 
 @pytest.mark.asyncio
 async def test_probe_vector_store_down() -> None:
-    s = await probe_vector_store("/var/aegis/vectors", client=_DownVectorStore())
+    s = await probe_vector_store("http://localhost:6333", client=_DownVectorStore())
     assert s.status == "down"
-    assert "unreadable" in (s.detail or "")
+    assert "unreachable" in (s.detail or "")
 
 
 # ── Probe-owned clients must be closed (a polled /readyz leaks otherwise) ──
@@ -110,7 +110,7 @@ class _CountingVectorStore:
     def __init__(self) -> None:
         self.closed = 0
 
-    def list_collections(self) -> list[str]:
+    def get_collections(self) -> list[str]:
         return []
 
     def close(self) -> None:
@@ -146,13 +146,13 @@ async def test_probe_vector_store_closes_the_client_it_constructed(monkeypatch) 
 
     class _Module:
         @staticmethod
-        def PersistentClient(path: str) -> _CountingVectorStore:  # noqa: N802 - driver name
+        def QdrantClient(url: str, timeout: int | None = None) -> _CountingVectorStore:  # noqa: N802 - driver name
             client = _CountingVectorStore()
             made.append(client)
             return client
 
     monkeypatch.setattr(health, "require", lambda *a, **k: _Module)
-    status = await health.probe_vector_store("/var/aegis/vectors")
+    status = await health.probe_vector_store("http://localhost:6333")
     assert status.status == "up"
     assert made and made[0].closed == 1
 

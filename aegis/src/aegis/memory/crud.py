@@ -180,7 +180,7 @@ async def add_fact(
     ``confidence`` defaults to ``1.0``: a person stating a fact about themselves or
     their own tenant is not a model guessing. ``embedding`` is optional and its absence
     is honest degradation rather than an error — a fact with no vector is still found by
-    the recency-only recall arm, and the Chroma mirror picks up any row that has one.
+    the recency-only recall arm, and the Qdrant mirror picks up any row that has one.
 
     Does **not** commit; the caller owns the transaction and the subsequent
     :class:`~aegis.memory.cache.MemorySemanticCache` invalidation for the subject.

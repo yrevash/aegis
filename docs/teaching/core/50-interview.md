@@ -297,7 +297,7 @@ returning `down` with the detail. A health endpoint that 500s because a dependen
 has confused "I am unhealthy" with "I cannot answer."
 
 And there is a small piece of ecosystem archaeology in the close helper: modern redis-py
-uses `aclose`, chromadb and older redis use `close`, and some return awaitables. It
+uses `aclose`, qdrant_client and older redis use `close`, and some return awaitables. It
 tries both, awaits if needed, and swallows everything — because *teardown must never mask
 the result you were computing*.
 

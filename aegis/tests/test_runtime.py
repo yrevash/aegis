@@ -233,10 +233,32 @@ async def test_a_missing_adapter_member_is_named_before_anything_is_wired() -> N
 
 # ─────────────────────────────── 3. missing environment, named and refused ──
 async def test_full_mode_names_the_unset_backend_variable() -> None:
-    """``AEGIS_MODE=full`` with no vector-store path names the variable, not "config error"."""
+    """``AEGIS_MODE=full`` with no Qdrant URL names the variable, not "config error"."""
     _fake_adapter("fake_widgets_adapter")
-    with pytest.raises(RuntimeError, match="AEGIS_VECTOR_STORE_PATH"):
+    with pytest.raises(RuntimeError, match="AEGIS_VECTOR_STORE_URL"):
         await Aegis.from_env(adapter="fake_widgets_adapter", mode="full")
+
+
+async def test_lite_boot_refuses_two_workers_on_an_embedded_store(monkeypatch) -> None:
+    """§9.1: `--workers>1` + an embedded store refuses **at boot**, naming the fix.
+
+    The refusal lands here rather than at the first component that needs an index,
+    because by then uvicorn has bound its port and forked, and the failure reads as a
+    crash instead of a configuration error. That guard is what turns "we could scale"
+    from a claim into a property: the only way to get more than one worker is to point
+    at a node all of them can share.
+    """
+    from aegis.retrieval.vector_store import EmbeddedVectorStoreMultiprocessError
+
+    _fake_adapter("fake_widgets_adapter")
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "app.main:app", "--workers", "2"])
+
+    with pytest.raises(EmbeddedVectorStoreMultiprocessError) as excinfo:
+        await Aegis.from_env(adapter="fake_widgets_adapter", mode="lite")
+
+    message = str(excinfo.value)
+    assert "2 workers" in message and "--workers" in message
+    assert "AEGIS_VECTOR_STORE_URL" in message
 
 
 async def test_full_mode_names_the_unset_jwt_secret_and_its_value_shape(
@@ -246,7 +268,7 @@ async def test_full_mode_names_the_unset_jwt_secret_and_its_value_shape(
     _fake_adapter("fake_widgets_adapter")
     monkeypatch.setenv("AEGIS_REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("AEGIS_DATABASE_URL", "postgresql+asyncpg://localhost/x")
-    monkeypatch.setenv("AEGIS_VECTOR_STORE_PATH", str(tmp_path))
+    monkeypatch.setenv("AEGIS_VECTOR_STORE_URL", "http://localhost:6333")
 
     with pytest.raises(MissingConfigurationError) as excinfo:
         await Aegis.from_env(adapter="fake_widgets_adapter", mode="full")
@@ -273,7 +295,7 @@ async def test_full_mode_refuses_to_invent_a_session_factory(
             mode="full",
             redis_url="redis://localhost:6379/0",
             database_url="postgresql+asyncpg://localhost/x",
-            vector_store_path=str(tmp_path),
+            vector_store_url="http://localhost:6333",
             jwt_secret="x" * 48,
         )
 

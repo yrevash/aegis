@@ -1,4 +1,4 @@
-"""Thirteen checks, and every one of them descends from a defect this repository shipped.
+"""Fourteen checks, and every one of them descends from a defect this repository shipped.
 
 Each check's docstring names its scar. The rule is not decoration: a conformance suite
 of plausible-sounding checks is a checklist, and a checklist grows forever. A check
@@ -78,6 +78,54 @@ def _string_constants(code: CodeType, *, exclude: object = None) -> set[str]:
         elif isinstance(const, tuple | frozenset):
             found |= {c for c in const if isinstance(c, str) and c != exclude}
     return found
+
+
+def _module_strings(module: object, *, depth: int = 3) -> set[str]:
+    """Return every string reachable from a module's own top-level constants.
+
+    The companion to :func:`_string_constants`, and the reason the skill-reachability
+    check no longer depends on *where* a selector's keyword table happens to live. That
+    check read the selector's compiled constants only, so hoisting the table to a
+    module-level dict — the obvious, tidier refactor — emptied the set it reasoned over,
+    emptied the guard that depended on the set, and made the check report clean while
+    verifying nothing at all. A retargeting agent passed it and was told nothing.
+
+    Imported modules, classes and functions are skipped: only data declared here is
+    read, so a re-exported constant from another package cannot masquerade as this
+    module's own vocabulary.
+
+    Args:
+        module: The module (or any object with a ``__dict__``) to read.
+        depth: How far to descend into nested containers.
+
+    Returns:
+        The strings found.
+    """
+    from types import FunctionType, ModuleType
+
+    def walk(value: object, level: int) -> set[str]:
+        if isinstance(value, str):
+            return {value}
+        if level <= 0:
+            return set()
+        if isinstance(value, Mapping):
+            found: set[str] = set()
+            for key, item in value.items():
+                found |= walk(key, level - 1) | walk(item, level - 1)
+            return found
+        if isinstance(value, list | tuple | set | frozenset):
+            found = set()
+            for item in value:
+                found |= walk(item, level - 1)
+            return found
+        return set()
+
+    strings: set[str] = set()
+    for name, value in vars(module).items():
+        if name.startswith("__") or isinstance(value, ModuleType | FunctionType | type):
+            continue
+        strings |= walk(value, depth)
+    return strings
 
 
 # ─────────────────────────────────────────────────────── 1 · the whole contract ──
@@ -388,6 +436,13 @@ def test_every_persona_the_adapter_declares_resolves(piece: Piece) -> None:
     unknown id and ``PERSONAS[DEFAULT_PERSONA_ID]`` is evaluated for *every* request that
     names no persona — so a ``DEFAULT_PERSONA_ID`` that does not appear in ``PERSONAS``
     is not a small mistake, it is every anonymous request 500-ing at the first turn.
+
+    SCAR, the second: ``PERSONA_BY_ROLE`` is the same failure one layer up. Every
+    authenticated principal resolves through it, so a role with no entry cannot sign in
+    and an entry naming a persona that no longer exists raises ``KeyError`` at the login
+    boundary — which is exactly what re-voicing ``PERSONAS`` did while the host decided
+    the mapping itself, with two persona ids written into an ``if``. Nothing in any suite
+    goes through the login path, so nothing went red.
     """
     personas = piece("personas")
     registry: Mapping[str, Any] = personas.PERSONAS
@@ -406,6 +461,48 @@ def test_every_persona_the_adapter_declares_resolves(piece: Piece) -> None:
         found = str(getattr(resolved, "id", persona_id))
         if found != persona_id:
             problems.append(f"get_persona({persona_id!r}) returned the persona {found!r}")
+    by_role: Mapping[Any, str] = getattr(personas, "PERSONA_BY_ROLE", None) or {}
+    if not by_role:
+        problems.append(
+            "PERSONA_BY_ROLE is missing or empty, so no RBAC role maps to a persona"
+        )
+    else:
+        for role, persona_id in by_role.items():
+            if persona_id not in registry:
+                problems.append(
+                    f"PERSONA_BY_ROLE maps role {str(role)!r} to {persona_id!r}, "
+                    f"which is not a key of PERSONAS"
+                )
+        try:
+            from aegis.governance.types import Role
+        except ImportError:  # pragma: no cover - governance extra absent
+            pass
+        else:
+            spelled = {str(k) for k in by_role}
+            unmapped = sorted(r.value for r in Role if r.value not in spelled and r not in by_role)
+            if unmapped:
+                problems.append(
+                    f"PERSONA_BY_ROLE declares no persona for role(s) "
+                    f"{', '.join(repr(r) for r in unmapped)}"
+                )
+        resolver = getattr(personas, "persona_for_role", None)
+        if resolver is None:
+            problems.append("personas has no persona_for_role(role) resolver")
+        else:
+            for role in by_role:
+                try:
+                    resolved_id = resolver(role)
+                except Exception as exc:  # noqa: BLE001 - any raise here is the defect
+                    problems.append(
+                        f"persona_for_role({str(role)!r}) raised {type(exc).__name__}: {exc}"
+                    )
+                else:
+                    if resolved_id not in registry:
+                        problems.append(
+                            f"persona_for_role({str(role)!r}) returned {resolved_id!r}, "
+                            f"which is not a key of PERSONAS"
+                        )
+
     if not problems:
         try:
             fallback = personas.get_persona(None)
@@ -421,7 +518,10 @@ def test_every_persona_the_adapter_declares_resolves(piece: Piece) -> None:
             what="; ".join(problems) + ".",
             fix=(
                 "Key PERSONAS by each persona's own id, point DEFAULT_PERSONA_ID at one "
-                "of those keys, and make get_persona(None) return that default."
+                "of those keys, and make get_persona(None) return that default. Then map "
+                "every RBAC role to one of those same keys in PERSONA_BY_ROLE, and have "
+                "persona_for_role(role) read it — the host asks the adapter which persona "
+                "a role adopts, and must never decide it itself."
             ),
             if_not=(
                 "A persona is not a UI label: its data_scope becomes the retrieval filter "
@@ -590,13 +690,22 @@ def test_every_playbook_is_reachable_from_select_skills(piece: Piece) -> None:
     never be selected again and the stale entry can never fire. Both halves are silent:
     the selector returns its other matches, or nothing, and the turn proceeds.
 
-    Two halves, both cheap and neither guessing. The **always-applicable** half probes
-    the selector with its own compiled string constants and asserts it never returns a
-    name outside the ``available`` list it was handed. The **literal-mapping** half reads
-    those same constants (not the source, and never the docstring) to see which playbooks
-    the selector can name at all: if it names some but not all of them, the ones it
-    cannot name are unreachable and that is the scar exactly. A selector that names none
-    of them literally selects some other way, and only the first half applies to it.
+    Three halves, none of them guessing. The **always-applicable** one probes the
+    selector and asserts it never returns a name outside the ``available`` list it was
+    handed. The **literal-mapping** one reads the strings the selector can name — from
+    its compiled constants *and* from its module's own top-level constants, so it does
+    not matter whether the keyword table sits inside the function or beside it: if the
+    selector names some playbooks but not all of them, the ones it cannot name are
+    unreachable and that is the scar exactly. The **behavioural** one covers a selector
+    that names none of them literally, which used to end the check right there: it is
+    probed with every playbook name, every word inside those names and every literal it
+    carries, and if it never once returns a playbook then it cannot select one and that
+    is a failure, not a pass.
+
+    SCAR, the second one, and it is this check's own: the literal half originally read
+    ``select_skills.__code__`` alone. Hoisting the table to a module constant — the
+    obvious tidier refactor — emptied ``literals``, emptied ``named``, and the
+    ``if named`` guard returned clean. The check verified nothing and said so to nobody.
     """
     spec = piece("memory_spec")
     directory, stems = _skill_stems(spec)
@@ -604,18 +713,29 @@ def test_every_playbook_is_reachable_from_select_skills(piece: Piece) -> None:
         return  # already reported by the directory check; one failure, not two
     selector = spec.select_skills
     literals = _string_constants(selector.__code__, exclude=selector.__doc__)
+    literals |= _module_strings(spec)
     default_persona = getattr(piece("personas"), "DEFAULT_PERSONA_ID", None)
 
-    invented = {
+    words = {part for stem in stems for part in stem.replace("-", "_").split("_") if part}
+    probes = sorted({p for p in (literals | stems | words) if len(p) <= 64} | {""})
+    returned = {
         name
-        for probe in [*sorted(literals), ""]
+        for probe in probes
         for name in (selector(probe, default_persona, sorted(stems)) or ())
-        if name not in stems
     }
+    invented = returned - stems
     named = literals & stems
     unreachable = sorted(stems - literals) if named else []
-    if invented or unreachable:
+    never_selects = not named and not (returned & stems)
+    if invented or unreachable or never_selects:
         problems = []
+        if never_selects:
+            problems.append(
+                f"select_skills names none of {directory.name}/'s playbooks in any "
+                f"constant, and returned no playbook for any of {len(probes)} probes "
+                f"(every playbook name, every word in them, and every string the "
+                f"selector carries) — so nothing it is given can reach one"
+            )
         if unreachable:
             problems.append(
                 f"playbook(s) {', '.join(repr(s) for s in unreachable)} exist in "
@@ -634,7 +754,9 @@ def test_every_playbook_is_reachable_from_select_skills(piece: Piece) -> None:
             fix=(
                 "Keep the selector and the directory in step: every *.md in SKILLS_DIR "
                 "must be reachable from select_skills, and every name select_skills can "
-                "return must be a file. Return only names from the `available` argument."
+                "return must be a file. Return only names from the `available` argument. "
+                "A selector that maps keywords to filenames may keep that table inside "
+                "the function or beside it as a module constant; both are read."
             ),
             if_not=(
                 "select_skills filters its answer by `skill in available`, so a renamed "
@@ -759,5 +881,156 @@ def test_seed_corpus_records_carry_identity_and_chunk(piece: Piece) -> None:
                 "The chunker shipped producing chunks with no tenant and a doc_id that "
                 "did not join documents.id; retrieval kept returning passages and every "
                 "citation on them was dead."
+            ),
+        )
+
+
+# ─────────────────────────────────────── 11 · the core, and what it may not know ──
+def test_no_shipped_domain_vocabulary_survives_outside_the_adapter(adapter: object) -> None:
+    """No module outside the adapter names the reference domain.
+
+    SCAR: this is the check that converts *"only ``backend/src/app/adapter/`` changes"*
+    from a promise into something enforced, and it exists because the promise was false
+    in four places at once. A fresh agent, given only this repository and a one-line
+    problem statement, retargeted the platform and shipped an integration that looked
+    correct: the login path mapped every RBAC role onto one of two persona ids written
+    into an ``if``, so re-voicing ``PERSONAS`` — which the procedure *instructs* — made
+    every sign-in raise ``KeyError``; the forecast module read the shipped record
+    collection and timestamp field by name, so ``/forecast`` raised ``AttributeError``,
+    and owned the chart's client-facing title as a constant, so a correct retarget drew
+    the shipped domain's sentence over its own data forever; and the ML trainer's sanity
+    probe was a literal feature row, so after any retarget both probe rows encoded
+    identically and the one diagnostic whose job is to say "your model learned nothing"
+    printed ``distinct=False`` on every *correct* integration. None of them raised at
+    import, at startup or in any suite. All four are one defect: a shipped-domain string
+    in a core module.
+
+    It is unconditional, not "after a retarget": the reference adapter must keep the
+    core clean too, which is the only way the promise holds *before* anybody retargets.
+    And it is built so it cannot go hollow — an empty word list, a scan that sees too
+    few files, a reader that matches nothing at all, or a quarantined word that no
+    longer appears in the reference adapter are each a failure, not a quiet pass.
+    """
+    import importlib
+    from pathlib import Path
+
+    import aegis
+    from aegis.conformance._vocabulary import (
+        MIN_CORE_FILES,
+        SHIPPED_DOMAIN_ID,
+        SHIPPED_VOCABULARY,
+        core_files,
+        scan_for_terms,
+    )
+
+    adapter_dir = Path(getattr(adapter, "__file__", "") or ".").resolve().parent
+    roots = [Path(aegis.__file__).resolve().parent]
+    host_name = str(getattr(adapter, "__name__", "")).rpartition(".")[0]
+    if host_name:
+        host = importlib.import_module(host_name)
+        roots.append(Path(getattr(host, "__file__", "") or ".").resolve().parent)
+    files = core_files(*roots, exclude=adapter_dir)
+
+    # ── the anti-vacuity gates: this check must never pass by seeing nothing ──
+    vacuous = None
+    if not SHIPPED_VOCABULARY:
+        vacuous = "the quarantined vocabulary list is empty, so nothing was looked for"
+    elif len(files) < MIN_CORE_FILES:
+        vacuous = (
+            f"only {len(files)} core source file(s) were found under "
+            f"{', '.join(str(r) for r in roots)} — fewer than the {MIN_CORE_FILES} a "
+            f"real core has, so the scan saw almost nothing and proved almost nothing"
+        )
+    elif not scan_for_terms(files, ("import",)):
+        vacuous = (
+            f"{len(files)} file(s) were read and not one contains the word 'import', "
+            f"so the reader is not seeing their contents"
+        )
+    if vacuous:
+        fail(
+            member="core",
+            problem="this check could not see the core, so it proves nothing",
+            what=vacuous + ".",
+            fix=(
+                "Point the run at an adapter that lives inside its host package "
+                "(`myapp.adapter`, not a bare top-level module) so the host's core is "
+                "discoverable, and check that aegis is importable from a real "
+                "directory rather than a zip or a namespace stub."
+            ),
+            if_not=(
+                "A scan with nothing in it passes. That is the failure mode this check "
+                "was written to avoid in the first place, so it refuses to be it."
+            ),
+            scar=(
+                "The playbook-reachability check read string constants out of one "
+                "function's code object; hoisting that function's table to a module "
+                "constant emptied the set, emptied the guard that depended on it, and "
+                "the check reported clean while verifying nothing. A retargeting agent "
+                "passed it and was told nothing."
+            ),
+        )
+
+    domain_id = str(getattr(adapter, "DOMAIN_ID", "") or "")
+    if domain_id == SHIPPED_DOMAIN_ID:
+        adapter_sources = core_files(adapter_dir)
+        stale = [t for t in SHIPPED_VOCABULARY if not scan_for_terms(adapter_sources, (t,))]
+        if stale:
+            fail(
+                member="core",
+                problem="the quarantined vocabulary has drifted from the adapter it came from",
+                what=(
+                    f"{', '.join(repr(t) for t in stale)} appear(s) nowhere in "
+                    f"{adapter_dir.name}/, so the reference domain no longer uses "
+                    f"{'them' if len(stale) > 1 else 'it'} and the entr"
+                    f"{'ies' if len(stale) > 1 else 'y'} guard nothing."
+                ),
+                fix=(
+                    "Update aegis.conformance._vocabulary.SHIPPED_VOCABULARY: drop the "
+                    "words the reference adapter no longer uses, and add the ones it now "
+                    "does. The list is only as good as its last edit."
+                ),
+                if_not=(
+                    "A word that is nowhere in the adapter can never be found in the "
+                    "core either, so the entry is decoration — and a list of decoration "
+                    "still reports 'passed'."
+                ),
+                scar=(
+                    "Every silent defect this suite exists for had the same shape: a "
+                    "check, a table or a mapping that had quietly stopped referring to "
+                    "anything real, and went on reporting success."
+                ),
+            )
+
+    hits = scan_for_terms(files, SHIPPED_VOCABULARY)
+    if hits:
+        shown = [
+            f"{path.name}:{number} names {term!r}" for term, path, number in hits[:8]
+        ]
+        leaked = sorted({term for term, _, _ in hits})
+        fail(
+            member="core",
+            problem=f"{len(hits)} shipped-domain string(s) survive outside the adapter",
+            what="; ".join(shown) + ("; …" if len(hits) > 8 else "."),
+            fix=(
+                f"Move {', '.join(repr(t) for t in leaked[:6])}"
+                f"{' …' if len(leaked) > 6 else ''} behind the adapter seam: the core "
+                f"should read the value from the adapter (a constant, a mapping or a "
+                f"function on one of the ten pieces) instead of spelling it. Where the "
+                f"word is only prose in a docstring, say what the thing *is* rather "
+                f"than naming this domain's spelling of it."
+            ),
+            if_not=(
+                "Every one of these is a retarget that looks finished. The lucky half "
+                "raise AttributeError or KeyError the first time a human uses the "
+                "system; the unlucky half never raise at all and simply serve the "
+                "previous domain's words, or its feature keys, over the new domain's "
+                "data — which is indistinguishable, on screen, from working."
+            ),
+            scar=(
+                "A retarget rehearsal produced an integration that passed conformance, "
+                "the adapter suite, the agent suite and ruff, and was broken in four "
+                "places: sign-in raised KeyError, /forecast raised AttributeError, the "
+                "chart title stayed the shipped domain's, and the ML sanity probe "
+                "reported 'distinct=False' in the wrong unit on a correct model."
             ),
         )

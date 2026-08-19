@@ -3,15 +3,19 @@
 Every break in this package is a *plausible first attempt*, not a caricature: a third
 specialist added to the roster without a graph node, a tool registered before anyone
 decided its risk tier, an allowlist entry with a typo, an ML feature list spelled
-``FEATURE_COLUMNS``, a playbook renamed without touching the selector that names it.
-None of them raises anything at import, at startup or on a query — which is the whole
-argument for an executable conformance suite, and why this fixture exists.
+``FEATURE_COLUMNS``, a playbook that the selector's table never names. None of them
+raises anything at import, at startup or on a query — which is the whole argument for an
+executable conformance suite, and why this fixture exists.
 
-It reuses ``app.adapter`` for everything that is *not* broken, so the diff between a
-correct adapter and this one is exactly the list of defects being demonstrated. Twelve
-of the thirteen checks fail against it; ``skills/`` is intact, so that check passes, and
-a run against this fixture therefore also shows that the suite is capable of passing a
-check in the middle of a wall of failures.
+**It is self-contained, and that is load-bearing.** It used to reuse ``app.adapter`` for
+everything that was not broken, which read as economical and was not: the memory break
+was that the *shipped* hints named ``de_escalation`` while this directory held
+``closing_cases.md``, so any correct retarget of the production adapter re-pointed those
+literals and the break simply vanished — the meta-test went from ``12 failed, 1 passed``
+to ``11 failed, 2 passed`` on a change that had nothing to do with it. A fixture whose
+job is to prove a suite can fail must not be coupled to the code the suite exists to let
+you rewrite. Nothing here imports the domain; the only imports are from ``aegis`` itself,
+which is the core every adapter builds on.
 
 ``generator`` is absent on purpose: it is on disk nowhere and imported nowhere, which is
 the ``missing_members`` scar itself.
@@ -19,9 +23,7 @@ the ``missing_members`` scar itself.
 
 from __future__ import annotations
 
-from app.adapter import schema
-
-from . import corpus, memory_spec, ml_spec, personas, prompts, roster, tools
+from . import corpus, memory_spec, ml_spec, personas, prompts, roster, schema, tools
 
 DOMAIN_ID = "broken_demo"
 DOMAIN_DESCRIPTION = "Support stuff."

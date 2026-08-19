@@ -91,6 +91,24 @@ class ScopeBinding:
         """The string to write into :data:`ALL_TENANTS_GUC` — ``'on'`` or ``'off'``."""
         return ALL_TENANTS_ON if self.all_tenants else "off"
 
+    @property
+    def platform_scope_value(self) -> str:
+        """The string to write into :data:`aegis.governance.rls.PLATFORM_SCOPE_GUC`.
+
+        The **same** decision as :attr:`all_tenants_value`, written into the GUC that
+        widens the ``tenant_isolation`` policy on the base tables rather than the one
+        this package's own predicate reads. Two names, one authority: a platform-wide
+        console read has to be admitted by both layers or it returns nothing, and a
+        per-tenant read must widen neither.
+
+        This is what keeps the console working when ``RLS_FAIL_CLOSED`` is on. Without
+        it a resolved platform-wide read binds an empty ``app.tenant_id``, the
+        fail-closed predicate finds no assertion, and the page goes blank on the one
+        query it was authorised for — the "unenumerated path becomes a silent zero-row
+        result" failure, in the surface most likely to be blamed on the database.
+        """
+        return ALL_TENANTS_ON if self.all_tenants else ""
+
     def describe(self) -> str:
         """One phrase naming the authority, for the audit row and the screen."""
         if self.all_tenants:

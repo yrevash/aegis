@@ -40,8 +40,8 @@ Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
   gate, dashboards) with **zero backend or database**. Best for a quick look or a
   projector demo.
 - **Path B — Full stack:** FastAPI backend + local stores (Postgres, Neo4j,
-  Redis) + Arize Phoenix, streaming live over SSE. The vector store is *embedded* —
-  it runs inside the backend process, so there is no fourth server to install.
+  Redis, Qdrant) + Arize Phoenix, streaming live over SSE. Qdrant is a zip with one
+  binary — no Docker, no installer, no service registration.
 
 > **Environment target:** 16 GB laptop, **no Docker, no GPU**. Everything is a
 > local install or an API call. The only remote calls are the model gateway
@@ -111,19 +111,25 @@ CREATE DATABASE taif;
 ```
 
 Postgres holds the relational tables, LightRAG's KV + doc-status stores, and the audit
-log. No `pgvector` extension is needed — vector ANN search runs in the embedded vector
-store.
+log. No `pgvector` extension is needed — vector ANN search runs in Qdrant.
 
-**Vector store — nothing to install.** ANN for retrieval + memory recall runs
-**embedded**: Chroma's `PersistentClient` (a pip dependency) for Aegis's own store, and
-LightRAG's file-backed NanoVectorDB for its internal vectors. Both live inside the
-backend process and write to a local directory, so there is no server binary, no Windows
-service and no open port — which is precisely what lets Aegis install on a locked-down
-enterprise machine. Point `VECTOR_STORE_PATH` at a writable directory (default
-`vector_storage`, relative to the backend's working directory). In full stores mode that
-directory is **required** and the backend fails loud at boot if it is unusable (exactly
-like Postgres/Redis) — it never degrades to a silent in-RAM index. Tests use an explicit
-in-memory engine, which is a real index, not a fake.
+**Vector store — Qdrant, one node, unzip and run.** ANN for retrieval + memory recall
+runs in **Qdrant**, and so do LightRAG's internal vectors (`QdrantVectorDBStorage`):
+one engine, one URL, one thing to install. v1.19.0 publishes
+`qdrant-x86_64-pc-windows-msvc.zip` — Apache-2.0, a zip with a binary — so there is no
+Docker, no installer and no Windows service, which is what keeps Aegis installable on a
+locked-down enterprise machine. Unzip it, run `qdrant.exe`, and point `QDRANT_URL` at it
+(default `http://localhost:6333`).
+
+It used to be embedded, and that is exactly what changed. An embedded vector store is
+**single-process**: Chroma's `PersistentClient` holds a SQLite metadata lock, so
+`uvicorn --workers 2` failed in a way that looked like index corruption rather than a
+configuration error. Aegis now **refuses to boot** with more than one worker while an
+embedded store is configured, and the durable path is a node every worker can share.
+In full stores mode `QDRANT_URL` is **required** and the backend fails loud at boot if
+the node does not answer (exactly like Postgres/Redis) — it never degrades to a silent
+in-process index. Tests and dev use `qdrant_client`'s in-process mode, chosen out loud,
+which is a real index, not a fake.
 
 **Neo4j** — install Neo4j Desktop or Community, start a local DB, and set a
 password. Default bolt URI is `bolt://localhost:7687`, user `neo4j`.
@@ -224,7 +230,7 @@ LOG_LEVEL=INFO
 > **Postgres-primary posture.** In the full stack one local PostgreSQL is the primary
 > store for *everything durable* — tenants, users, budgets, the usage ledger, the
 > approvals inbox, the LangGraph checkpoints, and the audit log. Vector embeddings live
-> in the embedded vector store (Postgres keeps only the JSON embedding-of-record). Set
+> in Qdrant (Postgres keeps only the JSON embedding-of-record). Set
 > `AGENT_CHECKPOINTER=postgres` for durable, resumable HITL runs; the `memory` default
 > keeps single-process/offline runs zero-dependency.
 
@@ -354,7 +360,9 @@ npm run lint   # ESLint (next/core-web-vitals + next/typescript) — 0 errors
 | `GENAILAB_API_KEY` | *(empty)* | gateway API key — **required for live calls** |
 | `GENAILAB_SSL_VERIFY` | `false` | verify gateway TLS (self-signed cert → false) |
 | `POSTGRES_DSN` | `postgresql://postgres:postgres@localhost:5432/taif` | Postgres DSN (relational + KV + audit; the primary durable store) |
-| `VECTOR_STORE_PATH` | `vector_storage` | directory for the **embedded** vector store — **required** and must be writable in full stores mode (fails loud at boot otherwise). No server, no port. |
+| `QDRANT_URL` | `http://localhost:6333` | the **Qdrant node** — the one vector engine, read by both `aegis.retrieval` and LightRAG. **Required** in full stores mode and the backend fails loud at boot if it does not answer. |
+| `QDRANT_API_KEY` | *(empty)* | token for a secured Qdrant node; leave empty for a local one |
+| `VECTOR_STORE_PATH` | `vector_storage` | LightRAG's local working directory (its own bookkeeping — no vectors, no KV) |
 | `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` | `bolt://localhost:7687` / `neo4j` / *(empty)* | Neo4j |
 | `REDIS_URL` | `redis://localhost:6379/0` | near-exact semantic cache |
 | `JWT_SECRET` | *(dev-insecure default)* | HS256 signing secret — **set a real one in prod** (ADR 0008) |
@@ -387,10 +395,13 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
   compile, not a hang. Give the first run 60s; later runs are ~2s.
 - **`next build` appears stuck or reuses stale output** — remove the build cache
   and rebuild: `rm -rf web/.next && (cd web && npm run build)`.
-- **Vector store unusable at boot (full stores mode)** — the backend fails loud if
-  `VECTOR_STORE_PATH` cannot be created or written. Point it at a writable directory
-  (`VECTOR_STORE_PATH=C:\Users\you\aegis-vectors`, say), or set `STORES=off` for the
-  databaseless lite demo. There is no server to start — the store is in-process.
+- **Vector store unreachable at boot (full stores mode)** — the backend fails loud if
+  nothing answers on `QDRANT_URL`. Unzip Qdrant and run `qdrant.exe` (it listens on
+  6333), or set `STORES=off` for the databaseless lite demo.
+- **`uvicorn --workers 2` refuses to boot** — that is deliberate. It means an *embedded*
+  vector store is configured, and an embedded store is single-process: the second worker
+  would diverge from or corrupt the first worker's index while every health check stayed
+  green. Set `QDRANT_URL` to a running node, or run one worker.
 - **TLS errors calling the gateway** — the gateway uses a self-signed cert;
   keep `GENAILAB_SSL_VERIFY=false` (a documented, scoped exception).
 - **Windows Redis** — use Memurai or Redis under WSL2; the default `REDIS_URL`

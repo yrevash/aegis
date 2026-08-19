@@ -17,12 +17,17 @@ from aegis.core.lazy import require
 
 logger = logging.getLogger(__name__)
 
+#: Seconds a reachability probe waits on the Qdrant node before calling it down.
+#: ``/readyz`` is polled, so a probe that hangs is a probe that stops answering — and a
+#: readiness endpoint that stops answering is indistinguishable from a dead process.
+_PROBE_TIMEOUT_SECONDS = 5
+
 
 async def _aclose(client: Any) -> None:  # noqa: ANN401 - any driver client
     """Close a probe-owned client, sync or async, without ever raising.
 
     Drivers disagree on the spelling (``aclose`` on modern redis-py, ``close`` on
-    chromadb and older redis), and some return an awaitable. Closing is
+    qdrant_client and older redis), and some return an awaitable. Closing is
     best-effort: a probe must report reachability, never fail because teardown did.
     """
     if client is None:
@@ -100,38 +105,40 @@ async def probe_postgres(url: str, *, conn: Any | None = None) -> DependencyStat
         return DependencyStatus(name="postgres", status="down", detail=str(exc))
 
 
-async def probe_vector_store(path: str, *, client: Any | None = None) -> DependencyStatus:  # noqa: ANN401
-    """Open the embedded vector store on disk and report whether it answered.
+async def probe_vector_store(url: str, *, client: Any | None = None) -> DependencyStatus:  # noqa: ANN401
+    """Ask the Qdrant node for its collections and report whether it answered.
 
     The vector store is the ANN engine behind retrieval + memory recall; in full mode it
-    is a hard dependency, exactly like Postgres/Redis. Unlike those, it is **embedded**
-    (Chroma's ``PersistentClient``), so there is no host to reach — the thing that can
-    fail is the storage directory: missing, unwritable, or holding a database this build
-    cannot open. The probe therefore opens the client at ``path`` and lists collections
-    (the cheapest round-trip that actually touches the store) and reports ``up`` only on
-    a real answer — never a silent in-RAM fallback.
+    is a hard dependency, exactly like Postgres/Redis — and since §9.1 it is a *node*,
+    not an embedded index, because an embedded one is single-process and that was the
+    ceiling under ``uvicorn --workers 2``. So this probe is now a real reachability check
+    against a real host, like :func:`probe_postgres` and :func:`probe_neo4j`: it lists
+    collections (the cheapest round-trip that actually touches the store) and reports
+    ``up`` only on a genuine answer — never on a URL that merely parsed.
 
     Args:
-        path: Filesystem directory holding the embedded vector store.
+        url: The Qdrant node URL (e.g. ``http://localhost:6333``).
         client: Optional injected client for testing. If None, uses lazy loading.
 
     Returns:
-        DependencyStatus with status "up" (store usable) or "down" (unusable/error).
+        DependencyStatus with status "up" (node answered) or "down" (unreachable/error).
     """
     owned = None
     try:
         store_client = client
         if store_client is None:
-            chromadb = require("aegis[retrieval]", "chromadb")
-            store_client = owned = chromadb.PersistentClient(path=path)
-        store_client.list_collections()
+            qdrant_client = require("aegis[retrieval]", "qdrant_client")
+            store_client = owned = qdrant_client.QdrantClient(
+                url=url, timeout=_PROBE_TIMEOUT_SECONDS
+            )
+        store_client.get_collections()
         return DependencyStatus(name="vector_store", status="up")
     except Exception as exc:  # noqa: BLE001 - a probe reports failure, never raises
         return DependencyStatus(name="vector_store", status="down", detail=str(exc))
     finally:
         # Only close what this probe opened — an injected client belongs to the caller.
         # /readyz is polled, so a probe that leaks a handle per call eventually exhausts
-        # the file descriptors of the store it is supposed to be reporting on.
+        # the sockets of the store it is supposed to be reporting on.
         await _aclose(owned)
 
 
@@ -180,5 +187,5 @@ async def probe_neo4j(
         return DependencyStatus(name="neo4j", status="down", detail=str(exc))
     finally:
         # Only close what this probe opened; the sync driver's ``close`` is picked up by
-        # ``_aclose`` exactly like Chroma's, and an injected driver belongs to its owner.
+        # ``_aclose`` exactly like Qdrant's, and an injected driver belongs to its owner.
         await _aclose(owned)

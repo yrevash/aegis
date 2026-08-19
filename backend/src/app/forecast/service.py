@@ -32,7 +32,7 @@ from aegis.forecast import (
     project_burndown,
 )
 
-from app.forecast.domain import DOMAIN_SERIES_LABEL, domain_series
+from app.forecast.domain import DOMAIN_SERIES_LABEL, DOMAIN_SERIES_UNIT, domain_series
 from app.forecast.ledger import LedgerMetric, ledger_series, window_spend
 
 __all__ = [
@@ -221,7 +221,7 @@ async def domain_forecast(*, horizon: int = 14, level: float = 0.9) -> ForecastR
         points,
         series_id="domain:demand",
         label=DOMAIN_SERIES_LABEL,
-        unit="requests",
+        unit=DOMAIN_SERIES_UNIT,
         data_source="adapter",
         horizon=horizon,
         level=level,

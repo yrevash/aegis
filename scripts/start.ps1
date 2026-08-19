@@ -5,7 +5,7 @@
 .PARAMETER Mode
   safe : console only, mock transport - no backend, no infra. Can't-fail demo.
   lite : backend with NO databases (STORES=off, SQLite audit) + live console.  [default]
-  full : backend with all stores (Postgres + Neo4j + Redis; vectors are embedded).
+  full : backend with all stores (Postgres + Neo4j + Redis + Qdrant).
 .EXAMPLE
   .\scripts\start.ps1 -Mode lite
 #>

@@ -54,20 +54,19 @@ if (Test-Path $pyExe) {
 }
 Row $rlsOk 'RLS serving role' $rlsNote
 
-# The vector store is EMBEDDED (in-process, file-backed) - no server, no port. What
-# can fail is the directory, so that is what we check: it must exist and be writable,
-# otherwise full mode refuses to boot rather than degrading to a RAM index.
-$vecPath = $env:VECTOR_STORE_PATH
-if (-not $vecPath) { $vecPath = "$root\backend\vector_storage" }
+# The vector store is a Qdrant NODE (section 9.1), shared by aegis.retrieval and
+# LightRAG through QDRANT_URL. It stopped being embedded because an embedded store is
+# single-process, which is exactly what made `uvicorn --workers 2` impossible. So what
+# can fail is reachability, and that is what we check: full mode refuses to boot on an
+# unreachable node rather than degrading to a RAM index.
+$qdrantUrl = $env:QDRANT_URL
+if (-not $qdrantUrl) { $qdrantUrl = 'http://localhost:6333' }
 $vecOk = $false
 try {
-  New-Item -ItemType Directory -Force -Path $vecPath -ErrorAction Stop | Out-Null
-  $probe = Join-Path $vecPath '.preflight'
-  Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
-  Remove-Item $probe -ErrorAction SilentlyContinue
+  Invoke-WebRequest -Uri "$qdrantUrl/" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop | Out-Null
   $vecOk = $true
 } catch { $vecOk = $false }
-Row $vecOk 'Vector store (local)' $vecPath
+Row $vecOk 'Vector store (Qdrant)' $qdrantUrl
 
 # Redis on Windows is Memurai: same wire protocol, same port, different CLI
 # (`memurai-cli`, not `redis-cli`) - the app needs no change either way. A PING

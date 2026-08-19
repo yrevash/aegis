@@ -765,13 +765,13 @@ async def _components() -> list[ComponentHealth]:
             required=True,
         ),
         _timed_probe(
-            probe_vector_store(settings.vector_store_path),
+            probe_vector_store(settings.qdrant_url),
             key="vector_store",
-            name="Embedded vector store",
+            name="Qdrant vector store",
             category="store",
             evidence=(
                 "aegis.core.health.probe_vector_store — "
-                "PersistentClient(path).list_collections()"
+                "QdrantClient(url).get_collections()"
             ),
             required=True,
         ),

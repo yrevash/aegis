@@ -54,10 +54,12 @@ bin/neo4j start
 
 Neo4j needs a JVM (Java 17+) — check with `java -version`.
 
-**Vector store** — nothing to download. It is embedded: Chroma's `PersistentClient` for
-Aegis's own store and LightRAG's file-backed NanoVectorDB for LightRAG's internal
-vectors, both installed by `uv sync` as ordinary Python packages. All you provide is a
-writable directory.
+**Vector store** — one download, no installer. Qdrant v1.19.0 ships
+`qdrant-x86_64-pc-windows-msvc.zip` (Apache-2.0): unzip it, run the binary, and it
+listens on 6333. Both vector consumers — Aegis's own store and LightRAG's
+`QdrantVectorDBStorage` — read the same `QDRANT_URL`, so there is one engine to run.
+It replaced the embedded stores because an embedded store is single-process, which is
+what made `uvicorn --workers 2` impossible.
 
 Then set the matching values in `backend/.env`:
 
@@ -164,7 +166,7 @@ What each extra buys you:
 | `auth` | pyjwt, argon2-cffi | no JWT login, no RBAC |
 | `observability` | OpenTelemetry SDK, Arize Phoenix (pinned `>=14.6,<15`) | no traces |
 | `agent` | langgraph, langchain-core, langgraph-checkpoint-postgres | no agent |
-| `retrieval` | lightrag-hku, neo4j, redis, chromadb (embedded) | lite retrieval only |
+| `retrieval` | lightrag-hku, neo4j, redis, qdrant-client | lite retrieval only |
 | `ml` | xgboost, scikit-learn, mapie, shap, pandas, numpy | no Aegis Signal |
 | `guardrails` | nemoguardrails, `aegis[pii]` (Presidio + spaCy) | programmatic rails with the regex PII engine |
 | `mcp` | the MCP SDK | no MCP tool server |
@@ -306,7 +308,8 @@ backend reads `os.environ` for configuration.
 | `STORES` | `on` | `on` = real stores; `off` = **lite**, no databases |
 | `DB_BOOTSTRAP` | `false` | Create tables on startup, best-effort (run scripts set `true`) |
 | `POSTGRES_DSN` / `NEO4J_URI` / `REDIS_URL` | localhost defaults | Store connections |
-| `VECTOR_STORE_PATH` | `vector_storage` | Directory for the embedded vector store. In non-dev full mode an unusable directory **fails the boot** by design |
+| `QDRANT_URL` | `http://localhost:6333` | The Qdrant node — the one vector engine, shared with LightRAG. In non-dev full mode an unreachable node **fails the boot** by design |
+| `VECTOR_STORE_PATH` | `vector_storage` | LightRAG's local working directory (its own bookkeeping; no vectors, no KV) |
 | `AGENT_CHECKPOINTER` | `memory` | `memory` (single-process `InMemorySaver`) or `postgres` (durable `PostgresSaver` → HITL resumable across restart/worker) |
 | `APPROVAL_SLA_SECONDS` | `3600` | SLA before the sweeper acts on a pending gate |
 | `APPROVAL_DEFAULT_TIER` | `tier-1` | Approver tier stamped on a fresh gate |
@@ -320,6 +323,8 @@ backend reads `os.environ` for configuration.
 | `LLM_MAX_OUTPUT_TOKENS` | `1024` | Per-generation output cap |
 | `LLM_TIMEOUT_SECONDS` | `60` | Per-call timeout, plus an outer `asyncio.wait_for` backstop |
 | `BUDGET_FAIL_OPEN` | `false` | Budgets **fail closed** by default: a DB blip during the pre-spend check *denies* the call rather than silently uncapping |
+| `GATEWAY_MAX_CONCURRENT_CALLS` | `12` | Model calls in flight across the **whole deployment**, not per process: the leases live in Redis, so the API and every worker share one count. `0` disables it, and the boot log then reports `scope=unlimited` rather than a bound nothing is holding |
+| `GATEWAY_SLOT_WAIT_SECONDS` | `60` | How long a call queues for a slot before it is refused with a reason |
 | `JWT_SECRET` | *(dev-insecure default)* | HS256 signing secret — **must be ≥ 32 chars in any non-dev deploy**, or startup fails |
 | `JWT_ALGORITHM` / `JWT_EXPIRE_MINUTES` | `HS256` / `720` | Token algorithm and lifetime |
 | `APP_ENV` | `dev` | `dev` enables the demo logins and the insecure JWT fallback; anything else locks both down |
@@ -342,7 +347,8 @@ Console (`web/.env.local`): `NEXT_PUBLIC_API_BASE` (empty means same-origin),
 |---|---|
 | Gateway DOWN in preflight | Check `GENAILAB_API_KEY` and your network. Until then `start.sh safe` still demos the whole UI |
 | Postgres / Neo4j / Redis down | Don't fight it — `start.sh lite` needs none of them |
-| Backend won't boot in full mode with a vector-store error | That is deliberate: full stores mode requires a usable `VECTOR_STORE_PATH`. Point it at a writable directory or set `STORES=off`. There is no server to start |
+| Backend won't boot in full mode with a vector-store error | That is deliberate: full stores mode requires a reachable `QDRANT_URL`. Unzip Qdrant and run it, or set `STORES=off` |
+| `uvicorn --workers 2` refuses to boot | Also deliberate: an embedded vector store is configured, and an embedded store is single-process. Point `QDRANT_URL` at a running node, or run one worker |
 | Backend won't boot at all | Usually a missing venv — re-run `bootstrap` |
 | Startup fails on `InsecureConfigurationError` | `APP_ENV` is not `dev` and `JWT_SECRET` is the default or too short. Set a real one |
 | `/audit` empty in lite | Expected until an action runs; lite writes to `taif_lite.db` (SQLite) |

@@ -25,7 +25,7 @@ def _default_spec():
 
 @pytest.fixture(autouse=True)
 def _fresh_vector_index():
-    """Give every test a pristine embedded Chroma index (no cross-test point bleed).
+    """Give every test a pristine in-process Qdrant index (no cross-test point bleed).
 
     Installs one rather than clearing the slot: since §8.4 an unconfigured index is a
     hard error, not a lazily-conjured ephemeral engine, so "pristine" has to be stated.

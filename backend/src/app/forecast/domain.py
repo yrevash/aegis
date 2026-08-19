@@ -1,42 +1,35 @@
 """The client-facing domain series, read through the adapter seam.
 
-This is the retarget point. The forecaster itself knows nothing about support
-requests — it is handed ``(timestamp, value)`` pairs. Everything domain-specific
-lives in :func:`domain_series`, which reads the adapter's own records through
-``app.adapter``'s public exports and nothing else. On the day the blind problem
-drops, ``adapter/schema.py`` and ``adapter/generator.py`` change, this function's
-one field reference follows, and the whole forecast surface retargets with the rest
-of the platform.
+This module is **mechanism only**: it buckets and memoises. Everything the series
+*means* — what a record is, when it arrived, what the chart's title says and what its
+values are counted in — comes from ``app.adapter`` and nothing else.
 
-The series is deliberately built from :attr:`ServiceRequest.created_at` — *arrivals*,
-not resolutions. Arrival volume is the quantity a client actually plans capacity
-against, and it is complete: a request that is still open still arrived, whereas a
-resolution series silently truncates the recent end and would bias the trend
-downwards for no reason a reader could see.
+It did not always. Until the Phase 8 retarget rehearsal this file reached into the
+shipped domain's record collection and timestamp field by name, and owned the chart's
+client-facing title as a module constant, so a retarget got two failures for free:
+``/forecast`` raised ``AttributeError`` the moment the collection was renamed, and —
+worse, because it never raised anything — a correctly retargeted deployment charted the
+shipped domain's sentence over its own data forever. Both are now the adapter's to
+answer (``DOMAIN_SERIES_LABEL``, ``DOMAIN_SERIES_UNIT``, ``domain_series_events``), and
+``aegis.conformance``'s vocabulary check fails if either creeps back.
 
-The dataset here is the adapter's synthetic world, so the timestamps are its epoch
-rather than today's date, and ``data_source`` says ``adapter`` so nothing downstream
-can mistake it for live client data.
+The dataset behind the series is the adapter's synthetic world, so the timestamps are
+its epoch rather than today's date, and ``data_source`` says ``adapter`` so nothing
+downstream can mistake it for live client data.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from aegis.forecast import SeriesPoint, bucket_events
 
-__all__ = ["DOMAIN_SERIES_LABEL", "domain_series", "reset_domain_cache"]
+from app.adapter import DOMAIN_SERIES_LABEL, DOMAIN_SERIES_UNIT, domain_series_events
 
-#: What the domain series measures, in the client's language.
-DOMAIN_SERIES_LABEL = "Service requests opened per day"
-
-#: How many records to fabricate for the series. Large enough that a daily bucket
-#: over the generator's ~120-day span is a countable volume rather than a sparse
-#: 0/1 rattle, which no model (and no reader) could learn anything from.
-_NUM_RECORDS = 1400
-
-#: Seed for a stable, reproducible demo series across processes and reloads.
-_SEED = 11
+__all__ = [
+    "DOMAIN_SERIES_LABEL",
+    "DOMAIN_SERIES_UNIT",
+    "domain_series",
+    "reset_domain_cache",
+]
 
 _CACHE: list[SeriesPoint] | None = None
 
@@ -47,23 +40,6 @@ def reset_domain_cache() -> None:
     _CACHE = None
 
 
-def _events() -> list[tuple[datetime, float]]:
-    """Return one ``(created_at, 1.0)`` arrival event per adapter record.
-
-    The single domain-coupled function in this module: it names the record type and
-    the timestamp field, and nothing else.
-
-    Returns:
-        Arrival events, unordered.
-    """
-    from app.adapter import GeneratorConfig, generate_synthetic_sync
-
-    dataset = generate_synthetic_sync(
-        GeneratorConfig(num_requests=_NUM_RECORDS, seed=_SEED, use_llm=False)
-    )
-    return [(r.created_at, 1.0) for r in dataset.requests]
-
-
 def domain_series(*, freq: str = "D") -> list[SeriesPoint]:
     """Return the client's domain demand series, memoised for the process lifetime.
 
@@ -71,12 +47,12 @@ def domain_series(*, freq: str = "D") -> list[SeriesPoint]:
         freq: Bucket width — one of the aliases in :data:`aegis.forecast.FREQ_SEASON`.
 
     Returns:
-        Arrival counts per bucket, oldest first, with empty buckets filled as ``0.0``
-        (no requests arrived that day — a real zero, not a missing reading).
+        Event counts per bucket, oldest first, with empty buckets filled as ``0.0``
+        (nothing arrived that day — a real zero, not a missing reading).
     """
     global _CACHE
     if freq != "D":
-        return bucket_events(_events(), freq, fill_gaps=True)
+        return bucket_events(domain_series_events(), freq, fill_gaps=True)
     if _CACHE is None:
-        _CACHE = bucket_events(_events(), freq, fill_gaps=True)
+        _CACHE = bucket_events(domain_series_events(), freq, fill_gaps=True)
     return _CACHE

@@ -10,7 +10,7 @@ the model is shippable on a given box:
 * **latency** — p50/p95 to rerank a pool of ``recall_top_k`` passages of realistic length.
   This is the number that lands in front of a user.
 * **peak RSS** — the delta the model adds to a process that is already holding Neo4j's
-  driver, Chroma and a gateway client.
+  driver, the Qdrant client and a gateway client.
 * **ordering** — a smoke check that the thing actually reranks, because a model that loads,
   answers in 70 ms and returns the input order is the failure this benchmark would otherwise
   miss entirely.

@@ -29,9 +29,8 @@ apply them:
 
 * **LOW / MEDIUM** (reads and low-consequence writes) execute through
   :func:`run_tool` and return the real :class:`ToolActionResult`.
-* **HIGH** (consequential, customer-visible writes such as
-  ``update_request_status``) are **listed** so a client can discover them, but a
-  CALL is **not auto-executed**. It returns a clear "requires human approval —
+* **HIGH** (consequential, externally-visible writes) are **listed** so a client can
+  discover them, but a CALL is **not auto-executed**. It returns a clear "requires human approval —
   routed to the approval inbox; not auto-executed via MCP" result and performs
   **no side effect**. This mirrors the platform's bounded-autonomy gate: an MCP
   client is a proposer, not an approver.
@@ -96,41 +95,19 @@ CAPABILITIES_URI = "aegis://platform/capabilities"
 TOOL_POLICY_URI = "aegis://tools/policy"
 """Resource URI for the persona allowlist + risk policy this server enforces."""
 
-# Per-tool MCP annotations. These are asserted PER TOOL rather than derived from the
-# risk tier, because risk does not imply idempotency: ``add_case_note`` is LOW risk
-# but NOT idempotent (each call appends another note), while ``update_request_status``
-# is HIGH risk and IS idempotent (setting the same status twice is one state). A
-# risk→annotation shortcut would therefore ship a hint that is simply untrue, and per
-# the MCP spec these hints are advisory metadata a client may act on — so an honest
-# table beats a tidy formula. Tools absent here fall back to
-# :func:`_conservative_annotations`.
-_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
-    # Appends a note to a case. A write, reversible, but re-running it adds another
-    # note — so explicitly NOT idempotent.
-    "add_case_note": {
-        "read_only_hint": False,
-        "destructive_hint": False,
-        "idempotent_hint": False,
-        "open_world_hint": False,
-    },
-    # Reassigns ownership. Re-running with the same assignee converges on the same
-    # state, and the previous assignee is recoverable — non-destructive, idempotent.
-    "assign_request": {
-        "read_only_hint": False,
-        "destructive_hint": False,
-        "idempotent_hint": True,
-        "open_world_hint": False,
-    },
-    # Customer-visible status transition: the consequential write this platform gates
-    # behind human approval. Destructive in the MCP sense (it overwrites prior state),
-    # though idempotent for a repeated identical target status.
-    "update_request_status": {
-        "read_only_hint": False,
-        "destructive_hint": True,
-        "idempotent_hint": True,
-        "open_world_hint": False,
-    },
-}
+# Per-tool MCP annotations come off the tool spec itself — ``ToolSpec.destructive`` and
+# ``ToolSpec.idempotent`` — rather than a table here, and they are asserted per tool
+# rather than derived from the risk tier, because risk does not imply idempotency: a
+# note-append is LOW risk and NOT idempotent, while a gated status transition is HIGH
+# risk and IS idempotent. A risk→annotation shortcut would ship a hint that is simply
+# untrue, and per the MCP spec these hints are advisory metadata a client may act on.
+#
+# This module used to hold that table keyed by the shipped domain's three tool names,
+# which made it core knowledge of one domain: a retarget renamed every key, every
+# lookup missed, and the MCP surface quietly advertised the conservative fallback as
+# though it were the domain's own assertion. A tool whose spec declares neither flag
+# still falls back to :func:`_conservative_annotations`.
+
 
 APPROVAL_REQUIRED_MESSAGE = (
     "This HIGH-risk write is a proposal only — it was NOT auto-executed via MCP "
@@ -167,6 +144,30 @@ def _conservative_annotations(risk: RiskLevel) -> dict[str, bool]:
         "destructive_hint": risk is RiskLevel.HIGH,
         "idempotent_hint": False,
         "open_world_hint": False,
+    }
+
+
+def _annotations_for(spec: object | None, risk: RiskLevel) -> dict[str, bool]:
+    """Return the MCP hints for one tool, read off its own spec.
+
+    Args:
+        spec: The registry's tool spec, or ``None`` when the tool is not registered.
+        risk: The tool's risk tier (``HIGH`` for an unregistered name).
+
+    Returns:
+        A mapping of MCP annotation hint names to values. A spec that asserts neither
+        ``destructive`` nor ``idempotent`` gets :func:`_conservative_annotations`, so a
+        tool nobody thought about is never advertised as safer than it is.
+    """
+    destructive = getattr(spec, "destructive", None)
+    idempotent = getattr(spec, "idempotent", None)
+    if destructive is None and idempotent is None:
+        return _conservative_annotations(risk)
+    return {
+        "read_only_hint": bool(getattr(spec, "read_only", False)),
+        "destructive_hint": bool(destructive),
+        "idempotent_hint": bool(idempotent),
+        "open_world_hint": bool(getattr(spec, "open_world", False)),
     }
 
 
@@ -255,7 +256,7 @@ class AdapterToolServer:
             name = function["name"]
             spec = TOOL_REGISTRY.get(name)
             risk = spec.risk if spec is not None else RiskLevel.HIGH
-            hints = _TOOL_ANNOTATIONS.get(name) or _conservative_annotations(risk)
+            hints = _annotations_for(spec, risk)
             tools.append(
                 mcp_types.Tool(
                     name=name,

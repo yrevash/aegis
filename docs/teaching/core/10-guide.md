@@ -266,7 +266,8 @@ await emitter.run_finished()
 | `AEGIS_MODE` | `full` | `full`, `lite` or `auto` — see above |
 | `AEGIS_REDIS_URL` | unset | Required in `full` |
 | `AEGIS_DATABASE_URL` | unset | Required in `full` |
-| `AEGIS_VECTOR_STORE_PATH` | unset | Directory for the embedded vector store. Required in `full` |
+| `AEGIS_VECTOR_STORE_URL` | unset | The Qdrant node (also read from `QDRANT_URL`). Required in `full` |
+| `AEGIS_VECTOR_STORE_PATH` | unset | LightRAG's local working directory. Not required |
 
 ---
 

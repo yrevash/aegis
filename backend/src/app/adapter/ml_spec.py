@@ -322,7 +322,7 @@ def feature_matrix(dataset: SyntheticDataset) -> tuple[list[dict], list[float]]:
     return features, targets
 
 
-def training_frame(*, num_requests: int = 1200, seed: int = 7) -> pd.DataFrame:
+def training_frame(*, num_records: int = 1200, seed: int = 7) -> pd.DataFrame:
     """Build the ML spine's labelled training frame from a fresh synthetic world.
 
     This is the ``frame_provider`` the spine resolves at (offline) train time: it
@@ -333,7 +333,11 @@ def training_frame(*, num_requests: int = 1200, seed: int = 7) -> pd.DataFrame:
     trains on genuine domain signal — never generic noise.
 
     Args:
-        num_requests: Requests to synthesise (more ⇒ more labelled training rows).
+        num_records: Records to synthesise (more ⇒ more labelled training rows).
+            The keyword is deliberately domain-neutral: it is named in
+            :class:`aegis.adapter.MLSpecModule`, and a core Protocol that spelled it
+            ``num_requests`` would force every future domain to describe its rows as
+            "requests".
         seed: Seed for the synthetic world (deterministic frame under a fixed seed).
 
     Returns:
@@ -345,7 +349,7 @@ def training_frame(*, num_requests: int = 1200, seed: int = 7) -> pd.DataFrame:
     from app.adapter.generator import GeneratorConfig, generate_synthetic_sync
 
     dataset = generate_synthetic_sync(
-        GeneratorConfig(seed=seed, num_requests=num_requests)
+        GeneratorConfig(seed=seed, num_requests=num_records)
     )
     rows, targets = feature_matrix(dataset)
     frame = pd.DataFrame(rows, columns=FEATURE_NAMES)

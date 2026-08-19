@@ -3865,7 +3865,7 @@ export interface components {
         AuditLogRow: {
             /**
              * Action
-             * @description The action performed, e.g. 'tool:update_request_status'.
+             * @description The action performed, e.g. 'tool:<registered_name>'.
              */
             action: string;
             /**

@@ -1,7 +1,7 @@
-"""Chroma-backed memory recall — the ANN engine, isolation, and SQL source-of-truth.
+"""Qdrant-backed memory recall — the ANN engine, isolation, and SQL source-of-truth.
 
 These tests pin the slice-2 behaviour: memory's semantic recall runs through an embedded
-:class:`~aegis.retrieval.vector_store.ChromaVectorStore` (a real offline index with no
+:class:`~aegis.retrieval.vector_store.QdrantVectorStore` (a real offline index with no
 server binary, never a RAM dict), scoped by tenant + subject metadata filters, and every
 hit is joined back to the authoritative SQL row before it is returned. The cross-tenant
 leak tests are load-bearing — a recall must never surface another tenant's row even when
@@ -49,16 +49,16 @@ def _fact(subject_id, predicate, obj, emb, *, tenant_id=None, **kw) -> MemoryFac
 # --------------------------------------------------------------------------- engine
 
 
-async def test_default_index_is_embedded_chroma_not_a_dict():
-    """The process-wide default is the real embedded chroma engine, offline."""
+async def test_default_index_is_a_real_engine_not_a_dict():
+    """The process-wide default is the real in-process Qdrant engine, offline."""
     index = get_default_index()
     assert isinstance(index, MemoryVectorIndex)
     assert index.store.mode == "local"  # embedded — no server, no dict fallback
     assert index.store.location == ":memory:"
 
 
-async def test_recall_search_goes_through_chroma(db):
-    """Recall mirrors the subject's fact into a Chroma collection and searches it there."""
+async def test_recall_search_goes_through_qdrant(db):
+    """Recall mirrors the subject's fact into a Qdrant collection and searches it there."""
     index = MemoryVectorIndex.local()
     set_default_index(index)
     cfg = MemoryConfig()
@@ -78,14 +78,14 @@ async def test_recall_search_goes_through_chroma(db):
             config=cfg,
         )
     assert [c.key for c in bundle.facts] == ["customer|prefers_channel"]
-    # Independently prove the vector actually landed in — and is searchable from — Chroma.
+    # Independently prove the vector actually landed in — and is searchable from — Qdrant.
     collection = index._collection("memory_fact", 4)
     hits = index.store.search(collection, [1.0, 0.0, 0.0, 0.0], 5, filter={"subject_id": "user:1"})
-    assert hits and hits[0].score == pytest.approx(1.0)  # cosine identity via Chroma
+    assert hits and hits[0].score == pytest.approx(1.0)  # cosine identity via Qdrant
 
 
-async def test_score_is_chroma_cosine_and_ranks(db):
-    """The composite's relevance is the Chroma cosine similarity; nearest ranks first."""
+async def test_score_is_qdrant_cosine_and_ranks(db):
+    """The composite's relevance is the Qdrant cosine similarity; nearest ranks first."""
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1"))
         s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0], importance=5))
@@ -186,15 +186,15 @@ async def test_valid_only_join_excludes_invalidated_nearest(db):
     assert "old_tier" not in preds  # invalid row filtered at the SQL source of truth
 
 
-async def test_stale_chroma_point_cannot_resurrect_a_deleted_row(db):
-    """A point left in Chroma for a row no longer in SQL is dropped by the join."""
+async def test_stale_qdrant_point_cannot_resurrect_a_deleted_row(db):
+    """A point left in Qdrant for a row no longer in SQL is dropped by the join."""
     index = MemoryVectorIndex.local()
     set_default_index(index)
     async with db() as s:
         f = _fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0])
         s.add(f)
         await s.commit()
-        # Prime Chroma with the fact, then hard-delete the SQL row it points to.
+        # Prime Qdrant with the fact, then hard-delete the SQL row it points to.
         hits = await topk_by_cosine(
             s, MemoryFact, subject_id="user:1", query_vec=[1.0, 0.0, 0.0, 0.0], k=5
         )
@@ -208,7 +208,7 @@ async def test_stale_chroma_point_cannot_resurrect_a_deleted_row(db):
         hits = await topk_by_cosine(
             s, MemoryFact, subject_id="user:1", query_vec=[1.0, 0.0, 0.0, 0.0], k=5
         )
-    assert hits == []  # Chroma may still hold the point, but SQL is the source of truth
+    assert hits == []  # Qdrant may still hold the point, but SQL is the source of truth
 
 
 async def test_none_query_vec_and_nonpositive_k_short_circuit(db):
@@ -224,8 +224,8 @@ async def test_none_query_vec_and_nonpositive_k_short_circuit(db):
         ) == []
 
 
-async def test_episodic_messages_recalled_via_chroma(db):
-    """Message (episodic) vectors are indexed + searched through the same Chroma path."""
+async def test_episodic_messages_recalled_via_qdrant(db):
+    """Message (episodic) vectors are indexed + searched through the same Qdrant path."""
     async with db() as s:
         await add_in_fk_order(
             s,
@@ -259,7 +259,7 @@ async def test_episodic_messages_recalled_via_chroma(db):
 
 
 class _CountingStore:
-    """Wraps a real store, recording every (synchronous) chromadb call it makes."""
+    """Wraps a real store, recording every (synchronous) qdrant_client call it makes."""
 
     def __init__(self, store) -> None:
         self._store = store
@@ -339,8 +339,8 @@ async def test_rows_added_after_the_first_sync_are_still_indexed(db):
     assert store.upserted == [["1"], ["2"]]
 
 
-async def test_chroma_calls_run_off_the_event_loop(db):
-    """Every chromadb call is synchronous, so none may run on the loop's thread."""
+async def test_qdrant_calls_run_off_the_event_loop(db):
+    """Every qdrant_client call is synchronous, so none may run on the loop's thread."""
     _, store = _counting_index()
     async with db() as s:
         s.add(_fact("user:1", "prefers_channel", "email", [1.0, 0.0, 0.0, 0.0]))
@@ -375,8 +375,8 @@ async def test_null_tenant_search_never_joins_a_tenants_row(db):
 async def test_null_tenant_is_excluded_by_the_ann_prefilter_itself(db):
     """SECURITY: the vector pre-filter is null-symmetric, not just the SQL gate.
 
-    Chroma drops a ``None`` metadata value outright, so encoding the null tenant naively
-    would erase the tenant condition from the ``where`` clause and let the ANN engine rank
+    Qdrant cannot match a JSON null with ``MatchValue``, so encoding the null tenant
+    naively would erase the tenant condition from the filter and let the ANN engine rank
     (and return) tenant 1's point for an unscoped recall — with a colliding subject id,
     straight into a prompt. Both directions are asserted at the store level, *below* the
     authoritative SQL join, so a regression cannot hide behind that second gate.
