@@ -104,10 +104,26 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validat
 
 
 class _BaseEvent(BaseModel):
-    """Fields common to every streamed event."""
+    """Fields common to every streamed event.
+
+    ``agent_id`` is here rather than on the few event types a sub-agent happens to
+    emit, because pydantic's default ``extra="ignore"`` made the omission **silent**:
+    :func:`stamp` builds these models from the pure package's dicts, so an event
+    carrying ``agent_id`` simply lost it on the way to the wire, and the per-agent
+    trace collapsed host-side while every test inside ``aegis`` still passed. A field
+    the wire drops without complaining is the same defect class as a control that is
+    quiet when it does not fire.
+    """
 
     run_id: str = Field(description="Correlates all events of one query run.")
     seq: int = Field(description="Monotonic sequence number within the run.")
+    agent_id: str | None = Field(
+        default=None,
+        description=(
+            "The sub-agent that emitted this event. ``None`` means the supervisor or a "
+            "graph-level node, which is what every single-pass run emits."
+        ),
+    )
 
 
 class RunStarted(_BaseEvent):

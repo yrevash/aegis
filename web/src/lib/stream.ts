@@ -49,6 +49,13 @@ export interface BaseEvent {
   run_id: string
   /** Monotonic sequence number within the run. */
   seq: number
+  /**
+   * The sub-agent that emitted this event; absent for the supervisor and for
+   * graph-level nodes, which is every event a single-pass run produces. Present on
+   * every event of a fan-out, and it is what groups a lane's log rather than a UI
+   * guess based on node names.
+   */
+  agent_id?: string | null
 }
 
 /** A node in the context knowledge graph (coloured by `kind`). */
