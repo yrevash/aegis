@@ -1,0 +1,121 @@
+[
+  {
+    "id": "spend-by-model",
+    "title": "Spend by model",
+    "summary": "What this tenant spent per model, from the usage ledger.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "client"
+    ],
+    "datasourceId": 0,
+    "datasourceType": "table",
+    "groupby": [
+      "model"
+    ],
+    "metrics": [
+      "spend_usd"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+  },
+  {
+    "id": "token-volume",
+    "title": "Token volume",
+    "summary": "Prompt and completion tokens per model \u2014 where the spend comes from.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin"
+    ],
+    "datasourceId": 0,
+    "groupby": [
+      "model"
+    ],
+    "metrics": [
+      "tokens_total",
+      "calls_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+  },
+  {
+    "id": "runs-by-outcome",
+    "title": "Runs by outcome",
+    "summary": "Agent runs per outcome, with guardrail blocks.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin"
+    ],
+    "datasourceId": 0,
+    "groupby": [
+      "status"
+    ],
+    "metrics": [
+      "runs_total",
+      "blocks_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_7_days",
+    "rowLimit": 200,
+    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+  },
+  {
+    "id": "human-gates",
+    "title": "Human gates",
+    "summary": "Every run that paused for a person, by risk tier and outcome.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "client"
+    ],
+    "datasourceId": 0,
+    "groupby": [
+      "risk"
+    ],
+    "metrics": [
+      "gates_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 100,
+    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+  },
+  {
+    "id": "operations",
+    "title": "Operations dashboard",
+    "summary": "The full Superset dashboard, embedded in this page.",
+    "kinds": [
+      "chart",
+      "dashboard"
+    ],
+    "audience": [
+      "platform_admin"
+    ],
+    "datasourceId": 0,
+    "groupby": [
+      "status"
+    ],
+    "metrics": [
+      "runs_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_7_days",
+    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+  }
+]

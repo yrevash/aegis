@@ -106,6 +106,7 @@ plus the console (`web/`) via `npm`. You never install these by hand.
 | `JWT_SECRET` | `backend/.env` | HS256 signing secret — **set a real one for any shared deploy** (ADR 0008). |
 | `APPROVAL_SLA_SECONDS` | `backend/.env` | SLA before the sweeper auto-rejects a HIGH-risk pending gate. |
 | `NEXT_PUBLIC_USE_MOCK` | set by start script | `true` = console runs with no backend. |
+| `AEGIS_SUPERSET_*` | `backend/.env` | Embedded analytics. **Optional and off by default** — Aegis boots and behaves identically without Superset. Full list and the Superset-side config: [`superset-embedded.md`](superset-embedded.md). |
 
 ---
 

@@ -1,0 +1,143 @@
+table_name: analytics_spend_daily
+main_dttm_col: day
+description: 'Model spend and token volume per day and deployment. Tenant-labelled; every query Superset runs against it is narrowed by the guest token''s RLS clause on tenant_id.'
+default_endpoint: null
+offset: 0
+cache_timeout: null
+schema: public
+sql: null
+params: null
+template_params: null
+filter_select_enabled: true
+fetch_values_predicate: null
+extra: null
+normalize_columns: false
+always_filter_main_dttm: false
+uuid: 'ee5786f0-88ec-5597-bec6-98338844a127'
+metrics:
+- metric_name: spend_usd
+  verbose_name: Spend (USD)
+  metric_type: null
+  expression: SUM(cost_usd)
+  description: null
+  d3format: ',.2f'
+  currency: null
+  extra: null
+  warning_text: null
+- metric_name: calls_total
+  verbose_name: Model calls
+  metric_type: null
+  expression: SUM(calls)
+  description: null
+  d3format: ',d'
+  currency: null
+  extra: null
+  warning_text: null
+- metric_name: tokens_total
+  verbose_name: Tokens
+  metric_type: null
+  expression: SUM(total_tokens)
+  description: null
+  d3format: ',d'
+  currency: null
+  extra: null
+  warning_text: null
+columns:
+- column_name: tenant_id
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: BIGINT
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+- column_name: day
+  verbose_name: null
+  is_dttm: true
+  is_active: true
+  type: TIMESTAMP WITHOUT TIME ZONE
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+- column_name: model
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: TEXT
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+- column_name: calls
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: BIGINT
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+- column_name: prompt_tokens
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: BIGINT
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+- column_name: completion_tokens
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: BIGINT
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+- column_name: total_tokens
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: BIGINT
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+- column_name: cost_usd
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: DOUBLE PRECISION
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: null
+  python_date_format: null
+  extra: null
+version: 1.0.0
+database_uuid: 'f5e1e4b2-8458-5481-a0b2-ddfeae2aacee'

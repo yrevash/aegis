@@ -1,0 +1,11 @@
+slice_name: Spend by model
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_bar
+params: '{"datasource": null, "viz_type": "echarts_timeseries_bar", "x_axis": "day", "time_grain_sqla": "P1D", "metrics": ["spend_usd"], "groupby": ["model"], "adhoc_filters": [], "row_limit": 500, "order_desc": true, "x_axis_title": "Day", "y_axis_title": "Spend (USD)", "y_axis_format": ",.2f", "color_scheme": "supersetColors", "show_legend": true}'
+query_context: null
+cache_timeout: null
+uuid: 'aac2b153-a8e9-5c54-a237-ae61a03e0693'
+version: 1.0.0
+dataset_uuid: 'ee5786f0-88ec-5597-bec6-98338844a127'
