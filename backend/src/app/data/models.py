@@ -144,6 +144,19 @@ class Approval(Base):
     #: deliberately — dropping it needs a migration and those are deferred — and the
     #: console guards on the value being absent, so an empty dict renders cleanly.
     ml_snapshot: Mapped[dict[str, Any]] = mapped_column(JsonB, default=dict)
+    #: Every call this ONE gate authorises, not only the representative in ``action``.
+    #: A fan-out can propose three consequential writes in a single turn; the live
+    #: ``approval_required`` event has enumerated all of them since commit ``7285bd6``,
+    #: and the durable row did not — so the inbox showed one write while approving ran
+    #: three. Nullable (not a defaulted NOT NULL) because that is what
+    #: ``reconcile_additive_columns`` can install without a migration; a row written
+    #: before this column existed reads as ``None`` and falls back to the representative.
+    actions: Mapped[list[dict[str, Any]] | None] = mapped_column(JsonB, default=None)
+    #: The ``users.id`` whose run raised this gate, when the run was made by a real
+    #: user. This is what lets a tenant's own user see the fate of the gates *they*
+    #: raised without being able to see anybody else's — the client half of the inbox.
+    #: Plain indexed column, as ``tenant_id`` above: no cross-package DDL foreign key.
+    requested_by: Mapped[int | None] = mapped_column(default=None, index=True)
     trace_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
     assignee_tier: Mapped[str | None] = mapped_column(String(64), default=None)
     sla_deadline: Mapped[datetime | None] = mapped_column(default=None, index=True)

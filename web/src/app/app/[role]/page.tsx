@@ -1,9 +1,9 @@
 import { notFound, redirect } from 'next/navigation'
-import { defaultSectionFor, isRole } from '@/lib/portal'
+import { defaultSectionFor, isPortal } from '@/lib/portal'
 
-/** /app/[role] → redirect to the role's first (default) section. */
+/** /app/[portal] → redirect to that portal's first (default) section. */
 export default async function PortalIndex({ params }: { params: Promise<{ role: string }> }) {
-  const { role } = await params
-  if (!isRole(role)) notFound()
-  redirect(`/app/${role}/${defaultSectionFor(role)}`)
+  const { role: portal } = await params
+  if (!isPortal(portal)) notFound()
+  redirect(`/app/${portal}/${defaultSectionFor(portal)}`)
 }

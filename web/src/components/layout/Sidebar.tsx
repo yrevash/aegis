@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { AegisLockup } from '@/components/brand/AegisLockup'
 import { cn } from '@/lib/utils'
-import { portalLabelFor, sectionsFor, type Role, type Section } from '@/lib/portal'
+import { portalLabelFor, sectionsFor, type Portal, type Section } from '@/lib/portal'
 
 const DEFAULT_GROUP = 'Workspace'
 
@@ -23,12 +23,12 @@ function groupSections(sections: Section[]): [string, Section[]][] {
 /**
  * The fixed left navigation rail — TailAdmin's sidebar structure (brand, grouped
  * nav with uppercase group titles, active accent), restyled to our tokens. Each
- * row links to /app/[role]/[section]; the active row is derived from the URL.
+ * row links to /app/[portal]/[section]; the active row is derived from the URL.
  */
-export function Sidebar({ role }: { role: Role }) {
+export function Sidebar({ portal }: { portal: Portal }) {
   const pathname = usePathname()
   const active = pathname.split('/')[3] ?? ''
-  const groups = groupSections(sectionsFor(role))
+  const groups = groupSections(sectionsFor(portal))
 
   return (
     <aside className="sticky top-0 hidden h-dvh w-[264px] shrink-0 self-start border-r border-border bg-surface lg:flex lg:flex-col">
@@ -51,7 +51,7 @@ export function Sidebar({ role }: { role: Role }) {
                 return (
                   <li key={item.id}>
                     <Link
-                      href={`/app/${role}/${item.id}`}
+                      href={`/app/${portal}/${item.id}`}
                       aria-current={isActive ? 'page' : undefined}
                       title={item.tooltip}
                       className={cn(
@@ -81,7 +81,7 @@ export function Sidebar({ role }: { role: Role }) {
 
       {/* Portal label */}
       <div className="border-t border-border px-5 py-4">
-        <p className="eyebrow">{portalLabelFor(role)}</p>
+        <p className="eyebrow">{portalLabelFor(portal)}</p>
       </div>
     </aside>
   )

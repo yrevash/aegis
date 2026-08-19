@@ -14,7 +14,9 @@ This module relates them, from the real artefacts on both sides:
 * the **portal catalogue** ``ROLE_SECTIONS`` / ``SECTIONS`` in
   ``web/src/lib/portal.ts``;
 * the **section renderer** ``web/src/app/app/[role]/[section]/page.tsx``, which
-  decides — per role — which component a section actually mounts;
+  decides — per portal — which component a section actually mounts (the ``[role]``
+  URL segment carries the *fine* role since §7.2, so there are five portals, not
+  four, and the two admin tiers no longer share one);
 * the **call graph** from each mounted component through its imports to the
   ``web/src/lib/api`` functions that name endpoint paths and methods.
 
@@ -77,6 +79,12 @@ _AUTH_GUARDS = frozenset(
         "require_client",
         "require_platform_admin",
         "require_tenant_admin",
+        # The red-team control plane's two guards (§7.13). Both are built from
+        # ``require_auth`` and refuse a role outright; without them listed here their
+        # routes would be classified **public** and silently dropped from this whole
+        # analysis — which is the opposite of what a guard named ``require_*`` means.
+        "require_redteam_operator",
+        "require_redteam_reader",
         # ``require_roles(...)`` returns a closure named ``_dep``; it is only ever
         # built from ``require_auth``, so its presence marks an authenticated route.
         "_dep",
@@ -351,7 +359,9 @@ def _role_sections() -> dict[str, list[str]]:
     """Parse ``ROLE_SECTIONS`` — role → the section ids its portal exposes."""
     text = _PORTAL_TS.read_text()
     block = re.search(
-        r"ROLE_SECTIONS:\s*Record<Role, string\[\]>\s*=\s*\{(.*?)\n\}", text, re.S
+        r"ROLE_SECTIONS:\s*Record<(?:Role|Portal), string\[\]>\s*=\s*\{(.*?)\n\}",
+        text,
+        re.S,
     )
     assert block is not None, f"ROLE_SECTIONS not found in {_PORTAL_TS}"
     return {
@@ -382,6 +392,11 @@ class _RenderBranch:
 
 _BRANCH_RE = re.compile(r"if \(([^)]*)\) return <(\w+)")
 
+#: How the renderer names the portal it is switching on. It was `role` while the URL
+#: segment carried the coarse role and is `portal` since §7.2 split the two admin
+#: tiers; both are accepted so the parse does not depend on the variable's name.
+_PORTAL_IN_CONDITION = re.compile(r"\b(?:portal|role) === '(\w+)'")
+
 
 def _render_branches() -> list[_RenderBranch]:
     """Parse the section renderer's branches, in source (first-match) order."""
@@ -390,7 +405,7 @@ def _render_branches() -> list[_RenderBranch]:
     for match in _BRANCH_RE.finditer(text):
         condition, component = match.group(1), match.group(2)
         section = re.search(r"section === '(\w+)'", condition)
-        role = re.search(r"role === '(\w+)'", condition)
+        role = _PORTAL_IN_CONDITION.search(condition)
         branches.append(
             _RenderBranch(
                 section=section.group(1) if section else None,
@@ -464,10 +479,21 @@ def _console_sections() -> set[str]:
 #: ``console`` on ``client`` is the §3.10 entry: the client is the role the product
 #: exists for, and the console is the only surface that asks a question.
 REQUIRED_SECTIONS: dict[str, frozenset[str]] = {
-    "admin": frozenset({"dashboard", "governance", "audit", "roles", "forecast"}),
+    "platform_admin": frozenset(
+        {"dashboard", "governance", "audit", "roles", "forecast", "approvals"}
+    ),
+    # The portal that did not exist before §7.2: a tenant's own administrator was
+    # borrowing the platform operator's. `approvals` is the one that makes it a portal
+    # rather than a copy — deciding its tenant's gates is the authority §7.1 moved
+    # here, and this row is what stops it being moved back out.
+    "tenant_admin": frozenset({"dashboard", "approvals", "governance", "audit"}),
     "ai_team": frozenset({"console", "harness", "evals", "memory", "rag", "guardrails"}),
     "devops": frozenset({"stack", "patch", "security", "redteam", "latency"}),
-    "client": frozenset({"console", "dashboard", "savings", "forecast", "risk"}),
+    # `approvals` on the client is read-only and is still required: a user whose run
+    # trips the HIGH-risk gate had no screen at all that told them what happened to it.
+    "client": frozenset(
+        {"console", "dashboard", "savings", "forecast", "risk", "approvals"}
+    ),
 }
 
 #: Non-public endpoints deliberately not reachable from any portal, each with the
@@ -476,33 +502,19 @@ REQUIRED_SECTIONS: dict[str, frozenset[str]] = {
 #: fails if an entry names a route that no longer exists or one that has since been
 #: wired, so the list cannot rot in either direction.
 UNREACHABLE_BY_DESIGN: dict[tuple[str, str], str] = {
-    # ── The approvals inbox has no screen (phase 7.1 owns it) ────────────────
-    # `ApprovalCard` renders a *single* live gate inside a run (POST /approval);
-    # the durable inbox that lists parked gates and decides them out-of-band has
-    # no route in the app at all. Phase 7.1 mounts `ApprovalInbox` and is named
-    # there as the prerequisite for the rest of that phase.
-    ("GET", "/approvals"): "phase 7.1 — the approvals inbox screen does not exist yet",
-    (
-        "POST",
-        "/approvals/{}/decision",
-    ): "phase 7.1 — decided from the inbox screen, which does not exist yet",
-    # ── Provisioning writes have no forms (phase 7.3 owns them) ──────────────
-    # Server-side complete (Argon2 hashing, tenant pinning, 409 on duplicates,
-    # audit rows); the gap is entirely in the browser. Phase 7.3 adds
-    # `CreateTenantForm` / `CreateUserForm` / `BudgetForm` beside `RolesAccess`.
-    # `createBudget` already exists in the api client and is called by nothing —
-    # this entry is what keeps that dead code visible.
-    ("POST", "/admin/tenants"): "phase 7.3 — no CreateTenantForm in the browser yet",
-    ("POST", "/admin/users"): "phase 7.3 — no CreateUserForm in the browser yet",
-    ("POST", "/admin/budgets"): "phase 7.3 — no BudgetForm; api client `createBudget` is unwired",
-    # ── Per-resource admin reads, superseded by the aggregate ────────────────
+    # ── The usage rollup, superseded by the aggregate ────────────────────────
     # `GET /governance/dashboard` returns tenants + budgets + users + the usage
-    # rollup + the audit tail in one tenant-scoped call, and is what the
-    # Governance section renders. These three remain the per-resource API reads
-    # (used by integration tests and by any API consumer); a portal calling them
-    # would issue three round trips for data it already has.
-    ("GET", "/admin/tenants"): "superseded in the UI by the GET /governance/dashboard aggregate",
-    ("GET", "/admin/budgets"): "superseded in the UI by the GET /governance/dashboard aggregate",
+    # rollup + the audit tail in one tenant-scoped call, and is what the Governance
+    # section renders. This remains the per-resource API read (used by integration
+    # tests and by any API consumer); a portal calling it would issue a second round
+    # trip for data it already has.
+    #
+    # The five provisioning entries that sat here — POST/GET `/admin/tenants`,
+    # POST/GET `/admin/budgets`, POST `/admin/users` — are gone because phase 7.3
+    # wired the forms (commit `8cbf446`), and the reads came with them. The allowlist
+    # cannot rot in that direction: leaving them would fail
+    # :func:`test_allowlist_is_neither_stale_nor_wrong` as loudly as omitting a real
+    # one fails the reachability test.
     ("GET", "/admin/usage"): "superseded in the UI by the GET /governance/dashboard aggregate",
     # ── Right-to-erasure writes (phase 7 §6 owns the memory control plane) ───
     # The only hard deletes in the product. Exposing them from a read-only

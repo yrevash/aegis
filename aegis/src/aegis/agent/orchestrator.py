@@ -269,6 +269,13 @@ async def run_agent(
                         args=args,
                         risk=risk,
                         rationale=rationale,
+                        # Every call this gate authorises, not only the representative
+                        # in ``action``. The live ``approval_required`` event below has
+                        # enumerated all of them since ``7285bd6``; the durable row did
+                        # not, so the async inbox asked a person to authorise three
+                        # writes while naming one — the same defect the card was fixed
+                        # for, one surface further along.
+                        actions=actions,
                         # NOTE: no ``ml_snapshot`` is passed. The host's approvals
                         # row still HAS that column and the console still reads it,
                         # but no ML step runs in this graph any more, so there is

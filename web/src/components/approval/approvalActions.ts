@@ -20,7 +20,28 @@
  * Pure and framework-free, so the consent rule is testable without a renderer.
  */
 
-import type { ApprovalAction, ApprovalRequired, RiskLevel } from '@/lib/stream'
+import type { ApprovalAction, RiskLevel } from '@/lib/stream'
+
+/**
+ * A gate this module can read — the fields that decide what approving will run.
+ *
+ * Structural rather than the `ApprovalRequired` event it started as, because the
+ * *same* consent question is asked in two places now: the live card inside a run, and
+ * the durable row in the approvals inbox. Both carry a representative call and a list;
+ * neither should get its own copy of the rule for reconciling them. `ApprovalRequired`
+ * satisfies this, and so does `ApprovalInboxRow` with its `id` passed as
+ * `approval_id`.
+ */
+export interface AuthorisingGate {
+  /** The gate's id — the fallback call's id when the wire carried no list. */
+  approval_id: string
+  /** The representative (highest-risk) call. */
+  action: string
+  args: Record<string, unknown>
+  risk: RiskLevel
+  /** Every call this gate authorises, when the backend enumerated them. */
+  actions?: ApprovalAction[] | null
+}
 
 /** The risk words the wire uses. Anything else is not a risk level. */
 const RISKS: readonly string[] = ['low', 'medium', 'high']
@@ -76,12 +97,12 @@ function summaryFor(count: number): string {
 }
 
 /**
- * Read an `approval_required` event into what the gate should show.
+ * Read a gate — live event or durable inbox row — into what it should show.
  *
- * @param approval - The live gate event.
+ * @param approval - The gate, in either of its two shapes.
  * @returns The calls approving authorises, and the sentence that counts them.
  */
-export function readApproval(approval: ApprovalRequired): ApprovalView {
+export function readApproval(approval: AuthorisingGate): ApprovalView {
   const listed = (approval.actions ?? [])
     .map((raw) => readAction(raw, approval.risk))
     .filter((entry): entry is AuthorisedAction => entry !== null)

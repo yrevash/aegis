@@ -4,7 +4,8 @@ Each test here FAILS on the pre-fix code and passes after the fix:
 
 - C1 — approvals inbox + decision paths were only ``require_admin`` and never
   checked the approval's tenant, so a tenant-admin could read and decide on another
-  tenant's gates.
+  tenant's gates. §7.1 closed the other half of the same hole: the platform admin was
+  *exempted* from the check, so the Aegis operator decided a tenant's business gate.
 - H2 — the audit trail had no tenant column/scoping, so any admin saw every
   tenant's actions.
 - H3 — ``POST /admin/budgets`` only guarded the ``tenant`` scope, letting a
@@ -101,8 +102,21 @@ async def test_tenant_admin_cannot_decide_other_tenant_approval(client, db):
     assert any(r["id"] == "ap-b" and r["status"] == "pending" for r in p.json()["rows"])
 
 
-async def test_owner_and_platform_admin_can_decide(client, db):
+async def test_the_owner_decides_and_the_platform_admin_may_not(client, db):
+    """A tenant's gate is the tenant admin's decision. Aegis's own gate is Aegis's.
+
+    This is the §7.1 ownership move, asserted from both ends. The platform admin used
+    to be exempted outright by an early return in ``_enforce_approval_tenant``, so the
+    operator of Aegis decided a customer's business gate — the exact authority a
+    multi-tenant governance product must not hold. Deleting the exemption is only half
+    the claim; the other half is that the operator keeps the gates that are genuinely
+    theirs, the ones no tenant raised.
+    """
     await _seed_two_approvals()
+    await enqueue_approval(
+        approval_id="ap-aegis", run_id="run-aegis", action="x", risk=RiskLevel.HIGH
+    )
+
     # Owning tenant-admin resolves its own gate.
     own = await client.post(
         "/approvals/ap-a/decision",
@@ -111,13 +125,51 @@ async def test_owner_and_platform_admin_can_decide(client, db):
     )
     assert own.status_code == 200 and own.json()["accepted"] is True
 
-    # Platform-admin resolves another tenant's gate.
+    # Platform-admin may NOT resolve a tenant's gate — from either surface.
     cross = await client.post(
         "/approvals/ap-b/decision",
         json={"decision": "reject"},
         headers=_headers(PLATFORM_ADMIN),
     )
-    assert cross.status_code == 200 and cross.json()["accepted"] is True
+    assert cross.status_code == 403
+    cross_live = await client.post(
+        "/approval",
+        json={"approval_id": "ap-b", "decision": "reject"},
+        headers=_headers(PLATFORM_ADMIN),
+    )
+    assert cross_live.status_code == 403
+
+    # …and the refusal is real: the row never left PENDING.
+    listed = await client.get("/approvals", headers=_headers(PLATFORM_ADMIN))
+    rows = {r["id"]: r for r in listed.json()["rows"]}
+    assert rows["ap-b"]["status"] == "pending"
+
+    # The platform admin still sees it — read-only, with the reason stated.
+    assert rows["ap-b"]["decidable"] is False
+    assert "tenant" in rows["ap-b"]["blocked_reason"]
+
+    # Aegis's own gate (no tenant) is the one the platform admin does decide.
+    assert rows["ap-aegis"]["decidable"] is True
+    assert rows["ap-aegis"]["blocked_reason"] is None
+    mine = await client.post(
+        "/approvals/ap-aegis/decision",
+        json={"decision": "approve"},
+        headers=_headers(PLATFORM_ADMIN),
+    )
+    assert mine.status_code == 200 and mine.json()["accepted"] is True
+
+
+async def test_a_tenant_admin_cannot_decide_the_platforms_own_gate(client, db):
+    """The move is symmetric: an un-tenanted gate is not a tenant's to decide."""
+    await enqueue_approval(
+        approval_id="ap-aegis-2", run_id="run-aegis-2", action="x", risk=RiskLevel.HIGH
+    )
+    resp = await client.post(
+        "/approvals/ap-aegis-2/decision",
+        json={"decision": "approve"},
+        headers=_headers(TENANT_ADMIN, tenant_id=1),
+    )
+    assert resp.status_code == 403
 
 
 async def test_unknown_approval_still_idempotent_noop(client, db):

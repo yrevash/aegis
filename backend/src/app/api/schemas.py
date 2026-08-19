@@ -878,12 +878,50 @@ class ApprovalRow(BaseModel):
             "on the contract because the underlying column is kept."
         ),
     )
+    actions: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Every call approving this gate will run — not only the representative "
+            "in `action`, which is the single highest-risk one. Empty on a row "
+            "written before the column existed; the reader falls back to `action`."
+        ),
+    )
+    requested_by: int | None = Field(
+        default=None,
+        description="The `users.id` whose run raised the gate, when a real user did.",
+    )
+    decided_at: str | None = Field(
+        default=None, description="ISO 8601 UTC time the gate was decided."
+    )
+    decided_by: str | None = Field(
+        default=None, description="Who decided it (or `sla-sweeper` when the SLA did)."
+    )
+
+
+class ApprovalInboxRow(ApprovalRow):
+    """One inbox row, plus **this caller's** right to decide it.
+
+    `decidable` is computed by the server from the same rule the decision endpoints
+    enforce (`app.api.routes._decision_refusal`), never re-derived in the browser: a
+    second copy of "who owns this gate" in TypeScript is a copy that can disagree with
+    the 403. When it is false, `blocked_reason` is the sentence the disabled control
+    shows — the buttons are rendered and explained rather than hidden, so an operator
+    can see that the gate exists, see that it is not theirs, and see why.
+    """
+
+    decidable: bool = Field(
+        description="Whether this caller may decide this gate (the 403's inverse)."
+    )
+    blocked_reason: str | None = Field(
+        default=None,
+        description="Why this caller may not decide it; None when `decidable`.",
+    )
 
 
 class ApprovalInboxResponse(BaseModel):
-    """Body for `GET /approvals` — the pending durable-approval rows."""
+    """Body for `GET /approvals` — the durable-approval rows this caller may see."""
 
-    rows: list[ApprovalRow]
+    rows: list[ApprovalInboxRow]
 
 
 class ApprovalDecisionRequest(BaseModel):

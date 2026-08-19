@@ -17,7 +17,11 @@ What it writes:
 * a day **budget** for each tenant and a tighter one for each tenant's client user, so
   the nearest-binding-limit resolution has something real to resolve;
 * three **documents** per tenant, each inserted with that tenant's RLS scope bound, so
-  the seed itself exercises the isolation it exists to make testable.
+  the seed itself exercises the isolation it exists to make testable;
+* one parked **human gate** per tenant, raised by that tenant's client user, and one
+  un-tenanted gate that is Aegis's own action — so the approvals inbox (§7.1) has
+  something real in all three of its scopes on a fresh database instead of demoing as
+  an empty queue.
 
 **Idempotency is a property of every step, not a flag.** Each row is looked up by its
 natural key — tenant name, username, ``(scope_type, scope_id, window)``,
@@ -55,6 +59,7 @@ from sqlalchemy.exc import SQLAlchemyError
 # it is what injects this deployment's session factory and RLS scope binder into the
 # governance package (see ``app.data.governance``), so a governed write from here takes
 # the identical path a request's does.
+from app.api.schemas import RiskLevel
 from app.data import (
     Budget,
     BudgetScope,
@@ -65,6 +70,8 @@ from app.data import (
     User,
     create_tenant,
     create_user,
+    enqueue_approval,
+    get_approval,
     get_sessionmaker,
     set_tenant_scope,
     upsert_budget,
@@ -72,9 +79,11 @@ from app.data import (
 
 __all__ = [
     "DEFAULT_SEED_PASSWORD",
+    "PLATFORM_APPROVAL",
     "PLATFORM_PRINCIPALS",
     "SEED_PASSWORD_ENV",
     "TENANTS",
+    "ApprovalSpec",
     "DocumentSpec",
     "PrincipalSpec",
     "SeedSummary",
@@ -145,6 +154,43 @@ class DocumentSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class ApprovalSpec:
+    """One parked human gate the seed guarantees exists.
+
+    The approvals inbox is the first screen §7.1 builds and the one the whole phase
+    is a prerequisite of, and a queue with nothing in it demos as a blank page. So
+    the starting state carries real ``PENDING`` rows: one per tenant, raised by that
+    tenant's own client user, plus one un-tenanted gate that is Aegis's own action.
+    Between them the three inbox scopes are all non-empty on a fresh database — a
+    tenant admin has something to decide, the platform operator has something of its
+    own to decide and two tenants' gates it may only watch, and the client who
+    raised one can see what became of it.
+
+    Attributes:
+        approval_id: The gate id — the primary key, and therefore the idempotency
+            key: a second seed run finds the row and writes nothing.
+        run_id: The run the gate parked. No LangGraph checkpoint backs a seeded id,
+            so deciding one resolves the row without resuming a run — which is the
+            honest behaviour for a gate whose run ended before the demo began.
+        action: The representative (highest-risk) call awaiting the decision.
+        args: That call's arguments.
+        actions: Every call approving authorises. More than one on purpose: the card
+            counts them out loud, and a seed that only ever showed one would never
+            exercise the count on screen.
+        risk: The gate's declared risk.
+        rationale: Why the gate fired, in the words a reviewer reads.
+    """
+
+    approval_id: str
+    run_id: str
+    action: str
+    args: dict[str, object]
+    actions: tuple[dict[str, object], ...]
+    risk: RiskLevel
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
 class TenantSpec:
     """One tenant and everything that hangs off it.
 
@@ -162,6 +208,8 @@ class TenantSpec:
             tenant's rather than widening it.
         client_usd_cap: The same, in USD.
         documents: The documents the tenant starts with.
+        approval: The parked human gate this tenant's inbox starts with, raised by
+            its client user.
     """
 
     name: str
@@ -174,6 +222,7 @@ class TenantSpec:
     client_token_cap: int
     client_usd_cap: float
     documents: tuple[DocumentSpec, ...]
+    approval: ApprovalSpec
 
 
 #: The platform's own staff, plus the un-tenanted client the console's quick-in button
@@ -269,6 +318,35 @@ TENANTS: tuple[TenantSpec, ...] = (
         client_token_cap=200_000,
         client_usd_cap=5.0,
         documents=_documents("northwind", "Northwind Trading"),
+        approval=ApprovalSpec(
+            approval_id="seed-gate-northwind",
+            run_id="seed-run-northwind",
+            action="issue_supplier_credit",
+            args={"supplier": "Halden Freight", "amount_usd": 4200, "reason": "SLA breach"},
+            actions=(
+                {
+                    "id": "seed-gate-northwind-1",
+                    "name": "issue_supplier_credit",
+                    "args": {
+                        "supplier": "Halden Freight",
+                        "amount_usd": 4200,
+                        "reason": "SLA breach",
+                    },
+                    "risk": "high",
+                },
+                {
+                    "id": "seed-gate-northwind-2",
+                    "name": "notify_account_owner",
+                    "args": {"supplier": "Halden Freight", "channel": "email"},
+                    "risk": "low",
+                },
+            ),
+            risk=RiskLevel.HIGH,
+            rationale=(
+                "The credit exceeds the desk's own authority and the supplier is "
+                "inside its notice period, so the write needs a person."
+            ),
+        ),
     ),
     TenantSpec(
         name="Vertex Logistics",
@@ -284,6 +362,51 @@ TENANTS: tuple[TenantSpec, ...] = (
         client_token_cap=100_000,
         client_usd_cap=2.5,
         documents=_documents("vertex", "Vertex Logistics"),
+        approval=ApprovalSpec(
+            approval_id="seed-gate-vertex",
+            run_id="seed-run-vertex",
+            action="cancel_shipment",
+            args={"shipment": "VX-88104", "reason": "customs hold"},
+            actions=(
+                {
+                    "id": "seed-gate-vertex-1",
+                    "name": "cancel_shipment",
+                    "args": {"shipment": "VX-88104", "reason": "customs hold"},
+                    "risk": "high",
+                },
+            ),
+            risk=RiskLevel.HIGH,
+            rationale=(
+                "Cancelling a shipment already in transit is not reversible from "
+                "the agent's side."
+            ),
+        ),
+    ),
+)
+
+#: Aegis's own parked gate — the one a platform admin may actually decide. It carries
+#: no ``tenant_id`` because no tenant raised it, and that is exactly what makes it the
+#: platform operator's to decide: since §7.1 deleted the platform-admin exemption, a
+#: gate that names a tenant belongs to that tenant's admin and the operator may only
+#: watch it. Without this row the platform inbox would be a screen of controls the
+#: operator is never allowed to press.
+PLATFORM_APPROVAL: ApprovalSpec = ApprovalSpec(
+    approval_id="seed-gate-platform",
+    run_id="seed-run-platform",
+    action="rotate_gateway_credential",
+    args={"provider": "llm-gateway", "scope": "platform"},
+    actions=(
+        {
+            "id": "seed-gate-platform-1",
+            "name": "rotate_gateway_credential",
+            "args": {"provider": "llm-gateway", "scope": "platform"},
+            "risk": "high",
+        },
+    ),
+    risk=RiskLevel.HIGH,
+    rationale=(
+        "Rotating the shared gateway credential interrupts every tenant's runs "
+        "until the new key propagates."
     ),
 )
 
@@ -518,6 +641,51 @@ async def _ensure_document(spec: DocumentSpec, summary: SeedSummary, *, tenant_i
     summary.record("documents", created=True)
 
 
+#: The SLA window seeded gates are given: 30 days. The sweeper is real and it runs —
+#: at the configured hour-long default a gate seeded before breakfast is auto-rejected
+#: before the demo, and a HIGH-risk one is auto-*rejected* rather than merely expired
+#: (decision D5). Widening the window for these rows is honest (they genuinely are not
+#: urgent) and it leaves the sweeper's policy untouched for every real gate.
+_SEED_APPROVAL_SLA_SECONDS = 30 * 24 * 60 * 60
+
+
+async def _ensure_approval(
+    spec: ApprovalSpec,
+    summary: SeedSummary,
+    *,
+    tenant_id: int | None,
+    requested_by: int | None,
+) -> None:
+    """Guarantee one parked ``PENDING`` gate exists, owned by ``tenant_id``.
+
+    Idempotent through :func:`app.data.enqueue_approval`, which is keyed on the
+    approval id: a second run finds the row and returns it untouched, so a gate an
+    operator has already decided is never resurrected as pending.
+
+    Args:
+        spec: The gate to guarantee.
+        summary: Counter to record the outcome against.
+        tenant_id: The owning tenant, or ``None`` for Aegis's own gate.
+        requested_by: The ``users.id`` whose run raised it — what lets that user, and
+            only that user, see the gate's fate on the client portal.
+    """
+    existed = await get_approval(spec.approval_id) is not None
+    await enqueue_approval(
+        approval_id=spec.approval_id,
+        run_id=spec.run_id,
+        action=spec.action,
+        args=dict(spec.args),
+        actions=[dict(a) for a in spec.actions],
+        risk=spec.risk,
+        rationale=spec.rationale,
+        tenant_id=tenant_id,
+        requested_by=requested_by,
+        persona="operations_lead",
+        sla_seconds=_SEED_APPROVAL_SLA_SECONDS,
+    )
+    summary.record("approvals", created=not existed)
+
+
 async def seed_platform_principals(
     summary: SeedSummary | None = None, *, password: str | None = None
 ) -> SeedSummary:
@@ -552,6 +720,13 @@ async def seed(password: str | None = None) -> SeedSummary:
     """
     summary = SeedSummary()
     await seed_platform_principals(summary, password=password)
+    platform_client = await _find_user("client")
+    await _ensure_approval(
+        PLATFORM_APPROVAL,
+        summary,
+        tenant_id=None,
+        requested_by=platform_client[0] if platform_client is not None else None,
+    )
     for spec in TENANTS:
         tenant_id = await ensure_tenant(spec.name, summary, usd_cap=spec.usd_cap)
         await ensure_principal(
@@ -587,6 +762,12 @@ async def seed(password: str | None = None) -> SeedSummary:
             )
         for document in spec.documents:
             await _ensure_document(document, summary, tenant_id=tenant_id)
+        await _ensure_approval(
+            spec.approval,
+            summary,
+            tenant_id=tenant_id,
+            requested_by=client_user_id,
+        )
     return summary
 
 

@@ -1,16 +1,30 @@
 /**
- * The role-scoped portal catalogue — a faithful port of the ROLE_SECTIONS +
- * SECTIONS structure in frontend/src/routes/Portal.tsx.
+ * The portal catalogue — which sections each portal exposes, in nav order.
  *
- * Four portals, each a focused subset of sections scoped to what the role owns:
- *   - admin    : oversight / governance / delegation
- *   - ai_team  : builds / tunes the agent
- *   - devops   : runs the stack
- *   - client   : the tenant end-user (value, risk, read-only access)
+ * **Five portals, keyed on the fine role** (§7.2). They used to be four, keyed on the
+ * coarse one, and the missing fifth was the whole defect: `admin` collapses the Aegis
+ * operator and a customer's own administrator into one value, so the two landed on the
+ * same URL, the same nav and the same screens. A tenant admin had no portal at all —
+ * it was borrowing the platform's. `fine_role` reaches the browser on
+ * `POST /auth/login`; this module is what the browser does with it.
+ *
+ *   - platform_admin : operates Aegis itself — every tenant, no tenant pin
+ *   - tenant_admin   : administers exactly one tenant
+ *   - ai_team        : builds / tunes the agent
+ *   - devops         : runs the stack
+ *   - client         : the tenant end-user (value, risk, their own governance)
+ *
+ * **The rule for adding a section to a portal: that role must be able to *act* on it.**
+ * A read-only copy of someone else's screen is a tab on their screen, not a section on
+ * this one — it is a gap wearing a menu entry, and it reads as capability the operator
+ * does not have. The one deliberate exception is a role's own record: a tenant admin's
+ * audit trail and a client's own approvals are theirs to read even where the write
+ * belongs elsewhere.
  *
  * Every section carries a short executive label, the honest tech `hint`, a
  * plain-language `tooltip` (a hard requirement), and an optional `group` heading.
- * Every section listed in ROLE_SECTIONS renders a live surface.
+ * Every section listed in ROLE_SECTIONS renders a live surface — asserted from the
+ * backend by `backend/tests/api/test_route_coverage.py`, which reads this file.
  */
 
 import {
@@ -20,6 +34,7 @@ import {
   DatabaseZap,
   GitCompareArrows,
   Gauge,
+  Gavel,
   KeyRound,
   Landmark,
   ListChecks,
@@ -44,12 +59,28 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
+import type { FineRole } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 
 export type { Role }
 
-/** The four portal roles, in a stable order (drives the login role-select). */
-export const ROLES: Role[] = ['admin', 'ai_team', 'devops', 'client']
+/**
+ * A portal — the fine RBAC tier, which is the granularity a navigation must have.
+ *
+ * Deliberately the *same* type as `FineRole` rather than a parallel union: the portal
+ * a session may enter is the tier the backend issued it, and a second list of names
+ * here could disagree with the JWT while still type-checking.
+ */
+export type Portal = FineRole
+
+/** The five portals, in a stable order. */
+export const PORTALS: Portal[] = [
+  'platform_admin',
+  'tenant_admin',
+  'ai_team',
+  'devops',
+  'client',
+]
 
 /** A navigation entry / section definition. */
 export interface Section {
@@ -259,6 +290,15 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Aegis Governance — tenants, budgets, usage & RBAC read straight from the ledger',
     group: 'Governance',
   },
+  approvals: {
+    id: 'approvals',
+    label: 'Approvals',
+    icon: Gavel,
+    hint: 'the human gate',
+    tooltip:
+      'Aegis Approvals — every action the agent paused on rather than took: what approving would run, why the gate fired, and how long is left on its SLA. Deciding one resumes the parked run.',
+    group: 'Governance',
+  },
   audit: {
     id: 'audit',
     label: 'Audit',
@@ -294,7 +334,7 @@ export const SECTIONS: Record<string, Section> = {
 }
 
 /**
- * Which sections each role's portal exposes, in nav order (RBAC).
+ * Which sections each portal exposes, in nav order (RBAC).
  *
  * `console` leads the client portal: the client is the role the product exists
  * for, and without it the tenant end-user has every read-only report and no way
@@ -302,49 +342,97 @@ export const SECTIONS: Record<string, Section> = {
  * (`require_auth`); only this catalogue withheld the surface. The route-coverage
  * test in `backend/tests/api/test_route_coverage.py` is what stops it being
  * dropped again.
+ *
+ * **What each portal is for, and what was deliberately withheld from it.**
+ *
+ * `platform_admin` operates Aegis. It keeps every section the old `admin` portal had
+ * and gains `approvals`, where it decides the gates Aegis's own runs raised and *sees*
+ * — without deciding — every tenant's. `tenant_admin` is the portal that did not
+ * exist: the tenant's own administrator, whose sections are the ones the backend lets
+ * a `tenant_admin` write (`require_tenant_admin` pins each to its own tenant) plus its
+ * own tenant's record. `client` gains `approvals` too, read-only: a user whose run
+ * tripped the gate had no screen that told them what became of it.
+ *
+ * `console` is on both admin portals, and on the platform operator's it is load-bearing
+ * rather than a courtesy: the gates a platform admin may decide are the ones carrying no
+ * tenant, and an un-tenanted run is the only thing that raises one. Without a console
+ * the operator's own approvals queue could only ever be filled by somebody else.
+ *
+ * Refused on purpose, and each is a task that owns it rather than an oversight:
+ *
+ *   - `llmops` on `tenant_admin` — the prompt-registry read path is not yet
+ *     per-tenant (`_ACTIVE_CACHE` is keyed on the prompt key alone), so the screen
+ *     would look right and show another tenant's active version. Task 7.7 fixes the
+ *     read path *before* mounting the surface.
+ *   - `memory` on `tenant_admin` / `client` — read-only today; the write and the
+ *     forget are task 7.5. A memory screen you cannot correct is a report.
+ *   - `jobs` on `devops` — `GET /jobs` is `require_admin_or_ai_team`, so devops would
+ *     get a 403 where the nav promised a control.
+ *   - `simulation` stays where it tells the isolation story and is not propagated: it
+ *     is a demo artefact, not an operator tool.
  */
-export const ROLE_SECTIONS: Record<Role, string[]> = {
-  admin: ['dashboard', 'forecast', 'governance', 'jobs', 'audit', 'roles', 'settings'],
+export const ROLE_SECTIONS: Record<Portal, string[]> = {
+  platform_admin: ['dashboard', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
+  tenant_admin: ['dashboard', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit', 'settings'],
-  client: ['console', 'dashboard', 'savings', 'forecast', 'risk', 'simulation', 'settings'],
-}
-
-/** Section definitions for a role's portal, in nav order. */
-export function sectionsFor(role: Role): Section[] {
-  return ROLE_SECTIONS[role].map((id) => SECTIONS[id])
-}
-
-/** The default (first) section slug for a role. */
-export function defaultSectionFor(role: Role): string {
-  return ROLE_SECTIONS[role][0]
+  client: ['console', 'dashboard', 'approvals', 'savings', 'forecast', 'risk', 'simulation', 'settings'],
 }
 
 /**
- * The home route a role owns — its portal's default section. This is the single
- * source of truth for RBAC redirects (login lands here; a session reaching the
- * wrong portal is sent back here). Mirrors `homePathFor` in the Vite app's
- * RequireRole guard.
+ * The coarse data-layer role a portal's principal holds.
+ *
+ * Both admin tiers are `admin` to the backend's four-valued `Role`, which is what
+ * several surfaces (the console, the dashboards, the forecast) still take — they
+ * branch on what the *data* is scoped by, not on which portal is showing it. This is
+ * the one place the widening happens, so a component never has to guess.
  */
-export function homePathFor(role: Role): string {
-  return `/app/${role}/${defaultSectionFor(role)}`
+export function coarseRoleFor(portal: Portal): Role {
+  switch (portal) {
+    case 'platform_admin':
+    case 'tenant_admin':
+      return 'admin'
+    default:
+      return portal
+  }
 }
 
-/** Whether `section` is valid for `role`. */
-export function isValidSection(role: Role, section: string): boolean {
-  return ROLE_SECTIONS[role]?.includes(section) ?? false
+/** Section definitions for a portal, in nav order. */
+export function sectionsFor(portal: Portal): Section[] {
+  return ROLE_SECTIONS[portal].map((id) => SECTIONS[id])
 }
 
-/** Whether `role` is one of the four portals. */
-export function isRole(value: string): value is Role {
-  return (ROLES as string[]).includes(value)
+/** The default (first) section slug for a portal. */
+export function defaultSectionFor(portal: Portal): string {
+  return ROLE_SECTIONS[portal][0]
 }
 
-/** Human name for the portal a role owns (foot of the nav rail). */
-export function portalLabelFor(role: Role): string {
-  switch (role) {
-    case 'admin':
-      return 'Admin portal'
+/**
+ * The home route a portal owns — its default section. This is the single source of
+ * truth for RBAC redirects (login lands here; a session reaching the wrong portal is
+ * sent back here).
+ */
+export function homePathFor(portal: Portal): string {
+  return `/app/${portal}/${defaultSectionFor(portal)}`
+}
+
+/** Whether `section` is valid for `portal`. */
+export function isValidSection(portal: Portal, section: string): boolean {
+  return ROLE_SECTIONS[portal]?.includes(section) ?? false
+}
+
+/** Whether `value` names one of the five portals. */
+export function isPortal(value: string): value is Portal {
+  return (PORTALS as string[]).includes(value)
+}
+
+/** Human name for the portal (foot of the nav rail). */
+export function portalLabelFor(portal: Portal): string {
+  switch (portal) {
+    case 'platform_admin':
+      return 'Platform admin portal'
+    case 'tenant_admin':
+      return 'Tenant admin portal'
     case 'ai_team':
       return 'AI team portal'
     case 'devops':

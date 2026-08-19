@@ -387,7 +387,7 @@ function AdminCommandCenter(): ReactElement {
               title="Customers & budgets"
               actions={
                 <Link
-                  href="/app/admin/governance"
+                  href={`/app/${session?.fineRole ?? 'tenant_admin'}/governance`}
                   className="inline-flex items-center gap-1 text-[0.78rem] font-medium text-primary hover:underline"
                 >
                   View all customers <ChevronRight className="size-3.5" />

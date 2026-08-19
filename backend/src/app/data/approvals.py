@@ -8,8 +8,10 @@ an admin resolve it out-of-band from the inbox, decoupled from the SSE socket.
 This module owns the typed CRUD over that table:
 
 - :func:`enqueue_approval` — INSERT a ``PENDING`` row when the gate fires.
-- :func:`list_pending` — the admin inbox query (``ORDER BY sla_deadline``), with a
-  ``FOR UPDATE SKIP LOCKED`` claim path so many workers never double-process a row.
+- :func:`list_pending` — the *claim* query (``ORDER BY sla_deadline``), with a
+  ``FOR UPDATE SKIP LOCKED`` path so many workers never double-process a row.
+- :func:`list_approvals` — the inbox *screen*'s query (§7.1): status, ``since``,
+  tenant and requester filters, every one of which narrows and none of which widens.
 - :func:`resolve_approval` — an **optimistic** ``PENDING → RESUMING/REJECTED``
   transition; only the winning caller (rowcount 1) proceeds, so a double-decision
   can never double-resume (idempotency).
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -80,6 +83,10 @@ def to_row(row: Approval) -> ApprovalRow:
         sla_deadline=_iso_utc(row.sla_deadline),
         created_at=_iso_utc(row.created_at) or _iso_utc(_now()) or "",
         ml_snapshot=dict(row.ml_snapshot or {}),
+        actions=[dict(a) for a in (row.actions or []) if isinstance(a, dict)],
+        requested_by=row.requested_by,
+        decided_at=_iso_utc(row.decided_at),
+        decided_by=row.decided_by,
     )
 
 
@@ -116,6 +123,8 @@ async def enqueue_approval(
     ml_snapshot: dict[str, Any] | None = None,
     thread_id: str | None = None,
     tenant_id: int | None = None,
+    requested_by: int | None = None,
+    actions: list[dict[str, Any]] | None = None,
     persona: str | None = None,
     trace_id: str | None = None,
     assignee_tier: str | None = None,
@@ -140,6 +149,12 @@ async def enqueue_approval(
             snapshot is the expected state, not a missing write.
         thread_id: The checkpoint thread id; defaults to ``run_id``.
         tenant_id: Owning tenant, for inbox scoping.
+        requested_by: The ``users.id`` whose run raised the gate, when a real user
+            did. It is what scopes the inbox for a tenant's own user: they see the
+            fate of the gates they raised and nothing else.
+        actions: Every call approving this gate will run, not just ``action`` (the
+            representative). A fan-out gate authorises several; a row that stored
+            only the representative made the inbox understate what Approve does.
         persona: The persona that raised the run.
         trace_id: OTel trace id correlating the run's spans.
         assignee_tier: Approver tier; defaults to ``approval_default_tier``.
@@ -163,9 +178,11 @@ async def enqueue_approval(
             thread_id=thread_id or run_id,
             tenant_id=tenant_id,
             status=ApprovalStatus.PENDING,
+            requested_by=requested_by,
             persona=persona,
             action=action,
             args=dict(args or {}),
+            actions=[dict(a) for a in (actions or [])] or None,
             risk=risk,
             rationale=rationale,
             ml_snapshot=dict(ml_snapshot or {}),
@@ -217,6 +234,68 @@ async def list_pending(
             stmt = stmt.where(Approval.tenant_id == tenant_id)
         if for_update and _supports_skip_locked(session):
             stmt = stmt.with_for_update(skip_locked=True)
+        rows = (await session.execute(stmt)).scalars().all()
+        return [to_row(r) for r in rows]
+
+
+async def list_approvals(
+    *,
+    tenant_id: int | None = None,
+    requested_by: int | None = None,
+    statuses: Sequence[ApprovalStatus] | None = None,
+    since: datetime | None = None,
+    limit: int = 50,
+) -> list[ApprovalRow]:
+    """Return the approvals matching every filter given — the inbox query (§7.1).
+
+    Separate from :func:`list_pending`, which stays exactly what it is: the *claim*
+    path, with its ``FOR UPDATE SKIP LOCKED`` lock and its one hard-wired status. This
+    is the read a screen makes, and it has to answer three different questions from
+    three different callers without ever letting one of them widen its own scope.
+
+    Every filter narrows. There is no argument here that opens the query up: the
+    caller resolves its authority first (``_scope_tenant`` for an admin, its own user
+    id for everyone else) and hands the result down. ``tenant_id=None`` therefore
+    means "the caller already established it may read every tenant" — it is never
+    reached by omission, because :mod:`app.api.routes` cannot produce it without the
+    explicit :data:`~aegis.retrieval.types.ALL_TENANTS` authority.
+
+    Ordering follows the question. A pure ``pending`` filter is the actionable queue,
+    so it comes back soonest-SLA-deadline first — the row about to expire is the row
+    to look at. Any other filter is a history ("what happened to my gates?"), so it
+    comes back newest first; sorting a decided list by a deadline that has already
+    passed would order it by nothing a reader cares about.
+
+    Args:
+        tenant_id: Restrict to this tenant's rows. ``None`` applies no tenant
+            predicate — only ever passed by a caller holding platform authority.
+        requested_by: Restrict to gates raised by this ``users.id``. This is the
+            client's scope and it is strictly tighter than the tenant's: a gate a
+            user raised belongs, by construction, to that user's tenant.
+        statuses: Restrict to these lifecycle statuses; ``None`` means every status.
+        since: Restrict to rows created at or after this instant.
+        limit: Maximum rows to return.
+
+    Returns:
+        Up to ``limit`` :class:`ApprovalRow` records in the order described above.
+    """
+    wanted = list(statuses) if statuses is not None else []
+    async with get_sessionmaker()() as session:
+        # Engage Postgres RLS for this connection (no-op on SQLite; H1).
+        await set_tenant_scope(session, tenant_id)
+        stmt = select(Approval).limit(limit)
+        if wanted:
+            stmt = stmt.where(Approval.status.in_(wanted))
+        if tenant_id is not None:
+            stmt = stmt.where(Approval.tenant_id == tenant_id)
+        if requested_by is not None:
+            stmt = stmt.where(Approval.requested_by == requested_by)
+        if since is not None:
+            stmt = stmt.where(Approval.created_at >= since)
+        if wanted == [ApprovalStatus.PENDING]:
+            stmt = stmt.order_by(Approval.sla_deadline.asc(), Approval.created_at.asc())
+        else:
+            stmt = stmt.order_by(Approval.created_at.desc(), Approval.id.asc())
         rows = (await session.execute(stmt)).scalars().all()
         return [to_row(r) for r in rows]
 

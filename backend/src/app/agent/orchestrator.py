@@ -313,6 +313,7 @@ async def _enqueue_gate(
     args: dict[str, Any],
     risk: Any,  # noqa: ANN401 - RiskLevel
     rationale: str,
+    actions: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Persist the durable approvals-inbox row (best-effort), returning its SLA ISO.
 
@@ -321,6 +322,17 @@ async def _enqueue_gate(
     logged, the ``approval_queued`` event simply carries no SLA deadline, and the
     in-process notify path resolves the gate.
 
+    Args:
+        approval_id: The gate id.
+        run_id: The paused run.
+        trace_id: The run's OTel trace id.
+        persona: The persona that raised the run.
+        action: The representative (highest-risk) proposed call.
+        args: That call's arguments.
+        risk: The gate's declared risk.
+        rationale: Why the gate fired.
+        actions: Every call approving authorises, when the graph enumerated them.
+
     Returns:
         The row's ``sla_deadline`` as an ISO string, or ``None`` if the write failed.
     """
@@ -328,20 +340,26 @@ async def _enqueue_gate(
         from app.core.governance import get_governance_context
         from app.data import enqueue_approval
 
-        # Stamp the owning tenant from the per-request governance context so the
-        # durable row can be tenant-scoped for the inbox and decision paths (C1).
+        # Stamp the owning tenant *and the requester* from the per-request governance
+        # context so the durable row can be tenant-scoped for the inbox and decision
+        # paths (C1) — and so the person whose run raised the gate can be shown its
+        # fate (§7.1) without being shown anybody else's. Both are read server-side
+        # from the authenticated context; neither is ever accepted from a client.
         gov = get_governance_context()
         tenant_id = gov.tenant_id if gov is not None else None
+        requested_by = gov.user_id if gov is not None else None
 
         row = await enqueue_approval(
             approval_id=approval_id,
             run_id=run_id,
             action=action,
             args=args,
+            actions=actions,
             risk=risk,
             persona=persona,
             trace_id=trace_id,
             tenant_id=tenant_id,
+            requested_by=requested_by,
         )
         return row.sla_deadline
     except Exception:  # noqa: BLE001 - durable inbox is best-effort at the edge

@@ -10,7 +10,7 @@ import { Button } from '@/components/primitives/button'
 import { Input } from '@/components/primitives/input'
 import { LoginError } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { homePathFor, type Role } from '@/lib/portal'
+import { homePathFor } from '@/lib/portal'
 
 /**
  * Real sign-in surface (port of `frontend/src/routes/LoginPage.tsx`). The role
@@ -25,12 +25,19 @@ import { homePathFor, type Role } from '@/lib/portal'
  * otherwise), so these buttons issue an ordinary `POST /auth/login` like the form does.
  * An unseeded backend answers 503 and says to run the seed — there is no fallback
  * login table behind these names.
+ *
+ * Five, not four: `northwind.admin` is the seed's tenant administrator, and until
+ * §7.2 there was no way to reach that portal from this screen at all — the un-tenanted
+ * `admin` account is the *platform* operator, and the two are different jobs with
+ * different screens. Which portal each lands in is decided by the backend's
+ * `fine_role`, never by this list.
  */
-const QUICK_IN: { role: Role; label: string; username: string }[] = [
-  { role: 'admin', label: 'Enter as Admin', username: 'admin' },
-  { role: 'ai_team', label: 'Enter as AI team', username: 'ai' },
-  { role: 'devops', label: 'Enter as DevOps', username: 'devops' },
-  { role: 'client', label: 'Enter as Client', username: 'client' },
+const QUICK_IN: { label: string; username: string }[] = [
+  { label: 'Enter as Platform admin', username: 'admin' },
+  { label: 'Enter as Tenant admin', username: 'northwind.admin' },
+  { label: 'Enter as AI team', username: 'ai' },
+  { label: 'Enter as DevOps', username: 'devops' },
+  { label: 'Enter as Client', username: 'client' },
 ]
 
 /**
@@ -57,7 +64,7 @@ export default function LoginPage() {
 
   // Already signed in → go to the role's home (mirrors the Vite <Navigate/>).
   useEffect(() => {
-    if (hydrated && session) router.replace(homePathFor(session.role))
+    if (hydrated && session) router.replace(homePathFor(session.fineRole))
   }, [hydrated, session, router])
 
   const submit = async (e: FormEvent): Promise<void> => {
@@ -66,7 +73,7 @@ export default function LoginPage() {
     setError(null)
     try {
       const s = await signIn(username || 'analyst', password)
-      router.replace(homePathFor(s.role))
+      router.replace(homePathFor(s.fineRole))
     } catch (err) {
       setError(signInMessage(err))
       setBusy(false)
@@ -78,7 +85,7 @@ export default function LoginPage() {
     setBusy(true)
     setError(null)
     void signIn(name, 'demo')
-      .then((s) => router.replace(homePathFor(s.role)))
+      .then((s) => router.replace(homePathFor(s.fineRole)))
       .catch((err: unknown) => {
         setError(signInMessage(err))
         setBusy(false)
@@ -115,8 +122,8 @@ export default function LoginPage() {
           <AegisLockup size="md" className="mb-8 lg:hidden" />
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Sign in</h1>
           <p className="mb-6 mt-1 text-sm text-muted-foreground">
-            Access is role-scoped: Admin, AI team, DevOps and Client each land in
-            their own portal.
+            Access is role-scoped: the platform admin, a tenant&rsquo;s own admin, AI
+            team, DevOps and Client each land in their own portal.
           </p>
 
           <form onSubmit={submit} className="space-y-4">
@@ -156,7 +163,7 @@ export default function LoginPage() {
             <div className="grid grid-cols-2 gap-2">
               {QUICK_IN.map((q) => (
                 <Button
-                  key={q.role}
+                  key={q.username}
                   type="button"
                   variant="outline"
                   size="sm"

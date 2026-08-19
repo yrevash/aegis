@@ -22,7 +22,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 from aegis.ml import MLModelUnavailableError
@@ -35,7 +35,16 @@ from aegis.retrieval.types import (
     scoped_graph,
     tenant_filter,
 )
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.exc import SQLAlchemyError
@@ -57,6 +66,7 @@ from app.api.schemas import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalInboxResponse,
+    ApprovalInboxRow,
     ApprovalRequest,
     ApprovalResponse,
     AuditLogResponse,
@@ -156,6 +166,7 @@ from app.core.security import (
     verify_password,
 )
 from app.data import (
+    ApprovalStatus,
     BudgetWindow,
     CrossTenantBudgetError,
     DuplicateTenantError,
@@ -166,8 +177,8 @@ from app.data import (
     create_user,
     effective_limits,
     get_approval,
+    list_approvals,
     list_budgets,
-    list_pending,
     list_recent_audit,
     list_tenants,
     list_users,
@@ -1437,46 +1448,221 @@ async def audit(
 # Upper bound on how many approval rows one /approvals call may return.
 _APPROVALS_LIMIT_MAX = 200
 
+#: The two aggregate words ``GET /approvals?status=`` accepts beside the raw
+#: lifecycle names. ``all`` is the empty tuple because "no status predicate" is the
+#: honest expression of "every status" — enumerating them here would silently drop a
+#: status a later phase adds.
+_APPROVAL_STATUS_GROUPS: dict[str, tuple[ApprovalStatus, ...]] = {
+    "pending": (ApprovalStatus.PENDING,),
+    "decided": tuple(s for s in ApprovalStatus if s is not ApprovalStatus.PENDING),
+    "all": (),
+}
+
+
+def _approval_statuses(requested: str) -> tuple[ApprovalStatus, ...]:
+    """Resolve the ``status`` query word to the lifecycle states it selects.
+
+    Raises:
+        HTTPException: 400 naming every word this endpoint accepts. A typo that
+            silently returned an empty inbox would read as "no gates were raised",
+            which is the one answer a governance queue must never guess at.
+    """
+    if requested in _APPROVAL_STATUS_GROUPS:
+        return _APPROVAL_STATUS_GROUPS[requested]
+    try:
+        return (ApprovalStatus(requested),)
+    except ValueError as exc:
+        accepted = sorted({*_APPROVAL_STATUS_GROUPS, *(s.value for s in ApprovalStatus)})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown approval status {requested!r}. Accepted: {', '.join(accepted)}.",
+        ) from exc
+
+
+def _approvals_since(raw: str | None) -> datetime | None:
+    """Parse the ``since`` query parameter as an ISO 8601 instant, or ``None``.
+
+    A naive value is read as UTC — the wire format every timestamp on this contract
+    is serialised in — rather than as the server's local time.
+
+    Raises:
+        HTTPException: 400 when the value is not ISO 8601.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"`since` must be an ISO 8601 timestamp; got {raw!r}.",
+        ) from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _decision_refusal(auth: AuthContext, owner: int | None) -> str | None:
+    """Return why ``auth`` may not decide a gate owned by ``owner``, or ``None``.
+
+    **The one place the product decides who owns a business gate**, read by both the
+    inbox annotation (:func:`approvals_inbox`) and the enforcement on the decision
+    endpoints (:func:`_enforce_approval_tenant`). One rule, two readers: a screen that
+    offers a control the endpoint then refuses, or hides one the endpoint would allow,
+    is a second copy of this rule that has drifted.
+
+    The rule, in full:
+
+    * **A non-admin never decides.** Both decision endpoints are ``require_admin``;
+      the client's inbox is the read half of the gate and nothing more.
+    * **Platform staff decide Aegis's own gates and nobody else's.** A gate with no
+      ``tenant_id`` was raised by an un-tenanted platform run and belongs to the
+      operator of the platform. A gate that names a tenant is that tenant's business
+      decision, and the Aegis operator deciding it was §7.1's headline defect — the
+      early exit that used to sit here returned unconditionally for
+      :data:`~app.core.security.PLATFORM_ADMIN`.
+    * **A tenant principal decides its own tenant's gates.**
+
+    Note what is *not* written here: nothing compares ``auth.tenant_id`` to
+    ``owner`` directly. ``None`` means two different things on the two sides — "this
+    principal belongs to no tenant" on one, "this gate belongs to no tenant" on the
+    other — and equating them is the conflation that cost five cross-tenant leaks. The
+    authority comes from :meth:`AuthContext.tenant_scope` via :func:`_require_scope`,
+    which answers with a type rather than a nullable int.
+
+    Args:
+        auth: The authenticated principal.
+        owner: The gate's ``tenant_id``.
+
+    Returns:
+        A sentence for the disabled control, or ``None`` when the caller may decide.
+    """
+    if auth.role is not Role.ADMIN:
+        # Deciding is ``require_admin`` on both decision endpoints, so this is not a
+        # policy stated twice — it is that policy, read out. It also has to come
+        # before the scope lookup: a client with no tenant has no tenant authority to
+        # resolve, and asking for one would refuse them the *read* they are entitled
+        # to on the way to answering a question about a write they never asked for.
+        return (
+            "Deciding a gate is an administrator's action. You can see what "
+            "happened to the ones you raised."
+        )
+    scope = _require_scope(auth)
+    if isinstance(scope, AllTenants):
+        if owner is None:
+            return None
+        return (
+            "This gate belongs to a tenant. A tenant's own admin decides it — "
+            "the platform operator sees it, and does not vote on it."
+        )
+    if owner == scope:
+        return None
+    return "This gate belongs to another tenant."
+
 
 @router.get("/approvals", response_model=ApprovalInboxResponse, tags=["agent"])
 async def approvals_inbox(
-    status: str = "pending",
+    status_filter: str = Query("pending", alias="status"),
+    since: str | None = None,
+    tenant_id: int | None = None,
     limit: int = 50,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(require_auth),
 ) -> ApprovalInboxResponse:
-    """Return the durable approvals inbox (admin only, read-only; §1.3).
+    """Return the durable approvals inbox this caller may see (§7.1).
 
-    Tenant-scoped (C1): a platform-admin sees every tenant's pending gates; a
-    tenant-admin sees only its own tenant's. Only ``status=pending`` is served (the
-    actionable queue); ``limit`` is clamped to ``[1, 200]``. Rows come back
-    soonest-SLA-deadline first.
+    Three callers, three scopes, and each is *narrowed* by the server from what the
+    principal is — never by a query parameter the browser chose:
+
+    * **Platform staff** see every tenant's gates and may target one with
+      ``tenant_id``. They may decide only the gates that carry no tenant (Aegis's own
+      actions); every other row comes back ``decidable=false`` with the reason, so the
+      queue is visible and not theirs to vote in.
+    * **A tenant admin** sees its own tenant's gates and decides them. ``tenant_id``
+      naming another tenant is a 403 from :func:`_scope_tenant`, not a wider read.
+    * **Every other authenticated principal** — the client the gate was raised *for*,
+      above all — sees the gates **they raised** and no others, read-only. That scope
+      is the requester's own user id, which is strictly tighter than their tenant's,
+      so no tenant authority is consulted and an un-tenanted user is not refused.
+
+    ``status`` takes a lifecycle name (``pending``, ``approved``, …) or one of
+    ``pending`` / ``decided`` / ``all``; ``since`` is an ISO 8601 instant; ``limit``
+    is clamped to ``[1, 200]``. A pending-only query comes back soonest-SLA-deadline
+    first, anything else newest first.
+
+    Raises:
+        HTTPException: 400 on an unknown ``status`` or an unparseable ``since``; 403
+            when a caller with no tenant authority asks to filter by ``tenant_id``,
+            or when a tenant principal names a tenant that is not its own.
     """
     capped = max(1, min(limit, _APPROVALS_LIMIT_MAX))
-    scoped = _scope_tenant(auth, None)
-    rows = await list_pending(tenant_id=scoped, limit=capped) if status == "pending" else []
-    return ApprovalInboxResponse(rows=rows)
+    statuses = _approval_statuses(status_filter)
+    cutoff = _approvals_since(since)
+
+    if auth.role is Role.ADMIN:
+        rows = await list_approvals(
+            tenant_id=_scope_tenant(auth, tenant_id),
+            statuses=statuses or None,
+            since=cutoff,
+            limit=capped,
+        )
+    else:
+        if tenant_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an administrator may filter the inbox by tenant.",
+            )
+        # No user id means no gate can name this principal as its requester, so the
+        # honest answer is an empty inbox rather than an unscoped read.
+        rows = (
+            await list_approvals(
+                tenant_id=auth.tenant_id,
+                requested_by=auth.user_id,
+                statuses=statuses or None,
+                since=cutoff,
+                limit=capped,
+            )
+            if auth.user_id is not None
+            else []
+        )
+
+    annotated: list[ApprovalInboxRow] = []
+    for row in rows:
+        # A decided gate is history for everyone: re-deciding it is a no-op the
+        # optimistic transition already refuses, so the control says so up front.
+        reason = (
+            _decision_refusal(auth, row.tenant_id)
+            if row.status == ApprovalStatus.PENDING.value
+            else f"This gate is already {row.status}."
+        )
+        annotated.append(
+            ApprovalInboxRow(
+                **row.model_dump(), decidable=reason is None, blocked_reason=reason
+            )
+        )
+    return ApprovalInboxResponse(rows=annotated)
 
 
 async def _enforce_approval_tenant(approval_id: str, auth: AuthContext) -> None:
-    """Forbid deciding on another tenant's approval (C1; platform-admin exempt).
+    """Forbid deciding a gate this principal does not own (C1; §7.1).
 
-    Loads the durable row and — for a tenant-scoped caller — requires the approval's
-    ``tenant_id`` to equal the caller's. A platform-admin may resolve any tenant's
-    gate. An unknown ``approval_id`` is left to the idempotent decision path (which
-    returns ``accepted=False``) so replay/no-op semantics are preserved.
+    Loads the durable row and applies :func:`_decision_refusal` — the same rule the
+    inbox renders its disabled buttons from. An unknown ``approval_id`` is left to the
+    idempotent decision path (which returns ``accepted=False``) so replay/no-op
+    semantics are preserved.
+
+    **There is no platform-admin exemption.** There was one, and it meant the operator
+    of Aegis decided a tenant's business gate. Deleting it is what moves that ownership
+    to the tenant admin, and it is why the inbox screen shipped in the same change:
+    without the screen the capability would have moved into nowhere.
 
     Raises:
-        HTTPException: 403 when a tenant-admin targets an approval owned by another
-            tenant.
+        HTTPException: 403 when the caller may not decide this gate, carrying the same
+            sentence the disabled button shows.
     """
-    if auth.fine_role == PLATFORM_ADMIN:
-        return
     row = await get_approval(approval_id)
-    if row is not None and row.tenant_id != auth.tenant_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cross-tenant approval access is not permitted.",
-        )
+    if row is None:
+        return
+    refusal = _decision_refusal(auth, row.tenant_id)
+    if refusal is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=refusal)
 
 
 @router.post(

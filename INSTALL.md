@@ -274,17 +274,23 @@ nothing that already exists, and prints what it did. Accounts it creates use the
 
 **Platform staff** (no `tenant_id`, so their runs are ungoverned):
 
-| Username | Password | Coarse role | Persona           | Portal           |
-|----------|----------|-------------|-------------------|------------------|
-| `admin`  | `demo`   | `admin`     | `operations_lead` | `/app/admin/…`   |
-| `ai`     | `demo`   | `ai_team`   | `operations_lead` | `/app/ai_team/…` |
-| `aiteam` | `demo`   | `ai_team`   | `operations_lead` | `/app/ai_team/…` |
-| `devops` | `demo`   | `devops`    | `operations_lead` | `/app/devops/…`  |
-| `client` | `demo`   | `client`    | `client`          | `/app/client/…`  |
+| Username | Password | Coarse role | Persona           | Portal                   |
+|----------|----------|-------------|-------------------|--------------------------|
+| `admin`  | `demo`   | `admin`     | `operations_lead` | `/app/platform_admin/…`  |
+| `ai`     | `demo`   | `ai_team`   | `operations_lead` | `/app/ai_team/…`         |
+| `aiteam` | `demo`   | `ai_team`   | `operations_lead` | `/app/ai_team/…`         |
+| `devops` | `demo`   | `devops`    | `operations_lead` | `/app/devops/…`          |
+| `client` | `demo`   | `client`    | `client`          | `/app/client/…`          |
 
 Every operational role (`admin` / `ai_team` / `devops`) maps to the full
 `operations_lead` persona; `client` gets the self-scoped `client` persona. `admin` has no
 tenant, which is what makes it the `platform_admin` tier.
+
+**The URL carries the fine role, not the coarse one** (§7.2). A tenant's own admin —
+`northwind.admin` below — lands on `/app/tenant_admin/…`, a different portal with
+different sections, because administering one tenant and operating the platform are
+different jobs. Signing in is what decides which; there is no way to type your way into
+the other one.
 
 **Two tenants**, each with a tenant admin, two users, a daily budget and three documents:
 
@@ -292,6 +298,12 @@ tenant, which is what makes it the `platform_admin` tier.
 |---|---|---|
 | Northwind Trading | `northwind.admin` | `northwind.analyst`, `northwind.client` |
 | Vertex Logistics  | `vertex.admin`    | `vertex.analyst`, `vertex.client`       |
+
+…and **one parked approval each**, plus one un-tenanted gate of Aegis's own, so the
+approvals inbox has something real in all three of its scopes on a fresh database. Sign
+in as `northwind.admin` to decide Northwind's; as `admin` to decide Aegis's own and to
+see (without deciding) both tenants'; as `client` to see the fate of the gate that
+account raised.
 
 A tenant admin's login yields a **tenant-scoped** JWT, so its runs are governed (budget +
 RLS) and the per-tenant screens have something to render. Tenant/user/budget management is

@@ -197,14 +197,16 @@ password **`demo`** (override with `AEGIS_SEED_PASSWORD` before seeding):
 
 | Username | Role → portal | Persona |
 |---|---|---|
-| `admin` | `admin` → `/app/admin/dashboard` | `operations_lead` |
+| `admin` | `platform_admin` → `/app/platform_admin/dashboard` | `operations_lead` |
 | `ai` or `aiteam` | `ai_team` → `/app/ai_team/console` | `operations_lead` |
 | `devops` | `devops` → `/app/devops/dashboard` | `operations_lead` |
 | `client` | `client` → `/app/client/console` | `client` |
 
 They carry no `tenant_id`, so their runs are ungoverned. The seed's two tenants —
 `northwind.*` and `vertex.*`, same password — do carry one, so those logins yield a
-tenant-scoped JWT and every run is governed by that tenant's budget and RLS scope. Admins
+tenant-scoped JWT and every run is governed by that tenant's budget and RLS scope. A
+tenant admin (`northwind.admin`) lands on `/app/tenant_admin/dashboard`: the portal is
+keyed on the **fine** role, so the two admin tiers no longer share one. Admins
 reassign roles through `POST /admin/users/{id}/role`, which is guarded against demoting
 the last platform-admin into a lockout.
 

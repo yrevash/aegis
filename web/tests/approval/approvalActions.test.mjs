@@ -94,3 +94,76 @@ test('a gate whose wire carried no usable list still shows the call it named', (
     ['crm.delete_account'],
   )
 })
+
+/**
+ * The durable inbox row shape (`ApprovalInboxRow`), carrying only what the rule reads.
+ *
+ * The fourth way this goes wrong, and it is the §7.1 one: the *async* queue. A gate
+ * decided out-of-band from the inbox runs the same calls as one decided live in the
+ * run, and it was read from a different object — so "the rendered list is the executed
+ * list" held on one surface and was never checked on the other. `readApproval` takes
+ * both shapes for exactly this reason; if it ever stops doing so, this fails rather
+ * than the inbox quietly showing one write of three.
+ */
+function inboxRowOf(overrides) {
+  return {
+    id: 'ap-9',
+    run_id: 'r9',
+    tenant_id: 3,
+    action: 'crm.delete_account',
+    args: { account_id: 42 },
+    risk: 'high',
+    rationale: 'A fan-out proposed three writes.',
+    status: 'pending',
+    actions: [],
+    ...overrides,
+  }
+}
+
+/** Project an inbox row onto the gate shape, exactly as `ApprovalInbox` does. */
+function asGate(row) {
+  return {
+    approval_id: row.id,
+    action: row.action,
+    args: row.args,
+    risk: row.risk,
+    actions: row.actions,
+  }
+}
+
+test('a parked gate in the inbox authorises the same calls the live card showed', () => {
+  const view = readApproval(
+    asGate(
+      inboxRowOf({
+        actions: [
+          { id: 'c1', name: 'crm.delete_account', args: { account_id: 42 }, risk: 'high' },
+          { id: 'c2', name: 'billing.issue_refund', args: { amount: 900 }, risk: 'medium' },
+          { id: 'c3', name: 'crm.notify_owner', args: {}, risk: 'low' },
+        ],
+      }),
+    ),
+  )
+
+  assert.deepEqual(
+    view.actions.map((a) => a.name),
+    ['crm.delete_account', 'billing.issue_refund', 'crm.notify_owner'],
+  )
+  assert.equal(view.many, true)
+  assert.equal(view.summary, 'Approving runs all 3 of these calls.')
+})
+
+test('a parked gate written before the actions column still shows the call it named', () => {
+  // A row enqueued before `approvals.actions` existed reads back as an empty list.
+  // Falling back to the representative is what stops that row rendering as a gate
+  // with nothing in it — an empty card is the one thing a reviewer cannot act on.
+  const view = readApproval(asGate(inboxRowOf({ actions: [] })))
+
+  assert.equal(view.representativeOnly, true)
+  assert.deepEqual(
+    view.actions.map((a) => a.name),
+    ['crm.delete_account'],
+  )
+  assert.equal(view.actions[0].id, 'ap-9')
+  assert.equal(view.many, false)
+  assert.equal(view.summary, 'Approving runs this one call.')
+})

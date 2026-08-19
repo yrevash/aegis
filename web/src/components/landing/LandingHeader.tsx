@@ -53,7 +53,7 @@ export function LandingHeader() {
 
         <div className="ml-auto flex items-center gap-3 md:ml-0">
           <Link
-            href={signedIn ? homePathFor(session.role) : '/login'}
+            href={signedIn ? homePathFor(session.fineRole) : '/login'}
             className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
           >
             {signedIn ? 'Enter console' : 'Login'}

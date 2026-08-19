@@ -117,11 +117,15 @@ export function ApprovalCard({
 /**
  * One call the approval authorises: what runs, with what, and at what risk.
  *
+ * Exported because the durable approvals inbox (§7.1) renders the same list. A gate
+ * that authorises three calls must show three wherever it is read, and a second
+ * renderer is a second chance to show two.
+ *
  * The per-call risk chip appears only on a multi-call gate. On the common single-call
  * run the header badge already says the risk, and repeating it two lines down is noise
  * on the one card that must be read in a hurry.
  */
-function ProposedAction({
+export function ProposedAction({
   action,
   showRisk,
 }: {

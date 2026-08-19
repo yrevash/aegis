@@ -35,7 +35,8 @@ src/app/
   page.tsx                         "/"  → redirects to /login
   login/page.tsx                   "/login" — real credential sign-in
   app/[role]/layout.tsx            portal shell: PortalGuard + Sidebar + Topbar
-  app/[role]/page.tsx              "/app/[role]" → redirect to that role's default section
+  app/[role]/page.tsx              "/app/[role]" → redirect to that portal's default section
+                                   ([role] carries the FINE role: five portals, §7.2)
   app/[role]/[section]/page.tsx    "/app/[role]/[section]" — the section itself
 ```
 
