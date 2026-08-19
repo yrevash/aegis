@@ -151,10 +151,11 @@ class SettingSpec:
 
     Raises:
         ValueError: If the declaration is incoherent — an unrenderable type, a
-            ``TIGHTEN_ONLY`` key with no strictness direction, a default outside its own
-            bounds or choices, a missing description, or an ``inert_reason`` that does
-            not name what would make the key live. Every one of these is a programming
-            error in the catalogue itself, so it fails at import.
+            ``TIGHTEN_ONLY`` key with no strictness direction or no domain to rank its
+            values over, a default outside its own bounds or choices, a missing
+            description, or an ``inert_reason`` that does not name what would make the
+            key live. Every one of these is a programming error in the catalogue itself,
+            so it fails at import.
     """
 
     key: str
@@ -190,6 +191,18 @@ class SettingSpec:
                 f"setting {self.key!r} is tighten_only but does not say which direction "
                 "is stricter, so the resolver could not tell a tightening from a "
                 "weakening; declare stricter=Strictness.LOWER or .HIGHER"
+            )
+        if (
+            self.merge is MergeRule.TIGHTEN_ONLY
+            and self.choices is None
+            and self.bounds is None
+            and self.type_ is not bool
+        ):
+            raise ValueError(
+                f"setting {self.key!r} is tighten_only but declares neither choices nor "
+                "bounds, so there is no domain to rank its values over: the fold would "
+                "raise on the first tenant write and there is no strictest value to fail "
+                "closed to. Give it bounds or choices."
             )
         if self.merge is MergeRule.UNION and self.type_ is not list:
             raise ValueError(
@@ -299,8 +312,11 @@ def strictest_legal(spec: SettingSpec) -> Any:  # noqa: ANN401 - any setting val
     Raises:
         ValueError: If the spec is not ``TIGHTEN_ONLY`` (there is no "strictest" for an
             override or a union), or declares no domain to clamp into, so the question
-            has no answer. Callers are expected to raise this at **import**, not
-            discover it during the outage in which the fail-closed path is the only
+            has no answer. The second of those is defence in depth:
+            :meth:`SettingSpec.__post_init__` already refuses to construct a
+            ``TIGHTEN_ONLY`` spec with no rankable domain, so a catalogue entry cannot
+            reach here without one. Callers are expected to raise this at **import**,
+            not discover it during the outage in which the fail-closed path is the only
             thing standing between a tenant and a control nobody can read.
     """
     if spec.merge is not MergeRule.TIGHTEN_ONLY:

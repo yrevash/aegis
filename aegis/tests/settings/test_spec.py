@@ -118,6 +118,24 @@ def test_a_tighten_only_setting_with_no_direction_is_refused():
         _spec(merge=MergeRule.TIGHTEN_ONLY, bounds=(1, 10))
 
 
+def test_a_tighten_only_setting_with_no_domain_to_rank_over_is_refused():
+    """Phase 7 §7.16 rows 1 and 3: the fold has to be able to compare two values.
+
+    A ``tighten_only`` key with neither choices nor bounds is not a rule the resolver
+    can apply — :meth:`SettingSpec.rank` has nothing to turn the value into, so the fold
+    would raise on the first tenant write, and :func:`strictest_legal` would have no
+    value to fail closed to during the outage in which it is the only thing standing
+    between a tenant and a control nobody can read.
+    """
+    with pytest.raises(ValueError, match="neither choices nor bounds"):
+        _spec(
+            merge=MergeRule.TIGHTEN_ONLY,
+            stricter=Strictness.LOWER,
+            type_=str,
+            default="anything",
+        )
+
+
 def test_a_union_setting_that_is_not_a_list_is_refused():
     with pytest.raises(ValueError, match="union"):
         _spec(merge=MergeRule.UNION, type_=int, default=1)
