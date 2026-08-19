@@ -40,8 +40,58 @@ it is why bypass is now a property of the *connection* rather than something
 application code is trusted to avoid.
 
 App-level ``WHERE tenant_id = :ctx`` scoping (in :mod:`aegis.governance.enforcement`) is
-the belt-and-suspenders layer over these DB-enforced policies — and the only layer on
-SQLite.
+the belt-and-suspenders layer over these DB-enforced policies.
+
+The fail-closed posture, and why it is not the default yet (§9.5)
+----------------------------------------------------------------
+
+``RLS_FAIL_CLOSED`` chooses between two predicates — see
+:data:`_TENANT_ISOLATION_PREDICATE` and :data:`_TENANT_ISOLATION_PREDICATE_CLOSED`. It
+ships **false**, and the ordering is the task, not caution: flipping first turns every
+reader nobody enumerated into a silent zero-row result, which is worse than the fail-open
+it replaces because an empty screen is blamed on the data rather than on the policy.
+
+:func:`install_scope_auditor` is the enumeration, and it was run over the whole backend
+suite on 2026-08-20. It found **67 distinct production call sites** across 13 tables —
+not the five the phase doc listed. The five were real; they were the visible ones. What
+the instrument added, and what no reading of the code had produced:
+
+* **The dominant shape is a read after a commit.** ``set_config(..., is_local => true)``
+  is discarded at the end of the transaction, so ``session.add(row); commit();
+  refresh(row)`` runs its refresh unbound — in ``aegis.governance.enforcement``'s user
+  and budget writers, in ``app.data.approvals``, and anywhere else the pattern appears.
+  :func:`bind_scope_for_session` is the fix for the class; a one-shot
+  :func:`set_tenant_scope` is not.
+* **Approvals are keyed by id, not by tenant.** ``get_approval(approval_id)``,
+  ``resolve_approval(approval_id)`` and ``finalize_resumed(approval_id)`` have no tenant
+  to bind: closing them is a signature change reaching the API routes and the
+  orchestrator, not a line.
+* **The memory subsystem** (``recall``, ``consolidate``, ``vector_ops``) reads six
+  tenant-scoped tables through its own session seam and binds on none of them.
+* **The prompt registry** (``aegis.ops.registry``, ``release``, ``diagnose``,
+  ``trace_eval``) filters ``prompt_versions``/``eval_results`` in SQL and binds nothing.
+
+By module, the sites that remain: ``aegis.memory.consolidate`` 18, ``aegis.ops.registry``
+8, ``aegis.memory.recall`` 7, ``app.data.approvals`` 5, ``app.api.routes`` 5,
+``aegis.ops.release`` 5, ``aegis.memory.vector_ops`` 4, ``aegis.governance.enforcement``
+4, and one or two each in ``aegis.ops.gate``/``diagnose``/``trace_eval``, ``app.seed``,
+``app.data.chat``, ``app.api.routes_memory``/``routes_llmops``/``routes_health`` and
+``app.agent.orchestrator``. Re-run the auditor rather than trusting this list: it is a
+measurement dated 2026-08-20, and the whole point of the instrument is that a list in a
+docstring goes stale while the log does not.
+
+Closed in this task: :func:`aegis.governance.audit.list_recent_audit` (which bound
+nothing at all), the SLA sweeper, the LLM-Ops registry cache warm, the Phase 7 SQL
+console's platform-wide read, the durable approvals enqueue, and the dashboard's
+import-time copy of the binder that made the seam blind to its own reads.
+
+**The flag flips when :func:`scope_audit_findings` is empty over a full suite run.** It
+is not empty today, and saying so is the point of the instrument.
+
+Note one thing the phase doc got wrong: "move background work onto the admin engine" does
+not fix an unscoped reader. The policies are installed with ``FORCE ROW LEVEL SECURITY``,
+so a non-superuser table owner is subject to them exactly like the serving role. The
+scope is the fix; the engine is not.
 """
 
 from __future__ import annotations
@@ -58,13 +108,30 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 __all__ = [
+    "LOGIN_LOOKUP_FUNCTION",
+    "PLATFORM_SCOPE_GUC",
+    "SCOPE_BINDING_SQL",
     "SERVING_ROLE",
+    "TENANT_GUC",
+    "USERS_PROVISIONED_FUNCTION",
     "RlsBypassError",
     "RlsEnforcement",
+    "ScopeAuditFinding",
+    "UnscopedReadError",
     "audit_rls_enforcement",
+    "bootstrap_login_functions",
+    "bind_scope_for_session",
     "bootstrap_rls",
+    "configure_rls",
     "grant_serving_role",
+    "install_scope_auditor",
+    "login_function_statements",
+    "mark_scope_bound",
     "report_rls_enforcement",
+    "reset_scope_audit",
+    "rls_fail_closed",
+    "scope_audit_findings",
+    "scope_binding_params",
     "set_tenant_scope",
     "tenant_policy_statements",
 ]
@@ -193,27 +260,87 @@ _PLATFORM_BASELINE_TABLES: frozenset[str] = frozenset({"settings"})
 #: narrower than Postgres allows: a name that would need escaping is refused, not escaped.
 _SAFE_RELATION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
 
+#: The GUC carrying the tenant a session may read. Written by every scope binder in the
+#: codebase (:func:`set_tenant_scope`, ``aegis.jobs.scope``, ``aegis.dbadmin.runner``)
+#: and read by the ``tenant_isolation`` policy predicate.
+TENANT_GUC = "app.tenant_id"
+
+#: The GUC that says **"this session is deliberately platform-wide"** — the positive
+#: assertion that the fail-closed predicate widens on.
+#:
+#: It exists because ``app.tenant_id`` cannot express the difference between the two
+#: things it is silent about: *"I am a platform-admin read and I mean every tenant"* and
+#: *"nobody bound a scope on this path"*. Under :data:`_TENANT_ISOLATION_PREDICATE` both
+#: read as "do not restrict", which is the fail-open branch this GUC exists to remove.
+#: A session that never speaks gets nothing; a session that means every tenant says so.
+#:
+#: Deliberately the same shape as :data:`aegis.analytics.provision.ALL_TENANTS_GUC` and
+#: :data:`aegis.dbadmin.scope.ALL_TENANTS_GUC` — the pattern already proved here — and
+#: deliberately a *different name* from both, because those two narrow statements that
+#: Aegis generates for a connection it did not open, while this one widens the policy on
+#: the base tables. One name per boundary, so widening one can never widen another.
+PLATFORM_SCOPE_GUC = "app.tenant_all"
+
+#: The one statement that binds a session's scope: both GUCs, one round trip, one
+#: definition. Every binder in the codebase executes *this* — see
+#: :func:`scope_binding_params` for the values and why the platform assertion is written
+#: explicitly rather than implied by an empty ``app.tenant_id``.
+SCOPE_BINDING_SQL = (
+    f"SELECT set_config('{TENANT_GUC}', :tenant_scope, true), "
+    f"set_config('{PLATFORM_SCOPE_GUC}', :platform_scope, true)"
+)
+
+
+def scope_binding_params(tenant_id: int | None) -> dict[str, str]:
+    """Return the bind parameters :data:`SCOPE_BINDING_SQL` takes for ``tenant_id``.
+
+    ``None`` is the **platform scope**: the caller is asserting, on a path whose
+    authority has already been resolved, that it means every tenant. It writes
+    ``app.tenant_all = 'on'`` and leaves ``app.tenant_id`` empty. A numeric tenant does
+    the reverse, and clears the platform assertion — clearing it matters, because the
+    GUCs live on a pooled connection and a stale ``'on'`` left by an earlier transaction
+    would silently widen this one.
+
+    Args:
+        tenant_id: The tenant to scope to, or ``None`` for the platform scope.
+
+    Returns:
+        The ``{"tenant_scope": ..., "platform_scope": ...}`` bind parameters.
+    """
+    return {
+        "tenant_scope": "" if tenant_id is None else str(tenant_id),
+        "platform_scope": "on" if tenant_id is None else "",
+    }
+
 
 async def set_tenant_scope(session: AsyncSession, tenant_id: int | None) -> None:
-    """Bind ``app.tenant_id`` for the session's connection so RLS policies apply.
+    """Bind this session's tenant scope so the RLS policies engage.
 
     Applied inside the governed data-layer calls — the usage ledger, budget reads,
     user/usage listings, the memory read/write paths, and the approvals inbox — so the
     bootstrapped per-tenant RLS policies engage on Postgres for every governed request.
     The app-level ``WHERE tenant_id = :ctx`` scoping remains the belt-and-suspenders
-    layer over these DB-enforced policies (and the only layer on SQLite).
+    layer over these DB-enforced policies.
 
-    RLS is **Postgres-only**: this calls ``set_config('app.tenant_id', <id>, true)`` on
-    PostgreSQL, writing the **empty string** when the request is unscoped; on SQLite (the
-    test database) it does nothing, since RLS and session GUCs are Postgres-only. See the
-    numbered comment in the body for why ``set_config`` rather than ``SET``/``RESET``, and
-    note that the empty string is not inert: it makes the policy predicate's ``substring``
-    yield NULL, which is the deliberate fail-open branch documented on
-    :data:`_TENANT_ISOLATION_PREDICATE`.
+    **Two GUCs, not one.** ``app.tenant_id`` carries the tenant; ``app.tenant_all``
+    carries the *platform assertion* that ``tenant_id=None`` makes. Writing only the
+    first would leave "a platform-admin read" and "nobody bound a scope" spelled
+    identically, and it is that spelling collision — not the policy — that makes the
+    fail-open branch necessary. See :data:`PLATFORM_SCOPE_GUC`, and
+    :data:`_TENANT_ISOLATION_PREDICATE_CLOSED` for what the distinction buys.
+
+    Passing ``None`` is therefore not "clear the scope"; it is "I have resolved this
+    caller's authority and it spans every tenant". A path that has resolved nothing must
+    not call this at all — under ``RLS_FAIL_CLOSED`` that path reads zero rows, and
+    :func:`install_scope_auditor` names it in the log long before the flag flips.
+
+    RLS is **Postgres-only**: this is a no-op on any other dialect, since RLS and session
+    GUCs are Postgres-only. See the numbered comment in the body for why ``set_config``
+    rather than ``SET``/``RESET``.
 
     Args:
         session: The async session whose connection to pin.
-        tenant_id: The tenant to scope to, or ``None`` to clear the scope.
+        tenant_id: The tenant to scope to, or ``None`` for the platform scope.
     """
     bind = session.get_bind()
     if bind.dialect.name != "postgresql":
@@ -233,13 +360,52 @@ async def set_tenant_scope(session: AsyncSession, tenant_id: int | None) -> None
     #    is discarded on commit/rollback. Session-level ``SET`` persists for the life of
     #    the *connection*, which a pool then hands to the next request — leaking one
     #    tenant's scope into another tenant's query.
-    if tenant_id is None:
-        await session.execute(text("SELECT set_config('app.tenant_id', '', true)"))
-    else:
-        await session.execute(
-            text("SELECT set_config('app.tenant_id', :tid, true)"),
-            {"tid": str(tenant_id)},
-        )
+    #
+    # 3. AMBIGUITY. ``app.tenant_id`` alone cannot distinguish "platform-admin read"
+    #    from "nobody bound anything", which is precisely the ambiguity the fail-open
+    #    branch of the policy predicate turns into every tenant's rows. So both GUCs are
+    #    written together, in one statement: see :data:`PLATFORM_SCOPE_GUC`.
+    connection = await session.connection()
+    await connection.execute(text(SCOPE_BINDING_SQL), scope_binding_params(tenant_id))
+    mark_scope_bound(connection, tenant_id)
+
+
+def bind_scope_for_session(session: AsyncSession, tenant_id: int | None) -> None:
+    """Re-bind ``tenant_id`` at the start of **every** transaction on ``session``.
+
+    :func:`set_tenant_scope` writes the GUCs with ``is_local => true``, so Postgres
+    discards them at the end of the transaction — deliberately, because a session-level
+    ``SET`` would leak one tenant's scope into the next request that borrowed the pooled
+    connection. The consequence is sharp and it is the single most common real finding of
+    :func:`install_scope_auditor`: **a session that commits and then keeps working
+    continues unscoped.** ``session.add(row); await session.commit(); await
+    session.refresh(row)`` is the canonical shape, and the refresh runs in a fresh,
+    unbound transaction — harmless under the fail-open predicate, and zero rows under the
+    fail-closed one.
+
+    This makes the binding a property of the *session* rather than of one transaction. It
+    is not a substitute for :func:`set_tenant_scope` on a single-transaction path; it is
+    what a path that commits more than once needs.
+
+    Registered on the underlying sync session, which is where SQLAlchemy's ORM events
+    live; the listener runs inside the greenlet driving the async session, so issuing SQL
+    from it is legitimate and not a blocking call on the event loop.
+
+    Args:
+        session: The session to bind for its whole lifetime.
+        tenant_id: The tenant, or ``None`` for a deliberate platform-wide scope.
+    """
+    from sqlalchemy import event  # noqa: PLC0415 - local: keeps import cost off the module
+
+    params = scope_binding_params(tenant_id)
+
+    def _on_begin(_session: Any, _transaction: Any, connection: Any) -> None:  # noqa: ANN401
+        if connection.dialect.name != "postgresql":
+            return
+        connection.execute(text(SCOPE_BINDING_SQL), params)
+        mark_scope_bound(connection, tenant_id)
+
+    event.listen(getattr(session, "sync_session", session), "after_begin", _on_begin)
 
 
 #: The row-visibility predicate installed as the ``tenant_isolation`` policy.
@@ -271,15 +437,91 @@ _TENANT_ISOLATION_PREDICATE = (
     "from '^[0-9]+$')::int)"
 )
 
-#: The read predicate for a :data:`_PLATFORM_BASELINE_TABLES` table: the standard one,
-#: widened by the NULL-tenant baseline row. Used for ``USING`` only — see that registry
-#: for why the ``WITH CHECK`` half stays unwidened.
-_PLATFORM_BASELINE_PREDICATE = (
-    f"({_TENANT_ISOLATION_PREDICATE} OR {_TENANT_COLUMN} IS NULL)"
+#: The **fail-closed** row-visibility predicate — the same policy, with the silence
+#: removed. ``RLS_FAIL_CLOSED=true`` installs this one instead of the fail-open form
+#: above; :func:`configure_rls` is the switch and :func:`bootstrap_rls` the installer.
+#:
+#: The only difference is which branch widens. The fail-open predicate widens on the
+#: *absence* of a numeric ``app.tenant_id``, so an unset GUC — a path that bound nothing
+#: at all — is indistinguishable from a platform-admin read and sees every row. This one
+#: widens on the *presence* of ``app.tenant_all = 'on'``: a positive assertion a caller
+#: had to make, written by :func:`set_tenant_scope` only when it is handed ``None``.
+#:
+#: Semantics:
+#:   * ``app.tenant_all = 'on'`` → the policy does not restrict. The platform scope.
+#:   * a **numeric** ``app.tenant_id`` → a row is visible only when ``tenant_id`` equals
+#:     it. Identical to the fail-open predicate's second branch.
+#:   * **neither** (nothing bound, an empty or non-numeric GUC) → ``tenant_id = NULL``,
+#:     which is never true: **no rows**. This is the branch the whole task is about.
+#:
+#: The ``substring(… from '^[0-9]+$')`` shape is kept for the same reason as above: the
+#: expression can never raise, whatever the GUC holds. Note it is exactly the shape
+#: :data:`aegis.analytics.provision.TENANT_PREDICATE` and
+#: :data:`aegis.dbadmin.catalogue.TENANT_PREDICATE` already carry — those two weld a
+#: fail-closed filter into statements Aegis generates for connections it did not open,
+#: and this makes the base tables agree with them instead of being laxer underneath.
+_TENANT_ISOLATION_PREDICATE_CLOSED = (
+    f"(current_setting('{PLATFORM_SCOPE_GUC}', true) = 'on' "
+    f"OR {_TENANT_COLUMN} = substring(current_setting('{TENANT_GUC}', true) "
+    "from '^[0-9]+$')::int)"
 )
 
+#: Process-wide posture: which of the two predicates :func:`tenant_policy_statements`
+#: emits. Module state rather than a parameter threaded through every caller, because
+#: the *other* caller is :mod:`aegis.runs.partitions`, which builds a policy for a
+#: partition created months after boot — and a partition carrying a different predicate
+#: from its parent is precisely the "protected by another name" failure this module was
+#: written to stop.
+_fail_closed = False
 
-def tenant_policy_statements(table: str, *, policy_for: str | None = None) -> tuple[str, ...]:
+
+def configure_rls(*, fail_closed: bool) -> None:
+    """Set the process-wide RLS posture (the ``RLS_FAIL_CLOSED`` switch).
+
+    Call once at startup, **before** :func:`bootstrap_rls`, since the posture decides
+    which predicate the policy DDL carries. Changing it afterwards has no effect on a
+    database already bootstrapped — re-run :func:`bootstrap_rls` (every boot does).
+
+    Args:
+        fail_closed: ``True`` installs :data:`_TENANT_ISOLATION_PREDICATE_CLOSED`, under
+            which a session that bound no scope reads **zero rows**. ``False`` (the
+            default) installs the historical fail-open predicate.
+    """
+    global _fail_closed
+    _fail_closed = fail_closed
+
+
+def rls_fail_closed() -> bool:
+    """Return the configured posture — ``True`` when an unbound scope reads no rows."""
+    return _fail_closed
+
+
+def _isolation_predicate(fail_closed: bool | None) -> str:
+    """Return the tenant predicate for ``fail_closed`` (``None`` = the process posture)."""
+    closed = _fail_closed if fail_closed is None else fail_closed
+    return (
+        _TENANT_ISOLATION_PREDICATE_CLOSED if closed else _TENANT_ISOLATION_PREDICATE
+    )
+
+
+def _baseline_predicate(fail_closed: bool | None) -> str:
+    """Return the :data:`_PLATFORM_BASELINE_TABLES` read predicate for the posture.
+
+    The standard predicate for the posture, widened by the NULL-tenant baseline row.
+    Used for ``USING`` only — see that registry for why the ``WITH CHECK`` half stays
+    unwidened.
+    """
+    return f"({_isolation_predicate(fail_closed)} OR {_TENANT_COLUMN} IS NULL)"
+
+
+#: The read predicate for a :data:`_PLATFORM_BASELINE_TABLES` table under the historical
+#: fail-open posture. Kept as a name because it is the one the shipped databases carry.
+_PLATFORM_BASELINE_PREDICATE = _baseline_predicate(False)
+
+
+def tenant_policy_statements(
+    table: str, *, policy_for: str | None = None, fail_closed: bool | None = None
+) -> tuple[str, ...]:
     """Return the DDL that puts one table under the ``tenant_isolation`` policy.
 
     Pure and synchronous **so there is one definition of "governed" rather than two**.
@@ -304,6 +546,9 @@ def tenant_policy_statements(table: str, *, policy_for: str | None = None) -> tu
             ``table`` itself. A partition inherits its parent's flavour: which predicate
             a relation gets is a property of what its rows mean, and a partition's rows
             mean whatever its parent's do.
+        fail_closed: Override the process posture set by :func:`configure_rls`. ``None``
+            (the default) uses it, which is what keeps a partition created six months
+            after boot carrying the same predicate as its parent.
 
     Returns:
         The ordered ``ALTER TABLE``/``CREATE POLICY`` statements, ready to execute on a
@@ -316,20 +561,20 @@ def tenant_policy_statements(table: str, *, policy_for: str | None = None) -> tu
         raise ValueError(
             f"refusing to build RLS DDL for {table!r}: not a plain SQL identifier"
         )
+    predicate = _isolation_predicate(fail_closed)
     if (policy_for or table) in _PLATFORM_BASELINE_TABLES:
         # Read widened to the platform baseline row, write deliberately not — a tenant
         # that could write a NULL-tenant row could forge a platform default.
         policy = (
             f"CREATE POLICY {_POLICY_NAME} ON \"{table}\" "
-            f"USING {_PLATFORM_BASELINE_PREDICATE} "
-            f"WITH CHECK {_TENANT_ISOLATION_PREDICATE}"
+            f"USING {_baseline_predicate(fail_closed)} "
+            f"WITH CHECK {predicate}"
         )
     else:
         # No explicit WITH CHECK: Postgres reuses USING for writes, so an INSERT/UPDATE
         # stamping another tenant is rejected rather than merely hidden afterwards.
         policy = (
-            f"CREATE POLICY {_POLICY_NAME} ON \"{table}\" "
-            f"USING {_TENANT_ISOLATION_PREDICATE}"
+            f"CREATE POLICY {_POLICY_NAME} ON \"{table}\" USING {predicate}"
         )
     return (
         f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY',
@@ -614,7 +859,9 @@ def _report_plan(plan: _RlsPlan) -> None:
         )
 
 
-async def bootstrap_rls(engine: AsyncEngine) -> list[str]:
+async def bootstrap_rls(
+    engine: AsyncEngine, *, fail_closed: bool | None = None
+) -> list[str]:
     """Enable + **force** Row-Level Security and install the per-tenant policy.
 
     Postgres-only and idempotent — it is called on every startup, and a second run
@@ -665,6 +912,9 @@ async def bootstrap_rls(engine: AsyncEngine) -> list[str]:
 
     Args:
         engine: The async engine to configure.
+        fail_closed: Which predicate to install. ``None`` (the default) uses the process
+            posture from :func:`configure_rls`; see
+            :data:`_TENANT_ISOLATION_PREDICATE_CLOSED`.
 
     Returns:
         The table names this call installed the policy on, sorted — empty on a
@@ -672,6 +922,13 @@ async def bootstrap_rls(engine: AsyncEngine) -> list[str]:
     """
     if engine.dialect.name != "postgresql":
         return []
+    closed = _fail_closed if fail_closed is None else fail_closed
+    logger.info(
+        "RLS bootstrap: installing the %s tenant_isolation predicate (a session that "
+        "binds no scope reads %s).",
+        "FAIL-CLOSED" if closed else "fail-open",
+        "no rows" if closed else "EVERY tenant's rows",
+    )
     async with engine.begin() as conn:
         live = await _live_tables(conn)
         plan = _plan_rls(live)
@@ -684,7 +941,7 @@ async def bootstrap_rls(engine: AsyncEngine) -> list[str]:
             # Identifiers come from our own registry, filtered through the catalog —
             # never from user input, and validated again inside the DDL builder.
             for statement in tenant_policy_statements(
-                table, policy_for=roots.get(table, table)
+                table, policy_for=roots.get(table, table), fail_closed=closed
             ):
                 await conn.execute(text(statement))
         shortfall = _unprotected(await _live_tables(conn), plan.protect)
@@ -1020,3 +1277,407 @@ async def grant_serving_role(engine: AsyncEngine, role: str) -> tuple[str, ...]:
         role,
     )
     return statements
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The login lookup — the one read that legitimately precedes a tenant
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The ``SECURITY DEFINER`` function the host's authentication path reads ``users``
+#: through when the fail-closed posture is in force.
+LOGIN_LOOKUP_FUNCTION = "aegis_login_lookup"
+
+#: Its companion: "has anybody been provisioned at all?" — the question the login path
+#: asks to tell *wrong password* apart from *this deployment was never seeded*, which is
+#: a ``COUNT(*)`` across every tenant and therefore fails closed exactly like the lookup.
+USERS_PROVISIONED_FUNCTION = "aegis_users_provisioned"
+
+
+def login_function_statements(*, role: str | None = None) -> tuple[str, ...]:
+    """Return the DDL for the two functions the login path reads ``users`` through.
+
+    **Why a function at all.** Authentication is the one read that genuinely happens
+    before a tenant is known: the username *is* the lookup key, and the row it finds is
+    what tells the platform which tenant the caller belongs to. Under the fail-closed
+    predicate a session that has bound no scope sees no rows, so the login query returns
+    nothing and every credential is "wrong" — the failure the phase doc warns is worse
+    than the fail-open it replaces. The alternative to a function is for the login path
+    to bind the *platform* scope, which would widen every statement in that transaction
+    rather than the one that needs it.
+
+    **What it can see, precisely.** ``SECURITY DEFINER`` makes the body run as the
+    function's owner (the table owner, which is who bootstraps it), and the
+    ``SET app.tenant_all = 'on'`` clause widens the policy **for the duration of the
+    call only** — Postgres restores the parameter's prior value when the function exits,
+    so the widening cannot leak into the rest of the caller's transaction. Inside that
+    window the body can read every tenant's ``users`` rows. It returns:
+
+    * :data:`LOGIN_LOOKUP_FUNCTION` — the rows for the **exact username passed**, and
+      nothing else. ``users.username`` is ``UNIQUE``, so that is at most one row, and it
+      is the same row the fail-open predicate hands the login path today. There is no
+      wildcard, no ``LIKE``, no listing, and no parameter that can widen it: a caller who
+      does not already know a username learns nothing.
+    * :data:`USERS_PROVISIONED_FUNCTION` — a single boolean. It exposes *whether the
+      platform has any users*, which the login screen already tells anyone who tries.
+
+    ``RETURNS SETOF public.users`` rather than a hand-written column list, deliberately:
+    a column added to :class:`~aegis.governance.models.User` would otherwise have to be
+    added here too, and the failure of forgetting would be a login path silently missing
+    a field. The composite type is resolved by name, so the function keeps up on its own.
+
+    ``search_path`` is pinned, which is not optional for ``SECURITY DEFINER``: without it
+    a caller who can create objects could shadow ``users`` with their own table and have
+    the owner read it.
+
+    Args:
+        role: The serving role to ``GRANT EXECUTE`` to. ``None`` skips the grant (there
+            is no owner/serving split, so the owner already holds it).
+
+    Returns:
+        The ordered statements, ready to execute on a PostgreSQL owner connection.
+
+    Raises:
+        ValueError: If ``role`` is not a plain, unquoted SQL identifier.
+    """
+    if role is not None and not _SAFE_ROLE_NAME.match(role):
+        raise ValueError(
+            f"refusing to grant EXECUTE to {role!r}: not a plain SQL identifier"
+        )
+    statements = [
+        f"CREATE OR REPLACE FUNCTION {LOGIN_LOOKUP_FUNCTION}(p_username text)\n"
+        "RETURNS SETOF users\n"
+        "LANGUAGE sql\n"
+        "STABLE\n"
+        "SECURITY DEFINER\n"
+        "SET search_path = pg_catalog, public\n"
+        f"SET {PLATFORM_SCOPE_GUC} = 'on'\n"
+        "AS $aegis$ SELECT * FROM public.users WHERE username = p_username $aegis$",
+        f"CREATE OR REPLACE FUNCTION {USERS_PROVISIONED_FUNCTION}()\n"
+        "RETURNS boolean\n"
+        "LANGUAGE sql\n"
+        "STABLE\n"
+        "SECURITY DEFINER\n"
+        "SET search_path = pg_catalog, public\n"
+        f"SET {PLATFORM_SCOPE_GUC} = 'on'\n"
+        "AS $aegis$ SELECT EXISTS (SELECT 1 FROM public.users) $aegis$",
+        # PUBLIC gets EXECUTE on a new function by default. A SECURITY DEFINER function
+        # that every role may call is the classic way one becomes a privilege hole, so
+        # the default grant is revoked and the serving role is named explicitly.
+        f"REVOKE ALL ON FUNCTION {LOGIN_LOOKUP_FUNCTION}(text) FROM PUBLIC",
+        f"REVOKE ALL ON FUNCTION {USERS_PROVISIONED_FUNCTION}() FROM PUBLIC",
+    ]
+    if role is not None:
+        statements += [
+            f'GRANT EXECUTE ON FUNCTION {LOGIN_LOOKUP_FUNCTION}(text) TO "{role}"',
+            f'GRANT EXECUTE ON FUNCTION {USERS_PROVISIONED_FUNCTION}() TO "{role}"',
+        ]
+    return tuple(statements)
+
+
+async def bootstrap_login_functions(
+    engine: AsyncEngine, role: str | None = None
+) -> tuple[str, ...]:
+    """Install (or refresh) the login functions on the owner connection.
+
+    Idempotent — ``CREATE OR REPLACE`` — and a no-op off PostgreSQL and on a database
+    that has no ``users`` table yet (a host that installs only some aegis modules), in
+    which case it says so rather than failing the boot.
+
+    Args:
+        engine: An engine connected as the **owner** of ``users``. The function inherits
+            that role's identity, which is the whole mechanism.
+        role: The serving role to grant ``EXECUTE`` to, or ``None`` when there is no
+            owner/serving split.
+
+    Returns:
+        The statements executed, in order — empty when nothing was done.
+    """
+    if engine.dialect.name != "postgresql":
+        return ()
+    try:
+        statements = login_function_statements(role=role)
+    except ValueError:
+        logger.exception("Refusing to install the login functions")
+        return ()
+    async with engine.begin() as conn:
+        present = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = current_schema() AND table_name = 'users'"
+            )
+        )
+        if present.first() is None:
+            logger.info(
+                "No 'users' table in this database, so the %s login function was not "
+                "installed.",
+                LOGIN_LOOKUP_FUNCTION,
+            )
+            return ()
+        for statement in statements:
+            await conn.execute(text(statement))
+    logger.info(
+        "Installed the SECURITY DEFINER login functions (%s, %s)%s.",
+        LOGIN_LOOKUP_FUNCTION,
+        USERS_PROVISIONED_FUNCTION,
+        f" and granted EXECUTE to {role!r}" if role else "",
+    )
+    return statements
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The scope auditor — the enumeration that has to come before the flag flips
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Where the auditor records a connection's currently-bound scope. Lives on the DBAPI
+#: connection's ``info`` dict (which the pool carries across checkouts), and is cleared
+#: on commit, rollback and checkin — mirroring ``set_config(..., is_local => true)``,
+#: which Postgres discards at the end of the transaction. A tracker that outlived the
+#: GUC would report a scope the database no longer has, which is the one lie an
+#: enumeration must not tell.
+_SCOPE_INFO_KEY = "aegis_tenant_scope"
+
+#: Matches a bare word in a statement, cheaply, so a tenant-scoped table name can be
+#: found without parsing SQL. Table names here are our own identifiers, never quoted
+#: strings from a request, so word-boundary matching is sufficient and a false positive
+#: costs a log line rather than a wrong answer.
+_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+#: Statement prefixes the auditor never questions. DDL and catalog reads are not tenant
+#: reads, and ``bootstrap_rls`` itself would otherwise report every table it protects.
+_UNAUDITED_PREFIXES = (
+    "alter", "create", "drop", "grant", "revoke", "comment", "set", "show",
+    "begin", "commit", "rollback", "savepoint", "release", "vacuum", "analyze",
+    "explain", "truncate", "reset", "lock", "prepare", "deallocate", "listen",
+    "notify", "unlisten", "copy", "refresh", "reindex", "cluster", "discard",
+)
+
+
+class UnscopedReadError(RuntimeError):
+    """Raised by a **strict** scope auditor when a tenant-scoped table is read unscoped.
+
+    Off by default. It exists so a suite can assert that the enumeration is complete
+    rather than reading a log and hoping — a warning nobody greps is how an enumeration
+    is declared finished while three readers are still missing from it.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeAuditFinding:
+    """One place in the codebase that touched a tenant-scoped table with no scope bound.
+
+    Attributes:
+        table: The first registered tenant-scoped table named in the statement.
+        caller: ``file:line`` of the nearest frame outside SQLAlchemy — the line to fix.
+        statement: The statement, truncated; enough to recognise the query.
+        count: How many times this ``(table, caller)`` pair has been seen.
+    """
+
+    table: str
+    caller: str
+    statement: str
+    count: int = 1
+
+
+#: Every distinct ``(table, caller)`` the auditor has seen, in first-seen order. Module
+#: state on purpose: the enumeration is a property of the *process*, and the point is to
+#: read it back at the end of a whole suite run rather than per test.
+_findings: dict[tuple[str, str], ScopeAuditFinding] = {}
+
+
+def scope_audit_findings() -> tuple[ScopeAuditFinding, ...]:
+    """Return every unscoped read seen so far, in first-seen order.
+
+    **This is the enumeration.** An empty tuple after a full suite run is the evidence
+    the phase doc asks for before ``RLS_FAIL_CLOSED`` may default to true.
+    """
+    return tuple(_findings.values())
+
+
+def reset_scope_audit() -> None:
+    """Forget every finding (test isolation, or the start of a fresh enumeration)."""
+    _findings.clear()
+
+
+def mark_scope_bound(connection: Any, tenant_id: int | None) -> None:  # noqa: ANN401
+    """Record that ``connection`` now carries a bound scope, for the auditor.
+
+    Called by every scope binder immediately after it writes the GUCs, so the auditor
+    reports on what the *database* was actually told rather than on what a call site
+    intended. A no-op when no auditor is installed, and never raises: a diagnostic that
+    can break a request is worse than the gap it reports.
+
+    Args:
+        connection: The connection the GUCs were written on — a SQLAlchemy
+            ``Connection`` or ``AsyncConnection``; anything else is ignored.
+        tenant_id: The scope just bound (``None`` is the platform scope, which is a
+            bound scope: somebody asserted it).
+    """
+    info = getattr(connection, "info", None)
+    if isinstance(info, dict):
+        info[_SCOPE_INFO_KEY] = tenant_id
+
+
+def _clear_scope(connection: Any) -> None:  # noqa: ANN401 - Connection or DBAPI proxy
+    """Forget a connection's bound scope — the GUC is transaction-local, so this is too."""
+    info = getattr(connection, "info", None)
+    if isinstance(info, dict):
+        info.pop(_SCOPE_INFO_KEY, None)
+
+
+def _audited_tables(statement: str) -> str | None:
+    """Return the first registered tenant-scoped table named in ``statement``, if any.
+
+    Args:
+        statement: The SQL about to be sent.
+
+    Returns:
+        The table name, or ``None`` when the statement touches none of them (or is DDL,
+        a catalog read, or a transaction-control command).
+    """
+    stripped = statement.lstrip().lower()
+    if not stripped or stripped.startswith(_UNAUDITED_PREFIXES):
+        return None
+    if "pg_catalog" in stripped or "information_schema" in stripped:
+        return None
+    registered = _AUDITED_TABLE_SET
+    for word in _WORD.findall(stripped):
+        if word in registered:
+            return word
+    return None
+
+
+#: Lowercased registry, materialised once — the auditor runs on every statement.
+_AUDITED_TABLE_SET = frozenset(name.lower() for name in _TENANT_SCOPED_TABLES)
+
+
+#: Module prefixes that are never the *caller* of an unscoped read — they are the
+#: machinery carrying it. ``pytest``/``_pytest`` are not excluded: a test that reads
+#: unscoped is a real finding, and the file:line of the test is what the reader wants.
+_PLUMBING = ("sqlalchemy", "asyncio", "greenlet", "concurrent.futures", __name__)
+
+
+def _first_app_frame(frame: Any) -> str | None:  # noqa: ANN401 - a CPython frame
+    """Walk up from ``frame`` and return ``file:line`` of the first non-plumbing frame.
+
+    Bounded to 60 frames: this runs only when a violation has already been detected, and
+    an unbounded walk on a deep ORM stack would turn a diagnostic into a cost.
+
+    Args:
+        frame: The frame to start from, or ``None``.
+
+    Returns:
+        ``file:line``, or ``None`` when this stack holds no application frame.
+    """
+    for _ in range(60):
+        if frame is None:
+            return None
+        name = frame.f_globals.get("__name__", "")
+        if not name.startswith(_PLUMBING):
+            return f"{frame.f_code.co_filename}:{frame.f_lineno}"
+        frame = frame.f_back
+    return None
+
+
+def _caller_frame() -> str:
+    """Return ``file:line`` for the code that issued the statement.
+
+    **The greenlet hop is the whole difficulty.** SQLAlchemy's asyncio layer runs the
+    synchronous DBAPI work in a *separate greenlet*, so by the time an engine event
+    fires, ``f_back`` walks a stack that begins at the greenlet's entry point and never
+    reaches the coroutine that called ``execute``. Every frame on it is plumbing, and a
+    naive walk reports ``<unknown>`` for every async caller — which is every caller in
+    this codebase, making the finding's most useful field useless.
+
+    So when the current stack yields nothing, the parent greenlets' frames are walked in
+    turn: that chain is where the awaiting coroutine actually lives.
+    """
+    import sys  # noqa: PLC0415 - local: this is the only place that needs it
+
+    found = _first_app_frame(sys._getframe(1))  # noqa: SLF001 - the documented walk
+    if found is not None:
+        return found
+    try:
+        import greenlet  # noqa: PLC0415 - optional; only installed with the async driver
+    except ImportError:  # pragma: no cover - greenlet ships with SQLAlchemy's asyncio
+        return "<unknown>"
+    current = greenlet.getcurrent()
+    for _ in range(10):
+        current = getattr(current, "parent", None)
+        if current is None:
+            break
+        found = _first_app_frame(getattr(current, "gr_frame", None))
+        if found is not None:
+            return found
+    return "<unknown>"
+
+
+def install_scope_auditor(engine: AsyncEngine, *, strict: bool = False) -> None:
+    """Report every session that reads a tenant-scoped table with no scope bound.
+
+    **The instrument the flag flip depends on.** ``RLS_FAIL_CLOSED`` turns an unscoped
+    read from "every tenant's rows" into "no rows", and a path nobody enumerated becomes
+    a silent empty result — worse than the leak it replaces. So the posture ships
+    ``false`` with this installed, the log is read as the enumeration, each named path is
+    given the scope it should always have had, and only an empty enumeration earns the
+    flip.
+
+    Installed on the **serving** engine. The owner/DDL engine is deliberately not
+    audited: bootstrapping, granting and reconciling are not tenant reads, and a
+    diagnostic that cries at every boot is one nobody reads.
+
+    Postgres-only, and idempotent per engine.
+
+    Args:
+        engine: The serving engine to instrument.
+        strict: Raise :class:`UnscopedReadError` instead of logging. For suites that
+            assert the enumeration is complete; never for a deployment, where the whole
+            point is that the platform keeps working while the gaps are collected.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    sync_engine = engine.sync_engine
+    if getattr(sync_engine, "_aegis_scope_auditor", False):
+        return
+    sync_engine._aegis_scope_auditor = True  # noqa: SLF001 - our own marker
+
+    from sqlalchemy import event  # noqa: PLC0415 - local: keeps import cost off the module
+
+    @event.listens_for(sync_engine, "before_cursor_execute")
+    def _audit(  # noqa: ANN202
+        conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool  # noqa: ANN401, ARG001, E501
+    ) -> None:
+        if _SCOPE_INFO_KEY in conn.info:
+            return
+        table = _audited_tables(statement)
+        if table is None:
+            return
+        caller = _caller_frame()
+        key = (table, caller)
+        seen = _findings.get(key)
+        if seen is None:
+            _findings[key] = ScopeAuditFinding(
+                table=table, caller=caller, statement=statement[:400].strip()
+            )
+        else:
+            _findings[key] = ScopeAuditFinding(
+                table=seen.table,
+                caller=seen.caller,
+                statement=seen.statement,
+                count=seen.count + 1,
+            )
+        message = (
+            "UNSCOPED READ: %s was queried with no tenant scope bound, from %s. Under "
+            "RLS_FAIL_CLOSED=true this statement returns ZERO rows; today it returns "
+            "every tenant's. Bind the scope this path has resolved (set_tenant_scope, "
+            "or None for a deliberate platform-wide read). Statement: %s"
+        )
+        if strict:
+            raise UnscopedReadError(
+                message.replace("%s", "{}").format(table, caller, statement[:400])
+            )
+        if seen is None:
+            logger.warning(message, table, caller, statement[:400])
+
+    for moment in ("commit", "rollback"):
+        event.listen(sync_engine, moment, _clear_scope)
+    event.listen(sync_engine.pool, "checkin", lambda dbapi_conn, record: _clear_scope(record))

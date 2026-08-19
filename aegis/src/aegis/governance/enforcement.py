@@ -119,6 +119,28 @@ def _session() -> AsyncSession:
     return _session_factory()
 
 
+async def apply_tenant_scope(session: AsyncSession, tenant_id: int | None) -> None:
+    """Bind the tenant scope through the **currently configured** binder.
+
+    The public seam for any module outside this one that needs the same binder, and the
+    reason it exists is a real defect this project found: ``aegis.governance.dashboard``
+    did ``from aegis.governance.enforcement import _set_tenant_scope`` at import time,
+    which captures whatever the binder was *then*. A later ``configure_governance`` — the
+    supported way a host injects its own binder, and the way the tests install a spy —
+    rebinds this module's global and never touches that copy, so the dashboard's reads
+    went out through the original binder and the seam was blind to them.
+
+    Harmless in itself, and exactly the shape that makes an enumeration incomplete: the
+    instrument reports "no unscoped reads" because it cannot see the reader. Resolving
+    the name on every call is what makes one seam mean one thing.
+
+    Args:
+        session: The session to bind the scope on.
+        tenant_id: The tenant, or ``None`` for a deliberate platform-wide read.
+    """
+    await _set_tenant_scope(session, tenant_id)
+
+
 #: The rolling span, in seconds, for each budget window (token/usd caps). Public because
 #: it is the one definition of what a window *means*: the dashboard, the config projection
 #: and job admission (:mod:`aegis.jobs.admission`) all measure spend over it, and a second

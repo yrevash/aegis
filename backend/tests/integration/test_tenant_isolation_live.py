@@ -1513,7 +1513,7 @@ async def test_retrieval_never_surfaces_another_tenants_phrase_across_two_runs()
     What is real here, and what is not — stated plainly rather than implied:
 
     * **Real**: the shipped :class:`~aegis.retrieval.pipeline.Retriever`, its ingest path,
-      wide recall over an embedded **Chroma** vector store (the genuine engine, in
+      wide recall over an in-process **Qdrant** vector store (the genuine engine, in
       process), the BM25 keyword arm, RRF fusion, spotlighting, and the real
       :class:`~aegis.retrieval.cache.SemanticCache` with both tiers — over
       :class:`~aegis.retrieval.memory.InMemoryRedis`, the store the product's own lite

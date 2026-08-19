@@ -30,8 +30,8 @@ from aegis.governance.enforcement import (
     _budget_row,
     _now_naive,
     _session,
-    _set_tenant_scope,
     _usage_sums,
+    apply_tenant_scope,
     list_tenants,
     list_users,
     usage_rollup,
@@ -72,7 +72,7 @@ async def budget_status(
         One :class:`BudgetStatusRow` per matching cap, ordered by id ascending.
     """
     async with _session() as session:
-        await _set_tenant_scope(session, tenant_id)
+        await apply_tenant_scope(session, tenant_id)
         stmt = select(Budget).order_by(Budget.id.asc())
         if tenant_id is not None:
             stmt = stmt.where(Budget.tenant_id == tenant_id)
@@ -130,7 +130,7 @@ async def usage_summary(
     win = BudgetWindow(window)
     since = _now_naive() - timedelta(seconds=WINDOW_SECONDS[win])
     async with _session() as session:
-        await _set_tenant_scope(session, tenant_id)
+        await apply_tenant_scope(session, tenant_id)
         stmt = select(func.count(UsageLedger.id)).where(UsageLedger.ts >= since)
         if tenant_id is not None:
             stmt = stmt.where(UsageLedger.tenant_id == tenant_id)

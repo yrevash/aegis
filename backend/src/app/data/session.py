@@ -45,8 +45,13 @@ from aegis.governance.rls import (
     RlsBypassError,  # noqa: F401 - re-exported for importers
     RlsEnforcement,
     audit_rls_enforcement,
+    bind_scope_for_session,  # noqa: F401 - re-exported for importers
+    bootstrap_login_functions,
+    configure_rls,
     grant_serving_role,
+    install_scope_auditor,
     report_rls_enforcement,
+    rls_fail_closed,  # noqa: F401 - re-exported for importers
     set_tenant_scope,  # noqa: F401 - re-exported for importers
 )
 from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
@@ -56,12 +61,14 @@ from aegis.governance.schema import (
 )
 from sqlalchemy import make_url, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from app.config import get_settings
 
@@ -150,16 +157,126 @@ def to_asyncpg_dsn(dsn: str) -> str:
     return dsn
 
 
+class PoolExhaustedError(SATimeoutError):
+    """A connection pool ran out, and this says which one and what to do about it.
+
+    Subclasses ``sqlalchemy.exc.TimeoutError`` (itself a ``SQLAlchemyError``), so every
+    existing ``except SQLAlchemyError`` handler keeps catching it — this replaces a
+    diagnostic, it does not add a new failure mode.
+
+    The one it replaces read ``QueuePool limit of size 5 overflow 10 reached, connection
+    timed out, timeout 30.00``, arrived thirty seconds late, and named neither the engine
+    nor the setting that would fix it. On a demo, thirty silent seconds is
+    indistinguishable from a hang, and a hang is diagnosed by restarting the process —
+    which clears the evidence.
+    """
+
+
+def _pool_class(label: str, env_prefix: str) -> type[AsyncAdaptedQueuePool]:
+    """Build a pool class that names itself when it runs out.
+
+    A subclass rather than an event listener because there is no event for "the checkout
+    timed out": SQLAlchemy raises from inside ``_do_get``, and that is the only place the
+    pool's own status is in scope.
+
+    Args:
+        label: Which engine this pool belongs to, for the message.
+        env_prefix: The settings prefix whose ``_POOL_SIZE`` / ``_MAX_OVERFLOW`` the
+            operator would raise.
+
+    Returns:
+        An ``AsyncAdaptedQueuePool`` subclass. One per engine, because the label has to
+        live somewhere and a class attribute is the only thing the pool machinery will
+        carry for us.
+    """
+
+    class _NamedPool(AsyncAdaptedQueuePool):
+        def _do_get(self) -> Any:  # noqa: ANN401 - _ConnectionRecord, kept loose
+            try:
+                return super()._do_get()
+            except SATimeoutError as exc:
+                message = (
+                    f"The {label} Postgres pool is exhausted: {self.status()}. Every "
+                    f"connection is checked out and none was returned within "
+                    f"{self._timeout:.0f}s, so this request was refused rather than "
+                    f"left to stall. Either raise {env_prefix}_POOL_SIZE / "
+                    f"{env_prefix}_MAX_OVERFLOW (and re-check the total against the "
+                    f"cluster's max_connections — app.data.session.pool_budget does "
+                    f"that arithmetic), or find what is holding connections open: "
+                    f"SELECT state, count(*), max(now() - state_change) FROM "
+                    f"pg_stat_activity GROUP BY state;"
+                )
+                logger.critical("%s", message)
+                raise PoolExhaustedError(message) from exc
+
+    _NamedPool.__name__ = f"{label.capitalize()}Pool"
+    return _NamedPool
+
+
+def _pool_kwargs(dsn: str, *, label: str, size: int, overflow: int) -> dict[str, Any]:
+    """Return the ``create_async_engine`` pool arguments for one engine.
+
+    Empty for a non-PostgreSQL URL: SQLite (in-process, in tests) has its own pool
+    classes, and forcing a queue pool onto it is how a test suite acquires a mysterious
+    "database is locked".
+
+    Args:
+        dsn: The URL the engine will be built from.
+        label: Which engine this is, for :func:`_pool_class`.
+        size: Steady-state connections held open.
+        overflow: Extra connections allowed under burst, closed again afterwards.
+
+    Returns:
+        Keyword arguments for ``create_async_engine``.
+    """
+    if not dsn.startswith(("postgresql:", "postgresql+")):
+        return {}
+    settings = get_settings()
+    return {
+        "poolclass": _pool_class(label, f"DB{'_ADMIN' if label == 'admin' else ''}"),
+        "pool_size": size,
+        "max_overflow": overflow,
+        "pool_timeout": settings.db_pool_timeout_seconds,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        # A connection the server closed under us is otherwise discovered by the query
+        # that fails on it — one round trip per checkout buys "the pool never hands out a
+        # corpse", which is worth it for a platform that idles between demos.
+        "pool_pre_ping": True,
+    }
+
+
 def get_engine() -> AsyncEngine:
     """Return the process-wide **serving** engine, creating it on first use.
 
     Built from ``POSTGRES_DSN``, which must name a role with neither ``SUPERUSER`` nor
     ``BYPASSRLS`` so the tenant RLS policies actually apply to it. Every request-path
     session comes from here; DDL does not (see :func:`get_admin_engine`).
+
+    Two things are installed on it here and nowhere else:
+
+    * **The pool is sized** (§9.4) — see :attr:`app.config.Settings.db_pool_size` for the
+      arithmetic, and :class:`PoolExhaustedError` for what exhaustion now says.
+    * **The scope auditor** (§9.5) — :func:`aegis.governance.rls.install_scope_auditor`,
+      which names every statement that reads a tenant-scoped table with no scope bound.
+      Only on the serving engine: the owner engine's DDL and grants are not tenant reads,
+      and a diagnostic that fires at every boot is one nobody reads.
     """
     global _engine
     if _engine is None:
-        _engine = create_async_engine(to_asyncpg_dsn(get_settings().postgres_dsn))
+        settings = get_settings()
+        dsn = to_asyncpg_dsn(settings.postgres_dsn)
+        configure_rls(fail_closed=settings.rls_fail_closed)
+        _engine = create_async_engine(
+            dsn,
+            **_pool_kwargs(
+                dsn,
+                label="serving",
+                size=settings.db_pool_size,
+                overflow=settings.db_max_overflow,
+            ),
+        )
+        if settings.rls_scope_audit:
+            install_scope_auditor(_engine, strict=settings.rls_scope_audit_strict)
     return _engine
 
 
@@ -179,7 +296,17 @@ def get_admin_engine() -> AsyncEngine:
     """
     global _admin_engine
     if _admin_engine is None:
-        _admin_engine = create_async_engine(to_asyncpg_dsn(get_settings().admin_dsn))
+        settings = get_settings()
+        dsn = to_asyncpg_dsn(settings.admin_dsn)
+        _admin_engine = create_async_engine(
+            dsn,
+            **_pool_kwargs(
+                dsn,
+                label="admin",
+                size=settings.db_admin_pool_size,
+                overflow=settings.db_admin_max_overflow,
+            ),
+        )
     return _admin_engine
 
 
@@ -215,6 +342,14 @@ def configure_engine(
     _sessionmaker = async_sessionmaker(
         engine, expire_on_commit=False, class_=AsyncSession
     )
+    # The scope auditor goes on here too, not only in :func:`get_engine` — and that is
+    # the whole reason it can produce an enumeration. The suites bind their scratch
+    # database through this function and never call ``get_engine``, so an auditor
+    # installed only there would watch an engine no test uses and report a clean run
+    # over a codebase full of unscoped readers.
+    settings = get_settings()
+    if settings.rls_scope_audit:
+        install_scope_auditor(engine, strict=settings.rls_scope_audit_strict)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -271,6 +406,91 @@ def serving_role_name() -> str | None:
     if not serving or serving == owner:
         return None
     return serving
+
+
+async def pool_budget(engine: AsyncEngine | None = None) -> tuple[int, int] | None:
+    """Check that the configured pools fit inside the cluster's ``max_connections``.
+
+    The arithmetic in :attr:`app.config.Settings.db_pool_size` is written down once; this
+    is the part that checks it against the database actually in front of us, because the
+    number it is checked against is a property of the *cluster*, not of this repository.
+    A deployment that lowered ``max_connections``, or added a second Aegis process, is
+    exactly the case a comment cannot catch.
+
+    Logged, never raised. Over-subscription is not a fault at boot — it is a fault only
+    when every pool fills at once, and refusing to start would turn a capacity warning
+    into an outage.
+
+    Args:
+        engine: A connection to the cluster to ask. Defaults to the serving engine.
+            ``bootstrap`` passes its own, deliberately: reaching for the process-wide
+            serving engine from inside a call that was handed an engine is how a check
+            ends up connecting somewhere the caller never asked about — and on a suite
+            that binds a scratch database per test, somewhere that no longer exists.
+
+    Returns:
+        ``(ceiling, requested)`` — the cluster's ``max_connections`` less its superuser
+        reservation, and the maximum this process can hold open. ``None`` when the
+        engine is not PostgreSQL or the cluster could not be asked.
+    """
+    engine = engine or get_engine()
+    if engine.dialect.name != "postgresql":
+        return None
+    settings = get_settings()
+    requested = (
+        settings.db_pool_size
+        + settings.db_max_overflow
+        + settings.db_admin_pool_size
+        + settings.db_admin_max_overflow
+    )
+    try:
+        async with engine.connect() as conn:
+            limit = int(
+                (await conn.execute(text("SHOW max_connections"))).scalar_one()
+            )
+            reserved = int(
+                (
+                    await conn.execute(text("SHOW superuser_reserved_connections"))
+                ).scalar_one()
+            )
+    except (SQLAlchemyError, OSError, ValueError):
+        logger.warning(
+            "Could not read max_connections, so the %d connections this process may "
+            "hold open are UNCHECKED against the cluster's ceiling.",
+            requested,
+            exc_info=True,
+        )
+        return None
+    ceiling = limit - reserved
+    if requested >= ceiling:
+        logger.error(
+            "Postgres pool budget does not fit: this process may hold %d connections "
+            "(serving %d+%d, admin %d+%d) against a cluster ceiling of %d "
+            "(max_connections %d less %d reserved). Lower DB_POOL_SIZE / "
+            "DB_MAX_OVERFLOW, or raise max_connections. Nothing else may connect to "
+            "this cluster — psql, Superset and LightRAG included.",
+            requested,
+            settings.db_pool_size,
+            settings.db_max_overflow,
+            settings.db_admin_pool_size,
+            settings.db_admin_max_overflow,
+            ceiling,
+            limit,
+            reserved,
+        )
+    else:
+        logger.info(
+            "Postgres pool budget: up to %d connections (serving %d+%d, admin %d+%d) "
+            "of a %d ceiling; %d left for everything else.",
+            requested,
+            settings.db_pool_size,
+            settings.db_max_overflow,
+            settings.db_admin_pool_size,
+            settings.db_admin_max_overflow,
+            ceiling,
+            ceiling - requested,
+        )
+    return ceiling, requested
 
 
 async def verify_rls_enforcement(*, fatal: bool | None = None) -> RlsEnforcement | None:
@@ -607,3 +827,10 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     if serving_role is not None:
         await grant_serving_role(engine, serving_role)
     await bootstrap_rls(engine)
+    # §9.5. The one read that legitimately precedes a tenant. Installed on every boot,
+    # not only under the fail-closed posture: a function that only exists when the flag
+    # is already on cannot be tested by turning the flag on.
+    await bootstrap_login_functions(engine, serving_role)
+    # §9.4. The pool arithmetic, checked against the cluster it will actually run on —
+    # asked over the engine this bootstrap was handed, not the process-wide one.
+    await pool_budget(engine)
