@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from aegis.memory import reset_default_index, set_default_spec
+from aegis.memory import MemoryVectorIndex, set_default_index, set_default_spec
 
 from ._spec import FAKE_SPEC
 
@@ -25,10 +25,12 @@ def _default_spec():
 
 @pytest.fixture(autouse=True)
 def _fresh_vector_index():
-    """Give every test a pristine embedded Chroma index (no cross-test point bleed)."""
-    reset_default_index()
-    yield
-    reset_default_index()
+    """Give every test a pristine embedded Chroma index (no cross-test point bleed).
+
+    Installs one rather than clearing the slot: since §8.4 an unconfigured index is a
+    hard error, not a lazily-conjured ephemeral engine, so "pristine" has to be stated.
+    """
+    set_default_index(MemoryVectorIndex.local())
 
 
 @pytest_asyncio.fixture

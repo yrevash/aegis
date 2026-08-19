@@ -85,6 +85,13 @@ governance = [
 ]
 observability = ["opentelemetry-sdk>=1.27", "opentelemetry-api>=1.27"]
 phoenix = ["arize-phoenix>=5.0", "arize-phoenix-otel>=0.6"]
+# Reference documentation. `pdoc` reads the Google-style docstrings that
+# `[tool.ruff.lint] select = [..., "D"]` + `convention = "google"` already enforce,
+# so the reference is derived from the source rather than written beside it and left
+# to rot. Output goes to `docs/api/` and is git-ignored — see scripts/build_api_docs.py.
+# Deliberately NOT folded into `dev`: build_api_docs.py already exits with the exact
+# install command when pdoc is absent, so a dev who never builds docs never pays for it.
+docs = ["pdoc>=16"]
 # The LangGraph orchestration core. The durable Postgres checkpointer
 # (``langgraph-checkpoint-postgres``) stays a host/backend concern, injected via
 # the composition root; ``aegis.agent`` needs only the in-memory saver + the

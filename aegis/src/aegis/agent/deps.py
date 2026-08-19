@@ -16,27 +16,97 @@ tool's own declared risk, is the whole gating rule — there is no second signal
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from aegis.core.types import RiskLevel
+from aegis.adapter import AgentRosterLike
+from aegis.core.models import ModelRole
+from aegis.core.types import GuardResult, RiskLevel
+from aegis.gateway.types import LLMResult
 from aegis.retrieval.types import RetrievalScope
 
 from .router import load_roster
 
+if TYPE_CHECKING:  # pragma: no cover - typing only; .subagent imports this module
+    from .subagent import SubAgentSpec
+
 __all__ = [
+    "ActivePromptFn",
     "AgentConfig",
     "AgentDeps",
+    "AuditFn",
+    "CompleteFn",
+    "EmbedQueryFn",
+    "InputGuardFn",
     "MemoryDeps",
+    "OutputGuardFn",
+    "RenderPromptFn",
+    "RetrieveFn",
+    "RiskFn",
+    "RosterFn",
+    "RunToolFn",
+    "SubAgentRosterFn",
+    "TenantFn",
+    "ToolDefsFn",
     "ToolOutcome",
     "risk_at_least",
     "risk_rank",
 ]
 
 
-# Structural aliases for the injected callables (kept loose to avoid coupling).
-CompleteFn = Callable[..., Awaitable[Any]]
+# ─────────────────────────────────────────────────────────────────────────────
+# The injected capabilities, as Protocols with named parameters and real returns.
+#
+# These were ``Callable[..., Awaitable[Any]]`` — a type that accepts anything and
+# therefore tells a caller nothing. Signature misinterpretation is one of the two
+# dominant error classes when an AI integrates an unfamiliar library, and ``...`` is
+# that error class written down: it cannot say that ``check_output`` takes the retrieved
+# contexts, that ``run_tool``'s four audit fields are keyword-only and have **no
+# defaults**, or that ``complete`` hands back a result with ``tool_calls`` and ``usage``
+# on it. Every parameter below is named, and every return type is the real one.
+#
+# The leading ``/`` on the positional parameters of ``RunToolFn`` / ``RenderPromptFn``
+# is deliberate: it makes them positional-only in the *contract*, so an implementation
+# may call its first argument ``persona`` where the caller calls it ``persona_id``
+# without a type checker objecting to a difference that cannot matter — those call sites
+# all pass positionally. ``CompleteFn`` deliberately does NOT do this, because it must
+# stay interchangeable with :class:`aegis.retrieval.protocols.CompleteFn`, which names
+# ``role``/``messages``: the graph passes ``deps.complete`` straight into the retrieval
+# pipeline, so the two spellings of one seam have to be assignable to each other.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class CompleteFn(Protocol):
+    """Structural type of the injected chat-completion callable (the LLM gateway).
+
+    Bound host-side to :func:`aegis.gateway.complete`. The return type is the real
+    :class:`~aegis.gateway.types.LLMResult` rather than ``Any`` because the graph reads
+    four fields off it — ``content``, ``tool_calls``, ``usage`` and ``model`` — and a
+    fake that returns a bare string type-checks fine against ``Any`` and then fails at
+    the first ``.tool_calls``.
+
+    All three keywords are required of an implementation, and narrowing this type is
+    what proved it: the graph hands ``deps.complete`` straight to the retrieval
+    pipeline's own :class:`aegis.retrieval.protocols.CompleteFn` (query rewrite,
+    agentic retrieval), which calls it with ``response_format=`` and ``temperature=``.
+    A binding that accepted only ``tools`` therefore type-checked against the old
+    ``Callable[..., Awaitable[Any]]`` and raised ``TypeError`` the first time a query
+    rewrite ran. A host may of course accept *more* (the gateway's own ``complete``
+    also takes ``max_tokens``); accepting extra optional keywords never breaks a caller.
+    """
+
+    async def __call__(
+        self,
+        role: ModelRole,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float = 0.0,
+        response_format: dict[str, Any] | None = None,
+    ) -> LLMResult:
+        """Complete a chat request for ``role`` and return the normalised result."""
+        ...
 
 
 class RetrieveFn(Protocol):
@@ -55,25 +125,96 @@ class RetrieveFn(Protocol):
         """Retrieve for ``query`` within ``scope`` and return a retrieval result."""
         ...
 
-# The input rail takes the query text; the output rail additionally accepts the
-# retrieved ``contexts`` (keyword) so the grounding self-check can run on the same
-# passages the answer was generated from. Kept loose (``...``) so a plain
-# ``check_output(text)`` fake and a ``check_output(text, contexts=...)`` one both fit.
-GuardFn = Callable[..., Awaitable[Any]]
+
+class InputGuardFn(Protocol):
+    """Structural type of an *inbound* rail: screen one piece of text, return a verdict.
+
+    Bound to ``check_input`` and — when a host wires the dedicated rail — to
+    ``check_tool_result``. One argument, because that is genuinely all the inbound chain
+    takes; the tool-result rail falls back to this one precisely because the two have
+    the same shape (see :func:`aegis.agent.rails.screen_tool_result`).
+    """
+
+    async def __call__(self, text: str, /) -> GuardResult:
+        """Screen ``text`` and return the rail's verdict (PASS/FLAG/REDACT/BLOCK)."""
+        ...
+
+
+class OutputGuardFn(Protocol):
+    """Structural type of the *outbound* rail, which additionally takes the contexts.
+
+    ``contexts`` is the retrieved passages the answer was generated from, and it is what
+    makes the grounding self-check possible: judged without them, an answer can only be
+    checked for form, not for support. The old ``Callable[..., Awaitable[Any]]`` could
+    not say this parameter existed, so a host was free to bind a one-argument
+    ``check_output(text)`` — which type-checked, and then raised ``TypeError`` on the
+    one call site in the graph that passes ``contexts=``.
+    """
+
+    async def __call__(
+        self, text: str, /, contexts: list[str] | None = None
+    ) -> GuardResult:
+        """Screen ``text``, grounding it against ``contexts`` when they are supplied."""
+        ...
+
+
 ToolDefsFn = Callable[[str], list[dict[str, Any]]]
 RiskFn = Callable[[str], RiskLevel]
-RenderPromptFn = Callable[..., str]
-RosterFn = Callable[[], Any]
-#: Provider of the adapter's SUB-agent roster (the fan-out team). Returns a sequence of
-#: ``SubAgentSpec``-shaped entries; ``None``/absent ⇒ no team, every turn is SINGLE.
-SubAgentRosterFn = Callable[[], Any]
+
+
+class RenderPromptFn(Protocol):
+    """Structural type of the persona system-prompt renderer.
+
+    Takes a persona **id**, not a persona object: the core has no domain persona type,
+    and the host resolves the id through its own adapter (which is also where the
+    LLM-Ops prompt version and the platform floor get composed in).
+    """
+
+    def __call__(self, persona_id: str, /, extra_context: str | None = None) -> str:
+        """Render the system prompt for ``persona_id``, appending ``extra_context``."""
+        ...
+
+
+#: Provider of the adapter's SUPERVISOR roster (the routable specialists). The return is
+#: :class:`~aegis.adapter.AgentRosterLike` — ``default_role`` / ``roles()`` / ``named()``
+#: / ``specialists`` — rather than ``Any``, so a roster missing the fall-through role is
+#: a type error and not a run that routes nowhere.
+RosterFn = Callable[[], AgentRosterLike]
+#: Provider of the adapter's SUB-agent roster (the fan-out team) — a sequence of
+#: :class:`~aegis.agent.subagent.SubAgentSpec` entries; ``None``/absent ⇒ no team and
+#: every turn is SINGLE. Quoted because ``subagent`` imports this module, not the other
+#: way round: the contract is here, the mechanism is there.
+SubAgentRosterFn = Callable[[], "Sequence[SubAgentSpec]"]
 #: Synchronous read of the LLM-Ops registry's ACTIVE prompt version for a ``prompt_key``
 #: — ``(system_prompt, config, version)`` or ``None`` when nothing is active. A host
 #: binds :func:`aegis.ops.registry.get_cached_active` here; the seam exists because
 #: ``aegis.ops`` pulls SQLAlchemy and ``aegis.agent`` must stay import-light.
 ActivePromptFn = Callable[[str], "tuple[str, dict[str, Any], int] | None"]
 TenantFn = Callable[[], int | None]
-AuditFn = Callable[..., Awaitable[Any]]
+
+
+class AuditFn(Protocol):
+    """Structural type of the durable audit sink (the supervisor hand-off row).
+
+    Every parameter is keyword-only and every one of the first five is **required**,
+    which is the contract ``aegis.governance.audit.record_audit`` already has: an audit
+    row with no ``trace_id`` cannot be correlated to the spans it describes, and one
+    with no ``payload`` records that something happened without recording what.
+    """
+
+    async def __call__(
+        self,
+        *,
+        action: str,
+        actor: str | None,
+        model: str | None,
+        trace_id: str | None,
+        payload: dict[str, Any],
+        approved_by: str | None = None,
+        tenant_id: int | None = None,
+    ) -> None:
+        """Persist one audit record for ``action``."""
+        ...
 #: Embed one query string for memory recall; returns ``None`` when unavailable.
 EmbedQueryFn = Callable[[str], Awaitable[list[float] | None]]
 
@@ -102,7 +243,31 @@ class ToolOutcome(Protocol):
     summary: str
 
 
-RunToolFn = Callable[..., Awaitable[ToolOutcome]]
+class RunToolFn(Protocol):
+    """Structural type of the action-tool executor — the one seam that changes the world.
+
+    The four keyword arguments have **no defaults** on purpose. They are the audit trail
+    of a consequential action (who asked, which model proposed it, which trace it
+    belongs to, and which human approved it at the gate), and a default would let a
+    caller drop the approver silently — which is the difference between an approved
+    action and an unattributed one. ``Callable[..., Awaitable[ToolOutcome]]`` could not
+    express that any of them existed.
+    """
+
+    async def __call__(
+        self,
+        persona_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        /,
+        *,
+        actor: str | None,
+        model: str | None,
+        trace_id: str | None,
+        approver: str | None,
+    ) -> ToolOutcome:
+        """Execute ``tool_name`` for ``persona_id`` and return its outcome."""
+        ...
 
 
 def _no_tenant() -> int | None:
@@ -301,8 +466,8 @@ class AgentDeps:
 
     complete: CompleteFn
     retrieve: RetrieveFn
-    check_input: GuardFn
-    check_output: GuardFn
+    check_input: InputGuardFn
+    check_output: OutputGuardFn
     tool_definitions_for: ToolDefsFn
     run_tool: RunToolFn
     tool_risk: RiskFn
@@ -354,7 +519,7 @@ class AgentDeps:
     #: cannot end up with tool results screened by nothing simply by not knowing about a
     #: new field. A host binds ``guardrails.check_tool_result`` here to additionally get
     #: the tool named in the verdict's rationale.
-    check_tool_result: GuardFn | None = None
+    check_tool_result: InputGuardFn | None = None
     #: The LLM-Ops registry read for a sub-agent's system prompt (§5.9b). Bound host-side
     #: to ``aegis.ops.registry.get_cached_active`` — the SAME process-wide active cache
     #: the main persona prompt already resolves through, so improving a sub-agent's

@@ -2,8 +2,9 @@
 
 The core (agent, retrieval, ml, memory, guardrails, api) depends on the domain
 **only** through the names re-exported here. Everything domain-specific lives in the
-**ten** sibling pieces — eight modules plus ``corpus/`` and ``skills/``, listed in
-``README.md`` and ``SWAP.md``; this file is not one of them, it is the interface
+**ten** sibling pieces — eight modules plus ``corpus/`` and ``skills/``, mapped in
+``README.md`` and retargeted by the root ``SKILL.md`` (the `retarget-aegis` skill,
+the one authoritative procedure); this file is not one of them, it is the interface
 contract. Swapping the domain means editing those pieces and keeping these exports
 stable.
 
@@ -22,18 +23,26 @@ Exposed surface (the domain seam described in ``docs/learn/50-run-and-extend.md`
   :func:`get_persona`, :class:`Persona`.
 * **prompts** (piece 6) — :data:`SYSTEM_PROMPTS`, :func:`render_system_prompt`,
   :data:`PLATFORM_FLOOR` / :func:`render_platform_floor` (the half no tenant may edit).
+* **memory_spec** (piece 7) — the :mod:`app.adapter.memory_spec` **module** itself, not
+  its individual names: :mod:`app.memory` installs it as the process-wide default spec
+  (``set_default_spec(app.adapter.memory_spec)``), so the module object is the contract.
+  It is imported here rather than only by its consumers, because a submodule is an
+  attribute of its package only once something imports it — and until it was, this
+  package satisfied nine of the ten pieces of :class:`aegis.adapter.DomainAdapter` with
+  the tenth sitting on disk, unreachable.
 * **roster** (piece 8) — :func:`agent_roster`, :class:`AgentRoster`,
   :class:`RosterSpecialist`, and the fan-out team :func:`sub_agent_roster`.
 * **corpus** (piece 9) — :func:`load_seed_corpus`.
+* **skills/** (piece 10) — the one piece with no name here: Markdown playbooks
+  discovered from ``memory_spec.SKILLS_DIR`` at call time, never imported.
 
-Two pieces are deliberately *not* re-exported here, because their consumer binds to
-the module itself rather than to individual names:
+The whole set is executable as :class:`aegis.adapter.DomainAdapter`::
 
-* **memory_spec** (piece 7) — :mod:`app.memory` installs it as the process-wide
-  default spec (``set_default_spec(app.adapter.memory_spec)``), so the module object
-  is the contract.
-* **skills/** (piece 10) — Markdown playbooks discovered from
-  ``memory_spec.SKILLS_DIR`` at call time, never imported.
+    from aegis.adapter import DomainAdapter, missing_members
+    import app.adapter
+
+    assert not missing_members(app.adapter)      # every piece present
+    assert isinstance(app.adapter, DomainAdapter)
 
 Current domain: a neutral service-request / case-management world. It is
 illustrative only — see :data:`DOMAIN_ID` / :data:`DOMAIN_DESCRIPTION`.
@@ -41,7 +50,7 @@ illustrative only — see :data:`DOMAIN_ID` / :data:`DOMAIN_DESCRIPTION`.
 
 from __future__ import annotations
 
-from app.adapter import ml_spec, schema
+from app.adapter import memory_spec, ml_spec, schema
 from app.adapter.corpus import load_seed_corpus
 from app.adapter.generator import (
     GeneratorConfig,
@@ -135,6 +144,7 @@ __all__ = [
     "is_allowed",
     "latent_resolution_hours",
     "load_seed_corpus",
+    "memory_spec",
     "ml_spec",
     "render_platform_floor",
     "render_system_prompt",

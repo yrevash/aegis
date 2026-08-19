@@ -24,12 +24,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.api.routes_analytics import mount as _mount_analytics
+from app.api.routes_db import mount as _mount_db
 from app.api.routes_guardrails import mount as _mount_guardrails
 from app.api.routes_health import mount as _mount_health
 from app.api.routes_llmops import mount as _mount_llmops
 from app.api.routes_memory import mount as _mount_memory
+from app.api.routes_pipelines import mount as _mount_pipelines
 from app.api.routes_redteam import mount as _mount_redteam
 from app.api.routes_reports import mount as _mount_reports
+from app.api.routes_seats import mount as _mount_seats
 from app.config import get_settings
 from app.observability import init_observability
 
@@ -39,6 +42,11 @@ from app.observability import init_observability
 # table stays one table. ``mount`` is idempotent, so moving it there later is a
 # one-line change that cannot double-register anything in the meantime.
 _mount_redteam(router)
+
+# The named-seat surface (§7.8) — tenant sub-roles were cut, so a seat is a named grant
+# in the settings table and this is the only route that can write one *for somebody
+# else*. Same shape, same reason, same idempotent mount.
+_mount_seats(router)
 
 # Embedded analytics (Apache Superset). Same shape, same reason, same idempotent mount.
 # Nothing in that module runs until its first request: Superset is optional, and a
@@ -69,6 +77,19 @@ _mount_health(router)
 # ticket a browser navigation needs. Same shape and the same idempotent mount: the
 # routes land on ``router`` itself, so the served table stays one table.
 _mount_reports(router)
+
+# The database console (§7.9) — the schema browser and the closed set of parameterised
+# reads, over a connection that holds SELECT and nothing else. Same shape and the same
+# idempotent mount. Nothing in that module opens its connection until a request asks it
+# to, and it opens none at all unless AEGIS_DB_CONSOLE_ENABLED and AEGIS_DB_CONSOLE_DSN
+# are both set: the console is off by default, in every environment.
+_mount_db(router)
+
+# The pipeline declarations (§8.12) — the three flows Aegis runs, their stages, the
+# module that owns each, and what each emits, served from ``aegis.pipelines`` and
+# verified against the code before a byte of it goes out. Same shape and the same
+# idempotent mount; it reads no database and dials nothing.
+_mount_pipelines(router)
 
 logger = logging.getLogger(__name__)
 
@@ -365,15 +386,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # server to install or reach; the failure it can still have is an unusable directory.
     # Construction is therefore deliberately NOT wrapped in a try/except: an unwritable or
     # corrupt store raises here and the process refuses to boot, rather than degrading to
-    # a silent, non-durable RAM index. Dev/tests keep the ephemeral in-memory engine (the
-    # sanctioned offline path), so this block is gated on ``not is_dev``.
-    if settings.stores_enabled and not settings.is_dev:
-        from aegis.memory import MemoryVectorIndex, set_default_index
+    # a silent, non-durable RAM index.
+    #
+    # §8.4: BOTH branches now configure, because neither package has an implicit default
+    # any more. A dev/lite process gets the ephemeral engine because this line asks for
+    # it, not because a leaf built one when nobody was looking — and a deployment that
+    # skips this block entirely gets a named error out of the first recall instead of a
+    # working-looking system with nothing durable in it.
+    from aegis.memory import MemoryVectorIndex, set_default_index
+    from aegis.retrieval import ChromaVectorStore, configure_vector_store
 
-        set_default_index(MemoryVectorIndex.local(path=settings.vector_store_path))
+    if settings.stores_enabled and not settings.is_dev:
+        vector_store_path = settings.vector_store_path
+        set_default_index(MemoryVectorIndex.local(path=vector_store_path))
+        configure_vector_store(
+            lambda: ChromaVectorStore.local(path=vector_store_path)
+        )
         logger.info(
             "Aegis Memory vector index bound to the embedded vector store at %s.",
-            settings.vector_store_path,
+            vector_store_path,
+        )
+    else:
+        set_default_index(MemoryVectorIndex.local())
+        configure_vector_store(ChromaVectorStore.local)
+        logger.info(
+            "Aegis vector stores bound to the EPHEMERAL in-process engine "
+            "(dev/lite): nothing indexed here survives this process."
         )
 
     # The SLA sweeper (§1.3): an in-process asyncio task — no cron, no Docker — that

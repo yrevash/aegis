@@ -47,9 +47,10 @@ call in embedded mode), so each one is run in a worker thread — the recall pat
 Modes follow the store's contract: ``server`` fails loud if the node is unreachable;
 ``local`` is the embedded, offline chroma engine (``:memory:`` for tests, on-disk for dev)
 — a real HNSW index that needs **no server binary at all**, and **never** an in-RAM dict
-fallback. The process-wide default is an embedded index; a host wires a shared server with
-:func:`set_default_index` (the backend does exactly that at startup for any non-dev
-deployment with the real stores).
+fallback. There is **no implicit process-wide default**: a host installs the index it
+wants with :func:`set_default_index` (the backend does exactly that at startup — the
+on-disk store for a real deployment, the explicit ephemeral one for dev), and recall
+raises until it does rather than conjuring a non-durable index nobody asked for.
 """
 
 from __future__ import annotations
@@ -60,7 +61,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aegis.retrieval.vector_store import ChromaVectorStore
+from aegis.retrieval.vector_store import (
+    ChromaVectorStore,
+    VectorStoreNotConfiguredError,
+)
 
 #: Payload keys carried on every memory point for isolation-scoped filtering.
 _SUBJECT_KEY = "subject_id"
@@ -295,15 +299,33 @@ _DEFAULT_INDEX: MemoryVectorIndex | None = None
 
 
 def get_default_index() -> MemoryVectorIndex:
-    """Return the process-wide memory index, building an embedded one on first use.
+    """Return the process-wide memory index, or fail loud if none was configured.
 
-    The default is an embedded (``:memory:``) Chroma engine — offline, real ANN, no
-    server binary, the sanctioned dev/test mode — never a dict. A host swaps in a shared
-    Chroma server via :func:`set_default_index`.
+    There is no lazily-built default any more (§8.4). Until this raised, a host that
+    forgot :func:`set_default_index` got an ephemeral ``:memory:`` Chroma engine on
+    first recall: memory appeared to work, every fact it "remembered" was lost on
+    restart, and nothing in the logs or on the wire said so. A missing step now names
+    itself, exactly as ``aegis.governance``'s ``configure_audit`` already did.
+
+    Returns:
+        The :class:`MemoryVectorIndex` installed by :func:`set_default_index`.
+
+    Raises:
+        VectorStoreNotConfiguredError: If no index was installed. The message carries
+            both honest choices — the durable on-disk index and the explicit ephemeral
+            one — so the fix is in the failure rather than in a document.
     """
-    global _DEFAULT_INDEX
     if _DEFAULT_INDEX is None:
-        _DEFAULT_INDEX = MemoryVectorIndex.local()
+        raise VectorStoreNotConfiguredError(
+            "aegis.memory has no vector index configured, so semantic recall has "
+            "nowhere to search. Call "
+            "aegis.memory.set_default_index(MemoryVectorIndex.local(path=...)) at "
+            "startup for a DURABLE on-disk index, or "
+            "set_default_index(MemoryVectorIndex.local()) to choose the EPHEMERAL "
+            "in-process engine explicitly (dev/tests). It used to build the ephemeral "
+            "one for you on first use, so a forgotten call looked exactly like working "
+            "memory until the process restarted and every recalled fact was gone."
+        )
     return _DEFAULT_INDEX
 
 
@@ -314,7 +336,7 @@ def set_default_index(index: MemoryVectorIndex | None) -> None:
 
 
 def reset_default_index() -> None:
-    """Drop the cached default index so the next use rebuilds a fresh embedded one."""
+    """Clear the installed index (test teardown); the next use raises again."""
     global _DEFAULT_INDEX
     _DEFAULT_INDEX = None
 
@@ -352,6 +374,7 @@ async def topk_by_cosine(
 
 __all__ = [
     "MemoryVectorIndex",
+    "VectorStoreNotConfiguredError",
     "get_default_index",
     "reset_default_index",
     "set_default_index",

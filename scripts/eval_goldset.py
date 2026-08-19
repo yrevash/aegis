@@ -59,6 +59,7 @@ from aegis.retrieval.memory import InMemoryKnowledgeBackend
 from aegis.retrieval.models import Chunk
 from aegis.retrieval.protocols import EmbedFn
 from aegis.retrieval.types import RetrievalScope
+from aegis.retrieval.vector_store import ChromaVectorStore
 
 REPO = Path(__file__).resolve().parents[1]
 PDF_DIR = REPO / "tests" / "fixtures" / "pdfs"
@@ -255,7 +256,12 @@ async def main() -> int:
     for kind, chunks in corpora.items():
         started = time.perf_counter()
         backend = InMemoryKnowledgeBackend(
-            list(chunks), embed=embed, extractor=NoOpExtractor()
+            list(chunks),
+            embed=embed,
+            extractor=NoOpExtractor(),
+            # One ephemeral store per chunking strategy, named explicitly: a shared or
+            # implicit store would merge two corpora into one collection (§8.4).
+            vector_store=ChromaVectorStore.local(),
         )
         await backend.recall_ranked("warm the index", top_k=1, scope=scope)
         backends[kind] = backend

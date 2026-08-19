@@ -24,6 +24,7 @@ from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.memory import InMemoryKnowledgeBackend, InMemoryRedis, _local_embed
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.types import RetrievalScope
+from aegis.retrieval.vector_store import ChromaVectorStore
 
 from .corpus import SEED_CASES, EvalCase, corpus_chunks
 from .judge import JudgeSummary, JudgeVerdict, judge_answer, summarize_verdicts
@@ -280,7 +281,11 @@ def build_eval_retriever() -> Retriever:
     BM25 recall fused by RRF); only the embedding and reranker are deterministic local
     fakes so the run needs no network.
     """
-    backend = InMemoryKnowledgeBackend(corpus_chunks())
+    # An offline eval is an explicitly ephemeral run: name the store rather than
+    # inheriting whatever the process happened to configure (§8.4).
+    backend = InMemoryKnowledgeBackend(
+        corpus_chunks(), vector_store=ChromaVectorStore.local()
+    )
     cache = SemanticCache(InMemoryRedis(), similarity_threshold=0.99)
     return Retriever(
         backend=backend,

@@ -81,8 +81,20 @@ from aegis.retrieval.types import (
     principal_tenant_scope,
     tenant_filter,
 )
+from aegis.retrieval.vector_store import (
+    ChromaVectorStore,
+    VectorStoreNotConfiguredError,
+    configure_vector_store,
+    new_default_store,
+    reset_vector_store,
+)
 
 __all__ = [
+    "ChromaVectorStore",
+    "VectorStoreNotConfiguredError",
+    "configure_vector_store",
+    "new_default_store",
+    "reset_vector_store",
     "ALL_TENANTS",
     "DEFAULT_LOCAL_RERANK_MODEL",
     "EMBED_DIM",

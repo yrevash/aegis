@@ -12,7 +12,9 @@ re-exports the pieces to the core, and its `__all__` is the contract to keep
 stable while the pieces underneath are rewritten.
 
 The numbering is the recommended **edit order**; it is the same numbering used in
-each module's own docstring and in [`SWAP.md`](SWAP.md).
+each module's own docstring and in the authoritative retargeting procedure,
+[`SKILL.md`](../../../../SKILL.md) at the repository root (the `retarget-aegis`
+skill). This table is the local *map* of the ten pieces, not a second procedure.
 
 | # | Piece | What it defines | Lands in |
 |---|-------|-----------------|----------|

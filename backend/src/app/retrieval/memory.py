@@ -19,6 +19,7 @@ from aegis.retrieval.memory import (
     _local_embed,  # noqa: F401 - re-exported for existing tests
 )
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever, build_local_reranker
+from aegis.retrieval.vector_store import ChromaVectorStore
 
 from app.config import Settings
 
@@ -43,12 +44,17 @@ class InMemoryKnowledgeBackend(_InMemoryKnowledgeBackend):
         docs: object | None = None,
         chunk_size: int = 400,
         overlap: int = 60,
+        vector_store: ChromaVectorStore | None = None,
     ) -> InMemoryKnowledgeBackend:
         """Build a backend from ``path``/``docs``, or this app's adapter corpus.
 
         Falls back to an empty backend (still valid) if the adapter corpus package is
         absent — retrieval then returns no candidates and the agent answers from the
         model alone, degrading cleanly rather than erroring.
+
+        ``vector_store`` is forwarded rather than dropped: since §8.4 a backend given no
+        store and no process-wide declaration raises, so an override that silently
+        swallowed the argument would turn a caller's explicit choice into that error.
         """
         if path is None and docs is None:
             try:
@@ -57,7 +63,11 @@ class InMemoryKnowledgeBackend(_InMemoryKnowledgeBackend):
                 corpus_dir = None
             path = str(corpus_dir) if corpus_dir is not None else None
         return super().from_corpus(  # type: ignore[return-value]
-            path=path, docs=docs, chunk_size=chunk_size, overlap=overlap
+            path=path,
+            docs=docs,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            vector_store=vector_store,
         )
 
 
@@ -72,7 +82,12 @@ def build_lite_retriever(settings: Settings) -> Retriever:
     complete = gateway.default_complete()
     embed = gateway.default_embed()
     backend = InMemoryKnowledgeBackend.from_corpus(
-        chunk_size=config.chunk_size, overlap=config.chunk_overlap
+        chunk_size=config.chunk_size,
+        overlap=config.chunk_overlap,
+        # Lite mode IS the ephemeral engine, so it says so rather than inheriting the
+        # process-wide store declaration (§8.4). A retriever built here is deliberately
+        # non-durable; a caller that wanted durability wired the full stores instead.
+        vector_store=ChromaVectorStore.local(),
     )
     cache = SemanticCache(
         InMemoryRedis(),

@@ -74,7 +74,7 @@ from aegis.retrieval.types import (
     UnresolvedTenantScopeError,
     tenant_collection_name,
 )
-from aegis.retrieval.vector_store import ChromaVectorStore
+from aegis.retrieval.vector_store import ChromaVectorStore, new_default_store
 
 _WORD = re.compile(r"[a-z0-9]+")
 
@@ -205,8 +205,11 @@ class InMemoryKnowledgeBackend:
     of what the other two arms already found. :meth:`recall` returns the vector+graph
     pair fused (for direct callers).
 
-    The vector store is injectable; it defaults to an embedded ``:memory:`` Chroma so a
-    directly-constructed backend (tests, offline evals) still uses the genuine engine.
+    The vector store is injectable and is **never invented**: a backend built without
+    one takes it from :func:`~aegis.retrieval.vector_store.configure_vector_store`, and
+    raises when the process never declared a store (§8.4). Tests and offline evals
+    declare the embedded ``:memory:`` engine explicitly, which is the genuine engine —
+    the point of the change is that the choice is now visible, not that it moved.
     Optional ``tenant``/``subject`` scope every upsert payload and every search filter,
     so one process can hold isolated corpora. That construction-time ``tenant`` is a
     *corpus namespace* and is distinct from the per-request governance tenant carried by
@@ -252,8 +255,14 @@ class InMemoryKnowledgeBackend:
                 deterministic :func:`_default_offline_embed` when none is supplied.
             extractor: Entity/relation extractor; defaults to the best available
                 deterministic one (spaCy, else a logged no-op) when none is injected.
-            vector_store: The Chroma-backed vector store; defaults to an embedded
-                ``:memory:`` store (the real engine, offline).
+            vector_store: The Chroma-backed vector store. Omitting it builds one from
+                the process-wide factory declared by
+                :func:`~aegis.retrieval.vector_store.configure_vector_store`, and
+                **raises**
+                :class:`~aegis.retrieval.vector_store.VectorStoreNotConfiguredError`
+                when nothing was declared. It used to fall back to an embedded
+                ``:memory:`` store, which is the right engine for a lite/offline run and
+                the wrong one for every other run — and nothing said which you had got.
             collection_prefix: Prefix of the per-tenant Chroma collections holding
                 this backend's chunk vectors (one collection per tenant; see
                 :func:`~aegis.retrieval.types.tenant_collection_name`).
@@ -263,7 +272,9 @@ class InMemoryKnowledgeBackend:
         self._chunks = chunks
         self._embed = embed or _default_offline_embed
         self._extractor = extractor or build_extractor()
-        self._vector_store = vector_store or ChromaVectorStore.local()
+        self._vector_store = (
+            vector_store if vector_store is not None else new_default_store()
+        )
         self._collection_prefix = collection_prefix
         self._tenant = tenant
         self._subject = subject
@@ -477,7 +488,9 @@ class InMemoryKnowledgeBackend:
                 available deterministic one (see
                 :func:`~aegis.retrieval.graph_extract.build_extractor`).
             embed: Optional injected embedder (defaults to the offline embedder).
-            vector_store: Optional Chroma store (defaults to embedded ``:memory:``).
+            vector_store: Optional Chroma store; omitted, it comes from the factory
+                declared by :func:`~aegis.retrieval.vector_store.configure_vector_store`
+                (and raises when none was declared).
             collection_prefix: Prefix of the per-tenant Chroma collections holding
                 this backend's chunk vectors.
             tenant: Optional tenant id scoping every payload + search filter.
@@ -861,7 +874,12 @@ def build_lite_retriever(
     # Real vectors in an embedded (:memory:) Chroma — no external DB, no server binary,
     # no RAM dict — with embeddings from the injected gateway embedder (same as the full
     # path; only the store is local).
-    backend = InMemoryKnowledgeBackend([], embed=embed, extractor=extractor)
+    # The ephemeral store is named here rather than defaulted into: lite mode IS the
+    # in-process engine, and saying so is what stops a non-lite caller inheriting it by
+    # accident (§8.4).
+    backend = InMemoryKnowledgeBackend(
+        [], embed=embed, extractor=extractor, vector_store=ChromaVectorStore.local()
+    )
     cache = SemanticCache(
         InMemoryRedis(),
         ttl_seconds=config.cache_ttl_seconds,
