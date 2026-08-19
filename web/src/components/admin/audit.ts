@@ -7,6 +7,11 @@
  * `components/audit/query.ts`), because narrowing an already-fetched page cannot answer
  * a question about anything older than that page. What remains is arithmetic over what
  * came back, which is honestly what these figures are.
+ *
+ * **Nor does CSV.** `rowsToCsv` serialised the rows in view into a blob that named
+ * neither its scope nor its window — a file that read as a complete export of a filtered
+ * query and was a screenshot of one page. `GET /reports/audit.csv` (§7.12) replaced it:
+ * streamed, unlimited, audited, and self-describing.
  */
 
 import type { AuditLogRow, AuditOutcome } from '@/lib/api/types'
@@ -69,17 +74,4 @@ export function eventsPerHour(rows: AuditLogRow[], hours = 12): HourBucket[] {
     if (idx >= 0 && idx < hours) buckets[idx].count += 1
   }
   return buckets
-}
-
-/** Serialise the (filtered) rows to a CSV string for export/download. */
-export function rowsToCsv(rows: AuditLogRow[]): string {
-  const esc = (v: unknown): string => {
-    const s = v == null ? '' : String(v)
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-  }
-  const head = ['time', 'action', 'actor', 'model', 'trace_id', 'approved_by', 'result']
-  const lines = rows.map((r) =>
-    [r.ts, r.action, r.actor, r.model, r.trace_id, r.approved_by, r.outcome].map(esc).join(','),
-  )
-  return [head.join(','), ...lines].join('\n')
 }

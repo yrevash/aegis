@@ -122,9 +122,9 @@ async def test_a_wildcard_in_action_prefix_is_a_literal(db):
         _row("%weird", actor="alice", minutes_ago=2),
     )
 
-    assert [r.action for r in await list_recent_audit(50, tenant_id=_TENANT, action_prefix="%")] == [
-        "%weird"
-    ]
+    found = await list_recent_audit(50, tenant_id=_TENANT, action_prefix="%")
+
+    assert [r.action for r in found] == ["%weird"]
 
 
 @pytest.mark.parametrize("outcome", AUDIT_OUTCOMES)

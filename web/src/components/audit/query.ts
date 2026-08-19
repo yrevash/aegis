@@ -116,3 +116,46 @@ export function emptyStateFor(q: AuditQuery): { title: string; hint: string } {
         hint: 'Recorded actions appear here, newest first — each with its actor, model and trace.',
       }
 }
+
+/**
+ * The filters `GET /reports/audit.csv` accepts, taken from the live screen filter.
+ *
+ * The export is the streamed, keyset-paged, audited one from §7.12 — it has no `limit`,
+ * so it is the whole filtered trail rather than the page in view. What it does *not*
+ * take is the rest of this form: `model`, `trace_id`, `outcome`, the free text, and the
+ * platform admin's tenant selector (the route resolves the scope from the token alone).
+ * Those are named by {@link unexportableFilters} and said out loud on the screen, because
+ * a file that silently contains more than the table it was downloaded from is evidence
+ * of the wrong thing — which is the exact failure §7.12 exists to prevent.
+ */
+export function exportFilters(q: AuditQuery): {
+  since?: string
+  until?: string
+  actor?: string
+  actionPrefix?: string
+} {
+  const since = localToIso(q.since)
+  const until = localToIso(q.until)
+  return {
+    ...(since !== null ? { since } : {}),
+    ...(until !== null ? { until } : {}),
+    ...(q.actor.trim() !== '' ? { actor: q.actor.trim() } : {}),
+    ...(q.actionPrefix.trim() !== '' ? { actionPrefix: q.actionPrefix.trim() } : {}),
+  }
+}
+
+/**
+ * The active filters the CSV export cannot carry, named for the reader.
+ *
+ * Empty when the file will match the table. Non-empty means the download will contain
+ * *more* rows than the screen, and the operator is told which control was dropped rather
+ * than discovering it in a spreadsheet.
+ */
+export function unexportableFilters(q: AuditQuery): string[] {
+  const dropped: string[] = []
+  if (q.outcome !== null) dropped.push('outcome')
+  if (q.model.trim() !== '') dropped.push('model')
+  if (q.text.trim() !== '') dropped.push('search text')
+  if (q.tenantId !== null) dropped.push('tenant')
+  return dropped
+}

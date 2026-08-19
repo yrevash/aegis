@@ -4,11 +4,15 @@ import { CheckCircle2, Copy, Download, ListChecks, Loader2, ScrollText, ShieldAl
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { getAudit, getTenants } from '@/lib/api/client'
+import { apiMessage, statusOf } from '@/lib/api/apiError'
+import { startReportDownload } from '@/lib/api/reports'
 import { BarChart } from '@/components/charts/BarChart'
 import { AuditFilterBar } from '@/components/audit/AuditFilterBar'
 import {
   auditQueryString,
   emptyStateFor,
+  exportFilters,
+  unexportableFilters,
   EMPTY_AUDIT_QUERY,
   type AuditQuery,
 } from '@/components/audit/query'
@@ -23,7 +27,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import type { AuditLogRow, AuditOutcome, Tenant } from '@/lib/api/types'
 
-import { auditCounts, eventsPerHour, rowsToCsv } from './audit'
+import { auditCounts, eventsPerHour } from './audit'
 
 /** Load state for the audit fetch. */
 type LoadState =
@@ -62,6 +66,7 @@ interface AuditLogProps {
 export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [query, setQuery] = useState<AuditQuery>(EMPTY_AUDIT_QUERY)
+  const [exportError, setExportError] = useState<string | null>(null)
   const search = useMemo(() => auditQueryString(query), [query])
 
   useEffect(() => {
@@ -89,15 +94,28 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
   const perHour = useMemo(() => eventsPerHour(rows, 12), [rows])
   const empty = useMemo(() => emptyStateFor(query), [query])
 
-  /** Download the rows currently on screen as a CSV file. */
+  const dropped = useMemo(() => unexportableFilters(query), [query])
+
+  /**
+   * Hand the export to `GET /reports/audit.csv` (§7.12).
+   *
+   * It used to serialise `rows` into a blob — the rows *on screen*, capped by the page
+   * limit, in a file that said nothing about its own scope or window. That file looked
+   * like a complete export of a filtered query and was not. The server's export is
+   * streamed with no limit, scoped through the sealed `TenantScope`, audited as
+   * `report.export` before the first byte, and opens with a preamble naming the scope,
+   * window, source and filters — so the file states what it is.
+   */
   const exportCsv = (): void => {
-    const blob = new Blob([rowsToCsv(rows)], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `aegis-audit-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    setExportError(null)
+    startReportDownload(token, 'audit', exportFilters(query)).catch((error: unknown) => {
+      const status = statusOf(error)
+      setExportError(
+        status === null
+          ? 'The export could not be started. Check the backend is reachable, then retry.'
+          : apiMessage(status),
+      )
+    })
   }
 
   return (
@@ -133,20 +151,44 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
             </InfoTip>
           </div>
 
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
             <button
               type="button"
               onClick={exportCsv}
-              disabled={rows.length === 0}
-              title="Export the rows on screen as CSV"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+              title="Download the whole filtered trail as CSV"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
               <Download aria-hidden className="size-3.5" /> CSV
             </button>
+            <InfoTip label="What the CSV contains">
+              The whole filtered trail, not the page on screen — streamed from the server with
+              no row limit, scoped to what you may read, and opening with a preamble naming the
+              scope, window and filters it was built from. The download is itself recorded as a
+              report.export row.
+            </InfoTip>
           </div>
         </CardHeader>
 
         <CardContent className="flex flex-col gap-4">
+          {exportError !== null && (
+            <p role="alert" className="text-sm text-destructive">
+              {exportError}
+            </p>
+          )}
+
+          {/* The export takes the actor, action prefix and time range; the rest of this
+              form has no counterpart on the route. Saying so is the point: a file that
+              quietly holds more than the table it came from is evidence of the wrong
+              thing. */}
+          {dropped.length > 0 && (
+            <p className="rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
+              The CSV carries the actor, action prefix and time range. It cannot narrow by{' '}
+              <span className="text-foreground">{dropped.join(', ')}</span>, so it will hold more
+              rows than the table below. Clear those filters before exporting if the file must
+              match what you see.
+            </p>
+          )}
+
           <AuditFilterBar
             value={query}
             onChange={setQuery}

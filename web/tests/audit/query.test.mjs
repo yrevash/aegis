@@ -22,6 +22,8 @@ import test from 'node:test'
 import {
   auditQueryString,
   emptyStateFor,
+  exportFilters,
+  unexportableFilters,
   EMPTY_AUDIT_QUERY,
   isFiltered,
   localToIso,
@@ -97,4 +99,46 @@ test('an empty result set instructs when filtered and states the truth when not'
   const filtered = emptyStateFor({ ...EMPTY_AUDIT_QUERY, actor: 'alice' })
   assert.match(filtered.title, /No events match those filters/)
   assert.match(filtered.hint, /Widen|clear/i, 'an empty state must say what to do next')
+})
+
+test('the CSV export carries the filters the route accepts, trimmed and in UTC', () => {
+  const filters = exportFilters({
+    ...EMPTY_AUDIT_QUERY,
+    actor: ' alice ',
+    actionPrefix: ' ops. ',
+    since: '2026-08-19T09:00',
+    until: '2026-08-19T17:00',
+  })
+
+  assert.deepEqual(filters, {
+    since: new Date('2026-08-19T09:00').toISOString(),
+    until: new Date('2026-08-19T17:00').toISOString(),
+    actor: 'alice',
+    actionPrefix: 'ops.',
+  })
+})
+
+test('an empty screen filter asks the export to narrow nothing', () => {
+  assert.deepEqual(exportFilters(EMPTY_AUDIT_QUERY), {})
+})
+
+test('a filter the export cannot carry is named, never silently dropped', () => {
+  // The failure this guards: the file holds more rows than the table it was downloaded
+  // from, and nothing on screen said so.
+  assert.deepEqual(unexportableFilters(EMPTY_AUDIT_QUERY), [])
+  assert.deepEqual(
+    unexportableFilters({
+      ...EMPTY_AUDIT_QUERY,
+      outcome: 'blocked',
+      model: 'gpt-4o-mini',
+      text: 'transfer',
+      tenantId: 7,
+    }),
+    ['outcome', 'model', 'search text', 'tenant'],
+  )
+  // The two the route DOES take must never be reported as dropped.
+  assert.deepEqual(
+    unexportableFilters({ ...EMPTY_AUDIT_QUERY, actor: 'alice', actionPrefix: 'ops.' }),
+    [],
+  )
 })

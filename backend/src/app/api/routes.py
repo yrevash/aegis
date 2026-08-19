@@ -1551,6 +1551,7 @@ async def audit(
             (:func:`~aegis.governance.audit.classify_outcome`).
         since: Inclusive lower bound on the timestamp.
         until: Inclusive upper bound on the timestamp.
+        auth: The authenticated admin/devops principal; the sole source of the scope.
     """
     capped = max(1, min(limit, _AUDIT_LIMIT_MAX))
     scoped = _scope_tenant(auth, tenant_id)
