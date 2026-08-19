@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Any, Literal
 
+from aegis.agent.router import DepthMode
 from aegis.core.types import (  # noqa: F401 - re-exported for identity, see docstrings below
     ApprovalDecision,
     GuardStage,
@@ -65,7 +66,14 @@ from aegis.vision import (  # noqa: F401 - re-exported: identity with aegis.visi
     ScreenVerdict,
     VisionAnalysis,
 )
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enums
@@ -667,7 +675,23 @@ class LoginResponse(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    """Body for `POST /query` (response is the SSE stream, not JSON)."""
+    """Body for `POST /query` (response is the SSE stream, not JSON).
+
+    **``extra="forbid"`` is load-bearing, not tidiness.** Pydantic's default silently
+    drops a field it does not know, so ``{"query": …, "depth_mode": "team"}`` posted at
+    a model that had no ``depth_mode`` reached nothing and raised nothing — the client
+    saw a 200 and an Auto-mode run. That is how ``session_id`` was dark for a phase, and
+    it is how ``depth_mode`` would have been dark for the next one. A body naming a
+    field this request does not carry is now a 422 that says which field.
+
+    The width fields are validated here rather than trusted: an unknown mode or a
+    negative width is refused. Validation is **not** a licence to substitute a different
+    width — a legal-but-wide request is narrowed only by the platform cap, in
+    :func:`aegis.agent.router.decide_depth`, which reports ``decided_by="platform_cap"``
+    so the screen can say who narrowed it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     query: str
     persona: str | None = Field(
@@ -678,6 +702,58 @@ class QueryRequest(BaseModel):
         description="Conversation/session id for multi-turn long-term memory. When "
         "omitted the run is single-shot and memory stays inert (no behaviour change).",
     )
+    depth_mode: str | None = Field(
+        default=None,
+        description=(
+            "The user's REQUESTED width: 'auto' (the classifier decides), 'single' or "
+            "'team'. Omitted behaves exactly as 'auto'. An explicit value is the user's "
+            "decision and is honoured — the classifier is skipped, not overruled."
+        ),
+    )
+    requested_fanout: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "An explicit team width (the composer's Custom mode). Only meaningful with "
+            "depth_mode='team'. Clamped DOWN by the tenant's max_parallel_agents and "
+            "never up; 0 is a legal request for the narrowest possible run."
+        ),
+    )
+
+    @field_validator("depth_mode")
+    @classmethod
+    def _known_depth_mode(cls, value: str | None) -> str | None:
+        """Refuse a width the core does not implement, naming the ones it does.
+
+        Read off :class:`aegis.agent.router.DepthMode` rather than restated, so a mode
+        added there cannot be rejected here by a list nobody updated. The core's own
+        fallback for an unreadable mode is SINGLE; that is a *defensive* default for a
+        checkpoint it did not write, and letting the HTTP boundary lean on it would mean
+        a user who asked for a team and mistyped it silently got a single-lane run.
+        """
+        if value is None:
+            return None
+        try:
+            return DepthMode(value).value
+        except ValueError as exc:
+            legal = ", ".join(sorted(mode.value for mode in DepthMode))
+            raise ValueError(f"unknown depth_mode {value!r}; expected one of {legal}") from exc
+
+    @model_validator(mode="after")
+    def _fanout_needs_a_team(self) -> QueryRequest:
+        """Refuse an explicit width in a mode that has no width to set.
+
+        ``depth_mode='single'`` with ``requested_fanout=4`` is two contradictory
+        instructions, and the core resolves it by ignoring the width. Ignoring half a
+        request is the same silence ``extra='forbid'`` above exists to end, so the
+        contradiction is reported instead of resolved.
+        """
+        if self.requested_fanout is not None and self.depth_mode != DepthMode.TEAM.value:
+            raise ValueError(
+                "requested_fanout is only meaningful with depth_mode='team'; got "
+                f"depth_mode={self.depth_mode!r}"
+            )
+        return self
 
 
 class GraphResponse(BaseModel):

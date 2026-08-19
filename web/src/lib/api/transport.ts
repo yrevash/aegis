@@ -32,6 +32,26 @@ export interface RunRequest {
    * and the transcript agree on what a conversation is.
    */
   sessionId?: string | null
+  /**
+   * The REQUESTED width: `'auto'` (the classifier decides), `'single'` or `'team'`.
+   * Omitted behaves exactly as `'auto'`.
+   *
+   * The same story as `sessionId`, one phase later. `aegis.agent.run_agent` has taken
+   * `depth_mode` since Phase 5 and honours an explicit value exactly — the classifier is
+   * skipped, not overruled — but `QueryRequest` did not carry the field and `POST /query`
+   * never passed one, so a mode chosen in the composer could not reach the run by any
+   * route. Pydantic drops an unknown body field in silence, so posting it anyway looked
+   * like it worked.
+   */
+  depthMode?: 'auto' | 'single' | 'team' | null
+  /**
+   * An explicit team width (the composer's Custom mode). Only legal with
+   * `depthMode: 'team'` — the server rejects it in any other mode rather than ignoring
+   * half the request. It is clamped DOWN by the tenant's cap and never up; the run's
+   * `routing` event reports `decided_by: 'platform_cap'` when that happened, so the
+   * screen can say who narrowed it.
+   */
+  requestedFanout?: number | null
 }
 
 /** Callbacks a transport invokes as a run progresses. */

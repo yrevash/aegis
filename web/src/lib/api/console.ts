@@ -1,5 +1,6 @@
 /**
- * The console's own endpoints — models, chat sessions, attachments, own budget.
+ * The console's own endpoints — models, chat sessions, attachments, own budget,
+ * the settings catalogue and the tool roster.
  *
  * A faithful TypeScript mirror of the Pydantic models in
  * `backend/src/app/api/routes_console.py`, which is where those four surfaces live
@@ -255,4 +256,145 @@ export async function uploadAttachment(
 /** Read the caller's own effective caps and live spend. */
 export async function getMyBudget(token: string | null): Promise<MyBudgetResponse> {
   return consoleRequest<MyBudgetResponse>('/me/budget', { method: 'GET' }, token)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings — the resolved catalogue, and where each value came from
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The catalogue's own UI descriptor for one control. Mirrors
+ * `aegis.settings.spec.setting_controls`, which is where the type, the default, the
+ * legal values and the help text are declared — once, as data. Nothing here is
+ * restated in the browser, because a second copy of a control's bounds is a second
+ * place for the form and the enforcement to disagree.
+ */
+export interface SettingControl {
+  key: string
+  /** The Python type name: 'bool' | 'int' | 'float' | 'str' | 'list'. */
+  type: string
+  /** Which control to render: 'toggle' | 'number' | 'text' | 'tags' | 'select'. */
+  control: string
+  /** The platform default — the value in force when nobody has written anything. */
+  default: unknown
+  /** How the scopes combine: 'override' | 'tighten_only' | 'union'. */
+  merge: string
+  writable_by: string[]
+  readable_by: string[]
+  description: string
+  minimum?: number
+  maximum?: number
+  choices?: unknown[]
+  /** For a tighten-only key: which direction is stricter. */
+  stricter?: string
+}
+
+/**
+ * One resolved control. Mirrors `SettingRow`.
+ *
+ * `source` is the field this endpoint exists for: "Team (your setting)" and "Team
+ * (your tenant's default)" render identically without it and mean opposite things
+ * the moment somebody wants to change one.
+ */
+export interface SettingRow {
+  key: string
+  value: unknown
+  /** Which scope decided the effective value. */
+  source: 'platform' | 'tenant' | 'user'
+  control: SettingControl
+  /** Whether this caller's role may write the key at all. */
+  writable: boolean
+}
+
+/** Body of `GET /settings` — every control this caller may read, resolved. */
+export interface SettingsResponse {
+  tenant_id: number | null
+  user_id: number | null
+  rows: SettingRow[]
+}
+
+/** Which layer of the caller's own chain a write lands on. */
+export type SettingScope = 'platform' | 'tenant' | 'user'
+
+/** Read every control this caller may read, each with the scope that decided it. */
+export async function getSettings(token: string | null): Promise<SettingsResponse> {
+  return consoleRequest<SettingsResponse>('/settings', { method: 'GET' }, token)
+}
+
+/** Read one control's effective value and its source. */
+export async function getSetting(token: string | null, key: string): Promise<SettingRow> {
+  return consoleRequest<SettingRow>(
+    `/settings/${encodeURIComponent(key)}`,
+    { method: 'GET' },
+    token,
+  )
+}
+
+/**
+ * Write one control at one of the caller's **own** layers and return it re-resolved.
+ *
+ * The returned row is the value now in force, which is not always the value written:
+ * a tenant admin who tightens a key their platform already set stricter gets the
+ * platform's value back with `source: 'platform'`. Rendering the response rather than
+ * the request is what stops the screen claiming a setting that is not in effect.
+ *
+ * Every refusal is the server's, with its reason on `ConsoleApiError.message`: 403 the
+ * role or the scope, 409 a weakening of a tighten-only key, 422 an illegal value.
+ */
+export async function putSetting(
+  token: string | null,
+  key: string,
+  value: unknown,
+  scope: SettingScope = 'user',
+): Promise<SettingRow> {
+  return consoleRequest<SettingRow>(
+    `/settings/${encodeURIComponent(key)}`,
+    { method: 'PUT', body: JSON.stringify({ value, scope }) },
+    token,
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tools — the effective roster, and which layer decided each row
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One action tool as this caller may use it. Mirrors `ToolRow`.
+ *
+ * `decided_by` names the narrowest layer that constrains it: `platform` (declared and
+ * unconstrained — it runs), `persona` (the allowlist does not carry it), or `tenant`
+ * (allowed, but the tenant's gate floor means a human decides before it runs).
+ */
+export interface ToolRow {
+  name: string
+  description: string
+  /** The declared risk tier: 'low' | 'medium' | 'high'. */
+  risk: string
+  allowed: boolean
+  decided_by: 'platform' | 'persona' | 'tenant'
+  requires_approval: boolean
+}
+
+/** Body of `GET /tools` — the effective roster for one caller. */
+export interface ToolRosterResponse {
+  persona: string
+  /** The tenant's effective human-gate floor, resolved as a run resolves it. */
+  gate_min_risk: string
+  rows: ToolRow[]
+  allowed_count: number
+  total: number
+}
+
+/**
+ * Read the effective tool roster for a persona — "6 of 9", and why the other three.
+ *
+ * A **report**. Pinning a subset for one run needs a per-run field the query request
+ * does not carry, so this endpoint does not pretend to offer one.
+ */
+export async function getToolRoster(
+  token: string | null,
+  persona?: string | null,
+): Promise<ToolRosterResponse> {
+  const query = persona == null || persona === '' ? '' : `?persona=${encodeURIComponent(persona)}`
+  return consoleRequest<ToolRosterResponse>(`/tools${query}`, { method: 'GET' }, token)
 }

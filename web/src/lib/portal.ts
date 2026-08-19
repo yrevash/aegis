@@ -34,6 +34,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sigma,
+  SlidersHorizontal,
   Sparkles,
   Swords,
   Timer,
@@ -282,6 +283,14 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'How an autonomous agent can go wrong — and the control holding each risk down',
     group: 'Governance',
   },
+  settings: {
+    id: 'settings',
+    label: 'Settings',
+    icon: SlidersHorizontal,
+    hint: 'platform → tenant → you',
+    tooltip: 'The per-tenant control catalogue and the tool roster — every value shows which scope decided it',
+    group: 'Governance',
+  },
 }
 
 /**
@@ -295,10 +304,10 @@ export const SECTIONS: Record<string, Section> = {
  * dropped again.
  */
 export const ROLE_SECTIONS: Record<Role, string[]> = {
-  admin: ['dashboard', 'forecast', 'governance', 'jobs', 'audit', 'roles'],
-  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation'],
-  devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit'],
-  client: ['console', 'dashboard', 'savings', 'forecast', 'risk', 'simulation'],
+  admin: ['dashboard', 'forecast', 'governance', 'jobs', 'audit', 'roles', 'settings'],
+  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
+  devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'latency', 'audit', 'settings'],
+  client: ['console', 'dashboard', 'savings', 'forecast', 'risk', 'simulation', 'settings'],
 }
 
 /** Section definitions for a role's portal, in nav order. */

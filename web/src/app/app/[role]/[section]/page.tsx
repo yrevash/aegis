@@ -29,6 +29,8 @@ import { VisionMount } from '@/components/vision/VisionView'
 import { VoiceMount } from '@/components/voice/VoiceView'
 import { isRole, isValidSection, ROLE_SECTIONS, SECTIONS } from '@/lib/portal'
 
+import { SettingsMount } from './SettingsView'
+
 /**
  * A single portal section. Validates that `section` is exposed by `role` (RBAC),
  * then renders that section's live surface — every section in ROLE_SECTIONS has
@@ -74,6 +76,7 @@ export default async function SectionPage({
   if (section === 'patch') return <PatchMount />
   if (section === 'savings') return <SavingsMount />
   if (section === 'risk') return <RiskMount />
+  if (section === 'settings') return <SettingsMount />
   if (section === 'simulation') return <SimulationMount />
   if (section === 'voice') return <VoiceMount />
   if (section === 'vision') return <VisionMount />

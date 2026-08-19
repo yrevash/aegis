@@ -176,6 +176,34 @@ async def check_output(
     return await _guard.check_output(text, contexts=contexts)
 
 
+async def check_tool_result(text: str, *, tool_name: str | None = None) -> GuardResult:
+    """Run the ``TOOL_RESULT`` rail over one tool's output, via aegis.
+
+    The third rail stage. A record, row, page or summary a tool returns is untrusted
+    third-party text that a model will read as instructions-adjacent context — the OWASP
+    LLM01 surface — so it is screened by the **inbound** chain (schema → PII → injection
+    → content-safety → topical) before it is allowed anywhere near a prompt. The rail
+    existed and, until the agent graph was wired to it, web search was its only caller:
+    every other tool's output went into the generation prompt and into every sub-agent's
+    transcript unscreened.
+
+    Deliberately NOT routed through the NeMo Colang engine even when it is selected:
+    that engine models a *conversation* (user says X, bot says Y) and has no tool-result
+    action, so sending a tool payload through it would screen it as if a human had typed
+    it. The programmatic pipeline is the same set of layers without that mismodelling.
+
+    Args:
+        text: Exactly what the tool returned.
+        tool_name: The tool that produced it; named in the verdict's rationale so a
+            console never shows an anonymous block.
+
+    Returns:
+        A :class:`GuardResult`. ``block`` means the content must not reach the agent's
+        context at all; ``redact`` means use ``result.text``; ``flag`` is advisory.
+    """
+    return await _guard.check_tool_result(text, tool_name=tool_name)
+
+
 __all__ = [
     "GuardResult",
     "Guardrails",
@@ -183,6 +211,7 @@ __all__ = [
     "PIIMatch",
     "check_input",
     "check_output",
+    "check_tool_result",
     "classifier",
     "nemo",
     "pii",

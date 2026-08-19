@@ -49,7 +49,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
+from aegis.agent.deps import risk_at_least
 from aegis.gateway.routing import (
     billing_unit,
     is_small_model,
@@ -59,10 +61,25 @@ from aegis.gateway.routing import (
 )
 from aegis.governance.types import BudgetStatusRow
 from aegis.retrieval.types import UntenantedPrincipalError, tenant_filter
+from aegis.settings import resolve, resolve_all, write_setting
+from aegis.settings.models import SettingScope
+from aegis.settings.resolver import (
+    SettingError,
+    SettingValueError,
+    SettingWeakerThanFloorError,
+)
+from aegis.settings.spec import (
+    SETTING_SPECS,
+    UnknownSettingError,
+    setting_controls,
+    spec_for,
+)
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.api.routes import AuthContext, require_auth
+from app.agent.deps import AgentDeps
+from app.api.routes import AuthContext, get_agent_deps, require_auth
 from app.api.schemas import VisionAnalyseRequest
 from app.core.models import ModelRole
 from app.data.chat import (
@@ -72,6 +89,7 @@ from app.data.chat import (
     list_chat_sessions,
     rename_chat_session,
 )
+from app.data.session import get_sessionmaker, set_tenant_scope
 
 __all__ = [
     "AttachmentResponse",
@@ -83,6 +101,11 @@ __all__ = [
     "ModelRow",
     "ModelsResponse",
     "MyBudgetResponse",
+    "SettingRow",
+    "SettingWriteRequest",
+    "SettingsResponse",
+    "ToolRosterResponse",
+    "ToolRow",
     "console_router",
     "mount",
 ]
@@ -583,6 +606,431 @@ async def my_budget(auth: AuthContext = Depends(require_auth)) -> MyBudgetRespon
         cost_usd_used=0.0 if nearest is None else nearest.cost_usd_used,
         usd_cap=None if nearest is None else nearest.budget.usd_cap,
         usd_remaining=None if nearest is None else nearest.usd_remaining,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /settings — the catalogue's HTTP surface, and where each value came from
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class SettingRow(BaseModel):
+    """One resolved control: its effective value, and **which scope decided it**.
+
+    ``source`` is the reason this endpoint exists. A control that renders a value
+    without saying whether it is the platform's default, the tenant's choice or the
+    person's own is a control nobody can reason about — "Team (your setting)" and "Team
+    (your tenant's default)" look identical on screen and mean opposite things the
+    moment somebody wants to change one.
+
+    ``control`` is :func:`aegis.settings.spec.setting_controls`' own descriptor,
+    forwarded verbatim rather than re-typed field by field: the catalogue already
+    declares the type, the default, the choices, the bounds and the help text, and a
+    second projection here is the drift this whole package is built to prevent.
+    """
+
+    key: str
+    value: Any = Field(description="The effective value after the merge rule is applied.")
+    source: str = Field(description="Which scope decided it: platform | tenant | user.")
+    control: dict[str, Any] = Field(
+        description="The catalogue's UI descriptor: type, control, default, bounds, "
+        "choices, merge rule, writable_by/readable_by and the help text."
+    )
+    writable: bool = Field(
+        description="Whether this caller's fine role may write the key at all. Which "
+        "SCOPE their write may reach is the resolver's decision, made at write time."
+    )
+
+
+class SettingsResponse(BaseModel):
+    """Body for `GET /settings` — every control this caller may read, resolved."""
+
+    tenant_id: int | None = None
+    user_id: int | None = None
+    rows: list[SettingRow]
+
+
+class SettingWriteRequest(BaseModel):
+    """Body for `PUT /settings/{key}` — the value, and which of the caller's own layers.
+
+    ``scope`` names a **layer**, never a target: the tenant and user ids a row is
+    stamped with come from the token and are never accepted from the body, so "write at
+    tenant scope" can only ever mean *this* caller's tenant. Whether the caller may
+    reach that layer at all is :func:`aegis.settings.resolver.write_setting`'s decision,
+    not this model's.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: Any = Field(description="The value to write; validated against the spec.")
+    scope: str = Field(
+        default=SettingScope.USER.value,
+        description="platform | tenant | user. Defaults to the caller's own preference.",
+    )
+
+
+def _setting_row(key: str, resolved: tuple[Any, str], *, fine_role: str) -> SettingRow:
+    """Project one resolved key onto the wire row."""
+    value, source = resolved
+    spec = spec_for(key)
+    return SettingRow(
+        key=key,
+        value=value,
+        source=source,
+        control=setting_controls([spec])[0],
+        writable=fine_role in spec.writable_by,
+    )
+
+
+def _settings_http_error(exc: SettingError) -> HTTPException:
+    """Translate the resolver's refusals into their HTTP codes, reason intact.
+
+    Every one of these is refused *in the resolver*, deliberately: a disabled control in
+    a form is a hint and a ``curl`` is not. This function only chooses the number — it
+    never decides anything the resolver has not already decided.
+    """
+    if isinstance(exc, SettingWeakerThanFloorError):
+        # 409, not 422: the value is legal for the key and would have been accepted at a
+        # different scope. What refuses it is the stricter value already in force.
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.reason)
+    if isinstance(exc, SettingValueError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.reason
+        )
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.reason)
+
+
+def _unknown_setting(exc: UnknownSettingError) -> HTTPException:
+    """A key that is not in the catalogue is a 404 — there is no such control."""
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+def _stores_off() -> bool:
+    """Whether this deployment runs with no durable store at all."""
+    from app.config import get_settings
+
+    return not get_settings().stores_enabled
+
+
+@console_router.get("/settings", response_model=SettingsResponse, tags=["console"])
+async def list_settings(auth: AuthContext = Depends(require_auth)) -> SettingsResponse:
+    """Return every control this caller may read, resolved, each with its source.
+
+    One query for the whole catalogue rather than N round trips — and keys the caller
+    may not read are **omitted** rather than refused, because this is a screen and one
+    unreadable key should not blank the page.
+
+    In databaseless (``STORES=off``) mode there is no ``settings`` table and therefore no
+    written row at any scope, so the catalogue's compiled-in defaults genuinely *are*
+    what is in force and are reported with ``source="platform"``. That is a different
+    claim from "the store is down", which is a 503 below — reporting a default as the
+    effective value while a tenant's stored tightening sits unread would be exactly the
+    lie the ``source`` field exists to prevent.
+
+    Raises:
+        HTTPException: 403 for an un-tenanted principal; 503 when the store is
+            configured but unreadable.
+    """
+    tenant_id = _scope(auth)
+    if _stores_off():
+        return SettingsResponse(
+            tenant_id=auth.tenant_id,
+            user_id=auth.user_id,
+            rows=[
+                _setting_row(
+                    spec.key,
+                    (spec.default, SettingScope.PLATFORM.value),
+                    fine_role=auth.fine_role,
+                )
+                for spec in SETTING_SPECS
+                if auth.fine_role in spec.readable_by
+            ],
+        )
+    try:
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, tenant_id)
+            resolved = await resolve_all(
+                session,
+                tenant_id=tenant_id,
+                user_id=auth.user_id,
+                actor_role=auth.fine_role,
+            )
+    except SQLAlchemyError as exc:
+        logger.error("Settings read failed for tenant %s.", tenant_id, exc_info=True)  # noqa: TRY400
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The settings store is unreachable, so no value can be reported as "
+            "in force. Retry once the database is back.",
+        ) from exc
+    return SettingsResponse(
+        tenant_id=auth.tenant_id,
+        user_id=auth.user_id,
+        rows=[
+            _setting_row(key, value, fine_role=auth.fine_role)
+            for key, value in sorted(resolved.items())
+        ],
+    )
+
+
+@console_router.get("/settings/{key}", response_model=SettingRow, tags=["console"])
+async def get_setting(key: str, auth: AuthContext = Depends(require_auth)) -> SettingRow:
+    """Return one control's effective value and the scope that decided it.
+
+    Raises:
+        HTTPException: 404 for a key that is not in the catalogue, 403 when the caller
+            may not read it or is un-tenanted, 503 when the store is unreadable.
+    """
+    tenant_id = _scope(auth)
+    try:
+        spec = spec_for(key)
+    except UnknownSettingError as exc:
+        raise _unknown_setting(exc) from exc
+    if _stores_off():
+        if auth.fine_role not in spec.readable_by:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"role {auth.fine_role!r} may not read {key!r}",
+            )
+        return _setting_row(
+            key, (spec.default, SettingScope.PLATFORM.value), fine_role=auth.fine_role
+        )
+    try:
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, tenant_id)
+            resolved = await resolve(
+                session,
+                key,
+                tenant_id=tenant_id,
+                user_id=auth.user_id,
+                actor_role=auth.fine_role,
+            )
+    except SettingError as exc:
+        raise _settings_http_error(exc) from exc
+    except SQLAlchemyError as exc:
+        logger.error("Settings read failed for %s.", key, exc_info=True)  # noqa: TRY400
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The settings store is unreachable, so no value can be reported as "
+            "in force. Retry once the database is back.",
+        ) from exc
+    return _setting_row(key, resolved, fine_role=auth.fine_role)
+
+
+@console_router.put("/settings/{key}", response_model=SettingRow, tags=["console"])
+async def put_setting(
+    key: str,
+    req: SettingWriteRequest,
+    auth: AuthContext = Depends(require_auth),
+) -> SettingRow:
+    """Write one control at one of the caller's **own** layers, or refuse with a reason.
+
+    **Every refusal is the resolver's**, not this route's:
+    :func:`aegis.settings.resolver.write_setting` already refuses a role that may not
+    write the key, a scope beyond that role's reach, a value that is the wrong type or
+    out of bounds, and a ``TIGHTEN_ONLY`` write that would be weaker than the enclosing
+    scope. Re-checking any of that here would be a second policy that can disagree with
+    the first, which is how a control ends up enforced in a form and bypassed by a
+    ``curl``. This function chooses the status code and nothing else.
+
+    The row's tenant and user come from the **token**. A body cannot name a scope target,
+    only a layer — so "tenant scope" is always this caller's tenant, and the sealed
+    :func:`~aegis.retrieval.types.tenant_filter` resolves it exactly as every other
+    scoped write does.
+
+    The write and its audit row commit together: a setting that changed with no record of
+    who changed it is precisely the evidence a governance review asks for.
+
+    Raises:
+        HTTPException: 404 unknown key; 403 role or scope refused; 409 a weakening of a
+            tighten-only key; 422 an illegal value; 503 the store is unreadable.
+    """
+    tenant_id = _scope(auth)
+    try:
+        scope = SettingScope(req.scope)
+    except ValueError as exc:
+        legal = ", ".join(s.value for s in SettingScope)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unknown scope {req.scope!r}; expected one of {legal}",
+        ) from exc
+    if _stores_off():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="This deployment runs with no durable store, so a preference has "
+            "nowhere to be written. The catalogue defaults are the only values in force.",
+        )
+    # The ids are the caller's own, never the body's. ``None`` here can only have come
+    # from ALL_TENANTS (platform staff), whose layer is `platform` — a tenant-scoped row
+    # with a NULL tenant would be readable by every tenant, and the resolver refuses it.
+    row_tenant = None if scope is SettingScope.PLATFORM else tenant_id
+    row_user = _owner(auth) if scope is SettingScope.USER else None
+    try:
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, tenant_id)
+            await write_setting(
+                session,
+                key,
+                req.value,
+                scope=scope,
+                actor_role=auth.fine_role,
+                tenant_id=row_tenant,
+                user_id=row_user,
+                actor_user_id=auth.user_id,
+                updated_by=auth.username,
+            )
+            resolved = await resolve(
+                session, key, tenant_id=tenant_id, user_id=auth.user_id
+            )
+            await session.commit()
+    except UnknownSettingError as exc:
+        raise _unknown_setting(exc) from exc
+    except SettingError as exc:
+        raise _settings_http_error(exc) from exc
+    except SQLAlchemyError as exc:
+        logger.error("Settings write failed for %s.", key, exc_info=True)  # noqa: TRY400
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The settings store is unreachable, so the preference was not saved.",
+        ) from exc
+    from app.api.routes import _safe_audit
+
+    await _safe_audit(
+        "settings.write",
+        auth,
+        payload={"key": key, "scope": scope.value, "value": req.value},
+    )
+    return _setting_row(key, resolved, fine_role=auth.fine_role)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /tools — the effective roster, and which layer decided each row
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ToolRow(BaseModel):
+    """One action tool, as this caller may (or may not) use it.
+
+    ``decided_by`` names the **narrowest layer that constrains this tool for this
+    caller**, which is the only version of "who decided" a screen can act on:
+
+    * ``platform`` — the tool is declared in the registry and nothing below narrows it.
+      It runs unattended.
+    * ``persona`` — the persona allowlist (:func:`app.adapter.tools.is_allowed`, the one
+      policy function) does not carry it. Not available.
+    * ``tenant`` — available, but the tenant's resolved ``agent.gate_min_risk`` floor
+      stands between the model and running it: the agent may only *propose* it, and a
+      human decides. Different from "not allowed", and a screen that conflated the two
+      would send somebody to the wrong settings page.
+    """
+
+    name: str
+    description: str
+    risk: str = Field(description="The tool's declared risk tier: low | medium | high.")
+    allowed: bool = Field(description="Whether this caller's persona may call it.")
+    decided_by: str = Field(description="platform | persona | tenant — see the class doc.")
+    requires_approval: bool = Field(
+        description="Whether a call would stop at the human gate for this tenant."
+    )
+
+
+class ToolRosterResponse(BaseModel):
+    """Body for `GET /tools` — the effective roster for one caller.
+
+    ``allowed_count`` of ``total`` is the composer's "6 of 9". It is a **report**: this
+    endpoint is read-only, and the intersection it reports is the same
+    ``platform ∩ persona`` one :func:`app.adapter.tools.is_allowed` enforces before any
+    side effect, never a second copy of it.
+    """
+
+    persona: str
+    gate_min_risk: str = Field(
+        description="The tenant's effective human-gate floor, resolved exactly as a run "
+        "resolves it (agent.gate_min_risk, tighten-only)."
+    )
+    rows: list[ToolRow]
+    allowed_count: int
+    total: int
+
+
+@console_router.get("/tools", response_model=ToolRosterResponse, tags=["console"])
+async def list_tools(
+    persona: str | None = None,
+    auth: AuthContext = Depends(require_auth),
+    deps: AgentDeps = Depends(get_agent_deps),
+) -> ToolRosterResponse:
+    """Return every declared tool with whether this caller may use it, and who decided.
+
+    Three real layers, read from the three places that actually hold them — no fourth
+    invented here:
+
+    1. **platform** — :data:`app.adapter.tools.TOOL_REGISTRY`: what exists at all.
+    2. **persona** — :func:`app.adapter.tools.is_allowed`: what this persona may call.
+       The same function ``run_tool`` checks before any side effect, and the same one a
+       sub-agent's definitions are filtered through, so this cannot be a more permissive
+       second intersection.
+    3. **tenant** — ``agent.gate_min_risk``, resolved through
+       :func:`app.agent.deps.resolve_run_config`, which is the function a *run* resolves
+       it with. A tool at or above the floor may only be proposed.
+
+    **Read-only, and deliberately.** A pin — "use only these three tools for this run" —
+    needs three things that do not exist yet: a field on ``QueryRequest`` carrying the
+    chosen names, that field threaded onto ``AgentState`` so the graph can read it, and
+    the narrowing applied inside
+    :func:`aegis.agent.subagent.allowed_tool_definitions`, which is where the one
+    intersection already lives and which that function's docstring names as the place a
+    Phase 6 pin must go. Serving a pin control before any of that exists would be a
+    control that changes nothing, which is the defect this endpoint was written to
+    remove.
+
+    Args:
+        persona: An explicit persona id to report for, subject to the same role scoping
+            ``POST /query`` applies. Omitted → the caller's own.
+        auth: The authenticated principal.
+        deps: The agent's capability bundle; its config is the process-wide floor the
+            tenant's settings are folded onto.
+
+    Raises:
+        HTTPException: 400 for an unknown persona, 403 for one this role may not drive.
+    """
+    from app.adapter.tools import TOOL_REGISTRY, is_allowed
+    from app.agent.deps import resolve_run_config
+    from app.api.routes import _resolve_governance, _resolve_persona
+    from app.core.governance import reset_governance_context, set_governance_context
+
+    persona_id = _resolve_persona(persona, auth)
+    # The gate floor is the tenant's, so it is resolved through the tenant's own
+    # governance binding — the same contextvar a run reads it from. Building it here
+    # rather than passing ``auth.tenant_id`` keeps ONE way for a tenant's floor to be
+    # found, which is what stops this surface reporting a floor a run would not obey.
+    config = deps.config
+    governance = await _resolve_governance(auth)
+    token = set_governance_context(governance)
+    try:
+        config = await resolve_run_config(config)
+    finally:
+        reset_governance_context(token)
+
+    rows: list[ToolRow] = []
+    for name in sorted(TOOL_REGISTRY):
+        spec = TOOL_REGISTRY[name]
+        allowed = is_allowed(persona_id, name)
+        gated = allowed and risk_at_least(spec.risk, config.gate_min_risk)
+        rows.append(
+            ToolRow(
+                name=name,
+                description=spec.description,
+                risk=spec.risk.value,
+                allowed=allowed,
+                decided_by="persona" if not allowed else ("tenant" if gated else "platform"),
+                requires_approval=gated,
+            )
+        )
+    return ToolRosterResponse(
+        persona=persona_id,
+        gate_min_risk=config.gate_min_risk.value,
+        rows=rows,
+        allowed_count=sum(1 for row in rows if row.allowed),
+        total=len(rows),
     )
 
 

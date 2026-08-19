@@ -1160,7 +1160,16 @@ async def query(
     await _safe_audit(
         "query.start",
         auth,
-        payload={"persona": persona, "query_chars": len(req.query)},
+        payload={
+            "persona": persona,
+            "query_chars": len(req.query),
+            # The requested width is recorded because it is a spend decision the user
+            # made: an explicit `team` is charged and pre-flighted, an auto-escalation
+            # is not, and an audit trail that cannot tell them apart cannot answer who
+            # asked for the fan-out.
+            "depth_mode": req.depth_mode,
+            "requested_fanout": req.requested_fanout,
+        },
     )
     # Resolve the caller's tenant/user + effective caps once, then bind the governance
     # context inside the streaming task so the LiteLLM chokepoint (core.llm.complete)
@@ -1191,6 +1200,11 @@ async def query(
                 registry=get_approval_registry(),
                 session_id=req.session_id,
                 memory_subject=memory_subject,
+                # Validated in ``QueryRequest``, honoured in ``decide_depth``, and
+                # narrowed only by the tenant's cap (reported as `platform_cap`). This
+                # route passes them and decides nothing.
+                depth_mode=req.depth_mode,
+                requested_fanout=req.requested_fanout,
             ):
                 _update_dashboards(event, graph_store, metrics, persona)
                 if event.type == "token":

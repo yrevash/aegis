@@ -17,7 +17,8 @@ import type { RunController, RunHandlers, RunRequest } from './transport'
 /**
  * Begin a run and return its controller.
  *
- * @param request - The turn, its persona, and the conversation it belongs to.
+ * @param request - The turn, its persona, the conversation it belongs to, and the
+ *   width the user asked for.
  * @param token - Bearer token for RBAC, or null to use the stored session token.
  * @param handlers - Run lifecycle callbacks.
  */
@@ -26,7 +27,13 @@ export function startRun(
   token: string | null,
   handlers: RunHandlers,
 ): RunController {
-  const { query, persona, sessionId = null } = request
+  const {
+    query,
+    persona,
+    sessionId = null,
+    depthMode = null,
+    requestedFanout = null,
+  } = request
   const controller = new AbortController()
   // Per-call token wins; else fall back to the signed-in session's token.
   const bearer = token ?? getAuthToken()
@@ -38,8 +45,20 @@ export function startRun(
       method: 'POST',
       headers,
       // `session_id` is what turns the memory nodes from pass-throughs into a
-      // recall; omitting it is why memory was dark in the live product.
-      body: JSON.stringify({ query, persona, session_id: sessionId }),
+      // recall; omitting it is why memory was dark in the live product. `depth_mode`
+      // and `requested_fanout` are the same seam for width — the run honours an
+      // explicit mode exactly, and this is the only wire it can arrive on.
+      //
+      // Both are sent as `null` when unset rather than omitted, which is deliberate:
+      // `QueryRequest` now forbids unknown fields, so a typo here is a 422 that names
+      // the field instead of a 200 that quietly ran in Auto.
+      body: JSON.stringify({
+        query,
+        persona,
+        session_id: sessionId,
+        depth_mode: depthMode,
+        requested_fanout: requestedFanout,
+      }),
       signal: controller.signal,
     })
     if (!res.ok || res.body === null) {

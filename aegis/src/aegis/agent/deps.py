@@ -119,9 +119,21 @@ class AgentConfig:
     money-shot. Nothing else can force or skip the gate, which is what makes the
     guarantee explainable on stage: read the tool's declared risk, read this floor.
 
+    **The values here are the floor, not the last word.** A host that governs tenants
+    resolves this config *per run* through
+    :func:`aegis.settings.agent.resolve_agent_config`, which folds the tenant's
+    ``TIGHTEN_ONLY`` settings on by taking whichever value is stricter — so a tenant may
+    ask for more oversight (a lower ``gate_min_risk``) or fewer agents, and can never
+    loosen what the host wired here. Nothing in this module reads a database; the seam
+    is the host's, and the fold is per run precisely so one tenant's floor can never run
+    another tenant's turn.
+
     Attributes:
         gate_min_risk: The minimum tool risk that forces the human gate. This is the
-            **only** gating signal.
+            **only** gating signal. The platform default is HIGH: what deserves a gate
+            depends on the tenant, so the platform does not presume MEDIUM for everyone
+            — and a tenant that tightens to MEDIUM gets MEDIUM (``agent.gate_min_risk``
+            in the settings catalogue).
         stream_chunk_words: How many words per streamed answer ``token`` event.
         approval_park_timeout: Seconds the live ``/query`` socket holds a gate open
             before *parking* the run (durable row remains the source of truth).
@@ -140,9 +152,13 @@ class AgentConfig:
             none. Neutral by default; the host wires its adapter's default persona.
         team_enabled: Master switch for the adaptive multi-agent fan-out. ``False``
             forces every turn SINGLE whatever the classifier or the user asked for.
-        max_parallel_agents: The platform cap on team width. A user's explicit width is
-            **narrowed** by this and never widened past it — ``Custom`` mode is not a
-            way around a budget cap, so the clamp lives where the cap is read.
+        max_parallel_agents: The platform cap on team width (``agent.team.max_parallel``
+            in the settings catalogue, ``TIGHTEN_ONLY``: a platform admin may lower it
+            without a deploy and a tenant may lower it further for themselves, never
+            raise it). A user's explicit width is **narrowed** by this and never widened
+            past it — ``Custom`` mode is not a way around a budget cap, so the clamp
+            lives where the cap is read. It is a ceiling and nothing else: it may not
+            become a second reason to reduce a width the user explicitly chose.
         max_concurrent_agents: How many sub-agents may hold a gateway slot at once
             (the semaphore over the fan-out). Lower than ``max_parallel_agents`` on
             purpose: width is what the user asked for, concurrency is what the gateway
