@@ -36,15 +36,28 @@ mode flag"; it is **no JSON- or SQLite-backed vector storage in the server profi
 * LightRAG `vector_storage` -> `QdrantVectorDBStorage`, replacing NanoVectorDB, whose
   own docstring calls it "a brute-force cosine scan held in memory" written back as a
   whole-file JSON rewrite.
-* `aegis.retrieval` vectors -> Qdrant, retiring the Chroma `PersistentClient` whose
-  SQLite metadata lock is what makes `uvicorn --workers 2` fail today, and fail looking
-  like corruption rather than a clear error.
+* `aegis.retrieval` vectors -> Qdrant. **Chroma is removed entirely**, not demoted to a
+  second mode: the `chromadb` dependency, `ChromaVectorStore`, and every construction
+  site (`main.py`, `build_lite_retriever` x2, `evals/harness.py`,
+  `scripts/eval_goldset.py`). Keeping a Chroma path would leave the SQLite metadata lock
+  reachable by configuration — and it is that lock which makes `uvicorn --workers 2`
+  fail today, looking like corruption rather than a clear error. A ceiling you can still
+  configure your way back into is not removed.
+* **Tests and dev do not need a Qdrant server.** `qdrant_client` supports an in-process
+  mode, so the ephemeral choice the 8.4 lane made explicit stays available and stays
+  named out loud. The two seams 8.4 made *raise* rather than silently degrade must keep
+  raising — this task changes which store they configure, never whether a forgotten call
+  is silent.
 * LightRAG graph stays on Neo4j; KV moves off files to Postgres or Redis, both of which
   already run.
 * Refuse to boot with `--workers>1` while any embedded store is configured.
 
 **The accepted cost:** existing vectors are re-ingested, not migrated. The user has
 explicitly accepted this. Do it before a demo corpus exists, not after.
+
+**One store, one operational story.** After this task Aegis runs exactly one vector
+engine, in one mode, on one Windows binary — which is also one fewer thing to install,
+explain and have fail on 30 August.
 
 **What this buys:** 9.1 stops *documenting* the single-process ceiling and removes it.
 "Scaling later is a deployment change" becomes true rather than aspirational.
