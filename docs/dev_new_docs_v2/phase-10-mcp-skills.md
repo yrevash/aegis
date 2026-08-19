@@ -11,6 +11,30 @@ user named both as major additions, so they get a phase rather than a backlog li
 
 ---
 
+## Amendment of 2026-08-20 — use the official SDKs, do not hand-roll
+
+Decided by the user. Verified against the tree rather than assumed:
+
+* **Python: already correct.** `backend/pyproject.toml` pins `mcp>=2.0,<3` and the existing
+  593-line server targets the **2.x `FastMCP`** API (the pin's own comment records that 1.x is
+  not compatible). So **10.4 and 10.5 are not a rewrite** — Streamable HTTP transport and
+  per-caller identity are SDK features to adopt, not protocol plumbing to write. Budget them
+  as adoption plus our RBAC layer on top.
+* **TypeScript: not present.** `web/package.json` carries no `@modelcontextprotocol/*`. **10.7,
+  the admin MCP console, uses the official TS SDK** rather than a bespoke fetch client — and
+  the same reasoning that killed the 696-line hand-written API client in 8.7 applies here: a
+  hand-rolled protocol client drifts from the spec and nobody notices until a peer changes.
+* **10.6, the MCP client, uses the Python SDK's client half**, so Aegis speaks one
+  implementation of the protocol in both directions.
+
+**What the SDKs do not give us, and what this phase is actually for:** identity, tenant scope,
+RBAC, the tool allowlist, risk tiers and the approval gate. The SDK carries the protocol; Aegis
+carries the governance. An external MCP server reached through 10.6 must arrive as a **gated
+tool** — same allowlist, same risk tier, same gate as every other tool — or it becomes a side
+door around seven phases of governance.
+
+---
+
 ## What is actually wrong
 
 ### 1. An MCP server exists and is single-tenant by construction
