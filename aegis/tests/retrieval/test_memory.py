@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from aegis.retrieval.cache import SemanticCache
@@ -16,7 +18,7 @@ from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.protocols import MultiListBackend
 from aegis.retrieval.spotlight import DATAMARK_TOKEN
 from aegis.retrieval.types import FusionMethod, RetrievalOrigin, RetrievalScope
-from aegis.retrieval.vector_store import ChromaVectorStore
+from aegis.retrieval.vector_store import QdrantVectorStore
 
 from .conftest import RecordingComplete, SequenceEmbed
 
@@ -122,30 +124,30 @@ def test_build_lite_retriever_is_databaseless():
     assert isinstance(retriever.cache._client, InMemoryRedis)
 
 
-def test_lite_backend_vector_store_is_embedded_chroma_not_a_dict():
-    """The vector arm is a real (embedded/local) Chroma engine, never a RAM dict."""
+def test_lite_backend_vector_store_is_in_process_qdrant_not_a_dict():
+    """The vector arm is a real (in-process) Qdrant engine, never a RAM dict."""
     backend = _backend()
-    # There is no in-RAM vector dict anymore — vectors live in the Chroma store.
+    # There is no in-RAM vector dict anymore — vectors live in the Qdrant store.
     assert not hasattr(backend, "_vectors")
-    assert isinstance(backend._vector_store, ChromaVectorStore)
+    assert isinstance(backend._vector_store, QdrantVectorStore)
     assert backend._vector_store.mode == "local"  # embedded, offline
     assert backend._vector_store.location == ":memory:"
 
 
-async def test_vector_recall_reads_back_through_chroma():
-    """Ingested chunk embeddings are upserted to Chroma and recalled by a real search."""
+async def test_vector_recall_reads_back_through_qdrant():
+    """Ingested chunk embeddings are upserted to Qdrant and recalled by a real search."""
     backend = _backend()
     sample = backend._chunks[0]
     query = " ".join(sample.text.split()[:8])
     ranked = await backend.recall_ranked(query, top_k=5, scope=_SCOPE)
 
-    # After recall, the fresh chunks have been embedded + upserted into Chroma.
+    # After recall, the fresh chunks have been embedded + upserted into Qdrant.
     assert backend._indexed_ids == {c.id for c in backend._chunks}
     vector_list = next(
         rl for rl in ranked.lists if RetrievalOrigin.VECTOR in rl.origins
     )
-    assert vector_list.candidates, "a corpus-overlapping query should hit Chroma vectors"
-    # A direct store search returns the same nearest chunk id (proof it came from Chroma).
+    assert vector_list.candidates, "a corpus-overlapping query should hit Qdrant vectors"
+    # A direct store search returns the same nearest chunk id (proof it came from Qdrant).
     # The collection is derived from the scope, exactly as the backend derives it — this
     # corpus is tenant-less, so that is the shared partition.
     q_vec = _local_embed(query)
@@ -156,8 +158,8 @@ async def test_vector_recall_reads_back_through_chroma():
 
 
 async def test_tenant_scope_filters_vector_recall():
-    """A tenant-scoped backend never recalls another tenant's vectors from Chroma."""
-    shared = ChromaVectorStore.local()  # one embedded store, two tenants
+    """A tenant-scoped backend never recalls another tenant's vectors from Qdrant."""
+    shared = QdrantVectorStore.local()  # one embedded store, two tenants
     acme = InMemoryKnowledgeBackend.from_corpus(
         docs=[("acme_doc", "Acme closures are approved within five business days.")],
         vector_store=shared,
@@ -231,3 +233,49 @@ async def test_lite_result_carries_hybrid_provenance_offline():
     assert RetrievalOrigin.VECTOR in result.provenance.origins
     # Sources carry per-candidate origin tags from fusion.
     assert result.sources[0].metadata.get(ORIGIN_METADATA_KEY)
+
+
+# ───────────────────────────────────────────── the store never runs on the loop (§9.7)
+
+
+class _ThreadRecordingStore:
+    """Delegates to a real store, recording which thread each blocking call ran on."""
+
+    def __init__(self, inner: QdrantVectorStore) -> None:
+        self._inner = inner
+        self.call_threads: set[int] = set()
+
+    def __getattr__(self, name):  # noqa: ANN001, ANN204 - transparent delegation
+        return getattr(self._inner, name)
+
+    def ensure_collection(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        self.call_threads.add(threading.get_ident())
+        self._inner.ensure_collection(*args, **kwargs)
+
+    def upsert(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        self.call_threads.add(threading.get_ident())
+        self._inner.upsert(*args, **kwargs)
+
+    def search(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        self.call_threads.add(threading.get_ident())
+        return self._inner.search(*args, **kwargs)
+
+
+async def test_vector_store_calls_never_run_on_the_event_loop_thread():
+    """§9.7: every store call is synchronous, so none of them may hold the loop.
+
+    Measured at 13.5 ms of pure CPU per query at 50k vectors — held on the loop that
+    blocks *every* concurrent request for that long, including ones that never touch
+    retrieval. A server-mode call is worse still: a blocking HTTP round-trip. Both the
+    search and the index write are covered, because ingest runs on the same loop.
+    """
+    store = _ThreadRecordingStore(QdrantVectorStore.local())
+    backend = InMemoryKnowledgeBackend.from_corpus(
+        docs=_SAMPLE_DOCS, vector_store=store  # type: ignore[arg-type] - a delegating double
+    )
+    await backend.recall_ranked(
+        "closure approved by the original approver", top_k=5, scope=_SCOPE
+    )
+
+    assert store.call_threads, "ensure_collection + upsert + search must all have fired"
+    assert threading.get_ident() not in store.call_threads

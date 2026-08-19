@@ -9,14 +9,16 @@
   `start.ps1 -Mode full` needs all three. This script fills that gap:
 
     1. toolchain  - Python 3.11, Node LTS, uv, Git (via winget)
-    2. stores     - PostgreSQL, Redis, Neo4j (native, never Docker)
+    2. stores     - PostgreSQL, Redis, Neo4j, Qdrant (native, never Docker)
     3. app deps   - delegates to bootstrap.ps1 (single source of truth for extras)
     4. verify     - reports what actually answers on its port
 
-  There is deliberately NO vector-database step. The vector store is EMBEDDED:
-  it runs inside the Python process against a local directory, so it needs no
-  server binary, no service registration and no open port - which is what makes
-  Aegis installable on a locked-down machine.
+  Qdrant is the ONE vector engine (section 9.1): both aegis.retrieval and LightRAG
+  write to it through QDRANT_URL. It is not an installer and not a service - v1.19.0
+  publishes `qdrant-x86_64-pc-windows-msvc.zip`, Apache-2.0, a zip with a binary you
+  unzip and run, the same operational shape as Superset. That is why an embedded
+  store was no longer worth its cost: an embedded store is single-process, and it is
+  what made `uvicorn --workers 2` fail in a way that looked like index corruption.
 
   Idempotent: every step checks before it installs, so re-running is safe and
   fast. Each store is independent - one failing does not stop the others, and
@@ -205,22 +207,32 @@ if (-not $SkipStores) {
     Warn '  fix: install Memurai (https://www.memurai.com/get-memurai), then Start-Service Memurai'
   }
 
-  # -- Vector store - EMBEDDED, so there is nothing to install ----------------
-  # The ANN engine behind retrieval + memory recall runs in-process against a
-  # local directory (installed as a Python package by bootstrap.ps1). No binary,
-  # no service, no port. All this step does is prove the directory is writable,
-  # because that is the only way the vector tier can fail on this machine.
-  Head 'Vector store (embedded)'
-  $vecPath = $env:VECTOR_STORE_PATH
-  if (-not $vecPath) { $vecPath = Join-Path $root 'backend\vector_storage' }
+  # -- Vector store - Qdrant, one node for both consumers --------------------
+  # Section 9.1. Not an installer and not a Windows service: v1.19.0 ships
+  # `qdrant-x86_64-pc-windows-msvc.zip` (Apache-2.0), a zip with one binary you
+  # unzip and run - the same shape as Superset, which this box already runs.
+  #
+  # Best-effort by design, exactly like Neo4j below: unzipping into a directory the
+  # operator chose is a decision this script must not make for them, so it reports
+  # what answers and prints the two commands that fix it. Unlike Neo4j, though, a
+  # down Qdrant is NOT a degradation - full stores mode refuses to boot without it,
+  # which is the point: an unreachable index must never look like an empty one.
+  Head 'Vector store (Qdrant)'
+  $qdrantUrl = $env:QDRANT_URL
+  if (-not $qdrantUrl) { $qdrantUrl = 'http://localhost:6333' }
+  $qdrantUp = $false
   try {
-    New-Item -ItemType Directory -Force -Path $vecPath -ErrorAction Stop | Out-Null
-    $probe = Join-Path $vecPath '.install-check'
-    Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
-    Remove-Item $probe -ErrorAction SilentlyContinue
-    Ok "writable: $vecPath (no server needed)"
-  } catch {
-    Bad "vector store directory not writable: $vecPath - $($_.Exception.Message)"
+    Invoke-WebRequest -Uri "$qdrantUrl/" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop | Out-Null
+    $qdrantUp = $true
+  } catch { $qdrantUp = $false }
+  if ($qdrantUp) {
+    Ok "answering: $qdrantUrl"
+  } else {
+    Bad "Qdrant not answering on $qdrantUrl - full stores mode will refuse to boot"
+    Warn '  fix: download qdrant-x86_64-pc-windows-msvc.zip from'
+    Warn '       https://github.com/qdrant/qdrant/releases/tag/v1.19.0'
+    Warn '       unzip it, then run .\qdrant.exe (it listens on 6333; no install, no service)'
+    Warn '  then: setx QDRANT_URL http://localhost:6333   (already the default)'
   }
 
   # -- Neo4j - the knowledge graph behind GET /graph --------------------------

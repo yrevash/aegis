@@ -233,12 +233,13 @@ def tenant_metadata_value(tenant_id: int | None) -> str | None:
     its owner under one canonical value produced here, so the write side and the read
     side cannot drift apart.
 
-    It is a *string* token rather than the raw ``int`` for one concrete reason: Chroma
-    rejects a ``$in`` list whose values are not all of the same type, and a tenant-scoped
-    search must ask for ``[<this tenant>, <shared>]`` in one clause — where "shared" is
-    stored as :data:`~aegis.retrieval.vector_store._NULL`, a *string* sentinel (Chroma
-    silently drops a literal ``None`` metadata value, which would turn a null tenant into
-    a wildcard). Encoding the tenant as ``"t<id>"`` keeps that list homogeneous.
+    It is a *string* token rather than the raw ``int`` for one concrete reason: a
+    match-any list must be homogeneous, and a tenant-scoped search asks for
+    ``[<this tenant>, <shared>]`` in one clause — where "shared" is stored as
+    :data:`~aegis.retrieval.vector_store._NULL`, a *string* sentinel (Qdrant's
+    ``MatchValue`` cannot express a JSON null, so a literal ``None`` would force the
+    condition to be dropped, turning a null tenant into a wildcard). Encoding the tenant
+    as ``"t<id>"`` keeps that list homogeneous.
 
     Args:
         tenant_id: The owning tenant, or ``None`` for a row in the **shared** corpus

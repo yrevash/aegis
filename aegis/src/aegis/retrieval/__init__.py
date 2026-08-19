@@ -7,7 +7,7 @@ Rank Fusion → local ONNX cross-encoder rerank (LLM-as-reranker behind it, loud
 spotlighted assembly, with a two-tier semantic cache,
 an agentic Self-RAG loop, and honest provenance/citations. LLM-agnostic (inject a
 completer + embedder); heavy deps
-(lightrag/neo4j/redis/chromadb/asyncpg) are lazy-imported, so `import aegis.retrieval`
+(lightrag/neo4j/redis/qdrant_client/asyncpg) are lazy-imported, so `import aegis.retrieval`
 never requires them — see `aegis[retrieval]` and `tests/retrieval/test_isolation.py`.
 
 Typical lifecycle::
@@ -82,7 +82,8 @@ from aegis.retrieval.types import (
     tenant_filter,
 )
 from aegis.retrieval.vector_store import (
-    ChromaVectorStore,
+    EmbeddedVectorStoreMultiprocessError,
+    QdrantVectorStore,
     VectorStoreNotConfiguredError,
     configure_vector_store,
     new_default_store,
@@ -90,7 +91,8 @@ from aegis.retrieval.vector_store import (
 )
 
 __all__ = [
-    "ChromaVectorStore",
+    "EmbeddedVectorStoreMultiprocessError",
+    "QdrantVectorStore",
     "VectorStoreNotConfiguredError",
     "configure_vector_store",
     "new_default_store",

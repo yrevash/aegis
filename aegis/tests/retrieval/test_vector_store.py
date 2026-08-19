@@ -1,35 +1,47 @@
-"""The Chroma-backed vector store, exercised offline with the REAL client.
+"""The Qdrant-backed vector store, exercised offline with the REAL client.
 
-These use chromadb's embedded mode (an in-process ``EphemeralClient``, reported as
-``:memory:``) — the official engine, no server binary, no network — so they prove upsert
-+ nearest-neighbour search and metadata filtering against the real library, not a stand-in.
+These use ``qdrant_client``'s in-process mode (reported as ``:memory:``) — the official
+client's own implementation of the same API the server speaks, no server binary and no
+network — so they prove upsert + nearest-neighbour search and payload filtering against
+the real library, not a stand-in. ``test_live_qdrant_server_round_trip`` runs the same
+path against a node on :data:`_LIVE_URL` when one is up, so the two modes are not taken
+on trust.
 
-The null-metadata and collection-name tests are load-bearing: Chroma silently *drops* a
-``None`` metadata value and rejects short/odd collection names, and both would otherwise
-surface as a scoping leak or a hard crash on names the rest of Aegis already uses.
+The null-payload and collection-name tests are load-bearing: Qdrant cannot *match* a
+JSON null with ``MatchValue`` (so a naive encoding would have to drop the condition, and
+"null tenant" would become "any tenant"), point ids must be UUIDs rather than the
+caller's own strings, and collection names become directory names on disk. Each of those
+would otherwise surface as a scoping leak, a duplicated row, or a hard crash on names the
+rest of Aegis already uses.
 """
 
 from __future__ import annotations
+
+import os
+import sys
+import uuid
 
 import pytest
 
 from aegis.retrieval.vector_store import (
     _NULL,
-    ChromaVectorStore,
+    EmbeddedVectorStoreMultiprocessError,
+    QdrantVectorStore,
     VectorHit,
     _safe_name,
+    configured_worker_count,
 )
 
 
-def _store() -> ChromaVectorStore:
-    return ChromaVectorStore.local()  # embedded, in-process — real engine, offline
+def _store() -> QdrantVectorStore:
+    return QdrantVectorStore.local()  # embedded, in-process — real engine, offline
 
 
 def test_local_store_reports_honest_mode_and_location():
     store = _store()
     assert store.mode == "local"
     assert store.location == ":memory:"
-    assert "ChromaVectorStore" in repr(store)
+    assert "QdrantVectorStore" in repr(store)
 
 
 def test_upsert_then_search_returns_nearest_first():
@@ -150,14 +162,14 @@ def test_two_local_stores_are_isolated():
 def test_server_mode_fails_loud_when_unreachable():
     """A store built for a live node must raise if the node is down — never degrade."""
     with pytest.raises(Exception):  # noqa: B017 - any connection error is acceptable
-        ChromaVectorStore.server(url="http://127.0.0.1:59999", timeout=0.5)
+        QdrantVectorStore.server(url="http://127.0.0.1:59999", timeout=0.5)
 
 
 # --------------------------------------------------------------------------- null scope
 
 
 def test_null_payload_value_round_trips_as_none():
-    """Chroma drops ``None``; the store must hand it back as ``None`` regardless."""
+    """``None`` is stored as a sentinel; the store must hand it back as ``None``."""
     store = _store()
     store.ensure_collection("c", dim=2)
     store.upsert("c", ids=["a"], vectors=[[1.0, 0.0]], payloads=[{"tenant_id": None}])
@@ -168,8 +180,8 @@ def test_null_payload_value_round_trips_as_none():
 def test_null_filter_matches_only_null_scoped_points():
     """SECURITY: filtering on ``None`` is the *null scope*, never a wildcard.
 
-    Chroma stores no key at all for a ``None`` metadata value, so the naive encoding
-    would drop the condition entirely and return every tenant's points. This is the
+    Qdrant's ``MatchValue`` cannot express a JSON null, so the naive encoding would have
+    to drop the condition entirely and return every tenant's points. This is the
     cross-tenant leak the store's sentinel exists to prevent.
     """
     store = _store()
@@ -235,7 +247,7 @@ def test_safe_name_normalises_illegal_names_injectively():
 
 
 def test_a_one_character_collection_name_actually_works():
-    """Chroma rejects a 1-char name outright; the store must still serve it."""
+    """A 1-char name is not a legal collection/directory name; the store still serves it."""
     store = _store()
     store.ensure_collection("c", dim=2)
     store.upsert("c", ids=["a"], vectors=[[1.0, 0.0]], payloads=[{"v": 1}])
@@ -255,16 +267,101 @@ def test_normalised_names_stay_distinct_collections():
 
 def test_on_disk_store_persists_across_clients(tmp_path):
     """The embedded on-disk mode is a genuine store, not a per-process scratch index."""
-    path = str(tmp_path / "chroma")
-    first = ChromaVectorStore.local(path=path)
+    path = str(tmp_path / "qdrant")
+    first = QdrantVectorStore.local(path=path)
     assert first.mode == "local"
     assert first.location == path
     first.ensure_collection("aegis_persist", dim=2)
     first.upsert("aegis_persist", ids=["a"], vectors=[[1.0, 0.0]], payloads=[{"v": 7}])
     first.close()
 
-    second = ChromaVectorStore.local(path=path)
+    second = QdrantVectorStore.local(path=path)
     hits = second.search("aegis_persist", [1.0, 0.0], k=5)
     assert [h.id for h in hits] == ["a"]
     assert hits[0].payload["v"] == 7
     second.close()
+
+
+# --------------------------------------------------------------- the multi-worker guard
+
+
+def test_embedded_store_refuses_to_boot_under_workers_gt_1(monkeypatch):
+    """§9.1: an embedded store in a multi-worker process refuses, naming the fix.
+
+    This is the whole point of deleting Chroma rather than demoting it. An embedded
+    store is single-process whichever engine backs it, and the failure it produces under
+    a second worker looks like corruption rather than a configuration error — so the
+    configuration is refused at construction instead of being survived.
+    """
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "app.main:app", "--workers", "2"])
+    with pytest.raises(EmbeddedVectorStoreMultiprocessError) as ei:
+        QdrantVectorStore.local()
+    message = str(ei.value)
+    assert "2 workers" in message
+    assert "AEGIS_VECTOR_STORE_URL" in message  # the message carries its own fix
+
+
+def test_the_guard_reads_the_process_manager_environment_too(monkeypatch):
+    """``WEB_CONCURRENCY`` asks for workers without ever touching ``sys.argv``."""
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "app.main:app"])
+    monkeypatch.setenv("WEB_CONCURRENCY", "4")
+    with pytest.raises(EmbeddedVectorStoreMultiprocessError):
+        QdrantVectorStore.local()
+
+
+def test_one_worker_is_not_refused(monkeypatch):
+    """The guard must not fire on the single-worker dev/test case it is aimed past."""
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "app.main:app", "--workers=1"])
+    monkeypatch.setenv("WEB_CONCURRENCY", "1")
+    assert QdrantVectorStore.local().mode == "local"
+
+
+def test_a_server_store_is_never_refused_for_being_multi_worker(monkeypatch):
+    """The server mode is the *answer* to more than one worker, so it must survive it."""
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "app.main:app", "--workers", "8"])
+    assert configured_worker_count() == (8, "--workers on the command line")
+    if not _live_server():
+        pytest.skip(f"no Qdrant node on {_LIVE_URL}")
+    assert QdrantVectorStore.server(url=_LIVE_URL, timeout=2.0).mode == "server"
+
+
+# ------------------------------------------------------------------- the live server
+
+
+#: The node the repo's own ``QDRANT_URL`` points at. These tests skip when it is down —
+#: the offline in-process tests above still cover the contract — but when it is up they
+#: are the only proof that the *server* path, the one Windows runs, actually works.
+_LIVE_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+
+
+def _live_server() -> bool:
+    try:
+        QdrantVectorStore.server(url=_LIVE_URL, timeout=2.0).close()
+    except Exception:  # noqa: BLE001 - absence of a node is a skip, not a failure
+        return False
+    return True
+
+
+def test_live_qdrant_server_round_trip():
+    """Write through Aegis's own path into a real node, read it back, then clean up."""
+    if not _live_server():
+        pytest.skip(f"no Qdrant node on {_LIVE_URL}")
+    store = QdrantVectorStore.server(url=_LIVE_URL, timeout=10.0)
+    name = f"aegis-livetest-{uuid.uuid4().hex[:8]}"
+    try:
+        store.ensure_collection(name, dim=3)
+        store.upsert(
+            name,
+            ids=["doc-0#3", "doc-1#0"],
+            vectors=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            payloads=[{"tenant_id": None}, {"tenant_id": 7}],
+        )
+        hits = store.search(name, [1.0, 0.0, 0.0], k=5)
+        assert [h.id for h in hits] == ["doc-0#3", "doc-1#0"]
+        assert hits[0].score == pytest.approx(1.0)
+        # The null-scope filter is exact against the real engine too, not just in-process.
+        scoped = store.search(name, [1.0, 0.0, 0.0], k=5, filter={"tenant_id": None})
+        assert [h.id for h in scoped] == ["doc-0#3"]
+    finally:
+        store._client.delete_collection(_safe_name(name))
+        store.close()

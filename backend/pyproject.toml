@@ -84,13 +84,13 @@ retrieval = [
     "lightrag-hku>=1.0",
     "neo4j>=5.24",
     "redis>=5.1",
-    # Chroma is THE vector DB for retrieval + memory recall, run EMBEDDED
-    # (``PersistentClient`` over a local directory) — no server binary and no port, which
-    # is what makes the stack installable on a locked-down enterprise machine. LightRAG's
-    # internal vectors use NanoVectorDB, which ships as a ``lightrag-hku`` dependency.
-    # Resolves cleanly against the pins held below (numba==0.67.0, numpy<2.5,
-    # pandas>=2.2,<2.4).
-    "chromadb>=1.5",
+    # Qdrant is THE vector DB, and the ONLY one (§9.1): `aegis.retrieval` and LightRAG's
+    # `QdrantVectorDBStorage` share one node via `QDRANT_URL`. Qdrant v1.19.0 ships
+    # `qdrant-x86_64-pc-windows-msvc.zip` — Apache-2.0, a zip with a binary, no Docker and
+    # no installer — so a locked-down enterprise machine still runs it, and a second
+    # uvicorn worker can finally share the index. `qdrant_client` keeps an in-process mode
+    # for tests and dev.
+    "qdrant-client>=1.12",
 ]
 # PDF ingestion (app.ingestion -> aegis.ingestion). The version is pinned in the aegis
 # package, where the code that depends on its exact behaviour lives; the backend declares

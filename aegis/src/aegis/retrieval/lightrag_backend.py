@@ -1,33 +1,41 @@
-"""LightRAG-backed knowledge store (Neo4j graph + embedded file-backed vectors).
+"""LightRAG-backed knowledge store (Neo4j graph + Qdrant vectors + Postgres KV).
 
 LightRAG is the *pipeline* (chunk → extract entities/relationships → embed → write
-graph and vectors → retrieve over both); Neo4j (graph), **NanoVectorDB** (vectors), and
+graph and vectors → retrieve over both); Neo4j (graph), **Qdrant** (vectors), and
 Postgres (KV + doc-status only) are the *stores*. Entity/relationship extraction and
 embeddings run via the injected `complete`/`embed` callables, so nothing heavy runs
 locally beyond LightRAG's own in-process bookkeeping.
 
-**Why NanoVectorDB and not a vector server.** Aegis must install on a locked-down
-enterprise Windows machine where no extra server binary may be installed, so the vector
-tier cannot be a service. The server-free options LightRAG 1.5.6 actually offers were
-enumerated against the installed package rather than its docs:
+**Why Qdrant, and what it replaced (§9.1).** This backend used to run
+``NanoVectorDBStorage``, chosen because the target Windows machine forbids installing a
+server. Its own docstring calls it a brute-force cosine scan held in memory, persisted
+by rewriting a whole JSON file — so it is linear in corpus size, it assumes a **single
+writing process**, and it is one of the two reasons ``uvicorn --workers 2`` could not
+work. Qdrant v1.19.0 publishes ``qdrant-x86_64-pc-windows-msvc.zip``: Apache-2.0, a zip
+with a binary, no Docker and no installer — the same operational shape as Superset,
+which this deployment already runs. The premise that a vector service was
+un-installable did not survive checking, so the option that removes the ceiling is
+taken.
 
-* ``NanoVectorDBStorage`` — imports cleanly; pure Python, file-backed under
-  ``working_dir``; LightRAG's own default. **Chosen.**
+The options were enumerated against the installed 1.5.6 package rather than its docs:
+
+* ``QdrantVectorDBStorage`` (``lightrag/kg/qdrant_impl.py``, registered in
+  ``kg/__init__.py``) — batched upserts, payload-size limits, a ``QDRANT_WORKSPACE``
+  namespace override, and it reads **``QDRANT_URL``**, the same variable
+  :mod:`aegis.retrieval.vector_store` is pointed at. One engine for both consumers.
+  **Chosen.**
+* ``NanoVectorDBStorage`` — LightRAG's default, and what this replaces. See above.
 * ``ChromaVectorDBStorage`` — declared in ``lightrag.kg.STORAGES`` but its module
   (``lightrag.kg.chroma_impl``) **does not ship** in 1.5.6, so it cannot be selected.
-  (Chroma is still used directly by :mod:`aegis.retrieval.vector_store` for Aegis's own
-  store — that path does not go through LightRAG.)
+  Chroma could therefore never have served this half, which is why §9.1 deleted it from
+  Aegis's half too rather than running two vector systems.
 * ``FaissVectorDBStorage`` — needs the ``faiss`` wheel, an extra native dependency.
-* ``PGVectorStorage`` — server-free only in the sense that Postgres is already a
-  dependency, but it requires the ``pgvector`` **extension** to be installed into the
-  server, which is exactly the kind of privileged native install the target box forbids
-  (and this repo deliberately removed pgvector already).
+* ``PGVectorStorage`` — requires the ``pgvector`` **extension** installed into the
+  server, exactly the kind of privileged native install the target box forbids (and this
+  repo deliberately removed pgvector already).
 
-The honest cost of NanoVectorDB: it is a brute-force cosine scan held in memory and
-persisted to JSON, not an HNSW index, so query cost grows linearly with the corpus and
-it assumes a single writing process. At Aegis's corpus scale that is a good trade for
-"zero servers"; at very large scale the fix is to point ``vector_storage`` at a real
-service again, which is a one-line change here.
+The honest cost: Qdrant is a second process to keep alive next to Postgres, Neo4j and
+Memurai, and existing NanoVectorDB vectors are **re-ingested, not migrated**.
 
 **The lexical arm deliberately does not go through LightRAG.** :meth:`
 LightRAGBackend.keyword_recall` queries the ``chunks`` table directly with PostgreSQL
@@ -189,18 +197,28 @@ _ENTITY_TYPES: tuple[str, ...] = (
 
 
 def _apply_store_env(config: object) -> None:
-    """Export Neo4j/Postgres connection settings as the env vars LightRAG reads.
+    """Export Neo4j/Postgres/Qdrant connection settings as the env vars LightRAG reads.
 
     LightRAG's storage impls read connection details from the environment (`NEO4J_*`,
-    `POSTGRES_*`) rather than constructor kwargs, so we translate the store config into
-    those variables before building the instance. The vector store needs nothing here:
-    ``NanoVectorDBStorage`` is file-backed under ``working_dir``, so there is no host,
-    port or credential to export. Postgres remains only for the KV + doc-status stores.
+    `POSTGRES_*`, `QDRANT_URL`) rather than constructor kwargs, so we translate the store
+    config into those variables before building the instance. ``QDRANT_URL`` is the same
+    variable :mod:`aegis.retrieval.vector_store` is configured from, which is the point:
+    both vector consumers name one node, so they cannot drift onto two.
+
+    ``setdefault`` throughout — an operator who already exported a value in the
+    environment outranks a config default, and silently overwriting it would send a
+    process at a node nobody chose.
 
     Args:
         config: An object exposing ``neo4j_uri``/``neo4j_user``/``neo4j_password``/
-            ``postgres_dsn`` (duck-typed — a `RetrievalConfig` in practice).
+            ``postgres_dsn``/``qdrant_url`` (duck-typed — a `RetrievalConfig` in practice).
     """
+    qdrant_url = getattr(config, "qdrant_url", "") or ""
+    if qdrant_url:
+        os.environ.setdefault("QDRANT_URL", qdrant_url)
+    qdrant_api_key = getattr(config, "qdrant_api_key", "") or ""
+    if qdrant_api_key:
+        os.environ.setdefault("QDRANT_API_KEY", qdrant_api_key)
     os.environ.setdefault("NEO4J_URI", config.neo4j_uri)
     os.environ.setdefault("NEO4J_USERNAME", config.neo4j_user)
     os.environ.setdefault("NEO4J_PASSWORD", config.neo4j_password)
@@ -217,8 +235,40 @@ def _apply_store_env(config: object) -> None:
         os.environ.setdefault("POSTGRES_DATABASE", pg.path.lstrip("/"))
 
 
+def lightrag_embedding_adapter(embed: EmbedFn) -> object:
+    """Wrap an :class:`~aegis.retrieval.protocols.EmbedFn` for LightRAG's ``EmbeddingFunc``.
+
+    Two adaptations, both load-bearing rather than cosmetic — and both verified against
+    the installed ``lightrag==1.5.6`` rather than its docs:
+
+    * **numpy, not a list.** ``EmbeddingFunc.__call__`` validates its result with
+      ``result.size`` (``lightrag/utils.py``) and the vector storages then
+      ``np.concatenate`` it. ``EmbedFn`` returns ``list[list[float]]``, so handing it over
+      unwrapped raises ``AttributeError: 'list' object has no attribute 'size'`` on the
+      **first embed of every ingest**. This is not specific to Qdrant: ``NanoVectorDB``
+      called the very same wrapper, so the LightRAG path had this defect all along and
+      §9.1 is simply the change that made someone run it.
+    * **Tolerate LightRAG's own keyword arguments.** It calls the wrapped function with
+      ``context="document"``, and its priority limiter adds ``_priority``. A
+      single-parameter lambda raises ``TypeError`` on either.
+
+    Args:
+        embed: The host's embedding callable.
+
+    Returns:
+        An async callable LightRAG can hand to ``EmbeddingFunc(func=...)``.
+    """
+
+    async def _embed_for_lightrag(texts: Sequence[str], **_: object) -> object:
+        import numpy as np  # lazy: numpy arrives with lightrag, not at package import
+
+        return np.asarray(await embed(list(texts)), dtype=np.float32)
+
+    return _embed_for_lightrag
+
+
 class LightRAGBackend:
-    """A `KnowledgeBackend` on LightRAG with Neo4j + NanoVectorDB (+ Postgres KV).
+    """A `KnowledgeBackend` on LightRAG with Neo4j + Qdrant (+ Postgres KV).
 
     The instance is built lazily on first use and reused thereafter. Construction is
     injected with `complete`/`embed` so extraction and embedding route through
@@ -295,7 +345,6 @@ class LightRAGBackend:
         from lightrag.utils import EmbeddingFunc
 
         _apply_store_env(self._config)
-        embed = self._embed
 
         rag = LightRAG(
             working_dir=self._working_dir,
@@ -303,14 +352,16 @@ class LightRAGBackend:
             embedding_func=EmbeddingFunc(
                 embedding_dim=_EMBED_DIM,
                 max_token_size=_EMBED_MAX_TOKENS,
-                func=lambda texts: embed(texts),
+                func=lightrag_embedding_adapter(self._embed),
             ),
             kv_storage="PGKVStorage",
-            # Vectors live in NanoVectorDB — a file-backed, pure-Python store under
-            # ``working_dir``, so LightRAG's vector tier needs no server binary (see the
-            # module docstring for the options that were rejected and why). Postgres
-            # remains only for the KV + doc-status stores below.
-            vector_storage="NanoVectorDBStorage",
+            # Vectors live in Qdrant — the same node aegis.retrieval writes to, reached
+            # through ``QDRANT_URL`` exported above (§9.1). This replaces
+            # ``NanoVectorDBStorage``, whose own docstring calls it a brute-force cosine
+            # scan held in memory and persisted as a whole-file JSON rewrite: linear in
+            # corpus size and single-writer, i.e. one of the two reasons a second uvicorn
+            # worker could not work. Postgres remains only for the KV + doc-status stores.
+            vector_storage="QdrantVectorDBStorage",
             graph_storage="Neo4JStorage",
             doc_status_storage="PGDocStatusStorage",
             # Steer extraction into typed, domain-relevant nodes and re-glean once so

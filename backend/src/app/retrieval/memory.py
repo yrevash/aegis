@@ -1,6 +1,6 @@
 """Backend shim: the lite/no-database retrieval backend now lives in ``aegis.retrieval.memory``.
 
-``STORES=off`` swaps the LightRAG (Neo4j + NanoVectorDB) backend and the Redis semantic
+``STORES=off`` swaps the LightRAG (Neo4j + Qdrant) backend and the Redis semantic
 cache for the self-contained equivalents, so the full agentic slice runs with no
 databases. ``aegis.retrieval``'s ``InMemoryKnowledgeBackend.from_corpus`` takes an
 explicit ``path``/``docs`` argument (the package has no notion of this platform's
@@ -19,7 +19,7 @@ from aegis.retrieval.memory import (
     _local_embed,  # noqa: F401 - re-exported for existing tests
 )
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever, build_local_reranker
-from aegis.retrieval.vector_store import ChromaVectorStore
+from aegis.retrieval.vector_store import QdrantVectorStore
 
 from app.config import Settings
 
@@ -44,7 +44,7 @@ class InMemoryKnowledgeBackend(_InMemoryKnowledgeBackend):
         docs: object | None = None,
         chunk_size: int = 400,
         overlap: int = 60,
-        vector_store: ChromaVectorStore | None = None,
+        vector_store: QdrantVectorStore | None = None,
     ) -> InMemoryKnowledgeBackend:
         """Build a backend from ``path``/``docs``, or this app's adapter corpus.
 
@@ -87,7 +87,7 @@ def build_lite_retriever(settings: Settings) -> Retriever:
         # Lite mode IS the ephemeral engine, so it says so rather than inheriting the
         # process-wide store declaration (§8.4). A retriever built here is deliberately
         # non-durable; a caller that wanted durability wired the full stores instead.
-        vector_store=ChromaVectorStore.local(),
+        vector_store=QdrantVectorStore.local(),
     )
     cache = SemanticCache(
         InMemoryRedis(),

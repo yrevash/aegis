@@ -1,20 +1,21 @@
-"""Semantic recall for the memory tiers — Chroma ANN, never in-Python cosine.
+"""Semantic recall for the memory tiers — Qdrant ANN, never in-Python cosine.
 
 Memory's vector recall (nearest facts / turns) runs through a real
-:class:`~aegis.retrieval.vector_store.ChromaVectorStore` — the official chromadb engine —
+:class:`~aegis.retrieval.vector_store.QdrantVectorStore` — the official ``qdrant_client`` —
 instead of a pgvector ``<=>`` scan or a hand-rolled cosine loop over a Python list. The
 durable relational tier stays authoritative: the **Postgres row is the source of truth**
-and the Chroma point only carries the row id (plus tenant/subject scope) in its metadata,
+and the Qdrant point only carries the row id (plus tenant/subject scope) in its payload,
 so every hit is joined back to its authoritative row before it is returned.
 
 Isolation is enforced twice, on purpose:
 
-* **Chroma metadata filter** — every search is scoped by ``subject_id`` **and**
+* **Qdrant payload filter** — every search is scoped by ``subject_id`` **and**
   ``tenant_id``, so the ANN engine never even ranks another subject's/tenant's points.
   The tenant condition is NULL-symmetric: ``tenant_id=None`` is the *null-tenant scope*,
   matching null-tenant points only, never a wildcard over every tenant. (The store
-  encodes that ``None`` as an explicit sentinel, because Chroma would otherwise drop the
-  key entirely and turn the condition into "no condition".)
+  encodes that ``None`` as an explicit sentinel, because Qdrant's ``MatchValue`` cannot
+  express a JSON null — so the condition would have to be dropped, turning it into "no
+  condition".)
 * **SQL re-filter (source of truth)** — the returned point ids are loaded back from the
   authoritative table with the SAME ``subject_id`` / ``tenant_id`` predicates (plus
   ``valid_only`` / ``predicate`` where asked). A stale or mis-scoped point can therefore
@@ -22,14 +23,14 @@ Isolation is enforced twice, on purpose:
 
 Because validity (Zep ``invalid_at`` / ``expired_at`` supersession) and predicate matching
 are authoritative SQL concerns, they are applied at the SQL join rather than mirrored into
-Chroma — the index only has to answer "which of this subject's rows are nearest", and SQL
+Qdrant — the index only has to answer "which of this subject's rows are nearest", and SQL
 decides which of those are still eligible. This keeps the vector index free of the
 bitemporal bookkeeping and impossible to desync from the truth.
 
 The embedding of record still lives on the ORM row's ``embedding`` column (written by the
 injected embedder on the consolidation/ingest path). The column is no longer *searched*;
-it is **incrementally** mirrored into the Chroma collection for the subject on the
-recall/reconcile path, and the ANN search runs against Chroma. One collection is used per
+it is **incrementally** mirrored into the Qdrant collection for the subject on the
+recall/reconcile path, and the ANN search runs against Qdrant. One collection is used per
 ``(memory kind, embedding dim)`` so a lite 256-dim vector is never compared against a
 full-dim one — exactly the dim-skip the old cosine path did, now expressed as collection
 routing.
@@ -40,16 +41,19 @@ a per-scope high-water mark on the primary key is a sound sync cursor. Only rows
 than the mark are read and upserted, which is what makes the ANN path cheaper than the
 cosine loop it replaced instead of strictly worse than it.
 
-Every chromadb call is synchronous (an HTTP round-trip in server mode, a blocking native
+Every qdrant_client call is synchronous (an HTTP round-trip in server mode, a blocking native
 call in embedded mode), so each one is run in a worker thread — the recall path is
 ``async`` and must never block the event loop.
 
 Modes follow the store's contract: ``server`` fails loud if the node is unreachable;
-``local`` is the embedded, offline chroma engine (``:memory:`` for tests, on-disk for dev)
-— a real HNSW index that needs **no server binary at all**, and **never** an in-RAM dict
-fallback. There is **no implicit process-wide default**: a host installs the index it
+``local`` is the embedded, offline in-process engine (``:memory:`` for tests, on-disk for
+dev) — the client's own implementation of the same API, needing **no server binary at
+all**, and **never** an in-RAM dict fallback. It is single-process by construction, so
+building one under ``--workers>1`` refuses rather than corrupting the index (§9.1).
+
+There is **no implicit process-wide default**: a host installs the index it
 wants with :func:`set_default_index` (the backend does exactly that at startup — the
-on-disk store for a real deployment, the explicit ephemeral one for dev), and recall
+shared Qdrant node for a real deployment, the explicit ephemeral one for dev), and recall
 raises until it does rather than conjuring a non-durable index nobody asked for.
 """
 
@@ -62,7 +66,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.retrieval.vector_store import (
-    ChromaVectorStore,
+    QdrantVectorStore,
     VectorStoreNotConfiguredError,
 )
 
@@ -75,15 +79,15 @@ _COLLECTION_PREFIX = "aegis_mem"
 
 
 class MemoryVectorIndex:
-    """A Chroma-backed semantic index over the memory ORM rows.
+    """A Qdrant-backed semantic index over the memory ORM rows.
 
-    Wraps a single :class:`~aegis.retrieval.vector_store.ChromaVectorStore`. The store's
+    Wraps a single :class:`~aegis.retrieval.vector_store.QdrantVectorStore`. The store's
     mode (``server`` / embedded ``local``) is chosen at construction and is honest at every
     call site — there is no silent RAM fallback.
     """
 
     def __init__(
-        self, store: ChromaVectorStore, *, collection_prefix: str = _COLLECTION_PREFIX
+        self, store: QdrantVectorStore, *, collection_prefix: str = _COLLECTION_PREFIX
     ) -> None:
         """Hold the vector store this index mirrors memory rows into and searches."""
         self._store = store
@@ -95,7 +99,7 @@ class MemoryVectorIndex:
     @classmethod
     def local(cls, *, path: str | None = None) -> MemoryVectorIndex:
         """Build an embedded, offline index (on-disk ``path`` or ``:memory:``)."""
-        return cls(ChromaVectorStore.local(path=path))
+        return cls(QdrantVectorStore.local(path=path))
 
     @classmethod
     def server(
@@ -105,13 +109,13 @@ class MemoryVectorIndex:
         api_key: str | None = None,
         timeout: float | None = None,
     ) -> MemoryVectorIndex:
-        """Build an index against a live Chroma server (fail loud if it is down)."""
+        """Build an index against a live Qdrant server (fail loud if it is down)."""
         return cls(
-            ChromaVectorStore.server(url=url, api_key=api_key, timeout=timeout)
+            QdrantVectorStore.server(url=url, api_key=api_key, timeout=timeout)
         )
 
     @property
-    def store(self) -> ChromaVectorStore:
+    def store(self) -> QdrantVectorStore:
         """The underlying vector store (for honest logging / isolation proofs)."""
         return self._store
 
@@ -132,7 +136,7 @@ class MemoryVectorIndex:
         """Mirror this scope's **newly-added** embedded rows into ``collection``.
 
         Reads the embedding of record from the ORM rows (the durable column) and upserts
-        the same-dim ones into Chroma under the row's own tenant/subject scope. Re-upsert
+        the same-dim ones into Qdrant under the row's own tenant/subject scope. Re-upsert
         is idempotent: the row id **is** the collection-scoped point id, so a repeat
         replaces in place rather than duplicating.
 
@@ -181,7 +185,7 @@ class MemoryVectorIndex:
                 {_SUBJECT_KEY: row.subject_id, _TENANT_KEY: row.tenant_id}
             )
         if ids:
-            # chromadb is synchronous; keep the round-trips off the event loop.
+            # qdrant_client is synchronous; keep the round-trips off the event loop.
             await asyncio.to_thread(self._store.ensure_collection, collection, dim)
             await asyncio.to_thread(self._store.upsert, collection, ids, vectors, payloads)
         # Advance past every row *considered*, including the dim-mismatched ones that
@@ -200,13 +204,13 @@ class MemoryVectorIndex:
         valid_only: bool = False,
         predicate: str | None = None,
     ) -> list[tuple[Any, float]]:
-        """Return the ``k`` rows nearest ``query_vec`` via Chroma, joined back to SQL.
+        """Return the ``k`` rows nearest ``query_vec`` via Qdrant, joined back to SQL.
 
         Same contract as the old cosine helper, but the ranking is a real ANN search:
 
         1. Mirror the scope's rows added since the last sync into the ``(kind, dim)``
            collection (incremental — see :meth:`_sync_subject`).
-        2. ANN-search Chroma, scoped by ``subject_id`` **and** ``tenant_id``, over-fetching
+        2. ANN-search Qdrant, scoped by ``subject_id`` **and** ``tenant_id``, over-fetching
            so the authoritative SQL filter below can still yield ``k`` eligible rows.
         3. Load the hit ids back from the authoritative table under the SAME scope plus
            ``valid_only`` / ``predicate`` — the source-of-truth gate. Rows that are gone,
@@ -228,18 +232,18 @@ class MemoryVectorIndex:
             dim=dim,
         )
 
-        # Chroma metadata pre-filter, NULL-symmetric on tenant. ``tenant_id`` is ALWAYS
+        # Qdrant payload pre-filter, NULL-symmetric on tenant. ``tenant_id`` is ALWAYS
         # part of the scope — including when it is ``None``, which means the *null-tenant*
         # scope and matches null-tenant points only. Dropping the key for a null tenant
-        # (as the Qdrant path had to, lacking a matchable null) would turn the condition
+        # (which is what a store lacking a matchable null forces) would turn the condition
         # into "any tenant" and hand a colliding subject id another tenant's points; the
         # store encodes ``None`` as an explicit sentinel precisely so this stays exact.
         # SQL still re-gates below — defence in depth, not a substitute.
         scope: dict[str, Any] = {_SUBJECT_KEY: subject_id, _TENANT_KEY: tenant_id}
-        # Over-fetch: SQL may drop invalidated/expired/off-predicate hits, so ask Chroma
+        # Over-fetch: SQL may drop invalidated/expired/off-predicate hits, so ask Qdrant
         # for more than k and let the authoritative join trim back to the eligible top-k.
         fetch_k = k * 4 + 16 if (valid_only or predicate is not None) else k
-        # Synchronous chromadb call → off the event loop (a server-mode search is a
+        # Synchronous qdrant_client call → off the event loop (a server-mode search is a
         # network round-trip and this runs on the hot recall path).
         hits = await asyncio.to_thread(
             self._store.search, collection, query_vec, fetch_k, filter=scope
@@ -302,7 +306,7 @@ def get_default_index() -> MemoryVectorIndex:
     """Return the process-wide memory index, or fail loud if none was configured.
 
     There is no lazily-built default any more (§8.4). Until this raised, a host that
-    forgot :func:`set_default_index` got an ephemeral ``:memory:`` Chroma engine on
+    forgot :func:`set_default_index` got an ephemeral ``:memory:`` Qdrant engine on
     first recall: memory appeared to work, every fact it "remembered" was lost on
     restart, and nothing in the logs or on the wire said so. A missing step now names
     itself, exactly as ``aegis.governance``'s ``configure_audit`` already did.
@@ -319,8 +323,8 @@ def get_default_index() -> MemoryVectorIndex:
         raise VectorStoreNotConfiguredError(
             "aegis.memory has no vector index configured, so semantic recall has "
             "nowhere to search. Call "
-            "aegis.memory.set_default_index(MemoryVectorIndex.local(path=...)) at "
-            "startup for a DURABLE on-disk index, or "
+            "aegis.memory.set_default_index(MemoryVectorIndex.server(url=...)) at "
+            "startup for a DURABLE, multi-process Qdrant node, or "
             "set_default_index(MemoryVectorIndex.local()) to choose the EPHEMERAL "
             "in-process engine explicitly (dev/tests). It used to build the ephemeral "
             "one for you on first use, so a forgotten call looked exactly like working "
@@ -352,11 +356,11 @@ async def topk_by_cosine(
     valid_only: bool = False,
     predicate: str | None = None,
 ) -> list[tuple[Any, float]]:
-    """Top-k semantic recall for ``model``, subject-scoped, via the default Chroma index.
+    """Top-k semantic recall for ``model``, subject-scoped, via the default Qdrant index.
 
     Thin seam over :meth:`MemoryVectorIndex.search_rows` on the process-wide index, kept
     at this name/signature so recall + consolidation call sites (and the backend shim) are
-    unchanged while the engine underneath is Chroma, not in-Python cosine.
+    unchanged while the engine underneath is Qdrant, not in-Python cosine.
     """
     if not query_vec or k <= 0:
         return []

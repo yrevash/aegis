@@ -1,6 +1,6 @@
 """Phase 1 — the retrieval arsenal is real, selectable, and observable.
 
-These tests prove, offline (no Neo4j/Redis/network — an embedded ``:memory:`` Chroma
+These tests prove, offline (no Neo4j/Redis/network — an embedded ``:memory:`` Qdrant
 and injected fakes), that:
 
 * every recall arm can fire and its candidate count is *measured*, not fabricated;
@@ -47,7 +47,7 @@ _RERANK = '{"scores": [{"id": 0, "score": 9}, {"id": 1, "score": 4}, {"id": 2, "
 
 
 def _lite_retriever(config: RetrievalConfig | None = None) -> Retriever:
-    """A databaseless lite retriever over ``_DOCS`` (offline embedder + Chroma :memory:)."""
+    """A databaseless lite retriever over ``_DOCS`` (offline embedder + Qdrant :memory:)."""
     backend = InMemoryKnowledgeBackend.from_corpus(docs=_DOCS)
     cache = SemanticCache(InMemoryRedis(), ttl_seconds=60, similarity_threshold=0.985)
     complete = RecordingComplete(_RERANK)

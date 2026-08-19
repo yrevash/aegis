@@ -271,3 +271,77 @@ async def test_ingest_report_carries_real_counts_through_pipeline():
     assert report.relations is not None and report.relations > 0
     assert report.entities == 2 * report.chunks_written
     assert report.relations == report.chunks_written
+
+
+# ─────────────────────────────────────────── the storage selection and its seams (§9.1)
+
+
+async def test_the_embedding_adapter_gives_lightrag_what_it_actually_validates():
+    """REGRESSION: LightRAG validates ``result.size``, so a list crashes every ingest.
+
+    ``EmbeddingFunc.__call__`` (lightrag 1.5.6) reads ``result.size`` off whatever the
+    wrapped callable returns, and the vector storages then ``np.concatenate`` it — but
+    :class:`~aegis.retrieval.protocols.EmbedFn` returns ``list[list[float]]``. Handing it
+    over unwrapped raised ``AttributeError: 'list' object has no attribute 'size'`` on the
+    *first* embed of any ingest. Not a Qdrant-specific defect: NanoVectorDB called the
+    same wrapper, so this path was broken before §9.1 selected a different storage.
+    """
+    from lightrag.utils import EmbeddingFunc
+
+    from aegis.retrieval.lightrag_backend import lightrag_embedding_adapter
+
+    async def embed(texts: Sequence[str]) -> list[list[float]]:
+        return [[0.5, 0.5, 0.5] for _ in texts]
+
+    wrapped = EmbeddingFunc(
+        embedding_dim=3, max_token_size=8, func=lightrag_embedding_adapter(embed)
+    )
+    # ``context=`` is what the storages pass; the priority limiter adds ``_priority``.
+    result = await wrapped(["a", "b"], context="document")
+    assert result.size == 6  # the attribute LightRAG reads, on the object it gets back
+
+
+def test_vectors_are_configured_onto_qdrant_and_kv_stays_on_postgres(monkeypatch):
+    """§9.1: the LightRAG instance must ask for Qdrant, not the JSON-backed default.
+
+    Pinned because ``vector_storage`` is a *string*: a typo or a revert reads as working
+    configuration and silently restores NanoVectorDB — a brute-force in-memory scan
+    persisted by rewriting a whole JSON file, and single-writer, which is the ceiling this
+    task removed.
+    """
+    import lightrag as lightrag_pkg
+
+    from aegis.retrieval import lightrag_backend as module
+
+    captured: dict[str, object] = {}
+
+    class _FakeRAG:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def initialize_storages(self) -> None: ...
+
+    async def _noop_pipeline_status() -> None: ...
+
+    monkeypatch.setattr(lightrag_pkg, "LightRAG", _FakeRAG)
+    monkeypatch.setattr(
+        "lightrag.kg.shared_storage.initialize_pipeline_status", _noop_pipeline_status
+    )
+    monkeypatch.setenv("QDRANT_URL", "")  # cleared, so the config value is what lands
+    monkeypatch.delenv("QDRANT_URL", raising=False)
+
+    backend = module.LightRAGBackend(
+        RecordingComplete("unused"),
+        SequenceEmbed([[1.0, 0.0]]),
+        config=RetrievalConfig(qdrant_url="http://qdrant.test:6333"),
+    )
+    import asyncio
+
+    asyncio.run(backend._ensure())
+
+    assert captured["vector_storage"] == "QdrantVectorDBStorage"
+    assert captured["kv_storage"] == "PGKVStorage"  # KV is off files, on Postgres
+    # The URL reaches LightRAG the only way its storages read it: the environment.
+    import os
+
+    assert os.environ["QDRANT_URL"] == "http://qdrant.test:6333"

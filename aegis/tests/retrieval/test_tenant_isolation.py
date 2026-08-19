@@ -32,7 +32,7 @@ from aegis.retrieval.types import (
     tenant_collection_name,
     tenant_metadata_value,
 )
-from aegis.retrieval.vector_store import ChromaVectorStore
+from aegis.retrieval.vector_store import QdrantVectorStore
 
 from .conftest import FakeBackend, FakeRedis, RecordingComplete, SequenceEmbed, make_recall
 
@@ -246,8 +246,8 @@ async def test_ingest_ledger_is_per_tenant_so_two_tenants_can_hold_one_document(
 
 
 async def _lite_backend() -> InMemoryKnowledgeBackend:
-    """Build one shared embedded-Chroma backend holding two tenants' + shared chunks."""
-    backend = InMemoryKnowledgeBackend([], vector_store=ChromaVectorStore.local())
+    """Build one shared in-process Qdrant backend holding two tenants' + shared chunks."""
+    backend = InMemoryKnowledgeBackend([], vector_store=QdrantVectorStore.local())
     retriever = Retriever(
         backend=backend,
         cache=SemanticCache(FakeRedis(), ttl_seconds=60, similarity_threshold=0.985),
@@ -275,7 +275,7 @@ async def _lite_backend() -> InMemoryKnowledgeBackend:
     return backend
 
 
-async def test_vector_arm_filters_by_tenant_in_the_chroma_query():
+async def test_vector_arm_filters_by_tenant_in_the_qdrant_query():
     """One embedded store, three owners: a tenant sees its own rows plus the shared ones."""
     backend = await _lite_backend()
     ranked = await backend.recall_ranked(
@@ -353,11 +353,11 @@ class _RecordingStore:
     The assertion "nothing leaked" is weaker than the assertion "nothing was even
     looked at", and only the second one can distinguish *refusing* to search from
     searching everything and filtering the results afterwards. This wrapper is what makes
-    the second one available: it delegates every call to the real embedded Chroma store
+    the second one available: it delegates every call to the real in-process Qdrant store
     and keeps a list of the collection names ``search`` was asked for.
     """
 
-    def __init__(self, inner: ChromaVectorStore) -> None:
+    def __init__(self, inner: QdrantVectorStore) -> None:
         self._inner = inner
         self.searched: list[str] = []
 
@@ -374,7 +374,7 @@ class _RecordingStore:
 
 async def _recording_backend() -> InMemoryKnowledgeBackend:
     """Build a lite backend over a recording store holding all three passages."""
-    backend = InMemoryKnowledgeBackend([], vector_store=_RecordingStore(ChromaVectorStore.local()))
+    backend = InMemoryKnowledgeBackend([], vector_store=_RecordingStore(QdrantVectorStore.local()))
     retriever = Retriever(
         backend=backend,
         cache=SemanticCache(FakeRedis(), ttl_seconds=60, similarity_threshold=0.985),
@@ -421,7 +421,7 @@ async def test_two_tenants_asking_the_same_question_get_disjoint_passages():
 
 
 async def test_a_tenants_vectors_live_in_a_collection_of_their_own():
-    """Each tenant's rows are a separate Chroma collection, and a read touches only its own.
+    """Each tenant's rows are a separate Qdrant collection, and a read touches only its own.
 
     The names are asserted because they are the boundary: ``aegis_chunks_t1`` cannot be
     reached by a query against ``aegis_chunks_t2`` no matter what filter that query
@@ -509,7 +509,7 @@ async def test_the_scope_filter_keeps_a_null_owner_from_matching_a_real_tenant()
     """The shared corpus's null sentinel is not a wildcard, at the filter level.
 
     This is the specific closure ``_scope_filter``'s docstring points at: the store
-    encodes a ``None`` owner as an explicit null sentinel rather than letting Chroma drop
+    encodes a ``None`` owner as an explicit null sentinel rather than letting Qdrant drop
     the key, because a dropped key matches every ``where`` clause. Both directions are
     asserted, so a regression that turns either "no tenant" or "some tenant" into "any
     tenant" fails here.

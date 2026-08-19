@@ -41,11 +41,13 @@ retrieval = [
     # the deploy box has no GPU. The reranker asks for `CPUExecutionProvider` explicitly
     # anyway, so an onnxruntime-gpu that arrived some other way cannot silently take over.
     "fastembed==0.8.0",
-    # Chroma is THE vector store for retrieval + memory recall, run EMBEDDED
-    # (``PersistentClient`` over a local directory). No server binary, no port — the
-    # constraint that lets Aegis install on a locked-down enterprise machine. LightRAG's
-    # own internal vectors use NanoVectorDB, which ships with ``lightrag-hku``.
-    "chromadb>=1.5",
+    # Qdrant is THE vector store, and the ONLY one (§9.1): both `aegis.retrieval` and
+    # LightRAG's `QdrantVectorDBStorage` write to one node, reached through `QDRANT_URL`.
+    # Chroma was deleted rather than demoted — its embedded `PersistentClient` holds a
+    # SQLite metadata lock, which is what makes `uvicorn --workers 2` fail, and a ceiling
+    # you can still configure your way back into is not removed. `qdrant_client` also
+    # provides a real in-process mode, so tests and dev still need no server at all.
+    "qdrant-client>=1.12",
     # Postgres stays for LightRAG's KV + doc-status stores, hence asyncpg.
     "asyncpg>=0.29",
 ]

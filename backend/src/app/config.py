@@ -52,6 +52,26 @@ class Settings(BaseSettings):
     # and enforced as a hard outer backstop via ``asyncio.wait_for`` so a hung
     # upstream can never block a run indefinitely.
     llm_timeout_seconds: float = Field(default=60.0)
+    # How many model calls this DEPLOYMENT — every process, not every interpreter —
+    # may have in flight against the gateway at once. Five users asking four-agent
+    # questions is twenty simultaneous calls, and the number that matters upstream is
+    # the total across the API process and every worker.
+    #
+    # It is not a third bound competing with ``agent.team.max_parallel`` (how wide ONE
+    # turn fans out, per tenant) or ``QueueSpec.max_concurrent_activities`` (how many
+    # activities ONE worker process runs). Those two bound a run and a box; this one
+    # bounds the shared provider, which is the only one of the three that has a rate
+    # limit of its own. The other two are inputs to the arithmetic — users ×
+    # max_parallel, workers × activity slots — and this is the ceiling that arithmetic
+    # is held under.
+    #
+    # 0 disables the limiter entirely (and the platform surface then reports
+    # ``scope="unlimited"`` rather than a number it is not holding).
+    gateway_max_concurrent_calls: int = Field(default=12)
+    # How long a caller queues for a slot before it is refused with a reason. A model
+    # call that waits forever is indistinguishable, to the person who asked, from one
+    # that was lost.
+    gateway_slot_wait_seconds: float = Field(default=60.0)
 
     # ── Stores ───────────────────────────────────────────────────────────────
     # The **serving** DSN: the connection every request runs on. It must name a role
@@ -74,13 +94,24 @@ class Settings(BaseSettings):
     neo4j_user: str = Field(default="neo4j")
     neo4j_password: str = Field(default="")
     redis_url: str = Field(default="redis://localhost:6379/0")
-    # The vector store is EMBEDDED and file-backed — the ANN engine behind retrieval +
-    # memory recall runs in this process, so there is no server binary to install and no
-    # port to open. That is what makes Aegis installable on a locked-down enterprise
-    # machine. (pgvector was removed earlier; the SQL ``embedding`` columns are now only
-    # the JSON source-of-record.) In full stores mode this directory must be usable —
-    # boot fails loud if it is not, exactly like Postgres/Redis — and tests use an
-    # explicit in-memory engine, never a silent RAM fallback.
+    # The vector tier is a Qdrant NODE, and there is exactly one of it (§9.1): both
+    # ``aegis.retrieval`` and LightRAG's ``QdrantVectorDBStorage`` write here. It stopped
+    # being embedded because an embedded store is single-process — Chroma's
+    # ``PersistentClient`` holds a SQLite metadata lock, which is precisely why
+    # ``uvicorn --workers 2`` could not work. Qdrant v1.19.0 ships a Windows zip with one
+    # Apache-2.0 binary (no Docker, no installer), so the locked-down enterprise machine
+    # still runs it. (pgvector was removed earlier; the SQL ``embedding`` columns are now
+    # only the JSON source-of-record.) In full stores mode the node must answer — boot
+    # fails loud if it does not, exactly like Postgres/Redis — and tests use the client's
+    # explicit in-process mode, never a silent RAM fallback.
+    #
+    # Read from ``QDRANT_URL``, which is the variable LightRAG's own storage reads: one
+    # node deserves one variable, and two of them is how the two consumers drift apart.
+    qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
+    # Optional token for a secured Qdrant node (empty means an unauthenticated node).
+    qdrant_api_key: str = Field(default="", alias="QDRANT_API_KEY")
+    # LightRAG's local working directory — its own bookkeeping. No vectors and no KV live
+    # here any more (vectors moved to Qdrant, KV to Postgres), so it is not a store.
     vector_store_path: str = Field(default="vector_storage")
 
     # ── Agent checkpointer (durable-execution seam; §1.3) ────────────────────
@@ -286,7 +317,7 @@ class Settings(BaseSettings):
     rerank_local: bool = Field(default=True)
 
     # ── Run mode (see docs/operations/runbook.md) ───────────────────────────────────────
-    # "on" (default) uses the real stores — LightRAG over Neo4j + NanoVectorDB with a
+    # "on" (default) uses the real stores — LightRAG over Neo4j + Qdrant with a
     # Redis semantic cache. "off" runs a self-contained in-memory backend + cache
     # (no databases) — the "lite" demo mode that needs only the model gateway.
     stores: str = Field(default="on")
@@ -383,6 +414,64 @@ class Settings(BaseSettings):
     db_console_max_plan_cost: float = Field(
         default=5_000_000.0, validation_alias="AEGIS_DB_CONSOLE_MAX_PLAN_COST"
     )
+
+    # ── Postgres connection pools (§9.4) ─────────────────────────────────────
+    # These were **entirely unconfigured**, which meant SQLAlchemy's defaults —
+    # ``pool_size=5, max_overflow=10, pool_timeout=30`` — across two engines plus
+    # whatever the worker ran on. The failure mode of that is not an error: a request
+    # that cannot get a connection *waits thirty seconds* and then raises a message
+    # naming the pool but not the deployment, which on a demo looks exactly like a hang.
+    #
+    # THE ARITHMETIC, written down once (see ``app.data.session.pool_budget``, which
+    # re-does it against the live ``max_connections`` at boot and says so if it does not
+    # fit). A stock PostgreSQL allows 100 connections, of which 3 are reserved for
+    # superusers:
+    #
+    #   serving   20 + 10 overflow =  30   every request, the in-process worker, sweepers
+    #   admin      5 +  5 overflow =  10   DDL, bootstrap, RLS, grants — low concurrency
+    #   console    3 +  2 overflow =   5   the §7.9 SQL console, its own read-only role
+    #                                 ---
+    #                                  45   leaving ~52 for psql, Superset and LightRAG
+    #
+    # Serving is 30 because the in-process Temporal worker draws from the same pool as
+    # the request path: activities are long (a parse is minutes) and each holds its
+    # connection for the stage, so the pool has to cover concurrent activities *plus*
+    # concurrent requests. Admin is small deliberately — a second engine sized like the
+    # first doubles the footprint to protect work that runs once at boot.
+    db_pool_size: int = Field(default=20)
+    db_max_overflow: int = Field(default=10)
+    db_admin_pool_size: int = Field(default=5)
+    db_admin_max_overflow: int = Field(default=5)
+    # Ten seconds, not thirty. Nothing is gained by waiting longer: if the pool has been
+    # saturated for ten seconds the request in hand is already outside any latency budget
+    # worth having, and the diagnostic is more use than the connection would have been.
+    db_pool_timeout_seconds: float = Field(default=10.0)
+    # Recycle a connection after this long. Postgres, PgBouncer-free deployments and idle
+    # laptops all drop connections eventually; ``pool_pre_ping`` catches the corpse and
+    # this stops it being created. 30 minutes is comfortably under any default reaper.
+    db_pool_recycle_seconds: int = Field(default=1800)
+
+    # ── RLS posture (§9.5) ───────────────────────────────────────────────────
+    # ``false`` (the default) installs the historical fail-OPEN ``tenant_isolation``
+    # predicate: a session that bound no tenant scope is not restricted, and reads every
+    # tenant's rows. ``true`` installs the fail-CLOSED one, under which the same session
+    # reads **zero** rows.
+    #
+    # It ships false on purpose and the ordering is not optional caution. Flipping first
+    # turns every path nobody enumerated into a silent empty result — worse than the
+    # fail-open it replaces, because an empty screen is blamed on the data. The
+    # enumeration comes first (``rls_scope_audit`` below), and the flag flips when it is
+    # empty over a full suite run.
+    rls_fail_closed: bool = Field(default=False)
+    # The instrument that produces that enumeration: an engine-level listener that logs
+    # every statement touching a tenant-scoped table on a connection with no scope bound.
+    # On by default — it costs one dict lookup per statement on the happy path — because
+    # its whole value is being on in the environments where the surprising path runs.
+    rls_scope_audit: bool = Field(default=True)
+    # Turn each such statement into an exception instead of a log line. For a suite that
+    # asserts the enumeration is complete; never for a deployment, where the point is
+    # that the platform keeps working while the gaps are collected.
+    rls_scope_audit_strict: bool = Field(default=False)
 
     # ── App ──────────────────────────────────────────────────────────────────
     app_env: str = Field(default="dev")

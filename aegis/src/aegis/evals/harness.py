@@ -24,7 +24,7 @@ from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.memory import InMemoryKnowledgeBackend, InMemoryRedis, _local_embed
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.types import RetrievalScope
-from aegis.retrieval.vector_store import ChromaVectorStore
+from aegis.retrieval.vector_store import QdrantVectorStore
 
 from .corpus import SEED_CASES, EvalCase, corpus_chunks
 from .judge import JudgeSummary, JudgeVerdict, judge_answer, summarize_verdicts
@@ -284,7 +284,7 @@ def build_eval_retriever() -> Retriever:
     # An offline eval is an explicitly ephemeral run: name the store rather than
     # inheriting whatever the process happened to configure (§8.4).
     backend = InMemoryKnowledgeBackend(
-        corpus_chunks(), vector_store=ChromaVectorStore.local()
+        corpus_chunks(), vector_store=QdrantVectorStore.local()
     )
     cache = SemanticCache(InMemoryRedis(), similarity_threshold=0.99)
     return Retriever(

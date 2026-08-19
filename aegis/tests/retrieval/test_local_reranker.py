@@ -235,7 +235,7 @@ async def test_no_local_reranker_configured_is_not_an_error(caplog):
 
 
 def _retriever(config: RetrievalConfig, local: LocalCrossEncoderReranker | None) -> Retriever:
-    """A databaseless retriever over the rerank fixtures (offline embedder + :memory: Chroma)."""
+    """A databaseless retriever over the rerank fixtures (offline embedder + :memory: Qdrant)."""
     docs = [(cid, text) for cid, text in _DISTRACTORS]
     docs.append(("refund-clause", _ANSWER_TEXT))
     backend = InMemoryKnowledgeBackend.from_corpus(docs=docs)

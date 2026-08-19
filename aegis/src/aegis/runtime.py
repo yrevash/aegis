@@ -26,7 +26,7 @@ reproduces the defect class it exists to remove:
 
 **What it reads, and what it refuses to guess.** It reads the ``AEGIS_``-prefixed
 environment through :class:`aegis.core.config.CoreSettings` (``AEGIS_MODE``,
-``AEGIS_VECTOR_STORE_PATH``, ``AEGIS_DATABASE_URL``, ``AEGIS_REDIS_URL``) plus
+``AEGIS_VECTOR_STORE_URL``, ``AEGIS_DATABASE_URL``, ``AEGIS_REDIS_URL``) plus
 ``AEGIS_JWT_SECRET`` / ``AEGIS_JWT_ALGORITHM`` / ``AEGIS_JWT_EXPIRE_MINUTES``. It refuses
 to guess the **adapter** (no default domain exists) and the **database session factory**
 (the host owns its engine, its pool and — decisively — which Postgres *role* serves
@@ -135,12 +135,12 @@ class Seam:
     The point of recording this is that a *choice* and an *omission* look identical from
     the outside once the process is running. An ephemeral vector store is a legitimate
     choice for dev, tests and offline evals — and a catastrophe when it happened because
-    nobody set ``AEGIS_VECTOR_STORE_PATH``. The difference is whether anything said so.
+    nobody set ``AEGIS_VECTOR_STORE_URL``. The difference is whether anything said so.
 
     Attributes:
         target: The seam that was written, spelled as the call an integrator would have
             made by hand (``"aegis.memory.set_default_index"``).
-        source: Where the value came from — ``"env AEGIS_VECTOR_STORE_PATH"``,
+        source: Where the value came from — ``"env AEGIS_VECTOR_STORE_URL"``,
             ``"adapter.memory_spec"``, ``"host session_factory"``, ``"caller override"``.
         detail: What was actually installed, in one line.
         durable: ``False`` marks a deliberately non-durable choice, so
@@ -226,6 +226,7 @@ class Aegis:
         approval_model: Any = None,  # noqa: ANN401 - host ORM class, kept loose (see configure_ops)
         approval_status: Any = None,  # noqa: ANN401 - host status enum, kept loose
         mode: AegisMode | str | None = None,
+        vector_store_url: str | None = None,
         vector_store_path: str | None = None,
         database_url: str | None = None,
         redis_url: str | None = None,
@@ -280,7 +281,13 @@ class Aegis:
                 notion of dev-vs-production (the backend's ``stores_enabled`` /
                 ``is_dev``) this is how it stays the single source of that truth instead
                 of duplicating it into a second variable. Recorded as ``caller override``.
-            vector_store_path: Override for ``AEGIS_VECTOR_STORE_PATH``, same reasoning.
+            vector_store_url: Override for ``AEGIS_VECTOR_STORE_URL`` (which also reads
+                ``QDRANT_URL``) — the Qdrant node both vector consumers share, same
+                reasoning. **Required in ``full`` mode**: since §9.1 an embedded vector
+                store is a dev/test choice only, because it cannot be shared by a second
+                uvicorn worker.
+            vector_store_path: Override for ``AEGIS_VECTOR_STORE_PATH`` — LightRAG's own
+                working directory, which no longer holds vectors or KV.
             database_url: Override for ``AEGIS_DATABASE_URL``. It is only ever *read* —
                 to answer ``require_full_infra``'s question "is a relational store
                 configured at all" — and never dialled: the engine comes from
@@ -339,6 +346,7 @@ class Aegis:
         if mode is not None:
             settings = settings.model_copy(update={"mode": AegisMode(mode)})
         for name, value in (
+            ("vector_store_url", vector_store_url),
             ("vector_store_path", vector_store_path),
             ("database_url", database_url),
             ("redis_url", redis_url),
@@ -357,10 +365,10 @@ class Aegis:
             settings,
             resolved,
             mode_source="caller override" if mode is not None else f"{ENV_PREFIX}MODE",
-            path_source=(
+            url_source=(
                 "caller override"
-                if vector_store_path is not None
-                else f"env {ENV_PREFIX}VECTOR_STORE_PATH"
+                if vector_store_url is not None
+                else f"env {ENV_PREFIX}VECTOR_STORE_URL"
             ),
             seams=seams,
         )
@@ -513,21 +521,29 @@ def _wire_vector_stores(
     resolved: AegisMode,
     *,
     mode_source: str,
-    path_source: str,
+    url_source: str,
     seams: list[Seam],
 ) -> None:
     """Seams 2 and 3 — the two that used to degrade silently (§8.4).
 
-    ``full`` gets the durable on-disk engine at the resolved vector-store path;
+    ``full`` dials the **Qdrant node** at the resolved vector-store URL;
     :meth:`~aegis.core.config.CoreSettings.require_full_infra` has already raised by now
-    if it is unset, so there is no branch here where a path is invented. ``lite`` gets
-    the ephemeral in-process engine — the honest dev/test choice — recorded as
-    ``durable=False`` so it is logged at WARNING and printed with a ``!`` rather than
-    being indistinguishable from the durable case.
+    if it is unset, so there is no branch here where a URL is invented, and
+    :meth:`~aegis.retrieval.QdrantVectorStore.server` raises here rather than at the
+    first recall if the node is down. ``lite`` gets the ephemeral in-process engine — the
+    honest dev/test choice — recorded as ``durable=False`` so it is logged at WARNING and
+    printed with a ``!`` rather than being indistinguishable from the durable case.
 
-    ``mode_source``/``path_source`` are threaded in rather than assumed, because a host
+    **§9.1: the multi-worker refusal lands here, at boot.** The in-process engine is
+    single-process, so declaring it in a process that was asked for several workers is
+    refused *before* the factory is installed, naming the worker count and its source.
+    Waiting for the first component to build a store would put the refusal after the
+    server has already bound its port, which reads as a crash rather than a
+    configuration error.
+
+    ``mode_source``/``url_source`` are threaded in rather than assumed, because a host
     that owns its own config names passes both as arguments; reporting those as "read
-    from AEGIS_VECTOR_STORE_PATH" would send the next person to debug this to a variable
+    from AEGIS_VECTOR_STORE_URL" would send the next person to debug this to a variable
     nobody set. A record that misnames where a value came from is worse than none.
 
     Both branches configure. Neither leaf has an implicit default any more, so a process
@@ -536,7 +552,8 @@ def _wire_vector_stores(
     """
     try:
         from aegis.memory import MemoryVectorIndex, set_default_index
-        from aegis.retrieval import ChromaVectorStore, configure_vector_store
+        from aegis.retrieval import QdrantVectorStore, configure_vector_store
+        from aegis.retrieval.vector_store import refuse_embedded_multiprocess
     except ImportError as exc:  # pragma: no cover - the retrieval extra is optional
         seams.append(
             Seam(
@@ -551,19 +568,20 @@ def _wire_vector_stores(
         return
 
     if resolved is AegisMode.full:
-        path = str(settings.vector_store_path)
-        set_default_index(MemoryVectorIndex.local(path=path))
-        configure_vector_store(lambda: ChromaVectorStore.local(path=path))
-        detail = f"durable, on disk at {path}"
+        url = str(settings.vector_store_url)
+        set_default_index(MemoryVectorIndex.server(url=url))
+        configure_vector_store(lambda: QdrantVectorStore.server(url=url))
+        detail = f"durable, shared Qdrant node at {url}"
         durable = True
-        source = path_source
+        source = url_source
     else:
+        refuse_embedded_multiprocess(":memory:")
         set_default_index(MemoryVectorIndex.local())
-        configure_vector_store(ChromaVectorStore.local)
+        configure_vector_store(QdrantVectorStore.local)
         detail = (
             "EPHEMERAL in-process engine — nothing indexed in this process survives it. "
             f"Chosen because the resolved mode is {resolved.value} (from {mode_source}); "
-            "a durable store needs mode=full and a vector-store path."
+            "a durable store needs mode=full and a Qdrant URL."
         )
         durable = False
         source = f"{mode_source}={resolved.value}"

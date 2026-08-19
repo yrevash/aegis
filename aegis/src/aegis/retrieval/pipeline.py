@@ -145,9 +145,18 @@ class RetrievalConfig:
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
     redis_url: str = "redis://localhost:6379/0"
-    #: Directory holding the **embedded, file-backed vector store** (Postgres stays for
-    #: KV/doc-status only). The vector tier runs in-process — there is no server to
-    #: install or reach — so this is a path, not a URL.
+    #: URL of the **Qdrant node** both vector consumers write to: LightRAG's
+    #: ``QdrantVectorDBStorage`` and :mod:`aegis.retrieval.vector_store` (Postgres stays
+    #: for KV/doc-status only). One engine, one URL — §9.1. Qdrant v1.19.0 ships as a
+    #: single Windows binary in a zip, so this is still an install with no Docker and no
+    #: installer; it is simply not *in-process* any more, which is what lets more than one
+    #: uvicorn worker share an index.
+    qdrant_url: str = "http://localhost:6333"
+    #: Optional API key for a secured Qdrant node (empty means an unauthenticated node).
+    qdrant_api_key: str = ""
+    #: LightRAG's local **working directory** — its own bookkeeping, no longer any
+    #: vectors. Kept because LightRAG requires the argument; the vector tier moved to
+    #: ``qdrant_url`` and the KV/doc-status tier is on Postgres.
     vector_store_path: str = "vector_storage"
     #: Whether the real databases (Neo4j/Redis) are expected to be in use.
     #: Purely informational at this layer — callers decide what to build from it
@@ -669,7 +678,7 @@ def build_default_retriever(
         config: Tunables + store connection settings; defaults to `RetrievalConfig()`.
 
     Returns:
-        A `Retriever` wired to a `LightRAGBackend` (Neo4j + NanoVectorDB), a Redis
+        A `Retriever` wired to a `LightRAGBackend` (Neo4j + Qdrant), a Redis
         `SemanticCache`, and the local ONNX cross-encoder reranker (unless
         ``config.local_rerank_enabled`` is off).
     """
