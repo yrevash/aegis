@@ -461,6 +461,91 @@ async def test_the_collection_returns_one_tenant_even_with_no_filter_at_all():
     )
 
 
+async def test_the_scope_filter_is_a_second_predicate_and_not_decoration():
+    """Poison one collection with a foreign row and the ``where`` filter must still hold.
+
+    ``_scope_filter``'s docstring calls itself "the second, independent predicate on the
+    same fact" and claims "a regression there fails a test here instead of in
+    production". That claim was false: the collection *is* the boundary for every row
+    ``_owner_of`` routes, so deleting the ``where`` clause from ``_vector_list``
+    entirely changed no test's outcome — measured, 284 passed either way. A defence
+    nothing exercises is a defence nobody will notice the removal of.
+
+    What can put a foreign row inside a tenant's collection is not hypothetical: a
+    repair or backfill script writing straight to the store, a restore that replays an
+    older payload shape, or a future writer that derives the collection from the request
+    in flight rather than from the row's own owner — the exact mistake ``_owner_of``
+    exists to prevent, which means it is the mistake worth having a second net under.
+    This writes that row directly and asserts the search does not return it.
+    """
+    backend = await _lite_backend()
+    store = backend._vector_store
+    q_vec = (await backend._embed([_QUERY]))[0]
+    foreign = "Globex's merger terms, mis-filed into tenant 1's partition."
+
+    store.upsert(
+        tenant_collection_name("aegis_chunks", "t1"),
+        ids=["mis-routed"],
+        vectors=[q_vec],
+        payloads=[{"doc": "globex", "text": foreign, TENANT_METADATA_KEY: "t2"}],
+    )
+
+    # Non-vacuity: the poisoned row really is in tenant 1's collection and really is a
+    # hit for this query, so the assertion below is about the filter and nothing else.
+    unfiltered = store.search(
+        tenant_collection_name("aegis_chunks", "t1"), q_vec, 10, filter=None
+    )
+    assert foreign in {str(hit.payload.get("text")) for hit in unfiltered}
+
+    ranked = await backend.recall_ranked(_QUERY, top_k=10, scope=_ACME)
+    texts = {c.text for lst in ranked.lists for c in lst.candidates}
+    assert foreign not in texts, (
+        "the vector arm returned a row whose recorded owner is another tenant — the "
+        f"where filter is not being applied: {texts}"
+    )
+
+
+async def test_the_scope_filter_keeps_a_null_owner_from_matching_a_real_tenant():
+    """The shared corpus's null sentinel is not a wildcard, at the filter level.
+
+    This is the specific closure ``_scope_filter``'s docstring points at: the store
+    encodes a ``None`` owner as an explicit null sentinel rather than letting Chroma drop
+    the key, because a dropped key matches every ``where`` clause. Both directions are
+    asserted, so a regression that turns either "no tenant" or "some tenant" into "any
+    tenant" fails here.
+    """
+    backend = await _lite_backend()
+    store = backend._vector_store
+    q_vec = (await backend._embed([_QUERY]))[0]
+    shared_name = tenant_collection_name("aegis_chunks", None)
+    tenant_name = tenant_collection_name("aegis_chunks", "t1")
+
+    # A tenant-owned row mis-filed into the shared partition, and a shared-owned row
+    # mis-filed into a tenant's. Neither may be returned by the other's filter.
+    store.upsert(
+        shared_name,
+        ids=["tenant-row-in-shared"],
+        vectors=[q_vec],
+        payloads=[{"doc": "globex", "text": "owned by t2", TENANT_METADATA_KEY: "t2"}],
+    )
+    store.upsert(
+        tenant_name,
+        ids=["shared-row-in-tenant"],
+        vectors=[q_vec],
+        payloads=[{"doc": "hb", "text": "owned by nobody", TENANT_METADATA_KEY: None}],
+    )
+
+    shared_hits = store.search(shared_name, q_vec, 10, filter=backend._scope_filter(None))
+    assert "owned by t2" not in {str(h.payload.get("text")) for h in shared_hits}, (
+        "a filter for the shared corpus matched a row owned by a real tenant"
+    )
+
+    own_hits = store.search(tenant_name, q_vec, 10, filter=backend._scope_filter("t1"))
+    assert "owned by nobody" not in {str(h.payload.get("text")) for h in own_hits}, (
+        "a filter for tenant 1 matched a row whose owner is the null sentinel"
+    )
+
+
 async def test_a_tenant_with_nothing_ingested_reads_nothing_of_anyone_elses():
     """An unwritten partition is empty, not absent-therefore-unfiltered.
 

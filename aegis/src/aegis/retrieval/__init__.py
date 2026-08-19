@@ -67,20 +67,28 @@ from aegis.retrieval.pipeline import (
     build_default_retriever,
 )
 from aegis.retrieval.types import (
+    ALL_TENANTS,
     TENANT_METADATA_KEY,
+    AllTenants,
     FusionMethod,
     GraphEdge,
     GraphNode,
     RetrievalOrigin,
     RetrievalScope,
+    TenantScope,
     UnresolvedTenantScopeError,
+    UntenantedPrincipalError,
+    principal_tenant_scope,
+    tenant_filter,
 )
 
 __all__ = [
+    "ALL_TENANTS",
     "DEFAULT_LOCAL_RERANK_MODEL",
     "EMBED_DIM",
     "TENANT_METADATA_KEY",
     "AgenticReport",
+    "AllTenants",
     "ArmReport",
     "CacheProvenance",
     "Candidate",
@@ -107,10 +115,14 @@ __all__ = [
     "Retriever",
     "RewriteReport",
     "Source",
+    "TenantScope",
     "UnresolvedTenantScopeError",
+    "UntenantedPrincipalError",
     "build_default_retriever",
     "citation_validity",
     "normalise_span",
+    "principal_tenant_scope",
     "span_present",
+    "tenant_filter",
     "verify_citations",
 ]

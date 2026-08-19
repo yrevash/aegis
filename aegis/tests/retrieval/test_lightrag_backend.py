@@ -154,7 +154,13 @@ class QueryingRag(FakeRag):
 
 
 async def test_ingest_tags_the_owning_tenant_into_the_stored_file_path():
-    """LightRAG round-trips ``file_path`` and nothing else, so the tenant rides in it."""
+    """LightRAG round-trips ``file_path`` and nothing else, so the tenant rides in it.
+
+    The shared-corpus chunk is tagged too, and explicitly. It used to be stored with its
+    path untouched, which made "belongs to the shared corpus" and "nobody recorded an
+    owner" the same bytes — and every scope may read the shared corpus, so an untagged
+    row was readable by everyone. See ``_SHARED_TAG``.
+    """
     rag = FakeRag(graph=FakeGraphStore())
     backend = _backend(rag)
     await backend.ingest_chunks(
@@ -169,7 +175,7 @@ async def test_ingest_tags_the_owning_tenant_into_the_stored_file_path():
             Chunk(id="c1", doc_id="d", ordinal=1, text="t", metadata={"source": "public.md"}),
         ]
     )
-    assert rag.inserts[0]["file_paths"] == ["t7::handbook.md", "public.md"]
+    assert rag.inserts[0]["file_paths"] == ["t7::handbook.md", "shared::public.md"]
 
 
 async def test_recall_drops_another_tenants_rows_and_restores_the_clean_source():
@@ -177,7 +183,7 @@ async def test_recall_drops_another_tenants_rows_and_restores_the_clean_source()
         [
             {"id": "a", "content": "acme secret", "file_path": "t1::acme.md"},
             {"id": "b", "content": "globex secret", "file_path": "t2::globex.md"},
-            {"id": "s", "content": "shared handbook", "file_path": "handbook.md"},
+            {"id": "s", "content": "shared handbook", "file_path": "shared::handbook.md"},
         ]
     )
     recall = await _backend(rag).recall("q", top_k=5, scope=RetrievalScope(tenant_id=1))
@@ -187,12 +193,37 @@ async def test_recall_drops_another_tenants_rows_and_restores_the_clean_source()
     assert [c.metadata["file_path"] for c in recall.candidates] == ["acme.md", "handbook.md"]
 
 
-async def test_unscoped_recall_sees_only_untagged_rows():
+async def test_a_chunk_with_no_owner_tag_is_refused_by_a_tenant_scoped_recall():
+    """An untagged stored path establishes nothing, so it is served to nobody scoped.
+
+    It used to read as the shared corpus — ``_untag_file_path`` returned ``(None, path)``
+    for it and ``_candidates_from_payload`` stamped ``tenant_attributed: True`` anyway —
+    and every tenant may read the shared corpus. So one row whose tag was lost (a corpus
+    loaded into the working directory by hand, a row written before tagging existed, a
+    LightRAG version that normalised the path) was visible to *every* tenant at once,
+    which is the opposite direction to ``chunks.tenant_id`` being ``NOT NULL``.
+
+    The tenant's own tagged row still comes back, so this is a per-row refusal and not
+    the whole request failing.
+    """
+    rag = QueryingRag(
+        [
+            {"id": "a", "content": "acme secret", "file_path": "t1::acme.md"},
+            {"id": "u", "content": "untagged settlement figure", "file_path": "board.pdf"},
+        ]
+    )
+    recall = await _backend(rag).recall("q", top_k=5, scope=RetrievalScope(tenant_id=1))
+
+    assert [c.id for c in recall.candidates] == ["a"]
+    assert not any("settlement" in c.text for c in recall.candidates)
+
+
+async def test_unscoped_recall_sees_only_shared_rows():
     """A null tenant reads the shared corpus, never every tenant's."""
     rag = QueryingRag(
         [
             {"id": "a", "content": "acme secret", "file_path": "t1::acme.md"},
-            {"id": "s", "content": "shared handbook", "file_path": "handbook.md"},
+            {"id": "s", "content": "shared handbook", "file_path": "shared::handbook.md"},
         ]
     )
     recall = await _backend(rag).recall("q", top_k=5, scope=_SCOPE)

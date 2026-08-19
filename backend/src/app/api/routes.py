@@ -26,6 +26,15 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from aegis.ml import MLModelUnavailableError
+from aegis.retrieval.types import (
+    AllTenants,
+    RetrievalScope,
+    TenantScope,
+    UntenantedPrincipalError,
+    principal_tenant_scope,
+    scoped_graph,
+    tenant_filter,
+)
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -205,6 +214,55 @@ class AuthContext:
     fine_role: str = "client"
     tenant_id: int | None = None
     user_id: int | None = None
+
+    def is_platform_staff(self) -> bool:
+        """Whether this principal operates the platform rather than living in a tenant.
+
+        Two ways to be platform staff, and both are a *role* statement, never merely the
+        absence of a tenant:
+
+        * :data:`~app.core.security.PLATFORM_ADMIN` — the admin sub-tier ``principal_role``
+          already derives for an un-tenanted ``Role.ADMIN``.
+        * an un-tenanted **operational** role (``ai_team`` / ``devops``). These are the
+          staff accounts ``app.seed`` provisions with ``tenant_id=None`` on purpose, and
+          the codebase already draws exactly this line one screen up in
+          :func:`_persona_for`: ``Role.CLIENT`` is the self-scoped business/end-user role,
+          every other role is ``operations_lead``.
+
+        ``Role.CLIENT`` is therefore never platform staff however its row is shaped —
+        which is the whole of gap A1: ``app.seed`` mints a ``client``-role principal with
+        ``users.tenant_id`` NULL, and "has no tenant" was being read as "may read every
+        tenant".
+        """
+        if self.fine_role == PLATFORM_ADMIN:
+            return True
+        return self.tenant_id is None and self.role is not Role.CLIENT
+
+    def tenant_scope(self) -> TenantScope:
+        """Return the tenant authority this principal's reads may use.
+
+        **Read this instead of :attr:`tenant_id` whenever the answer is about to scope a
+        query.** ``tenant_id`` is a fact about the principal — which tenant it belongs
+        to, ``None`` for one that belongs to none. It is *not* an authority, and the two
+        were being conflated: ``None if fine_role == PLATFORM_ADMIN else auth.tenant_id``
+        reaches ``None`` down **either** branch, so a ``client``-role account whose
+        ``users.tenant_id`` is NULL arrived at the platform admin's unrestricted value.
+        This method has three outcomes where that expression had two, and the third is an
+        exception rather than a value — so it cannot be passed onward and mistaken for
+        the first.
+
+        Returns:
+            :data:`~aegis.retrieval.types.ALL_TENANTS` for platform staff
+            (:meth:`is_platform_staff`), or the principal's own tenant id.
+
+        Raises:
+            UntenantedPrincipalError: If the principal is neither platform staff nor
+                bound to a tenant. Callers at the HTTP boundary translate it — see
+                :func:`_require_scope`.
+        """
+        return principal_tenant_scope(
+            platform_wide=self.is_platform_staff(), tenant_id=self.tenant_id
+        )
 
 
 #: What to tell an operator whose ``users`` table is empty (§3.8).
@@ -451,22 +509,66 @@ endpoints (diagnose / release / rollback / pending-releases). The human approval
 (deciding a staged release) stays admin-only."""
 
 
-def _scope_tenant(auth: AuthContext, requested: int | None) -> int | None:
-    """Resolve the tenant a request may read, enforcing cross-tenant isolation.
+#: What a principal that resolves to no tenant authority is told. Deliberately the same
+#: wording whichever endpoint refused it, so the 403 does not leak which tenants exist.
+_UNTENANTED = (
+    "This account is not bound to a tenant, so there is no scope to read. Ask an "
+    "administrator to assign it to a tenant."
+)
 
-    A platform-admin may target any tenant (``None`` == all). A tenant-admin is
-    pinned to their own tenant: a request for a *different* tenant is forbidden, and
+
+def _require_scope(auth: AuthContext) -> TenantScope:
+    """Return ``auth``'s tenant authority, or refuse the request with a 403.
+
+    The single HTTP-boundary translation of
+    :exc:`~aegis.retrieval.types.UntenantedPrincipalError`. Every route that scopes a
+    read goes through here (directly, or via :func:`_scope_tenant`), so an authenticated
+    principal with no tenant is refused **once, by the type**, rather than falling
+    through each call site's own ``if tenant_id is None`` into an unscoped query.
+
+    Raises:
+        HTTPException: 403 when the principal is neither platform staff
+            (:meth:`AuthContext.is_platform_staff`) nor bound to a tenant.
+    """
+    try:
+        return auth.tenant_scope()
+    except UntenantedPrincipalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=_UNTENANTED
+        ) from exc
+
+
+def _scope_tenant(auth: AuthContext, requested: int | None) -> int | None:
+    """Resolve the tenant filter a request may read, enforcing cross-tenant isolation.
+
+    Platform staff may target any tenant (``None`` == all, and now only a principal
+    :meth:`AuthContext.is_platform_staff` admits can reach that value). A tenant-admin
+    is pinned to their own tenant: a request for a *different* tenant is forbidden, and
     an omitted ``tenant_id`` defaults to their own — the app-level scoping layer that
     backs Postgres RLS (§3.3).
+
+    Returns:
+        The ``tenant_id`` to AND into the query, or ``None`` for an unrestricted read —
+        which :func:`~aegis.retrieval.types.tenant_filter` will only ever produce from
+        the explicit :data:`~aegis.retrieval.types.ALL_TENANTS` authority.
+
+    Raises:
+        HTTPException: 403 on a cross-tenant request, or when the principal resolves to
+            no tenant authority at all — which is the case this function did not used to
+            have: it returned ``auth.tenant_id``, and for a tenant-less non-admin that is
+            ``None``, i.e. the platform-wide read. It backs ``/audit``, ``/jobs``,
+            ``POST /documents``, the admin listings and the forecasts, several of which
+            admit ``devops``/``ai_team`` as well as admins.
     """
-    if auth.fine_role == PLATFORM_ADMIN:
+    scope = _require_scope(auth)
+    if isinstance(scope, AllTenants):
         return requested
-    if requested is not None and requested != auth.tenant_id:
+    if requested is not None and requested != scope:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cross-tenant access is not permitted.",
         )
-    return auth.tenant_id
+    return tenant_filter(scope)
 
 
 async def _resolve_governance(auth: AuthContext) -> GovernanceContext:
@@ -985,8 +1087,22 @@ async def graph(
 
     The persona scoping on the in-process slice is preserved — it is a security control
     (a ``client`` must not see what an operations persona retrieved).
+
+    **Both halves are tenant-scoped, and the durable one did not used to be.** Neo4j has
+    no RLS and LightRAG's ``get_knowledge_graph("*")`` takes no predicate, so the durable
+    half arrives holding every tenant's entities; before Phase 4's ``index`` stage began
+    writing every tenant's document into that one graph it was a dormant gap, and after
+    it a live one. The backend carries each element's owning tenants out on
+    ``owners`` and :func:`~aegis.retrieval.types.scoped_graph` applies the boundary here,
+    before anything is serialised — a node whose provenance cannot be established is not
+    shown to a tenant-scoped caller at all. A platform admin reads
+    :data:`~aegis.retrieval.types.ALL_TENANTS` and sees the whole graph, deliberately.
+
+    Raises:
+        HTTPException: 403 when the caller resolves to no tenant authority.
     """
     persona = _resolve_persona(None, auth)
+    scope = _require_scope(auth)
     try:
         from app.retrieval import knowledge_graph  # noqa: PLC0415
 
@@ -999,7 +1115,13 @@ async def graph(
     if durable is None:
         return local
 
-    nodes, edges = durable
+    nodes, edges = scoped_graph(
+        durable[0],
+        durable[1],
+        visible=None
+        if isinstance(scope, AllTenants)
+        else RetrievalScope(tenant_id=scope).visible_tenant_values(),
+    )
     by_id = {n.id: n for n in nodes}
     for node in local.nodes:  # the live delta fills in what Neo4j has not ingested yet
         by_id.setdefault(node.id, node)
@@ -1540,8 +1662,14 @@ def _authorize_subject(auth: AuthContext, subject: str) -> int | None:
     platform-admin may reach any). The returned tenant id is ANDed into every query as
     the belt-and-suspenders isolator over app-level ``subject_id`` scoping.
 
+    The tenant half comes from :func:`_require_scope`, not from ``auth.tenant_id``: a
+    tenant-less non-admin used to return ``None`` here, and ``None`` is the value every
+    memory handler reads as "add no tenant predicate". Subject scoping alone was then
+    the only thing between that principal and another tenant's rows.
+
     Raises:
-        HTTPException: 403 when a non-admin targets a subject other than its own.
+        HTTPException: 403 when a non-admin targets a subject other than its own, or
+            when the principal resolves to no tenant authority.
     """
     if auth.role is Role.ADMIN:
         return _scope_tenant(auth, None)
@@ -1551,7 +1679,7 @@ def _authorize_subject(auth: AuthContext, subject: str) -> int | None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You may only access your own memory.",
         )
-    return auth.tenant_id
+    return tenant_filter(_require_scope(auth))
 
 
 @router.get("/memory/facts", response_model=MemoryFactsResponse, tags=["memory"])

@@ -35,11 +35,11 @@ per-token; an ingest emits one event per stage, six of them, over minutes.
 
 from __future__ import annotations
 
+from aegis.retrieval.types import UntenantedPrincipalError, tenant_filter
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.api.routes import AuthContext, require_auth
-from app.core.security import PLATFORM_ADMIN
 from app.data import get_sessionmaker, set_tenant_scope
 from app.ingestion.progress import (
     IngestProgress,
@@ -313,16 +313,36 @@ async def get_ingest_progress(
     Args:
         document_id: The document to report on.
         auth: The authenticated principal. A platform admin may read any document;
-            everyone else is pinned to their own tenant.
+            everyone else is pinned to their own tenant, and a principal pinned to no
+            tenant is refused rather than unpinned.
 
     Returns:
         The whole log in one body — safe to poll.
 
     Raises:
         HTTPException: 404 when the document is not visible under the caller's scope.
-            "Deleted" and "another tenant's" are deliberately one answer.
+            "Deleted", "another tenant's" and "your account is bound to no tenant, so
+            nothing here is yours" are deliberately one answer — a principal with no
+            tenant authority can see no document, and saying which of the three it was
+            would tell an unauthorised caller that document ``document_id`` exists.
+
+            The scope itself used to be
+            ``None if auth.fine_role == PLATFORM_ADMIN else auth.tenant_id``, which
+            reaches the platform admin's unrestricted ``None`` down the *other* branch
+            for any non-admin whose ``users.tenant_id`` is NULL — the shape ``app.seed``
+            mints for the "client" platform principal. ``_load_document`` then added no
+            predicate and ``set_tenant_scope(None)`` bound the empty RLS scope, which
+            ``tenant_isolation`` deliberately does not restrict, so both layers were
+            open at once. :meth:`~app.api.routes.AuthContext.tenant_scope` now separates
+            the two states in the type, and the tenant-less one lands here.
     """
-    tenant_id = None if auth.fine_role == PLATFORM_ADMIN else auth.tenant_id
+    try:
+        tenant_id = tenant_filter(auth.tenant_scope())
+    except UntenantedPrincipalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No document {document_id} is visible to this caller.",
+        ) from exc
     async with get_sessionmaker()() as session:
         await set_tenant_scope(session, tenant_id)
         try:

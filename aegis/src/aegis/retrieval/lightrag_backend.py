@@ -45,6 +45,7 @@ imports cleanly with no LightRAG install, no `aegis[data]` extra and no live sto
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
@@ -60,6 +61,7 @@ from aegis.retrieval.types import (
     GraphNode,
     RetrievalOrigin,
     RetrievalScope,
+    scoped_graph,
     tenant_metadata_value,
 )
 
@@ -72,6 +74,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, keeps sqlalchemy out of the
     #: Anything that opens a session when called — ``async_sessionmaker`` satisfies it,
     #: and so does a one-line lambda over a host's own request-path session factory.
     SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+
+logger = logging.getLogger(__name__)
 
 #: Dimension of `text-embedding-3-large` (the default embedding model this backend
 #: targets). Independent of :attr:`~aegis.retrieval.pipeline.RetrievalConfig.embed_dim`
@@ -94,6 +98,25 @@ _GRAPH_SNAPSHOT_CAP = 1_000_000
 #: is the only per-chunk field it round-trips — so the tenant tag rides in it and is
 #: stripped back off on the way out, leaving citations exactly as they were.
 _TENANT_TAG_SEP = "::"
+
+#: The tag written for a chunk that genuinely belongs to the **shared, tenant-less**
+#: corpus. It exists because "no tag" and "shared" used to be the same bytes, and they
+#: are not the same fact: a stored path with no tag is one a writer that predates
+#: tagging produced, or one a hand-loaded corpus put there, or one a LightRAG version
+#: normalised — none of which is a claim about ownership. Tagging the shared corpus
+#: explicitly is what lets an untagged path mean **unknown** and be refused, instead of
+#: defaulting to the one value (:data:`None`) that every tenant is allowed to read.
+#:
+#: The cost is stated rather than hidden: rows written into a LightRAG working directory
+#: *before* this tag existed are untagged, so they are no longer served to a
+#: tenant-scoped query. That is the fail-closed direction, and re-ingesting the shared
+#: corpus re-tags it.
+_SHARED_TAG = "shared"
+
+#: LightRAG joins the several ``file_path`` values a merged entity or relationship was
+#: extracted from with this separator (``lightrag.constants.GRAPH_FIELD_SEP``). Read
+#: rather than imported so this module keeps importing with no LightRAG install.
+_GRAPH_FIELD_SEP = "<SEP>"
 
 #: Candidate-metadata flag meaning "this row's owning tenant is known". Absent on the
 #: whole-context fallback, which is a blend with no per-chunk provenance — the difference
@@ -515,14 +538,24 @@ class LightRAGBackend:
         ``GET /graph``, so the visualisation shows the platform's real accumulated
         knowledge and survives a process restart (the in-memory alternative does not).
 
+        **It is whole, and every tenant is in it.** Neo4j has no row-level security and
+        ``get_knowledge_graph("*")`` takes no predicate, so this method cannot narrow the
+        read. What it can do — and now does — is carry each element's provenance out on
+        ``GraphNode.owners`` / ``GraphEdge.owners``, so the caller can apply
+        :func:`~aegis.retrieval.types.scoped_graph` before anything reaches a response.
+        **A caller that skips that step serves every tenant's entities to whoever asked**,
+        which is exactly what ``GET /graph`` did before Phase 4's ``index`` stage started
+        writing every tenant's document into this one graph and made it a live path.
+
         Args:
             max_nodes: Upper bound on nodes requested from the store, so a large graph
                 cannot blow up the payload or the force-directed layout.
 
         Returns:
-            A ``(nodes, edges)`` tuple, or ``None`` when the graph store is absent or
-            unreachable — the caller then reports honestly rather than showing an
-            empty graph that looks like "no knowledge".
+            A ``(nodes, edges)`` tuple whose elements carry their owning tenants, or
+            ``None`` when the graph store is absent or unreachable — the caller then
+            reports honestly rather than showing an empty graph that looks like "no
+            knowledge".
         """
         rag = await self._ensure()
         kg = await _read_knowledge_graph(rag, max_nodes=max_nodes)
@@ -544,7 +577,14 @@ class LightRAGBackend:
             # back to the id and a neutral kind rather than inventing either.
             label = str(props.get("entity_id") or props.get("entity_name") or node_id)
             kind = str(props.get("entity_type") or "entity").strip().lower() or "entity"
-            nodes.append(GraphNode(id=node_id, label=label, kind=kind))
+            nodes.append(
+                GraphNode(
+                    id=node_id,
+                    label=label,
+                    kind=kind,
+                    owners=_owners_of(props.get("file_path")),
+                )
+            )
 
         edges: list[GraphEdge] = []
         for raw in raw_edges:
@@ -556,7 +596,14 @@ class LightRAGBackend:
                 continue
             props = getattr(raw, "properties", None) or {}
             relation = str(props.get("keywords") or getattr(raw, "type", "") or "related")
-            edges.append(GraphEdge(source=source, target=target, relation=relation))
+            edges.append(
+                GraphEdge(
+                    source=source,
+                    target=target,
+                    relation=relation,
+                    owners=_owners_of(props.get("file_path")),
+                )
+            )
 
         return (nodes, edges)
 
@@ -739,9 +786,10 @@ def _keyword_candidate(row: object) -> Candidate:
 def _tag_file_path(source: str, tenant_value: str | None) -> str:
     """Return ``source`` tagged with the tenant that owns it, for LightRAG storage.
 
-    A shared-corpus chunk (``tenant_value is None``) is stored with its path untouched,
-    so an unscoped deployment's stored paths are byte-identical to what they were before
-    tenanting existed.
+    **Every** chunk is tagged, including a shared-corpus one — see :data:`_SHARED_TAG`
+    for why the untagged form had to stop meaning "shared". An untagged path now carries
+    no ownership claim at all, which is what makes :func:`_scoped_recall` able to refuse
+    it instead of handing it to whoever asks.
 
     Args:
         source: The real source path/id for the chunk.
@@ -750,70 +798,144 @@ def _tag_file_path(source: str, tenant_value: str | None) -> str:
             shared corpus.
 
     Returns:
-        The tagged path, e.g. ``"t7::handbook.md"``.
+        The tagged path, e.g. ``"t7::handbook.md"`` or ``"shared::handbook.md"``.
     """
-    if tenant_value is None:
-        return source
-    return f"{tenant_value}{_TENANT_TAG_SEP}{source}"
+    tag = _SHARED_TAG if tenant_value is None else tenant_value
+    return f"{tag}{_TENANT_TAG_SEP}{source}"
 
 
-def _untag_file_path(file_path: object) -> tuple[str | None, str | None]:
-    """Split a stored ``file_path`` back into ``(tenant_value, source)``.
+def _untag_file_path(file_path: object) -> tuple[str | None, str | None, bool]:
+    """Split a stored ``file_path`` into ``(tenant_value, source, attributed)``.
 
-    Only a tag this module wrote is recognised — ``t<digits>`` before the separator.
-    Anything else is treated as an ordinary path that happens to contain the separator,
-    so a real source path is never mistaken for a tenant tag.
+    Only a tag this module wrote is recognised — ``t<digits>`` or :data:`_SHARED_TAG`
+    before the separator. Anything else is an ordinary path that happens to contain the
+    separator, so a real source path is never mistaken for a tenant tag.
+
+    The third element is the whole point of this signature. It used to return two, and
+    an untagged path came back as ``(None, path)`` — indistinguishable from the shared
+    corpus, which every scope may read. Ownership was therefore *asserted* rather than
+    established, and the caller stamped :data:`_ATTRIBUTED_KEY` ``True`` on it. Now the
+    two are separate values: ``tenant_value is None`` means "owned by the shared corpus"
+    and is only ever returned alongside ``attributed=True``.
 
     Args:
         file_path: The value LightRAG returned for the chunk (may be ``None``).
 
     Returns:
-        ``(tenant_value, source)``; ``tenant_value`` is ``None`` for a shared-corpus row,
-        and ``source`` is ``None`` when LightRAG reported no path at all.
+        ``(tenant_value, source, attributed)``. ``source`` is ``None`` when LightRAG
+        reported no path at all; ``attributed`` is ``False`` whenever the owner could
+        not be established from the path.
     """
     if file_path is None:
-        return (None, None)
+        return (None, None, False)
     text = str(file_path)
     tag, sep, rest = text.partition(_TENANT_TAG_SEP)
+    if sep and tag == _SHARED_TAG:
+        return (None, rest, True)
     if sep and tag.startswith("t") and tag[1:].isdigit():
-        return (tag, rest)
-    return (None, text)
+        return (tag, rest, True)
+    return (None, text, False)
+
+
+def _owners_of(file_path: object) -> tuple[str | None, ...] | None:
+    """Return every tenant that contributed ``file_path``, or ``None`` if unknowable.
+
+    LightRAG merges an entity (and a relationship) across every document it was seen in
+    and joins their paths with :data:`_GRAPH_FIELD_SEP`, so provenance here is a *set*,
+    not a single owner. It also writes the literal ``"unknown_source"`` when a document
+    reached it with no path at all.
+
+    One unattributable contributor poisons the whole element: if any source cannot be
+    owned, the merged label/description may have come from it, so the answer is "unknown"
+    rather than "the ones I could read". That is what makes :func:`~aegis.retrieval.types.
+    scoped_graph` able to fail closed.
+
+    Args:
+        file_path: LightRAG's ``file_path`` value for a node or edge.
+
+    Returns:
+        The owning tenant metadata values (``None`` inside the tuple means the shared
+        corpus), or ``None`` when provenance could not be established at all.
+    """
+    if file_path is None:
+        return None
+    parts = [p.strip() for p in str(file_path).split(_GRAPH_FIELD_SEP) if p.strip()]
+    if not parts:
+        return None
+    owners: list[str | None] = []
+    for part in parts:
+        tenant_value, _source, attributed = _untag_file_path(part)
+        if not attributed:
+            return None
+        owners.append(tenant_value)
+    return tuple(dict.fromkeys(owners))
 
 
 def _scoped_recall(recall: Recall, scope: RetrievalScope) -> Recall:
-    """Drop every candidate in ``recall`` that ``scope``'s tenant may not read.
+    """Drop everything in ``recall`` that ``scope``'s tenant may not read.
+
+    **Nodes and edges are filtered too, and they did not used to be.** The old contract
+    said they "are entity labels for the visualisation, not document content". A node's
+    label is an entity name lifted verbatim out of a document, and an edge's ``relation``
+    is :func:`_edges_from_payload`'s reading of LightRAG's relationship *description* —
+    a sentence the extractor wrote from the source text. Both are document content, and
+    both reach the browser on the SSE ``retrieval.done`` event. See
+    :func:`~aegis.retrieval.types.scoped_graph` for the two rules and why they differ.
+
+    An unscoped run (``tenant_id is None``) has no boundary to cross, so its graph passes
+    through whole — the same asymmetry the candidate loop below already had.
 
     Args:
         recall: The recall as LightRAG returned it.
         scope: The request's retrieval scope.
 
     Returns:
-        The recall with only visible candidates (graph nodes/edges are left as-is: they
-        are entity labels for the visualisation, not document content).
+        The recall with only visible candidates, nodes and edges.
 
     Raises:
-        RuntimeError: If a tenant-scoped request receives an **unattributable** candidate
-            — LightRAG's whole-context fallback, which blends passages with no per-chunk
-            path and therefore cannot be shown to belong to this tenant. Serving it would
-            be the leak; quietly dropping it would hide a store that cannot be scoped. It
-            fails loudly instead, and only ever for a tenant-scoped run.
+        RuntimeError: If a tenant-scoped request receives LightRAG's **whole-context
+            fallback** — a blend with no per-chunk path at all, which cannot be shown to
+            belong to this tenant. Serving it would be the leak; quietly dropping it
+            would hide a store that cannot be scoped at all. It fails loudly instead, and
+            only ever for a tenant-scoped run.
+        UnresolvedTenantScopeError: If ``scope``'s tenant is present but is not an
+            integer — resolved here rather than read off the attribute, so a scope that
+            lost its type upstream cannot widen this filter.
     """
+    tenant_id = scope.resolved_tenant_id()
     visible = scope.visible_tenant_values()
     kept = []
     for candidate in recall.candidates:
         if candidate.metadata.get(_ATTRIBUTED_KEY) is not True:
-            if scope.tenant_id is not None:
+            if tenant_id is None:
+                # Unscoped run: the whole corpus is the shared corpus.
+                kept.append(candidate)
+                continue
+            if not candidate.metadata.get("file_path"):
                 raise RuntimeError(
                     "LightRAG returned an unattributable blended context for a "
                     f"tenant-scoped request ({scope!r}); it cannot be shown to belong "
                     "to this tenant, so it is refused rather than served. Per-tenant "
                     "LightRAG instances are required for this store/version."
                 )
-            kept.append(candidate)  # unscoped run: the whole corpus is the shared corpus
+            # A per-chunk row whose stored path carries no owner tag. The store *is*
+            # attributable — this one row is not — so the honest answer is to refuse the
+            # row rather than the request. Logged at ERROR because an untagged row in a
+            # tagged store is a migration/ingest defect, not a routine miss.
+            logger.error(
+                "Refusing a LightRAG chunk with no owner tag (%r) for tenant-scoped "
+                "request %r: its owning tenant cannot be established, so it is not "
+                "served. Re-ingest the corpus so its file paths carry a tenant tag.",
+                candidate.metadata.get("file_path"),
+                scope,
+            )
             continue
         if candidate.metadata.get(TENANT_METADATA_KEY) in visible:
             kept.append(candidate)
-    return Recall(candidates=kept, nodes=recall.nodes, edges=recall.edges)
+    nodes, edges = scoped_graph(
+        recall.nodes, recall.edges, visible=None if tenant_id is None else visible
+    )
+    return Recall(candidates=kept, nodes=nodes, edges=edges)
 
 
 def _to_recall(raw: object) -> Recall:
@@ -838,9 +960,10 @@ def _candidates_from_payload(payload: dict, *, fallback_context: str) -> list[Ca
 
     Per-chunk candidates carry their owning tenant, parsed back out of the tagged
     ``file_path`` (see :func:`_untag_file_path`), plus :data:`_ATTRIBUTED_KEY` recording
-    that the ownership is *known*. The whole-context fallback carries neither: it is a
-    blend with no per-chunk path, so its ownership is genuinely unknown and
-    :func:`_scoped_recall` refuses it under a tenant scope rather than guessing.
+    whether that ownership is genuinely *known* — which is a fact read off the path, not
+    a constant. The whole-context fallback carries neither: it is a blend with no
+    per-chunk path, so its ownership is genuinely unknown and :func:`_scoped_recall`
+    refuses it under a tenant scope rather than guessing.
     """
     chunks = payload.get("chunks") if isinstance(payload, dict) else None
     candidates: list[Candidate] = []
@@ -851,7 +974,7 @@ def _candidates_from_payload(payload: dict, *, fallback_context: str) -> list[Ca
             text = chunk.get("content") or chunk.get("text") or ""
             if not text:
                 continue
-            tenant_value, source = _untag_file_path(chunk.get("file_path"))
+            tenant_value, source, attributed = _untag_file_path(chunk.get("file_path"))
             candidates.append(
                 Candidate(
                     id=str(chunk.get("id", chunk.get("chunk_id", i))),
@@ -859,7 +982,10 @@ def _candidates_from_payload(payload: dict, *, fallback_context: str) -> list[Ca
                     metadata={
                         "file_path": source,
                         TENANT_METADATA_KEY: tenant_value,
-                        _ATTRIBUTED_KEY: True,
+                        # Recorded, never asserted: a path with no tag this module wrote
+                        # establishes nothing, and stamping ``True`` on it was what made
+                        # an unowned chunk readable by every tenant at once.
+                        _ATTRIBUTED_KEY: attributed,
                     },
                 )
             )
@@ -869,7 +995,12 @@ def _candidates_from_payload(payload: dict, *, fallback_context: str) -> list[Ca
 
 
 def _nodes_from_payload(payload: dict) -> list[GraphNode]:
-    """Extract graph nodes from LightRAG entity data."""
+    """Extract graph nodes from LightRAG entity data, carrying their provenance.
+
+    ``owners`` comes off the entity's ``file_path`` (see :func:`_owners_of`) so
+    :func:`_scoped_recall` has something to filter on. An entity LightRAG could not
+    attribute gets ``None``, which every restricted scope refuses.
+    """
     entities = payload.get("entities") if isinstance(payload, dict) else None
     nodes: list[GraphNode] = []
     if isinstance(entities, list):
@@ -884,13 +1015,21 @@ def _nodes_from_payload(payload: dict) -> list[GraphNode]:
                     id=str(name),
                     label=str(name),
                     kind=str(ent.get("entity_type") or ent.get("type") or "entity"),
+                    owners=_owners_of(ent.get("file_path")),
                 )
             )
     return nodes
 
 
 def _edges_from_payload(payload: dict) -> list[GraphEdge]:
-    """Extract graph edges from LightRAG relationship data."""
+    """Extract graph edges from LightRAG relationship data, carrying their provenance.
+
+    ``relation`` is LightRAG's relationship ``description`` — LLM-written prose derived
+    from the *source document's text*, not a type name — so this is the single highest-
+    value string in a recall for a cross-tenant leak. ``owners`` is recorded for exactly
+    that reason; :func:`~aegis.retrieval.types.scoped_graph` requires every one of them
+    to be visible before the edge is shown.
+    """
     relations = payload.get("relationships") if isinstance(payload, dict) else None
     edges: list[GraphEdge] = []
     if isinstance(relations, list):
@@ -906,6 +1045,7 @@ def _edges_from_payload(payload: dict) -> list[GraphEdge]:
                     source=str(src),
                     target=str(tgt),
                     relation=str(rel.get("description") or rel.get("keywords") or "related_to"),
+                    owners=_owners_of(rel.get("file_path")),
                 )
             )
     return edges

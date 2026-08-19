@@ -169,13 +169,34 @@ class DocumentStore:
     def _tenant_dir(self, tenant_id: int | None) -> Path:
         """Return the subtree owned by ``tenant_id``.
 
+        The tenant is checked for the same reason :meth:`_checked_sha` checks the digest,
+        and it was the half that was not: both become path segments, and only one of them
+        was validated. ``f"t{tenant_id}"`` interpolates whatever it is given, so a
+        ``tenant_id`` that reached here as ``"../t2"`` — the shape a claim has when it
+        came off a JWT and was never coerced — names another tenant's subtree, or
+        somewhere outside the root entirely. :func:`aegis.governance.security.
+        _checked_tenant_id` now refuses that at the token boundary; this refuses it at
+        the filesystem boundary, because a store that is only safe when its caller is
+        correct is not a boundary.
+
         Args:
             tenant_id: The owning tenant, or ``None`` for a platform-level document.
 
         Returns:
             The directory, which may not exist yet.
+
+        Raises:
+            ValueError: If ``tenant_id`` is present but is not an ``int`` (``bool``
+                included: ``True`` would silently address tenant 1's subtree).
         """
-        return self.root / (_PLATFORM_DIR if tenant_id is None else f"t{tenant_id}")
+        if tenant_id is None:
+            return self.root / _PLATFORM_DIR
+        if isinstance(tenant_id, bool) or not isinstance(tenant_id, int):
+            raise ValueError(
+                f"{tenant_id!r} is not a tenant id; it names a path segment in the "
+                "document store and must never be an uncoerced caller-supplied value"
+            )
+        return self.root / f"t{tenant_id}"
 
     @staticmethod
     def _checked_sha(sha256: str) -> str:

@@ -273,6 +273,13 @@ class InMemoryKnowledgeBackend:
         # Genuine in-memory knowledge graph, merged across chunks by entity id.
         self.entities: dict[str, Entity] = {}
         self.relations: set[Relation] = set()
+        # relation -> {chunk_id it was extracted from}. This is the tenant provenance of
+        # an *edge*, and without it ``_graph_slice`` had none: ``self.relations`` is one
+        # merged set across every tenant this process holds, so an edge whose two
+        # endpoints happen to be entities in *this* scope's chunks was drawn even when
+        # the relation — and the phrase written on it — came only from another tenant's
+        # document.
+        self.relation_chunks: dict[Relation, set[str]] = {}
         self.mentions: dict[str, set[str]] = {}  # chunk_id -> {entity_id}
         self.entity_chunks: dict[str, set[str]] = {}  # entity_id -> {chunk_id} (inverse)
         self._extracted_ids: set[str] = set()  # chunk ids already run through extraction
@@ -555,13 +562,15 @@ class InMemoryKnowledgeBackend:
                     self.entities[ent.id] = ent
                     new_entity_ids.add(ent.id)
             for rel in relations:
-                if (
-                    rel.src_id in self.entities
-                    and rel.tgt_id in self.entities
-                    and rel not in self.relations
-                ):
+                if rel.src_id not in self.entities or rel.tgt_id not in self.entities:
+                    continue
+                if rel not in self.relations:
                     self.relations.add(rel)
                     new_relations += 1
+                # Recorded for *every* chunk that produced it, not only the first: the
+                # same relation seen in two tenants' documents is owned by both, and an
+                # edge is shown to a scope only when one of its own chunks produced it.
+                self.relation_chunks.setdefault(rel, set()).add(chunk.id)
             self._extracted_ids.add(chunk.id)
 
         self._rebuild_mentions()
@@ -695,21 +704,41 @@ class InMemoryKnowledgeBackend:
         return Candidate(id=ch.id, text=ch.text, score=score, metadata={"doc": ch.doc_id})
 
     def _graph_slice(
-        self, candidates: Sequence[Candidate]
+        self, candidates: Sequence[Candidate], scope: RetrievalScope
     ) -> tuple[list[GraphNode], list[GraphEdge]]:
-        """Emit the real entity subgraph the retrieved chunks touched.
+        """Emit the real entity subgraph the retrieved chunks touched, within ``scope``.
 
         Nodes are exactly the entities *mentioned* by the seed candidates' chunks (via
-        the literal mention index), carrying their true entity ``kind``. Edges are every
-        extracted relation whose **both** endpoints are among those touched entities — so
-        an edge only appears when a real relation between two shown nodes was extracted
-        (no relation ⇒ no edge; honesty by construction). There is no synthetic
-        document-to-document chain.
+        the literal mention index), carrying their true entity ``kind``. The candidates
+        are already scope-filtered and every mention is a literal surface-form match in
+        one of them, so a node's label is text this scope's own corpus contains.
+
+        Edges need their own predicate and did not have one. ``self.relations`` is a
+        single set merged across every tenant in the process, so "both endpoints are
+        touched" was satisfiable by a relation extracted **only from another tenant's
+        chunk** — and ``Relation.phrase`` is the connecting text that chunk stated. An
+        edge is therefore kept only when at least one of the chunks that produced it is
+        one this scope may read (``relation_chunks``). "At least one" rather than "all"
+        is exact here, not a compromise: a relation is keyed by
+        ``(src_id, tgt_id, phrase)``, so a shared edge carries the *identical* phrase in
+        each owner's document — unlike LightRAG's merged relationship description, which
+        is prose synthesised across sources and is filtered strictly in
+        :func:`~aegis.retrieval.types.scoped_graph`.
+
+        A relation with no recorded provenance is dropped rather than shown.
+
+        Args:
+            candidates: The seed candidates, already restricted to what ``scope`` reads.
+            scope: The request's retrieval scope, applied to every edge's provenance.
+
+        Returns:
+            The ``(nodes, edges)`` this scope may see.
         """
         touched: set[str] = set()
         for candidate in candidates:
             touched |= self.mentions.get(candidate.id, set())
 
+        readable = {ch.id for ch in self._chunks if self._visible(ch, scope)}
         nodes = [
             GraphNode(id=e.id, label=e.label, kind=e.kind)
             for eid in touched
@@ -718,7 +747,9 @@ class InMemoryKnowledgeBackend:
         edges = [
             GraphEdge(source=r.src_id, target=r.tgt_id, relation=r.phrase)
             for r in self.relations
-            if r.src_id in touched and r.tgt_id in touched
+            if r.src_id in touched
+            and r.tgt_id in touched
+            and self.relation_chunks.get(r, frozenset()) & readable
         ]
         return nodes, edges
 
@@ -742,7 +773,7 @@ class InMemoryKnowledgeBackend:
         vector_list = await self._vector_list(query, top_k, scope)
         graph_list = self._graph_list(query, top_k, scope)
         seed = list(vector_list.candidates) or list(graph_list.candidates)
-        nodes, edges = self._graph_slice(seed)
+        nodes, edges = self._graph_slice(seed, scope)
         return RankedRecall(lists=[vector_list, graph_list], nodes=nodes, edges=edges)
 
     async def keyword_recall(

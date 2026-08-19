@@ -10,20 +10,29 @@ them — see the backend's strangler shim over its schema module.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Final
 
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "ALL_TENANTS",
     "TENANT_METADATA_KEY",
+    "AllTenants",
     "FusionMethod",
     "GraphEdge",
     "GraphNode",
     "RetrievalOrigin",
     "RetrievalScope",
+    "TenantScope",
     "UnresolvedTenantScopeError",
+    "UntenantedPrincipalError",
+    "principal_tenant_scope",
+    "scoped_graph",
     "tenant_collection_name",
+    "tenant_filter",
     "tenant_metadata_value",
 ]
 
@@ -56,6 +65,124 @@ class UnresolvedTenantScopeError(LookupError):
     impossible: an unresolvable scope names no collection, and a collection that does
     not exist holds nothing.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class AllTenants:
+    """The **platform-wide** read authority: every tenant, on purpose.
+
+    This type exists because ``tenant_id: int | None`` was being asked to mean two
+    unrelated things at once — "a platform admin, so do not restrict anything" and
+    "this principal is not bound to any tenant". Both arrive as ``None``, both then
+    reach a query that adds no predicate, and only one of them is authorised. That
+    conflation was a live cross-tenant read on ``GET /documents/{id}/ingest``: a
+    ``client``-role account whose ``users.tenant_id`` is NULL — the shape
+    ``app.seed`` mints — took the *unprivileged* branch to the *privileged* value.
+
+    A sentinel rather than ``None`` makes the privileged state something a call site
+    has to **name**. Nothing else can produce it by omission, by a missing column, by
+    a dropped JSON key or by a default argument, which is what ``None`` does for free.
+    See :func:`principal_tenant_scope` for the resolver and :func:`tenant_filter` for
+    the single place it is turned back into an unrestricted query.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - developer affordance
+        """Return the sentinel's public name, so a log line reads honestly."""
+        return "ALL_TENANTS"
+
+
+#: The one instance of :class:`AllTenants`. Compare with ``is``, never by value.
+ALL_TENANTS: Final[AllTenants] = AllTenants()
+
+#: A **resolved** tenant authority: exactly one tenant, or deliberately every tenant.
+#: There is no third member, and in particular no ``None``: the un-resolvable state is
+#: :class:`UntenantedPrincipalError`, which is raised rather than represented, so it
+#: cannot be passed on to a query.
+TenantScope = int | AllTenants
+
+
+class UntenantedPrincipalError(UnresolvedTenantScopeError):
+    """Raised when a principal is authenticated but resolves to no tenant authority.
+
+    Subclasses :class:`UnresolvedTenantScopeError` deliberately: "I do not know whose
+    data this principal may read" is the same fact as "I do not know whose partition to
+    search", and both must fail closed rather than widen. It is a distinct class only so
+    a host can map it to its own 403 while leaving the retrieval-side refusal a 500.
+    """
+
+
+def principal_tenant_scope(
+    *, platform_wide: bool, tenant_id: object
+) -> TenantScope:
+    """Resolve a principal's claims into the single authority its reads may use.
+
+    The whole point is that the three input states map onto **three distinct outputs**,
+    one of which is an exception:
+
+    * ``platform_wide`` → :data:`ALL_TENANTS`. The caller has already decided the
+      principal is a platform operator; this function does not re-derive that from the
+      absence of a tenant, because "has no tenant" is precisely what it must stop
+      meaning "may read every tenant".
+    * a genuine ``int`` tenant id → that tenant, and only that tenant.
+    * anything else — ``None``, a string that came off a JWT claim or a header, a
+      ``bool`` — → :class:`UntenantedPrincipalError`.
+
+    ``bool`` is rejected explicitly even though it *is* an ``int`` in Python, for the
+    same reason :meth:`RetrievalScope.resolved_tenant_id` rejects it: ``tenant_id=True``
+    would otherwise resolve to tenant 1, which is a real tenant.
+
+    Args:
+        platform_wide: Whether the principal holds the platform-wide role. Passed in
+            rather than inferred, so the privileged answer always has an author.
+        tenant_id: The tenant claim as it actually arrived — deliberately typed
+            ``object``, because the value this guards against is one that lost its type
+            somewhere upstream.
+
+    Returns:
+        The resolved :data:`TenantScope`.
+
+    Raises:
+        UntenantedPrincipalError: If the principal is not platform-wide and carries no
+            usable tenant id.
+    """
+    if platform_wide:
+        return ALL_TENANTS
+    if isinstance(tenant_id, bool) or not isinstance(tenant_id, int):
+        raise UntenantedPrincipalError(
+            f"this principal is not platform-wide and carries tenant_id={tenant_id!r} "
+            f"({type(tenant_id).__name__}), which is not a tenant id. It resolves to no "
+            "authority, so the request is refused rather than run unscoped."
+        )
+    return tenant_id
+
+
+def tenant_filter(scope: TenantScope) -> int | None:
+    """Return the ``tenant_id`` predicate ``scope`` implies, or ``None`` for *all*.
+
+    **This is the only sanctioned producer of a ``None`` tenant filter**, and it can
+    only return one for :data:`ALL_TENANTS`. Every query that wants "no predicate" has
+    to come through here, which is what makes an unrestricted read traceable to a
+    principal who was entitled to one.
+
+    Args:
+        scope: A resolved authority from :func:`principal_tenant_scope`.
+
+    Returns:
+        The tenant id to filter on, or ``None`` meaning "do not restrict".
+
+    Raises:
+        UntenantedPrincipalError: If ``scope`` is neither a tenant id nor
+            :data:`ALL_TENANTS` — including a bare ``None``, which is the exact value
+            this indirection exists to stop being accepted.
+    """
+    if isinstance(scope, AllTenants):
+        return None
+    if isinstance(scope, bool) or not isinstance(scope, int):
+        raise UntenantedPrincipalError(
+            f"{scope!r} is not a resolved tenant authority. Pass ALL_TENANTS to read "
+            "every tenant deliberately; a bare None is refused."
+        )
+    return scope
 
 
 def tenant_collection_name(prefix: str, tenant_value: str | None) -> str:
@@ -268,12 +395,32 @@ class FusionMethod(StrEnum):
     MIX = "mix"  # delegated to a backend's internal graph+vector blend
 
 
+#: The provenance field carried by :class:`GraphNode` and :class:`GraphEdge`.
+#:
+#: ``None`` means **the owner could not be established**, which is not the same as "no
+#: owner" and must not be read as the shared corpus. A tuple lists every tenant metadata
+#: value (:func:`tenant_metadata_value`, so ``"t7"``, or ``None`` for a genuinely shared
+#: row) whose document contributed to this node or edge — LightRAG merges an entity
+#: across every document it appears in, so there is genuinely more than one.
+#:
+#: ``exclude=True``: this is an in-process isolation input, not part of the wire
+#: contract. It is used by :func:`scoped_graph` before the graph reaches a response and
+#: never serialised, so the ``GET /graph`` and SSE payloads are byte-identical to what
+#: they were — and a tenant is never told which tenants a node came from.
+_OWNERS_FIELD = Field(
+    default=None,
+    exclude=True,
+    description="Tenant metadata values this element was extracted from; None = unknown.",
+)
+
+
 class GraphNode(BaseModel):
     """A node in the knowledge-graph visualisation."""
 
     id: str
     label: str
     kind: str = Field(description="Entity kind/type for colouring the viz.")
+    owners: tuple[str | None, ...] | None = _OWNERS_FIELD
 
 
 class GraphEdge(BaseModel):
@@ -282,3 +429,64 @@ class GraphEdge(BaseModel):
     source: str
     target: str
     relation: str
+    owners: tuple[str | None, ...] | None = _OWNERS_FIELD
+
+
+def scoped_graph(
+    nodes: Sequence[GraphNode],
+    edges: Sequence[GraphEdge],
+    *,
+    visible: Sequence[str | None] | None,
+) -> tuple[list[GraphNode], list[GraphEdge]]:
+    """Return the part of a knowledge graph a scope is allowed to be shown.
+
+    A graph is document content, not decoration. A node's ``label`` is an entity name
+    lifted verbatim out of whichever document the extractor found it in, and an edge's
+    ``relation`` is worse: it is LightRAG's relationship *description*, a sentence the
+    extractor wrote **from the source text**. Passing either through unfiltered puts a
+    whole clause of another tenant's document on the visualisation and in the SSE
+    ``retrieval.done`` event.
+
+    The two are filtered by deliberately different rules, because they leak differently:
+
+    * A **node** survives if *any* of its owners is visible. Its label is an entity name,
+      and an entity that appears in this scope's own corpus is a name this scope already
+      knows — a merged node contributes nothing new.
+    * An **edge** survives only if *every* owner is visible, and only if both its
+      endpoints survived. The relation text is prose synthesised across all of the
+      documents the edge was extracted from, so a single foreign source is enough to put
+      a foreign sentence in it. Strictly closed is the only honest rule here.
+
+    Unknown provenance (``owners is None``) is never visible to a restricted scope. That
+    is the fail-closed half: an element we cannot attribute is refused rather than shown,
+    exactly as ``chunks.tenant_id`` being ``NOT NULL`` refuses an unattributable row.
+
+    Args:
+        nodes: The graph's nodes.
+        edges: The graph's edges.
+        visible: The tenant metadata values the caller may read, or ``None`` for a
+            deliberately unrestricted read (:data:`ALL_TENANTS`, or a wholly unscoped
+            single-tenant/eval run). ``None`` here is an authority, not an absence — it
+            has to be passed, and the only producers of it say so at the call site.
+
+    Returns:
+        The ``(nodes, edges)`` the scope may see, with dangling edges dropped.
+    """
+    if visible is None:
+        return (list(nodes), list(edges))
+    allowed = set(visible)
+    kept_nodes = [
+        node
+        for node in nodes
+        if node.owners is not None and any(owner in allowed for owner in node.owners)
+    ]
+    kept_ids = {node.id for node in kept_nodes}
+    kept_edges = [
+        edge
+        for edge in edges
+        if edge.owners is not None
+        and all(owner in allowed for owner in edge.owners)
+        and edge.source in kept_ids
+        and edge.target in kept_ids
+    ]
+    return (kept_nodes, kept_edges)

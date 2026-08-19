@@ -24,6 +24,7 @@ from aegis.retrieval.graph_extract import (
 )
 from aegis.retrieval.memory import InMemoryKnowledgeBackend
 from aegis.retrieval.models import Candidate, Chunk
+from aegis.retrieval.types import RetrievalScope
 
 
 class FakeGraphComplete:
@@ -200,7 +201,9 @@ async def test_graph_slice_is_touched_entity_subgraph_no_chain(tmp_path):
 
     doc_c_chunk = next(c for c in backend._chunks if c.doc_id == "docC")
     candidate = Candidate(id=doc_c_chunk.id, text=doc_c_chunk.text)
-    nodes, edges = backend._graph_slice([candidate])
+    # The unscoped corpus: these chunks record no owner, so the shared-corpus scope is
+    # the one that may read them (a null tenant is not a wildcard — see RetrievalScope).
+    nodes, edges = backend._graph_slice([candidate], RetrievalScope(tenant_id=None))
 
     touched = {n.id for n in nodes}
     # Exactly the entities docC mentions — Widget and John Doe, not Acme/London.

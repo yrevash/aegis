@@ -260,7 +260,8 @@ def decode_access_token(token: str) -> TokenClaims:
 
     Raises:
         jwt.InvalidTokenError: If the signature is invalid, the token is expired,
-            or a required claim is missing/malformed.
+            or a required claim is missing/malformed — which now includes a
+            ``tenant_id`` that is not an integer. See :func:`_checked_tenant_id`.
     """
     data = jwt.decode(
         token, _config.jwt_secret, algorithms=[_config.jwt_algorithm]
@@ -279,6 +280,50 @@ def decode_access_token(token: str) -> TokenClaims:
         user_id=int(sub) if sub is not None else None,
         username=str(username),
         role=role,
-        tenant_id=data.get("tenant_id"),
+        tenant_id=_checked_tenant_id(data.get("tenant_id")),
         coarse_role=coarse,
     )
+
+
+def _checked_tenant_id(claim: object) -> int | None:
+    """Return the ``tenant_id`` claim as a tenant id, or refuse the token.
+
+    JSON has no integer type distinct from what a producer chose to write, so this claim
+    used to be read straight through with ``data.get("tenant_id")`` and whatever came out
+    became ``AuthContext.tenant_id``. A string ``"7 OR 1=1"``, a float, a list — each one
+    then reached two sinks that treat it very differently:
+
+    * ``DocumentStore._tenant_dir`` interpolates it into a filesystem path with no check,
+      while the ``sha256`` segment beside it *is* checked — so the one segment a forged
+      token controls was the unchecked one.
+    * ``set_tenant_scope`` writes it into the ``app.tenant_id`` GUC, where the RLS
+      predicate's ``substring(... from '^[0-9]+$')`` yields NULL for any non-numeric
+      value. That is the policy's deliberate "no scope bound" branch, so a non-integer
+      tenant does not merely fail to match — **it disengages RLS entirely**.
+
+    ``RetrievalScope.resolved_tenant_id`` already refuses exactly this shape; this makes
+    the auth side agree, at the one door every bearer comes through. ``bool`` is rejected
+    for the same reason it is there: ``True`` is an ``int`` in Python and would resolve to
+    tenant 1, which is a real tenant.
+
+    Reaching this at all requires a validly-signed token, so it is hardening behind
+    ``JWT_SECRET`` rather than a reachable hole — and a *mint* bug would produce the same
+    shape without any attacker.
+
+    Args:
+        claim: The ``tenant_id`` claim exactly as decoded.
+
+    Returns:
+        The tenant id, or ``None`` for a principal pinned to no tenant.
+
+    Raises:
+        jwt.InvalidTokenError: If the claim is present but is not an integer.
+    """
+    if claim is None:
+        return None
+    if isinstance(claim, bool) or not isinstance(claim, int):
+        raise jwt.InvalidTokenError(
+            f"tenant_id claim {claim!r} is not a tenant id; refusing the token rather "
+            "than interpolating it into a scope."
+        )
+    return claim
