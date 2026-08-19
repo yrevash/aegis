@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from app.adapter.roster import AgentRoster, RosterSpecialist
 from aegis.agent import SubAgentSpec
+
+from app.adapter.roster import AgentRoster, RosterSpecialist
 
 _ROSTER = AgentRoster(
     specialists=(

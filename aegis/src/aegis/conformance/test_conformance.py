@@ -382,7 +382,7 @@ def test_allowlists_name_registered_tools_and_known_personas(piece: Piece) -> No
 
 # ────────────────────────────────────────────────────────────── 5 · personas ──
 def test_every_persona_the_adapter_declares_resolves(piece: Piece) -> None:
-    """``get_persona`` resolves the default and every declared id, and returns what it was asked for.
+    """``get_persona`` resolves the default and every declared id, and returns what it was asked.
 
     SCAR: "a persona the resolver rejects". ``get_persona`` raises ``KeyError`` for an
     unknown id and ``PERSONAS[DEFAULT_PERSONA_ID]`` is evaluated for *every* request that
@@ -677,7 +677,7 @@ def test_ml_spec_resolves_to_the_domain_not_the_fallback(piece: Piece) -> None:
             problem="the ML spine would not train on this domain's problem",
             what=(
                 f"the adapter declares features={declared_features or '(none)'} and "
-                f"target={declared_target or '(none)'}; resolve_spec produced "
+                f"target={declared_target or '(none)'!r}; resolve_spec produced "
                 f"features={resolved.features} target={resolved.target!r}"
                 + (" — the generic FALLBACK_SPEC." if resolved is FALLBACK_SPEC else ".")
             ),

@@ -5,11 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.adapter.tools import (  # noqa: F401
-    ALLOWLIST as _REFERENCE_ALLOWLIST,
-    TOOL_REGISTRY as _REFERENCE_REGISTRY,
-    run_tool,
-)
+from app.adapter.tools import TOOL_REGISTRY as _REFERENCE_REGISTRY
+from app.adapter.tools import run_tool  # noqa: F401 - re-exported, as a real adapter does
 
 
 @dataclass(frozen=True)
