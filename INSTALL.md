@@ -61,8 +61,22 @@ Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
 | **PostgreSQL** | ≥ 15 | relational + KV/doc-status + audit log *(Path B)* |
 | **Neo4j** | 5.x (Desktop/Community) | knowledge graph *(Path B)* |
 | **Redis** | ≥ 7 (or Memurai on Windows) | semantic cache *(Path B)* |
+| **Temporal CLI** | latest | **the ingest substrate** — every document upload runs as a Temporal workflow *(Path B)* |
 
 Phoenix runs **in-process** (a pip dependency) — nothing to install separately.
+
+> **Temporal is not optional on Path B.** Without it running, `POST /documents` stores
+> the bytes, fails to start the workflow, and returns a 503 carrying a raw transport
+> error. Worse, the upload's `content_sha256` dedup then refuses to re-ingest those
+> bytes and no `job_runs` row exists for `requeue` to act on — so the document is stuck
+> until somebody edits the database. Start it before uploading anything:
+>
+> ```bash
+> temporal server start-dev            # listens on localhost:7233
+> ```
+>
+> `scripts/preflight.sh` does **not** probe Temporal and will report "all UP" while it
+> is down. The Windows runbook in `docs/install/02-services.md` covers installing it.
 
 ---
 

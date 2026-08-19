@@ -39,12 +39,25 @@ Get-Process postgres, memurai, java, temporal, python, node -ErrorAction Silentl
   Sort-Object RSS_MB -Descending
 ```
 
-**Record the total.** For reference, measured on macOS: Temporal dev server **135 MB**, a
-Docling parse peaks at **2,199 MB**.
+**Record the total.** For reference, measured on macOS: Temporal dev server **135 MB**, and a
+Docling parse peaks at **3,363 MB** on a 126-page table-dense document (Audit C, 2026-08-19,
+`docling==2.120.3`). An earlier figure of 2,199 MB in this file was measured on a smaller
+document and an older Docling; **peak RSS scales with the document, not just with the models**,
+so size the box against the largest document you intend to ingest rather than against a
+constant.
 
 **Then answer one question with the number:** does a Docling parse fit alongside everything
 else? If it is close, that is the hardware reason parses serialise on a single-slot queue —
-two concurrent parses is ~4.4 GB and would be the thing that kills the box.
+**two concurrent parses of a large document is ~6.7 GB** and would be the thing that kills the
+box. That is the measurement that justifies `max_concurrent_activities=1` on the CPU queue.
+
+**And record the parse duration**, because it decides what you dare upload live. Measured on
+Apple Silicon with MPS: a 15-page text-dense paper is **7 s warm** (16 s in a cold process, the
+difference being model load); a 67-page table-dense report is **~215 s**; the 126-page IRS
+instructions are **838 s — fourteen minutes**. The Windows box has no GPU, so treat those as
+floors. **Do not upload a large document on stage:** the 15-page paper in a warm process is the
+demo-safe artefact. A killed parse restarts that stage from zero, so a crash at minute 13 of 14
+costs the whole fourteen.
 
 ---
 
