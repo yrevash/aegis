@@ -115,3 +115,51 @@ export function statusOf(error: unknown): number {
   }
   return 0
 }
+
+/**
+ * The server's own reason for a refusal, flattened to one sentence.
+ *
+ * {@link ApiError} has always promised that "the server's own `detail` wins when it
+ * sent one", and until the admin forms landed nothing read the failure body, so the
+ * promise was only true of errors constructed by hand. It matters most exactly where
+ * the backend is most specific: `A tenant-admin may only create users in its own
+ * tenant.`, `A tenant-admin may only set budgets for its own tenant.`, `Tenant
+ * 'Acme' already exists.` Replacing any of those with "The backend refused those
+ * values" throws away the isolation story at the moment it is showing its work.
+ *
+ * FastAPI sends `detail` in two shapes and both have to survive the trip:
+ *
+ * - a **string**, from an explicit `HTTPException` — the interesting case;
+ * - a **list of validation errors**, from Pydantic — `[{loc, msg, …}]`, which is
+ *   joined field-first so `usd_cap: Input should be greater than 0` reads as an
+ *   instruction rather than as a stack trace.
+ *
+ * @param body - The parsed failure body, or anything at all.
+ * @returns One sentence from the server, or null when it sent nothing usable.
+ */
+export function serverDetail(body: unknown): string | null {
+  if (body === null || typeof body !== 'object') return null
+  const detail = (body as { detail?: unknown }).detail
+  if (typeof detail === 'string') return sentence(detail)
+  if (!Array.isArray(detail)) return null
+
+  const parts: string[] = []
+  for (const item of detail) {
+    if (item === null || typeof item !== 'object') continue
+    const msg = (item as { msg?: unknown }).msg
+    if (typeof msg !== 'string' || msg.trim() === '') continue
+    const loc = (item as { loc?: unknown }).loc
+    const field = Array.isArray(loc)
+      ? loc.filter((p) => typeof p === 'string' && p !== 'body').join('.')
+      : ''
+    parts.push(field === '' ? msg.trim() : `${field}: ${msg.trim()}`)
+  }
+  return parts.length === 0 ? null : sentence(parts.join('; '))
+}
+
+/** Trim a server string and give it a full stop, so it reads as one sentence. */
+function sentence(raw: string): string | null {
+  const text = raw.trim()
+  if (text === '') return null
+  return /[.!?]$/.test(text) ? text : `${text}.`
+}

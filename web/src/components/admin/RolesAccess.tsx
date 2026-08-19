@@ -15,6 +15,8 @@ import { cn } from '@/lib/utils'
 import type { AdminUser } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 
+import { AdminControls } from './AdminControls'
+import { adminTier } from './adminForms'
 import {
   PORTAL_ROLES,
   ROLE_CATALOG,
@@ -39,7 +41,21 @@ type LoadState =
   | { status: 'error'; message: string }
   | { status: 'ready'; rows: AdminUser[] }
 
-export function RolesAccess({ token }: { token: string | null }): ReactElement {
+export function RolesAccess({
+  token,
+  reloadKey = 0,
+}: {
+  token: string | null
+  /**
+   * Bumped by whoever writes a user, to refetch the roster.
+   *
+   * A create form that posts and then leaves the roster below it unchanged reads as
+   * a broken control — the operator's only evidence that the write landed is a
+   * sentence, and a console that will not show you what you just did is exactly the
+   * defect this phase exists to remove.
+   */
+  reloadKey?: number
+}): ReactElement {
   // The signed-in admin, so the self-lockout guard knows *who* is acting. With a
   // constant `null` here the guard degraded to protecting the last admin in
   // scope for everyone; the real username makes it precise.
@@ -68,7 +84,7 @@ export function RolesAccess({ token }: { token: string | null }): ReactElement {
     return () => {
       alive = false
     }
-  }, [token])
+  }, [token, reloadKey])
 
   const reassign = (user: AdminUser, target: Role): void => {
     if (load.status !== 'ready') return
@@ -316,6 +332,10 @@ export function RolesAccessMount(): ReactElement {
   // `/admin/users` is admin-only: hand the child the real session bearer, and
   // hold it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
+  // Bumped when a user is created above, so the roster below shows them without a
+  // reload. The forms and the roster read the same endpoint; only this keeps them
+  // from disagreeing about who exists.
+  const [rosterKey, setRosterKey] = useState(0)
 
   if (!hydrated) {
     return (
@@ -330,10 +350,20 @@ export function RolesAccessMount(): ReactElement {
       <TooltipProvider>
         <div className="space-y-4">
           <div>
-            <p className="eyebrow mb-1">RBAC grants</p>
+            <p className="eyebrow mb-1">Tenants, seats and caps</p>
             <h1 className="t-hero text-foreground">Roles &amp; Access</h1>
+            <p className="mt-1 max-w-prose text-sm text-muted-foreground">
+              Everything on this screen is a write. Onboard a client, provision a seat, set what
+              either may spend — and see the result on the same page, without a deploy.
+            </p>
           </div>
-          <RolesAccess token={session?.token ?? null} />
+          <AdminControls
+            token={session?.token ?? null}
+            tier={adminTier(session?.fineRole)}
+            ownTenantId={session?.tenantId ?? null}
+            onUsersChanged={() => setRosterKey((n) => n + 1)}
+          />
+          <RolesAccess token={session?.token ?? null} reloadKey={rosterKey} />
         </div>
       </TooltipProvider>
     </BackendGate>

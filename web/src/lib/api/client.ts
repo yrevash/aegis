@@ -18,6 +18,8 @@ import type {
   BudgetScope,
   CapabilitiesResponse,
   CreateBudgetRequest,
+  CreateTenantRequest,
+  CreateUserRequest,
   ForecastResponse,
   GraphResponse,
   LoginRequest,
@@ -30,6 +32,7 @@ import type {
   RiskMapResponse,
   SavingsResponse,
   StackResponse,
+  Tenant,
   TenantsResponse,
   UsageResponse,
   UsersResponse,
@@ -70,7 +73,7 @@ import type {
   SecurityPostureResponse,
 } from '@/lib/api/platform'
 
-import { ApiError } from './apiError'
+import { ApiError, serverDetail } from './apiError'
 import { getAuthToken, reportSessionExpired } from './authToken'
 import { API_BASE } from './config'
 
@@ -100,7 +103,15 @@ async function request<T>(
   if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
   if (!res.ok) {
-    const failure = new ApiError(res.status, method, path)
+    // The backend's own `detail` when it sent one — `A tenant-admin may only create
+    // users in its own tenant.` is the isolation rule showing its work, and the
+    // status table cannot say it. A body that is missing or unparseable is not a
+    // second failure: fall through to the table.
+    const detail = await res
+      .json()
+      .then(serverDetail)
+      .catch(() => null)
+    const failure = new ApiError(res.status, method, path, detail ?? undefined)
     if (res.status === 401) reportSessionExpired()
     console.error('[aegis] request failed', { route: failure.route, status: res.status })
     throw failure
@@ -218,6 +229,34 @@ export async function postApproval(
 /** List tenants (platform admin). */
 export async function getTenants(token: string | null): Promise<TenantsResponse> {
   return request<TenantsResponse>('/admin/tenants', { method: 'GET' }, token)
+}
+
+/**
+ * Onboard a tenant, with its spend cap (platform admin only).
+ *
+ * The cap travels in the same call because it is part of creating a tenant, not a
+ * later step. A duplicate name is a 409 and the route says which name; both reach
+ * the operator as the server's own sentence.
+ */
+export async function createTenant(
+  body: CreateTenantRequest,
+  token: string | null,
+): Promise<Tenant> {
+  return request<Tenant>('/admin/tenants', { method: 'POST', body: JSON.stringify(body) }, token)
+}
+
+/**
+ * Provision a user with a role and an Argon2-hashed password.
+ *
+ * A platform admin may target any tenant (or none, for a platform user); a tenant
+ * admin is pinned to its own and gets a 403 for anything else. A duplicate username
+ * is a 409.
+ */
+export async function createUser(
+  body: CreateUserRequest,
+  token: string | null,
+): Promise<AdminUser> {
+  return request<AdminUser>('/admin/users', { method: 'POST', body: JSON.stringify(body) }, token)
 }
 
 /** List users, optionally scoped to a tenant. */

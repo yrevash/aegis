@@ -217,6 +217,35 @@ export interface BudgetsResponse {
 /** Body for `POST /admin/budgets`. */
 export type CreateBudgetRequest = Budget
 
+/**
+ * Body for `POST /admin/tenants` — onboard a client (platform admin only).
+ *
+ * `usd_cap` is **required**, mirroring `TenantCreateRequest` on the backend: an
+ * absent `budgets` row means uncapped, so a tenant created without one would spend
+ * without limit and the omission would surface as a bill rather than as an error.
+ * The route answers 422 for a missing or zero cap.
+ */
+export interface CreateTenantRequest {
+  name: string
+  usd_cap: number
+  window: BudgetWindow
+}
+
+/**
+ * Body for `POST /admin/users` — provision a user with a role and a password.
+ *
+ * `tenant_id` is only the platform admin's to choose. A tenant admin's own tenant is
+ * pinned server-side, and naming another tenant is a 403 — so the form never offers
+ * them the field.
+ */
+export interface CreateUserRequest {
+  username: string
+  role: Role
+  tenant_id: number | null
+  email: string | null
+  password: string
+}
+
 // ── DevOps: tech stack + patch check (supply-chain transparency) ────────────
 
 /** One dependency in the running Aegis stack. */
