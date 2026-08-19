@@ -11,8 +11,8 @@ import type { Role } from '@/lib/stream'
 // that reach for `window` at module scope, so mount the whole thing client-only.
 // The backend probe in `BackendGate` also has to run in the browser before the
 // first query, so a server render would be throwaway regardless.
-const MoneyShotConsole = dynamic(
-  () => import('@/components/console/MoneyShotConsole').then((m) => m.MoneyShotConsole),
+const ChatConsole = dynamic(
+  () => import('@/components/console/ChatConsole').then((m) => m.ChatConsole),
   {
     ssr: false,
     loading: () => (
@@ -31,7 +31,7 @@ export function ConsoleMount({ role }: { role: Role }): ReactElement {
   return (
     <BackendGate>
       <TooltipProvider>
-        <MoneyShotConsole role={role} />
+        <ChatConsole role={role} />
       </TooltipProvider>
     </BackendGate>
   )
