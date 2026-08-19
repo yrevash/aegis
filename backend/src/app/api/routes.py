@@ -848,15 +848,21 @@ async def _safe_chat_turn(
     role: str,
     content: str,
     tenant_id: int | None,
+    user_id: int,
     run_id: str | None = None,
 ) -> None:
-    """Append one turn to the chat transcript, never breaking the run if it fails.
+    """Append one turn to the caller's own transcript, never breaking the run if it fails.
 
     ``POST /query`` is the only writer of ``chat_messages`` (task 6.2): a client that
     could post its own transcript could post one that never happened, so there is no
     ``POST /sessions/{id}/messages`` and the run that produced the answer is its only
     author. Best-effort for the same reason :func:`_safe_audit` is — a failed
     bookkeeping row must not take down the thing being recorded.
+
+    ``user_id`` is passed because "the run that produced the answer" is only an honest
+    author of *its own* conversation: without the owner, an id learned from anywhere
+    (they are the same strings as ``memory_session.id``) let one person's run write into
+    another person's transcript.
     """
     from app.data.chat import append_chat_turn
 
@@ -866,6 +872,7 @@ async def _safe_chat_turn(
             role=role,
             content=content,
             tenant_id=tenant_id,
+            user_id=user_id,
             run_id=run_id,
         )
     except Exception:  # noqa: BLE001 - the transcript is best-effort at the edge
@@ -1176,17 +1183,25 @@ async def query(
     # can enforce budgets/rates and write the usage ledger for this run (§3.3).
     governance = await _resolve_governance(auth)
 
-    # The chat transcript's tenant, resolved exactly as every scoped read resolves it.
-    # ``None`` here can only have come from ALL_TENANTS; a principal that resolves to no
-    # authority at all simply gets no transcript, because refusing the *run* over a
-    # bookkeeping row would be the wrong trade.
+    # The chat transcript's tenant *and* its owner, resolved exactly as every scoped
+    # read resolves them. ``None`` for the tenant can only have come from ALL_TENANTS; a
+    # principal that resolves to no authority at all — or to no user row, and so to no
+    # conversation it could own — simply gets no transcript, because refusing the *run*
+    # over a bookkeeping row would be the wrong trade.
+    chat_owner: int | None = auth.user_id
     try:
         chat_tenant: int | None = tenant_filter(auth.tenant_scope())
-        transcript = req.session_id
+        transcript = req.session_id if chat_owner is not None else None
     except UntenantedPrincipalError:
         chat_tenant, transcript = None, None
-    if transcript is not None:
-        await _safe_chat_turn(transcript, role="user", content=req.query, tenant_id=chat_tenant)
+    if transcript is not None and chat_owner is not None:
+        await _safe_chat_turn(
+            transcript,
+            role="user",
+            content=req.query,
+            tenant_id=chat_tenant,
+            user_id=chat_owner,
+        )
 
     async def event_source() -> AsyncIterator[ServerSentEvent]:
         token = set_governance_context(governance)
@@ -1209,12 +1224,17 @@ async def query(
                 _update_dashboards(event, graph_store, metrics, persona)
                 if event.type == "token":
                     answer.append(event.text)
-                elif event.type == "run_finished" and transcript is not None:
+                elif (
+                    event.type == "run_finished"
+                    and transcript is not None
+                    and chat_owner is not None
+                ):
                     await _safe_chat_turn(
                         transcript,
                         role="assistant",
                         content="".join(answer),
                         tenant_id=chat_tenant,
+                        user_id=chat_owner,
                         run_id=event.run_id,
                     )
                 yield ServerSentEvent(event=event.type, data=event.model_dump_json())
@@ -1849,6 +1869,38 @@ def _authorize_subject(auth: AuthContext, subject: str) -> int | None:
     return tenant_filter(_require_scope(auth))
 
 
+def _authorize_row_subject(auth: AuthContext, subject: str, detail: str) -> int | None:
+    """Authorise a subject reached by **row id**, answering 404 instead of 403.
+
+    ``/memory/sessions/{id}/messages`` and ``DELETE /memory/facts/{id}`` look their row
+    up by an opaque id *before* any tenant scope is bound — deliberately, since the row
+    is what names the subject to authorise. That made the pair of status codes an
+    id-existence oracle: a row belonging to another tenant answered 403 while an id that
+    existed nowhere answered 404, so the two together said "this id is real, just not
+    yours" to anybody willing to probe. The console's own
+    ``/sessions/{id}``/``/sessions/{id}/messages`` already answer 404 for both cases;
+    these now agree with them.
+
+    The caller's *own* scope is still authorised before the 404, so a principal with no
+    tenant authority at all keeps its 403 — that refusal is a statement about the
+    caller, not about whether the id exists.
+
+    Returns:
+        The tenant filter to apply, exactly as :func:`_authorize_subject` returns it.
+
+    Raises:
+        HTTPException: 404 when this caller may not reach ``subject``; 403 when the
+            caller resolves to no authority of its own.
+    """
+    try:
+        return _authorize_subject(auth, subject)
+    except HTTPException:
+        _authorize_subject(auth, _own_subject(auth) or "")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=detail
+        ) from None
+
+
 @router.get("/memory/facts", response_model=MemoryFactsResponse, tags=["memory"])
 async def memory_facts(
     subject: str,
@@ -1994,6 +2046,8 @@ async def memory_session_messages(
 
     The session's own ``subject_id`` is authorised — a user may only read a session it
     owns; an admin any session in its tenant — so no separate subject param is needed.
+    A session this caller may not reach is a **404**, the same answer as an id that
+    names nothing: see :func:`_authorize_row_subject`.
     """
     try:
         from sqlalchemy import select
@@ -2013,7 +2067,7 @@ async def memory_session_messages(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session."
                 )
-            tenant_id = _authorize_subject(auth, sess.subject_id)
+            tenant_id = _authorize_row_subject(auth, sess.subject_id, "Unknown session.")
             await set_tenant_scope(session, tenant_id)
             stmt = select(MemoryMessage).where(
                 MemoryMessage.session_id == session_id,
@@ -2278,8 +2332,10 @@ async def memory_delete_fact(
     """GDPR right-to-erasure of a single fact: HARD-delete the row (audited).
 
     The fact's own ``subject_id`` is authorised before deletion (a user may only erase
-    its own facts; an admin any fact in its tenant). A 503 is returned when the store is
-    unreachable — an erasure must never be faked.
+    its own facts; an admin any fact in its tenant); a fact this caller may not reach is
+    a **404**, the same answer as an id that names nothing, so the status code cannot be
+    used to probe which ids exist (:func:`_authorize_row_subject`). A 503 is returned
+    when the store is unreachable — an erasure must never be faked.
     """
     try:
         from sqlalchemy import delete, select
@@ -2298,7 +2354,7 @@ async def memory_delete_fact(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Unknown fact."
                 )
-            tenant_id = _authorize_subject(auth, fact.subject_id)
+            tenant_id = _authorize_row_subject(auth, fact.subject_id, "Unknown fact.")
             await set_tenant_scope(session, tenant_id)
             subject = fact.subject_id
             stmt = delete(MemoryFact).where(MemoryFact.id == fact_id)

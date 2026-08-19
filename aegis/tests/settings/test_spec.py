@@ -190,3 +190,38 @@ def test_strictness_is_undefined_for_an_override_key_and_says_so():
     """Answering anyway would let a caller believe a key was protected when it is not."""
     with pytest.raises(ValueError, match="only defined for"):
         strictest(spec_for("agent.model"), "a", "b")
+
+
+# ── the honesty flag: a control may not be badged live unless something reads it ──
+
+
+def test_a_key_is_declared_inert_exactly_when_nothing_binds_it():
+    """The catalogue is where "does this control do anything?" is answered, once.
+
+    Six keys once saved, wrote an audit row and badged themselves "Your setting" while
+    reaching nothing. Four of them now bind — through
+    :data:`aegis.settings.agent.AGENT_SETTING_BINDINGS` and
+    :data:`aegis.settings.guardrails.GUARDRAIL_SETTING_BINDINGS` — and the two that do
+    not (``agent.model``, ``agent.mode``, both request-level ``OVERRIDE`` preferences
+    with no request field to carry them) say so in the one place every layer reads.
+
+    Drop the ``inert_reason`` from either without giving it a consumer and the control
+    goes back to claiming it works; add a binding for one without clearing the reason
+    and the import-time check in the binding module fails first.
+    """
+    from aegis.settings.agent import AGENT_SETTING_BINDINGS
+    from aegis.settings.guardrails import GUARDRAIL_SETTING_BINDINGS
+
+    bound = {b.key for b in AGENT_SETTING_BINDINGS} | {
+        b.key for b in GUARDRAIL_SETTING_BINDINGS
+    }
+    inert = {spec.key for spec in SETTING_SPECS if not spec.effective}
+
+    assert bound & inert == set(), f"bound and declared inert: {sorted(bound & inert)}"
+    assert inert == {"agent.model", "agent.mode"}, (
+        "the set of controls that change nothing moved; every member needs an "
+        f"inert_reason naming what would make it live: {sorted(inert)}"
+    )
+    for control in setting_controls():
+        if not control["effective"]:
+            assert control["inert_reason"], control["key"]

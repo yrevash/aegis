@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Any
 
 from aegis.core.types import RiskLevel
 from aegis.settings.resolver import resolve_all
-from aegis.settings.spec import MergeRule, SettingSpec, Strictness, spec_for, strictest
+from aegis.settings.spec import MergeRule, spec_for, strictest, strictest_legal
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,46 +109,24 @@ AGENT_SETTING_BINDINGS: tuple[_Binding, ...] = (
 )
 
 
-def _strictest_legal(spec: SettingSpec) -> Any:  # noqa: ANN401 - any setting value
-    """Return the strictest value ``spec`` permits at all — the fail-closed value.
-
-    Args:
-        spec: A ``TIGHTEN_ONLY`` spec.
-
-    Returns:
-        The end of the spec's declared domain that its :class:`~aegis.settings.spec.
-        Strictness` calls stricter: the first (or last) of ``choices``, or the low (or
-        high) end of ``bounds``.
-
-    Raises:
-        ValueError: If the spec declares no domain to clamp into, so "the strictest
-            value" has no answer. Raised at import (see the check below) rather than
-            discovered during an outage, when the fail-closed path is the only thing
-            standing between a tenant and a control nobody can read.
-    """
-    lower_is_stricter = spec.stricter is Strictness.LOWER
-    if spec.choices is not None:
-        return spec.choices[0] if lower_is_stricter else spec.choices[-1]
-    if spec.bounds is not None:
-        return spec.bounds[0] if lower_is_stricter else spec.bounds[1]
-    raise ValueError(
-        f"{spec.key} declares neither choices nor bounds, so there is no strictest "
-        "value to fail closed to; give it bounds or drop it from AGENT_SETTING_BINDINGS"
-    )
-
-
 # Import-time coherence, in the style of the catalogue itself: a binding to a key that
 # is not tighten_only, or to one with no clampable domain, is a programming error whose
 # only symptom would otherwise be a fail-open during a database outage.
 for _binding in AGENT_SETTING_BINDINGS:
     _spec = spec_for(_binding.key)
+    if _spec.inert_reason is not None:
+        raise ValueError(
+            f"{_binding.key} is bound to AgentConfig here but the catalogue still "
+            f"declares it inert: {_spec.inert_reason!r}. One of the two is lying; "
+            "clear inert_reason when the key gains a consumer."
+        )
     if _spec.merge is not MergeRule.TIGHTEN_ONLY:
         raise ValueError(
             f"{_binding.key} merges by {_spec.merge.value}; only a tighten_only key may "
             "be folded onto a host's AgentConfig, because only tightening is safe to "
             "apply to a value the host chose"
         )
-    _strictest_legal(_spec)
+    strictest_legal(_spec)
 del _binding, _spec
 
 
@@ -170,7 +148,7 @@ def strictest_agent_config(config: AgentConfig) -> AgentConfig:
     updates: dict[str, Any] = {}
     for binding in AGENT_SETTING_BINDINGS:
         spec = spec_for(binding.key)
-        updates[binding.field] = binding.from_setting(_strictest_legal(spec))
+        updates[binding.field] = binding.from_setting(strictest_legal(spec))
     return dataclasses.replace(config, **updates)
 
 

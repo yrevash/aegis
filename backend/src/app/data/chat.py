@@ -22,6 +22,25 @@ one row for the user's turn before the run and one for the assistant's answer wh
 run finishes. There is deliberately no ``POST /sessions/{id}/messages`` — a client that
 could write its own transcript could write one that never happened, and the run that
 produced the answer is the only honest author of it.
+
+**A session id is an identifier, not a capability.** This is worth stating because for
+a while it was not true. ``chat_sessions.id`` is deliberately the same string as
+``memory_session.id``, and ``GET /memory/sessions?subject=user:<colleague>`` hands a
+tenant admin every one of a colleague's ids — so an id is *learnable*, not guessable.
+When :func:`append_chat_turn` checked only that the session existed in the tenant, that
+made every learnable id a write capability into somebody else's transcript.
+
+The fix is the owner predicate on the write, not secrecy for the id, and that ordering
+is deliberate. The admin's read stays: ``_authorize_subject``'s admin branch is how a
+tenant admin administers their tenant's memory — it is the same branch
+``DELETE /memory/facts/{id}`` needs for a right-to-erasure request, and it already
+exposes far more than ids (``turn_count``, ``last_active_at``, and the conversation
+``summary``). Narrowing it to hide ids would remove a governance capability to buy
+secrecy for a string that is not, and must not be, a secret. What was wrong was never
+that the id could be learned; it was that knowing it was enough to act. It no longer is
+— every function in this module, read and write alike, filters on the owner — and note
+that the memory *summary* an admin can read is a different resource from this
+transcript, which no admin branch reaches at all.
 """
 
 from __future__ import annotations
@@ -194,31 +213,55 @@ async def append_chat_turn(
     role: str,
     content: str,
     tenant_id: int | None,
+    user_id: int,
     run_id: str | None = None,
 ) -> int | None:
-    """Append one turn to a session and bump its activity clock.
+    """Append one turn to the caller's own session and bump its activity clock.
 
     Called by ``POST /query`` for the user's question and again for the answer. A
-    ``session_id`` that names no row is a no-op returning ``None`` rather than an error:
-    the transcript is a record of the run, and failing the run because the record could
-    not be written would trade a working product for a bookkeeping detail.
+    ``session_id`` that names no row **of the caller's** is a no-op returning ``None``
+    rather than an error: the transcript is a record of the run, and failing the run
+    because the record could not be written would trade a working product for a
+    bookkeeping detail.
+
+    ``user_id`` is not optional and not a courtesy. This function used to check only
+    that the session existed *in the tenant*, which made ``session_id`` a write
+    capability for anyone who could learn one: a colleague could POST ``/query`` with
+    a co-worker's id and both turns landed in that person's transcript — the assistant
+    turn carrying a ``run_id`` from a run they never made, and ``last_active_at`` bumped
+    so their session rail re-ordered under them. Every sibling in this module filters on
+    the owner; the write is the one that most needed to.
+
+    **The ``UPDATE`` is deliberately first.** It is both the ownership check (a
+    ``rowcount`` of zero means "no such session of yours") and the serialisation point:
+    it takes the session row's write lock, so a second concurrent appender on the same
+    conversation blocks there rather than racing the ``count(*)`` below and minting a
+    duplicate ``turn_index``. Ordering it after the count — as it was — left the two
+    writers counting the same value.
 
     Args:
         session_id: The conversation the turn belongs to.
         role: ``user`` | ``assistant``.
         content: The turn's text.
         tenant_id: Scope bound for RLS and stamped on the row.
+        user_id: The owner. A turn is only ever appended to that person's own session.
         run_id: The run that produced an assistant turn; ``None`` for a user turn.
 
     Returns:
-        The 0-based ``turn_index`` written, or ``None`` when no such session exists.
+        The 0-based ``turn_index`` written, or ``None`` when the caller owns no such
+        session.
     """
     async with get_sessionmaker()() as db:
         await set_tenant_scope(db, tenant_id)
-        exists = select(ChatSession.id).where(ChatSession.id == session_id)
+        bump = (
+            update(ChatSession)
+            .where(ChatSession.id == session_id, ChatSession.user_id == user_id)
+            .values(last_active_at=_now())
+        )
         if tenant_id is not None:
-            exists = exists.where(ChatSession.tenant_id == tenant_id)
-        if (await db.execute(exists)).scalars().first() is None:
+            bump = bump.where(ChatSession.tenant_id == tenant_id)
+        if (await db.execute(bump)).rowcount != 1:
+            await db.rollback()
             return None
         next_index = (
             await db.execute(
@@ -234,11 +277,6 @@ async def append_chat_turn(
                 content=content,
                 run_id=run_id,
             )
-        )
-        await db.execute(
-            update(ChatSession)
-            .where(ChatSession.id == session_id)
-            .values(last_active_at=_now())
         )
         await db.commit()
         return int(next_index)

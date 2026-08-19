@@ -442,14 +442,61 @@ async def test_delete_single_fact_erases_and_audits(client, db):
     assert resp.status_code == 200
     assert resp.json() == {"fact_id": fid, "deleted": True}
 
-    # A member cannot delete a fact belonging to another subject (cross-subject 403).
+    # A member cannot delete a fact belonging to another subject. The refusal is a 404,
+    # not the 403 it used to be: an id-keyed route that answers 403 for "exists, not
+    # yours" and 404 for "exists nowhere" hands out an id-existence oracle (audit A6).
+    # What matters is that the row survives, which is asserted below the status code.
     async with get_sessionmaker()() as s:
         other = (
             await s.execute(
                 select(MemoryFact.id).where(MemoryFact.subject_id == "user:22")
             )
         ).scalar_one()
-    forbidden = await client.delete(
+    refused = await client.delete(
         f"/memory/facts/{other}", headers=_headers(MEMBER, tenant_id=2, user_id=99)
     )
-    assert forbidden.status_code == 403
+    assert refused.status_code == 404
+    async with get_sessionmaker()() as s:
+        survived = (
+            await s.execute(select(MemoryFact.id).where(MemoryFact.id == other))
+        ).scalar_one_or_none()
+        assert survived == other, "another subject's fact was erased by a stranger"
+
+
+async def test_an_id_keyed_memory_route_is_not_an_existence_oracle(client, db):
+    """A real row this caller may not reach answers exactly as an id that names nothing.
+
+    ``/memory/sessions/{id}/messages`` and ``DELETE /memory/facts/{id}`` look their row
+    up *before* any tenant scope is bound — deliberately, since the row is what names
+    the subject to authorise — so the status codes were the only thing separating "this
+    id is real, just not yours" (403) from "no such id" (404). Together they let anyone
+    with a bearer probe which ids exist in other tenants. ``/sessions/{id}`` on the
+    console router already answered 404 to both; these now agree.
+
+    Replace :func:`app.api.routes._authorize_row_subject` with the bare
+    ``_authorize_subject`` at either call site and the pair splits apart again.
+    """
+    await _seed_memory()
+    async with get_sessionmaker()() as s:
+        s.add(
+            MemorySession(
+                id="sess-of-tenant-2", subject_id="user:22", tenant_id=2, persona="ops"
+            )
+        )
+        await s.commit()
+        others_fact = (
+            await s.execute(
+                select(MemoryFact.id).where(MemoryFact.subject_id == "user:22")
+            )
+        ).scalar_one()
+
+    stranger = _headers(MEMBER, tenant_id=1, user_id=11)
+    real = await client.get("/memory/sessions/sess-of-tenant-2/messages", headers=stranger)
+    absent = await client.get("/memory/sessions/no-such-session/messages", headers=stranger)
+    assert (real.status_code, absent.status_code) == (404, 404)
+    assert real.json()["detail"] == absent.json()["detail"]
+
+    real_fact = await client.delete(f"/memory/facts/{others_fact}", headers=stranger)
+    absent_fact = await client.delete("/memory/facts/999999", headers=stranger)
+    assert (real_fact.status_code, absent_fact.status_code) == (404, 404)
+    assert real_fact.json()["detail"] == absent_fact.json()["detail"]

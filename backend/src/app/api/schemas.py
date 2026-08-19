@@ -8,6 +8,14 @@ the TypeScript types from it (do not hand-maintain a parallel copy).
 
 SSE wire format: each event is emitted as an SSE message whose `event:` field is
 the variant's `type` and whose `data:` field is the model's JSON.
+
+**Every `*Request` model in this file sets `extra="forbid"`.** Pydantic's default is to
+drop a field it does not recognise, in silence, with a 200 — which in this project has
+now swallowed a request field four separate times (`session_id`, `depth_mode`, and the
+two before them), each time presenting as "the backend ignored what I sent" with nothing
+in any log to say so. The rule is therefore the file's, not one model's: a body naming a
+field its request does not carry is a 422 that says which field. Response models keep
+the permissive default — an extra key on the way *out* breaks nobody.
 """
 
 from __future__ import annotations
@@ -622,6 +630,8 @@ class AboutResponse(BaseModel):
 class LoginRequest(BaseModel):
     """Body for `POST /auth/login`."""
 
+    model_config = ConfigDict(extra="forbid")
+
     username: str
     password: str
 
@@ -766,6 +776,8 @@ class GraphResponse(BaseModel):
 class MLExplainRequest(BaseModel):
     """Body for `POST /ml/explain` — the features for one prediction."""
 
+    model_config = ConfigDict(extra="forbid")
+
     features: dict = Field(description="Feature name → value for one prediction.")
 
 
@@ -818,6 +830,8 @@ class MetricsResponse(BaseModel):
 
 class ApprovalRequest(BaseModel):
     """Body for `POST /approval` — resolve a paused action."""
+
+    model_config = ConfigDict(extra="forbid")
 
     approval_id: str
     decision: ApprovalDecision
@@ -875,6 +889,8 @@ class ApprovalInboxResponse(BaseModel):
 class ApprovalDecisionRequest(BaseModel):
     """Body for `POST /approvals/{id}/decision` — resolve a durable approval."""
 
+    model_config = ConfigDict(extra="forbid")
+
     decision: ApprovalDecision
 
 
@@ -922,11 +938,15 @@ class AdminUsersResponse(BaseModel):
 class UserRoleUpdateRequest(BaseModel):
     """Body for `POST /admin/users/{user_id}/role` — reassign a user's RBAC role."""
 
+    model_config = ConfigDict(extra="forbid")
+
     role: Role = Field(description="The new coarse role to assign the user.")
 
 
 class AdminUserCreateRequest(BaseModel):
     """Body for `POST /admin/users` — provision a new user with a role + password."""
+
+    model_config = ConfigDict(extra="forbid")
 
     username: str = Field(min_length=1, max_length=255, description="Unique login name.")
     role: Role = Field(description="The coarse role to grant (admin/ai_team/devops/client).")
@@ -941,6 +961,8 @@ class AdminUserCreateRequest(BaseModel):
 
 class TenantCreateRequest(BaseModel):
     """Body for `POST /admin/tenants` — create a client/tenant (platform-admin only)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255, description="Unique tenant (client) name.")
     usd_cap: float = Field(
@@ -968,6 +990,8 @@ class AdminBudgetsResponse(BaseModel):
 
 class BudgetUpsertRequest(BaseModel):
     """Body for `POST /admin/budgets` — create or update a cap for a scope+window."""
+
+    model_config = ConfigDict(extra="forbid")
 
     scope_type: str = Field(description="'tenant' | 'user'.")
     scope_id: int = Field(description="Id of the tenant or user the cap governs.")
@@ -1206,6 +1230,8 @@ class OpsEvalsResponse(BaseModel):
 class OpsDiagnoseRequest(BaseModel):
     """Body for `POST /ops/diagnose` — cluster failures + draft an improved prompt."""
 
+    model_config = ConfigDict(extra="forbid")
+
     prompt_key: str
     limit: int = Field(default=50, ge=1, le=500)
 
@@ -1221,6 +1247,8 @@ class OpsDiagnoseResponse(BaseModel):
 
 class OpsReleaseRequest(BaseModel):
     """Body for `POST /ops/release` — run the eval gate + tiered decision on a draft."""
+
+    model_config = ConfigDict(extra="forbid")
 
     draft_version_id: int
     autonomy: str = Field(default="tiered", description="tiered | auto | manual.")
@@ -1241,6 +1269,8 @@ class OpsReleaseResponse(BaseModel):
 
 class OpsRollbackRequest(BaseModel):
     """Body for `POST /ops/rollback` — revert to the previous version for a key."""
+
+    model_config = ConfigDict(extra="forbid")
 
     prompt_key: str
 
@@ -1272,6 +1302,8 @@ class OpsPendingReleasesResponse(BaseModel):
 
 class OpsReleaseDecisionRequest(BaseModel):
     """Body for `POST /ops/releases/{approval_id}/decide` — resolve a staged release."""
+
+    model_config = ConfigDict(extra="forbid")
 
     approved: bool
 
@@ -1324,6 +1356,8 @@ class StackResponse(BaseModel):
 
 class PatchCheckRequest(BaseModel):
     """Body for `POST /stack/patch-check` — optionally narrow to a subset of packages."""
+
+    model_config = ConfigDict(extra="forbid")
 
     packages: list[str] | None = Field(
         default=None,
@@ -1795,6 +1829,8 @@ class VisionAnalyseRequest(BaseModel):
     rail sniffs the magic bytes and refuses a payload whose declaration disagrees
     with its content — that single lie is a whole rail bypass.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     image_base64: str = Field(
         description="The image bytes, base64-encoded. A `data:` URL is also accepted."

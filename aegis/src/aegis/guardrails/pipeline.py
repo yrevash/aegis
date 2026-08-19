@@ -8,12 +8,13 @@ schema → content filter → PII on output), but is LLM-agnostic (an injected
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 from aegis.core.config import AegisMode, CoreSettings
@@ -37,6 +38,7 @@ from aegis.guardrails.grounding import check_grounding
 from aegis.guardrails.media import MediaScreen, call_rail
 from aegis.guardrails.media.audio import Transcriber
 from aegis.guardrails.media.types import MediaGuardResult
+from aegis.guardrails.policy import GuardrailPolicy
 from aegis.guardrails.topical import screen_topic
 from aegis.media import MediaKind, MediaLimits, MediaPayload, TextPayload, as_payload
 
@@ -154,6 +156,22 @@ LegacyTextRail = Callable[[str], "GuardResult | None | Awaitable[GuardResult | N
 AnyRail = Rail | LegacyTextRail
 
 
+def _clean_terms(values: Sequence[str] | None) -> tuple[str, ...]:
+    """Normalise a configured string collection to a de-duplicated, order-stable tuple.
+
+    Args:
+        values: Raw terms/entity names from a host or a settings resolution.
+
+    Returns:
+        The non-empty, stripped members in first-seen order.
+    """
+    seen: dict[str, None] = {}
+    for value in values or ():
+        if isinstance(value, str) and value.strip():
+            seen.setdefault(value.strip(), None)
+    return tuple(seen)
+
+
 @register("guardrail", "default")
 class Guardrails:
     """SOTA, LLM-agnostic input/output guardrail pipeline.
@@ -174,6 +192,8 @@ class Guardrails:
         topical_block: bool = False,
         ground_answers: bool = False,
         grounding_block: bool = False,
+        denylist_terms: Sequence[str] | None = None,
+        pii_entities: Sequence[str] | None = None,
         injection_cache: InjectionCache | None = None,
         vision_completer: ChatCompleter | None = None,
         media_limits: MediaLimits | None = None,
@@ -204,6 +224,13 @@ class Guardrails:
                 when ``check_output`` is given retrieval ``contexts``; an
                 ungrounded answer is an advisory FLAG unless ``grounding_block``.
             grounding_block: Make the grounding rail a hard BLOCK instead of advisory.
+            denylist_terms: Terms whose presence is a BLOCK on the inbound, tool-result
+                and outbound paths (:func:`aegis.guardrails.schema.denied_term`). The
+                host's own floor; a tenant's ``guardrails.denylist.terms`` is unioned
+                onto it per request by :meth:`with_policy`.
+            pii_entities: Entity kinds to screen for **in addition to** the ones the
+                live PII engine already covers. Again a floor: a tenant's
+                ``guardrails.pii.entities`` is unioned onto it, never assigned over it.
             vision_completer: A vision-capable completer for the image-injection
                 screen (:mod:`aegis.guardrails.media.injection`). Kept separate
                 from ``completer`` because screening pixels needs a multimodal
@@ -232,6 +259,8 @@ class Guardrails:
         self._topical_block = topical_block
         self._ground_answers = ground_answers
         self._grounding_block = grounding_block
+        self._denylist_terms = _clean_terms(denylist_terms)
+        self._pii_entities = _clean_terms(pii_entities)
         self._injection_cache = (
             injection_cache if injection_cache is not None else _default_injection_cache()
         )
@@ -243,6 +272,53 @@ class Guardrails:
             image_redactor=image_redactor,
             transcriber=transcriber,
         )
+
+    @property
+    def policy(self) -> GuardrailPolicy:
+        """The four per-tenant controls this pipeline is currently enforcing.
+
+        Read by a host so it can fold a tenant's resolved settings **onto** what it
+        wired, rather than replacing them — see
+        :func:`aegis.settings.guardrails.resolve_guardrail_policy`.
+        """
+        return GuardrailPolicy(
+            topical_block=self._topical_block,
+            grounding_block=self._grounding_block,
+            denylist_terms=self._denylist_terms,
+            pii_entities=self._pii_entities,
+        )
+
+    def with_policy(self, policy: GuardrailPolicy) -> Guardrails:
+        """Return a pipeline enforcing ``policy``, sharing this one's expensive parts.
+
+        **The point is that it returns a new object.** The pipeline a host builds is
+        process-wide and a tenant's rails are not: writing one tenant's resolved policy
+        onto the singleton would apply it to every other tenant's next request, which is
+        the exact class of defect — one tenant's resolution reused for another's run —
+        that :mod:`aegis.settings.agent` exists to avoid for the agent's config. So a
+        caller resolves per request, calls this, uses the result for that request, and
+        drops it.
+
+        The copy is shallow on purpose: the completer, the injection cache and the media
+        screen are stateless-by-contract collaborators that are expensive to build and
+        safe to share, and none of them is policy-dependent.
+
+        Args:
+            policy: The tenant's resolved controls. Callers are expected to have folded
+                it onto :attr:`policy` already (tighten-only for the two booleans, union
+                for the two collections), so this method assigns rather than merges.
+
+        Returns:
+            ``self`` when nothing changed, otherwise a new :class:`Guardrails`.
+        """
+        if policy == self.policy:
+            return self
+        clone = copy.copy(self)
+        clone._topical_block = policy.topical_block
+        clone._grounding_block = policy.grounding_block
+        clone._denylist_terms = _clean_terms(policy.denylist_terms)
+        clone._pii_entities = _clean_terms(policy.pii_entities)
+        return clone
 
     @staticmethod
     async def _run_custom(
@@ -418,7 +494,18 @@ class Guardrails:
                 ),
                 [],
             )
-        redacted, kinds = pii.redact(text)
+        denied = schema.denied_term(text, self._denylist_terms)
+        if not denied.ok:
+            return (
+                GuardResult(
+                    verdict=GuardVerdict.BLOCK,
+                    reason=denied.reason,
+                    text=text,
+                    layer="denylist",
+                ),
+                [],
+            )
+        redacted, kinds = pii.redact(text, entities=self._pii_entities)
         verdict = await self._detect_injection_cached(redacted, emitter=emitter)
         if verdict.injection:
             return (_injection_block(verdict, redacted), [])
@@ -711,6 +798,11 @@ class Guardrails:
             return GuardResult(
                 verdict=GuardVerdict.BLOCK, reason=filtered.reason, text=text, layer="content"
             )
+        denied = schema.denied_term(text, self._denylist_terms)
+        if not denied.ok:
+            return GuardResult(
+                verdict=GuardVerdict.BLOCK, reason=denied.reason, text=text, layer="denylist"
+            )
         safety = await screen_content(text, completer=self._completer)
         if safety.unsafe:
             return GuardResult(
@@ -725,7 +817,7 @@ class Guardrails:
         grounding = await self._screen_grounding(text, contexts)
         if grounding is not None and grounding.verdict is GuardVerdict.BLOCK:
             return grounding
-        redacted, kinds = pii.redact(text)
+        redacted, kinds = pii.redact(text, entities=self._pii_entities)
         if kinds:
             return GuardResult(
                 verdict=GuardVerdict.REDACT,
@@ -820,7 +912,10 @@ class Guardrails:
             # PII spans are character offsets into text; a binary payload has none
             # (its PII, if any, is reported by the media chain's own redaction rail).
             spans = (
-                [{"kind": m.kind, "start": m.start, "end": m.end} for m in pii.scan(text)]
+                [
+                    {"kind": m.kind, "start": m.start, "end": m.end}
+                    for m in pii.scan(text, entities=self._pii_entities)
+                ]
                 if isinstance(text, str)
                 else []
             )

@@ -19,11 +19,14 @@ stable.
 
 from __future__ import annotations
 
+import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import NamedTuple
 
 from aegis.core.types import PIIMatch
+
+_LOG = logging.getLogger(__name__)
 
 #: Human-readable identifier reported by ``pii.active_engine()`` when this engine is live.
 ENGINE_NAME = "regex"
@@ -136,15 +139,60 @@ def _resolve_overlaps(matches: list[PIIMatch]) -> list[PIIMatch]:
     return kept
 
 
-def scan(text: str) -> list[PIIMatch]:
+#: The Presidio entity names this engine's fixed detector table actually covers, so a
+#: caller asking for something else is *told* rather than quietly served less. The
+#: fallback engine is allowed to detect fewer kinds than Presidio — that is what makes
+#: it a fallback — but it is not allowed to accept an instruction it cannot carry out
+#: and say nothing.
+SUPPORTED_ENTITIES: frozenset[str] = frozenset(
+    {
+        "EMAIL_ADDRESS",
+        "US_SSN",
+        "CREDIT_CARD",
+        "AWS_ACCESS_KEY",
+        "API_KEY",
+        "IP_ADDRESS",
+        "PHONE_NUMBER",
+    }
+)
+
+#: Entity names already warned about, so an unscreenable kind logs once per process
+#: rather than once per inbound message.
+_WARNED: set[str] = set()
+
+
+def _warn_unsupported(entities: Sequence[str] | None) -> None:
+    """Log, once per name, any requested entity this engine has no detector for."""
+    for name in entities or ():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        normalised = name.strip().upper()
+        if normalised in SUPPORTED_ENTITIES or normalised in _WARNED:
+            continue
+        _WARNED.add(normalised)
+        _LOG.warning(
+            "PII engine 'regex' has no detector for %s, so it is NOT being screened "
+            "for. The setting is honoured by the Presidio engine; install "
+            "'aegis[pii]' (and the spaCy model) for it to take effect here.",
+            normalised,
+        )
+
+
+def scan(text: str, *, entities: Sequence[str] | None = None) -> list[PIIMatch]:
     """Return every (non-overlapping) PII span found in ``text``.
 
     Args:
         text: The text to scan.
+        entities: Extra entity names the caller wants screened (a tenant's
+            ``guardrails.pii.entities``). This engine's detector table is fixed and
+            already covers every kind the catalogue's platform default names, so the
+            argument can only ever *add* — and any name it has no detector for is
+            logged once rather than silently dropped.
 
     Returns:
         Detected :class:`PIIMatch` spans, ordered by position. Empty when clean.
     """
+    _warn_unsupported(entities)
     hits: list[PIIMatch] = []
     for detector in _DETECTORS:
         for match in detector.pattern.finditer(text):

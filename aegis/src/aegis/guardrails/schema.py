@@ -33,6 +33,7 @@ operator can see why.
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Sequence
 
 from aegis.core.types import FormatCheck
 from aegis.guardrails.normalize import disallowed_invisible_chars
@@ -152,6 +153,48 @@ def validate_output_format(text: str) -> FormatCheck:
             ),
         )
     return FormatCheck(ok=True, reason="Output format is valid.")
+
+
+def denied_term(text: str, terms: Sequence[str] | None) -> FormatCheck:
+    """Screen ``text`` against a tenant's own denied terms.
+
+    The rail behind ``guardrails.denylist.terms``, which until now was a catalogue key
+    a tenant admin could write, audit and see badged "Your setting" while nothing on any
+    path read it. It is deliberately separate from :func:`content_filter`: that
+    function's markers are the *platform's* fixed backstop against system-prompt
+    leakage on the outbound path, whereas these are one tenant's own words — client
+    names, project codenames, an unreleased product — and they are screened on the
+    inbound, tool-result **and** outbound paths, because a term that must not be
+    discussed must not be typed in, fetched, or answered with.
+
+    Case-insensitive substring matching, which is what a list of names needs and what
+    the catalogue's ``tags`` control implies. It is not a word-boundary match: a
+    denylist that misses ``project-zephyr's`` because of an apostrophe is a denylist
+    that does not work.
+
+    Args:
+        text: The text to screen.
+        terms: The tenant's resolved denied terms (already UNION-merged across the
+            platform, tenant and user scopes). ``None``/empty disables the rail.
+
+    Returns:
+        A :class:`FormatCheck`; ``ok`` is ``False`` when a denied term is present, and
+        ``reason`` names the term that fired so the console never shows an anonymous
+        block.
+    """
+    if not terms:
+        return FormatCheck(ok=True, reason="No denied terms are configured.")
+    lowered = text.lower()
+    for term in terms:
+        if not isinstance(term, str):
+            continue
+        needle = term.strip().lower()
+        if needle and needle in lowered:
+            return FormatCheck(
+                ok=False,
+                reason=f"Matched a denied term configured for this tenant: {term.strip()!r}.",
+            )
+    return FormatCheck(ok=True, reason="No denied term is present.")
 
 
 def content_filter(text: str) -> FormatCheck:

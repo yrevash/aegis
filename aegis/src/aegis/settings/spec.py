@@ -48,6 +48,7 @@ __all__ = [
     "setting_keys",
     "spec_for",
     "strictest",
+    "strictest_legal",
 ]
 
 
@@ -138,12 +139,22 @@ class SettingSpec:
             for — ``TIGHTEN_ONLY``.
         description: Rendered as the control's help text. Required: an unexplained
             control in a tenant-facing form is one nobody dares touch.
+        inert_reason: ``None`` for a key some consumer actually reads — the normal case,
+            and the only one a control may be rendered as live. A **string** declares
+            that nothing reads this key yet and says exactly what would make it live.
+            It exists because the alternative was found in the wild: six catalogue keys
+            that saved, wrote an audit row, badged themselves "Your setting" and changed
+            nothing whatsoever. A control that lies about being in force is worse than an
+            absent one, so the catalogue — the single declaration every layer reads —
+            is where the admission belongs, and :func:`setting_controls` forwards it to
+            the screen. Four of those six now bind; the two that do not say so here.
 
     Raises:
         ValueError: If the declaration is incoherent — an unrenderable type, a
             ``TIGHTEN_ONLY`` key with no strictness direction, a default outside its own
-            bounds or choices, or a missing description. Every one of these is a
-            programming error in the catalogue itself, so it fails at import.
+            bounds or choices, a missing description, or an ``inert_reason`` that does
+            not name what would make the key live. Every one of these is a programming
+            error in the catalogue itself, so it fails at import.
     """
 
     key: str
@@ -156,6 +167,7 @@ class SettingSpec:
     choices: tuple[Any, ...] | None = None
     stricter: Strictness | None = None
     description: str = ""
+    inert_reason: str | None = None
 
     def __post_init__(self) -> None:
         """Refuse a declaration the rest of this package could not honour."""
@@ -167,6 +179,12 @@ class SettingSpec:
             )
         if not self.description:
             raise ValueError(f"setting {self.key!r} has no description to render as help text")
+        if self.inert_reason is not None and not self.inert_reason.strip():
+            raise ValueError(
+                f"setting {self.key!r} declares itself inert but does not say why or "
+                "what would make it live; an unexplained dead control is the defect the "
+                "field exists to end, not a lighter version of it"
+            )
         if self.merge is MergeRule.TIGHTEN_ONLY and self.stricter is None:
             raise ValueError(
                 f"setting {self.key!r} is tighten_only but does not say which direction "
@@ -179,6 +197,11 @@ class SettingSpec:
                 "a union key holds a list of members"
             )
         self.validate(self.default)
+
+    @property
+    def effective(self) -> bool:
+        """Whether anything in the system actually reads this key today."""
+        return self.inert_reason is None
 
     @property
     def control(self) -> str:
@@ -253,6 +276,49 @@ class SettingSpec:
         if self.type_ is bool:
             return 1.0 if value else 0.0
         return float(value)
+
+
+def strictest_legal(spec: SettingSpec) -> Any:  # noqa: ANN401 - any setting value
+    """Return the strictest value ``spec`` permits at all — the **fail-closed** value.
+
+    What a binding clamps to when a tenant is known but their settings cannot be read.
+    In that state we do not know what they asked for, and the platform default is by
+    construction the *loosest* value they could have chosen — so the honest answer is
+    the strictest value they *could* have written, not the default.
+
+    Args:
+        spec: A ``TIGHTEN_ONLY`` spec.
+
+    Returns:
+        The end of the spec's declared domain that its :class:`Strictness` calls
+        stricter: the first (or last) of :attr:`SettingSpec.choices`, the low (or high)
+        end of :attr:`SettingSpec.bounds`, or — for a boolean toggle, whose domain is
+        not written down because it does not have to be — ``True`` when higher is
+        stricter and ``False`` when lower is.
+
+    Raises:
+        ValueError: If the spec is not ``TIGHTEN_ONLY`` (there is no "strictest" for an
+            override or a union), or declares no domain to clamp into, so the question
+            has no answer. Callers are expected to raise this at **import**, not
+            discover it during the outage in which the fail-closed path is the only
+            thing standing between a tenant and a control nobody can read.
+    """
+    if spec.merge is not MergeRule.TIGHTEN_ONLY:
+        raise ValueError(
+            f"{spec.key} merges by {spec.merge.value}; the strictest legal value is "
+            f"only defined for {MergeRule.TIGHTEN_ONLY.value}"
+        )
+    lower_is_stricter = spec.stricter is Strictness.LOWER
+    if spec.choices is not None:
+        return spec.choices[0] if lower_is_stricter else spec.choices[-1]
+    if spec.bounds is not None:
+        return spec.bounds[0] if lower_is_stricter else spec.bounds[1]
+    if spec.type_ is bool:
+        return not lower_is_stricter
+    raise ValueError(
+        f"{spec.key} declares neither choices nor bounds, so there is no strictest "
+        "value to fail closed to; give it bounds or drop it from the bindings"
+    )
 
 
 def strictest(spec: SettingSpec, left: Any, right: Any) -> Any:  # noqa: ANN401 - any value
@@ -397,6 +463,18 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
             "Preferred model deployment for a run. A preference, not a permission: the "
             "server validates any override against the platform's allowed deployments."
         ),
+        inert_reason=(
+            "Nothing reads this yet. It is an OVERRIDE, request-level preference, and "
+            "there is no request field to carry it: QueryRequest has no model override, "
+            "and the gateway picks a deployment per ModelRole with no per-run seam. "
+            "Making it live needs three things this key cannot supply on its own — a "
+            "field on QueryRequest, a per-tenant list of ALLOWED deployments to "
+            "validate it against (the sentence above promises a validation that has no "
+            "list to validate against), and a gateway that accepts a deployment for one "
+            "run. Resolving it server-side as a run default instead was considered and "
+            "rejected: an unvalidated tenant string reaching the gateway is a way to "
+            "point one tenant's spend at a model nobody approved."
+        ),
     ),
     SettingSpec(
         key="agent.mode",
@@ -409,6 +487,17 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         description=(
             "Answering depth for a run — fast single pass, standard, or the multi-agent "
             "team. Orthogonal to the model, and charged differently."
+        ),
+        inert_reason=(
+            "Nothing reads this yet. The run's width comes from QueryRequest.depth_mode "
+            "-> aegis.agent.router.DepthMode, whose values are auto|single|team, and "
+            "this key's are fast|standard|team. The two vocabularies do not line up: "
+            "'standard' has no DepthMode, and the composer's own mapping sends both "
+            "Fast and Deep to 'single' because Deep tunes depth per lane, not width. "
+            "Making it live means one vocabulary, not a mapping invented here — either "
+            "re-declare these choices as DepthMode's, or give the router a notion of "
+            "'standard'. Guessing a mapping would silently give a tenant who asked for "
+            "'standard' a width nobody chose, which is worse than the control being off."
         ),
     ),
     SettingSpec(
@@ -539,9 +628,14 @@ def setting_controls(
 
     Returns:
         One descriptor per spec, carrying ``key``, ``type``, ``control``, ``default``,
-        ``merge``, ``writable_by``/``readable_by`` (sorted, so the output is stable) and
-        the ``description`` to render as help text — plus ``bounds``, ``choices`` and
-        ``stricter`` where they apply.
+        ``merge``, ``writable_by``/``readable_by`` (sorted, so the output is stable),
+        the ``description`` to render as help text, and ``effective`` — plus ``bounds``,
+        ``choices``, ``stricter`` and ``inert_reason`` where they apply.
+
+        ``effective`` is the one a screen must not ignore: ``False`` means nothing reads
+        the key yet, ``inert_reason`` says what would change that, and rendering such a
+        control as though a write to it took effect is the defect the field was added to
+        stop.
     """
     controls: list[dict[str, Any]] = []
     for spec in specs if specs is not None else SETTING_SPECS:
@@ -554,7 +648,10 @@ def setting_controls(
             "writable_by": sorted(spec.writable_by),
             "readable_by": sorted(spec.readable_by),
             "description": spec.description,
+            "effective": spec.effective,
         }
+        if spec.inert_reason is not None:
+            control["inert_reason"] = spec.inert_reason
         if spec.bounds is not None:
             control["minimum"], control["maximum"] = spec.bounds
         if spec.choices is not None:

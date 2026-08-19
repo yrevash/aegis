@@ -157,6 +157,103 @@ async def test_query_with_a_session_id_writes_both_turns_of_the_transcript(
     assert turns[1]["run_id"] == run_id
 
 
+async def test_a_colleague_cannot_write_into_another_users_transcript(
+    client, db, make_deps, parse_sse
+):
+    """``POST /query`` with somebody else's ``session_id`` writes nothing of theirs.
+
+    ``append_chat_turn`` was the one function in ``app.data.chat`` without the owner
+    predicate — it checked only that the session existed *in the tenant* — so a
+    ``session_id`` was a write capability for anyone who could learn one. And they are
+    learnable, not guessable: ``chat_sessions.id`` is deliberately the same string as
+    ``memory_session.id``, and a tenant-admin may list a colleague's memory sessions.
+    Both turns landed in the victim's transcript, the assistant turn carrying a
+    ``run_id`` from a run they never made, with ``last_active_at`` bumped so their
+    session rail re-ordered under them.
+
+    Restore the tenant-only ``exists`` check and every assertion below fails.
+    """
+    from app.api import routes as api_routes
+    from app.data.models import ChatMessage
+    from app.main import app
+
+    await _seed_two_tenants()
+    owner = _headers(tenant_id=1, user_id=11, username="a-user")
+    colleague = _headers(tenant_id=1, user_id=12, username="a-other")
+    session_id = (
+        await client.post("/sessions", headers=owner, json={"title": "Q3 refunds"})
+    ).json()["id"]
+
+    async with get_sessionmaker()() as session:
+        await set_tenant_scope(session, 1)
+        before = (
+            await session.execute(
+                select(ChatSession.last_active_at).where(ChatSession.id == session_id)
+            )
+        ).scalar_one()
+
+    app.dependency_overrides[api_routes.get_agent_deps] = lambda: make_deps(propose_tool=False)
+    try:
+        run = await client.post(
+            "/query",
+            headers=colleague,
+            json={"query": "What is in their transcript?", "session_id": session_id},
+        )
+        assert run.status_code == 200, run.text
+        # The run itself is fine — it is the *transcript* the colleague may not touch.
+        assert [e for e in parse_sse(run.text) if e["event"] == "run_finished"], run.text
+    finally:
+        app.dependency_overrides.pop(api_routes.get_agent_deps, None)
+
+    assert (await client.get(f"/sessions/{session_id}/messages", headers=owner)).json()[
+        "rows"
+    ] == []
+    async with get_sessionmaker()() as session:
+        await set_tenant_scope(session, 1)
+        turns = (
+            await session.execute(
+                select(ChatMessage.id).where(ChatMessage.session_id == session_id)
+            )
+        ).scalars().all()
+        assert turns == [], "a colleague's run wrote turns into somebody else's transcript"
+        after = (
+            await session.execute(
+                select(ChatSession.last_active_at).where(ChatSession.id == session_id)
+            )
+        ).scalar_one()
+        assert after == before, "the victim's session rail was re-ordered by a stranger's run"
+
+
+async def test_concurrent_turns_on_one_session_get_distinct_indexes(db):
+    """Four appenders racing on one conversation number their turns 0..3, not all 0.
+
+    ``turn_index`` is a ``SELECT count(*)`` and ``ix_chat_messages_session_turn`` is not
+    unique, so two writers that counted before either inserted both wrote index 0 and
+    the transcript rendered them in an arbitrary order for ever. The fix is ordering,
+    not DDL: the ``UPDATE`` that bumps ``last_active_at`` runs *first* and takes the
+    session row's write lock, so the second appender waits there instead of counting
+    stale. Move that ``UPDATE`` back below the count and this fails.
+    """
+    import asyncio
+
+    from app.data.chat import append_chat_turn, create_chat_session
+
+    await _seed_two_tenants()
+    await create_chat_session("race-1", tenant_id=1, user_id=11, title="Race")
+
+    indexes = await asyncio.gather(
+        *(
+            append_chat_turn(
+                "race-1", role="user", content=f"turn {n}", tenant_id=1, user_id=11
+            )
+            for n in range(4)
+        )
+    )
+    assert sorted(indexes) == [0, 1, 2, 3], (
+        f"concurrent appends produced duplicate turn_index values: {indexes}"
+    )
+
+
 # ── The caller's own budget ──────────────────────────────────────────────────
 
 

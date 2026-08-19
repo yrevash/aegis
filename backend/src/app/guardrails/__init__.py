@@ -40,6 +40,7 @@ import logging
 from aegis.core.types import GuardResult, GuardVerdict, InjectionVerdict, PIIMatch
 from aegis.guardrails import Guardrails
 
+from app.adapter import DOMAIN_DESCRIPTION
 from app.config import get_settings
 from app.guardrails import classifier, nemo, pii, schema  # noqa: F401 - re-exported submodules
 
@@ -79,11 +80,46 @@ async def _gateway_completer(
 #: when :func:`check_output` is given the retrieved ``contexts``, the answer is judged
 #: for groundedness against them (advisory FLAG by default; ``grounding_block`` in
 #: settings flips it to a hard BLOCK). With no contexts the grounding rail is a no-op.
+#:
+#: ``allowed_topics`` is the adapter's own :data:`~app.adapter.DOMAIN_DESCRIPTION`,
+#: which is the one sentence in this codebase that says what the platform is *for*.
+#: Without it :func:`aegis.guardrails.topical.screen_topic` returns "rail disabled" on
+#: every call and ``guardrails.topical.block`` is a control over a rail that never runs
+#: — a toggle that saves and changes nothing, which is the defect this whole seam is
+#: about. It is the domain seam by construction: retarget the adapter and the topical
+#: rail retargets with it, with no edit here.
+#:
+#: **This object is the platform layer, not the whole policy.** The four ``guardrails.*``
+#: catalogue keys are per tenant and are folded onto it per request by
+#: :func:`_request_guard`; what is wired here is the floor none of them can go under.
 _guard = Guardrails(
     completer=_gateway_completer,
     ground_answers=True,
     grounding_block=get_settings().grounding_block,
+    allowed_topics=DOMAIN_DESCRIPTION,
 )
+
+
+async def _request_guard() -> Guardrails:
+    """Return the pipeline enforcing **this request's tenant's** rails.
+
+    ``_guard`` is the platform layer. This folds the tenant's four ``guardrails.*``
+    settings onto it — tighten-only for the two block toggles, union for the denied
+    terms and the PII entity kinds — and returns a per-request pipeline sharing the
+    expensive collaborators. It is called on every rail entry rather than once per run
+    because the rails are entered from several places (the graph's input and output
+    nodes, every tool result) and there is no request-scoped object common to all of
+    them to hang a resolution off; a settings resolution is one indexed query, and
+    correctness at that price is the right trade against a rail that enforces the wrong
+    tenant's policy.
+
+    Returns:
+        ``_guard`` itself when the tenant added nothing, otherwise a per-request copy.
+        Never retained: it is dropped when the rail call returns.
+    """
+    from app.guardrails.policy import resolve_request_policy
+
+    return _guard.with_policy(await resolve_request_policy(_guard.policy))
 
 
 def _use_nemo_engine() -> bool:
@@ -142,7 +178,7 @@ async def check_input(text: str) -> GuardResult:
             return await nemo.nemo_check_input(text)
         except Exception as exc:  # noqa: BLE001 - fail closed, never silently pass
             return _fail_closed("input", exc)
-    return await _guard.check_input(text)
+    return await (await _request_guard()).check_input(text)
 
 
 async def check_output(
@@ -173,7 +209,7 @@ async def check_output(
             return await nemo.nemo_check_output(text)
         except Exception as exc:  # noqa: BLE001 - fail closed, never silently pass
             return _fail_closed("output", exc)
-    return await _guard.check_output(text, contexts=contexts)
+    return await (await _request_guard()).check_output(text, contexts=contexts)
 
 
 async def check_tool_result(text: str, *, tool_name: str | None = None) -> GuardResult:
@@ -201,7 +237,7 @@ async def check_tool_result(text: str, *, tool_name: str | None = None) -> Guard
         A :class:`GuardResult`. ``block`` means the content must not reach the agent's
         context at all; ``redact`` means use ``result.text``; ``flag`` is advisory.
     """
-    return await _guard.check_tool_result(text, tool_name=tool_name)
+    return await (await _request_guard()).check_tool_result(text, tool_name=tool_name)
 
 
 __all__ = [

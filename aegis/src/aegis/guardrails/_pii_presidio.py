@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from aegis.core.types import PIIMatch
@@ -60,8 +61,11 @@ _ENTITY_TO_KIND: dict[str, str] = {
     "API_KEY": "API_KEY",
 }
 
-#: The explicit allowlist handed to ``analyze(entities=...)`` — anything not here is
-#: dropped even if a recognizer fires, keeping false positives low.
+#: The curated allowlist handed to ``analyze(entities=...)`` — the **floor**. Anything
+#: not here and not asked for by a caller is dropped even if a recognizer fires, keeping
+#: false positives low. A caller may *add* to it (see :func:`scan`'s ``entities``, which
+#: carries a tenant's ``guardrails.pii.entities``); it can never subtract from it,
+#: because the two are unioned rather than assigned.
 _ENTITIES: list[str] = list(_ENTITY_TO_KIND)
 
 #: Kind -> redaction placeholder. Preserves the exact legacy tokens (note ``CC`` for
@@ -90,6 +94,28 @@ _available: bool | None = None
 def _placeholder(kind: str) -> str:
     """Return the redaction token for ``kind`` (legacy token, or a generated default)."""
     return _KIND_TO_PLACEHOLDER.get(kind, f"[REDACTED_{kind}]")
+
+
+def effective_entities(entities: Sequence[str] | None) -> list[str]:
+    """Return the curated allowlist unioned with ``entities`` — never a subset of it.
+
+    The single expression behind "the platform's set is a floor, not a starting point".
+    A tenant's ``guardrails.pii.entities`` is UNION-merged by the resolver and unioned
+    again here against what this engine already screens, so there is no value a tenant
+    can write that makes the rail detect **less** than it does today.
+
+    Args:
+        entities: Extra entity names, or ``None``.
+
+    Returns:
+        The entity list to hand ``AnalyzerEngine.analyze``, curated names first and
+        additions in the order they were asked for, de-duplicated.
+    """
+    effective = dict.fromkeys(_ENTITIES)
+    for name in entities or ():
+        if isinstance(name, str) and name.strip():
+            effective.setdefault(name.strip().upper(), None)
+    return list(effective)
 
 
 def _build_analyzer() -> AnalyzerEngine:
@@ -199,15 +225,23 @@ def _analyzer_singleton() -> AnalyzerEngine:
         return _get_analyzer_locked()
 
 
-def scan(text: str) -> list[PIIMatch]:
+def scan(text: str, *, entities: Sequence[str] | None = None) -> list[PIIMatch]:
     """Return every (non-overlapping) PII span Presidio finds in ``text``.
 
-    Presidio results are mapped to legacy kinds, filtered to the curated allowlist,
+    Presidio results are mapped to legacy kinds, filtered to the effective allowlist,
     and passed through the shared longest-span overlap resolver so the output matches
     the regex engine's shape exactly: ordered, non-overlapping :class:`PIIMatch` spans.
 
     Args:
         text: The text to scan.
+        entities: Extra Presidio entity types to screen for **as well as**
+            :data:`_ENTITIES`. This is where a tenant's ``guardrails.pii.entities``
+            arrives. It is unioned, never assigned: a caller naming a subset of the
+            curated allowlist (which is exactly what the catalogue's platform default
+            is) cannot switch the rest of it off. An entity with no registered
+            recognizer simply never fires — Presidio ignores it — so an unknown name is
+            inert rather than an error. Entities outside :data:`_ENTITY_TO_KIND` keep
+            their own name as the kind and get a generated ``[REDACTED_<NAME>]`` token.
 
     Returns:
         Detected :class:`PIIMatch` spans, ordered by position. Empty when clean.
@@ -215,13 +249,14 @@ def scan(text: str) -> list[PIIMatch]:
     if not text:
         return []
     results: list[Any] = _analyzer_singleton().analyze(
-        text=text, language="en", entities=_ENTITIES, score_threshold=_SCORE_THRESHOLD
+        text=text,
+        language="en",
+        entities=effective_entities(entities),
+        score_threshold=_SCORE_THRESHOLD,
     )
     hits: list[PIIMatch] = []
     for res in results:
-        kind = _ENTITY_TO_KIND.get(res.entity_type)
-        if kind is None:  # defence in depth; allowlist should already guarantee this
-            continue
+        kind = _ENTITY_TO_KIND.get(res.entity_type, res.entity_type)
         hits.append(
             PIIMatch(
                 kind=kind,

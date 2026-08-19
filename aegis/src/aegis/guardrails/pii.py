@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from types import ModuleType
 
 from aegis.core.types import PIIMatch
@@ -96,30 +97,38 @@ def active_engine() -> str:
     return getattr(_active(), "ENGINE_NAME", "unknown")
 
 
-def scan(text: str) -> list[PIIMatch]:
+def scan(text: str, *, entities: Sequence[str] | None = None) -> list[PIIMatch]:
     """Return every (non-overlapping) PII span found in ``text``.
 
     Args:
         text: The text to scan.
+        entities: Entity kinds to screen for **in addition to** whatever the live
+            engine already screens — this is where a tenant's resolved
+            ``guardrails.pii.entities`` arrives, and it is the reason that catalogue key
+            is no longer inert. Unioned, never assigned: the setting is a floor and
+            naming fewer kinds than the engine covers cannot switch any of them off.
 
     Returns:
         Detected :class:`PIIMatch` spans, ordered by position. Empty when clean.
     """
-    return _active().scan(text)
+    return _active().scan(text, entities=entities)
 
 
-def redact(text: str) -> tuple[str, list[str]]:
+def redact(
+    text: str, *, entities: Sequence[str] | None = None
+) -> tuple[str, list[str]]:
     """Replace every PII span in ``text`` with its redaction token.
 
     Args:
         text: The text to redact.
+        entities: Extra entity kinds to screen for; see :func:`scan`.
 
     Returns:
         A ``(redacted_text, kinds)`` tuple where ``kinds`` is the sorted list of
         unique detector names that fired (empty when nothing was redacted). Masks use
         the stable ``[REDACTED_<KIND>]`` form (e.g. ``[REDACTED_EMAIL]``).
     """
-    matches = scan(text)
+    matches = scan(text, entities=entities)
     if not matches:
         return text, []
     redacted = text
@@ -130,13 +139,14 @@ def redact(text: str) -> tuple[str, list[str]]:
     return redacted, kinds
 
 
-def contains_pii(text: str) -> bool:
+def contains_pii(text: str, *, entities: Sequence[str] | None = None) -> bool:
     """Return ``True`` if ``text`` contains any detectable PII.
 
     Args:
         text: The text to check.
+        entities: Extra entity kinds to screen for; see :func:`scan`.
 
     Returns:
         Whether at least one detector matched.
     """
-    return bool(scan(text))
+    return bool(scan(text, entities=entities))

@@ -211,6 +211,24 @@ class ChatMessage(Base):
     run_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
+    #: ``(session_id, turn_index)`` is **not** a unique index, and that is a decision
+    #: rather than an oversight. ``turn_index`` is a ``SELECT count(*)``, so two
+    #: concurrent appenders on one conversation could in principle both count *n* and
+    #: both write *n*. What stops them is ordering, in
+    #: :func:`app.data.chat.append_chat_turn`: the ``UPDATE`` that bumps
+    #: ``last_active_at`` runs **first** and takes this session row's write lock, so the
+    #: second appender blocks there instead of counting stale. The lock is the
+    #: serialisation point and the index is only a read path.
+    #:
+    #: Why not both — a unique index as the backstop? Because this schema is created by
+    #: ``create_all``, which is ``CREATE TABLE IF NOT EXISTS`` and **never alters a table
+    #: that already exists** (see :mod:`app.data.session`). Declaring ``unique=True``
+    #: here would give a fresh database the constraint and leave every existing one
+    #: without it, while every reader of this file believed the invariant was enforced.
+    #: A protection that half the deployments do not have, asserted in the model as
+    #: though they all did, is the failure mode this codebase keeps paying for. Add the
+    #: unique index the day a real migration tool lands, in the same change that
+    #: backfills the duplicates it would reject.
     __table_args__ = (
         Index("ix_chat_messages_session_turn", "session_id", "turn_index"),
     )

@@ -256,11 +256,15 @@ class ChatSessionsResponse(BaseModel):
 class ChatSessionCreateRequest(BaseModel):
     """Body for `POST /sessions` — start a conversation (title optional)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(default="New chat", max_length=255)
 
 
 class ChatSessionPatchRequest(BaseModel):
     """Body for `PATCH /sessions/{id}` — retitle a conversation."""
+
+    model_config = ConfigDict(extra="forbid")
 
     title: str = Field(max_length=255)
 
@@ -627,6 +631,14 @@ class SettingRow(BaseModel):
     forwarded verbatim rather than re-typed field by field: the catalogue already
     declares the type, the default, the choices, the bounds and the help text, and a
     second projection here is the drift this whole package is built to prevent.
+
+    **``control.effective`` is not decoration.** ``False`` means nothing in the system
+    reads this key yet, and ``control.inert_reason`` says what would change that. Six
+    keys once saved, wrote an audit row and badged themselves "Your setting" while
+    changing nothing whatsoever; four now bind, and the two that still do not
+    (``agent.model``, ``agent.mode``) say so here. A screen that renders an
+    ``effective=False`` control as though a write to it took effect re-creates the
+    defect on the client side of a wire that is now telling the truth.
     """
 
     key: str
