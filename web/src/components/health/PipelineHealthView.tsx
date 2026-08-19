@@ -19,15 +19,20 @@ import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import {
   getPipelineHealth,
+  getPipelines,
   getPlatformHealth,
   pipelineMessage,
   type ComponentHealth,
   type ComponentStatus,
   type NotRecorded,
   type PipelineHealthResponse,
+  type PipelineStage,
+  type PipelinesResponse,
   type PlatformHealthResponse,
 } from '@/lib/api/pipeline'
 import { useAuth } from '@/lib/auth/AuthContext'
+
+import { PipelineDeclarationPanel } from './PipelineDeclarationView'
 
 /** How often the aggregation is re-read. Slower than the cache page: these are queries. */
 const POLL_MS = 15000
@@ -134,9 +139,15 @@ function NotRecordedCard({
   )
 }
 
-/** A single-hue magnitude bar for one stage's p95, scaled against the slowest stage. */
+/**
+ * A single-hue magnitude bar for one stage's p95, scaled against the slowest stage.
+ *
+ * A zero value draws an empty track rather than the 2% minimum sliver: a declared stage
+ * with no run in the window has no measurement, and a visible bar would read as a fast
+ * one.
+ */
 function StageBar({ value, max }: { value: number; max: number }): ReactElement {
-  const pct = max > 0 ? Math.max(2, (value / max) * 100) : 0
+  const pct = max > 0 && value > 0 ? Math.max(2, (value / max) * 100) : 0
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
       <div
@@ -178,8 +189,23 @@ function ComponentPanel({ data }: { data: PlatformHealthResponse }): ReactElemen
   )
 }
 
-/** The job + stage aggregation. */
-function PipelinePanel({ data }: { data: PipelineHealthResponse }): ReactElement {
+/**
+ * The job + stage aggregation, read against the declared ingest pipeline.
+ *
+ * `declared` is the ingestion pipeline's stage list from `GET /pipelines` (§8.12). It is
+ * what the stage vocabulary below comes from — **not** the set of stages that happen to
+ * have rows in `run_events`. Deriving the list from the rows made a stage that has never
+ * run indistinguishable from one that does not exist, which is the drift this page is
+ * now built to be immune to. When the declaration cannot be read the panel falls back to
+ * the measured rows rather than inventing a list.
+ */
+function PipelinePanel({
+  data,
+  declared,
+}: {
+  data: PipelineHealthResponse
+  declared: PipelineStage[] | null
+}): ReactElement {
   if (!data.available) {
     return (
       <Card>
@@ -197,6 +223,21 @@ function PipelinePanel({ data }: { data: PipelineHealthResponse }): ReactElement
   }
 
   const slowest = data.stages.reduce((acc, s) => Math.max(acc, s.p95_ms), 0)
+  const timed = new Map(data.stages.map((stage) => [stage.stage, stage]))
+  const declaredNames = new Set((declared ?? []).map((stage) => stage.name))
+  const stageRows = [
+    ...(declared ?? []).map((stage) => ({
+      name: stage.name,
+      label: stage.label,
+      timing: timed.get(stage.name) ?? null,
+    })),
+    // A measured stage the declaration does not name cannot happen while the tripwire in
+    // `aegis.pipelines.bindings` holds — but if it ever did, hiding it would be the worse
+    // failure, so it is rendered rather than dropped.
+    ...data.stages
+      .filter((stage) => !declaredNames.has(stage.stage))
+      .map((stage) => ({ name: stage.stage, label: null, timing: stage })),
+  ]
 
   return (
     <div className="space-y-4">
@@ -266,11 +307,11 @@ function PipelinePanel({ data }: { data: PipelineHealthResponse }): ReactElement
 
         <Card>
           <CardHeader
-            eyebrow="run_events · the duration each stage handler measured"
+            eyebrow="every declared ingest stage · timed from run_events where it ran"
             title="Where the time goes"
           />
           <CardBody>
-            {data.stages.length === 0 ? (
+            {stageRows.length === 0 ? (
               <p className="py-6 text-sm text-muted-foreground">
                 No ingest stage has committed in the last {data.window_hours} hours, so
                 there is nothing timed to show. This is the only pipeline the platform
@@ -279,19 +320,27 @@ function PipelinePanel({ data }: { data: PipelineHealthResponse }): ReactElement
               </p>
             ) : (
               <ul className="space-y-3">
-                {data.stages.map((stage) => (
-                  <li key={stage.stage}>
-                    <div className="flex items-baseline justify-between gap-3">
+                {stageRows.map((row) => (
+                  <li key={row.name}>
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
                       <span className="font-mono text-[0.75rem] text-foreground">
-                        {stage.stage}
+                        {row.name}
+                        {row.label ? (
+                          <span className="pl-2 font-sans text-[0.7rem] text-muted-foreground">
+                            {row.label}
+                          </span>
+                        ) : null}
                       </span>
                       <span className="tabular text-[0.75rem] text-muted-foreground">
-                        p50 {ms(stage.p50_ms)} · p95 {ms(stage.p95_ms)} · {stage.runs} run
-                        {stage.runs === 1 ? '' : 's'}
+                        {row.timing === null
+                          ? `no run in the last ${data.window_hours}h`
+                          : `p50 ${ms(row.timing.p50_ms)} · p95 ${ms(row.timing.p95_ms)} · ${
+                              row.timing.runs
+                            } run${row.timing.runs === 1 ? '' : 's'}`}
                       </span>
                     </div>
                     <div className="mt-1.5">
-                      <StageBar value={stage.p95_ms} max={slowest} />
+                      <StageBar value={row.timing?.p95_ms ?? 0} max={slowest} />
                     </div>
                   </li>
                 ))}
@@ -403,6 +452,7 @@ export function PipelineHealthPanel(): ReactElement {
 
   const [pipeline, setPipeline] = useState<PipelineHealthResponse | null>(null)
   const [components, setComponents] = useState<PlatformHealthResponse | null>(null)
+  const [declared, setDeclared] = useState<PipelinesResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -411,6 +461,15 @@ export function PipelineHealthPanel(): ReactElement {
       setError(null)
     } catch (err) {
       setError(pipelineMessage(err, 'Could not read the pipeline aggregation.'))
+    }
+    try {
+      // The declaration, not a figure: it is static per build, but it is re-read with the
+      // rest so a deploy that changes the pipeline changes this page without a reload.
+      setDeclared(await getPipelines(token))
+    } catch {
+      // The measured figures are still true without it; the stage list below simply
+      // falls back to the rows that exist rather than showing a list it cannot vouch for.
+      setDeclared(null)
     }
     try {
       setComponents(await getPlatformHealth(token))
@@ -466,7 +525,13 @@ export function PipelineHealthPanel(): ReactElement {
         <h2 className="t-title text-foreground">Pipeline health</h2>
       </div>
       {components ? <ComponentPanel data={components} /> : null}
-      <PipelinePanel data={pipeline} />
+      <PipelinePanel
+        data={pipeline}
+        declared={
+          declared?.pipelines.find((spec) => spec.name === 'ingestion')?.stages ?? null
+        }
+      />
+      {declared ? <PipelineDeclarationPanel data={declared} /> : null}
     </section>
   )
 }

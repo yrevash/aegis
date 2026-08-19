@@ -9,6 +9,12 @@ extra, and the honest debt list.
 module, each with a guide, diagrams, and an interview file. This document is the
 contract and the map; the course is the explanation.
 
+**The flows those modules compose into live in [`PIPELINES.md`](PIPELINES.md)** — the
+three pipelines (retrieval, agent, ingestion), their stages, the module that owns each
+stage and what each stage emits. That file is *generated* from `aegis.pipelines.spec`,
+which the ingest runtime, `GET /pipelines` and the console's pipeline-health page all
+read, so a stage cannot be described here and absent there.
+
 ---
 
 ## What "modular" means here

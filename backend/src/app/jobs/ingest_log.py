@@ -18,7 +18,8 @@ finished" are the same commit: a worker hard-killed between them is not a state 
 database can hold.
 
 **Sequence numbers are a function of the pipeline, not of a counter.** A stage's ``seq``
-is its index in :data:`aegis.jobs.INGEST_STAGES`, so a replay of an already-committed
+is its index in the declared ingestion pipeline (:mod:`aegis.pipelines`, proved equal to
+:data:`aegis.jobs.INGEST_STAGES` at import), so a replay of an already-committed
 stage would write the number it wrote before rather than appending a second, later-looking
 entry. Combined with the substrate's replay short-circuit (which returns before the
 handler runs at all) the effect is that a resumed run adds entries only for stages that
@@ -43,7 +44,11 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from aegis.jobs.stages import INGEST_STAGES, stage_names
+from aegis.pipelines import (
+    INGEST_FINISHED_EVENT_TYPE,
+    INGEST_STAGE_EVENT_TYPE,
+    ingest_stage_order,
+)
 from aegis.runs.record import RunPartitionMissingError, record_events
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,20 +66,38 @@ __all__ = [
 
 #: The event type one committed ingest stage is recorded under.
 #:
+#: **Read from the pipeline declaration, not written here** (task 8.12). This string is
+#: what ``app.ingestion.progress`` filters the projection on and what
+#: ``app.api.routes_health`` aggregates the per-stage percentiles from, so it is the
+#: vocabulary the console ultimately renders. Taking it from
+#: :data:`aegis.pipelines.INGEST_STAGE_EVENT_TYPE` is what makes the declaration
+#: load-bearing rather than descriptive: the four consumers of the spec — this runtime,
+#: ``GET /pipelines``, the health page and ``docs/module/PIPELINES.md`` — read one
+#: source, and a spec that named a different type could not silently coexist with a
+#: runtime writing the old one.
+#:
 #: A new type name rather than a reused agent one: :func:`aegis.runs.record.apply_event`
 #: folds ``run_finished`` into ``runs.status``, which is a :class:`aegis.core.types.
 #: RunStatus` — an *agent* run's terminal vocabulary, with no member meaning "cancelled"
 #: and none meaning "succeeded with a low-confidence parse". Borrowing it would make the
 #: header claim an outcome the ingest never had. Unknown types are stored and counted by
 #: that fold and rejected by nothing, which is exactly the contract this needs.
-INGEST_STAGE_EVENT = "ingest_stage"
+INGEST_STAGE_EVENT = INGEST_STAGE_EVENT_TYPE
 
 #: The event type the close-out is recorded under. Written only when the close-out
 #: actually moved the row, so a replayed ``finish_ingest`` adds nothing.
-INGEST_FINISHED_EVENT = "ingest_finished"
+INGEST_FINISHED_EVENT = INGEST_FINISHED_EVENT_TYPE
 
-#: The stage names, in pipeline order, indexed once.
-_STAGE_ORDER: dict[str, int] = {name: index for index, name in enumerate(stage_names())}
+#: Each stage's 1-based sequence number, taken once — **from the declaration**.
+#:
+#: :func:`aegis.pipelines.ingest_stage_order` proves the declared stage list equal to
+#: :data:`aegis.jobs.stages.INGEST_STAGES` before it returns, and raises
+#: :class:`~aegis.pipelines.PipelineDriftError` when they differ. Because this runs at
+#: *import* of the module every ingest stage writes through, a pipeline whose spec and
+#: whose runtime disagree cannot commit a single mislabelled row: the worker fails on
+#: import instead. That is the tripwire the topology endpoint's ``NODE_LABELS[nid]``
+#: lookup is, applied to the pipeline that actually persists something.
+_STAGE_SEQ: dict[str, int] = ingest_stage_order()
 
 #: ``run_events.run_id`` is ``String(64)``; see the module docstring for why a longer
 #: workflow id is an error rather than a truncation.
@@ -84,7 +107,7 @@ _MAX_RUN_ID = 64
 def stage_seq(stage: str) -> int:
     """Return the monotonic per-run sequence number one stage's event carries.
 
-    Derived from the stage's position in :data:`aegis.jobs.INGEST_STAGES` rather than
+    Derived from the stage's position in the declared ingestion pipeline rather than
     from a counter, so the number an event gets is a property of *which stage* it is and
     not of when it happened to be written. That is what makes the log replay-stable.
 
@@ -100,7 +123,7 @@ def stage_seq(stage: str) -> int:
             validated the name against :func:`aegis.jobs.stages.stage_spec`, so reaching
             this would mean two disagreeing pipelines in one process.
     """
-    return _STAGE_ORDER[stage] + 1
+    return _STAGE_SEQ[stage]
 
 
 def finished_seq() -> int:
@@ -110,7 +133,7 @@ def finished_seq() -> int:
         One past the last stage's, so the close-out sorts after every stage whether or
         not the run reached them all.
     """
-    return len(INGEST_STAGES) + 1
+    return len(_STAGE_SEQ) + 1
 
 
 def ingest_run_id(workflow_id: str) -> str:
