@@ -280,8 +280,17 @@ async def test_a_different_result_cap_is_a_different_cache_entry():
     assert [c[1] for c in client.calls] == [3, 5]
 
 
-async def test_a_warm_cache_also_costs_zero_classifier_calls():
-    """The screened response is what is cached — the budget counts rails too."""
+async def test_a_warm_cache_costs_zero_provider_calls_but_still_pays_its_rails():
+    """The price of the fix, asserted rather than described.
+
+    Caching the *screened* response used to make a warm query cost zero classifier
+    calls as well as zero provider calls. It cannot: ``guardrails.denylist.terms``
+    and ``guardrails.pii.entities`` are tenant-scoped and UNION-merged, so a cached
+    verdict is one tenant's verdict imposed on the next (see
+    ``test_tenant_isolation.py``). What survives is the expensive half — the
+    rate-limited, network-dependent provider call — and the rail now runs on every
+    read, warm or cold. A rail that does not run is not a saving.
+    """
 
     class CountingGuard:
         def __init__(self):
@@ -292,12 +301,14 @@ async def test_a_warm_cache_also_costs_zero_classifier_calls():
             return GuardResult(verdict=GuardVerdict.PASS, reason="ok", text=text)
 
     guard = CountingGuard()
-    search = WebSearch(client=SpyClient([_hit("content")]), guard=guard)
+    client = SpyClient([_hit("content")])
+    search = WebSearch(client=client, guard=guard)
 
     await search.search("q")
     await search.search("q")
 
-    assert guard.calls == 1
+    assert len(client.calls) == 1, "the provider call must still be paid exactly once"
+    assert guard.calls == 2, "every read is screened by the reader's own rails"
 
 
 async def test_a_cached_response_still_reports_the_block_it_caught():

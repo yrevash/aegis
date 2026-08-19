@@ -612,6 +612,74 @@ def _is_available(deployment: str) -> bool:
     return (_now() - state.opened_at) >= _effective_breaker_cooldown()
 
 
+#: Exception *types* that are direct evidence the deployment could not be reached or
+#: did not answer, whatever was asked of it. ``TimeoutError`` is what
+#: :func:`_bounded_acompletion`'s outer ``wait_for`` raises, and is also what
+#: ``asyncio.TimeoutError`` aliases on 3.11+.
+_DEPLOYMENT_FAILURE_TYPES: tuple[type[BaseException], ...] = (ConnectionError, TimeoutError)
+
+#: Exception *class names* LiteLLM/OpenAI raise for transport failures that do not
+#: always carry a status code. Matched by name on purpose: importing litellm's
+#: exception module here would defeat the lazy import this gateway is built on.
+_DEPLOYMENT_FAILURE_NAMES = frozenset(
+    {
+        "APIConnectionError",
+        "APIConnectionTimeoutError",
+        "APITimeoutError",
+        "InternalServerError",
+        "ServiceUnavailableError",
+        "Timeout",
+    }
+)
+
+
+def _status_code(exc: BaseException) -> int | None:
+    """Return the HTTP status an exception carries, or ``None`` if it carries none."""
+    for attribute in ("status_code", "http_status", "code"):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) and not isinstance(status, bool) else None
+
+
+def _is_deployment_evidence(exc: BaseException) -> bool:
+    """Return whether ``exc`` is evidence about the *deployment* rather than the request.
+
+    The breaker is process-global and keyed by deployment, which is right: a
+    deployment is genuinely shared, so "it is unreachable" is a shared fact. But
+    a provider rejecting one tenant's request is *not* a fact about the deployment.
+    An over-long prompt, a content-policy refusal, or that tenant's own rate limit
+    would fail identically against a perfectly healthy upstream, and counting them
+    opens the breaker for every other tenant in the process — who are then answered
+    by a more expensive fallback and billed for it, or refused outright. That is a
+    spend decision taken on their behalf, which is the thing §5.8 exists to prevent.
+
+    So the classification is conservative in the safe direction: only positive
+    evidence of upstream unhealth arms the breaker. Connect errors, timeouts, 408
+    and 5xx qualify. 4xx does not. Neither does an exception type this gateway has
+    never seen — an unrecognised failure is evidence of nothing, and the cost of
+    missing one is paying a timeout, while the cost of a false positive is another
+    tenant's ledger.
+
+    Args:
+        exc: The exception raised by the provider call.
+
+    Returns:
+        ``True`` when the failure should count against the deployment.
+    """
+    if isinstance(exc, _DEPLOYMENT_FAILURE_TYPES):
+        return True
+    status = _status_code(exc)
+    if status is not None:
+        return status >= 500 or status == 408
+    return type(exc).__name__ in _DEPLOYMENT_FAILURE_NAMES
+
+
 def _record_deployment_failure(deployment: str, *, role: ModelRole, reason: str) -> None:
     """Count one failure against ``deployment``, opening its breaker at threshold."""
     state = _breakers.setdefault(deployment, _BreakerState())
@@ -875,20 +943,38 @@ async def _attempt(
     role: ModelRole,
     primary_role: ModelRole,
 ) -> Any:  # noqa: ANN401
-    """Run one bounded completion, faulting the chosen deployment if it raises.
+    """Run one bounded completion, faulting the chosen deployment only if it earned it.
 
-    An exception here means the whole chain LiteLLM was given is exhausted. The
-    failure is counted against the deployment **this gateway selected** — the one
-    it is responsible for choosing again next time — and not against the fallbacks,
-    because an opaque transport error carries no evidence of how far LiteLLM got,
-    and a breaker opened on a guess is a control that lies.
+    An exception here means the whole chain LiteLLM was given is exhausted. When the
+    failure is evidence about the *deployment* (see :func:`_is_deployment_evidence`)
+    it is counted against the deployment **this gateway selected** — the one it is
+    responsible for choosing again next time — and not against the fallbacks, because
+    an opaque transport error carries no evidence of how far LiteLLM got, and a
+    breaker opened on a guess is a control that lies.
+
+    When the failure is evidence about the *request* — a 4xx, a content-policy
+    refusal, an over-long prompt, this caller's own rate limit — nothing is counted.
+    The breaker is shared by every tenant in the process, and one tenant's bad
+    request must not push another tenant onto a costlier deployment or refuse them
+    outright. The failure still propagates to *this* caller unchanged, and it is
+    still logged, because not arming a control is not a reason to go quiet about it.
     """
     try:
         return await _bounded_acompletion(litellm, kwargs, timeout=timeout)
     except Exception as exc:
-        _record_deployment_failure(
-            model_for(primary_role), role=role, reason=type(exc).__name__
-        )
+        deployment = model_for(primary_role)
+        if _is_deployment_evidence(exc):
+            _record_deployment_failure(deployment, role=role, reason=type(exc).__name__)
+        else:
+            logger.warning(
+                "Gateway call to %s failed with a REQUEST-side error (%s: %s); the "
+                "circuit breaker is NOT armed. This failure is evidence about the "
+                "request, not about the deployment, and faulting a shared deployment "
+                "for it would degrade every other tenant in this process.",
+                deployment,
+                type(exc).__name__,
+                exc,
+            )
         raise
 
 

@@ -16,8 +16,12 @@ Standalone usage::
 
 Three properties are the whole point of this package:
 
-* **Cached.** A repeated query costs zero provider calls.
-* **Guarded.** Every hit passes the ``TOOL_RESULT`` rail before it is returned, so a
+* **Cached.** A repeated query costs zero provider calls. The cache is shared across
+  tenants deliberately — a public web page is the same page for everybody — so it holds
+  the provider's raw hits and nothing else: not the query that found them
+  (:class:`CachedWebResults`), and not one tenant's guardrail verdict.
+* **Guarded.** Every hit passes the ``TOOL_RESULT`` rail before it is returned — on a
+  cache hit exactly as on a cold call, because the rails are tenant-scoped — so a
   prompt injection planted in a web page is blocked and reported rather than read by
   the model (OWASP LLM01).
 * **Loud when degraded.** No key, or a failed provider, produces an ERROR log and a
@@ -29,6 +33,7 @@ from __future__ import annotations
 from aegis.websearch.cache import (
     DEFAULT_MAX_ENTRIES,
     DEFAULT_TTL_SECONDS,
+    CachedWebResults,
     InMemoryWebSearchCache,
     RedisWebSearchCache,
     WebSearchCache,
@@ -65,6 +70,7 @@ __all__ = [
     "NO_KEY_REASON",
     "TOOL_NAME",
     "BlockedResult",
+    "CachedWebResults",
     "InMemoryWebSearchCache",
     "RedisWebSearchCache",
     "TavilyWebSearchClient",

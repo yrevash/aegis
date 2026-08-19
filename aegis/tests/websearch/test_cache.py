@@ -9,12 +9,14 @@ import pytest
 from aegis.core.config import AegisMode
 from aegis.websearch.cache import (
     INDEX_KEY,
+    CachedWebResults,
     InMemoryWebSearchCache,
     RedisWebSearchCache,
     cache_key,
     make_web_search_cache,
     normalise_query,
 )
+from aegis.websearch.types import WebSearchResult
 
 
 class FakeRedis:
@@ -71,10 +73,25 @@ def test_the_key_separates_providers_and_result_caps():
 
 
 def test_the_key_never_carries_the_raw_query():
-    """The query is hashed; a cache dump is not a log of what people asked."""
+    """The query is hashed; a cache dump is not a log of what people asked.
+
+    ``v2`` is deliberate: ``v1`` entries held a whole screened ``WebSearchResponse``
+    (raw query text and one tenant's guardrail verdict included), and the version in
+    the prefix is what guarantees one of those can never be rehydrated as a
+    ``CachedWebResults``.
+    """
     key = cache_key("tavily", "acquire competitor xyz", 5)
     assert "acquire" not in key and "competitor" not in key
-    assert key.startswith("aegis:websearch:v1:")
+    assert key.startswith("aegis:websearch:v2:")
+
+
+def test_the_cached_value_carries_only_the_providers_hits():
+    """The key is a digest, but the *value* is where the isolation actually holds."""
+    payload = CachedWebResults(
+        results=(WebSearchResult(title="t", url="https://x/1", content="public"),)
+    )
+    assert set(payload.model_dump()) == {"results"}
+    assert "query" not in payload.model_dump_json()
 
 
 def test_punctuation_still_changes_the_key():

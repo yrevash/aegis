@@ -5,7 +5,7 @@ phase-05 budget arithmetic assumes, and it is also the rate-limit and
 conference-wifi insurance: the second run of a query that already worked cannot be
 broken by the network.
 
-Two properties are deliberate and both are about not lying:
+Three properties are deliberate and all three are about not lying:
 
 * **Backend choice is explicit.** ``full`` mode requires a real client and raises
   without one, exactly like :mod:`aegis.guardrails.cache`. There is no
@@ -16,6 +16,11 @@ Two properties are deliberate and both are about not lying:
   cache of arbitrary web content is the fastest way to reach it). The Redis backend
   keeps a sorted-set index of its own keys and trims the oldest past the cap, so the
   bound holds across processes rather than only inside one.
+* **The value holds public web content and nothing else.** The cache is shared by
+  every tenant, so what goes into it has to be shareable. :class:`CachedWebResults`
+  is the whole payload: the provider's raw hits. Not the query that found them, and
+  not the guardrail verdict that any one tenant's rails reached over them — see its
+  docstring for why each of those used to be there and what it cost.
 """
 
 from __future__ import annotations
@@ -26,7 +31,10 @@ import re
 import time
 from typing import Any, Protocol
 
+from pydantic import BaseModel
+
 from aegis.core.config import AegisMode
+from aegis.websearch.types import WebSearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +46,12 @@ DEFAULT_TTL_SECONDS = 3600
 #: Default cap on cached searches. Web content is large; this is the R8 bound.
 DEFAULT_MAX_ENTRIES = 512
 
-#: Redis key prefix, carrying a schema version. Bump ``v1`` when the cached payload
-#: shape changes, so an old entry can never be rehydrated as a new one.
-KEY_PREFIX = "aegis:websearch:v1"
+#: Redis key prefix, carrying a schema version. Bump it when the cached payload shape
+#: changes, so an old entry can never be rehydrated as a new one. ``v1`` held a whole
+#: screened :class:`~aegis.websearch.types.WebSearchResponse` — raw query text and one
+#: tenant's guardrail verdict included — so the bump to ``v2`` is not housekeeping: it
+#: is what guarantees a ``v1`` entry written before this fix can never be read back.
+KEY_PREFIX = "aegis:websearch:v2"
 
 #: The sorted-set that indexes this cache's own keys so the cap can be enforced.
 INDEX_KEY = f"{KEY_PREFIX}:index"
@@ -65,9 +76,15 @@ def cache_key(provider: str, query: str, max_results: int) -> str:
     Every part matters: two providers answer the same query differently, and a
     5-result request must not be served from a 3-result entry.
 
-    There is deliberately **no tenant in the key**. A public web search is not
-    tenant data — the query text is the only thing that could be, and it is hashed,
-    never stored. Sharing the entry across tenants is the point of the cache.
+    There is deliberately **no tenant in the key**. A public web search is not tenant
+    data, and one provider call answering every tenant who asks the same question is
+    the point of the cache. What makes that safe is not the digest — it is that the
+    *value* is :class:`CachedWebResults`, which carries no query text and no tenant's
+    guardrail verdict. The digest is a one-way function of the query, so a cache dump
+    is not a log of what anybody asked; it is not a secret, though. Anyone who can
+    read the store can also hash a guessed query and see whether that entry exists,
+    which is inherent to any shared cache and is why the value, not the key, is where
+    the isolation has to hold.
 
     Args:
         provider: The client's stable ``name``.
@@ -80,6 +97,32 @@ def cache_key(provider: str, query: str, max_results: int) -> str:
     material = f"{provider}\x1f{normalise_query(query)}\x1f{max_results}"
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
     return f"{KEY_PREFIX}:{digest}"
+
+
+class CachedWebResults(BaseModel):
+    """Everything the shared cache is allowed to hold: the provider's raw hits.
+
+    Two things used to ride along in the cached value and neither survived audit.
+
+    The **query** was in it, because the value was a whole
+    :class:`~aegis.websearch.types.WebSearchResponse` and that model carries
+    ``query``. :func:`cache_key`'s docstring claimed the query was "hashed, never
+    stored" while ``model_dump_json`` wrote it out verbatim, and :data:`INDEX_KEY`
+    made every entry enumerable — so read access to Redis was read access to every
+    tenant's questions, no guessing required.
+
+    The **screening verdict** was in it too, deliberately: caching the *screened*
+    response made a warm query cost zero classifier calls as well as zero provider
+    calls. But ``guardrails.denylist.terms`` and ``guardrails.pii.entities`` are
+    tenant-scoped, UNION-merged settings, so the rails that screened the first
+    tenant's copy are not the next tenant's rails. Caching the verdict meant
+    whichever tenant searched first decided what the other was allowed to see.
+
+    Raw hits are neither of those things: they are public web pages, identical for
+    everybody who asks, which is exactly what a tenant-less cache may share.
+    """
+
+    results: tuple[WebSearchResult, ...] = ()
 
 
 class WebSearchCache(Protocol):
