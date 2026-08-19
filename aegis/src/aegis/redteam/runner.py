@@ -28,10 +28,10 @@ from dataclasses import dataclass, field
 
 from aegis.core.interfaces import ChatCompleter
 from aegis.core.types import GuardResult, GuardVerdict
-from aegis.guardrails import check_input
-from aegis.redteam.battery import ATTACK_BATTERY, Attack, Category, Expectation
+from aegis.guardrails import check_input, check_output, check_tool_result
+from aegis.redteam.battery import ATTACK_BATTERY, Attack, Category, Expectation, Stage
 
-#: A guardrail input checker: ``check(text, *, completer=...) -> GuardResult``.
+#: A guardrail checker: ``check(text, *, completer=...) -> GuardResult``.
 #: :func:`aegis.guardrails.check_input` satisfies it; tests inject fakes with the
 #: same signature to drive the runner deterministically.
 InputChecker = Callable[..., Awaitable[GuardResult]]
@@ -39,6 +39,128 @@ InputChecker = Callable[..., Awaitable[GuardResult]]
 #: Verdicts that count as the rail *neutralizing* an attack. A hard BLOCK stops the
 #: request; a REDACT defuses a PII/credential payload before it reaches the model.
 _NEUTRALIZING: frozenset[GuardVerdict] = frozenset({GuardVerdict.BLOCK, GuardVerdict.REDACT})
+
+#: How many model-backed layers one probe can cost at each stage, counted off the
+#: pipeline rather than guessed: the inbound chain runs injection → content-safety →
+#: topical, the outbound chain runs content-safety → grounding, and the tool-result
+#: chain is the inbound chain. It is an **upper** bound — a probe blocked by a
+#: deterministic signature short-circuits before the later layers ever call a model —
+#: which is the right direction for a spend estimate shown before a button.
+_MODEL_LAYERS_PER_STAGE: dict[Stage, int] = {
+    Stage.INPUT: 3,
+    Stage.OUTPUT: 2,
+    Stage.TOOL_RESULT: 3,
+}
+
+
+@dataclass(frozen=True)
+class Rails:
+    """The three guardrail entry points a battery is aimed at.
+
+    Bundled rather than passed as three keyword arguments because they are one
+    decision: a caller either drives the real rails or substitutes fakes for all of
+    them, and a mix is how a test ends up quietly measuring the production rail it
+    thought it had replaced.
+
+    Attributes:
+        check_input: The inbound rail — :attr:`~aegis.redteam.battery.Stage.INPUT`.
+        check_output: The outbound rail — :attr:`~aegis.redteam.battery.Stage.OUTPUT`.
+        check_tool_result: The tool-result rail —
+            :attr:`~aegis.redteam.battery.Stage.TOOL_RESULT`.
+    """
+
+    check_input: InputChecker
+    check_output: InputChecker
+    check_tool_result: InputChecker
+
+    def for_stage(self, stage: Stage) -> InputChecker:
+        """Return the checker that screens ``stage``."""
+        if stage is Stage.OUTPUT:
+            return self.check_output
+        if stage is Stage.TOOL_RESULT:
+            return self.check_tool_result
+        return self.check_input
+
+    @classmethod
+    def uniform(cls, check: InputChecker) -> Rails:
+        """Build rails where **one** checker answers for every stage.
+
+        This is what an injected fake means: a test that hands the runner a checker
+        which passes everything is asserting the runner reports what the rail said,
+        and it must not have a second, real rail underneath it producing verdicts the
+        test never supplied.
+        """
+        return cls(check_input=check, check_output=check, check_tool_result=check)
+
+
+#: The real rails. :func:`run_redteam` uses these unless a caller injects its own.
+DEFAULT_RAILS = Rails(
+    check_input=check_input,
+    check_output=check_output,
+    check_tool_result=check_tool_result,
+)
+
+
+@dataclass(frozen=True)
+class RunEstimate:
+    """What a run will cost before anyone presses the button.
+
+    Attributes:
+        probes: How many prompts will be fed to a rail.
+        model_calls: Upper bound on completions the run will make. Zero offline —
+            the deterministic backstops call nothing, which is why the offline run
+            is the default and is free.
+        prompt_tokens: Rough prompt tokens across those calls (4 chars ≈ 1 token,
+            plus the classifier's own instruction overhead).
+        completion_tokens: Rough completion tokens — the model-backed layers all
+            answer with a small JSON verdict.
+    """
+
+    probes: int
+    model_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+
+
+#: Instruction overhead of one model-backed guardrail layer, in tokens. The classifier
+#: prompts are fixed text, so this is a constant rather than a per-probe measurement.
+_LAYER_PROMPT_OVERHEAD = 220
+
+#: Tokens a guardrail layer's JSON verdict costs. They answer with a small object.
+_LAYER_COMPLETION_TOKENS = 40
+
+
+def estimate_run(
+    battery: Sequence[Attack] = ATTACK_BATTERY, *, live: bool = False
+) -> RunEstimate:
+    """Estimate the model calls and tokens ``battery`` will cost.
+
+    Args:
+        battery: The probes that will run.
+        live: Whether a completer will be wired in. Offline the answer is zero calls
+            and zero tokens, because that is genuinely what the deterministic rails
+            spend.
+
+    Returns:
+        A :class:`RunEstimate`. Every field is an **upper** bound: a probe that a
+        signature blocks short-circuits before the later model layers run, so a live
+        run costs this much or less, never more.
+    """
+    probes = len(battery)
+    if not live:
+        return RunEstimate(probes=probes, model_calls=0, prompt_tokens=0, completion_tokens=0)
+    calls = 0
+    prompt_tokens = 0
+    for attack in battery:
+        layers = _MODEL_LAYERS_PER_STAGE.get(attack.stage, 3)
+        calls += layers
+        prompt_tokens += layers * (_LAYER_PROMPT_OVERHEAD + len(attack.prompt) // 4)
+    return RunEstimate(
+        probes=probes,
+        model_calls=calls,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=calls * _LAYER_COMPLETION_TOKENS,
+    )
 
 
 @dataclass(frozen=True)
@@ -91,6 +213,8 @@ class AttackResult:
             "owasp": a.owasp,
             "prompt": a.prompt,
             "expects": a.expects.value,
+            "stage": a.stage.value,
+            "description": a.description,
             "needsLlm": a.needs_llm,
             "verdict": self.verdict,
             "layer": self.layer,
@@ -174,6 +298,30 @@ class RedTeamReport:
         """The specific attacks that got through (were *not* neutralized)."""
         return tuple(r for r in self.attack_results if not r.neutralized)
 
+    @property
+    def blocked(self) -> tuple[AttackResult, ...]:
+        """The specific attacks the rail stopped, with the verdict it gave.
+
+        The counterpart of :attr:`leaked`, and the half a report usually reduces to a
+        percentage. A block is evidence only when the reader can see *which* attack was
+        stopped by *which* rail with the rationale the rail wrote, so the detail is
+        carried rather than summed away.
+        """
+        return tuple(r for r in self.attack_results if r.neutralized)
+
+    def rails_that_fired(self) -> tuple[tuple[str, int], ...]:
+        """Return ``(layer, blocks)`` pairs, most active rail first.
+
+        Names the rail behind the number. ``"unattributed"`` covers a neutralizing
+        verdict that carried no layer — reported rather than dropped, because a block
+        nobody can attribute is a fact about the report's own quality.
+        """
+        counts: dict[str, int] = {}
+        for r in self.blocked:
+            key = r.layer or "unattributed"
+            counts[key] = counts.get(key, 0) + 1
+        return tuple(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
     # --- control-side accessors -----------------------------------------------
     @property
     def controls_total(self) -> int:
@@ -250,6 +398,8 @@ class RedTeamReport:
                 "maxFalsePositiveRate": self.thresholds.max_false_positive_rate,
             },
             "categories": [c.as_dict() for c in self.by_category()],
+            "rails": [{"layer": layer, "blocks": n} for layer, n in self.rails_that_fired()],
+            "blocked": [r.as_dict() for r in self.blocked],
             "leaked": [r.as_dict() for r in self.leaked],
             "falsePositiveDetail": [r.as_dict() for r in self.false_positives],
             "attacks": [r.as_dict() for r in self.results],
@@ -303,41 +453,55 @@ def _score(attack: Attack, result: GuardResult) -> AttackResult:
 
 
 async def run_redteam(
-    check: InputChecker = check_input,
+    check: InputChecker | None = None,
     *,
     completer: ChatCompleter | None = None,
     battery: Sequence[Attack] = ATTACK_BATTERY,
     thresholds: RedTeamThresholds = DEFAULT_THRESHOLDS,
+    rails: Rails | None = None,
 ) -> RedTeamReport:
-    """Run the attack battery through the real guardrail and report real verdicts.
+    """Run the attack battery through the real guardrails and report real verdicts.
+
+    Each probe is fed to the rail its :attr:`~aegis.redteam.battery.Attack.stage`
+    names — inbound prompt, outbound answer, or tool result — so an indirect injection
+    is screened by the rail that would actually see it in production.
 
     Args:
-        check: The guardrail input checker, called as ``check(prompt, completer=...)``.
-            Defaults to :func:`aegis.guardrails.check_input`; inject a fake with the
-            same signature to drive the runner deterministically in tests.
-        completer: Optional :class:`ChatCompleter` passed through to ``check`` so the
-            model-based injection / content-safety layers run. ``None`` (the default)
-            runs the deterministic backstops only — fully offline, no API key.
+        check: A single checker that stands in for **every** stage, called as
+            ``check(prompt, completer=...)``. This is the fake-injection seam: a test
+            supplying one checker gets its verdicts for the whole battery and never a
+            real rail underneath. ``None`` (the default) uses :data:`DEFAULT_RAILS`.
+        completer: Optional :class:`ChatCompleter` passed through to the rails so the
+            model-based injection / content-safety / topical layers run. ``None`` (the
+            default) runs the deterministic backstops only — fully offline, no API key,
+            and no spend.
         battery: The attacks to run. Defaults to the curated
-            :data:`~aegis.redteam.battery.ATTACK_BATTERY`.
+            :data:`~aegis.redteam.battery.ATTACK_BATTERY`; select a suite's slice with
+            :func:`~aegis.redteam.battery.battery_for`.
         thresholds: The pass/fail bar (:class:`RedTeamThresholds`).
+        rails: The three stage checkers. Overrides ``check`` when both are given.
 
     Returns:
         A :class:`RedTeamReport` of the **actual** verdicts — never fabricated.
     """
+    resolved = rails or (Rails.uniform(check) if check is not None else DEFAULT_RAILS)
     results: list[AttackResult] = []
     for attack in battery:
-        result = await check(attack.prompt, completer=completer)
+        result = await resolved.for_stage(attack.stage)(attack.prompt, completer=completer)
         results.append(_score(attack, result))
     return RedTeamReport(results=tuple(results), thresholds=thresholds)
 
 
 __all__ = [
+    "DEFAULT_RAILS",
+    "DEFAULT_THRESHOLDS",
     "AttackResult",
     "CategoryReport",
-    "DEFAULT_THRESHOLDS",
     "InputChecker",
+    "Rails",
     "RedTeamReport",
     "RedTeamThresholds",
+    "RunEstimate",
+    "estimate_run",
     "run_redteam",
 ]

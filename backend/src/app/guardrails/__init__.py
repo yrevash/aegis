@@ -122,6 +122,32 @@ async def _request_guard() -> Guardrails:
     return _guard.with_policy(await resolve_request_policy(_guard.policy))
 
 
+async def tenant_pipeline(*, live: bool) -> Guardrails:
+    """Return **this request's tenant's** rails, with or without the model layers.
+
+    The seam the red-team harness runs through, and the reason it can report on a
+    tenant rather than on the platform's defaults: :func:`_request_guard` has already
+    folded the tenant's four ``guardrails.*`` settings onto the platform floor, so
+    what comes back is the rail stack that tenant actually enforces.
+
+    ``live`` is the only difference between the two kinds of run. ``False`` strips the
+    completer, so only the deterministic backstops fire — free, offline, no key — and
+    the honest headline is *"our signatures blocked N of M"*. ``True`` keeps the
+    platform's cheap-model completer, so the semantic-only attacks become catchable
+    and the headline becomes *"our stack blocked N of M"*. Same policy either way,
+    which is what makes the two reports comparable.
+
+    Args:
+        live: Whether the model-backed layers should run.
+
+    Returns:
+        A per-call :class:`~aegis.guardrails.Guardrails`. Never retained — a cached
+        one is one tenant's policy applied to another tenant's next request.
+    """
+    guard = await _request_guard()
+    return guard.with_completer(_gateway_completer if live else None)
+
+
 def _use_nemo_engine() -> bool:
     """Whether this request should enforce via the NeMo Colang engine.
 

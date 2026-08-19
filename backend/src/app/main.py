@@ -23,8 +23,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.api.routes_redteam import mount as _mount_redteam
 from app.config import get_settings
 from app.observability import init_observability
+
+# The red-team control plane (§7.13). This line belongs at the bottom of
+# ``app.api.routes`` beside the ``ingest_log`` / ``routes_console`` mounts and has the
+# identical effect from here — the routes land on ``router`` itself, so the served
+# table stays one table. ``mount`` is idempotent, so moving it there later is a
+# one-line change that cannot double-register anything in the meantime.
+_mount_redteam(router)
 
 logger = logging.getLogger(__name__)
 

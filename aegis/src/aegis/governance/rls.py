@@ -142,6 +142,11 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     # for a boundary to be argued away ("the input was identical, so the output is
     # safe"), and the predicate on the row is what makes that argument unnecessary.
     "table_summaries",
+    # aegis.redteam.models — the durable red-team run record. A run names the tenant
+    # whose rails were attacked; a NULL row is Aegis testing its own, which no tenant
+    # is entitled to read, so the standard (NULL-is-invisible) predicate is right and
+    # this table is deliberately NOT a platform baseline.
+    "redteam_runs",
     # aegis.runs.models — the durable, replayable per-run record. ``run_events`` is
     # PARTITIONED BY RANGE (ts); its monthly partitions are not registered here (their
     # names are a function of the calendar) and are covered by the partition rule in

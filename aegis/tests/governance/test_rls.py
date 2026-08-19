@@ -212,6 +212,8 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         "documents",
         "job_runs",
         "table_summaries",
+        # aegis.redteam.models
+        "redteam_runs",
         # aegis.runs.models
         "run_events",
         "runs",

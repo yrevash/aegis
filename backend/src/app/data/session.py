@@ -505,6 +505,7 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     import aegis.governance.models  # noqa: F401,PLC0415 - registration side-effect only
     import aegis.jobs.models  # noqa: F401,PLC0415 - registration side-effect only
     import aegis.ops.models  # noqa: F401,PLC0415 - registration side-effect only
+    import aegis.redteam.models  # noqa: F401,PLC0415 - registration side-effect only
 
     # Registers the run record's models **and** the ``after_create`` hook that gives
     # ``run_events`` its first monthly partitions (via ``aegis.runs.__init__``). A

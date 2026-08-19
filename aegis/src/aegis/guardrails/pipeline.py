@@ -320,6 +320,33 @@ class Guardrails:
         clone._pii_entities = _clean_terms(policy.pii_entities)
         return clone
 
+    def with_completer(self, completer: ChatCompleter | None) -> Guardrails:
+        """Return a pipeline whose model-backed layers use ``completer``.
+
+        The sibling of :meth:`with_policy`, and it exists for the same reason: the
+        pipeline a host builds is process-wide, and *whether the model layers run* is
+        a per-call decision. The red-team harness needs both answers over the same
+        rails — an offline run must wire **no** completer so the report is honestly
+        "our deterministic signatures blocked N of M" and costs nothing, and a live
+        run must wire the host's, over the identical policy, so the two reports differ
+        by the model layer and nothing else. Rebuilding a second ``Guardrails`` from
+        the same fields would let the two drift on the next field somebody adds.
+
+        Args:
+            completer: The chat completer for the injection / content-safety /
+                topical layers, or ``None`` to run the deterministic layers only.
+
+        Returns:
+            ``self`` when the completer is already the one asked for, otherwise a
+            shallow copy — the injection cache and media screen are stateless-by-
+            contract collaborators and safe to share, exactly as in :meth:`with_policy`.
+        """
+        if completer is self._completer:
+            return self
+        clone = copy.copy(self)
+        clone._completer = completer
+        return clone
+
     @staticmethod
     async def _run_custom(
         payload: MediaPayload, rails: list[AnyRail], *, skipped: list[str] | None = None
