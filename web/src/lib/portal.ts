@@ -32,6 +32,7 @@ import {
   Brain,
   Coins,
   Cpu,
+  Database,
   DatabaseZap,
   GitCompareArrows,
   Gauge,
@@ -316,6 +317,15 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Aegis Governance — append-only audit trail · Postgres (RLS), with trace links to Aegis Trace',
     group: 'Governance',
   },
+  database: {
+    id: 'database',
+    label: 'Database',
+    icon: Database,
+    hint: 'read-only · scoped',
+    tooltip:
+      'Aegis DB console — the schema and a closed set of parameterised reads over a Postgres role that holds SELECT and nothing else, with every row filtered to the selected tenant by a clause the server writes into the query, bounded rows/bytes/time, and both sides of every read on the audit trail',
+    group: 'Governance',
+  },
   roles: {
     id: 'roles',
     label: 'Roles & Access',
@@ -390,7 +400,7 @@ export const SECTIONS: Record<string, Section> = {
  * tenant with a clause the browser cannot reach.
  */
 export const ROLE_SECTIONS: Record<Portal, string[]> = {
-  platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'settings'],
+  platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'database', 'console', 'settings'],
   tenant_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'cache', 'latency', 'audit', 'settings'],

@@ -50,6 +50,14 @@ from pathlib import Path
 import pytest
 from fastapi.params import Depends as DependsParam
 
+# ``app.main`` is imported for its side effect, not for a name: the control planes that
+# live in their own modules (``routes_redteam``, ``routes_reports``, ``routes_db``, …)
+# attach themselves to ``router`` from the composition root, so importing ``routes``
+# alone yields a served table that is missing every one of them. That made this analysis
+# silently order-dependent — it saw the full table only when some earlier test happened
+# to import the app first, and saw a truncated one otherwise, which is the same class of
+# "passes for the wrong reason" this module exists to end.
+import app.main  # noqa: F401 - registers the mounted control planes on ``router``
 from app.api.routes import router
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,6 +125,13 @@ _AUTH_GUARDS = frozenset(
         # from ``require_auth``; unlisted, four routes that stream a tenant's whole
         # audit trail would classify **public** and drop out of this analysis.
         "require_report_download",
+        # The database console's guard (§7.9). Built from ``require_platform_admin`` —
+        # never ``require_admin``, which admits the tenant-admin tier too — and it also
+        # refuses when the console is switched off, so a disabled deployment cannot be
+        # talked into a read by a well-formed request. Without it named here, three routes
+        # that read the data layer directly would classify **public** and drop out of this
+        # analysis entirely, which is the exact failure mode this set exists to prevent.
+        "require_db_console",
         # ``require_roles(...)`` returns a closure named ``_dep``; it is only ever
         # built from ``require_auth``, so its presence marks an authenticated route.
         "_dep",
