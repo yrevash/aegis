@@ -263,9 +263,16 @@ def _build_limiter() -> gateway.SlotLimiter:
       cannot hold.
 
     The lease length is derived from ``llm_timeout_seconds`` rather than configured
-    separately: a slot held materially longer than one call timeout is held by a process
-    that is no longer running, and a second number here could be set shorter than the
-    call it must outlast.
+    separately: a slot held materially longer than the call it guards is held by a
+    process that is no longer running, and a second number here could be set shorter than
+    the call it must outlast.
+
+    It is derived through :func:`~aegis.gateway.llm.max_call_hold_seconds`, **not from
+    the timeout directly**. The slot wraps the gateway's outer backstop, which gives the
+    primary deployment and each fallback in the chain its own timeout budget — three call
+    timeouts on the shipped chains. A lease of ``2 × timeout`` was therefore shorter than
+    the call it guarded, and the reaper handed the slot to a second caller mid-flight: a
+    limit of N admitting N+1 on precisely the slow calls it exists for.
 
     Returns:
         The limiter to install on the gateway.
@@ -279,7 +286,9 @@ def _build_limiter() -> gateway.SlotLimiter:
             limit,
         )
         return gateway.NoSlotLimiter()
-    lease = gateway.lease_seconds_for(settings.llm_timeout_seconds)
+    lease = gateway.lease_seconds_for(
+        gateway.max_call_hold_seconds(settings.llm_timeout_seconds)
+    )
     if settings.stores_enabled and settings.redis_url:
         return gateway.RedisSlotLimiter.from_url(
             settings.redis_url,

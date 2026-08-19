@@ -97,6 +97,7 @@ __all__ = [
     "fallback_events",
     "last_trace_id",
     "limiter_status",
+    "max_call_hold_seconds",
     "model_allowlist",
     "optimization_config",
     "optimization_summary",
@@ -420,6 +421,37 @@ def _effective_fallbacks() -> dict[ModelRole, list[ModelRole]]:
 def _effective_baseline_role() -> ModelRole:
     """Return the active frontier-baseline role (host override wins over env)."""
     return _baseline_role_override if _baseline_role_override is not None else baseline_role()
+
+
+def max_call_hold_seconds(timeout_seconds: float) -> float:
+    """Return the longest one provider call can hold a limiter slot.
+
+    **This is not ``timeout_seconds``, and the difference is what makes a lease derived
+    from the per-attempt timeout too short.** The slot in :func:`_attempt` wraps the
+    *outer* backstop, which gives the primary deployment and each fallback in the chain
+    its own timeout budget: ``timeout × (len(fallbacks) + 1)``. With the shipped chains
+    (:data:`_DEFAULT_ROLE_FALLBACKS` gives ``GENERATION`` and ``REASONING`` two fallbacks
+    each) that is **three** call timeouts, not one. :func:`embed` and :func:`transcribe`
+    hold theirs for ``timeout + 5``.
+
+    A lease shorter than this figure is reaped while its holder is still inside the call,
+    and the freed slot is handed to a second caller — the fleet limit is then quietly
+    exceeded, on exactly the slow calls a limiter exists for. So the host derives the
+    lease from *this*, never from the per-attempt timeout:
+    ``lease_seconds_for(max_call_hold_seconds(timeout))``.
+
+    Args:
+        timeout_seconds: The gateway's per-attempt wall-clock bound
+            (``GatewayConfig.timeout_seconds``).
+
+    Returns:
+        The worst-case slot hold, in seconds, for any call shape this module makes.
+    """
+    timeout = max(timeout_seconds, 0.0)
+    longest_chain = max((len(chain) for chain in _effective_fallbacks().values()), default=0)
+    # The two shapes a slot is held around: a chat completion under the outer
+    # fallback-chain backstop, and an embedding/transcription under ``timeout + 5``.
+    return max(timeout * (longest_chain + 1), timeout + 5.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

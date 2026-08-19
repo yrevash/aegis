@@ -213,8 +213,25 @@ def _pool_class(label: str, env_prefix: str) -> type[AsyncAdaptedQueuePool]:
     return _NamedPool
 
 
-def _pool_kwargs(dsn: str, *, label: str, size: int, overflow: int) -> dict[str, Any]:
+#: The settings prefix an operator would raise, per engine. Explicit rather than derived
+#: from the label: the console engine is built in another module, and a rule that read
+#: ``"DB" if not admin`` sent its reader to a variable that does not exist.
+_ENV_PREFIX: dict[str, str] = {
+    "serving": "DB",
+    "admin": "DB_ADMIN",
+    "console": "AEGIS_DB_CONSOLE",
+}
+
+
+def pool_kwargs(dsn: str, *, label: str, size: int, overflow: int) -> dict[str, Any]:
     """Return the ``create_async_engine`` pool arguments for one engine.
+
+    Public because there are **three** engines and only two of them are built here: the
+    §7.9 SQL console builds its own, in :mod:`app.api.routes_db`, and building it with
+    bare ``create_async_engine`` is what left it on SQLAlchemy's defaults
+    (``pool_size=5, max_overflow=10, pool_timeout=30``) — fifteen unbudgeted connections
+    and the thirty-second undiagnosed stall §9.4 exists to remove, on the one engine an
+    operator reaches for when the platform is already misbehaving.
 
     Empty for a non-PostgreSQL URL: SQLite (in-process, in tests) has its own pool
     classes, and forcing a queue pool onto it is how a test suite acquires a mysterious
@@ -222,7 +239,8 @@ def _pool_kwargs(dsn: str, *, label: str, size: int, overflow: int) -> dict[str,
 
     Args:
         dsn: The URL the engine will be built from.
-        label: Which engine this is, for :func:`_pool_class`.
+        label: Which engine this is — ``serving``, ``admin`` or ``console``. Names the
+            pool in :class:`PoolExhaustedError` and selects the settings prefix.
         size: Steady-state connections held open.
         overflow: Extra connections allowed under burst, closed again afterwards.
 
@@ -233,7 +251,7 @@ def _pool_kwargs(dsn: str, *, label: str, size: int, overflow: int) -> dict[str,
         return {}
     settings = get_settings()
     return {
-        "poolclass": _pool_class(label, f"DB{'_ADMIN' if label == 'admin' else ''}"),
+        "poolclass": _pool_class(label, _ENV_PREFIX.get(label, "DB")),
         "pool_size": size,
         "max_overflow": overflow,
         "pool_timeout": settings.db_pool_timeout_seconds,
@@ -243,6 +261,11 @@ def _pool_kwargs(dsn: str, *, label: str, size: int, overflow: int) -> dict[str,
         # corpse", which is worth it for a platform that idles between demos.
         "pool_pre_ping": True,
     }
+
+
+#: The name this helper had while only this module called it. Kept so the existing
+#: pool tests import the same object the engines are built with.
+_pool_kwargs = pool_kwargs
 
 
 def get_engine() -> AsyncEngine:
@@ -268,7 +291,7 @@ def get_engine() -> AsyncEngine:
         configure_rls(fail_closed=settings.rls_fail_closed)
         _engine = create_async_engine(
             dsn,
-            **_pool_kwargs(
+            **pool_kwargs(
                 dsn,
                 label="serving",
                 size=settings.db_pool_size,
@@ -300,7 +323,7 @@ def get_admin_engine() -> AsyncEngine:
         dsn = to_asyncpg_dsn(settings.admin_dsn)
         _admin_engine = create_async_engine(
             dsn,
-            **_pool_kwargs(
+            **pool_kwargs(
                 dsn,
                 label="admin",
                 size=settings.db_admin_pool_size,
@@ -437,11 +460,18 @@ async def pool_budget(engine: AsyncEngine | None = None) -> tuple[int, int] | No
     if engine.dialect.name != "postgresql":
         return None
     settings = get_settings()
+    # All THREE engines, not two. The console's pool was omitted here while the comment
+    # on ``Settings.db_pool_size`` counted it, so the one function whose job is this
+    # arithmetic was the one place it was wrong — and it was wrong in the reassuring
+    # direction. Counted whether or not the console is switched on: a budget that changes
+    # when a feature flag flips is a budget nobody can check against a cluster.
     requested = (
         settings.db_pool_size
         + settings.db_max_overflow
         + settings.db_admin_pool_size
         + settings.db_admin_max_overflow
+        + settings.db_console_pool_size
+        + settings.db_console_max_overflow
     )
     try:
         async with engine.connect() as conn:
@@ -465,8 +495,8 @@ async def pool_budget(engine: AsyncEngine | None = None) -> tuple[int, int] | No
     if requested >= ceiling:
         logger.error(
             "Postgres pool budget does not fit: this process may hold %d connections "
-            "(serving %d+%d, admin %d+%d) against a cluster ceiling of %d "
-            "(max_connections %d less %d reserved). Lower DB_POOL_SIZE / "
+            "(serving %d+%d, admin %d+%d, console %d+%d) against a cluster ceiling of "
+            "%d (max_connections %d less %d reserved). Lower DB_POOL_SIZE / "
             "DB_MAX_OVERFLOW, or raise max_connections. Nothing else may connect to "
             "this cluster — psql, Superset and LightRAG included.",
             requested,
@@ -474,19 +504,23 @@ async def pool_budget(engine: AsyncEngine | None = None) -> tuple[int, int] | No
             settings.db_max_overflow,
             settings.db_admin_pool_size,
             settings.db_admin_max_overflow,
+            settings.db_console_pool_size,
+            settings.db_console_max_overflow,
             ceiling,
             limit,
             reserved,
         )
     else:
         logger.info(
-            "Postgres pool budget: up to %d connections (serving %d+%d, admin %d+%d) "
-            "of a %d ceiling; %d left for everything else.",
+            "Postgres pool budget: up to %d connections (serving %d+%d, admin %d+%d, "
+            "console %d+%d) of a %d ceiling; %d left for everything else.",
             requested,
             settings.db_pool_size,
             settings.db_max_overflow,
             settings.db_admin_pool_size,
             settings.db_admin_max_overflow,
+            settings.db_console_pool_size,
+            settings.db_console_max_overflow,
             ceiling,
             ceiling - requested,
         )

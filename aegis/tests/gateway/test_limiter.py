@@ -31,7 +31,7 @@ from aegis.gateway.limiter import (
     SlotUnavailableError,
     lease_seconds_for,
 )
-from aegis.gateway.llm import complete
+from aegis.gateway.llm import complete, max_call_hold_seconds
 
 from .test_llm import FakeLiteLLM, _make_response
 
@@ -211,3 +211,78 @@ def test_the_lease_outlasts_the_call_it_is_derived_from():
     # A zero/absurd timeout must still produce a usable lease rather than 0.
     assert lease_seconds_for(0.0) >= 2.0
 
+
+
+async def test_a_slow_call_is_not_reaped_out_from_under_its_own_holder(
+    redis_client, slot_key, monkeypatch
+):
+    """A limit of one admits one, even when the call outlives a per-attempt timeout.
+
+    **The defect this pins.** The lease used to be ``lease_seconds_for(timeout_seconds)``
+    — two *per-attempt* timeouts. But the slot in :func:`aegis.gateway.llm._attempt`
+    wraps the **outer** backstop, which gives the primary deployment and each fallback in
+    the chain its own timeout budget: ``timeout × (len(fallbacks) + 1)``, i.e. three call
+    timeouts for ``GENERATION``. Any call slower than two timeouts therefore had its
+    lease reaped while it was still in flight, and the fleet admitted an extra caller —
+    the limit silently becoming ``N + 1`` on exactly the slow calls it exists for.
+
+    Mutation-proven: pass ``lease_seconds_for(TIMEOUT)`` instead of
+    ``lease_seconds_for(max_call_hold_seconds(TIMEOUT))`` below and ``peak`` reads 2.
+    Deliberately a ``RedisSlotLimiter``, because the lease is the mechanism under test
+    and :class:`LocalSlotLimiter` has none.
+    """
+    timeout = 1.0
+    # Longer than one lease under the old derivation (2.0s), shorter than the outer
+    # backstop (3.0s) — the exact window in which a slot was handed out twice.
+    call_seconds = 2.5
+    overlap = {"now": 0, "peak": 0}
+
+    class _SlowFake(FakeLiteLLM):
+        async def acompletion(self, **kwargs):
+            overlap["now"] += 1
+            overlap["peak"] = max(overlap["peak"], overlap["now"])
+            try:
+                await asyncio.sleep(call_seconds)
+                return _make_response(content="ok")
+            finally:
+                overlap["now"] -= 1
+
+    class _Config:
+        base_url = "http://unused"
+        api_key = "x"
+        ssl_verify = False
+        max_output_tokens = 64
+        timeout_seconds = timeout
+        budget_fail_open = False
+
+    limiter = RedisSlotLimiter(
+        redis_client,
+        limit=1,
+        lease_seconds=lease_seconds_for(max_call_hold_seconds(timeout)),
+        wait_seconds=30.0,
+        key=slot_key,
+    )
+    monkeypatch.setitem(sys.modules, "litellm", _SlowFake())
+    monkeypatch.setattr(llm_mod, "_limiter", limiter)
+    monkeypatch.setattr(llm_mod, "_config", _Config())
+
+    messages = [{"role": "user", "content": "hi"}]
+    await asyncio.gather(
+        complete(ModelRole.GENERATION, messages),
+        complete(ModelRole.GENERATION, messages),
+    )
+    assert overlap["peak"] == 1, (
+        "a slow call's lease expired while it was still holding the slot, so the fleet "
+        "limit of 1 admitted 2"
+    )
+
+
+def test_the_lease_is_derived_from_the_widest_hold_not_one_attempt():
+    """``max_call_hold_seconds`` covers every shape of call the gateway makes."""
+    # Two fallbacks on the shipped GENERATION chain -> three call timeouts.
+    assert max_call_hold_seconds(60.0) == 180.0
+    # ...and the lease covers even that.
+    assert lease_seconds_for(max_call_hold_seconds(60.0)) > 180.0
+    # ``embed``/``transcribe`` hold theirs for ``timeout + 5``, which dominates when the
+    # timeout is small; a lease derived only from the chain would be too short there.
+    assert max_call_hold_seconds(1.0) >= 6.0

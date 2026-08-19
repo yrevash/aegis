@@ -301,3 +301,47 @@ async def test_cache_counters_are_served_with_their_caveat_and_no_invented_rate(
     injection = next(r for r in again.json()["caches"] if r["key"] == "injection")
     assert injection["evictions"] is None
     reset_cache_stats()
+
+
+async def test_a_limiter_that_lost_its_store_says_so_on_the_health_surface(
+    client, db, monkeypatch
+) -> None:
+    """``fleet (degraded)`` reaches a reader, rather than only a counter nobody polls.
+
+    **The defect this pins.** :mod:`aegis.gateway.limiter` computes an honest ``scope`` —
+    ``fleet (degraded)`` while the shared store is unreachable — and its docstring says
+    that word is *"reported on the platform surface"*. It was not. The single reader was
+    one ``logger.info`` in ``app.main``'s lifespan, which by construction runs before any
+    Redis failure can have happened, so the degradation counter incremented into a void: a
+    Redis outage turned a fleet-wide bound into no bound at all, silently, while the
+    limiter kept telling itself it was degraded.
+
+    Fails **open** on purpose — the call below proceeds — because a Redis blip becoming a
+    total model outage is the bigger failure. This asserts both halves: the call went
+    through, *and* the surface stopped claiming a bound it was not holding.
+    """
+    import aegis.gateway.llm as llm_mod
+    from aegis.gateway.limiter import RedisSlotLimiter
+
+    class _DeadRedis:
+        async def eval(self, *_args, **_kwargs):
+            raise ConnectionError("redis is down")
+
+    limiter = RedisSlotLimiter(
+        _DeadRedis(), limit=12, lease_seconds=5.0, wait_seconds=0.1, key="probe"
+    )
+    monkeypatch.setattr(llm_mod, "_limiter", limiter)
+
+    body = (await client.get("/platform/health", headers=_headers(PLATFORM_ADMIN))).json()
+    row = next(c for c in body["components"] if c["key"] == "model_limiter")
+    assert row["status"] == "up", "a healthy fleet limiter should not read as degraded"
+
+    # The store goes away mid-flight; the call is admitted anyway, and counted.
+    async with limiter.slot():
+        pass
+
+    body = (await client.get("/platform/health", headers=_headers(PLATFORM_ADMIN))).json()
+    row = next(c for c in body["components"] if c["key"] == "model_limiter")
+    assert row["status"] == "degraded"
+    assert "is NOT being held" in (row["detail"] or "")
+    assert row["evidence"], "a status with no provenance is not a measurement"

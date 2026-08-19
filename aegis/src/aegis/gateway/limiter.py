@@ -84,11 +84,20 @@ _LEASE_MARGIN = 2.0
 _POLL_SECONDS = 0.025
 
 
-def lease_seconds_for(timeout_seconds: float) -> float:
-    """Return the lease length implied by a per-call timeout.
+def lease_seconds_for(hold_seconds: float) -> float:
+    """Return the lease length implied by the longest a slot can be held.
+
+    **Give this the worst-case hold, not the per-attempt timeout.**
+    :func:`aegis.gateway.llm.max_call_hold_seconds` computes it: the slot wraps the outer
+    backstop, which gives the primary deployment *and each fallback in the chain* its own
+    timeout budget, so one logical call can hold a slot for three call timeouts on the
+    shipped chains. A lease derived from one timeout is reaped mid-call, and the freed
+    slot is handed to a second caller — the exact failure this function's derivation
+    exists to prevent, reintroduced by feeding it the wrong number.
 
     Args:
-        timeout_seconds: The gateway's own per-attempt wall-clock bound.
+        hold_seconds: The longest one call can hold the slot, from
+            :func:`~aegis.gateway.llm.max_call_hold_seconds`.
 
     Returns:
         How long a slot may be held before the acquiring script treats its holder as
@@ -96,7 +105,7 @@ def lease_seconds_for(timeout_seconds: float) -> float:
         than the call it is meant to outlast, which would hand the same slot to two
         callers and make the limit not a limit.
     """
-    return max(timeout_seconds, 1.0) * _LEASE_MARGIN
+    return max(hold_seconds, 1.0) * _LEASE_MARGIN
 
 
 class SlotUnavailableError(RuntimeError):
@@ -503,7 +512,11 @@ def limiter_from_env(*, timeout_seconds: float) -> SlotLimiter:
     if limit < 1:
         return NoSlotLimiter()
     url = os.getenv("REDIS_URL")
-    lease = lease_seconds_for(timeout_seconds)
+    # Local import: ``aegis.gateway.llm`` imports this module, so the dependency only
+    # goes the other way at call time — and this is never called at import time.
+    from aegis.gateway.llm import max_call_hold_seconds  # noqa: PLC0415
+
+    lease = lease_seconds_for(max_call_hold_seconds(timeout_seconds))
     if url:
         return RedisSlotLimiter.from_url(url, limit=limit, lease_seconds=lease)
     return LocalSlotLimiter(limit)

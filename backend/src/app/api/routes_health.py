@@ -549,6 +549,65 @@ def _worker_component() -> ComponentHealth:
     )
 
 
+def _limiter_component() -> ComponentHealth:
+    """Report what is actually bounding concurrent model calls, in its own word.
+
+    :mod:`aegis.gateway.limiter` computes an honest ``scope`` — ``fleet``, ``process``,
+    ``unlimited``, or ``fleet (degraded)`` while the shared store cannot be reached — and
+    documents it as *"reported on the platform surface"*. It was not: the only reader was
+    one ``logger.info`` at boot, which by construction runs before any Redis failure can
+    have happened. So the degradation counter existed and nothing could ever see it, and a
+    Redis outage silently converted a fleet-wide bound into no bound at all.
+
+    The verdict is the scope, not a ping. ``process`` is **not** ``up``: it is an accurate
+    limiter and a narrower claim than a multi-process deployment assumes, and the word for
+    "working, but less than you think" is ``degraded``. ``unlimited`` is the same reading
+    for the same reason. Neither is ``required``: an unbounded gateway still serves.
+    """
+    from aegis.gateway import limiter_status
+
+    status_payload = limiter_status()
+    scope = str(status_payload.get("scope") or "unknown")
+    limit = status_payload.get("limit")
+    if scope == "fleet":
+        verdict: ComponentStatus = "up"
+        detail = (
+            f"{limit} concurrent provider calls across every process, held as leases in "
+            "the shared store."
+        )
+    elif scope.startswith("fleet"):  # "fleet (degraded)" — the store went away
+        verdict = "degraded"
+        detail = (
+            f"The shared store could not be reached, so the fleet-wide bound of {limit} "
+            f"is NOT being held ({status_payload.get('degraded')} call(s) proceeded "
+            "unbounded). Calls fail OPEN deliberately: a Redis blip becoming a total "
+            "model outage is the bigger failure."
+        )
+    elif scope == "process":
+        verdict = "degraded"
+        detail = (
+            f"{limit} concurrent provider calls in THIS process only. A second process "
+            "would double it — set REDIS_URL for a bound that holds across the fleet."
+        )
+    else:
+        verdict = "degraded"
+        detail = (
+            "Nothing is bounding concurrent model calls. Five users asking four-agent "
+            "questions is twenty simultaneous provider calls; set "
+            "GATEWAY_MAX_CONCURRENT_CALLS."
+        )
+    return ComponentHealth(
+        key="model_limiter",
+        name="Model-call limiter",
+        category="model",
+        status=verdict,
+        detail=detail,
+        evidence="aegis.gateway.limiter_status() — the installed limiter's own counters",
+        measured_at=_now(),
+        required=False,
+    )
+
+
 async def _gateway_component() -> ComponentHealth:
     """Derive the LLM gateway's health from work already done, never from a ping.
 
@@ -717,9 +776,9 @@ async def _components() -> list[ComponentHealth]:
             ("redis", "Redis / Memurai", "store", "probe_redis — PING", True),
             (
                 "vector_store",
-                "Embedded vector store",
+                "Qdrant vector store",
                 "store",
-                "probe_vector_store — PersistentClient(path).list_collections()",
+                "aegis.core.health.probe_vector_store — QdrantClient(url).get_collections()",
                 True,
             ),
             (
@@ -742,7 +801,7 @@ async def _components() -> list[ComponentHealth]:
                 required=required,
             )
             for key, name, category, evidence, required in rows
-        ] + [_worker_component()]
+        ] + [_worker_component(), _limiter_component()]
 
     probes = [
         _timed_probe(
@@ -794,7 +853,7 @@ async def _components() -> list[ComponentHealth]:
         _rls_component(),
     ]
     measured = await asyncio.gather(*probes)
-    return [*measured[:4], _worker_component(), *measured[4:]]
+    return [*measured[:4], _worker_component(), *measured[4:], _limiter_component()]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

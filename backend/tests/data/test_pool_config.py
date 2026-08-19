@@ -100,14 +100,54 @@ async def test_the_budget_is_checked_against_the_cluster_not_a_comment(db, caplo
     assert result is not None
     ceiling, requested = result
     settings = get_settings()
+    # All THREE engines. This assertion previously named only two, which is how the
+    # console's fifteen default connections stayed out of the one figure whose job is to
+    # be checked against a cluster — and out of it in the reassuring direction.
     assert requested == (
         settings.db_pool_size
         + settings.db_max_overflow
         + settings.db_admin_pool_size
         + settings.db_admin_max_overflow
+        + settings.db_console_pool_size
+        + settings.db_console_max_overflow
     )
     assert requested < ceiling, (
         f"the configured pools ({requested}) do not fit inside this cluster's ceiling "
         f"({ceiling}); the sizes in app.config are the thing to change"
     )
     assert "pool budget" in caplog.text.lower()
+
+
+async def test_the_console_engine_is_sized_like_the_other_two(postgres_database, monkeypatch):
+    """The §7.9 console's own engine is not left on SQLAlchemy's defaults.
+
+    **The defect this pins.** ``app.api.routes_db._console_engine`` built its engine with
+    a bare ``create_async_engine``, so it took ``pool_size=5, max_overflow=10,
+    pool_timeout=30`` while ``app.config``'s arithmetic recorded it as ``3 + 2`` — fifteen
+    connections the budget never counted, and the thirty-second undiagnosed stall §9.4
+    exists to remove, on the one engine an operator opens *because* the platform is
+    already misbehaving.
+
+    Mutation-proven: drop the ``pool_kwargs(...)`` from ``_console_engine`` and this reads
+    ``QueuePool``/``30.0`` instead of ``ConsolePool``/the configured timeout.
+    """
+    from app.api.routes_db import _console_engine, reset_console_engine
+
+    monkeypatch.setattr(
+        "app.api.routes_db.console_dsn", lambda: postgres_database.scratch.app_dsn
+    )
+    reset_console_engine()
+    engine = _console_engine()
+    try:
+        settings = get_settings()
+        pool = engine.pool
+        assert type(pool).__name__ == "ConsolePool", (
+            "the console engine did not get the named pool, so exhaustion on it is a "
+            "bare SQLAlchemy TimeoutError again"
+        )
+        assert pool.size() == settings.db_console_pool_size
+        assert pool._max_overflow == settings.db_console_max_overflow
+        assert pool._timeout == settings.db_pool_timeout_seconds
+    finally:
+        await engine.dispose()
+        reset_console_engine()

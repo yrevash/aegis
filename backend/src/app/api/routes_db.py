@@ -89,7 +89,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.api.routes import AuthContext, require_platform_admin
 from app.config import get_settings
-from app.data.session import to_asyncpg_dsn
+from app.data.session import pool_kwargs, to_asyncpg_dsn
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,23 @@ def _console_engine() -> AsyncEngine:
                     f"`python -m aegis.dbadmin`, and restart."
                 ),
             )
-        _engine = create_async_engine(to_asyncpg_dsn(dsn))
+        settings = get_settings()
+        # Sized like the other two, and for the same reason (§9.4). A bare
+        # ``create_async_engine`` here took SQLAlchemy's defaults — ``pool_size=5,
+        # max_overflow=10, pool_timeout=30`` — which is fifteen connections the pool
+        # budget in ``app.config`` never counted, and a thirty-second stall with no
+        # diagnostic on the one engine somebody opens *because* the platform is already
+        # misbehaving. ``pool_kwargs`` gives it the named ``PoolExhaustedError`` instead.
+        url = to_asyncpg_dsn(dsn)
+        _engine = create_async_engine(
+            url,
+            **pool_kwargs(
+                url,
+                label="console",
+                size=settings.db_console_pool_size,
+                overflow=settings.db_console_max_overflow,
+            ),
+        )
     return _engine
 
 

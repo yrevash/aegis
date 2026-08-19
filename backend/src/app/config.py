@@ -442,6 +442,17 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=10)
     db_admin_pool_size: int = Field(default=5)
     db_admin_max_overflow: int = Field(default=5)
+    # The console's own engine, sized here rather than left on SQLAlchemy's defaults.
+    # It was: ``app.api.routes_db`` built it with a bare ``create_async_engine``, so the
+    # arithmetic above said 5 and the process could actually hold 15 — and the one engine
+    # an operator reaches for *while the platform is misbehaving* was the only one still
+    # on the thirty-second undiagnosed stall this task exists to remove.
+    db_console_pool_size: int = Field(
+        default=3, validation_alias="AEGIS_DB_CONSOLE_POOL_SIZE"
+    )
+    db_console_max_overflow: int = Field(
+        default=2, validation_alias="AEGIS_DB_CONSOLE_MAX_OVERFLOW"
+    )
     # Ten seconds, not thirty. Nothing is gained by waiting longer: if the pool has been
     # saturated for ten seconds the request in hand is already outside any latency budget
     # worth having, and the diagnostic is more use than the connection would have been.
