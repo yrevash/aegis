@@ -47,10 +47,21 @@ export async function readSSEStream(
     if (data === null) return
     try {
       onEvent(JSON.parse(data) as StreamEvent)
-    } catch {
-      // Ignore malformed frames rather than tearing down the whole stream.
+    } catch (error) {
+      // One malformed frame does not justify tearing down the stream — but it is not
+      // nothing either, and swallowing it in silence is how a frame-splitting bug went
+      // unnoticed while every run rendered empty. Report it and carry on.
+      console.error('[aegis] discarded an unparseable stream frame', {
+        error,
+        preview: data.slice(0, 200),
+      })
     }
   }
+
+  // Per the SSE specification a frame ends at a blank line, which may be CRLFCRLF,
+  // LFLF or CRCR. Not global-sticky: `lastIndex` is reset explicitly per match so a
+  // partial frame left in the buffer is re-scanned from its start on the next chunk.
+  const _FRAME_SEPARATOR = /\r\n\r\n|\n\n|\r\r/
 
   try {
     for (;;) {
@@ -59,12 +70,22 @@ export async function readSSEStream(
       if (done) break
       buffer += decoder.decode(value, { stream: true })
 
-      // Frames are separated by a blank line (\n\n).
-      let sep = buffer.indexOf('\n\n')
-      while (sep !== -1) {
-        flushFrame(buffer.slice(0, sep))
-        buffer = buffer.slice(sep + 2)
-        sep = buffer.indexOf('\n\n')
+      // Frames are separated by a blank line, and the separator is not always \n\n.
+      // `sse-starlette` — the server on the other end of every one of these streams —
+      // writes CRLF (`DEFAULT_SEPARATOR = "\r\n"` in its `event.py`), so a scan for
+      // `\n\n` alone matched nothing, no frame ever flushed mid-stream, and the whole
+      // response was handed to `extractData` at the end as one blob whose `JSON.parse`
+      // threw into a silent `catch`. Every live-run surface in the product — the
+      // console, RAG, Harness, Graph, Voice and Simulation — rendered nothing on a
+      // successful run while an unsuccessful one looked fine, because the error and
+      // close paths do not go through here. The SSE specification names all three
+      // separators; accept all three.
+      let match = _FRAME_SEPARATOR.exec(buffer)
+      while (match !== null) {
+        flushFrame(buffer.slice(0, match.index))
+        buffer = buffer.slice(match.index + match[0].length)
+        _FRAME_SEPARATOR.lastIndex = 0
+        match = _FRAME_SEPARATOR.exec(buffer)
       }
     }
     if (buffer.trim().length > 0) flushFrame(buffer)
