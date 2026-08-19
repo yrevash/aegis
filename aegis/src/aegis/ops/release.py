@@ -328,7 +328,10 @@ async def release(
         )
 
     floor = render_floor_prompt or config.render_floor_prompt
-    active = await registry.get_active(session, draft.prompt_key)
+    # The draft's OWN tenant's current live version is the baseline. Unscoped, a
+    # tenant's proposal was scored against — and its blast radius classified against —
+    # whichever tenant's row the planner returned first.
+    active = await registry.get_active(session, draft.prompt_key, draft.tenant_id)
     baseline_prompt, baseline_config = _baseline(active, draft.prompt_key, floor)
 
     draft_score = _require_score(await eval_fn(draft.system_prompt), "draft")

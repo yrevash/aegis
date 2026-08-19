@@ -13,6 +13,9 @@ durable decision glue that could not move:
   the durable ``app.data`` optimistic transition.
 - :func:`resume_parked_run` — rehydrate a parked run from the shared checkpoint (by
   in-process handle or by ``thread_id``) and drive it headless via the core helper.
+- :func:`_record_prompt_attribution` — note which LLM-Ops prompt version this run was
+  served, so "which prompt produced this answer?" has an answer that is recorded rather
+  than inferred (§7.7).
 
 The API layer (``app.api.routes``) consumes :func:`run_agent`/:func:`decide_approval`
 unchanged.
@@ -278,8 +281,45 @@ async def run_agent(
             parked_runs=get_parked_runs(),
         )
     ) as stream:
+        attributed = False
         async for event in stream:
+            if not attributed:
+                attributed = True
+                _record_prompt_attribution(event, persona)
             yield event
+
+
+def _record_prompt_attribution(event: Any, persona: str | None) -> None:  # noqa: ANN401
+    """Note which prompt version this run was served (§7.7), best-effort.
+
+    Recorded on the run's **first** event because that is the first moment the minted
+    ``run_id`` is knowable here — the core mints it when the caller passes none — and it
+    reads the version through the very same call the harness makes on the hot path,
+    ``app.ops.registry.get_cached_active``, whose tenant comes from the sealed governance
+    context. So the recorded attribution cannot disagree with what was actually sent:
+    there is no second lookup with a second idea of the tenant.
+
+    Best-effort in the strict sense — an attribution failure must never be why a run
+    fails — and deliberately in-process; see :mod:`app.ops.prompt_runs` for what that
+    does and does not promise.
+    """
+    try:
+        from app.adapter import DEFAULT_PERSONA_ID
+        from app.ops import prompt_runs, registry
+
+        run_id = getattr(event, "run_id", None)
+        if not run_id:
+            return
+        prompt_key = persona or DEFAULT_PERSONA_ID
+        cached = registry.get_cached_active(prompt_key)
+        prompt_runs.record(
+            run_id=str(run_id),
+            tenant_id=registry.current_tenant_id(),
+            prompt_key=prompt_key,
+            version=cached[2] if cached is not None else None,
+        )
+    except Exception:  # noqa: BLE001 - bookkeeping must never break a run
+        logger.debug("Prompt-version attribution skipped.", exc_info=True)
 
 
 def _durable_graph(deps: AgentDeps) -> Any:  # noqa: ANN401 - CompiledStateGraph

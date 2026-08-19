@@ -306,6 +306,10 @@ async def decide_release(
         args = row.args or {}
         draft_version_id = args.get("draft_version_id")
         prompt_key = args.get("prompt_key")
+        # Read now: the row is expired by the commit below, and the active-version
+        # lookups underneath must be scoped to the tenant whose gate this is — not to
+        # whichever tenant happens to hold an active row for the same key.
+        tenant_id = getattr(row, "tenant_id", None)
 
         # Claim the row atomically. rowcount == 0 ⇒ someone already decided it.
         claimed = await session.execute(
@@ -332,7 +336,7 @@ async def decide_release(
             )
             active_version: int | None = None
             if prompt_key is not None:
-                active = await registry.get_active(session, str(prompt_key))
+                active = await registry.get_active(session, str(prompt_key), tenant_id)
                 active_version = active.version if active is not None else None
             return ReleaseDecision(
                 approval_id=approval_id,
@@ -356,7 +360,7 @@ async def decide_release(
         if approved and pv is not None:
             active_version = pv.version
         elif approved and prompt_key is not None:
-            active = await registry.get_active(session, str(prompt_key))
+            active = await registry.get_active(session, str(prompt_key), tenant_id)
             active_version = active.version if active is not None else None
 
         outcome = (

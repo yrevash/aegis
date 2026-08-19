@@ -26,6 +26,7 @@ import type { OpsParamsResponse } from '@/lib/api/platform'
 import { DiagnosePanel } from './DiagnosePanel'
 import { EvalTrend } from './EvalTrend'
 import { LoopParams } from './LoopParams'
+import { PromptControl } from './PromptControl'
 import { PromptHistory } from './PromptHistory'
 import { ReleaseGate } from './ReleaseGate'
 import { PROMPT_KEY } from './opsShared'
@@ -171,7 +172,10 @@ function LLMOpsView(): ReactElement {
         </Card>
       </div>
 
-      {/* Row 2 — release gate + diagnosis. */}
+      {/* Row 2 — the one panel an operator acts on: change the live prompt, no deploy. */}
+      <PromptControl />
+
+      {/* Row 3 — release gate + diagnosis. */}
       <div className="grid gap-6 lg:grid-cols-2">
         <ReleaseGate
           rows={pendingRows}
@@ -182,7 +186,7 @@ function LLMOpsView(): ReactElement {
         <DiagnosePanel onChanged={reloadPending} />
       </div>
 
-      {/* Row 3 — prompt history: versions + diff. */}
+      {/* Row 4 — prompt history: versions + diff. */}
       <PromptHistory
         rows={promptRows}
         active={active.data}
@@ -190,7 +194,7 @@ function LLMOpsView(): ReactElement {
         error={prompts.error ?? active.error}
       />
 
-      {/* Row 4 — the read-only loop parameters. */}
+      {/* Row 5 — the read-only loop parameters. */}
       <LoopParams params={params.data} loading={params.loading} error={params.error} />
     </div>
   )

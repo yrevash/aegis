@@ -451,6 +451,76 @@ async def _recreate_legacy_chunks(
     logger.info("dropped the empty pre-tenancy chunks table; create_all will rebuild it")
 
 
+async def _retenant_prompt_version_indexes(
+    conn: Any,  # noqa: ANN401 - AsyncConnection, kept loose (no import-time asyncpg dep)
+) -> None:
+    """Re-key ``prompt_versions``' indexes on the tenant (§7.7), on a live database.
+
+    ``ux_prompt_version`` was ``UNIQUE (prompt_key, version)`` — one number line for a
+    prompt key shared by every tenant on the platform. ``create_all`` will not replace it
+    on a database that already has the table, and
+    :func:`aegis.governance.schema.reconcile_additive_columns` is additive-columns-only
+    by design, so this is the dedicated step (the pattern
+    :func:`_recreate_legacy_chunks` set) that brings an existing database to the current
+    definition.
+
+    Why it matters rather than being tidy-up: with Row-Level Security on
+    ``prompt_versions``, a tenant-scoped session computing ``max(version)`` sees only its
+    own rows, allocates the next number, and collides with a row it cannot see. The
+    insert retries with the same number and fails again — so the *second* tenant to write
+    a prompt version could never write one at all.
+
+    The new unique index is created **before** the old one is dropped, so a database
+    whose rows somehow violate the tenant-scoped shape fails here, loudly, with the
+    stricter constraint still in place rather than dropped.
+
+    Args:
+        conn: An open (transactional) async connection on the owner engine.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    table = (
+        await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = current_schema() AND table_name = 'prompt_versions'"
+            )
+        )
+    ).first()
+    if table is None:
+        return  # create_all is about to build it with the current definition
+    await conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_prompt_version_tenant "
+            "ON prompt_versions (coalesce(tenant_id, 0), prompt_key, version)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_prompt_tenant_key_status "
+            "ON prompt_versions (tenant_id, prompt_key, status)"
+        )
+    )
+    for stale in ("ux_prompt_version", "ix_prompt_key_status"):
+        dropped = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() "
+                    "AND tablename = 'prompt_versions' AND indexname = :name"
+                ),
+                {"name": stale},
+            )
+        ).first()
+        if dropped is None:
+            continue
+        await conn.execute(text(f"DROP INDEX {stale}"))
+        logger.info(
+            "schema: dropped %s on prompt_versions — superseded by the tenant-scoped "
+            "index (§7.7)",
+            stale,
+        )
+
+
 async def bootstrap(engine: AsyncEngine | None = None) -> None:
     """Create every table (relational + JSON embeddings-of-record).
 
@@ -462,6 +532,9 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     With no Alembic in this project, this function is the schema owner, so the
     reconciliation steps a long-lived database needs run here, on PostgreSQL only:
 
+    0b. :func:`_retenant_prompt_version_indexes` — replace ``prompt_versions``' unique
+       index on ``(prompt_key, version)`` with the tenant-scoped one (§7.7). Also before
+       ``create_all``, which never touches an existing table's indexes.
     0. :func:`_recreate_legacy_chunks` — drop a ``chunks`` table left over from before
        the retrieval corpus was tenant-scoped, but only when it is provably empty. It is
        first because the other two cannot fix it: the replacement's ``tenant_id`` and
@@ -522,6 +595,10 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
         # Before create_all, not after: the current ``chunks`` definition cannot be
         # reconciled onto the pre-tenancy one, so the stale table has to go first.
         await _recreate_legacy_chunks(conn)
+        # Also before create_all: an existing ``prompt_versions`` keeps whatever indexes
+        # it was built with, and the one it was built with makes the platform's second
+        # tenant unable to write a prompt version at all.
+        await _retenant_prompt_version_indexes(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(AegisBase.metadata.create_all)
         await reconcile_additive_columns(conn, metadatas)

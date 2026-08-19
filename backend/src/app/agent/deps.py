@@ -525,25 +525,43 @@ def _default_tool_risk(tool_name: str) -> RiskLevel:
 def _default_render_system_prompt(
     persona_id: str, extra_context: str | None = None
 ) -> str:
-    """Render the persona's system prompt, preferring an LLM-Ops active version.
+    """Render the persona's system prompt: the tenant's version over the platform floor.
 
     Resolution order (the "feed-back-into-the-harness" seam): if the prompt registry has
-    an ``active`` version cached for ``persona_id``, its ``system_prompt`` is the base;
-    otherwise the **adapter default is the floor**. ``extra_context`` (the assembled
-    working-memory block, or ``""``) is appended either way. With an empty registry cache
-    and no ``extra_context`` — the default/test path — this renders exactly today's
-    prompt, so the single-shot behavior is unchanged.
+    an ``active`` version cached for **this request's tenant** and ``persona_id``, its
+    ``system_prompt`` is the task half; otherwise the adapter's shipped base prompt is.
+    ``extra_context`` (the assembled working-memory block, or ``""``) is appended either
+    way. With an empty registry cache and no ``extra_context`` — the default/test path —
+    this renders exactly today's prompt, so the single-shot behavior is unchanged.
+
+    **The floor is composed underneath the version, never replaced by it** (§7.16 row
+    14). An active version used to be returned *alone*, which meant a prompt a tenant
+    admin can write replaced the persona's data-scope sentence, its tool allowlist and
+    the platform preamble in one move — the tenant editing the platform's own
+    instructions through a screen whose stated purpose is editing their task prompt.
+    :func:`app.adapter.render_platform_floor` is appended after the version body, so the
+    tenant's text is the task and the platform's is the boundary.
+
+    The tenant is **not** an argument here: ``app.ops.registry.get_cached_active``
+    defaults it from the sealed governance context, so there is no value this function
+    could be called with that reads another tenant's prompt.
     """
-    from app.adapter import get_persona, render_system_prompt
+    from app.adapter import get_persona, render_platform_floor, render_system_prompt
     from app.ops import registry
 
     cached = registry.get_cached_active(persona_id)
-    if cached is not None:
-        base = cached[0]
-        if extra_context and extra_context.strip():
-            return f"{base}\n\n{extra_context.strip()}"
-        return base
-    return render_system_prompt(get_persona(persona_id), extra_context=extra_context)
+    if cached is None:
+        return render_system_prompt(get_persona(persona_id), extra_context=extra_context)
+    try:
+        persona = get_persona(persona_id)
+    except KeyError:
+        # Not a persona key (a sub-agent's, say): the derived scope/tool clauses do not
+        # exist, but the static preamble still does. Never "no floor".
+        persona = None
+    parts = [cached[0], render_platform_floor(persona)]
+    if extra_context and extra_context.strip():
+        parts.append(extra_context.strip())
+    return "\n\n".join(parts)
 
 
 def _default_active_prompt(prompt_key: str) -> tuple[str, dict[str, Any], int] | None:
@@ -558,6 +576,8 @@ def _default_active_prompt(prompt_key: str) -> tuple[str, dict[str, Any], int] |
     """
     from app.ops import registry
 
+    # The tenant is defaulted from the sealed governance context inside the shim — a
+    # sub-agent lane resolves its own tenant's version or none, never another's.
     return registry.get_cached_active(prompt_key)
 
 

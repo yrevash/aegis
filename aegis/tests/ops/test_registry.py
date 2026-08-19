@@ -77,7 +77,7 @@ def test_cache_is_empty_by_default_so_host_falls_back_to_floor():
 def test_cache_returns_the_active_tuple_when_populated():
     """A populated cache hands back ``(system_prompt, config, version)`` synchronously."""
     registry.clear_cache()
-    registry._ACTIVE_CACHE[DEFAULT_PERSONA_ID] = ("ACTIVE PROMPT", {}, 7)
+    registry._ACTIVE_CACHE[(None, DEFAULT_PERSONA_ID)] = ("ACTIVE PROMPT", {}, 7)
     got = registry.get_cached_active(DEFAULT_PERSONA_ID)
     assert got == ("ACTIVE PROMPT", {}, 7)
     registry.clear_cache()

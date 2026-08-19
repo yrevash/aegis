@@ -15,7 +15,9 @@ Columns are preserved exactly from the pre-extraction platform schema:
 ``eval_results{id, ts, run_id, prompt_key, tenant_id, metric, score, passed, detail}`` and
 ``prompt_versions{id, tenant_id, prompt_key, version, system_prompt, config, status,
 parent_version, created_by, notes, created_at, activated_at}`` with a unique
-``(prompt_key, version)`` index and an ``(prompt_key, status)`` lookup index.
+``(coalesce(tenant_id,0), prompt_key, version)`` index and a
+``(tenant_id, prompt_key, status)`` lookup index — both keyed on the tenant, because a
+version number and an "active" row belong to one tenant, not to the platform.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import Index, String, Text, func
+from sqlalchemy import Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from aegis.data import AegisBase, JsonB
@@ -94,6 +96,27 @@ class PromptVersion(AegisBase):
     activated_at: Mapped[datetime | None] = mapped_column(default=None)
 
     __table_args__ = (
-        Index("ux_prompt_version", "prompt_key", "version", unique=True),
-        Index("ix_prompt_key_status", "prompt_key", "status"),
+        # Unique per **tenant** + key + version, not per key + version.
+        #
+        # The old ``ux_prompt_version(prompt_key, version)`` conflated two tenants under
+        # one identifier, and under RLS that is not a cosmetic problem: a tenant-scoped
+        # session reads ``max(version)`` over the rows it can see, allocates the next
+        # number, and collides with an invisible row belonging to somebody else — on
+        # every retry, forever. The first tenant to write a version would have owned the
+        # number line for the whole platform.
+        #
+        # ``coalesce(tenant_id, 0)`` rather than a plain ``tenant_id`` column because
+        # PostgreSQL treats NULLs as distinct in a unique index (``NULLS NOT DISTINCT``
+        # is 15+, and this deploys on 14), which would have left the **platform** rows —
+        # the ones every tenant without a version of its own falls back to — with no
+        # uniqueness at all. Folding NULL to 0 keeps one live number line per scope, and
+        # 0 is safe because ``tenants.id`` is an identity column starting at 1.
+        Index(
+            "ux_prompt_version_tenant",
+            text("coalesce(tenant_id, 0)"),
+            "prompt_key",
+            "version",
+            unique=True,
+        ),
+        Index("ix_prompt_tenant_key_status", "tenant_id", "prompt_key", "status"),
     )

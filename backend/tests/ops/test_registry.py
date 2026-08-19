@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.adapter import DEFAULT_PERSONA_ID, get_persona, render_system_prompt
+from app.adapter import (
+    DEFAULT_PERSONA_ID,
+    PLATFORM_FLOOR,
+    get_persona,
+    render_platform_floor,
+    render_system_prompt,
+)
 from app.agent import deps as agent_deps
 from app.data.models import PromptStatus
 from app.ops import registry
@@ -73,9 +79,18 @@ def test_render_falls_back_to_adapter_floor_when_cache_empty():
     assert got == expected
 
 
-def test_render_uses_active_version_when_cached():
+def test_render_uses_active_version_but_cannot_replace_the_platform_floor():
+    """The version is the task half; the platform floor is composed underneath it.
+
+    This assertion used to be ``got == "ACTIVE PROMPT\\n\\nctx"`` — the version alone.
+    That is the shape of §7.16 row 14's defect: a prompt a tenant admin can write also
+    deleted the persona's data-scope sentence, its tool allowlist and the platform
+    preamble, so "edit your task prompt" was in fact "edit the platform's instructions".
+    """
     registry.clear_cache()
-    registry._ACTIVE_CACHE[DEFAULT_PERSONA_ID] = ("ACTIVE PROMPT", {}, 7)
+    registry._ACTIVE_CACHE[(None, DEFAULT_PERSONA_ID)] = ("ACTIVE PROMPT", {}, 7)
     got = agent_deps._default_render_system_prompt(DEFAULT_PERSONA_ID, extra_context="ctx")
-    assert got == "ACTIVE PROMPT\n\nctx"
+    floor = render_platform_floor(get_persona(DEFAULT_PERSONA_ID))
+    assert got == f"ACTIVE PROMPT\n\n{floor}\n\nctx"
+    assert PLATFORM_FLOOR in got
     registry.clear_cache()
