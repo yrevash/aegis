@@ -8,6 +8,49 @@ Research: [`plans/05-modularity-scale.md`](plans/05-modularity-scale.md) ·
 
 ---
 
+## Amendments of 2026-08-19 — these override the sections below
+
+**1. The "$100 model bill binds first" framing is withdrawn.** That figure is the
+hackathon *credit ceiling*, not a property of Aegis. It constrains our development and
+rehearsal, not the architecture, and stating it to a jury undersells the system. The
+binding architectural limit is storage, addressed by 9.1.
+
+**2. Qdrant is the vector store, for both consumers.** Decided by the user on
+2026-08-19, after verifying against the pinned versions:
+
+* Qdrant **v1.19.0** publishes `qdrant-x86_64-pc-windows-msvc.zip` — Apache 2.0, a zip
+  with a binary, **no Docker and no installer**. Same operational shape as Superset.
+* LightRAG **1.5.6** ships `QdrantVectorDBStorage` (`lightrag/kg/qdrant_impl.py`,
+  registered in `kg/__init__.py`), with batched upserts, payload-size limits and a
+  `QDRANT_WORKSPACE` namespace override. `qdrant_client` is already installed.
+* It reads **`QDRANT_URL`**, which is already in `backend/.env` — the intent was
+  recorded and never wired.
+* **Chroma was considered and rejected for LightRAG because it cannot work**: LightRAG
+  1.5.6's vector implementations are NanoVectorDB, Milvus, PGVector, Faiss, Qdrant,
+  Mongo and OpenSearch. There is no `chroma_impl.py`. Chroma-in-server-mode would have
+  solved only Aegis's half and left two vector systems to run.
+
+**3. Therefore 9.1 is rewritten and grows from 0.5d to ~1.0d.** It is no longer "add a
+mode flag"; it is **no JSON- or SQLite-backed vector storage in the server profile**:
+
+* LightRAG `vector_storage` -> `QdrantVectorDBStorage`, replacing NanoVectorDB, whose
+  own docstring calls it "a brute-force cosine scan held in memory" written back as a
+  whole-file JSON rewrite.
+* `aegis.retrieval` vectors -> Qdrant, retiring the Chroma `PersistentClient` whose
+  SQLite metadata lock is what makes `uvicorn --workers 2` fail today, and fail looking
+  like corruption rather than a clear error.
+* LightRAG graph stays on Neo4j; KV moves off files to Postgres or Redis, both of which
+  already run.
+* Refuse to boot with `--workers>1` while any embedded store is configured.
+
+**The accepted cost:** existing vectors are re-ingested, not migrated. The user has
+explicitly accepted this. Do it before a demo corpus exists, not after.
+
+**What this buys:** 9.1 stops *documenting* the single-process ceiling and removes it.
+"Scaling later is a deployment change" becomes true rather than aspirational.
+
+---
+
 ## What is actually wrong
 
 ### Which limit binds first, and it is not architecture
