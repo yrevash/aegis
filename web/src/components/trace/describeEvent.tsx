@@ -26,6 +26,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
+import { readApproval } from '@/components/approval/approvalActions'
 import type { Signal } from '@/config/signals'
 import { signalForEvent } from '@/config/signals'
 import type { GuardStage, StreamEvent } from '@/lib/stream'
@@ -118,13 +119,19 @@ export function describeEvent(event: StreamEvent): TraceDescriptor {
         title: `Tool result · ${event.ok ? 'ok' : 'failed'}`,
         detail: event.summary,
       }
-    case 'approval_required':
+    case 'approval_required': {
+      // Not `event.action`: that is the representative call, and one gate can authorise
+      // several. The trace names the same list the card asks the person to consent to.
+      const view = readApproval(event)
       return {
         signal,
         icon: Flag,
-        title: 'Awaiting human approval',
-        detail: event.action,
+        title: view.many
+          ? `Awaiting human approval · ${view.actions.length} calls`
+          : 'Awaiting human approval',
+        detail: view.actions.map((action) => action.name).join(' · '),
       }
+    }
     case 'approval_queued': {
       const tier = event.assignee_tier ? ` → ${event.assignee_tier}` : ''
       return {

@@ -9,9 +9,11 @@ import { RecallDebugPanel } from '@/components/memory/RecallDebugPanel'
 import { SemanticFactsPanel } from '@/components/memory/SemanticFactsPanel'
 import { ErrorRow, LoadingRow } from '@/components/memory/StateRow'
 import { StructuredProfilePanel } from '@/components/memory/StructuredProfilePanel'
-import { useAsync } from '@/components/memory/useAsync'
+import { useAsync, type AsyncState } from '@/components/memory/useAsync'
+import { isAuthFailure } from '@/lib/api/apiError'
 import { getMemoryFacts, getMemoryProfile, getMemorySessions } from '@/lib/api/client'
 import { getMyBudget, type MyBudgetResponse } from '@/lib/api/console'
+import type { MemoryFactsResponse } from '@/lib/api/memory'
 import { cn } from '@/lib/utils'
 
 import {
@@ -21,8 +23,11 @@ import {
   cardToEvict,
   closeCard,
   initialOpenCards,
+  memoryAvailable,
   openCard,
+  railExplanation,
   visibleCards,
+  type MemoryAccess,
   type MemoryCardId,
   type RailCapabilities,
 } from './memoryCards'
@@ -80,19 +85,26 @@ function RailCard({
   )
 }
 
-/** "What I remember" — the durable facts, then the profile distilled from them. */
+/**
+ * "What I remember" — the durable facts, then the profile distilled from them.
+ *
+ * The facts read is handed in rather than started here, because the rail already made
+ * it: the same request decides whether this card is offered at all. Firing it twice for
+ * one card would be two round trips to answer one question.
+ */
 function RememberedBody({
   token,
   subject,
+  facts,
 }: {
   token: string | null
   subject: string
+  facts: AsyncState<MemoryFactsResponse>
 }): ReactElement {
-  const facts = useAsync(() => getMemoryFacts(token, subject, true), [token, subject])
   const profile = useAsync(() => getMemoryProfile(token, subject), [token, subject])
   return (
     <div className="flex flex-col gap-4">
-      <SemanticFactsPanel state={facts.state} />
+      <SemanticFactsPanel state={facts} />
       <div className="border-t border-border/70 pt-4">
         <StructuredProfilePanel state={profile.state} />
       </div>
@@ -246,16 +258,45 @@ interface MemoryRailProps {
  * add menu names which before the click. It opens with exactly one card — "What I
  * remember" — and everything else is opt-in.
  *
- * A card is only offered when its reading is actually available: no memory subject on
- * this bearer and the three memory cards are withheld; `GET /me/budget` refuses and the
- * budget card never appears. The panels themselves are the ones the Memory section
- * already uses, reused whole rather than reimplemented at a second size.
+ * A card is only offered when its reading is actually available, and that has to mean
+ * *available*, not *plausible*. Two things can withhold the memory cards and both were
+ * needed: the bearer resolving to no subject at all, and the store refusing the subject
+ * it does have. Only the first was checked, so signing in through the console's own
+ * "Enter as Client" button opened a card that rendered `Could not load. GET
+ * /memory/facts?subject=user%3A5... failed: 403 Forbidden` — the exact thing the rail
+ * claims never to do. The first read is now the probe as well as the card's content:
+ * one request, and a refusal withdraws the offer instead of printing itself.
+ *
+ * A 500 or a dropped connection does **not** withhold anything. That reading is absent
+ * right now, not absent for this person, and a card that disappears on a backend hiccup
+ * teaches something false about what the agent knows.
+ *
+ * The panels themselves are the ones the Memory section already uses, reused whole
+ * rather than reimplemented at a second size.
  */
 export function MemoryRail({ token, subject }: MemoryRailProps): ReactElement {
   const [budget, setBudget] = useState<MyBudgetResponse | null>(null)
   const [open, setOpen] = useState<MemoryCardId[]>(() =>
     initialOpenCards({ memory: subject !== null, budget: false }),
   )
+
+  // The rail's own read of the durable facts. It is the default card's content *and*
+  // the probe that decides whether any memory card is offered — the same request,
+  // because asking twice to answer one question is a round trip nobody needs.
+  const facts = useAsync<MemoryFactsResponse>(
+    () =>
+      subject === null
+        ? Promise.reject(new Error('This sign-in owns no memory subject.'))
+        : getMemoryFacts(token, subject, true),
+    [token, subject],
+  )
+
+  const access: MemoryAccess = useMemo(() => {
+    if (subject === null) return 'unscoped'
+    if (facts.state.status === 'loading') return 'probing'
+    if (facts.state.status === 'ready') return 'readable'
+    return isAuthFailure(facts.state.error) ? 'refused' : 'readable'
+  }, [subject, facts.state])
 
   // One probe decides both halves of the budget card: whether to offer it, and what it
   // says. A refusal (no such route, or not for this role) simply withholds the card.
@@ -274,12 +315,13 @@ export function MemoryRail({ token, subject }: MemoryRailProps): ReactElement {
   }, [token])
 
   const caps: RailCapabilities = useMemo(
-    () => ({ memory: subject !== null, budget: budget !== null }),
-    [subject, budget],
+    () => ({ memory: memoryAvailable(access), budget: budget !== null }),
+    [access, budget],
   )
 
   const shown = visibleCards(open, caps)
   const offered = availableCards(caps)
+  const explanation = railExplanation(access, shown.length, offered.length)
 
   const add = (id: MemoryCardId): void => setOpen((current) => openCard(current, id))
   const drop = (id: MemoryCardId): void => setOpen((current) => closeCard(current, id))
@@ -300,17 +342,9 @@ export function MemoryRail({ token, subject }: MemoryRailProps): ReactElement {
         <AddMenu open={shown} caps={caps} onAdd={add} />
       </header>
 
-      {offered.length === 0 && (
+      {explanation !== null && (
         <p className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-3 text-[0.78rem] leading-relaxed text-muted-foreground">
-          This sign-in is not scoped to a memory subject, so there is nothing here to read.
-          Sign in as a tenant user to see what the agent has learned.
-        </p>
-      )}
-
-      {offered.length > 0 && shown.length === 0 && (
-        <p className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-3 text-[0.78rem] leading-relaxed text-muted-foreground">
-          Every card is closed. Add one to see what the agent has kept from your past
-          conversations.
+          {explanation}
         </p>
       )}
 
@@ -320,7 +354,7 @@ export function MemoryRail({ token, subject }: MemoryRailProps): ReactElement {
         if (id === 'remembered' && subject !== null) {
           return (
             <RailCard key={id} id={id} title={spec.title} onClose={() => drop(id)}>
-              <RememberedBody token={token} subject={subject} />
+              <RememberedBody token={token} subject={subject} facts={facts.state} />
             </RailCard>
           )
         }

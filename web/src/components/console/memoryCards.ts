@@ -67,10 +67,67 @@ export const DEFAULT_OPEN_CARDS: readonly MemoryCardId[] = ['remembered']
 
 /** What this sign-in can actually read, decided before a card is offered. */
 export interface RailCapabilities {
-  /** True when the bearer resolves to a memory subject the `/memory/*` store is keyed on. */
+  /** True when the `/memory/*` store both has a subject for this bearer and answers for it. */
   memory: boolean
   /** True when `GET /me/budget` answered for this caller. */
   budget: boolean
+}
+
+/**
+ * Why the memory cards are not on offer — the three answers, kept apart.
+ *
+ * `unscoped` is the bearer having no `user:<id>` at all. `refused` is the store
+ * declining to serve the subject it does have, which is what "Enter as Client" produces
+ * and what the rail used to render as `Could not load. GET
+ * /memory/facts?subject=user%3A5... failed: 403 Forbidden` inside an open card. They
+ * need different sentences because they have different fixes.
+ */
+export type MemoryAccess = 'unscoped' | 'refused' | 'probing' | 'readable'
+
+/**
+ * What the rail says when it is showing no cards, or `null` when it owes no explanation.
+ *
+ * Two bugs lived in the old version of this decision. It keyed the "not scoped to a
+ * memory subject" line on `offered.length === 0`, so a session with a **readable budget
+ * card** and no `userId` got "0/3 · Every card is closed. Add one…" — blaming the person
+ * for closing cards that were never offered them. And it had no sentence at all for a
+ * subject the store refuses, because that case used to be rendered inside a card as a
+ * raw 403.
+ *
+ * @param access - What `/memory/*` will do for this bearer.
+ * @param openCount - How many cards are actually on screen.
+ * @param offeredCount - How many cards this sign-in could open.
+ * @returns The line to render, or `null` when the rail has cards up and owes nothing.
+ */
+export function railExplanation(
+  access: MemoryAccess,
+  openCount: number,
+  offeredCount: number,
+): string | null {
+  // Something is on screen; the rail is showing its answer and owes no note about it.
+  if (openCount > 0) return null
+
+  if (access === 'unscoped') {
+    return 'This sign-in is not scoped to a memory subject, so there is nothing here to read. Sign in as a tenant user to see what the agent has learned.'
+  }
+  if (access === 'refused') {
+    return 'This sign-in may not read the memory store, so its cards are not offered. Sign in as the user whose memory you want to see, or ask an admin for access.'
+  }
+  if (offeredCount === 0) {
+    return 'Nothing here is readable with this sign-in yet.'
+  }
+  return 'Every card is closed. Add one to see what the agent has kept from your past conversations.'
+}
+
+/**
+ * Whether the memory cards are worth offering for this access state.
+ *
+ * `probing` counts as available on purpose: the first read is in flight, the default
+ * card opens on it and shows its own loading row, and withholding the card for the
+ * length of one request would make the rail flicker on every load.
+ */
+export function memoryAvailable(access: MemoryAccess): boolean {
+  return access === 'readable' || access === 'probing'
 }
 
 /** Whether one card's reading is available. */

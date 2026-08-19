@@ -69,7 +69,7 @@ export function BentoTile({
     <Card
       className={cn(
         'h-full',
-        hero ? 'p-6 shadow-pop dark:border-t-white/5' : 'p-5',
+        hero ? 'p-6 shadow-pop' : 'p-5',
         interactive &&
           'cursor-pointer transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-hover focus-visible:-translate-y-0.5 focus-visible:shadow-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         className,

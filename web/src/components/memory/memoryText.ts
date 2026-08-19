@@ -157,3 +157,24 @@ function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0
   return Math.max(0, Math.min(1, n))
 }
+
+/**
+ * The query a recall trace should actually run, or `null` when there is none.
+ *
+ * The panel's own docstring says it refuses to seed a question — *"a placeholder
+ * question would put words in the operator's mouth and trace a recall nobody asked
+ * for"* — and three lines below it the submit handler did
+ * `setQuery(draft.trim() || 'request status')`, substituting exactly such a question.
+ * An empty box then traced "request status", and the ranked rows underneath were the
+ * agent's honest answer to a question nobody had asked.
+ *
+ * `null` is the honest reading of an empty box, and the panel invites a question instead
+ * of inventing one.
+ *
+ * @param draft - Whatever is in the input.
+ * @returns The trimmed query, or `null` when the box is empty or only whitespace.
+ */
+export function recallQuery(draft: string): string | null {
+  const trimmed = draft.trim()
+  return trimmed === '' ? null : trimmed
+}

@@ -29,10 +29,12 @@ import type { RunController } from '@/lib/api/transport'
 import type { ApprovalDecision } from '@/lib/api/types'
 
 import { questionWithAttachment, type TurnAttachment } from './composerAttachment'
+import { rememberChat, rememberedChat } from './lastChat'
 import {
   activeSession,
   initialThreadState,
   liveTurn,
+  localIdFor,
   threadReducer,
   type ChatSession,
   type RestoredTurn,
@@ -112,16 +114,34 @@ export function useChatThread(token: string | null): UseChatThread {
 
   // The caller's stored conversations, so the rail is the real list and not just what
   // this tab happened to run. A failure leaves the rail with the current chat only.
+  //
+  // The same pass resumes the conversation this browser was last in. A reload used to
+  // open an empty chat and leave the person's thread sitting in the rail looking
+  // abandoned; the reducer only takes the resume when this tab is still untouched, so a
+  // late-arriving sync never yanks somebody out of a chat they have already started.
   useEffect(() => {
     let alive = true
+    const resumeServerId = rememberedChat()
     void getSessions(token)
       .then((response) => {
         if (!alive) return
-        dispatch({
-          kind: 'sync_sessions',
-          rows: response.rows.map((row) => ({ id: row.id, title: row.title })),
-          at: Date.now(),
-        })
+        const rows = response.rows.map((row) => ({ id: row.id, title: row.title }))
+        dispatch({ kind: 'sync_sessions', rows, at: Date.now(), resumeServerId })
+        if (resumeServerId === null || !rows.some((row) => row.id === resumeServerId)) return
+        // The resumed chat renders its stored transcript, exactly as it would if it had
+        // been picked from the rail by hand.
+        void getSessionMessages(token, resumeServerId)
+          .then((messages) => {
+            if (!alive) return
+            dispatch({
+              kind: 'restore',
+              sessionId: localIdFor(resumeServerId),
+              turns: pairTranscript(messages.rows),
+            })
+          })
+          .catch(() => {
+            /* The chat is open; its transcript simply did not come back. */
+          })
       })
       .catch(() => {
         /* No stored conversations to show; the current chat still works. */
@@ -130,6 +150,12 @@ export function useChatThread(token: string | null): UseChatThread {
       alive = false
     }
   }, [token])
+
+  // Remember what is on screen, so the next load opens here. An unstarted chat is not
+  // somewhere to come back to, so it clears the memory rather than pinning a blank.
+  useEffect(() => {
+    rememberChat(session?.serverId ?? null)
+  }, [session?.serverId])
 
   const openRun = useCallback(
     (

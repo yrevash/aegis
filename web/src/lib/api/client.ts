@@ -70,14 +70,28 @@ import type {
   SecurityPostureResponse,
 } from '@/lib/api/platform'
 
-import { getAuthToken } from './authToken'
+import { ApiError } from './apiError'
+import { getAuthToken, reportSessionExpired } from './authToken'
 import { API_BASE } from './config'
 
+/**
+ * Issue one authenticated call.
+ *
+ * A failure throws an {@link ApiError}, whose `message` is a sentence a person can act
+ * on rather than the `GET /memory/facts?subject=user%3A5 failed: 403 Forbidden` this
+ * used to throw and surfaces used to render. The route survives on the error's own
+ * fields and goes to the console log, where it is the useful fact.
+ *
+ * A 401 is reported to the session before it is thrown, so a bearer the backend no
+ * longer accepts signs the console out instead of leaving a signed-in shell over a
+ * session that can read nothing.
+ */
 async function request<T>(
   path: string,
   init: RequestInit,
   token: string | null,
 ): Promise<T> {
+  const method = init.method ?? 'GET'
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
   // Per-call token wins; otherwise fall back to the signed-in session's token so
@@ -86,7 +100,10 @@ async function request<T>(
   if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
   if (!res.ok) {
-    throw new Error(`${init.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText}`)
+    const failure = new ApiError(res.status, method, path)
+    if (res.status === 401) reportSessionExpired()
+    console.error('[aegis] request failed', { route: failure.route, status: res.status })
+    throw failure
   }
   return (await res.json()) as T
 }
@@ -122,12 +139,15 @@ export async function login(body: LoginRequest): Promise<LoginResponse> {
 
 /** A failed `POST /auth/login`, carrying the status and the server's own reason. */
 export class LoginError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
+  // Declared, not a constructor parameter property: Node's strip-only TypeScript mode
+  // refuses `readonly status: number` in a parameter list, and `web/tests` runs these
+  // modules through it directly rather than through a bundler.
+  readonly status: number
+
+  constructor(status: number, message: string) {
     super(message)
     this.name = 'LoginError'
+    this.status = status
   }
 }
 
@@ -576,7 +596,8 @@ export async function transcribeVoice(
     body: form,
   })
   if (!res.ok) {
-    throw new Error(`POST /voice/transcribe failed: ${res.status} ${res.statusText}`)
+    if (res.status === 401) reportSessionExpired()
+    throw new ApiError(res.status, 'POST', '/voice/transcribe')
   }
   return (await res.json()) as VoiceTranscribeResponse
 }

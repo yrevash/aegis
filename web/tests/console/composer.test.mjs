@@ -18,6 +18,10 @@ import {
 } from '../../src/components/console/composerAttachment.ts'
 import { budgetLine } from '../../src/components/console/composerBudget.ts'
 import { priceClauses } from '../../src/components/console/composerPricing.ts'
+import {
+  MAX_QUESTION_CHARS,
+  questionLength,
+} from '../../src/components/console/questionLength.ts'
 
 /** A `GET /me/budget` body carrying only the fields the line reads. */
 function budgetOf(overrides) {
@@ -143,4 +147,54 @@ test('a screened image travels as labelled evidence beside the question', () => 
 
 test('no attachment leaves the question exactly as it was written', () => {
   assert.equal(questionWithAttachment('Plain question', null), 'Plain question')
+})
+
+/**
+ * The length cap, which the composer did not have.
+ *
+ * A 60,000-character paste was accepted, stored in the thread, used to title the chat,
+ * rendered in full, sent — and refused by the input rail, which stops at
+ * `MAX_INPUT_CHARS = 8_000` (`aegis/src/aegis/guardrails/schema.py`) because anything
+ * larger reads as context-stuffing rather than a question. Five wasted steps and a
+ * rejection the person could have been spared before pressing Enter.
+ */
+test('a question the rail would refuse cannot be sent, and says how much to cut', () => {
+  const paste = 'x'.repeat(60_000)
+  const length = questionLength(paste)
+
+  assert.equal(length.over, true, 'the Send button is disabled on this')
+  assert.equal(length.remaining, MAX_QUESTION_CHARS - 60_000)
+  assert.match(length.label, /52,000 characters over/)
+  assert.match(length.label, /trim it to send/, 'an error says what to do')
+})
+
+test('the cap is the rail\'s cap, measured on what actually goes on the wire', () => {
+  // Exactly at the limit is accepted — the rail refuses what is *larger* than this.
+  assert.equal(questionLength('x'.repeat(MAX_QUESTION_CHARS)).over, false)
+  assert.equal(questionLength('x'.repeat(MAX_QUESTION_CHARS + 1)).over, true)
+
+  // A screened image travels as text appended to the question. Measuring only what was
+  // typed would let a near-limit question plus a long description sail past and be
+  // refused at the far end anyway — the same defect with an extra step.
+  const typed = 'x'.repeat(MAX_QUESTION_CHARS - 20)
+  const composed = questionWithAttachment(typed, {
+    id: 'att-1',
+    filename: 'chart.png',
+    blocked: false,
+    summary: 'A bar chart of quarterly spend.',
+    coverage: 'sniffed, screened',
+    previewUrl: 'data:image/png;base64,AA',
+  })
+
+  assert.equal(questionLength(typed).over, false)
+  assert.equal(questionLength(composed).over, true, 'the description is on the same wire')
+})
+
+test('the counter stays out of the way until it is the answer to a question', () => {
+  assert.equal(questionLength('What changed in the release?').showCounter, false)
+  assert.equal(questionLength('').label, '', 'no number under an empty box')
+
+  const near = questionLength('x'.repeat(MAX_QUESTION_CHARS - 100))
+  assert.equal(near.showCounter, true)
+  assert.match(near.label, /100 characters left/)
 })

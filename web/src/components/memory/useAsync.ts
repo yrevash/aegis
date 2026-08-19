@@ -9,7 +9,13 @@ import { useEffect, useState, type DependencyList } from 'react'
  */
 export type AsyncState<T> =
   | { status: 'loading' }
-  | { status: 'error'; message: string }
+  /**
+   * `message` is the sentence to render. `error` is what was actually thrown, kept
+   * because a caller sometimes has to *decide* on the failure rather than show it —
+   * the memory rail withholds a card on a 401/403 and keeps it on a 500, and it needs
+   * the status to tell those apart.
+   */
+  | { status: 'error'; message: string; error: unknown }
   | { status: 'ready'; data: T }
 
 /**
@@ -31,7 +37,11 @@ export function useAsync<T>(fn: () => Promise<T>, deps: DependencyList): { state
         if (alive)
           setState({
             status: 'error',
-            message: err instanceof Error ? err.message : 'Could not load. Is the backend running?',
+            message:
+              err instanceof Error
+                ? err.message
+                : 'That reading did not come back. Check the backend is running, then retry.',
+            error: err,
           })
       })
     return () => {

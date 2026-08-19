@@ -356,7 +356,20 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
     case 'error':
       return { ...next, phase: 'error', running: false, error: event.message, approval: null }
 
-    default:
+    default: {
+      // Compile-time exhaustiveness. `event` narrows to `never` here only while every
+      // member of the union above has a `case`; add a variant to `StreamEvent` without a
+      // branch and this assignment is a type error rather than a silent discard. That
+      // silent discard is exactly what dropped `reflection`, `routing` and `memory` on
+      // the floor while they were live on the wire.
+      //
+      // The runtime fall-through stays, because a backend that ships a variant before
+      // this client does must degrade to "logged but not reduced", never to a crash
+      // mid-stream. `web/tests/state/runReducerCoverage.test.mjs` is the half of this
+      // guard that runs under `npm test`.
+      const unhandled: never = event
+      void unhandled
       return next
+    }
   }
 }

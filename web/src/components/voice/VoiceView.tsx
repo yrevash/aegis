@@ -86,9 +86,10 @@ function VoiceView(): ReactElement {
         const filename = prepared ? 'recording.wav' : (blob as File).name || 'recording'
         setResult(await transcribeVoice(upload, { filename }, token))
       } catch (err) {
-        setNotice(
-          `Transcription failed: ${err instanceof Error ? err.message : String(err)}. Nothing was sent to the agent.`,
-        )
+        // `err.message` is a whole sentence now (see `lib/api/apiError.ts`), so this
+        // joins two sentences rather than gluing a status line onto a suffix.
+        const said = err instanceof Error ? err.message : String(err)
+        setNotice(`The recording was not transcribed. ${said} Nothing was sent to the agent.`)
       } finally {
         setBusy(false)
       }

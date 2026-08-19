@@ -10,13 +10,15 @@ export function LoadingRow({ label = 'Loading…' }: { label?: string }): ReactE
   )
 }
 
-/** A calm error row — never alarming, honest about the offline case. */
+/**
+ * A calm error row — never alarming, honest about the offline case.
+ *
+ * No "Could not load." prefix any more: `message` is a whole sentence now (see
+ * `lib/api/apiError.ts`), and the prefix existed to make up for a `message` that used to
+ * be `GET /memory/facts?subject=user%3A5 failed: 403 Forbidden`.
+ */
 export function ErrorRow({ message }: { message: string }): ReactElement {
-  return (
-    <div className="py-8 text-sm text-destructive">
-      Could not load. {message}
-    </div>
-  )
+  return <div className="py-8 text-sm text-destructive">{message}</div>
 }
 
 /** An empty-state row for a panel with nothing to show yet. */

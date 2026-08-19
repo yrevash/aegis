@@ -48,7 +48,7 @@ export function KpiHero({
 }: KpiHeroProps): ReactElement {
   const token = SIGNALS[signal]
   return (
-    <Card className={cn('h-full gap-4 p-6 shadow-pop dark:border-t-white/5', className)}>
+    <Card className={cn('h-full gap-4 p-6 shadow-pop', className)}>
       <div className="flex items-center gap-2">
         <span className={cn('inline-block size-2 rounded-full', signal === 'neutral' ? 'bg-muted-foreground' : token.bg)} style={signal !== 'neutral' ? { background: token.hex } : undefined} aria-hidden />
         <span className="eyebrow">{label}</span>

@@ -241,6 +241,10 @@ function SettingsView(): ReactElement {
   const [scope, setScope] = useState<SettingScope>('user')
   const [error, setError] = useState<string | null>(null)
   const [rosterError, setRosterError] = useState<string | null>(null)
+  // Bumped by every accepted write. The roster is a *projection* of these settings —
+  // `agent.gate_min_risk` is literally the gate floor it prints — so a write that the
+  // server accepted has, by definition, moved it.
+  const [rosterKey, setRosterKey] = useState(0)
 
   useEffect(() => {
     // Wait for the persisted session; firing now would send no bearer.
@@ -262,6 +266,24 @@ function SettingsView(): ReactElement {
           )
         }
       })
+    return () => {
+      alive = false
+    }
+  }, [token, hydrated])
+
+  // The roster reads on its own key as well as the token, because a write to Controls
+  // changes it and nothing else on this screen will say so. Writing
+  // `agent.gate_min_risk = low` moved the settings row and left the Tools panel — on
+  // the same screen, a few hundred pixels down — insisting the human gate was still at
+  // "high risk and above" until a manual reload. The write worked; the console would
+  // not show it, which is the same as the control being broken to whoever is looking.
+  //
+  // Which keys feed the roster is the server's business, not this component's: a
+  // hand-kept list of "keys that matter" here would be one more thing to forget on the
+  // day a twelfth setting joins the catalogue. Every accepted write re-reads it.
+  useEffect(() => {
+    if (!hydrated) return
+    let alive = true
     getToolRoster(token)
       .then((data) => {
         if (alive) {
@@ -281,12 +303,13 @@ function SettingsView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token, hydrated])
+  }, [token, hydrated, rosterKey])
 
   const replace = useCallback((next: SettingRow) => {
     setRows((current) =>
       current === null ? current : current.map((row) => (row.key === next.key ? next : row)),
     )
+    setRosterKey((n) => n + 1)
   }, [])
 
   return (

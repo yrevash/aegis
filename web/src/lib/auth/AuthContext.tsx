@@ -27,7 +27,7 @@ import {
 } from 'react'
 
 import { login as apiLogin } from '@/lib/api/client'
-import { setAuthToken } from '@/lib/api/authToken'
+import { setAuthToken, setSessionExpiredHandler } from '@/lib/api/authToken'
 import type { FineRole } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 
@@ -139,6 +139,16 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
     setAuthToken(null)
     setSession(null)
   }, [])
+
+  // A 401 from anywhere is this session ending, so treat it as one. The JWT lasts 12
+  // hours; without this, a console left open overnight went on showing the username and
+  // a Sign out button while every read came back 401 — a signed-out session painted as
+  // a signed-in one. `reportSessionExpired` fires at most once per bearer, so a burst
+  // of refusals from six panels mounting at once signs out once.
+  useEffect(() => {
+    setSessionExpiredHandler(signOut)
+    return () => setSessionExpiredHandler(null)
+  }, [signOut])
 
   const value = useMemo<AuthContextValue>(
     () => ({ session, hydrated, signIn, signOut }),

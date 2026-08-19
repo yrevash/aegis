@@ -16,7 +16,8 @@
  * @see backend/src/app/api/routes_console.py
  */
 
-import { getAuthToken } from './authToken'
+import { ApiError, apiMessage } from './apiError'
+import { getAuthToken, reportSessionExpired } from './authToken'
 import { API_BASE } from './config'
 
 /** One role of the effective routing table. Mirrors `ModelRow`. */
@@ -136,25 +137,34 @@ export interface MyBudgetResponse {
   usd_remaining: number | null
 }
 
-/** A console-endpoint failure that kept the server's own explanation. */
-export class ConsoleApiError extends Error {
-  readonly status: number
-
-  constructor(status: number, detail: string) {
-    super(detail)
+/**
+ * A console-endpoint failure that kept the server's own explanation.
+ *
+ * An {@link ApiError} subclass, so the 401 sign-out and the memory rail's withholding
+ * rule read `status` the same way here as on every other route, while the `message`
+ * stays the server's `detail` whenever it sent one.
+ */
+export class ConsoleApiError extends ApiError {
+  constructor(status: number, method: string, path: string, detail: string) {
+    super(status, method, path, detail)
     this.name = 'ConsoleApiError'
-    this.status = status
   }
 }
 
-/** Read the server's `detail` from an error body, falling back to the status line. */
+/**
+ * Read the server's `detail` from an error body, falling back to a sentence.
+ *
+ * The fallback was `"403 Forbidden"` — a status line, rendered verbatim into a panel.
+ * When the server declined to explain itself, {@link apiMessage} says what the status
+ * means and what to do next instead.
+ */
 async function detailOf(res: Response): Promise<string> {
   const body: unknown = await res.json().catch(() => null)
   if (body !== null && typeof body === 'object' && 'detail' in body) {
     const detail = (body as { detail: unknown }).detail
     if (typeof detail === 'string' && detail.length > 0) return detail
   }
-  return `${res.status} ${res.statusText}`
+  return apiMessage(res.status)
 }
 
 /** Issue one authenticated call, preserving the server's reason on failure. */
@@ -168,7 +178,12 @@ async function consoleRequest<T>(
   const bearer = token ?? getAuthToken()
   if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
-  if (!res.ok) throw new ConsoleApiError(res.status, await detailOf(res))
+  if (!res.ok) {
+    const failure = new ConsoleApiError(res.status, init.method ?? 'GET', path, await detailOf(res))
+    if (res.status === 401) reportSessionExpired()
+    console.error('[aegis] request failed', { route: failure.route, status: res.status })
+    throw failure
+  }
   return (await res.json()) as T
 }
 

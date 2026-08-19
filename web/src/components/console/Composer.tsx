@@ -17,8 +17,9 @@ import type { Role } from '@/lib/stream'
 
 import { AttachmentPicker } from './AttachmentPicker'
 import { BudgetLine } from './BudgetLine'
-import type { TurnAttachment } from './composerAttachment'
+import { questionWithAttachment, type TurnAttachment } from './composerAttachment'
 import { ModelsMenu } from './ModelsMenu'
+import { questionLength } from './questionLength'
 
 interface ComposerProps {
   role: Role
@@ -52,16 +53,26 @@ const MAX_HEIGHT = 168
  *
  * - **Model** ships as a *report*, not a chooser. `GET /models` answers what the
  *   gateway would actually do, so the panel is true. Persisting a preference is
- *   `agent.model` in the settings catalogue — which exists, resolves platform → tenant
- *   → user, and has **no HTTP surface**, so there is nothing to PUT a choice to and
- *   nothing to read its `source` back from. See {@link ModelsMenu}.
- * - **Mode** and **Tools** are not here. `aegis.agent.run_agent` takes `depth_mode` and
- *   `requested_fanout`, and honours an explicit width exactly — but `QueryRequest`
- *   carries neither field and `POST /query` never passes one, so a mode picked here
- *   could not reach the run by any route. Adding the dropdown before the field would
- *   put a control on screen that silently does nothing.
+ *   `agent.model` in the settings catalogue, and that **does** have an HTTP surface now
+ *   — `GET|PUT /settings/{key}` — which the Settings screen writes, with the badge that
+ *   names the scope that decided. A second writer here, in a menu with no room for that
+ *   badge, would reintroduce the ambiguity Settings exists to remove. See
+ *   {@link ModelsMenu}.
+ * - **Mode** and **Tools** are not here — but no longer because the wire cannot carry
+ *   them. `QueryRequest` carries `depth_mode` and `requested_fanout` now, and
+ *   {@link startRun} already sends both (as `null` while nothing sets them), so the
+ *   remaining work is a control and a piece of state, not a backend field. What is
+ *   still missing for **Tools** is a per-run roster field; `GET /tools` reports the
+ *   effective roster and nothing accepts a pin for one run.
  * - **Image** ships whole, because `POST /attachments` exists and the screened
  *   descriptor it returns is text the question can carry. See {@link AttachmentPicker}.
+ *
+ * ## The length cap
+ *
+ * The input rail refuses over 8,000 characters, so the composer stops there rather than
+ * letting a 60,000-character paste be accepted, titled, rendered and *then* refused.
+ * What is measured is the composed query — an attached image's screened description is
+ * text on the same wire. See {@link questionLength}.
  */
 export function Composer({
   role,
@@ -85,9 +96,12 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`
   }, [question])
 
+  // What the rail will actually measure: the question plus any screened description.
+  const length = questionLength(questionWithAttachment(question.trim(), attachment))
+
   const send = (): void => {
     const trimmed = question.trim()
-    if (trimmed === '' || running) return
+    if (trimmed === '' || running || length.over) return
     onSend(trimmed, attachment)
     setQuestion('')
     // The attachment belonged to that question. Carrying it into the next one would
@@ -156,11 +170,28 @@ export function Composer({
         onChange={(event) => setQuestion(event.target.value)}
         onKeyDown={onKeyDown}
         placeholder="Ask anything…"
+        aria-invalid={length.over}
+        aria-describedby={length.showCounter ? 'composer-length' : undefined}
         className={cn(
           'w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-relaxed outline-none',
           'placeholder:text-muted-foreground',
         )}
       />
+
+      {length.showCounter && (
+        <p
+          id="composer-length"
+          // Announced, not shouted: a person pasting a long document should hear the
+          // limit once they are near it, not have it read out on every keystroke.
+          aria-live="polite"
+          className={cn(
+            'tabular px-2 pt-0.5 font-mono text-[0.7rem]',
+            length.over ? 'text-block-ink' : 'text-muted-foreground',
+          )}
+        >
+          {length.label}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-1.5">
         <BudgetLine token={token} refreshKey={budgetKey} />
@@ -173,7 +204,7 @@ export function Composer({
           type="submit"
           size="sm"
           className="ml-auto"
-          disabled={running || question.trim() === ''}
+          disabled={running || question.trim() === '' || length.over}
         >
           {running ? 'Sending' : 'Send'}
           <ArrowUp aria-hidden className="size-4" />

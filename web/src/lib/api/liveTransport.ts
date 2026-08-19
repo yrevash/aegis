@@ -8,11 +8,35 @@
 
 import type { ApprovalDecision } from '@/lib/api/types'
 
-import { getAuthToken } from './authToken'
+import { ApiError } from './apiError'
+import { getAuthToken, reportSessionExpired } from './authToken'
 import { postApproval } from './client'
 import { API_BASE } from './config'
 import { readSSEStream } from './sse'
 import type { RunController, RunHandlers, RunRequest } from './transport'
+
+/**
+ * Open the stream, turning an unreachable backend into a sentence.
+ *
+ * `fetch` rejects with `TypeError: Failed to fetch` when nothing answers, and that
+ * string went straight to the screen as "The run stopped. Failed to fetch" — which
+ * names a browser API rather than the thing that is wrong. A *fresh* load with the
+ * backend down is handled well by `BackendGate`; this is the same fact, said as
+ * plainly, for the session that was already open when the backend went away.
+ */
+async function postQuery(init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`${API_BASE}/query`, init)
+  } catch (cause) {
+    if (init.signal?.aborted === true) throw cause
+    throw new ApiError(
+      0,
+      'POST',
+      '/query',
+      'The backend stopped answering. Check it is still running, then send the question again.',
+    )
+  }
+}
 
 /**
  * Begin a run and return its controller.
@@ -41,7 +65,7 @@ export function startRun(
   const run = async (): Promise<void> => {
     const headers = new Headers({ 'Content-Type': 'application/json' })
     if (bearer) headers.set('Authorization', `Bearer ${bearer}`)
-    const res = await fetch(`${API_BASE}/query`, {
+    const res = await postQuery({
       method: 'POST',
       headers,
       // `session_id` is what turns the memory nodes from pass-throughs into a
@@ -62,7 +86,16 @@ export function startRun(
       signal: controller.signal,
     })
     if (!res.ok || res.body === null) {
-      throw new Error(`POST /query failed: ${res.status} ${res.statusText}`)
+      // A sentence, not a status line. `The run stopped. POST /query failed: 401
+      // Unauthorized` told the person the route and nothing they could act on; a
+      // 401 here is an expired bearer, and it signs the console out on the way past.
+      if (res.status === 401) reportSessionExpired()
+      throw new ApiError(
+        res.ok ? 0 : res.status,
+        'POST',
+        '/query',
+        res.ok ? 'The backend accepted the question but sent no stream to read.' : undefined,
+      )
     }
     await readSSEStream(res.body, handlers.onEvent, controller.signal)
   }

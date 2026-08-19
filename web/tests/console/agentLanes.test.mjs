@@ -147,7 +147,30 @@ test('an omitted agent wears the merge terminal state instead of spinning', () =
   assert.equal(panel.synthesis.summary, 'Synthesised from 1 of 2 agents; web research timed out.')
 })
 
+/**
+ * The `agent_id` filter, tested against an event the rail would otherwise render.
+ *
+ * This test used to prove nothing. Its agent-owned event was a `tool_call`, and
+ * `deriveActivity`'s switch has no `tool_call` case — so deleting the
+ * `if (agentIdOf(event) !== null) continue` guard entirely left the assertion passing,
+ * and the one rule the test exists to defend was unobservable through it. An
+ * agent-owned `guardrail` is the honest probe: the rail *does* render guardrails, so
+ * its absence here can only be the filter doing its job.
+ */
 test('the activity rail carries only what no agent owns', () => {
+  const guardrail = (overrides) =>
+    at({
+      type: 'guardrail',
+      stage: 'input',
+      verdict: 'pass',
+      reason: 'no injection found',
+      layer: 'injection',
+      redactions: [],
+      before_masked: null,
+      after: null,
+      ...overrides,
+    })
+
   const items = deriveActivity(
     stateOf([
       at({
@@ -158,16 +181,10 @@ test('the activity rail carries only what no agent owns', () => {
         touched_edges: [],
         scored_sources: [],
       }),
-      at({
-        type: 'guardrail',
-        stage: 'input',
-        verdict: 'pass',
-        reason: 'no injection found',
-        layer: 'injection',
-        redactions: [],
-        before_masked: null,
-        after: null,
-      }),
+      guardrail({}),
+      // A sub-agent's own tool-output rail. Same event type as the row above, same
+      // shape, and the only difference is who owns it.
+      guardrail({ agent_id: 'a1', stage: 'tool_result', reason: 'page content screened' }),
       at({
         type: 'tool_call',
         agent_id: 'a1',
@@ -182,7 +199,7 @@ test('the activity rail carries only what no agent owns', () => {
   assert.deepEqual(
     items.map((i) => i.title),
     ['Recalled candidates', 'Input rail — passed'],
-    "an agent's tool call belongs to its card, not the rail",
+    "an agent's own guardrail belongs to its card, not the supervisor's rail",
   )
 })
 

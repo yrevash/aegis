@@ -5,19 +5,19 @@
  * in `backend/src/app/api/schemas.py`.
  *
  * **Why this module has its own fetch instead of `client.ts`'s `request`.** That
- * helper collapses every failure into `"<METHOD> <path> failed: <status>"` and
- * discards the response body. For these routes the body *is* the feature: admission
- * control refuses a job with a reason precisely so the refusal is visible, and
- * throwing that reason away in the browser would recreate — one layer up — the
+ * helper discards the response body, and for these routes the body *is* the feature:
+ * admission control refuses a job with a reason precisely so the refusal is visible,
+ * and throwing that reason away in the browser would recreate — one layer up — the
  * invisible backpressure the endpoint exists to prevent. `JobsApiError` therefore
- * carries the status and the server's `detail`, plus the `X-Admission-Gate` header
- * saying which of the two gates said no.
+ * carries the server's `detail`, plus the `X-Admission-Gate` header saying which of
+ * the two gates said no.
  *
  * @see backend/src/app/api/schemas.py
  * @see aegis/src/aegis/jobs/admission.py
  */
 
-import { getAuthToken } from './authToken'
+import { ApiError, apiMessage } from './apiError'
+import { getAuthToken, reportSessionExpired } from './authToken'
 import { API_BASE } from './config'
 
 /** Which admission gate refused a job, when one did. */
@@ -57,14 +57,18 @@ export interface JobActionResponse {
  * `gate` is set only on a 429, and is what lets a surface say "your tenant is at
  * its in-flight cap" rather than the useless "request failed".
  */
-export class JobsApiError extends Error {
-  readonly status: number
+export class JobsApiError extends ApiError {
   readonly gate: AdmissionGate | null
 
-  constructor(status: number, detail: string, gate: AdmissionGate | null) {
-    super(detail)
+  constructor(
+    status: number,
+    method: string,
+    path: string,
+    detail: string,
+    gate: AdmissionGate | null,
+  ) {
+    super(status, method, path, detail)
     this.name = 'JobsApiError'
-    this.status = status
     this.gate = gate
   }
 
@@ -74,14 +78,14 @@ export class JobsApiError extends Error {
   }
 }
 
-/** Read the server's `detail` from an error body, falling back to the status line. */
+/** Read the server's `detail` from an error body, falling back to a sentence. */
 async function detailOf(res: Response): Promise<string> {
   const body: unknown = await res.json().catch(() => null)
   if (body !== null && typeof body === 'object' && 'detail' in body) {
     const detail = (body as { detail: unknown }).detail
     if (typeof detail === 'string' && detail.length > 0) return detail
   }
-  return `${res.status} ${res.statusText}`
+  return apiMessage(res.status)
 }
 
 /** Issue one authenticated call, preserving the server's reason on failure. */
@@ -94,7 +98,8 @@ async function jobsRequest<T>(path: string, init: RequestInit, token: string | n
   if (!res.ok) {
     const header = res.headers.get('X-Admission-Gate')
     const gate = header === 'concurrency' || header === 'budget' ? header : null
-    throw new JobsApiError(res.status, await detailOf(res), gate)
+    if (res.status === 401) reportSessionExpired()
+    throw new JobsApiError(res.status, init.method ?? 'GET', path, await detailOf(res), gate)
   }
   return (await res.json()) as T
 }
@@ -181,7 +186,8 @@ export async function uploadDocument(
   if (!res.ok) {
     const header = res.headers.get('X-Admission-Gate')
     const gate = header === 'concurrency' || header === 'budget' ? header : null
-    throw new JobsApiError(res.status, await detailOf(res), gate)
+    if (res.status === 401) reportSessionExpired()
+    throw new JobsApiError(res.status, 'POST', '/documents', await detailOf(res), gate)
   }
   return (await res.json()) as DocumentUpload
 }

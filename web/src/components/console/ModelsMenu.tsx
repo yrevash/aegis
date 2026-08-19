@@ -20,12 +20,14 @@ import { modelButtonLabel, priceClauses, roleLabel } from './composerPricing'
  * per-token heading for a third of the table.
  *
  * **It reports; it does not set.** A per-user model preference is `agent.model` in the
- * settings catalogue and resolves platform → tenant → user, but that resolver has no
- * HTTP surface yet: there is no endpoint to write the preference to and none to read
- * its `source` back from. Rather than draw a dropdown whose selection is discarded on
- * the next reload — and label a value "your setting" without being able to check that
- * it is — this control shows the one thing the API can answer truthfully today. The
- * missing endpoint is a `GET/PUT /settings/{key}` over `aegis.settings.resolve`.
+ * settings catalogue and resolves platform → tenant → user. That resolver now *does*
+ * have an HTTP surface — `GET|PUT /settings/{key}`, which this docstring used to say
+ * was missing — and the Settings screen writes it there, with the `source` badge that
+ * says which scope decided. What is deliberately not duplicated here is that control:
+ * a second place to set the same key, sitting in a composer menu with no room for the
+ * "who decided" badge, would be the ambiguity that screen exists to remove. This menu
+ * answers the question the composer actually raises — *what will this run cost?* — from
+ * the gateway's own table.
  */
 export function ModelsMenu({ token }: { token: string | null }): ReactElement {
   const [models, setModels] = useState<ModelsResponse | null>(null)

@@ -197,7 +197,7 @@ function EmptyState({
   onPick: (question: string) => void
 }): ReactElement {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4 py-12 text-center">
+    <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-4 px-4 py-12 text-center">
       <Sparkles aria-hidden className="size-7 text-muted-foreground/40" />
       <div className="max-w-lg">
         <h2 className="font-display text-lg font-semibold text-foreground">Nothing has run yet</h2>
@@ -207,14 +207,19 @@ function EmptyState({
         </p>
       </div>
       {samples.length > 0 && (
-        <div className="flex max-w-2xl flex-wrap items-center justify-center gap-1.5">
+        // `max-w-2xl` alone is a *maximum*, not a fit: a flex row of long questions
+        // measured 606px inside a 508px column, so the memory rail painted over it at
+        // 1422px and the page grew a horizontal scrollbar at 545px. `w-full min-w-0`
+        // makes the row take the column it is in rather than the width it wants, and
+        // the chips' own `truncate` finally has a box to truncate against.
+        <div className="flex w-full max-w-2xl min-w-0 flex-wrap items-center justify-center gap-1.5">
           <span className="eyebrow mr-1">Try</span>
           {samples.map((sample) => (
             <button
               key={sample}
               type="button"
               onClick={() => onPick(sample)}
-              className="max-w-full truncate rounded-md border border-border bg-surface/60 px-2.5 py-1 text-left font-mono text-[0.7rem] text-muted-foreground outline-none transition-colors hover:border-agent/50 hover:text-agent-ink focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="max-w-full min-w-0 truncate rounded-md border border-border bg-surface/60 px-2.5 py-1 text-left font-mono text-[0.7rem] text-muted-foreground outline-none transition-colors hover:border-agent/50 hover:text-agent-ink focus-visible:ring-[3px] focus-visible:ring-ring/50"
               title={sample}
             >
               {sample}
@@ -278,10 +283,20 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   const current = chat.session
   const turnCount = (current?.turns.length ?? 0) + (current?.restored.length ?? 0)
 
-  // Follow the newest turn as it arrives.
+  // Follow the newest turn as it arrives — and again when it settles.
+  //
+  // Once was not enough. The result tabs only mount when the run stops, so the scroll
+  // that ran the moment the question was sent left them below the fold, under a sticky
+  // composer that had just grown an assistant-bot row. The person watched their answer
+  // arrive somewhere they could not see. `chat.running` flipping false is exactly the
+  // moment the tabs exist, so that is the second time to look at them.
+  //
+  // Clearance is `scroll-mb-48` on the end marker rather than padding on the thread:
+  // `scrollIntoView` honours scroll-margin, so the newest content lands *above* the
+  // composer instead of behind it, and nothing has to guess the composer's height.
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [turnCount])
+  }, [turnCount, chat.running])
 
   const send = (question: string, attachment: TurnAttachment | null = null): void => {
     setDecided(false)
@@ -347,7 +362,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
               ))}
             </>
           )}
-          <div ref={threadEndRef} />
+          <div ref={threadEndRef} className="scroll-mb-48" />
         </div>
 
         <div className="sticky bottom-0 bg-background/95 pt-2 pb-1 backdrop-blur">

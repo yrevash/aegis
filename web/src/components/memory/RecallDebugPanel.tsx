@@ -15,7 +15,7 @@ import type { RecallDebugItem } from '@/lib/api/memory'
 import { ErrorRow, LoadingRow } from './StateRow'
 import { MiniMeter } from './MiniMeter'
 import { useAsync } from './useAsync'
-import { RECALL_DIMENSIONS, TOKEN_BUDGET, budgetPct, recallScores } from './memoryText'
+import { RECALL_DIMENSIONS, TOKEN_BUDGET, budgetPct, recallQuery, recallScores } from './memoryText'
 
 /**
  * One ranked recall row. The headline is used / not used plus the match score
@@ -122,8 +122,13 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
   // No seeded query: a placeholder question would put words in the operator's
   // mouth and trace a recall nobody asked for.
   const [draft, setDraft] = useState('')
-  const [query, setQuery] = useState('')
-  const { state } = useAsync(() => getRecallDebug(token, subject, query), [token, subject, query])
+  const [query, setQuery] = useState<string | null>(null)
+  // Nothing is traced until a question is asked. Firing on mount would run a recall for
+  // the empty string and rank the result as if somebody had asked for it.
+  const { state } = useAsync(
+    () => (query === null ? Promise.resolve(null) : getRecallDebug(token, subject, query)),
+    [token, subject, query],
+  )
 
   const data = state.status === 'ready' ? state.data : null
   const usedPct = data ? budgetPct(data.tokens_used) : 0
@@ -146,9 +151,9 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
           For a given question, this shows which memories the agent pulled in and how it ranked
           them — by how well they match, how recent they are, and how important they are.
         </InfoTip>
-        <Badge tone="neutral" className="text-[0.56rem]">
-          admin
-        </Badge>
+        {/* No role chip. A literal `admin` Badge sat here and told an `ai_team` analyst
+            that their own recall card belonged to somebody else. The panel is served to
+            whoever the bearer authorises; it has no business labelling them. */}
         <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </div>
 
@@ -158,7 +163,10 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
             className="flex flex-col gap-2 sm:flex-row"
             onSubmit={(e) => {
               e.preventDefault()
-              setQuery(draft.trim() || 'request status')
+              // Never a fallback question. `draft.trim() || 'request status'` stood here
+              // and traced a recall for words nobody typed — the very thing the
+              // docstring three lines above says this panel refuses to do.
+              setQuery(recallQuery(draft))
             }}
           >
             <div className="relative flex-1">
@@ -170,12 +178,20 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                 className="h-9 w-full rounded-md border border-input bg-surface pr-3 pl-9 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
             </div>
-            <Button type="submit" className="shrink-0">
+            <Button type="submit" className="shrink-0" disabled={recallQuery(draft) === null}>
               Show recall <ArrowRight />
             </Button>
           </form>
 
-          {state.status === 'loading' && <LoadingRow label="Gathering memories…" />}
+          {query === null && (
+            <p className="py-8 text-sm text-muted-foreground">
+              Ask a question above to see which memories it would pull in, and how they were
+              ranked.
+            </p>
+          )}
+          {query !== null && state.status === 'loading' && (
+            <LoadingRow label="Gathering memories…" />
+          )}
           {state.status === 'error' && <ErrorRow message={state.message} />}
 
           {data && (

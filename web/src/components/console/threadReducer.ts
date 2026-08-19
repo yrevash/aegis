@@ -94,8 +94,15 @@ export type ThreadAction =
   | { kind: 'new_chat'; sessionId: string; at: number }
   /** Show an existing chat. */
   | { kind: 'select_chat'; sessionId: string }
-  /** Merge the caller's stored conversations into the rail, newest first. */
-  | { kind: 'sync_sessions'; rows: ServerSession[]; at: number }
+  /**
+   * Merge the caller's stored conversations into the rail, newest first.
+   *
+   * `resumeServerId` is the conversation this tab was last looking at, remembered
+   * across a reload. A reload used to open a fresh empty chat and leave the
+   * conversation the person was mid-way through sitting in the rail, one click away
+   * and looking like it had been abandoned.
+   */
+  | { kind: 'sync_sessions'; rows: ServerSession[]; at: number; resumeServerId?: string | null }
   /** Bind a chat to the conversation the server just minted for it. */
   | { kind: 'bind_session'; sessionId: string; serverId: string }
   /** Fill in a chat's stored transcript. */
@@ -156,6 +163,41 @@ export function isEmptyChat(session: ChatSession | null): boolean {
   return session === null || (session.turns.length === 0 && session.restored.length === 0)
 }
 
+/**
+ * The local key a synced conversation gets.
+ *
+ * Deterministic on purpose: a resume has only the server id to go on, and both the
+ * merge and the transcript fetch have to name the same chat without one of them
+ * guessing.
+ */
+export function localIdFor(serverId: string): string {
+  return `chat-${serverId}`
+}
+
+/**
+ * Which chat to show after a sync — the remembered one, or the one already open.
+ *
+ * A reload restores where the person was, and **only** when this tab has nothing of its
+ * own. A sync is an async merge that can land seconds after the console mounted; if
+ * somebody has already opened a chat or typed a question in the meantime, moving them is
+ * worse than the defect this fixes. So the resume applies to an untouched, unstarted
+ * chat and to nothing else.
+ */
+function resumedId(
+  state: ThreadState,
+  sessions: ChatSession[],
+  resumeServerId: string | null,
+): string {
+  if (resumeServerId === null) return state.activeSessionId
+  const target = sessions.find((s) => s.serverId === resumeServerId)
+  if (target === undefined || target.id === state.activeSessionId) return state.activeSessionId
+
+  const current = sessions.find((s) => s.id === state.activeSessionId)
+  const untouched =
+    current !== undefined && current.serverId === null && current.turns.length === 0
+  return untouched ? target.id : state.activeSessionId
+}
+
 /** Apply `change` to one session, leaving every other identical. */
 function mapSession(
   state: ThreadState,
@@ -206,7 +248,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         .filter((row) => !known.has(row.id))
         .map(
           (row): ChatSession => ({
-            id: `chat-${row.id}`,
+            id: localIdFor(row.id),
             serverId: row.id,
             title: row.title,
             startedAt: action.at,
@@ -215,7 +257,13 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
             restoredLoaded: false,
           }),
         )
-      return added.length === 0 ? state : { ...state, sessions: [...state.sessions, ...added] }
+      const sessions = added.length === 0 ? state.sessions : [...state.sessions, ...added]
+      const activeSessionId = resumedId(state, sessions, action.resumeServerId ?? null)
+
+      // The rail re-syncs on every token change; a merge that changes nothing must
+      // return the same object, or every poll remounts the whole rail.
+      if (added.length === 0 && activeSessionId === state.activeSessionId) return state
+      return { sessions, activeSessionId }
     }
 
     case 'bind_session':

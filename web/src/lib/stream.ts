@@ -181,6 +181,17 @@ export interface ToolResult extends BaseEvent {
   summary: string
 }
 
+/**
+ * One call named in an {@link ApprovalRequired}'s `actions` list.
+ *
+ * Loose for the same reason {@link SynthesisMember} is: the backend declares the field
+ * as `list[dict]`, so a member is whatever the graph put in it and the browser has no
+ * standing to claim otherwise. `readApproval` in
+ * `web/src/components/approval/approvalActions.ts` checks the shape once, there, and
+ * every rendering surface reads the checked result.
+ */
+export type ApprovalAction = Record<string, unknown>
+
 /** The run paused at the human-in-the-loop gate (bounded autonomy). */
 export interface ApprovalRequired extends BaseEvent {
   type: 'approval_required'
@@ -199,7 +210,7 @@ export interface ApprovalRequired extends BaseEvent {
    * `action` alone would be asking the person to authorise more than it shows them.
    * Render this list. A single-action run carries one entry.
    */
-  actions: { id: string; name: string; args: Record<string, unknown>; risk: RiskLevel }[]
+  actions: ApprovalAction[]
 }
 
 /** A streamed chunk of the final answer text. */
