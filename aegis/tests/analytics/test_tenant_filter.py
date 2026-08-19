@@ -19,6 +19,7 @@ import pytest
 from aegis.analytics import chart_data_payload, guest_token_rls, guest_user
 from aegis.analytics.rls import (
     GUEST_USERNAME_PLATFORM,
+    analytics_connect_options,
     tenant_from_guest_username,
 )
 from aegis.analytics.types import Board, Metric
@@ -176,3 +177,35 @@ def test_a_board_with_no_embedded_uuid_can_serve_nothing():
     )
     assert not board.supports("chart")
     assert not board.supports("dashboard")
+
+
+# ── the mutator's decision, which otherwise lives only in a config file ──────
+
+
+def test_the_connection_options_set_nothing_for_a_username_that_names_no_tenant():
+    """The whole of the fail-closed design, on the Aegis side of it.
+
+    Superset's service account, and any username format that drifts after an upgrade,
+    produce **no** GUC — and the views' predicate then returns zero rows. The failure
+    mode this rules out is the one worth ruling out: a hook that quietly stops firing and
+    a database layer that quietly stops narrowing while the runbook still claims it.
+    """
+    assert analytics_connect_options("admin") == ""
+    assert analytics_connect_options("aegis_tenant_1") == ""
+    assert analytics_connect_options("") == ""
+
+
+def test_a_tenant_guest_sets_the_same_guc_the_base_policy_reads():
+    """One value, so the base table's policy and the view's predicate cannot be pointed
+    at two different tenants."""
+    assert analytics_connect_options("aegis-tenant-7") == "-c app.tenant_id=7"
+
+
+def test_reading_every_tenant_needs_its_own_guc_not_an_absent_one():
+    """Default-deny with a deliberate opt-out. The platform read sets a GUC in its own
+    name and, in particular, does **not** set an empty ``app.tenant_id`` — that is the
+    value `set_tenant_scope` writes on reset, i.e. one a session returns to rather than
+    one anybody chose."""
+    options = analytics_connect_options(GUEST_USERNAME_PLATFORM)
+    assert options == "-c app.analytics_all_tenants=on"
+    assert "app.tenant_id" not in options

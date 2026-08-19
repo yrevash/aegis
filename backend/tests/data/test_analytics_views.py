@@ -5,6 +5,13 @@ as its **own** role, carrying none of Aegis's request context — so "does a ten
 row-level-security policy still apply to a query Superset runs?" is decided entirely by
 two things, and both are exercised here against a real cluster:
 
+0. **the view's own predicate must fail closed.** Aegis's global ``tenant_isolation``
+   policy is null-tolerant by design — an unset ``app.tenant_id`` does not restrict —
+   which is right for Aegis, whose request path always binds it, and wrong for a
+   connection Aegis did not open. ``DB_CONNECTION_MUTATOR`` is exactly the kind of hook
+   that stops firing quietly, and a layer that silently becomes a no-op is worse than no
+   layer, because the runbook still claims it. So the views carry their own
+   *non*-null-tolerant predicate and an unmutated connection sees **zero** rows;
 1. the role Superset connects as must be ``NOSUPERUSER NOBYPASSRLS`` — PostgreSQL skips
    row security *entirely* for a superuser or a ``BYPASSRLS`` role;
 2. **the view must be owned by that role.** A view executes its query with the
@@ -14,10 +21,12 @@ two things, and both are exercised here against a real cluster:
    Same shape as the partition bug this project already paid for: *a parent's policy
    does not protect what is reached by another name.*
 
-The second claim is the one worth a test, and
-:func:`test_the_same_view_left_owned_by_the_table_owner_leaks` is its mutation proof:
-same SELECT, same reader, same GUC — and it returns both tenants, because it kept the
-owner that ``ALTER VIEW … OWNER TO`` would have taken away.
+Claims 0 and 2 are the ones worth a test, and each has its mutation proof beside it:
+:func:`test_an_unmutated_connection_sees_nothing_where_the_old_predicate_leaked` runs the
+fail-closed predicate and Aegis's null-tolerant one side by side with the GUC unset — one
+returns nothing, the other returns both tenants — and
+:func:`test_the_same_view_left_owned_by_the_table_owner_leaks` does the same for the
+ownership transfer.
 
 Everything here runs as a **separate role from the application's serving role**, minted
 per test module, exactly as a real deployment would: Superset's grants are not Aegis's.
@@ -31,11 +40,13 @@ import uuid
 import pytest
 import pytest_asyncio
 from aegis.analytics.provision import (
+    ALL_TENANTS_GUC,
     ANALYTICS_VIEWS,
     SOURCE_TABLES,
     provisioning_statements,
     revocation_statements,
 )
+from aegis.analytics.rls import analytics_connect_options
 from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -88,20 +99,28 @@ async def _seed_two_tenants_spend(owner_dsn: str) -> None:
     )
 
 
-async def _read_as_superset(dsn: str, sql: str, tenant: int | None):
-    """Read ``sql`` on one connection with ``app.tenant_id`` bound to ``tenant``.
+async def _read_as_superset(dsn: str, sql: str, tenant: int | None, *, all_tenants: bool = False):
+    """Read ``sql`` on one connection with the GUCs a mutated connection would carry.
 
-    One connection for both statements on purpose: the GUC is session state, which is
+    One connection for every statement on purpose: a GUC is session state, which is
     precisely why ``DB_CONNECTION_MUTATOR`` has to set it on the connection Superset
     opens rather than anywhere in Aegis.
+
+    ``tenant=None, all_tenants=False`` is the important case — it is what an **unmutated**
+    connection looks like, and the fail-closed predicate must return nothing for it.
     """
     engine = create_async_engine(dsn)
     try:
         async with engine.connect() as conn:
-            await conn.execute(
-                text("SELECT set_config('app.tenant_id', :tid, false)"),
-                {"tid": "" if tenant is None else str(tenant)},
-            )
+            if tenant is not None:
+                await conn.execute(
+                    text("SELECT set_config('app.tenant_id', :tid, false)"),
+                    {"tid": str(tenant)},
+                )
+            if all_tenants:
+                await conn.execute(
+                    text(f"SELECT set_config('{ALL_TENANTS_GUC}', 'on', false)")
+                )
             return (await conn.execute(text(sql))).scalars().all()
     finally:
         await engine.dispose()
@@ -136,7 +155,13 @@ async def test_every_view_carries_the_tenant_column_the_rls_clause_filters_on(su
 async def test_a_view_owned_by_the_read_only_role_is_narrowed_by_postgres_rls(
     postgres_database, superset_role
 ):
-    """Superset's own connection, its own GUC, its own answer — one tenant's rows."""
+    """Superset's own connection, its own GUC, its own answer — one tenant's rows.
+
+    Both mechanisms are in force here at once: the base table's ``tenant_isolation``
+    policy (reached as a role subject to it, because of the ownership transfer) and the
+    view's own fail-closed predicate. This asserts the working case; the two tests below
+    take each one away in turn.
+    """
     dsn, _role = superset_role
     await _seed_two_tenants_spend(postgres_database.scratch.owner_dsn)
     rows = await _read_as_superset(dsn, "SELECT tenant_id FROM analytics_spend_daily", 1)
@@ -175,6 +200,119 @@ async def test_the_same_view_left_owned_by_the_table_owner_leaks(
         "is itself subject to RLS on this cluster, and the ownership transfer is belt and "
         "braces rather than the load-bearing step"
     )
+
+
+async def test_an_unmutated_connection_sees_nothing_where_the_old_predicate_leaked(
+    postgres_database, superset_role
+):
+    """The mutation proof for the fail-closed predicate, and the reason it exists.
+
+    ``control_null_tolerant`` below is Aegis's own ``tenant_isolation`` predicate,
+    verbatim. It is correct for Aegis — the request path always binds the GUC, and the
+    login lookup and every platform read happen outside a tenant scope — and it is a hole
+    the moment a connection Aegis did not open reads through it, because *unset* means
+    *unrestricted*.
+
+    Same reader, same unset GUC, two predicates: the shipped view returns nothing and the
+    null-tolerant one returns both tenants. That is the difference between a Superset
+    whose ``DB_CONNECTION_MUTATOR`` quietly stopped firing showing an empty dashboard,
+    and one showing every tenant's spend to whoever is looking.
+    """
+    dsn, role = superset_role
+    owner_dsn = postgres_database.scratch.owner_dsn
+    await _seed_two_tenants_spend(owner_dsn)
+    await _run(
+        owner_dsn,
+        (
+            "CREATE OR REPLACE VIEW control_null_tolerant AS SELECT tenant_id FROM "
+            "usage_ledger u WHERE (substring(current_setting('app.tenant_id', true) "
+            "from '^[0-9]+$') IS NULL OR u.tenant_id = "
+            "substring(current_setting('app.tenant_id', true) from '^[0-9]+$')::int)",
+            f'ALTER VIEW control_null_tolerant OWNER TO "{role}"',
+        ),
+    )
+    try:
+        shipped = await _read_as_superset(
+            dsn, "SELECT tenant_id FROM analytics_spend_daily", None
+        )
+        tolerant = await _read_as_superset(
+            dsn, "SELECT tenant_id FROM control_null_tolerant", None
+        )
+    finally:
+        await _run(owner_dsn, ("DROP VIEW IF EXISTS control_null_tolerant",))
+
+    assert shipped == [], (
+        "an unmutated connection read rows out of a shipped view. The predicate is "
+        f"null-tolerant again and the database layer is a no-op: {shipped}"
+    )
+    assert sorted(tolerant) == [1, 2], (
+        "the null-tolerant control was expected to return both tenants; if it did not, "
+        "this cluster is narrowing by some other means and the comparison proves nothing"
+    )
+
+
+async def test_a_platform_read_needs_the_sentinel_set_on_purpose(
+    postgres_database, superset_role
+):
+    """Reading across tenants is an opt-out somebody chose, never one a session drifts into.
+
+    The three states, in one test, because it is the boundary between them that matters:
+    no GUCs at all is nothing; a tenant id is that tenant; and every tenant needs a GUC
+    in its own name that no other code in Aegis writes — in particular it is *not* the
+    empty ``app.tenant_id`` that :func:`set_tenant_scope` writes when it resets, which is
+    the value a connection returns to rather than one anybody selected.
+    """
+    dsn, _role = superset_role
+    await _seed_two_tenants_spend(postgres_database.scratch.owner_dsn)
+    sql = "SELECT tenant_id FROM analytics_spend_daily"
+
+    assert await _read_as_superset(dsn, sql, None) == []
+    assert await _read_as_superset(dsn, sql, 1) == [1]
+    assert sorted(await _read_as_superset(dsn, sql, None, all_tenants=True)) == [1, 2]
+
+    # The reset value is not the sentinel.
+    engine = create_async_engine(dsn)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT set_config('app.tenant_id', '', false)"))
+            reset = (await conn.execute(text(sql))).scalars().all()
+    finally:
+        await engine.dispose()
+    assert reset == [], f"an empty app.tenant_id read rows: {reset}"
+
+
+async def test_the_mutator_body_aegis_ships_produces_those_exact_states(
+    postgres_database, superset_role
+):
+    """The connection options in the runbook are the ones this package computes.
+
+    ``DB_CONNECTION_MUTATOR`` has to be written into ``superset_config.py`` by hand, so
+    the risk is that the documented hook and the guest usernames Aegis mints drift apart.
+    Driving the real options string through a real connection is what stops that being
+    discovered on demo day.
+    """
+    dsn, _role = superset_role
+    await _seed_two_tenants_spend(postgres_database.scratch.owner_dsn)
+    sql = "SELECT tenant_id FROM analytics_spend_daily"
+
+    async def read_with(options: str):
+        engine = create_async_engine(dsn)
+        try:
+            async with engine.connect() as conn:
+                for setting in options.split("-c ")[1:]:
+                    name, value = setting.strip().split("=", 1)
+                    await conn.execute(
+                        text("SELECT set_config(:n, :v, false)"), {"n": name, "v": value}
+                    )
+                return (await conn.execute(text(sql))).scalars().all()
+        finally:
+            await engine.dispose()
+
+    assert await read_with(analytics_connect_options("aegis-tenant-1")) == [1]
+    assert sorted(await read_with(analytics_connect_options("aegis-platform"))) == [1, 2]
+    # Superset's own service account, and a username format that drifted after an upgrade.
+    assert await read_with(analytics_connect_options("admin")) == []
+    assert await read_with(analytics_connect_options("aegis_tenant_1")) == []
 
 
 async def test_the_role_gets_select_on_the_source_tables_and_nothing_else(superset_role):

@@ -51,31 +51,71 @@ claim. The clause is derived from `AuthContext.tenant_scope()`
 request carried. The request body has exactly one field (`window`, a key from a fixed
 list); a body carrying `tenantId` or `datasourceId` is a 422, by name.
 
-**Three narrowings, at two levels.**
+**Three narrowings, at two levels, and every one of them fails closed.**
 
 | # | Level | Mechanism | Covers | Fails how |
 |---|---|---|---|---|
-| 1 | Query | The guest token's `rls` clause, compiled into the `WHERE` by Superset | Every query run under the token — the embed's charts included, which Aegis never sees | Fails **closed** if the token is refused: no data at all |
-| 2 | Query | The `filters` list in the query context **Aegis built** for the server-side path | `POST /analytics/boards/{id}/data` only | Fails **closed**: no query is built at all for an unresolved scope |
-| 3 | Database | `DB_CONNECTION_MUTATOR` sets `-c app.tenant_id=N` on Superset's own Postgres connection, so Aegis's `tenant_isolation` RLS policies apply to it | Every query Superset runs against an Aegis Postgres dataset | Fails **OPEN** — see below |
+| 1 | Query | The guest token's `rls` clause, compiled into the `WHERE` by Superset | Every query run under the token — the embed's charts included, which Aegis never sees | **Closed.** A refused token is no data at all |
+| 2 | Query | The `filters` list in the query context **Aegis built** for the server-side path | `POST /analytics/boards/{id}/data` only | **Closed.** No query is built at all for an unresolved scope |
+| 3 | Database | Each `analytics_*` view carries its own tenant predicate, and `DB_CONNECTION_MUTATOR` sets the GUC that predicate reads | Every query Superset runs against an Aegis dataset, whatever asked for it | **Closed.** An unmutated connection returns **zero rows** |
 
-Layer 3 is defence in depth and **must not be relied on alone**. Three things have to
-hold for it to bite, and the honest seam is that if any of them does not, it does not
-fail closed:
+Layer 3 deserves a paragraph, because the obvious way to build it fails open and this
+one does not.
 
-- Superset's database connection must use a role with **neither `SUPERUSER` nor
-  `BYPASSRLS`** (`aegis_app`, provisioned by `scripts/db-roles.sh` / `.ps1`). Postgres
-  skips row security entirely for a role that has either.
-- The mutator must actually run and set the GUC. Aegis's `tenant_isolation` predicate
-  is `current_setting('app.tenant_id', true) IS NULL OR tenant_id = <that>` — an
-  **unset** GUC does not restrict (that branch exists so login and the platform-admin
-  reads work). So a mutator that silently does nothing leaves the table wide open, not
-  closed.
+Aegis's own `tenant_isolation` policy is deliberately null-tolerant —
+`substring(current_setting('app.tenant_id', true) from '^[0-9]+$') IS NULL OR tenant_id = …`
+— so an unset GUC does not restrict. That is correct for Aegis, whose request path always
+binds the GUC, and whose login lookup and platform-admin reads legitimately happen outside
+any tenant scope. It is **wrong for a connection Aegis did not open**. `DB_CONNECTION_MUTATOR`
+is exactly the kind of hook that stops firing quietly: a typo in the username format, a
+Superset upgrade changing what it receives, a connection created outside the request path.
+Inheriting the null-tolerant predicate would mean the database layer silently became a
+no-op while this table still claimed three layers — and a layer that silently becomes
+nothing is worse than no layer at all.
+
+So the views carry **their own** predicate, and it is not null-tolerant:
+
+```sql
+WHERE (current_setting('app.analytics_all_tenants', true) = 'on'
+    OR <alias>.tenant_id = substring(
+         current_setting('app.tenant_id', true) from '^[0-9]+$'
+       )::int)
+```
+
+An unset or non-numeric `app.tenant_id` yields `tenant_id = NULL`, which is never true.
+An unmutated connection therefore sees **nothing** rather than everything. Reading across
+tenants requires `app.analytics_all_tenants = 'on'` — a GUC in its own name that nothing
+else in Aegis ever writes, so it is an opt-out somebody chose and not one a session can
+drift into. In particular it is *not* the empty `app.tenant_id` that `set_tenant_scope`
+writes when it resets: that is the value a connection *returns to*, and using it would be
+the implicit opt-out this design exists to avoid.
+
+> **If a board is unexpectedly empty, the mutator is not firing.** That is the failure
+> this shape converts a silent hole into. Check, in order: the guest token's
+> `user.username` is `aegis-tenant-<id>` (decode the token — §6 step 6); the
+> `DB_CONNECTION_MUTATOR` in `superset_config.py` matches that prefix exactly; and
+> Superset is not serving the query from a cached connection made before the hook was
+> added. A blank chart when Superset is otherwise healthy is *always* this, never "your
+> tenant has no data" — the same query with `app.tenant_id` set by hand in `psql` will
+> show you the rows are there.
+
+Two conditions still have to hold, and neither fails open:
+
+- Superset's database role must have **neither `SUPERUSER` nor `BYPASSRLS`** — Postgres
+  skips row security entirely for a role that has either, and a view owned by such a role
+  would reach the base tables unrestricted. `python -m aegis.analytics` provisions
+  `NOSUPERUSER NOBYPASSRLS`; §6 step 2 checks it.
 - Superset must not hand a pooled connection carrying one tenant's GUC to another
-  tenant's query. Aegis cannot verify Superset's pooling behaviour from here.
+  tenant's query. Aegis cannot verify Superset's pooling from here — but note that the
+  worst case is one tenant seeing another's *aggregate* through a stale connection, not
+  every tenant seeing everything, because there is no state in which the predicate is
+  absent.
 
-Layers 1 and 2 are the ones that do not depend on any of that. Layer 3 is what stops a
-Superset-side regression in layer 1 from becoming a cross-tenant read.
+`backend/tests/data/test_analytics_views.py` proves all of it on a real cluster with a
+real `NOSUPERUSER NOBYPASSRLS` role: the shipped view returns zero rows with the GUC
+unset while a control view carrying Aegis's null-tolerant predicate returns both tenants',
+and a control view identical to the shipped one but for `ALTER VIEW … OWNER TO` leaks the
+same way.
 
 **Who sees what.** Each board declares an `audience` — the fine roles allowed to select
 it. A client cannot open a platform operator's board: the refusal is a 404 on the
@@ -175,23 +215,28 @@ TALISMAN_CONFIG = {
 # hand-probing with curl only.
 
 # ── Defence in depth: carry the tenant onto Superset's own DB connection ─────
-# Superset opens its own pooled Postgres connection, which does NOT carry Aegis's
-# app.tenant_id GUC — so Aegis's RLS policies would not apply to it. The guest token's
-# username is the only channel this hook gets, so Aegis encodes the tenant there:
-# "aegis-tenant-<id>" for a tenant, "aegis-platform" for a platform-wide read.
+# Superset opens its own pooled Postgres connection, which carries none of Aegis's
+# request context. The guest token's username is the only channel this hook gets, so
+# Aegis encodes the tenant there: "aegis-tenant-<id>" for a tenant, "aegis-platform"
+# for a deliberate platform-wide read.
 #
-# Read the honest limits in §2 before relying on this: an unset GUC does NOT restrict,
-# so a mutator that quietly does nothing leaves the table open rather than closed.
+# The analytics_* views FAIL CLOSED (§2): a connection this hook does not touch reads
+# zero rows, not every row. So getting this wrong shows up as an empty dashboard, which
+# is the point. Mirror `aegis.analytics.rls.analytics_connect_options`, which is the
+# same three-way decision under test in the Aegis repo.
 def DB_CONNECTION_MUTATOR(uri, params, username, security_manager, source):
+    options = ""
     prefix = "aegis-tenant-"
-    tenant = None
     if username and username.startswith(prefix):
         suffix = username[len(prefix):]
         if suffix.isdigit():
-            tenant = int(suffix)
-    if tenant is not None and str(uri).startswith(("postgresql", "postgres")):
+            options = f"-c app.tenant_id={suffix}"
+    elif username == "aegis-platform":
+        # The deliberate opt-out, in a GUC nothing else in Aegis writes.
+        options = "-c app.analytics_all_tenants=on"
+    if options and str(uri).startswith(("postgresql", "postgres")):
         connect_args = dict(params.get("connect_args") or {})
-        connect_args["options"] = f"-c app.tenant_id={tenant}"
+        connect_args["options"] = options
         params["connect_args"] = connect_args
     return uri, params
 ```
@@ -303,14 +348,17 @@ What that script does, and why each step is there:
    make all thirteen `tenant_isolation` policies inert for every query it ran;
 2. grants it `SELECT` on exactly the six source tables — no `chat_messages`, no
    `memory_*`, no `documents`;
-3. creates each view **and immediately `ALTER VIEW … OWNER TO aegis_superset`**. This is
+3. creates each view **with its own fail-closed tenant predicate** (§2) — welded in by
+   `AnalyticsView.sql`, so a view added next month cannot omit it: there is no field in
+   which to write a `WHERE` that replaces it, only one that is `AND`-ed after it;
+4. **immediately `ALTER VIEW … OWNER TO aegis_superset`**. This is
    the load-bearing line. A view executes its query with the privileges of its *owner*,
    so a view left owned by the table owner reaches the base table as the owner — and
    where that owner can bypass RLS, the view is a hole straight through the policy while
    looking exactly like a safe projection. `backend/tests/data/test_analytics_views.py`
    proves both halves on a real cluster: the provisioned view returns one tenant's rows,
    and a control view identical but for that one line returns both;
-4. revokes `CREATE` on the schema again, which was needed only so the role could accept
+5. revokes `CREATE` on the schema again, which was needed only so the role could accept
    ownership.
 
 To remove it all: `python -m aegis.analytics --revoke | psql -d aegis`.
@@ -378,11 +426,15 @@ confirm as that role:
 
 ```bash
 psql "postgresql://aegis_superset:<password>@localhost:5432/aegis" \
-  -c "\dv analytics_*" -c "SELECT count(*) FROM analytics_spend_daily;"
+  -c "\dv analytics_*" \
+  -c "SELECT count(*) FROM analytics_spend_daily;" \
+  -c "SET app.tenant_id = '1'; SELECT count(*) FROM analytics_spend_daily;"
 ```
 
-Expected: six views listed, and a count that runs without a permission error. A
-`permission denied` means the provisioning did not run as the table owner.
+Expected: six views listed; the **first** count is `0`, and the second is however many
+rows tenant 1 has. A first count that is not zero means the fail-closed predicate is
+missing and layer 3 is a no-op. A `permission denied` means the provisioning did not run
+as the table owner.
 
 **2. The role cannot bypass row security.**
 
@@ -496,17 +548,14 @@ tenant B's admin and open the same board. Expected: different numbers. Then conf
 `client`-role account cannot open a board whose `audience` excludes it — expected: it is
 not in the list, and `POST /analytics/boards/<id>/data` returns 404.
 
-**12. The DB-level layer, end to end.** Confirm the database user Superset connects with
-has neither `SUPERUSER` nor `BYPASSRLS` (step 2), then check the mutator fires: run a
-board, and in Postgres
+**12. The DB-level layer, end to end.** With everything above passing, a board that draws
+rows *is* the proof that the mutator fired: the views return nothing without it (step 1).
+So this step is the negative check. Comment out `DB_CONNECTION_MUTATOR` in
+`superset_config.py`, restart Superset, and reload the board.
 
-```sql
-SELECT query, backend_start FROM pg_stat_activity WHERE usename = 'aegis_superset';
-```
-
-Expected: Superset's connections exist under that role. The GUC itself is session state
-you cannot read from outside; the proof that the *mechanism* narrows is
-`backend/tests/data/test_analytics_views.py`, which runs it on a real cluster.
+Expected: the chart is **empty** — not wrong, not another tenant's, empty. Put the hook
+back. If the board still draws rows with the mutator gone, the views were provisioned
+without their predicate; re-run `python -m aegis.analytics` and repeat step 1.
 
 ## 7. Superset 6.1.0 — what is confirmed, and what is still risky
 
@@ -522,7 +571,7 @@ not a missing `FAB_ROLES`).
 | `GUEST_TOKEN_JWT_AUDIENCE` unset | **Confirmed broken by default** | `aud` becomes `http://0.0.0.0:8080/`. Minting still returns 200; the browser rejects it later. Set it. |
 | Guest token on `POST /api/v1/chart/data` | Unverified | Step 7. A 403 is a `datasource access` grant on the guest role, not a credential problem. |
 | Guest-token RLS clause actually applied to the rows | **Unverified — highest impact** | Step 8. This is the security property. Do not enable the feature until it passes. |
-| `DB_CONNECTION_MUTATOR` receiving the guest username | Unverified | Layer 3 only. Layers 1 and 2 still hold without it. |
+| `DB_CONNECTION_MUTATOR` receiving the guest username | Unverified | No longer a silent risk: the views fail closed, so a hook that is not firing shows as an **empty** board (step 12), never as another tenant's rows. |
 | The import bundle in `docs/operations/superset/` | Unverified | Never imported. Parses as YAML; that is all that is proven. |
 | `GUEST_ROLE_NAME = "Gamma"` | Confirmed working | Not Admin. Harden to `AegisGuest` once the flow passes (§3). |
 

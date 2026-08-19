@@ -28,6 +28,7 @@ passed onward and mistaken for the first.
 
 from __future__ import annotations
 
+from aegis.analytics.provision import ALL_TENANTS_GUC, TENANT_GUC
 from aegis.analytics.types import is_safe_identifier
 from aegis.retrieval.types import (
     ALL_TENANTS,
@@ -39,6 +40,7 @@ from aegis.retrieval.types import (
 __all__ = [
     "GUEST_USERNAME_PLATFORM",
     "GUEST_USERNAME_PREFIX",
+    "analytics_connect_options",
     "guest_token_rls",
     "guest_user",
     "resolved_scope",
@@ -176,3 +178,42 @@ def tenant_from_guest_username(username: str) -> int | None:
     if not suffix.isdigit():
         return None
     return int(suffix)
+
+
+def analytics_connect_options(username: str) -> str:
+    """Return the Postgres ``options`` string for a connection running as ``username``.
+
+    **This is the body of Superset's ``DB_CONNECTION_MUTATOR``, and it lives here so it
+    is tested.** The hook itself has to be written into ``superset_config.py`` on the
+    analytics host; what it *decides* does not have to live only there. A rule that
+    exists solely inside a config file on somebody's Windows box is a rule nothing
+    checks, and this one governs which tenant's rows a BI tool can see.
+
+    The three outcomes, and the reason each is what it is:
+
+    * a tenant guest (``aegis-tenant-7``) → ``-c app.tenant_id=7``. One GUC, read by
+      Aegis's own ``tenant_isolation`` policy on the base tables *and* by the analytics
+      views' own predicate, so the two layers cannot be pointed at different tenants.
+    * the platform guest (:data:`GUEST_USERNAME_PLATFORM`) →
+      ``-c app.analytics_all_tenants=on``, and **no tenant id**. Reading across tenants
+      is a deliberate opt-out in a GUC nothing else in Aegis ever writes.
+    * anything else — Superset's own service account, a connection made outside the
+      request path, a username format that drifted after an upgrade → **the empty
+      string**, which sets nothing, and the views' fail-closed predicate then returns
+      **zero rows**. That is the whole design: when this hook stops firing the dashboard
+      goes empty rather than going wide, and an empty dashboard is a bug an operator
+      finds in a minute.
+
+    Args:
+        username: The Superset username the query is running for, as handed to
+            ``DB_CONNECTION_MUTATOR``.
+
+    Returns:
+        A ``libpq`` ``options`` string, or ``""`` to set nothing at all.
+    """
+    tenant = tenant_from_guest_username(username)
+    if tenant is not None:
+        return f"-c {TENANT_GUC}={tenant}"
+    if username == GUEST_USERNAME_PLATFORM:
+        return f"-c {ALL_TENANTS_GUC}=on"
+    return ""
