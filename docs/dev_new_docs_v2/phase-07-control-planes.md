@@ -1,5 +1,58 @@
 # Phase 7 — Control planes
 
+> ## Amendments of 2026-08-19 — the goal, stated by the user
+>
+> **The north star: operating this platform must never require touching code.**
+>
+> Everything a platform admin or a tenant admin needs to change — a setting, a budget, a
+> guardrail rule, a seat, a model, a knob, a tenant — is a screen. Looking at the data is a
+> screen. If an operator has to open an editor, edit a constant and redeploy to change how
+> the product behaves for a tenant, that is the defect this phase exists to remove, and it
+> does not matter how good the underlying mechanism is.
+>
+> Two consequences that override the body where they disagree:
+>
+> ### A. The admin dashboard is the control plane, not a report
+>
+> The ranked gap list is right about *what* is missing and understates *why*. A settings
+> screen generated from the catalogue (§7.4) is not a nice-to-have that follows the forms —
+> it is the mechanism by which every future knob becomes operable without a deploy. Phase 3
+> built the catalogue and Phase 5 proved the cost of a knob nothing reads: `agent.gate_min_risk`
+> was writable, `TIGHTEN_ONLY`, renderable, and **bound nothing**, because no screen and no
+> resolver call stood between the tenant and the dataclass default.
+>
+> The same test applies to every control in this phase: **can an operator change it, see that
+> it changed, and see where the value came from — without a deploy?** A control that fails
+> that test is not shipped, however complete its backend.
+>
+> **The database page (§7.9) is part of this, not a luxury.** "There is no way to look at the
+> data without `psql`" is the same defect wearing different clothes: the operator drops out of
+> the product to answer a question the product should answer. It stays hardened — read paths
+> first, every query tenant-scoped, nothing that lets one tenant's operator read another's —
+> but it stays.
+>
+> ### B. The client needs a console and pages of their own
+>
+> The client role scores **1 / 12** and has **zero write actions in the entire product**. That
+> is the largest single gap in the table and the body treats it as a consequence of other
+> tasks rather than a task.
+>
+> A client must be able to: ask a question and see the answer with its sources (Phase 6 ships
+> this), **see and manage what the system has learned about them** (the memory rail ships the
+> read; §7.5 owes the write and the forget), **keep things they care about** — a saved answer,
+> a pinned source, a thread worth returning to — and **see their own budget and usage** without
+> asking an administrator.
+>
+> "Saving" is the missing verb. Every other role in this product can only read; the client
+> cannot even do that about themselves. A tenant's user having no durable relationship with
+> the product is what makes it a demo rather than a platform, and it is the cheapest
+> credibility this phase can buy.
+>
+> **Ordering note.** §7.1 (the approvals inbox) remains the prerequisite it says it is — moving
+> approval ownership to the tenant admin relocates the capability into nowhere until a screen
+> exists. But the client console and the settings screen are the two that decide whether this
+> phase reads as *governance* or as *more pages*.
+
 **The "0 code change from the dashboard" phase.** Every control below is a `SettingSpec`
 entry from Phase 3 §3.7 rendered by one catalogue-driven form, not a bespoke screen. If a
 task here needs its own storage, its own precedence rules and its own idea of who may write
