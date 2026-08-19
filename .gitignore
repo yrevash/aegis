@@ -71,3 +71,12 @@ docs/teaching/_assets/
 # Phase 4 ingestion fixtures: downloaded by tests/fixtures/pdfs/fetch.sh, not committed
 # (two are arXiv papers whose licence does not clearly permit redistribution — see the README)
 tests/fixtures/pdfs/*.pdf
+
+# Uploaded document bytes and the parse artifacts beside them. NOT tracked and NOT
+# disposable: the `documents` rows in Postgres survive a `git clean -fd` while these
+# do not, and a document whose bytes are gone cannot be re-ingested through the API
+# (the upload dedupes on content_sha256). Audit C lost this tree twice mid-parse.
+backend/document_storage/
+document_storage/
+backend/vector_storage/
+vector_storage/
