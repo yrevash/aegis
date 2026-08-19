@@ -17,6 +17,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from aegis.governance.schema import SchemaDriftError
 from fastapi import APIRouter, FastAPI
@@ -34,6 +35,9 @@ from app.api.routes_memory import mount as _mount_memory
 from app.api.routes_pipelines import mount as _mount_pipelines
 from app.api.routes_redteam import mount as _mount_redteam
 from app.api.routes_reports import mount as _mount_reports
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.routes_seats import mount as _mount_seats
 from app.config import get_settings
 from app.observability import init_observability
@@ -243,6 +247,20 @@ async def run_worker_supervised(stop: asyncio.Event) -> None:
     set_worker_state(WORKER_STOPPED)
 
 
+async def _rls_scope(session: AsyncSession, tenant_id: int | None) -> None:
+    """Bind the per-request Postgres RLS scope, resolved late through the shim module.
+
+    ``app.data.governance`` re-exports ``set_tenant_scope`` as a module-level name and
+    resolves it on every call, so ``monkeypatch.setattr(app.data.governance,
+    "set_tenant_scope", spy)`` observes every governed write's tenant scope (the H1 test
+    seam). Passing ``aegis.governance.rls.set_tenant_scope`` here would bypass that
+    module and make the seam — and every test built on it — vacuous.
+    """
+    from app.data import governance
+
+    await governance.set_tenant_scope(session, tenant_id)
+
+
 async def _run_memory_sweeper(stop: asyncio.Event) -> None:
     """Drain the durable memory-consolidation queue until ``stop`` is set.
 
@@ -382,39 +400,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - the registry cache is best-effort at startup
             logger.warning("Prompt registry cache refresh skipped.", exc_info=True)
 
-    # Honest infra: a non-dev full-stores deployment REQUIRES a usable vector store — the
-    # ANN engine behind retrieval + memory recall — exactly like Postgres/Redis. The store
-    # is *embedded* (in-process, file-backed under ``VECTOR_STORE_PATH``), so there is no
-    # server to install or reach; the failure it can still have is an unusable directory.
-    # Construction is therefore deliberately NOT wrapped in a try/except: an unwritable or
-    # corrupt store raises here and the process refuses to boot, rather than degrading to
-    # a silent, non-durable RAM index.
+    # ── The one way up (§8.3) ────────────────────────────────────────────────
+    # One call replaces the ten ordered ``configure_*`` reaches this composition root
+    # used to make — the vector-store pair that lived here, and the three that fired as
+    # import side effects of ``app.core.llm``, ``app.core.security`` and ``app.ops``.
+    # The ordering that used to be a reader's problem is ``aegis.runtime``'s now, and the
+    # first thing it does is verify ``app.adapter`` against ``aegis.adapter.DomainAdapter``
+    # — so a missing piece is named here, at boot, instead of surfacing three layers away
+    # on the first turn that needed it. (``missing_members(app.adapter)`` returned
+    # ``['memory_spec']`` on our own reference adapter with no error anywhere.)
     #
-    # §8.4: BOTH branches now configure, because neither package has an implicit default
-    # any more. A dev/lite process gets the ephemeral engine because this line asks for
-    # it, not because a leaf built one when nobody was looking — and a deployment that
-    # skips this block entirely gets a named error out of the first recall instead of a
-    # working-looking system with nothing durable in it.
-    from aegis.memory import MemoryVectorIndex, set_default_index
-    from aegis.retrieval import ChromaVectorStore, configure_vector_store
+    # ``AEGIS_MODE`` is deliberately not read: this deployment already has one source of
+    # truth for dev-vs-production, and duplicating it into a second variable is how two
+    # of them drift apart. Every infra value is passed for the same reason.
+    #
+    # Honest infra, unchanged: a non-dev full-stores deployment REQUIRES a usable
+    # embedded vector store (in-process, file-backed under ``VECTOR_STORE_PATH``) and
+    # refuses to boot without one, exactly like Postgres/Redis. A dev/lite process gets
+    # the EPHEMERAL engine because this call asks for it — and ``from_env`` logs which
+    # one it chose, at WARNING, so a non-durable process is never a quiet one.
+    from aegis import Aegis
 
-    if settings.stores_enabled and not settings.is_dev:
-        vector_store_path = settings.vector_store_path
-        set_default_index(MemoryVectorIndex.local(path=vector_store_path))
-        configure_vector_store(
-            lambda: ChromaVectorStore.local(path=vector_store_path)
-        )
-        logger.info(
-            "Aegis Memory vector index bound to the embedded vector store at %s.",
-            vector_store_path,
-        )
-    else:
-        set_default_index(MemoryVectorIndex.local())
-        configure_vector_store(ChromaVectorStore.local)
-        logger.info(
-            "Aegis vector stores bound to the EPHEMERAL in-process engine "
-            "(dev/lite): nothing indexed here survives this process."
-        )
+    from app.data.approvals import enqueue_approval
+    from app.data.models import Approval, ApprovalStatus
+    from app.data.session import get_sessionmaker
+
+    await Aegis.from_env(
+        adapter="app.adapter",
+        mode="full" if (settings.stores_enabled and not settings.is_dev) else "lite",
+        vector_store_path=settings.vector_store_path,
+        database_url=settings.postgres_dsn,
+        redis_url=settings.redis_url,
+        # The host owns the engine, the pool and *which Postgres role serves requests* —
+        # the split that made RLS enforceable at all. Late-binding on purpose: it
+        # re-resolves the sessionmaker per call, so a test that swaps the engine is
+        # honoured, which is the behaviour ``app.data.governance``'s wiring already had.
+        session_factory=lambda: get_sessionmaker()(),
+        set_tenant_scope=_rls_scope,
+        enqueue_approval=enqueue_approval,
+        approval_model=Approval,
+        approval_status=ApprovalStatus,
+        jwt_secret=settings.jwt_secret,
+        jwt_algorithm=settings.jwt_algorithm,
+        jwt_expire_minutes=settings.jwt_expire_minutes,
+    )
 
     # The SLA sweeper (§1.3): an in-process asyncio task — no cron, no Docker — that
     # expires past-deadline approvals and auto-rejects HIGH-risk ones. Only runs with
