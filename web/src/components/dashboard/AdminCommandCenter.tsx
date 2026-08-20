@@ -15,12 +15,12 @@ import {
   ShieldCheck,
   Target,
   Timer,
+  XCircle,
   Zap,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 
 import { AreaChart } from '@/components/charts/AreaChart'
-import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
 import { RankedBars, type RankedDatum } from '@/components/charts/RankedBars'
 import { Figure } from '@/components/primitives/Figure'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
