@@ -38,7 +38,7 @@ export function AuditFilterBar({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface-2/40 p-3">
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-2/40 p-3">
       <div className="flex flex-wrap items-end gap-3">
         <Field label="Search" htmlFor={`${id}-text`} className="min-w-[13rem] flex-1">
           <div className="relative">
@@ -168,7 +168,7 @@ export function AuditFilterBar({
             type="button"
             onClick={() => onChange({ ...EMPTY_AUDIT_QUERY, limit: value.limit })}
             disabled={!isFiltered(value)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
           >
             <RotateCcw aria-hidden className="size-3.5" /> Clear filters
           </button>
@@ -180,7 +180,7 @@ export function AuditFilterBar({
 
 /** Shared control styling — one place, so every field in the strip lines up. */
 const INPUT =
-  'h-8 rounded-md border border-border bg-card px-2 text-[0.75rem] text-foreground placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+  'h-8 rounded-lg border border-border bg-card px-2 text-[0.75rem] text-foreground placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
 
 /** A labelled control. The label is real (`htmlFor`), not a placeholder standing in. */
 function Field({

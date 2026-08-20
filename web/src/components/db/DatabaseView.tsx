@@ -1,8 +1,6 @@
 'use client'
 
 import {
-  AlertTriangle,
-  Database,
   KeyRound,
   Link2,
   ListFilter,
@@ -11,14 +9,19 @@ import {
   ShieldCheck,
   Table2,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { Button } from '@/components/primitives/button'
+import { Figure } from '@/components/primitives/Figure'
 import { Input } from '@/components/primitives/input'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { errorSentence } from '@/lib/api/apiError'
 import {
   browseTable,
   getDatabaseOverview,
@@ -59,28 +62,14 @@ function Posture({ overview }: { overview: DbOverview }): ReactElement {
   const posture = overview.posture
   if (!posture) {
     return (
-      <Card>
-        <CardBody className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-risk-ink" />
-          <p className="text-sm text-foreground">
-            The console has no connection of its own, so nothing can be read.
-          </p>
-        </CardBody>
-      </Card>
+      <ErrorState error="The console has no connection of its own, so nothing can be read. A deployment points AEGIS_DB_CONSOLE_DSN at the read-only role." />
     )
   }
   if (!posture.readOnly) {
-    return (
-      <Card>
-        <CardBody className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-block-ink" />
-          <p className="text-sm text-foreground">{posture.refusal}</p>
-        </CardBody>
-      </Card>
-    )
+    return <ErrorState error={posture.refusal} />
   }
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader
         title="Read-only by privilege, not by promise"
         eyebrow="Connection"
@@ -94,36 +83,41 @@ function Posture({ overview }: { overview: DbOverview }): ReactElement {
       <CardBody className="pt-3">
         <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <dt className="text-xs uppercase tracking-wide text-muted-foreground">Role</dt>
-            <dd className="mt-0.5 font-mono text-[0.8rem] text-foreground">{posture.role}</dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-              Tables it can write
-            </dt>
-            <dd className="mt-0.5 text-foreground">
-              {posture.writableTables.length === 0 ? 'none' : posture.writableTables.join(', ')}
+            <dt className="eyebrow">Role</dt>
+            <dd className="mt-0.5">
+              <Figure className="text-foreground">{posture.role}</Figure>
             </dd>
           </div>
           <div>
-            <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-              Statement timeout
-            </dt>
-            <dd className="mt-0.5 font-mono text-[0.8rem] text-foreground">
-              {posture.statementTimeout || `${overview.statementTimeoutMs} ms`}
+            <dt className="eyebrow">Tables it can write</dt>
+            <dd className="mt-0.5">
+              <Figure className="text-foreground">
+                {posture.writableTables.length === 0 ? 'none' : posture.writableTables.join(', ')}
+              </Figure>
             </dd>
           </div>
           <div>
-            <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-              Result ceiling
-            </dt>
-            <dd className="mt-0.5 text-foreground">
-              {overview.rowLimitMax.toLocaleString()} rows · {overview.maxResultMb} MB
+            <dt className="eyebrow">Statement timeout</dt>
+            <dd className="mt-0.5">
+              <Figure className="text-foreground">
+                {posture.statementTimeout || `${overview.statementTimeoutMs} ms`}
+              </Figure>
+            </dd>
+          </div>
+          <div>
+            <dt className="eyebrow">Result ceiling</dt>
+            <dd className="mt-0.5">
+              <Figure className="text-foreground" unit="rows">
+                {overview.rowLimitMax.toLocaleString()}
+              </Figure>{' '}
+              <Figure className="text-foreground" unit="MB">
+                {overview.maxResultMb}
+              </Figure>
             </dd>
           </div>
         </dl>
-        <p className="mt-4 flex items-start gap-2 rounded-xl bg-surface-2 px-3 py-2 text-[0.8rem] leading-relaxed text-muted-foreground">
-          <Lock className="mt-0.5 size-3.5 shrink-0" />
+        <p className="mt-4 flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2 text-[0.8rem] leading-relaxed text-muted-foreground">
+          <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <span>{overview.freeFormReason}</span>
         </p>
       </CardBody>
@@ -152,12 +146,14 @@ function ScopePicker({
 }): ReactElement {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs uppercase tracking-wide text-muted-foreground">Read as</span>
+      <label htmlFor="db-scope" className="eyebrow">
+        Read as
+      </label>
       <select
+        id="db-scope"
         value={tenantId === null ? '' : String(tenantId)}
         onChange={(event) => onChange(event.target.value === '' ? null : Number(event.target.value))}
         disabled={disabled}
-        aria-label="Tenant scope for every read on this page"
         className="h-9 rounded-lg border border-input bg-surface px-3 text-sm text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <option value="">Every tenant</option>
@@ -195,10 +191,12 @@ function Catalog({
           onClick={() => onSelect({ kind: 'table', name: table.name })}
           aria-current={active ? 'true' : undefined}
           className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
-            active ? 'bg-surface-2 text-foreground' : 'text-muted-foreground hover:bg-surface-2/60'
+            active
+              ? 'bg-blue-50 font-medium text-foreground'
+              : 'text-muted-foreground hover:bg-surface-2/60'
           }`}
         >
-          <span className="truncate font-mono text-[0.78rem]">{table.name}</span>
+          <Figure className="truncate">{table.name}</Figure>
           <span className="shrink-0 text-[0.68rem] text-muted-foreground/80">
             {estimate(table.rowEstimate)}
           </span>
@@ -209,7 +207,7 @@ function Catalog({
 
   return (
     <div className="flex flex-col gap-4">
-      <Card>
+      <Card className="rounded-lg">
         <CardHeader title="Tenant tables" eyebrow={`${scoped.length} relations`} />
         <CardBody className="pt-2">
           <p className="mb-2 text-[0.72rem] leading-snug text-muted-foreground">
@@ -219,7 +217,7 @@ function Catalog({
           <ul className="space-y-0.5">{scoped.map(tableButton)}</ul>
         </CardBody>
       </Card>
-      <Card>
+      <Card className="rounded-lg">
         <CardHeader title="Platform tables" eyebrow={`${platform.length} relations`} />
         <CardBody className="pt-2">
           <p className="mb-2 text-[0.72rem] leading-snug text-muted-foreground">
@@ -248,8 +246,9 @@ function Inspections({
   onRun: (inspection: DbInspection) => void
   running: boolean
 }): ReactElement {
+  const id = useId()
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader title="Saved questions" eyebrow={`${overview.inspections.length} reads`} />
       <CardBody className="space-y-3 pt-3">
         {overview.inspections.map((inspection) => {
@@ -258,8 +257,8 @@ function Inspections({
           return (
             <div
               key={inspection.id}
-              className={`rounded-xl border px-3 py-3 transition-colors ${
-                active ? 'border-border bg-surface-2' : 'border-border/60'
+              className={`rounded-lg border px-3 py-3 transition-colors ${
+                active ? 'border-input bg-blue-50' : 'border-border/60'
               }`}
             >
               <p className="text-sm font-medium text-foreground">{inspection.title}</p>
@@ -268,12 +267,15 @@ function Inspections({
               </p>
               <div className="mt-2 flex flex-wrap items-end gap-2">
                 {keys.map((key) => (
-                  <label key={key} className="flex flex-col gap-1">
-                    <span className="text-[0.68rem] uppercase tracking-wide text-muted-foreground">
-                      {key}
-                    </span>
+                  <label
+                    key={key}
+                    htmlFor={`${id}-${inspection.id}-${key}`}
+                    className="flex flex-col gap-1"
+                  >
+                    <span className="eyebrow">{key}</span>
                     <Input
-                      className="h-8 w-32 text-[0.78rem]"
+                      id={`${id}-${inspection.id}-${key}`}
+                      className="tabular h-8 w-32 rounded-lg font-mono text-[0.78rem]"
                       value={parameters[`${inspection.id}.${key}`] ?? String(inspection.parameters[key] ?? '')}
                       onChange={(event) => onParameter(`${inspection.id}.${key}`, event.target.value)}
                     />
@@ -286,7 +288,9 @@ function Inspections({
                   disabled={running}
                   onClick={() => onRun(inspection)}
                 >
-                  {running && active ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {running && active ? (
+                    <Loader2 aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />
+                  ) : null}
                   Run
                 </Button>
               </div>
@@ -301,7 +305,7 @@ function Inspections({
 /** The columns of the selected table, including the ones this connection may not read. */
 function Structure({ table }: { table: DbTable }): ReactElement {
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader title={table.name} eyebrow="Structure" />
       <CardBody className="pt-3">
         <div className="w-full overflow-x-auto">
@@ -314,7 +318,7 @@ function Structure({ table }: { table: DbTable }): ReactElement {
                 {column.isPrimaryKey ? (
                   <KeyRound className="size-3 text-muted-foreground" aria-label="primary key" />
                 ) : null}
-                <span className="font-mono text-[0.74rem] text-foreground">{column.name}</span>
+                <Figure className="text-foreground">{column.name}</Figure>
                 <span className="text-[0.68rem] text-muted-foreground">{column.dataType}</span>
               </li>
             ))}
@@ -322,17 +326,17 @@ function Structure({ table }: { table: DbTable }): ReactElement {
         </div>
         {table.foreignKeys.length > 0 ? (
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.72rem] text-muted-foreground">
-            <Link2 className="size-3" />
+            <Link2 className="size-3" aria-hidden />
             {table.foreignKeys.map((key) => (
-              <span key={`${key.column}-${key.referencesTable}`} className="font-mono">
-                {key.column} → {key.referencesTable}.{key.referencesColumn}
-              </span>
+              <Figure key={`${key.column}-${key.referencesTable}`}>
+                {`${key.column} → ${key.referencesTable}.${key.referencesColumn}`}
+              </Figure>
             ))}
           </div>
         ) : null}
         {table.withheldColumns.length > 0 ? (
           <p className="mt-3 flex items-start gap-2 text-[0.72rem] leading-snug text-muted-foreground">
-            <Lock className="mt-0.5 size-3 shrink-0" />
+            <Lock className="mt-0.5 size-3 shrink-0" aria-hidden />
             <span>
               {table.withheldColumns.join(', ')} {table.withheldColumns.length === 1 ? 'is' : 'are'}{' '}
               withheld from this connection by a column grant, so {table.withheldColumns.length === 1 ? 'it is' : 'they are'} not
@@ -360,7 +364,7 @@ function Result({
   canPage: boolean
 }): ReactElement {
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader
         title={result.label}
         eyebrow={`${result.durationMs} ms · ${result.planSummary}`}
@@ -380,17 +384,23 @@ function Result({
         }
       />
       <CardBody className="pt-3">
-        <p className="text-[0.78rem] leading-snug text-muted-foreground">{coverage(result)}</p>
+        {/* What this read did not show, and which bound decided that. Never silent. */}
+        <p className="text-[0.78rem] leading-relaxed text-foreground">{coverage(result)}</p>
         {result.rowCount === 0 ? (
-          <p className="mt-4 rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-6 text-center text-sm text-muted-foreground">
-            {emptyMessage(result)}
-          </p>
+          <EmptyState
+            icon={Table2}
+            title="No rows came back"
+            body={emptyMessage(result)}
+            className="mt-4"
+          />
         ) : (
-          <div className="mt-3 max-h-[28rem] overflow-auto rounded-xl border border-border">
+          <div className="mt-3 max-h-[28rem] overflow-auto rounded-lg border border-border">
             <Table>
               <THead>
                 {result.columns.map((column) => (
-                  <TH key={column}>{column}</TH>
+                  <TH key={column} className="whitespace-nowrap">
+                    {column}
+                  </TH>
                 ))}
               </THead>
               <TBody>
@@ -413,13 +423,18 @@ function Result({
           </div>
         )}
         <details className="mt-3">
-          <summary className="cursor-pointer text-[0.72rem] text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+          <summary className="cursor-pointer rounded-lg text-[0.72rem] text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
             The statement the server built
           </summary>
-          <pre className="mt-2 overflow-x-auto rounded-xl bg-surface-2 px-3 py-2 font-mono text-[0.7rem] leading-relaxed text-foreground">
+          <pre className="tabular mt-2 overflow-x-auto rounded-lg bg-surface-2 px-3 py-2 font-mono text-[0.7rem] leading-relaxed text-foreground">
             {result.sql}
           </pre>
         </details>
+        <Receipt
+          origin={`${result.queryId} · ${result.planSummary}`}
+          detail={`${result.durationMs} ms · ${result.scope}`}
+          className="mt-3"
+        />
       </CardBody>
     </Card>
   )
@@ -467,7 +482,11 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
         }
       })
       .catch((err: unknown) => {
-        if (alive) setLoadError(err instanceof Error ? err.message : 'The console did not load.')
+        if (alive) {
+          setLoadError(
+            errorSentence(err, 'The database console did not load. Check the backend is up.'),
+          )
+        }
       })
     return () => {
       alive = false
@@ -501,7 +520,7 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
         setResult(next)
       } catch (err: unknown) {
         setResult(null)
-        setRefusal(err instanceof Error ? err.message : 'That read did not go through.')
+        setRefusal(errorSentence(err, 'That read did not go through. Try it again.'))
       } finally {
         setBusy(false)
       }
@@ -528,7 +547,7 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
         setResult(await runInspection(inspection.id, { parameters: values, tenantId }, token))
       } catch (err: unknown) {
         setResult(null)
-        setRefusal(err instanceof Error ? err.message : 'That read did not go through.')
+        setRefusal(errorSentence(err, 'That read did not go through. Try it again.'))
       } finally {
         setBusy(false)
       }
@@ -548,44 +567,37 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
 
   if (loadError !== null) {
     return (
-      <Card>
-        <CardBody className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-risk-ink" />
-          <div>
-            <p className="text-sm text-foreground">{loadError}</p>
-            <p className="mt-1 text-[0.78rem] text-muted-foreground">
-              The database console is off unless a deployment sets{' '}
-              <span className="font-mono">AEGIS_DB_CONSOLE_ENABLED</span> and points{' '}
-              <span className="font-mono">AEGIS_DB_CONSOLE_DSN</span> at the read-only role.
-            </p>
-          </div>
-        </CardBody>
-      </Card>
+      <div className="space-y-3">
+        <ErrorState error={loadError} />
+        <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
+          The database console is off unless a deployment sets{' '}
+          <span className="font-mono">AEGIS_DB_CONSOLE_ENABLED</span> and points{' '}
+          <span className="font-mono">AEGIS_DB_CONSOLE_DSN</span> at the read-only role.
+        </p>
+      </div>
     )
   }
 
   if (overview === null) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Reading the schema…
-      </div>
-    )
+    return <LoadingState rows={6} label="Reading the schema…" />
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Database className="size-4 text-muted-foreground" />
-          <h2 className="t-title text-foreground">Database</h2>
-        </div>
-        <ScopePicker
-          overview={overview}
-          tenantId={tenantId}
-          onChange={setTenantId}
-          disabled={busy}
-        />
-      </div>
+      <SectionHeader
+        as="h1"
+        eyebrow="read-only · parameterised"
+        title="Database"
+        note="A closed set of parameterised reads over a connection that holds SELECT and nothing else. Binding a tenant narrows every read on this page; it can never widen one."
+        right={
+          <ScopePicker
+            overview={overview}
+            tenantId={tenantId}
+            onChange={setTenantId}
+            disabled={busy}
+          />
+        }
+      />
 
       <Posture overview={overview} />
 
@@ -598,14 +610,7 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
         </div>
         <div className="min-w-0 space-y-4">
           {table ? <Structure table={table} /> : null}
-          {refusal !== null ? (
-            <Card>
-              <CardBody className="flex items-start gap-3">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-block-ink" />
-                <p className="text-sm text-foreground">{refusal}</p>
-              </CardBody>
-            </Card>
-          ) : null}
+          {refusal !== null ? <ErrorState error={refusal} /> : null}
           {result !== null ? (
             <Result
               result={result}
@@ -626,16 +631,11 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
             />
           ) : null}
           {result === null && refusal === null ? (
-            <Card>
-              <CardBody className="flex flex-col items-center gap-2 py-10 text-center">
-                <Table2 className="size-6 text-muted-foreground/50" />
-                <p className="text-sm text-foreground">Pick a table, or run a saved question.</p>
-                <p className="max-w-md text-[0.78rem] text-muted-foreground">
-                  Nothing has been read yet. Every read on this page is bounded, tenant-filtered
-                  and written to the audit trail before it runs.
-                </p>
-              </CardBody>
-            </Card>
+            <EmptyState
+              icon={Table2}
+              title="Nothing has been read yet"
+              body="Every read on this page is bounded, tenant-filtered and written to the audit trail before it runs. Pick a table on the left, or run one of the saved questions below."
+            />
           ) : null}
           <Inspections
             overview={overview}
@@ -648,11 +648,15 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
         </div>
       </div>
 
-      <p className="flex items-center gap-2 text-[0.72rem] text-muted-foreground">
-        <ListFilter className="size-3" />
-        Every read is capped at {overview.rowLimitMax.toLocaleString()} rows and{' '}
-        {overview.maxResultMb} MB, cancelled after {overview.statementTimeoutMs / 1000}s, and
-        recorded in the audit trail with who ran it, what it read and how many rows came back.
+      <p className="flex items-start gap-2 text-[0.72rem] leading-relaxed text-muted-foreground">
+        <ListFilter className="mt-0.5 size-3 shrink-0" aria-hidden />
+        <span>
+          Every read is capped at{' '}
+          <Figure unit="rows">{overview.rowLimitMax.toLocaleString()}</Figure> and{' '}
+          <Figure unit="MB">{overview.maxResultMb}</Figure>, cancelled after{' '}
+          <Figure unit="s">{overview.statementTimeoutMs / 1000}</Figure>, and recorded in the
+          audit trail with who ran it, what it read and how many rows came back.
+        </span>
       </p>
     </div>
   )
@@ -664,7 +668,7 @@ export function DatabaseMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
       </div>
     )

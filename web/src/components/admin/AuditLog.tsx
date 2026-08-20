@@ -1,10 +1,10 @@
 'use client'
 
-import { CheckCircle2, Copy, Download, ListChecks, Loader2, ScrollText, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Copy, Download, ListChecks, ScrollText, ShieldAlert } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { getAudit, getTenants } from '@/lib/api/client'
-import { apiMessage, statusOf } from '@/lib/api/apiError'
+import { apiMessage, errorSentence, statusOf } from '@/lib/api/apiError'
 import { startReportDownload } from '@/lib/api/reports'
 import { BarChart } from '@/components/charts/BarChart'
 import { AuditFilterBar } from '@/components/audit/AuditFilterBar'
@@ -16,10 +16,13 @@ import {
   EMPTY_AUDIT_QUERY,
   type AuditQuery,
 } from '@/components/audit/query'
-import { CountUp } from '@/components/shared'
 import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { SIGNALS, type Signal } from '@/config/signals'
@@ -80,7 +83,10 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
         if (alive) {
           setLoad({
             status: 'error',
-            message: error instanceof Error ? error.message : 'Failed to load audit trail',
+            message: errorSentence(
+              error,
+              'The audit trail did not load. Check the backend is reachable, then retry.',
+            ),
           })
         }
       })
@@ -120,12 +126,26 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
 
   return (
     <div className="flex flex-col gap-4">
-      <Card className="gap-0 p-0">
-        <div className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-[1fr_1fr_1fr_1.6fr] lg:divide-x lg:divide-border/70">
-          <HeaderStat label="Events" icon={ListChecks} signal="graph" value={counts.total} sub="recorded" />
-          <HeaderStat label="Blocked" icon={ShieldAlert} signal="block" value={counts.blocked} sub="guardrail / denied" className="lg:pl-5" />
-          <HeaderStat label="Approved" icon={CheckCircle2} signal="ok" value={counts.approved} sub="human-gated" className="lg:pl-5" />
-          <div className="lg:pl-5">
+      <Card className="gap-0 rounded-lg p-0">
+        <div className="grid grid-cols-2 gap-4 p-5 lg:grid-cols-[1fr_1fr_1fr_1.6fr] lg:divide-x lg:divide-border/70">
+          <HeaderStat label="Events" icon={ListChecks} signal="neutral" value={counts.total} sub="recorded" />
+          <HeaderStat
+            label="Blocked"
+            icon={ShieldAlert}
+            signal="block"
+            value={counts.blocked}
+            sub="guardrail / denied"
+            className="lg:pl-5"
+          />
+          <HeaderStat
+            label="Approved"
+            icon={CheckCircle2}
+            signal="ok"
+            value={counts.approved}
+            sub="human-gated"
+            className="lg:pl-5"
+          />
+          <div className="col-span-2 lg:col-span-1 lg:pl-5">
             <div className="mb-1 flex items-center gap-2">
               <span className="eyebrow">Activity</span>
               <span className="font-mono text-[0.62rem] text-muted-foreground">last 12h</span>
@@ -139,9 +159,9 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
         </div>
       </Card>
 
-      <Card>
+      <Card className="rounded-lg">
         <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-          <ScrollText className="size-4 text-blue-700" />
+          <ScrollText className="size-4 shrink-0 text-blue-700" aria-hidden />
           <CardTitle>Audit trail</CardTitle>
           <div className="ml-1 flex items-center gap-1">
             <Badge variant="secondary">append-only</Badge>
@@ -171,8 +191,12 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
 
         <CardContent className="flex flex-col gap-4">
           {exportError !== null && (
-            <p role="alert" className="text-sm text-destructive">
-              {exportError}
+            <p role="alert" className="flex items-start gap-2 text-sm text-block-ink">
+              <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0" />
+              <span>
+                <span className="font-medium">Export refused. </span>
+                {exportError}
+              </span>
             </p>
           )}
 
@@ -196,27 +220,12 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
             busy={load.status === 'loading'}
           />
 
-          {load.status === 'loading' && (
-            <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading audit trail…
-            </div>
-          )}
+          {load.status === 'loading' && <LoadingState rows={6} label="Reading the audit trail…" />}
 
-          {load.status === 'error' && (
-            <div className="py-10 text-sm text-destructive">
-              Could not load the audit trail. {load.message}
-            </div>
-          )}
+          {load.status === 'error' && <ErrorState error={load.message} />}
 
           {load.status === 'ready' && rows.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-14 text-center">
-              <span className="grid size-10 place-items-center rounded-full bg-surface-2">
-                <ScrollText className="size-5 text-muted-foreground" />
-              </span>
-              <p className="text-sm font-medium text-foreground">{empty.title}</p>
-              <p className="max-w-sm text-xs text-muted-foreground">{empty.hint}</p>
-            </div>
+            <EmptyState icon={ScrollText} title={empty.title} body={empty.hint} />
           )}
 
           {load.status === 'ready' && rows.length > 0 && (
@@ -225,18 +234,21 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
                 <thead className="sticky top-0 z-10 bg-card">
                   <tr className="border-b border-border/70 text-left">
                     {COLUMNS.map((h) => (
-                      <th key={h} className="eyebrow pb-2 font-normal whitespace-nowrap">
+                      <th
+                        key={h}
+                        scope="col"
+                        className="eyebrow pb-2 font-normal whitespace-nowrap"
+                      >
                         {h}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r, i) => (
+                  {rows.map((r) => (
                     <tr
                       key={r.id}
-                      className="animate-trace-in border-b border-border/40 align-top transition-colors last:border-0 hover:bg-surface-2/50"
-                      style={{ animationDelay: `${Math.min(i, 14) * 28}ms` }}
+                      className="border-b border-border/40 align-top transition-colors last:border-0 hover:bg-surface-2/50"
                     >
                       <td className="tabular py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
                         {formatTime(r.ts)}
@@ -263,6 +275,15 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
               </table>
             </div>
           )}
+
+          <Receipt
+            origin="GET /audit · Postgres, append-only"
+            detail={
+              load.status === 'ready'
+                ? `${rows.length} of at most ${query.limit} rows matched, filtered server-side`
+                : 'filtered server-side, so the figures above describe the same set as the table'
+            }
+          />
         </CardContent>
       </Card>
     </div>
@@ -289,12 +310,14 @@ function HeaderStat({
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       <div className="flex items-center gap-2">
-        <span className={cn('grid size-6 place-items-center rounded-md', token.bg)}>
-          <Icon className={cn('size-3.5', token.text)} />
+        <span className={cn('grid size-6 shrink-0 place-items-center rounded-md', token.bg)}>
+          <Icon aria-hidden className={cn('size-3.5', token.text)} />
         </span>
         <span className="eyebrow">{label}</span>
       </div>
-      <CountUp value={value} className="t-metric text-foreground" />
+      <Figure size="stat" className="text-foreground">
+        {value.toLocaleString()}
+      </Figure>
       <span className="font-mono text-[0.68rem] text-muted-foreground">{sub}</span>
     </div>
   )
@@ -332,6 +355,7 @@ function TraceChip({ traceId }: { traceId: string | null }): ReactElement {
     >
       {traceId}
       <Copy aria-hidden className="size-3 text-muted-foreground/60 group-hover:text-muted-foreground" />
+      <span className="sr-only">Copy trace id</span>
     </button>
   )
 }
@@ -370,7 +394,7 @@ export function AuditMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
       </div>
     )
@@ -380,10 +404,12 @@ export function AuditMount(): ReactElement {
     <BackendGate>
       <TooltipProvider>
         <div className="space-y-4">
-          <div>
-            <p className="eyebrow mb-1">Postgres audit</p>
-            <h1 className="t-hero text-foreground">Audit</h1>
-          </div>
+          <SectionHeader
+            as="h1"
+            eyebrow="Postgres audit"
+            title="Audit"
+            note="Every recorded action with its actor, model, trace id and approver. The filters run on the server, so a search reaches the whole trail rather than the page in view."
+          />
           <AuditLog token={token} tenants={tenants} />
         </div>
       </TooltipProvider>
