@@ -10072,6 +10072,19 @@
       "ScoredSource": {
         "description": "One reranked source with its relevance score (for the retrieval panel).",
         "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The source document this passage came from, e.g. 'quarterly-report.pdf'. ``None`` when the chunk carries no recorded provenance — a stated absence, never a filename chosen on the passage's behalf.",
+            "title": "File Path"
+          },
           "id": {
             "description": "Source/chunk identifier.",
             "title": "Id",
@@ -10536,9 +10549,48 @@
         "title": "ShapFeature",
         "type": "object"
       },
+      "SkillAgent": {
+        "description": "One agent a skill may be assigned to, as the console picker should offer it.",
+        "properties": {
+          "agentId": {
+            "description": "The id a write puts in ``agent``.",
+            "title": "Agentid",
+            "type": "string"
+          },
+          "isMain": {
+            "description": "Whether this is the main persona rather than a fan-out lane.",
+            "title": "Ismain",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "Human-facing name.",
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "label",
+          "isMain"
+        ],
+        "title": "SkillAgent",
+        "type": "object"
+      },
       "SkillRow": {
         "description": "One authored skill, with the layer it lives at and whether it is live.",
         "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent this skill was assigned to, or null for every agent. One of the ids GET /skills reports under 'agents'.",
+            "title": "Agent"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -10601,6 +10653,18 @@
         "additionalProperties": false,
         "description": "Body for ``POST /skills``.\n\nCarries **no tenant and no user**: both are the server's to decide from the sealed\nscope, and a body that could name either is §7.16 row 12 waiting to happen.\n``extra='forbid'`` makes a stray field a 422 rather than a silently ignored one.",
         "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Assign this skill to ONE agent from the live roster, or leave it out (the default) for a skill that belongs to Aegis generally and reaches every agent. An id nothing in the roster answers to is a 422 that names it.",
+            "title": "Agent"
+          },
           "document": {
             "description": "The whole SKILL.md, frontmatter included.",
             "title": "Document",
@@ -10661,6 +10725,14 @@
       "SkillsResponse": {
         "description": "Body for ``GET /skills``.",
         "properties": {
+          "agents": {
+            "description": "The agents a skill may be assigned to, read from the live roster. A console picker must be built from this rather than from a hard-coded list: a deployment that swaps its domain swaps these.",
+            "items": {
+              "$ref": "#/components/schemas/SkillAgent"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
           "rows": {
             "items": {
               "$ref": "#/components/schemas/SkillRow"
