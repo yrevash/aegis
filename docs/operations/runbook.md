@@ -166,6 +166,7 @@ check that gets disabled.
 | Console stuck on stale output | `rm -rf web/.next` and re-run `npm run dev`. |
 | First `pytest` is slow (~30–60s) | One-time SHAP/numba JIT compile; later runs are ~2s. |
 | Console banner says "mock" unexpectedly | The boot probe couldn't reach the backend — check `NEXT_PUBLIC_API_BASE` and that `:8000` is up. |
+| Queries answer with no sources / retrieval returns nothing, but `/documents` shows SUCCEEDED | The dense index is empty while the chunks are fine — the two stores disagree. Confirm with `curl -s localhost:6333/collections/lightrag_vdb_chunks \| grep points_count`, then rebuild from the rows that survived: `python -m app.ingestion --reindex` (see *Rebuilding the dense index* below). |
 
 ---
 
@@ -194,3 +195,34 @@ are budget-governed at the gateway and RLS-isolated. Platform-admins manage tena
 `/admin/usage`. A HIGH-risk (or uncertain) action **defers**: it lands in the durable
 inbox (`GET /approvals`); resolve it out-of-band at `POST /approvals/{id}/decision` and
 the run resumes from its checkpoint, executing the tool exactly once.
+
+---
+
+## Rebuilding the dense index (after a vector-store swap or a lost volume)
+
+`chunks.embedding` is the **embedding of record** — the durable vectors live in
+PostgreSQL beside the text, and the vector store is a derived index built from them.
+So losing the vector store loses nothing that cannot be replayed, and replaying it
+costs **no provider calls and no money**.
+
+```bash
+# from backend/, venv active
+python -m app.ingestion --verify                 # audit only: writes nothing
+python -m app.ingestion --reindex                # every tenant, every document
+python -m app.ingestion --reindex --tenant 1
+python -m app.ingestion --reindex --document 7
+```
+
+Both verbs finish by reading the index back and comparing it against the durable rows,
+and **exit non-zero if the two disagree** — so this is safe to wire into a smoke check.
+`--reindex` is idempotent (point ids are content-addressed, so a re-run overwrites) and
+non-destructive (nothing is deleted first, so a half-finished run leaves strictly more
+of the corpus searchable than it found).
+
+This is deliberately *not* the same thing as the scheduled re-index
+(`app.ingestion.reindex.reindex_corpus`), which re-runs every stage but `parse` and is
+the right answer when the chunker, the D7 prefix or the **embedding model** changed.
+Use that one when what a chunk *should be* has changed; use this one when only the
+index was lost. This one needs no parse artifact, so it still works on a corpus whose
+uploaded bytes have been pruned.
+

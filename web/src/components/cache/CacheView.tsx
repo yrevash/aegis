@@ -4,10 +4,10 @@ import { CircleSlash, DatabaseZap, RefreshCw, Trash2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -87,11 +87,22 @@ function OrAbsent({ value }: { value: number | string | null }): ReactElement {
  * sentence: a hit rate is null before the first lookup, and an empty track next to
  * "0.0%" would be a measurement this process has not made.
  */
-function HitRateMeter({ value }: { value: number | null }): ReactElement {
+function HitRateMeter({
+  value,
+  lookups,
+}: {
+  value: number | null
+  lookups: number
+}): ReactElement {
   if (value === null) {
     return (
-      <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-        No lookup has reached this cache in this process, so it has no hit rate to report.
+      <p className="flex items-center gap-1.5 text-[0.8125rem] text-muted-foreground">
+        <CircleSlash className="size-3.5 shrink-0" aria-hidden />
+        No hit rate yet
+        <InfoTip label="Why there is no hit rate">
+          No lookup has reached this cache in this process, so it has no hit rate to report. An
+          empty track next to “0.0%” would be a measurement this process has not made.
+        </InfoTip>
       </p>
     )
   }
@@ -100,7 +111,10 @@ function HitRateMeter({ value }: { value: number | null }): ReactElement {
     <div>
       <div className="flex items-baseline justify-between gap-3">
         <span className="eyebrow">hit rate</span>
-        <Figure className="font-semibold text-foreground">{pct.toFixed(1)}%</Figure>
+        <span className="flex items-baseline gap-2">
+          <Figure size="stat" className="text-foreground">{`${pct.toFixed(1)}%`}</Figure>
+          <Figure className="text-muted-foreground">{`of ${count(lookups)}`}</Figure>
+        </span>
       </div>
       <div
         className="mt-1.5 h-1.5 w-full overflow-hidden rounded-sm bg-surface-2"
@@ -122,7 +136,14 @@ function CacheCard({ row }: { row: CacheRow }): ReactElement {
     <Card>
       <CardHeader
         eyebrow={row.key}
-        title={row.name}
+        title={
+          <span className="flex items-center gap-1.5">
+            {row.name}
+            {/* What the cache holds was a paragraph on every card; it is the
+                mechanism, so DESIGN.md §4 puts it one layer down. */}
+            <InfoTip label={`What ${row.name} holds`}>{row.holds}</InfoTip>
+          </span>
+        }
         actions={
           row.registered ? (
             <Badge tone="graph">{row.backend ?? 'unknown backend'}</Badge>
@@ -135,11 +156,7 @@ function CacheCard({ row }: { row: CacheRow }): ReactElement {
         }
       />
       <CardBody>
-        <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">{row.holds}</p>
-
-        <div className="mt-4">
-          <HitRateMeter value={row.hit_rate} />
-        </div>
+        <HitRateMeter value={row.hit_rate} lookups={row.lookups} />
 
         <dl className="mt-4 divide-y divide-border border-t border-border">
           <ConfigRow label="lookups" value={<Figure>{count(row.lookups)}</Figure>} />
@@ -194,10 +211,12 @@ function CacheCard({ row }: { row: CacheRow }): ReactElement {
         </dl>
 
         {row.registered ? null : (
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-            No instance of this cache has been constructed in the API process, so its
-            configuration is unknown rather than defaulted.
-          </p>
+          <Absence
+            className="mt-3"
+            figure="This cache's configuration"
+            why="No instance of it has been constructed in the API process."
+            needed="Something has to build the cache before its TTL, threshold and capacity are facts rather than defaults."
+          />
         )}
 
         <Receipt origin={row.method} className="mt-4" />
@@ -270,12 +289,17 @@ function CacheView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
+      <PageHeader
         eyebrow="counted inside the caches"
         title="Cache"
-        note="Every counter below is incremented on the branch that decided hit or miss. A cache nobody built, and a cache nobody has read, each say so."
-        right={
+        actions={
+          <>
+          <InfoTip label="Where these counters come from">
+            Every counter here is incremented on the exact branch that decided hit or miss, inside
+            the cache itself. A cache nobody built, and a cache nobody has read, each say so rather
+            than reporting a zero. The totals are sums of counts, never an average of rates — the
+            exact-hash tiers and the cosine tiers do not decide the same event.
+          </InfoTip>
           <button
             type="button"
             onClick={() => void load()}
@@ -292,6 +316,7 @@ function CacheView(): ReactElement {
               {refreshing ? 'Re-reading the cache counters' : ''}
             </span>
           </button>
+          </>
         }
       />
 
@@ -361,6 +386,24 @@ function CacheView(): ReactElement {
             ).toLocaleTimeString()}, and again every ${POLL_MS / 1000} seconds.`}
           />
 
+          <Card>
+            <CardHeader
+              eyebrow="which tier is earning its keep"
+              title="Traffic and hit rate, side by side"
+              actions={
+                <InfoTip label="How to read this">
+                  Each row is one cache. The track&apos;s length is that cache&apos;s share of all
+                  lookups this process has made, so a tier nothing asks stays visibly short; the
+                  filled part is the share of its own lookups that hit. A cache with no lookups
+                  draws no track — there is nothing measured to draw.
+                </InfoTip>
+              }
+            />
+            <CardBody>
+              <CacheTrafficBars rows={rows} totalLookups={lookups.total} />
+            </CardBody>
+          </Card>
+
           <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {rows.map((row) => (
               <CacheCard key={row.key} row={row} />
@@ -389,13 +432,93 @@ function CacheView(): ReactElement {
   )
 }
 
+/**
+ * The caches compared on the two facts that decide whether one is worth keeping:
+ * **how much traffic it takes** and **how much of that traffic it answers**.
+ *
+ * A grid of per-cache cards gives each tier equal visual weight regardless of
+ * whether anything asks it, which is the opposite of the truth — a semantic tier
+ * fielding four lookups and an exact tier fielding forty thousand look identical
+ * as cards. Here the track length *is* the share of lookups, so the tier carrying
+ * the load is the long row, and the fill is its own hit rate. One hue, two
+ * intensities; the words carry everything the fill does.
+ *
+ * Nothing is scaled against an invented denominator: a cache with zero lookups
+ * draws no track and says so.
+ */
+function CacheTrafficBars({
+  rows,
+  totalLookups,
+}: {
+  rows: CacheRow[]
+  totalLookups: number
+}): ReactElement {
+  if (rows.length === 0 || totalLookups <= 0) {
+    return (
+      <Absence
+        figure="Lookup traffic per cache"
+        why="No lookup has reached any cache in this process yet, so there are no shares to compare."
+        needed="Run a query. The counters increment on the branch that decides hit or miss."
+      />
+    )
+  }
+  return (
+    <ul className="flex flex-col gap-3">
+      {rows.map((row) => {
+        const share = (row.lookups / totalLookups) * 100
+        const hitPct = row.lookups > 0 ? (row.hits / row.lookups) * 100 : 0
+        return (
+          <li key={row.key} className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-3">
+            <span className="min-w-0 truncate text-[0.8125rem] text-foreground">{row.name}</span>
+            <div className="relative h-3.5 rounded-sm bg-surface-2">
+              {row.lookups === 0 ? (
+                <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-[0.68rem] text-muted-foreground italic">
+                  no lookups yet
+                </span>
+              ) : (
+                <div
+                  className="absolute inset-y-0 left-0 overflow-hidden rounded-sm bg-blue-200"
+                  style={{ width: `${Math.max(share, 1.5)}%` }}
+                  role="img"
+                  aria-label={`${row.name}: ${row.lookups} lookups, ${hitPct.toFixed(0)} percent of them hits`}
+                >
+                  <span
+                    className="block h-full rounded-sm bg-blue-600"
+                    style={{ width: `${hitPct}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            <span className="flex w-32 items-baseline justify-end gap-2">
+              <Figure className="text-muted-foreground">{count(row.lookups)}</Figure>
+              {row.hit_rate === null ? (
+                <span className="text-[0.68rem] text-muted-foreground italic">no rate</span>
+              ) : (
+                <Figure className="font-semibold text-foreground">{`${(row.hit_rate * 100).toFixed(0)}%`}</Figure>
+              )}
+            </span>
+          </li>
+        )
+      })}
+      <li className="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t border-border pt-2.5 text-[0.72rem] text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-4 rounded-sm bg-blue-200" aria-hidden />
+          share of all lookups
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-4 rounded-sm bg-blue-600" aria-hidden />
+          of which hits
+        </span>
+      </li>
+    </ul>
+  )
+}
+
 /** Client entry for the Cache section — gated on a reachable backend. */
 export function CacheMount(): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
-        <CacheView />
-      </TooltipProvider>
+      <CacheView />
     </BackendGate>
   )
 }

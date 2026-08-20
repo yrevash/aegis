@@ -28,6 +28,7 @@ is between two real engines rather than two fakes that were written to match.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Iterator
 
 import pgsupport
@@ -206,8 +207,8 @@ async def _embedded_document(client, artifact, store) -> int:
         tenant_id=_TENANT, sha256=body["content_sha256"], payload=payload
     )
     for stage in ("chunk", "enrich", "embed"):
-        await _run(stage, body["id"])
-    return body["id"]
+        await _run(stage, body["document_id"])
+    return body["document_id"]
 
 
 async def _chunk_rows(document_id: int) -> list[Chunk]:
@@ -225,6 +226,13 @@ async def _chunk_rows(document_id: int) -> list[Chunk]:
             .scalars()
             .all()
         )
+
+
+def _cosine(a, b) -> float:  # noqa: ANN001 - two float sequences
+    """Return the cosine similarity of two vectors."""
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / norm if norm else 0.0
 
 
 async def test_indexed_chunks_are_present_in_the_dense_index(
@@ -280,16 +288,27 @@ async def test_indexed_chunks_are_present_in_the_dense_index(
         f"and {len(actual - expected)} vector(s) belong to no chunk row"
     )
 
-    # And the vector the index serves is the one the database holds — not a second,
-    # separately-derived embedding that merely happens to be close to it.
+    # And the vector the index serves for a given chunk is *that chunk's* embedding of
+    # record — not a second, separately-derived embedding that merely happens to be
+    # close to it. Matching ids with mismatched vectors is the quieter half of the same
+    # disagreement: retrieval would return the right passage for the wrong reasons, and
+    # rank it wrongly against its neighbours.
+    #
+    # Compared by direction rather than by value, because a Cosine collection stores
+    # vectors L2-normalised — Qdrant hands back the unit vector, not the bytes it was
+    # given. Direction is the whole of what a cosine index uses, so equality of
+    # direction is equality of everything that can affect an answer.
+    row = rows[0]
+    point_id = lightrag_point_id(
+        f"t{_TENANT}:{(row.meta or {}).get('content_id') or row.id}",
+        workspace=workspace,
+    )
     served = dense.retrieve(
-        collection_name=_COLLECTION,
-        ids=[str(point_id) for point_id in sorted(expected)[:1]],
-        with_vectors=True,
+        collection_name=_COLLECTION, ids=[point_id], with_vectors=True
     )[0]
-    assert [round(value, 9) for value in served.vector] in [
-        [round(value, 9) for value in row.embedding] for row in rows
-    ]
+    assert _cosine(served.vector, row.embedding) == pytest.approx(1.0, abs=1e-9), (
+        "the index is serving a different vector than the database holds for this chunk"
+    )
 
 
 async def test_index_stage_refuses_to_report_success_when_nothing_was_written(

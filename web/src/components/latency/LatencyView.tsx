@@ -4,17 +4,21 @@ import { Activity, Gauge, Hash, Timer, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { getLatency } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { LatencyResponse, NodeLatency } from '@/lib/api/platform'
+
+import { NodeRangeBars } from './NodeRangeBars'
 
 /**
  * Format a millisecond figure, or say plainly that there is no reading.
@@ -33,43 +37,6 @@ function Ms({ value, className }: { value: number | null | undefined; className?
   const text = fmtMs(value)
   if (text === null) return <span className="text-xs text-muted-foreground italic">no reading</span>
   return <Figure className={className}>{text}</Figure>
-}
-
-/**
- * Per-node p95 bars — one horizontal track per node, each scaled to the slowest
- * node's p95 so the tail latencies read at a glance, with the p95 figure pinned in
- * an aligned tabular-mono right column (never inside the bar, so it stays legible).
- *
- * The bars are `aria-hidden`: the figure in the right column is the reading, and
- * announcing both would say every timing twice.
- */
-function NodeP95Bars({ nodes }: { nodes: NodeLatency[] }): ReactElement {
-  const maxP95 = Math.max(1, ...nodes.map((n) => n.p95_ms))
-  return (
-    <div className="flex flex-col gap-2.5">
-      <div className="flex items-center justify-between">
-        <span className="eyebrow">p95 latency · per node</span>
-        <span className="eyebrow">ms</span>
-      </div>
-
-      <ul className="flex flex-col gap-1.5">
-        {nodes.map((n) => (
-          <li key={n.node} className="grid grid-cols-[minmax(0,1fr)_1.9fr_auto] items-center gap-3">
-            <Figure className="min-w-0 truncate text-foreground">{n.node}</Figure>
-            <div aria-hidden className="relative h-3 overflow-hidden rounded-sm bg-surface-2">
-              <div
-                className="absolute inset-y-0 left-0 rounded-sm bg-blue-600"
-                style={{ width: `${Math.max((n.p95_ms / maxP95) * 100, 1.5)}%` }}
-              />
-            </div>
-            <span className="w-20 text-right">
-              <Ms value={n.p95_ms} className="font-semibold text-foreground" />
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
 }
 
 /** The full per-node table: node, count, p50, p95, max, total — all tabular-mono. */
@@ -180,11 +147,16 @@ function LatencyView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
+      <PageHeader
         eyebrow="latency · p50 · p95"
         title="Latency"
-        note="Real samples from a per-process rolling window. The window resets on restart, so these are the timings of this process and no other."
+        actions={
+          <InfoTip label="What window these timings come from">
+            Real samples from a per-process rolling window. The window resets on restart, so these
+            are the timings of this process and no other — which is why an empty window says so
+            rather than reporting zeros.
+          </InfoTip>
+        }
       />
 
       {error ? (
@@ -227,11 +199,11 @@ function LatencyView(): ReactElement {
             />
           </div>
 
-          {/* ── Per-node p95 bars ─────────────────────────────────────────────── */}
+          {/* ── Per-node latency spans ────────────────────────────────────── */}
           <Card>
             <CardHeader
               eyebrow="aegis · /latency"
-              title="Per-node p95"
+              title="Where each node's time goes"
               actions={
                 <Badge tone="neutral" className="font-mono">
                   {data.source}
@@ -239,25 +211,23 @@ function LatencyView(): ReactElement {
               }
             />
             <CardBody>
-              <NodeP95Bars nodes={data.per_node} />
+              <NodeRangeBars nodes={data.per_node} />
             </CardBody>
           </Card>
 
           {/* ── Per-node table ────────────────────────────────────────────────── */}
-          <Card>
-            <CardHeader
-              eyebrow="aegis · /latency"
-              title="Per-node breakdown"
-              actions={
-                <Badge tone="neutral">
-                  <Figure>{data.per_node.length}</Figure> nodes
-                </Badge>
-              }
-            />
-            <CardBody>
-              <NodeTable nodes={data.per_node} />
-            </CardBody>
-          </Card>
+          <DataPanel
+            eyebrow="aegis · /latency"
+            title="Per-node breakdown"
+            maxHeight={480}
+            actions={
+              <Badge tone="neutral">
+                <Figure>{data.per_node.length}</Figure> nodes
+              </Badge>
+            }
+          >
+            <NodeTable nodes={data.per_node} />
+          </DataPanel>
 
           <Receipt
             origin={data.source}

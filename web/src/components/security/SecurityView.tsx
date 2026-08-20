@@ -7,7 +7,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
@@ -23,6 +23,7 @@ import { errorSentence } from '@/lib/api/apiError'
 import { getSecurityPosture } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
+import { PostureMatrix } from './PostureMatrix'
 import type {
   PostureEntry,
   PostureSignals,
@@ -101,60 +102,6 @@ function PostureRow({ entry }: { entry: PostureEntry }): ReactElement {
   )
 }
 
-/** Tally the three status bands across every entry. */
-function tally(entries: PostureEntry[]): Record<PostureStatus, number> {
-  const counts: Record<PostureStatus, number> = { enforced: 0, partial: 0, not_covered: 0 }
-  for (const e of entries) counts[bandOf(e.status)] += 1
-  return counts
-}
-
-/**
- * The three band counts, as one band rather than as five tiles.
- *
- * It used to be five `StatCard`s — three counts and two wiring facts — each setting its
- * figure at display size. DESIGN.md §3 allows one display figure per screen and calls a
- * second one a hierarchy failure rather than emphasis; five of them, two of which held
- * the word "available" instead of a number, made the summary the loudest thing on a
- * page whose subject is the table underneath it. The counts are counts now, and the two
- * wiring facts went to the wiring-signal grid, which is what they are.
- */
-function Tally({ counts }: { counts: Record<PostureStatus, number> }): ReactElement {
-  return (
-    <Card className="rounded-lg">
-      <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:divide-x sm:divide-border">
-        {BANDS.map((band, index) => {
-          const meta = STATUS_META[band]
-          const Icon = meta.icon
-          return (
-            <div key={band} className={cn('flex flex-col gap-1.5', index > 0 && 'sm:pl-5')}>
-              <span className="flex items-center gap-1.5">
-                <Icon
-                  aria-hidden
-                  className={cn(
-                    'size-3.5 shrink-0',
-                    band === 'enforced'
-                      ? 'text-ok-ink'
-                      : band === 'partial'
-                        ? 'text-risk-ink'
-                        : 'text-block-ink',
-                  )}
-                />
-                <span className="eyebrow">{meta.label}</span>
-              </span>
-              <Figure size="stat" className="text-foreground">
-                {counts[band]}
-              </Figure>
-              <span className="text-[0.72rem] text-muted-foreground">
-                {counts[band] === 1 ? 'threat' : 'threats'}
-              </span>
-            </div>
-          )
-        })}
-      </CardBody>
-    </Card>
-  )
-}
-
 /**
  * Security posture — the `aegis.security` read-surface. Every OWASP-Agentic
  * threat is mapped to the concrete Aegis control holding it down, with an honest
@@ -199,28 +146,36 @@ function SecurityView(): ReactElement {
     }
   }, [token, hydrated])
 
-  const counts = useMemo(() => (data ? tally(data.entries) : null), [data])
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PageHeader
         eyebrow="OWASP-Agentic · posture"
         title="Security"
-        note="One row per threat, the Aegis control holding it down, and a status derived from what is actually wired — not from a claim."
+        actions={
+          <InfoTip label="Where these statuses come from">
+            One row per threat, the Aegis control holding it down, and a status derived from what
+            is actually wired — introspected from the running process, never from a claim in a
+            file. `partial` is amber and is never dressed as green.
+          </InfoTip>
+        }
       />
 
       {error ? (
         <ErrorState error={error} />
-      ) : data == null || counts == null ? (
+      ) : data == null ? (
         <LoadingState rows={6} label="Reading the security posture…" />
       ) : (
         <>
-          <Tally counts={counts} />
-
-          <Card className="rounded-lg">
+          {/*
+            The board first, the record second. Five stat tiles used to sit here
+            and none of them answered the question the page exists for — how much
+            of the agentic threat surface is actually held down. The matrix answers
+            it in one glance and the table below is still the auditable row-by-row.
+          */}
+          <Card>
             <CardHeader
               eyebrow="aegis.security · /security/posture"
-              title="Threat → control posture"
+              title="The agentic threat surface"
               actions={
                 <Badge tone="neutral" className="gap-1.5">
                   <Lock className="size-3" aria-hidden />
@@ -229,29 +184,38 @@ function SecurityView(): ReactElement {
                 </Badge>
               }
             />
-            <CardBody className="space-y-3 pt-0">
-              <div className="overflow-hidden rounded-lg border border-border">
-                <Table>
-                  <THead>
-                    <TH className="text-left">Threat</TH>
-                    <TH className="text-left">Aegis control</TH>
-                    <TH className="text-right">Status</TH>
-                  </THead>
-                  <TBody>
-                    {data.entries.map((entry) => (
-                      <PostureRow key={entry.threat_id} entry={entry} />
-                    ))}
-                  </TBody>
-                </Table>
-              </div>
-              <Receipt
-                origin="GET /security/posture"
-                detail="each status is derived from an introspected wiring signal below, never from a declaration in this file"
-              />
+            <CardBody className="pt-0">
+              <PostureMatrix entries={data.entries} />
             </CardBody>
           </Card>
 
-          <Card className="rounded-lg">
+          <DataPanel
+            eyebrow="threat → control"
+            title="Every threat, and what holds it"
+            maxHeight={560}
+            footer={
+              <Receipt
+                origin="GET /security/posture"
+                detail="each status is derived from an introspected wiring signal below, never from a declaration in this file"
+                className="w-full border-t-0 pt-0"
+              />
+            }
+          >
+            <Table className="min-w-[560px]">
+              <THead>
+                <TH className="text-left">Threat</TH>
+                <TH className="text-left">Aegis control</TH>
+                <TH className="text-right">Status</TH>
+              </THead>
+              <TBody>
+                {data.entries.map((entry) => (
+                  <PostureRow key={entry.threat_id} entry={entry} />
+                ))}
+              </TBody>
+            </Table>
+          </DataPanel>
+
+          <Card>
             <CardHeader eyebrow="aegis.security · signals" title="Wiring signals" />
             <CardBody className="pt-0">
               <SignalGrid signals={data.signals} />

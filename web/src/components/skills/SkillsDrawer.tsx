@@ -213,7 +213,16 @@ export function SkillsDrawer({
             >
               {busy ? 'Saving…' : 'Save skill'}
             </button>
-            {scopes.length === 0 && data !== null && (
+            {busy && (
+              // A save is not instant and the reason is the product: the whole body goes
+              // through the same input rail a live question does, before a row exists.
+              // A button that reads "Saving…" for twelve seconds with nothing beside it
+              // is a button people press twice.
+              <span aria-live="polite" className="text-[0.74rem] text-muted-foreground">
+                Screening the body through the input rail before anything is stored…
+              </span>
+            )}
+            {!busy && scopes.length === 0 && data !== null && (
               <span className="text-[0.74rem] text-muted-foreground">
                 This account has no layer to write a skill at.
               </span>

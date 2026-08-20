@@ -29,6 +29,21 @@ import { UploadPanel } from '@/components/jobs/UploadPanel'
 import { cancelJob, getJobs, JobsApiError, requeueJob, type JobRunRow } from '@/lib/api/jobs'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
+import { AuditInsights } from '@/components/audit/AuditInsights'
+import { EMPTY_AUDIT_QUERY, auditQueryString, type AuditQuery } from '@/components/audit/query'
+import { getAudit } from '@/lib/api/client'
+import type { AuditLogRow } from '@/lib/api/types'
+
+function AuditProbe({ token }: { token: string | null }): ReactElement {
+  const [q, setQ] = useState<AuditQuery>({ ...EMPTY_AUDIT_QUERY, limit: 200 })
+  const [rows, setRows] = useState<AuditLogRow[]>([])
+  const [busy, setBusy] = useState(true)
+  useEffect(() => {
+    setBusy(true)
+    getAudit(token, auditQueryString(q)).then((r) => { setRows(r.rows); setBusy(false) }).catch(() => setBusy(false))
+  }, [token, q])
+  return <AuditInsights rows={rows} loading={busy} query={q} onQuery={setQ} />
+}
 
 /**
  * How often the queue is re-read, in ms.
@@ -248,6 +263,7 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
 
   return (
     <div className="flex flex-col gap-4">
+      <AuditProbe token={token} />
       {/* The pipeline before the queue: one glance at where the corpus actually
           is, then the rows that make it up. */}
       <PipelineIso
