@@ -118,26 +118,26 @@ export function RunChain(): ReactElement {
             {/* ── The record the selected link leaves ──────────────────────── */}
             <div
               aria-live="polite"
-              className="flex min-w-0 flex-col rounded-lg border border-rail-border bg-rail-hover/35 p-5 sm:p-6"
+              className="flex min-w-0 flex-col rounded-lg border border-rail-border bg-rail-hover/35 p-5 sm:p-7 lg:justify-center"
             >
               <p className={RAIL_EYEBROW}>What it records</p>
               <p
                 className={cn(
-                  'tabular mt-3 font-mono text-lg leading-tight font-medium break-words',
+                  'tabular mt-3 font-mono text-xl leading-tight font-medium break-words sm:text-2xl',
                   link.kind === 'gate' ? 'text-risk' : 'text-blue-400',
                 )}
               >
                 {link.node}
               </p>
-              <p className="mt-4 max-w-prose text-pretty text-[0.9375rem] leading-relaxed text-white/85">
+              <p className="mt-5 max-w-prose text-pretty text-base leading-relaxed text-white/85">
                 {link.note}
               </p>
 
-              <ul className="mt-5 space-y-1.5">
+              <ul className="mt-6 space-y-2">
                 {link.record.map((line) => (
                   <li
                     key={line}
-                    className="tabular font-mono text-[0.72rem] leading-relaxed break-words text-rail-text"
+                    className="tabular font-mono text-[0.78rem] leading-relaxed break-words text-rail-text"
                   >
                     {line}
                   </li>
@@ -155,7 +155,7 @@ export function RunChain(): ReactElement {
 
               {/* The panel stretches to the rail beside it, so it ends with the
                   position the rail used to carry as a column of ordinals. */}
-              <p className="tabular mt-8 pt-4 font-mono text-[0.68rem] text-rail-text/70 lg:mt-auto">
+              <p className="tabular mt-8 font-mono text-[0.68rem] text-rail-text/70">
                 stage {active + 1} of {CHAIN.length}
               </p>
             </div>
@@ -164,13 +164,23 @@ export function RunChain(): ReactElement {
 
         {/* The page's own rule, applied to the page. The chain is the sequence in
             the agent graph — it is not a replay of a run, and a landing page that
-            let a reader think it was would be inventing the figures it omits. */}
-        <Receipt
-          label="This diagram"
-          origin="aegis.agent.graph · the stage sequence"
-          detail="the shape of a run, not a recorded one — a run's own figures are per-tenant and live behind the login"
-          className="mt-6 border-t-0 pt-0"
-        />
+            let a reader think it was would be inventing the figures it omits.
+
+            The sentence is rendered rather than passed as the receipt's `detail`:
+            `Receipt` moves any detail over 36 characters into an `InfoTip`, and a
+            jury reading a landing page does not hover. */}
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-baseline sm:gap-4">
+          <Receipt
+            label="This diagram"
+            origin="aegis.agent.graph"
+            detail="the stage sequence"
+            className="shrink-0 border-t-0 pt-0"
+          />
+          <p className="max-w-prose text-pretty text-xs leading-relaxed text-muted-foreground">
+            The shape of a run, not a recording of one. A run&rsquo;s own figures are
+            per-tenant, and they live behind the login.
+          </p>
+        </div>
       </div>
     </section>
   )
@@ -212,10 +222,13 @@ function ChainRow({
         )}
       >
         {/* The line, drawn per row so it needs no measurement to stay joined. */}
-        <span aria-hidden className="relative flex w-4 shrink-0 justify-center self-stretch">
+        {/* `-my-2` cancels the button's own padding so the segments meet: without
+            it the line stopped at each content box and the chain read as nine
+            unconnected dots. */}
+        <span aria-hidden className="relative -my-2 flex w-4 shrink-0 justify-center self-stretch">
           <span
             className={cn(
-              'absolute inset-y-0 w-px bg-rail-border',
+              'absolute inset-y-0 w-px bg-rail-text/25',
               first && 'top-1/2',
               last && !link.lanes && 'bottom-1/2',
             )}
@@ -232,17 +245,17 @@ function ChainRow({
           )}
         </span>
 
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-[0.9375rem] font-medium transition-colors duration-[--dur-fast]',
-            active ? 'text-white' : 'text-white/65 group-hover:text-white',
-          )}
-        >
-          {link.label}
+        <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+          <span
+            className={cn(
+              'text-[0.9375rem] font-medium transition-colors duration-[--dur-fast]',
+              active ? 'text-white' : 'text-white/65 group-hover:text-white',
+            )}
+          >
+            {link.label}
+          </span>
+          {gate ? <span className="font-mono text-[0.68rem] text-risk">gate</span> : null}
         </span>
-        {gate ? (
-          <span className="shrink-0 font-mono text-[0.68rem] text-risk">gate</span>
-        ) : null}
         {/* The numeral is decoration for a sighted reader; what the control does
             is not obvious from the stage name alone, so it is said here. */}
         <span className="sr-only">
@@ -256,18 +269,18 @@ function ChainRow({
             const lastLane = laneIndex === link.lanes!.length - 1
             return (
               <li key={lane.label} className="flex items-center gap-3.5 py-1 pr-3 pl-1">
-                <span aria-hidden className="relative flex w-4 shrink-0 justify-center self-stretch">
+                <span aria-hidden className="relative -my-1 flex w-4 shrink-0 justify-center self-stretch">
                   {/* The trunk continues past every lane but the last, so the four
                       strands read as a split that rejoins rather than a dead end. */}
                   <span
-                    className={cn('absolute inset-y-0 w-px bg-rail-border', lastLane && 'bottom-1/2')}
+                    className={cn(
+                      'absolute inset-y-0 w-px bg-rail-text/25',
+                      lastLane && 'bottom-1/2',
+                    )}
                   />
                 </span>
-                <span className="flex min-w-0 flex-1 items-center gap-2.5">
-                  <span
-                    aria-hidden
-                    className="h-px w-3 shrink-0 bg-rail-border sm:w-4"
-                  />
+                <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                  <span aria-hidden className="h-px w-3 shrink-0 bg-rail-text/25 sm:w-4" />
                   <span
                     aria-hidden
                     className={cn(
@@ -275,17 +288,15 @@ function ChainRow({
                       lane.writes ? 'bg-risk' : 'bg-blue-400',
                     )}
                   />
-                  <span className="min-w-0 truncate text-[0.8125rem] text-white/70">
-                    {lane.label}
+                  <span className="text-[0.8125rem] text-white/70">{lane.label}</span>
+                  <span
+                    className={cn(
+                      'font-mono text-[0.68rem]',
+                      lane.writes ? 'text-risk' : 'text-rail-text/70',
+                    )}
+                  >
+                    {lane.remit}
                   </span>
-                </span>
-                <span
-                  className={cn(
-                    'shrink-0 font-mono text-[0.68rem]',
-                    lane.writes ? 'text-risk' : 'text-rail-text/80',
-                  )}
-                >
-                  {lane.remit}
                 </span>
               </li>
             )

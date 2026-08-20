@@ -6,6 +6,7 @@ import { CircleAlert, Loader2, LogIn, ShieldCheck } from 'lucide-react'
 import { AegisLockup } from '@/components/brand/AegisLockup'
 import { useEffect, useState, type FormEvent } from 'react'
 
+import { LandingScene } from '@/components/landing/LandingScene'
 import { Button } from '@/components/primitives/button'
 import { Input } from '@/components/primitives/input'
 import { LoginError } from '@/lib/api/client'
@@ -31,6 +32,23 @@ import { homePathFor } from '@/lib/portal'
  * (DESIGN.md §2), and a sign-in error that a screen reader never announces is
  * an operator stuck on a form that looks unchanged, so it carries an icon, a
  * word and `role="alert"`.
+ *
+ * **The split now reads as a split.** The identity panel was `bg-surface` —
+ * `#ffffff`, the same white as the card beside it — so the two-column shell
+ * rendered as one undifferentiated sheet with a hairline down the middle. It is
+ * the blue-tinted canvas now and the task side is the white surface, which is
+ * the console's own figure-and-ground relationship rather than a new one
+ * invented for this page.
+ *
+ * The canvas is also the only ground the scene works on: every Storyset file
+ * carries its own near-white background plate, so the navy this panel was first
+ * drafted as turned the drawing into a pale rectangle pasted onto the panel.
+ *
+ * **Sign in is blue, not near-black.** A visitor arrives here from a landing page
+ * whose two calls to action are `--blue-600`, and `--primary` is shadcn's
+ * near-black default rather than this product's action colour. The override is
+ * local because `--primary` is shared with every console screen; the token itself
+ * is a decision for whoever owns `globals.css`.
  */
 
 /**
@@ -114,18 +132,19 @@ export default function LoginPage() {
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[1fr_minmax(28rem,34rem)]">
-      {/* Left: identity / thesis. Hidden below lg — it is the claim, not the task. */}
-      <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-border bg-surface p-10 lg:flex xl:p-14">
+      {/* Left: what is on the other side. Hidden below lg — it is the claim, not
+          the task, and a phone should open on the form. */}
+      <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-border bg-background p-10 lg:flex xl:p-14">
         <AegisLockup size="lg" />
         <div className="max-w-lg">
-          <p className="eyebrow mb-4">Bounded-autonomy AI, made watchable</p>
-          <p className="text-[1.75rem] leading-9 font-semibold tracking-[-0.02em] text-balance text-foreground">
-            Every autonomous action is uncertainty-bounded, explainable, guarded,
-            human-approved, and fully traced.
+          <LandingScene name="locked" width={420} className="mb-10" />
+          <p className="eyebrow mb-4">Autonomy you can audit</p>
+          <p className="font-display text-[1.75rem] leading-9 font-semibold tracking-[-0.02em] text-balance text-foreground">
+            Every action leaves a record you can read.
           </p>
           <p className="mt-5 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
-            A control room for an agent that takes real actions, with the trust stack
-            visible in real time.
+            Guardrails on the way in and on the way out, a person on the consequential
+            writes, and a source line under every figure.
           </p>
         </div>
         <p className="flex items-center gap-2 text-muted-foreground">
@@ -137,10 +156,10 @@ export default function LoginPage() {
       </aside>
 
       {/* Right: the task. */}
-      <main className="flex items-center justify-center px-5 py-10 sm:px-8">
+      <main className="flex items-center justify-center bg-surface px-5 py-10 sm:px-8">
         <div className="w-full max-w-sm">
           <AegisLockup size="md" className="mb-8 lg:hidden" />
-          <h1 className="text-[1.75rem] leading-8 font-semibold tracking-[-0.02em] text-foreground">
+          <h1 className="font-display text-[1.75rem] leading-8 font-semibold tracking-[-0.02em] text-foreground">
             Sign in
           </h1>
           <p className="mt-1 mb-6 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
@@ -193,7 +212,12 @@ export default function LoginPage() {
               </p>
             ) : null}
 
-            <Button type="submit" size="lg" className="w-full" disabled={busy}>
+            <Button
+              type="submit"
+              size="lg"
+              className="w-full bg-blue-600 text-white hover:bg-blue-700"
+              disabled={busy}
+            >
               {busy && pending === null ? (
                 <>
                   <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
@@ -207,7 +231,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <section aria-labelledby="demo-access" className="mt-8 rounded-lg border border-border bg-surface p-4">
+          <section aria-labelledby="demo-access" className="mt-8 rounded-lg border border-border bg-surface-2 p-4">
             <h2 id="demo-access" className="eyebrow mb-1">
               Demo access
             </h2>
@@ -222,7 +246,7 @@ export default function LoginPage() {
                     type="button"
                     disabled={busy}
                     onClick={() => quickIn(q.username)}
-                    className="flex min-h-11 w-full touch-manipulation items-center gap-3 rounded-lg border border-border bg-card px-3 py-2 text-left outline-none transition-colors duration-[--dur-fast] hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    className="flex min-h-11 w-full touch-manipulation items-center gap-3 rounded-lg border border-border bg-card px-3 py-2 text-left outline-none transition-colors duration-[--dur-fast] hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block text-[0.8125rem] font-medium text-foreground">

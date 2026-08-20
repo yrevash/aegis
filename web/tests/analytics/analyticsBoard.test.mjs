@@ -20,6 +20,9 @@ import test from 'node:test'
 import {
   analyticsState,
   chartRows,
+  additiveMeasure,
+  boardForm,
+  comparableScale,
   countedRows,
   embedAvailable,
   groupByDimension,
@@ -173,4 +176,115 @@ test('groupByDimension keeps the catalogue order inside a section', () => {
     boardOf({ id: 'first', x: 'day' }),
   ])
   assert.deepEqual(groups[0].boards.map((b) => b.id), ['second', 'first'])
+})
+
+/*
+  Which mark a board gets.
+
+  The whole point of `boardForm` is that the shape decides, not the board id — so the
+  cases below are stated as shapes. Three of them are the ones that were actually wrong
+  on screen, twice, and each fails silently rather than loudly:
+
+  * a date-grouped series drawn as a category list throws the axis away;
+  * a donut over a measure with an empty category omits that category entirely, so
+    `blocks_total` at 32/0/0/0 reads as "everything was blocked";
+  * two measures forced onto one axis either hide the small one or need the second axis
+    DESIGN.md §2 forbids outright.
+*/
+const DAYS = [
+  { label: '2026-08-01', a: 10, b: 4 },
+  { label: '2026-08-02', a: 12, b: 5 },
+  { label: '2026-08-03', a: 9, b: 3 },
+]
+
+test('a date-grouped series is a trend, never a category list', () => {
+  assert.deepEqual(boardForm(DAYS, ['a']), { kind: 'trend', series: ['a'] })
+  assert.deepEqual(boardForm(DAYS, ['a', 'b']), { kind: 'trend', series: ['a', 'b'] })
+})
+
+test('one row is a figure — a single bar is a chart pretending', () => {
+  assert.equal(boardForm([{ label: 'HIGH', gates_total: 52 }], ['gates_total']).kind, 'figure')
+  assert.equal(boardForm([], ['gates_total']).kind, 'figure')
+})
+
+test('a donut is only used where the parts really are parts of a whole', () => {
+  const outcomes = [
+    { label: 'COMPLETED', runs_total: 903, blocks_total: 0 },
+    { label: 'BLOCKED', runs_total: 32, blocks_total: 32 },
+    { label: 'ERROR', runs_total: 20, blocks_total: 0 },
+  ]
+  // Counts across every category: a whole, so a circle.
+  assert.deepEqual(boardForm(outcomes, ['runs_total']), {
+    kind: 'donut',
+    series: ['runs_total'],
+  })
+  // Two of the three categories are zero — invisible slices, so bars instead.
+  assert.deepEqual(boardForm(outcomes, ['blocks_total']), {
+    kind: 'bars',
+    series: ['blocks_total'],
+  })
+  // An average has no total to be a part of, whatever the numbers happen to do.
+  const latency = [
+    { label: 'COMPLETED', avg_latency_ms: 13200 },
+    { label: 'ERROR', avg_latency_ms: 13500 },
+    { label: 'BLOCKED', avg_latency_ms: 1900 },
+  ]
+  assert.equal(boardForm(latency, ['avg_latency_ms']).kind, 'bars')
+})
+
+test('measures that cannot share an axis become small multiples, never a second axis', () => {
+  const byMode = [
+    { label: 'live', block_rate_avg: 1, redteam_runs_total: 1 },
+    { label: 'offline', block_rate_avg: 0.82, redteam_runs_total: 5 },
+  ]
+  // A rate and a count are different units, so they never share an axis whatever
+  // their magnitudes.
+  assert.equal(comparableScale(byMode, ['block_rate_avg', 'redteam_runs_total']), false)
+  assert.equal(boardForm(byMode, ['block_rate_avg', 'redteam_runs_total']).kind, 'multiples')
+
+  // Same unit, wildly different size: the small series would be a line on the floor.
+  const bySuite = [
+    { label: 'owasp-full', tokens_total: 16_900_000, calls_total: 120 },
+    { label: 'injection', tokens_total: 6_500_000, calls_total: 40 },
+  ]
+  assert.equal(comparableScale(bySuite, ['tokens_total', 'calls_total']), false)
+
+  // Same unit, comparable size: one axis, grouped.
+  const runs = [
+    { label: 'COMPLETED', runs_total: 903, blocks_total: 80 },
+    { label: 'ERROR', runs_total: 20, blocks_total: 4 },
+  ]
+  assert.equal(comparableScale(runs, ['runs_total', 'blocks_total']), true)
+  assert.equal(boardForm(runs, ['runs_total', 'blocks_total']).kind, 'bars')
+})
+
+test('a long ranked list is a bar chart, and every mark has a quantitative axis', () => {
+  const models = Array.from({ length: 14 }, (_, i) => ({
+    label: `model-${i}`,
+    spend_usd: 14 - i,
+  }))
+  assert.deepEqual(boardForm(models, ['spend_usd']), { kind: 'bars', series: ['spend_usd'] })
+  // Nothing anywhere in the rule set can produce the ranked-list form the screen was
+  // rejected for twice: every branch is a trend, a circle, a bar chart or a figure.
+  const forms = [
+    boardForm(DAYS, ['a']).kind,
+    boardForm(models, ['spend_usd']).kind,
+    boardForm([{ label: 'HIGH', a: 1 }], ['a']).kind,
+  ]
+  assert.deepEqual(forms, ['trend', 'bars', 'figure'])
+})
+
+test('additiveMeasure knows a count from an average', () => {
+  for (const name of ['runs_total', 'spend_usd', 'gates_total', 'events_total', 'jobs_total']) {
+    assert.equal(additiveMeasure(name), true, name)
+  }
+  for (const name of [
+    'avg_latency_ms',
+    'block_rate_avg',
+    'avg_decision_seconds_m',
+    'p95_ms',
+    'small_model_share',
+  ]) {
+    assert.equal(additiveMeasure(name), false, name)
+  }
 })

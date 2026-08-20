@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
-import { Receipt } from '@/components/primitives/Receipt'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { getPublicMetrics } from '@/lib/api/client'
 import type { PublicMetricsResponse } from '@/lib/api/types'
 
@@ -24,10 +24,13 @@ import { useCapabilities } from './useCapabilities'
  * product exists to make impossible, and it had already happened on the page
  * arguing that it could not.
  *
- * Both blocks render nothing rather than something plausible when their endpoint
- * does not answer. A hardcoded module list on an unreachable backend would be
- * claiming capabilities the page cannot substantiate; a zero in a metric tile is
- * a different claim from an unmeasured one.
+ * Neither block invents anything when its endpoint does not answer — but neither
+ * does it go quiet. Rendering nothing left a section whose own lead promised two
+ * blocks and then showed empty space, which reads as a bug rather than as a
+ * refusal. So an unreachable endpoint states its absence in the slot the block
+ * would have occupied, which is the same discipline DESIGN.md §1 asks of a figure
+ * and is the more convincing state of the two: a page willing to report its own
+ * backend as unreachable is a page not running on fixtures.
  */
 
 const pct = (n: number): string => `${Math.round(n * 100)}%`
@@ -77,13 +80,19 @@ export function LivePlatform(): ReactElement {
 
           <Receipt
             origin="GET /platform/capabilities"
-            detail="the manifest the backend serves about itself"
+            detail="public, unauthenticated"
             className="mt-5"
           />
         </div>
+      ) : manifest.state === 'down' ? (
+        <Absence
+          figure="The module list"
+          why="the capability manifest did not answer, and this page holds no copy of it"
+          needed="a reachable backend — the list is the platform's own, never typed here"
+        />
       ) : null}
 
-      <MetricRow className={manifest.state === 'up' ? 'mt-14' : ''} />
+      <MetricRow className="mt-14" />
 
       {/* The adapter claim, which used to be a four-box flowchart of its own. It is
           one sentence about a directory, and a flowchart of four labelled boxes was
@@ -112,16 +121,29 @@ export function LivePlatform(): ReactElement {
  */
 function MetricRow({ className }: { className?: string }): ReactElement | null {
   const [metrics, setMetrics] = useState<PublicMetricsResponse | null>(null)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let live = true
     getPublicMetrics()
       .then((response) => live && setMetrics(response))
-      .catch(() => undefined)
+      .catch(() => live && setFailed(true))
     return () => {
       live = false
     }
   }, [])
+
+  if (failed) {
+    return (
+      <div className={className}>
+        <Absence
+          figure="The five published figures"
+          why="the public metrics endpoint did not answer"
+          needed="a reachable backend — these are counted by the platform as it runs, not stored on this page"
+        />
+      </div>
+    )
+  }
 
   if (metrics === null) return null
 
@@ -171,7 +193,7 @@ function MetricRow({ className }: { className?: string }): ReactElement | null {
 
       <Receipt
         origin="GET /platform/public-metrics"
-        detail="counted by the platform, served unauthenticated"
+        detail="public, unauthenticated"
         className="mt-5"
       />
     </div>

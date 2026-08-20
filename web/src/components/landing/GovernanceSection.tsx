@@ -28,7 +28,7 @@ import { LandingSection } from './LandingSection'
 
 /** What the database is actually configured to do. Three facts, no SQL fragment. */
 const WALL = [
-  { term: 'Force row level security', detail: 'on every tenant-scoped table, so the owner has no exemption either' },
+  { term: 'Forced row-level security', detail: 'on every tenant-scoped table, so the owner has no exemption either' },
   { term: 'A serving role that owns nothing', detail: 'nosuperuser, nobypassrls — bypass is a property of the connection, not a rule code is trusted to follow' },
   { term: 'Row visibility bound to the tenant', detail: 'set on the session before the query runs, and audited against the catalog on every boot' },
 ] as const

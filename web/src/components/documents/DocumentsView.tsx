@@ -192,7 +192,10 @@ export function DocumentsView({ token }: { token: string | null }): ReactElement
             section exists. The scene beside it is Storyset's `Upload`, and it is
             here because it depicts what this panel does rather than decorating it.
           */}
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          {/* `[&>*]:min-w-0` for the same reason as the pipeline grid: below `lg` this
+              is one auto-sized track, and a grid item's default `min-width: auto` let
+              the upload form set it 6px wider than the 390px viewport. */}
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem] [&>*]:min-w-0">
             <UploadPanel token={token} onUploaded={refresh} />
             <Card className="hidden overflow-hidden lg:block">
               <CardBody className="flex h-full flex-col items-center justify-center gap-3">

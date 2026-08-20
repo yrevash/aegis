@@ -22,7 +22,8 @@ public deployment and assume it is settled — it is settled *for a demo*.
 Each file has been recoloured from Storyset's own accent family onto the Aegis blue
 ramp, so the illustrations belong to the product rather than sitting beside it:
 
-    #547cef -> #1570ef   --blue-600   (Storyset primary)
+    #547cef -> #1570ef   --blue-600   (Storyset primary, "amico"/"pana" sets)
+    #5585f1 -> #1570ef   --blue-600   (Storyset primary, "rafiki" set)
     #6880c8 -> #175cd3   --blue-700
     #4262c7 -> #0b3b8f   --blue-900
     #7d9bf5 -> #60a5fa   --blue-400
@@ -55,6 +56,14 @@ something Aegis really does does not belong on the page.
 | `Online resume-cuate.svg` | a record being read | audit / a single request |
 | `Curious-rafiki.svg` | asking a question | console idle state |
 | `brand guidelines-rafiki.svg` | a documented standard | settings / governance |
+| `404 Error-rafiki.svg` | wrong address | **404 page** |
+| `Forgot password-rafiki.svg` | locked out, recoverable | login — recovery path |
+| `Visual data-rafiki.svg` | reading a chart | analytics / insights empty state |
+| `Investment data-rafiki.svg` | money over time | forecast / savings empty state |
+| `Presentation-rafiki.svg` | showing findings | dashboard / reports empty state |
+| `FAQs-rafiki.svg` | asking a question | console idle, help |
+| `Company-rafiki.svg` | an organisation | tenants / governance |
+| `Mobile testing-rafiki.svg` | trying it out | simulation / harness / evals |
 | `Charity-amico.svg`, `messy bun-*.svg` | — | unused; nothing they depict is true here |
 
 **Use a scene only where it describes something the product really does.** An

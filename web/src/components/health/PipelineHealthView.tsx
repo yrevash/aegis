@@ -300,8 +300,15 @@ function PipelinePanel({
         />
       </div>
 
+      {/*
+        `min-w-0` on the grid children is load-bearing, not tidiness. A grid item's
+        default `min-width: auto` lets its content set the track's width, so at 390px
+        the two cards below measured 404px inside a 380px viewport and the *page*
+        scrolled sideways — the exact defect DataPanel exists to prevent, arriving one
+        level up through the grid instead of through the table.
+      */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
+        <Card className="min-w-0">
           <CardHeader eyebrow="job_runs · grouped by kind and status" title="Queue depth" />
           <CardBody>
             {data.depth.length === 0 ? (
@@ -336,7 +343,7 @@ function PipelinePanel({
           </CardBody>
         </Card>
 
-        <Card>
+        <Card className="min-w-0">
           <CardHeader
             eyebrow="every declared ingest stage · timed from run_events where it ran"
             title="Where the time goes"
