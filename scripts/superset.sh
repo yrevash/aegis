@@ -29,7 +29,7 @@ install() {
   #  is imported by superset/cli/test_db.py but is not declared as a
   # dependency of the 6.1.0 wheel, so every CLI invocation dies on
   # ModuleNotFoundError before doing anything.
-  VIRTUAL_ENV="$VENV" uv pip install "apache-superset==6.1.0" psycopg2-binary rich
+  VIRTUAL_ENV="$VENV" uv pip install "apache-superset==6.1.0" psycopg2-binary rich cachetools
   "$SUPERSET" db upgrade
   "$SUPERSET" fab create-admin --username admin --firstname A --lastname D \
       --email admin@aegis.local --password admin || true

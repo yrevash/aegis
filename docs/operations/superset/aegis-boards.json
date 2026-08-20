@@ -3,208 +3,366 @@
     "id": "spend-by-model",
     "title": "Spend by model",
     "summary": "What this tenant spent per model, from the usage ledger.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
     "datasourceId": 2,
     "datasourceType": "table",
-    "groupby": ["model"],
-    "metrics": ["spend_usd"],
+    "groupby": [
+      "model"
+    ],
+    "metrics": [
+      "spend_usd"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "token-volume",
     "title": "Token volume",
-    "summary": "Prompt and completion tokens per model — where the spend comes from.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops"],
+    "summary": "Prompt and completion tokens per model \u2014 where the spend comes from.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops"
+    ],
     "datasourceId": 2,
     "datasourceType": "table",
-    "groupby": ["model"],
-    "metrics": ["tokens_total", "calls_total"],
+    "groupby": [
+      "model"
+    ],
+    "metrics": [
+      "tokens_total",
+      "calls_total"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "runs-by-outcome",
     "title": "Runs by outcome",
     "summary": "Agent runs per outcome, with guardrail blocks.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
     "datasourceId": 3,
     "datasourceType": "table",
-    "groupby": ["status"],
-    "metrics": ["runs_total", "blocks_total"],
+    "groupby": [
+      "status"
+    ],
+    "metrics": [
+      "runs_total",
+      "blocks_total"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "run-latency",
     "title": "Run latency",
     "summary": "Average agent latency per outcome, in milliseconds.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops"
+    ],
     "datasourceId": 3,
     "datasourceType": "table",
-    "groupby": ["status"],
-    "metrics": ["avg_latency_ms"],
+    "groupby": [
+      "status"
+    ],
+    "metrics": [
+      "avg_latency_ms"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "human-gates",
     "title": "Human gates",
     "summary": "Every run that paused for a person, by risk tier.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "devops",
+      "client"
+    ],
     "datasourceId": 1,
     "datasourceType": "table",
-    "groupby": ["risk"],
-    "metrics": ["gates_total"],
+    "groupby": [
+      "risk"
+    ],
+    "metrics": [
+      "gates_total"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "gate-decisions",
     "title": "Gate decisions",
     "summary": "How the human gates ended, and how long each decision took.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "devops",
+      "client"
+    ],
     "datasourceId": 1,
     "datasourceType": "table",
-    "groupby": ["status"],
-    "metrics": ["gates_total", "avg_decision_seconds_m"],
+    "groupby": [
+      "status"
+    ],
+    "metrics": [
+      "gates_total",
+      "avg_decision_seconds_m"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "job-throughput",
     "title": "Job throughput",
     "summary": "The durable job substrate: how many jobs ran, per job type.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops"
+    ],
     "datasourceId": 4,
     "datasourceType": "table",
-    "groupby": ["job_type"],
-    "metrics": ["jobs_total", "job_spend_usd"],
+    "groupby": [
+      "job_type"
+    ],
+    "metrics": [
+      "jobs_total",
+      "job_spend_usd"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "job-outcomes",
     "title": "Job outcomes",
     "summary": "Whether the background work succeeded, failed or was cancelled.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
     "datasourceId": 4,
     "datasourceType": "table",
-    "groupby": ["status"],
-    "metrics": ["jobs_total", "avg_runtime_seconds_m"],
+    "groupby": [
+      "status"
+    ],
+    "metrics": [
+      "jobs_total",
+      "avg_runtime_seconds_m"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "governance-trail",
     "title": "Governance trail",
     "summary": "Which governed actions were recorded, and how often.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
     "datasourceId": 5,
     "datasourceType": "table",
-    "groupby": ["action"],
-    "metrics": ["events_total"],
+    "groupby": [
+      "action"
+    ],
+    "metrics": [
+      "events_total"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "redteam-defence",
     "title": "Red-team defence",
     "summary": "Attacks replayed against this tenant, and how many the rails stopped.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
     "datasourceId": 6,
     "datasourceType": "table",
-    "groupby": ["suite"],
-    "metrics": ["attacks_total_m", "attacks_blocked_m"],
+    "groupby": [
+      "suite"
+    ],
+    "metrics": [
+      "attacks_total_m",
+      "attacks_blocked_m"
+    ],
     "timeColumn": "started_at",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "redteam-block-rate",
     "title": "Red-team block rate",
     "summary": "The share of attacks blocked, offline battery against live traffic.",
-    "kinds": ["chart"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops", "client"],
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
     "datasourceId": 6,
     "datasourceType": "table",
-    "groupby": ["mode"],
-    "metrics": ["block_rate_avg", "redteam_runs_total"],
+    "groupby": [
+      "mode"
+    ],
+    "metrics": [
+      "block_rate_avg",
+      "redteam_runs_total"
+    ],
     "timeColumn": "started_at",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "operations",
     "title": "Operations dashboard",
     "summary": "Eleven Superset charts over every analytics view, embedded in this page.",
-    "kinds": ["chart", "dashboard"],
-    "audience": ["platform_admin", "devops"],
+    "kinds": [
+      "chart",
+      "dashboard"
+    ],
+    "audience": [
+      "platform_admin",
+      "devops"
+    ],
     "datasourceId": 3,
     "datasourceType": "table",
-    "groupby": ["status"],
-    "metrics": ["runs_total"],
+    "groupby": [
+      "status"
+    ],
+    "metrics": [
+      "runs_total"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
     "dashboardId": 1
   },
   {
     "id": "tenant-insights",
     "title": "Tenant insights dashboard",
     "summary": "The tenant-facing Superset dashboard: spend, gates, jobs and defence.",
-    "kinds": ["chart", "dashboard"],
-    "audience": ["platform_admin", "tenant_admin", "ai_team", "devops", "client"],
+    "kinds": [
+      "chart",
+      "dashboard"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
     "datasourceId": 2,
     "datasourceType": "table",
-    "groupby": ["model"],
-    "metrics": ["spend_usd", "calls_total"],
+    "groupby": [
+      "model"
+    ],
+    "metrics": [
+      "spend_usd",
+      "calls_total"
+    ],
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "9349e3e2-5675-456a-8146-0ad594c40e43",
-    "dashboardId": 2
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
+    "dashboardId": 1
   }
 ]
