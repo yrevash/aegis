@@ -411,11 +411,28 @@ async def test_every_inspection_executes_against_the_live_schema(
 
 
 async def test_the_console_is_off_unless_a_deployment_turns_it_on(client, admin_headers):
-    """Default off, and the refusal names the variable that turns it on."""
+    """Default off, and the refusal names the variable that turns it on.
+
+    The off state is asserted **explicitly**, not inherited from the ambient
+    environment. `Settings` loads `backend/.env`, and this test used to read whatever
+    the operator had put there — so turning the console on for a demo turned this
+    assertion red, which says nothing about the code and everything about the machine
+    it ran on. A test about a *default* has to set the default it is testing.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    restore = (settings.db_console_enabled, settings.db_console_dsn)
+    settings.db_console_enabled = False
+    settings.db_console_dsn = ""
     routes_db.reset_console_engine()
-    resp = await client.get("/database/overview", headers=admin_headers)
-    assert resp.status_code == 503
-    assert "AEGIS_DB_CONSOLE_ENABLED" in resp.json()["detail"]
+    try:
+        resp = await client.get("/database/overview", headers=admin_headers)
+        assert resp.status_code == 503
+        assert "AEGIS_DB_CONSOLE_ENABLED" in resp.json()["detail"]
+    finally:
+        settings.db_console_enabled, settings.db_console_dsn = restore
+        routes_db.reset_console_engine()
 
 
 @pytest.mark.parametrize("username", ["devops", "aiteam", "client"])

@@ -1,5 +1,5 @@
 database_name: Aegis
-sqlalchemy_uri: 'postgresql+psycopg2://aegis_superset:XXXXXXXXXX@localhost:5432/aegis'
+sqlalchemy_uri: 'postgresql+psycopg2://aegis_superset:REPLACE-ME@localhost:5432/taif'
 cache_timeout: null
 expose_in_sqllab: false
 allow_run_async: false
@@ -7,7 +7,8 @@ allow_ctas: false
 allow_cvas: false
 allow_dml: false
 allow_file_upload: false
-extra: '{"allows_virtual_table_explore": false}'
+extra:
+  allows_virtual_table_explore: false
 impersonate_user: false
 uuid: 'f5e1e4b2-8458-5481-a0b2-ddfeae2aacee'
 version: 1.0.0

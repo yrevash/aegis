@@ -3,9 +3,19 @@ description: null
 certified_by: null
 certification_details: null
 viz_type: pie
-params: '{"datasource": null, "viz_type": "pie", "groupby": ["risk"], "metric": "gates_total", "adhoc_filters": [], "row_limit": 100, "color_scheme": "supersetColors", "show_legend": true, "donut": true}'
+params:
+  datasource: null
+  viz_type: pie
+  groupby:
+  - risk
+  metric: gates_total
+  adhoc_filters: []
+  row_limit: 100
+  color_scheme: supersetColors
+  show_legend: true
+  donut: true
 query_context: null
 cache_timeout: null
-uuid: '61a27e36-6201-5e8b-a35a-17cc0a57a12a'
+uuid: 61a27e36-6201-5e8b-a35a-17cc0a57a12a
 version: 1.0.0
-dataset_uuid: '306c0124-0169-5ca4-8595-d8236051a3d3'
+dataset_uuid: 306c0124-0169-5ca4-8595-d8236051a3d3

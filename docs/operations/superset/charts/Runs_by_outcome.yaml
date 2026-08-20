@@ -3,9 +3,25 @@ description: null
 certified_by: null
 certification_details: null
 viz_type: echarts_timeseries_bar
-params: '{"datasource": null, "viz_type": "echarts_timeseries_bar", "x_axis": "day", "time_grain_sqla": "P1D", "metrics": ["runs_total"], "groupby": ["status"], "adhoc_filters": [], "row_limit": 500, "order_desc": true, "stack": "Stack", "x_axis_title": "Day", "y_axis_title": "Runs", "color_scheme": "supersetColors", "show_legend": true}'
+params:
+  datasource: null
+  viz_type: echarts_timeseries_bar
+  x_axis: day
+  time_grain_sqla: P1D
+  metrics:
+  - runs_total
+  groupby:
+  - status
+  adhoc_filters: []
+  row_limit: 500
+  order_desc: true
+  stack: Stack
+  x_axis_title: Day
+  y_axis_title: Runs
+  color_scheme: supersetColors
+  show_legend: true
 query_context: null
 cache_timeout: null
-uuid: '5a1a902b-9c7a-59a5-9a99-0d83805e6810'
+uuid: 5a1a902b-9c7a-59a5-9a99-0d83805e6810
 version: 1.0.0
-dataset_uuid: '9c1a5461-e081-58ca-8f3b-6795b8101a79'
+dataset_uuid: 9c1a5461-e081-58ca-8f3b-6795b8101a79

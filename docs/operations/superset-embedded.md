@@ -590,3 +590,94 @@ not a missing `FAB_ROLES`).
 | The page | `web/src/components/analytics/` |
 | Tests — the Superset side is faked, never called | `aegis/tests/analytics/`, `backend/tests/api/test_analytics_endpoints.py`, `web/tests/analytics/` |
 | Tests — the views and the role, on a real cluster | `backend/tests/data/test_analytics_views.py` |
+
+---
+
+## Provisioning log — what actually broke, in order
+
+Recorded 2026-08-20, against Superset **6.1.0** and the seeded demo corpus. Every item below
+was a hard stop that produced a *misleading* error, which is the reason to write them down: none
+of the five messages names its own cause.
+
+### 1. `superset init` had never been run
+
+The symptom the operator saw was **"Forbidden"** on every dashboard. `superset init` syncs the
+role↔permission tables; without it the roles exist by name and hold nothing.
+
+    superset init          # idempotent, safe to re-run, takes ~1 min
+
+### 2. `psycopg2` was not installed in Superset's virtualenv
+
+    GET /api/v1/dataset/2  →  500  {"error": "No module named 'psycopg2'"}
+
+Superset ships no Postgres driver by default. Nothing in the UI says so; the dataset list renders
+fine, because listing datasets reads Superset's own metadata DB and never touches Postgres.
+
+    uv pip install psycopg2-binary       # into Superset's venv, then restart
+
+### 3. The export bundle's JSON-string fields are rejected by 6.1.0's schemas
+
+    Schema validation failed for charts/Spend_by_model.yaml: {'params': ['Not a valid mapping type.']}
+    AttributeError: 'str' object has no attribute 'get'     # databases/Aegis.yaml, `extra`
+
+`params`, `extra`, `query_context`, `json_metadata` and `position_json` are carried as JSON
+*strings* by older exports and must be YAML *mappings* here. The bundle in
+`docs/operations/superset/` has been re-exported with the mappings baked in, so this should not
+recur — but a bundle taken from another instance may need the same conversion.
+
+### 4. A guest token authorises nothing until the dashboard owns the charts
+
+    403 DATASOURCE_SECURITY_ACCESS_ERROR — "requires the datasource 2 ... permission"
+
+Superset derives a guest's dataset access from the dashboards its token names. `import-directory`
+created the charts unattached, so the embedded dashboard granted access to nothing. Attach them
+(`PUT /api/v1/chart/<id>` with `{"dashboards": [<id>]}`), then re-mint.
+
+**And the request must name the dashboard too.** `raise_for_access` reads
+`form_data.dashboardId` off the chart-data body and resolves it by `Dashboard.id`. The token's
+`resources[].id` is the *embedded UUID*; this is the *numeric* id — two different identifiers for
+one dashboard, and both are required. Aegis carries them as `embeddedUuid` and `dashboardId` in
+the board catalogue, and refuses a `chart` board missing either.
+
+### 5. The guest token goes in `X-GuestToken`, never `Authorization`
+
+    422 {"msg": "Signature verification failed"}
+
+Sent as a Bearer token, FAB verifies it against `SECRET_KEY` rather than
+`GUEST_TOKEN_JWT_SECRET`. The message reads like a rotated secret and is really a token in the
+wrong header. Fixed in `aegis.analytics.client`.
+
+### 6. And the one that returns 200 with nothing in it
+
+With all five fixed, every board answered **200 and zero rows** over views holding 2,502 spend
+rows — because `DB_CONNECTION_MUTATOR` (specified above) was absent from the local
+`superset_config.py`. The `analytics_*` views fail closed, so a connection the hook does not touch
+reads nothing rather than everything. **This is the design working**: the failure is an empty
+dashboard, not another tenant's money. It is also the only item here that leaves no error at all,
+so check it first when charts render empty.
+
+### Verifying the whole chain
+
+```
+POST /v1/analytics/boards/spend-by-model/data   {"window": "last_30_days"}
+  → 200, 14 rows, [{"model": "genailab-maas-gpt-4o", "spend_usd": 49.14}, …]
+```
+
+And confirm isolation is real, not assumed — mint two guest tokens and compare:
+
+| guest username | `analytics_spend_daily`, DeepSeek-R1 |
+|---|---|
+| `aegis-platform` | $12.11 |
+| `aegis-tenant-1` | its own, smaller slice |
+
+If both return the same number, `DB_CONNECTION_MUTATOR` is not being called.
+
+### The instance is not in this repo
+
+Superset itself — the venv and the SQLite metadata DB holding these dashboards — lives outside
+version control. **Only the asset bundle in `docs/operations/superset/` is durable.** Rebuilding
+is: create the venv, `superset db upgrade`, `superset fab create-admin`, `superset init`, install
+`psycopg2-binary`, point `SUPERSET_CONFIG_PATH` at a config carrying the `GUEST_TOKEN_*` keys and
+the `DB_CONNECTION_MUTATOR`, then `superset import-directory -o docs/operations/superset`. Paste
+the resulting dataset and dashboard ids into `aegis-boards.json` — the catalogue refuses
+placeholders by name, so a missed paste is a sentence, not a silent empty chart.
