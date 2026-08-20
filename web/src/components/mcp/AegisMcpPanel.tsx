@@ -2,13 +2,17 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { AlertTriangle, Loader2, Plug, ShieldCheck } from 'lucide-react'
+import { Loader2, Plug, ShieldCheck } from 'lucide-react'
 import { useCallback, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { Button } from '@/components/primitives/button'
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
+import { EmptyState, ErrorState } from '@/components/primitives/States'
+import { errorSentence } from '@/lib/api/apiError'
 
 /**
  * The admin's own MCP client, speaking the protocol to Aegis's own server (§10.7).
@@ -85,7 +89,10 @@ export function AegisMcpPanel({
     } catch (error) {
       setConnection({
         state: 'failed',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: errorSentence(
+          error,
+          'The MCP handshake did not complete. Check the endpoint is serving Streamable HTTP.',
+        ),
       })
     } finally {
       await client.close().catch(() => undefined)
@@ -94,27 +101,21 @@ export function AegisMcpPanel({
 
   if (!endpoint) {
     return (
-      <Card>
+      <Card className="rounded-lg">
         <CardHeader title="Ask Aegis over MCP" eyebrow="This deployment's own server" />
-        <CardBody className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-risk-ink" />
-          <div>
-            <p className="text-sm text-foreground">
-              No MCP endpoint is configured, so there is nothing to connect to.
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Set <code className="font-mono">AEGIS_MCP_SERVER_URL</code> to the address this
-              deployment serves Streamable HTTP on. Nothing is guessed here: a made-up URL
-              would render as a live address for a server that is not running.
-            </p>
-          </div>
+        <CardBody>
+          <EmptyState
+            icon={Plug}
+            title="No MCP endpoint is configured"
+            body="Set AEGIS_MCP_SERVER_URL to the address this deployment serves Streamable HTTP on. Nothing is guessed here: a made-up URL would render as a live address for a server that is not running."
+          />
         </CardBody>
       </Card>
     )
   }
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader
         title="Ask Aegis over MCP"
         eyebrow="This deployment's own server"
@@ -126,7 +127,10 @@ export function AegisMcpPanel({
           >
             {connection.state === 'connecting' ? (
               <>
-                <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                <Loader2
+                  className="mr-2 size-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden
+                />
                 Connecting
               </>
             ) : (
@@ -146,15 +150,7 @@ export function AegisMcpPanel({
         </p>
 
         {connection.state === 'failed' ? (
-          <div className="flex items-start gap-3 rounded-md border border-border bg-surface-2 p-3">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-block-ink" aria-hidden />
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">Could not connect</p>
-              <p className="mt-1 break-words font-mono text-xs text-muted-foreground">
-                {connection.detail}
-              </p>
-            </div>
-          </div>
+          <ErrorState error={connection.detail} retry={() => void connect()} />
         ) : null}
 
         {connection.state === 'connected' ? (
@@ -164,15 +160,16 @@ export function AegisMcpPanel({
                 <ShieldCheck className="size-3" aria-hidden />
                 connected
               </Badge>
-              <span className="font-mono text-xs text-muted-foreground">
-                {connection.serverName}
-                {connection.version ? ` ${connection.version}` : ''}
-              </span>
+              <Figure className="text-muted-foreground">
+                {`${connection.serverName}${connection.version ? ` ${connection.version}` : ''}`}
+              </Figure>
             </div>
             {connection.tools.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                The server offered this principal no tools.
-              </p>
+              <EmptyState
+                icon={ShieldCheck}
+                title="The server offered you no tools"
+                body="That is an answer, not a failure: the tool list is a function of who is asking, and this principal is admitted to none of them."
+              />
             ) : (
               <Table>
                 <THead>
@@ -182,7 +179,9 @@ export function AegisMcpPanel({
                 <TBody>
                   {connection.tools.map((tool) => (
                     <TR key={tool.name}>
-                      <TD className="whitespace-nowrap font-mono text-xs">{tool.name}</TD>
+                      <TD className="whitespace-nowrap">
+                        <Figure className="text-foreground">{tool.name}</Figure>
+                      </TD>
                       <TD className="text-sm text-muted-foreground">
                         {tool.description || tool.title || '—'}
                       </TD>
@@ -191,11 +190,10 @@ export function AegisMcpPanel({
                 </TBody>
               </Table>
             )}
-            <p className="border-t border-border pt-2 text-xs text-muted-foreground">
-              Source: <span className="font-mono">tools/list</span> over Streamable HTTP at{' '}
-              <span className="font-mono">{endpoint}</span>, scoped to your principal by the
-              server.
-            </p>
+            <Receipt
+              origin={`tools/list · Streamable HTTP · ${endpoint}`}
+              detail="scoped to your principal by the server, so another caller sees a different list"
+            />
           </>
         ) : null}
       </CardBody>

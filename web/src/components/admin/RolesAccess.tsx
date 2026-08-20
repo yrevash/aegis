@@ -6,9 +6,13 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { assignUserRole, getUsers } from '@/lib/api/client'
 import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { errorSentence } from '@/lib/api/apiError'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { adminScopeCaption } from '@/lib/auth/tier'
 import { cn } from '@/lib/utils'
@@ -79,7 +83,10 @@ export function RolesAccess({
           alive &&
           setLoad({
             status: 'error',
-            message: e instanceof Error ? e.message : 'Failed to load users',
+            message: errorSentence(
+              e,
+              'The roster did not load. Check the backend is reachable, then retry.',
+            ),
           }),
       )
     return () => {
@@ -144,9 +151,9 @@ export function RolesAccess({
   const total = load.status === 'ready' ? load.rows.length : null
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <KeyRound className="size-4 text-blue-700" />
+        <KeyRound className="size-4 shrink-0 text-blue-700" aria-hidden />
         <CardTitle>Roles &amp; Access</CardTitle>
         <Badge variant="secondary">RBAC</Badge>
         {/* `GET /admin/users` is tenant-scoped server-side (`_scope_tenant`), so a
@@ -164,25 +171,23 @@ export function RolesAccess({
         {/* Header stat band — total + per-role head-count. */}
         {counts && total != null && (
           <div className="mb-5 flex flex-wrap items-stretch gap-2">
-            <StatCell label="Users" value={total} tone="neutral" />
+            <StatCell label="Users" value={total} emphasis />
             {PORTAL_ROLES.map((r) => (
-              <StatCell key={r} label={ROLE_CATALOG[r].label} value={counts[r]} chip={r} />
+              <StatCell key={r} label={ROLE_CATALOG[r].label} value={counts[r]} />
             ))}
           </div>
         )}
 
-        {load.status === 'loading' && (
-          <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading users…
-          </div>
-        )}
+        {load.status === 'loading' && <LoadingState rows={5} label="Reading the roster…" />}
 
-        {load.status === 'error' && (
-          <div className="py-10 text-sm text-destructive">Could not load users. {load.message}</div>
-        )}
+        {load.status === 'error' && <ErrorState error={load.message} />}
 
         {load.status === 'ready' && load.rows.length === 0 && (
-          <p className="py-10 text-sm text-muted-foreground">No users to manage.</p>
+          <EmptyState
+            icon={KeyRound}
+            title="No users in scope"
+            body="Everyone this sign-in may administer appears here with the portal their role grants them. Create the first one with the form above."
+          />
         )}
 
         {load.status === 'ready' && load.rows.length > 0 && (
@@ -190,10 +195,18 @@ export function RolesAccess({
             <table className="w-full min-w-[680px] text-sm">
               <thead>
                 <tr className="border-b border-border/70 text-left">
-                  <th className="eyebrow pb-2 font-normal">User</th>
-                  <th className="eyebrow pb-2 font-normal">Email · tenant</th>
-                  <th className="eyebrow pb-2 font-normal">Current role</th>
-                  <th className="eyebrow pb-2 font-normal">Assign portal</th>
+                  <th scope="col" className="eyebrow pb-2 font-normal">
+                    User
+                  </th>
+                  <th scope="col" className="eyebrow pb-2 font-normal">
+                    Email · tenant
+                  </th>
+                  <th scope="col" className="eyebrow pb-2 font-normal">
+                    Current role
+                  </th>
+                  <th scope="col" className="eyebrow pb-2 font-normal">
+                    Assign portal
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -216,26 +229,26 @@ export function RolesAccess({
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 font-mono text-[0.72rem] text-muted-foreground">
-                        {u.email ?? '—'}
-                        {u.tenant_id != null && (
-                          <span className="text-muted-foreground/70"> · t#{u.tenant_id}</span>
-                        )}
+                      <td className="py-2.5">
+                        <Figure className="text-muted-foreground">
+                          {`${u.email ?? '—'}${u.tenant_id != null ? ` · t#${u.tenant_id}` : ''}`}
+                        </Figure>
                       </td>
                       <td className="py-2.5">
                         <div className="flex items-center gap-1.5">
-                          <Badge variant={ROLE_CATALOG[current].chip}>{ROLE_CATALOG[current].label}</Badge>
-                          <span className="font-mono text-[0.62rem] text-muted-foreground/60">{u.role}</span>
+                          <Badge variant="secondary">{ROLE_CATALOG[current].label}</Badge>
+                          <Figure className="text-muted-foreground/70">{u.role}</Figure>
                         </div>
                       </td>
                       <td className="py-2.5">
                         <div className="flex items-center gap-2">
                           <select
+                            id={`assign-portal-${u.id}`}
                             value={current}
                             disabled={isSaving}
                             onChange={(e) => reassign(u, e.target.value as Role)}
                             className={cn(
-                              'h-7 rounded-md border border-border bg-card px-2 font-mono text-[0.68rem] text-foreground',
+                              'h-7 rounded-lg border border-border bg-card px-2 font-mono text-[0.68rem] text-foreground',
                               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                               isSaving && 'opacity-60',
                             )}
@@ -257,7 +270,12 @@ export function RolesAccess({
                             })}
                           </select>
 
-                          {isSaving && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+                          {isSaving && (
+                            <Loader2
+                              aria-hidden
+                              className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none"
+                            />
+                          )}
                           {!isSaving && flash.has(u.id) && (
                             <span className="flex items-center gap-1 text-[0.68rem] text-ok-ink">
                               <Check className="size-3.5" /> updated
@@ -288,44 +306,26 @@ export function RolesAccess({
 function StatCell({
   label,
   value,
-  chip,
-  tone,
+  emphasis,
 }: {
   label: string
   value: number
-  chip?: Role
-  tone?: 'neutral'
+  /** The roster total, set apart from the per-role counts that sum to it. */
+  emphasis?: boolean
 }): ReactElement {
   return (
     <div
       className={cn(
-        'flex min-w-[5.5rem] flex-col gap-0.5 rounded-lg border border-border/60 bg-card px-3 py-2',
-        tone === 'neutral' && 'bg-surface-2/40',
+        'flex min-w-[5.5rem] flex-col gap-0.5 rounded-lg border border-border/60 px-3 py-2',
+        emphasis ? 'bg-surface-2/60' : 'bg-card',
       )}
     >
-      <div className="flex items-center gap-1.5">
-        {chip && <span className={cn('size-2 rounded-full', chipDot(chip))} aria-hidden />}
-        <span className="eyebrow">{label}</span>
-      </div>
-      <span className="font-mono text-lg font-semibold tabular-nums text-foreground">{value}</span>
+      <span className="eyebrow">{label}</span>
+      <Figure size="stat" className="text-foreground">
+        {value}
+      </Figure>
     </div>
   )
-}
-
-/** Role → the dot colour used in the stat band (mirrors the badge tone). */
-function chipDot(role: Role): string {
-  switch (ROLE_CATALOG[role].chip) {
-    case 'risk':
-      return 'bg-risk'
-    case 'ml':
-      return 'bg-blue-100'
-    case 'agent':
-      return 'bg-blue-200'
-    case 'graph':
-      return 'bg-blue-400'
-    default:
-      return 'bg-muted-foreground'
-  }
 }
 
 /** Client entry for the Roles & Access section — gated on a reachable backend. */
@@ -340,7 +340,7 @@ export function RolesAccessMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
       </div>
     )
@@ -350,14 +350,12 @@ export function RolesAccessMount(): ReactElement {
     <BackendGate>
       <TooltipProvider>
         <div className="space-y-4">
-          <div>
-            <p className="eyebrow mb-1">Tenants, seats and caps</p>
-            <h1 className="t-hero text-foreground">Roles &amp; Access</h1>
-            <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-              Everything on this screen is a write. Onboard a client, provision a seat, set what
-              either may spend — and see the result on the same page, without a deploy.
-            </p>
-          </div>
+          <SectionHeader
+            as="h1"
+            eyebrow="Tenants, seats and caps"
+            title="Roles & access"
+            note="Everything on this screen is a write. Onboard a client, provision a seat, set what either may spend — and see the result on the same page, without a deploy."
+          />
           <AdminControls
             token={session?.token ?? null}
             tier={adminTier(session?.fineRole)}

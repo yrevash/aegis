@@ -1,10 +1,12 @@
 'use client'
 
-import { Loader2 } from 'lucide-react'
+import { Building2, Coins } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { getBudgets, getTenants, getUsers } from '@/lib/api/client'
 import type { AdminUser, Budget, Tenant } from '@/lib/api/types'
 
@@ -78,11 +80,7 @@ export function AdminControls({
 
   return (
     <div className="flex flex-col gap-4">
-      {readFailure != null && (
-        <p role="alert" className="rounded-lg border border-risk/40 bg-risk/5 px-3 py-2 text-[0.78rem] text-risk-ink">
-          {readFailure}
-        </p>
-      )}
+      {readFailure != null && <ErrorState error={readFailure} retry={() => void reload()} />}
 
       <CreateTenantForm token={token} tier={tier} onCreated={() => void reload()} />
 
@@ -121,24 +119,36 @@ function TenantList({
   loading: boolean
 }): ReactElement {
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
         <CardTitle>Tenants</CardTitle>
-        <Badge variant="secondary">{tenants.length}</Badge>
+        <Badge variant="secondary">
+          <Figure>{tenants.length}</Figure>
+        </Badge>
       </CardHeader>
       <CardContent>
         {loading ? (
-          <Waiting what="tenants" />
+          <LoadingState rows={3} label="Reading the tenants…" />
         ) : tenants.length === 0 ? (
-          <p className="py-6 text-sm text-muted-foreground">No tenants yet. Create the first one above.</p>
+          <EmptyState
+            icon={Building2}
+            title="No tenants yet"
+            body="Every tenant on this platform appears here with the cap that governs it. The form above creates the first one — and a tenant cannot be created without a spend cap."
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[520px] text-sm">
               <thead>
                 <tr className="border-b border-border/70 text-left">
-                  <th className="eyebrow pb-2 font-normal">Tenant</th>
-                  <th className="eyebrow pb-2 font-normal">Status</th>
-                  <th className="eyebrow pb-2 font-normal">Spend cap</th>
+                  <th scope="col" className="eyebrow pb-2 font-normal">
+                    Tenant
+                  </th>
+                  <th scope="col" className="eyebrow pb-2 font-normal">
+                    Status
+                  </th>
+                  <th scope="col" className="eyebrow pb-2 font-normal">
+                    Spend cap
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -147,12 +157,14 @@ function TenantList({
                   return (
                     <tr key={t.id} className="border-b border-border/40 last:border-0">
                       <td className="py-2.5 font-medium text-foreground">
-                        {t.name}
-                        <span className="ml-1.5 font-mono text-[0.62rem] text-muted-foreground/70">#{t.id}</span>
+                        {t.name}{' '}
+                        <Figure className="text-muted-foreground/70">{`#${t.id}`}</Figure>
                       </td>
                       <td className="py-2.5 text-muted-foreground">{t.status}</td>
-                      <td className="py-2.5 font-mono text-[0.72rem] text-foreground">
-                        {cap?.usd_cap != null ? `$${cap.usd_cap} a ${cap.window}` : 'uncapped'}
+                      <td className="py-2.5">
+                        <Figure className="text-foreground">
+                          {cap?.usd_cap != null ? `$${cap.usd_cap} a ${cap.window}` : 'uncapped'}
+                        </Figure>
                       </td>
                     </tr>
                   )
@@ -179,28 +191,32 @@ function BudgetList({
   loading: boolean
 }): ReactElement {
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
         <CardTitle>Caps in force</CardTitle>
-        <Badge variant="secondary">{budgets.length}</Badge>
+        <Badge variant="secondary">
+          <Figure>{budgets.length}</Figure>
+        </Badge>
       </CardHeader>
       <CardContent>
         {loading ? (
-          <Waiting what="budgets" />
+          <LoadingState rows={3} label="Reading the caps…" />
         ) : budgets.length === 0 ? (
-          <p className="py-6 text-sm text-muted-foreground">
-            Nothing is capped. Every call runs unlimited until a budget says otherwise.
-          </p>
+          <EmptyState
+            icon={Coins}
+            title="Nothing is capped"
+            body="Every call runs unlimited until a budget says otherwise. Set one with the form above — a cap can name a tenant or a single user."
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-border/70 text-left">
-                  <th className="eyebrow pb-2 font-normal">Governs</th>
-                  <th className="eyebrow pb-2 font-normal">Window</th>
-                  <th className="eyebrow pb-2 font-normal">Spend</th>
-                  <th className="eyebrow pb-2 font-normal">Tokens</th>
-                  <th className="eyebrow pb-2 font-normal">Rpm · tpm</th>
+                  {['Governs', 'Window', 'Spend', 'Tokens', 'Rpm · tpm'].map((head) => (
+                    <th key={head} scope="col" className="eyebrow pb-2 font-normal">
+                      {head}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -213,12 +229,18 @@ function BudgetList({
                         : (users.find((u) => u.id === b.scope_id)?.username ?? `#${b.scope_id}`)}
                     </td>
                     <td className="py-2.5 text-muted-foreground">{b.window}</td>
-                    <td className="py-2.5 font-mono text-[0.72rem] text-foreground">
-                      {b.usd_cap != null ? `$${b.usd_cap}` : '—'}
+                    <td className="py-2.5">
+                      <Figure className="text-foreground">
+                        {b.usd_cap != null ? `$${b.usd_cap}` : '—'}
+                      </Figure>
                     </td>
-                    <td className="py-2.5 font-mono text-[0.72rem] text-foreground">{b.token_cap ?? '—'}</td>
-                    <td className="py-2.5 font-mono text-[0.72rem] text-foreground">
-                      {b.rpm ?? '—'} · {b.tpm ?? '—'}
+                    <td className="py-2.5">
+                      <Figure className="text-foreground">{b.token_cap ?? '—'}</Figure>
+                    </td>
+                    <td className="py-2.5">
+                      <Figure className="text-foreground">
+                        {`${b.rpm ?? '—'} · ${b.tpm ?? '—'}`}
+                      </Figure>
                     </td>
                   </tr>
                 ))}
@@ -231,11 +253,3 @@ function BudgetList({
   )
 }
 
-/** The one waiting line both lists use. */
-function Waiting({ what }: { what: string }): ReactElement {
-  return (
-    <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-      <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> Loading {what}…
-    </div>
-  )
-}

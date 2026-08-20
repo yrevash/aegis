@@ -66,7 +66,7 @@ export function GuardrailReveal({ guardrails }: GuardrailRevealProps): ReactElem
   const [open, setOpen] = useState(fired > 0)
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader className="flex-row items-center gap-2 space-y-0">
         <ShieldCheck className={cn('size-4', fired > 0 ? 'text-block-ink' : 'text-ok-ink')} />
         <CardTitle>Guardrails</CardTitle>

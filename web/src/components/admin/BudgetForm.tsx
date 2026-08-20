@@ -112,7 +112,7 @@ export function BudgetForm({
   }
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
         <Wallet className="size-4 text-blue-800" aria-hidden />
         <CardTitle>Set a budget</CardTitle>

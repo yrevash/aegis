@@ -81,7 +81,7 @@ export function CreateTenantForm({
   }
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
         <Building2 className="size-4 text-blue-600" aria-hidden />
         <CardTitle>Create a tenant</CardTitle>

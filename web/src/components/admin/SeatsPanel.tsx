@@ -1,10 +1,13 @@
 'use client'
 
-import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
+import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { Badge } from '@/components/primitives/badge'
+import { Figure } from '@/components/primitives/Figure'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
+import { errorSentence } from '@/lib/api/apiError'
 import { getSeats, putSeat, type Seat } from '@/lib/api/seats'
 import { cn } from '@/lib/utils'
 
@@ -63,7 +66,10 @@ export function SeatsPanel({
           alive &&
           setLoad({
             status: 'error',
-            message: e instanceof Error ? e.message : 'Failed to load seats',
+            message: errorSentence(
+              e,
+              'The seats did not load. Check the backend is reachable, then retry.',
+            ),
           }),
       )
     return () => {
@@ -91,17 +97,16 @@ export function SeatsPanel({
         // The server's sentence, verbatim. A 409 here says the value was weaker than
         // the tenant already has in force — which is the whole tighten-only guarantee
         // speaking, and rewording it would hide which layer refused.
-        setRefusal(e instanceof Error ? e.message : 'The seat could not be changed.')
+        setRefusal(errorSentence(e, 'The seat could not be changed. Try it again.'))
       },
     )
   }
 
   if (load.status === 'loading') {
     return (
-      <Card>
-        <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-          Loading seats…
+      <Card className="rounded-lg">
+        <CardContent className="pt-5">
+          <LoadingState rows={4} label="Reading the seats…" />
         </CardContent>
       </Card>
     )
@@ -109,42 +114,43 @@ export function SeatsPanel({
 
   if (load.status === 'error') {
     return (
-      <Card>
-        <CardContent className="py-8 text-sm text-muted-foreground">{load.message}</CardContent>
+      <Card className="rounded-lg">
+        <CardContent className="pt-5">
+          <ErrorState error={load.message} />
+        </CardContent>
       </Card>
     )
   }
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4" aria-hidden />
+          <ShieldCheck className="size-4 shrink-0" aria-hidden />
           Named seats
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="max-w-prose text-sm text-muted-foreground">
+        <p id="seats-direction" className="max-w-prose text-sm leading-relaxed text-muted-foreground">
           A seat names what one person may do inside the role they already hold. Every toggle
           here <span className="text-foreground">removes</span> a capability — the role guard
           runs first, so a seat can narrow it and never widen it. Turning one back on restores
           what your tenant already permits and can never exceed it.
         </p>
 
-        {refusal ? (
-          <p className="rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-sm text-foreground">
-            {refusal}
-          </p>
-        ) : null}
+        {refusal ? <ErrorState error={refusal} /> : null}
 
         <div className="space-y-3">
           {load.rows.map((seat) => (
-            <div key={seat.userId} className="rounded-xl border border-border bg-surface-1 p-3">
+            <div key={seat.userId} className="rounded-lg border border-border bg-card p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-sm text-foreground">{seat.username}</span>
+                <Figure className="text-foreground">{seat.username}</Figure>
+                <label htmlFor={`seat-name-${seat.userId}`} className="sr-only">
+                  Seat name for {seat.username}
+                </label>
                 <input
-                  aria-label={`Seat name for ${seat.username}`}
-                  className="min-w-[12rem] rounded-md border border-border bg-surface-2 px-2 py-1 text-sm text-foreground"
+                  id={`seat-name-${seat.userId}`}
+                  className="min-w-[12rem] rounded-lg border border-border bg-surface-2 px-2 py-1 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   placeholder="Name this seat — e.g. Support Lead"
                   value={draftLabel[seat.userId] ?? seat.label}
                   onChange={(e) =>
@@ -153,7 +159,7 @@ export function SeatsPanel({
                 />
                 <button
                   type="button"
-                  className="rounded-md border border-border px-2 py-1 text-xs text-foreground"
+                  className="rounded-lg border border-border px-2 py-1 text-xs text-foreground transition-colors outline-none hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={saving === `label:${seat.userId}`}
                   onClick={() =>
                     apply(
@@ -167,20 +173,26 @@ export function SeatsPanel({
                 </button>
               </div>
 
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <fieldset className="mt-3 grid gap-2 sm:grid-cols-2">
+                <legend className="sr-only">What {seat.username}&apos;s seat may do</legend>
                 {seat.capabilities.map((cap) => {
                   const marker = `${seat.userId}:${cap.key}`
                   return (
                     <label
                       key={cap.key}
+                      htmlFor={`seat-${seat.userId}-${cap.key}`}
                       className={cn(
-                        'flex items-start gap-2 rounded-lg border border-border px-2 py-2 text-sm',
-                        cap.allowed ? 'bg-surface-1' : 'bg-surface-2',
+                        'flex items-start gap-2 rounded-lg border px-2 py-2 text-sm',
+                        cap.allowed
+                          ? 'border-border bg-card'
+                          : 'border-l-2 border-risk bg-surface-2',
                       )}
                     >
                       <input
+                        id={`seat-${seat.userId}-${cap.key}`}
                         type="checkbox"
-                        className="mt-1"
+                        aria-describedby="seats-direction"
+                        className="mt-1 size-3.5 rounded border-border accent-[color:var(--primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)]"
                         checked={cap.allowed}
                         disabled={saving === marker}
                         onChange={(e) =>
@@ -196,26 +208,26 @@ export function SeatsPanel({
                         <span className="mt-0.5 flex flex-wrap items-center gap-1">
                           <Badge>{SOURCE_LABEL[cap.source] ?? cap.source}</Badge>
                           {cap.allowed ? null : (
-                            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                              <ShieldOff className="h-3 w-3" aria-hidden />
+                            <span className="inline-flex items-center gap-1 text-xs text-risk-ink">
+                              <ShieldOff className="size-3" aria-hidden />
                               revoked
                             </span>
                           )}
                         </span>
-                        <span className="mt-1 block font-mono text-[0.68rem] text-muted-foreground">
-                          {cap.key}
-                        </span>
+                        <Figure className="mt-1 block text-muted-foreground">{cap.key}</Figure>
                       </span>
                     </label>
                   )
                 })}
-              </div>
+              </fieldset>
             </div>
           ))}
           {load.rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No users in this tenant yet, so there is nothing to seat.
-            </p>
+            <EmptyState
+              icon={ShieldCheck}
+              title="Nothing to seat yet"
+              body="A seat names what one person may do inside the role they already hold, so it appears here once the tenant has a user. Create one on the roster above."
+            />
           ) : null}
         </div>
       </CardContent>
