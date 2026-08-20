@@ -66,3 +66,24 @@ test('a receipt states its origin; prose goes one hover away', async () => {
 
   assert.ok(INLINE_DETAIL_MAX >= 20 && INLINE_DETAIL_MAX <= 48, 'threshold stays in the sane band')
 })
+
+test('a real saving never renders as zero, and the reduction is a like-for-like ratio', async () => {
+  const { formatUsdAuto } = await import('../../src/components/dashboard/roi.ts')
+  const { reductionPct } = await import('../../src/components/dashboard/overview.ts')
+
+  // The client dashboard's own live figures on the day this was found.
+  const saved = 0.4788594
+  const baseline = 0.683353
+
+  // It printed "$0" for a measured 48-cent saving, because the tile asked for
+  // whole dollars. A demo tenant's spend is measured in cents.
+  assert.equal(formatUsdAuto(saved), '$0.48')
+  assert.equal(formatUsdAuto(12345.6), '$12,346', 'and large figures still lose the cents')
+
+  // It printed "-0% vs frontier" because it divided a *total* by a *per-1k rate*.
+  // `/v1/savings` independently reports saved_pct 0.7003 for the same window —
+  // two paths to the same number is what makes this one trustworthy.
+  assert.equal(reductionPct(baseline, saved), 70)
+  assert.equal(reductionPct(0, saved), null, 'no baseline is unknown, not 100%')
+  assert.equal(reductionPct(baseline, null), null)
+})

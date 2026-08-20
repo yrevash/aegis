@@ -110,7 +110,7 @@ _ACTIONS = {
     # Not a PDF, deliberately: without the seat this is a 415 and with it revoked a 403,
     # so the two outcomes are distinguishable and neither is the coarse guard's.
     "seat.can_upload_documents": ("UPLOAD", "/documents", None),
-    "seat.can_edit_memory": ("POST", "/memory/forget?subject=tenant:1:user:12", None),
+    "seat.can_edit_memory": ("POST", "/memory/forget?subject=user:12", None),
     "seat.can_approve": ("POST", "/approval", {"approval_id": "nope", "decision": "approve"}),
     "seat.can_view_tenant_audit": ("GET", "/audit", None),
     "seat.can_change_agent_mode": (

@@ -106,10 +106,23 @@ export function modelMixData(share: number | null): ModelMixSlice[] {
 /** Reduction versus the frontier baseline as a whole-number percentage, or null. */
 export function reductionPct(
   baseline: number | null,
-  costPer1k: number | null,
+  saved: number | null,
 ): number | null {
-  if (baseline == null || costPer1k == null) return null
-  return Math.round(costReductionRatio(baseline, costPer1k) * 100)
+  // **This compared two different units and always answered 0.**
+  //
+  // It was `costReductionRatio(baseline_cost_usd, cost_per_1k_queries_usd)` — a
+  // *total* against a *rate per thousand queries*. On live data that is $0.68
+  // against $21.05, so the subtraction goes negative, clamps at zero, and the
+  // client's headline tile reported "-0% vs frontier" while `/v1/savings`
+  // independently reported **70%** saved. A figure that is always zero is
+  // indistinguishable from a product that does nothing.
+  //
+  // The saving is already measured and already on the wire: `cost_saved_usd`
+  // over `baseline_cost_usd`. 0.4789 / 0.6834 = 70%, which agrees with
+  // `/v1/savings`'s own `saved_pct` of 0.7003 — two independent paths to the same
+  // number, which is the check that this one is right.
+  if (baseline == null || saved == null || baseline <= 0) return null
+  return Math.round(Math.max(0, Math.min(1, saved / baseline)) * 100)
 }
 
 /** Format a 0..1 fraction as a whole-number percentage string ("74%"). */

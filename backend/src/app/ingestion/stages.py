@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -329,16 +330,74 @@ def _owning_tenant(document: Document, stage: str) -> int:
     return document.tenant_id
 
 
-def _derive_title(parsed: ParsedDocument, filename: str) -> str:
-    """Return the document's title: its first heading, else the file name's stem.
+#: Share of a document's pages a heading must appear on before it is read as a **running
+#: header** rather than as a title. A running header is printed on every page or every
+#: other page by construction, so a half is the structural line rather than a fitted one.
+#: Measured on the real corpus, the two populations sit well clear of it on both sides:
+#: the CFR reprints' "Federal Trade Commission" runs at 0.50 and 0.60 and their
+#: "12 CFR Ch. X (1-1-23 Edition)" at 0.50, while the most-repeated *genuine* heading of
+#: any fixture — a section title recurring in a statistics breakdown — reaches 0.40, and
+#: a cover title reprinted on its first content page reaches 0.04.
+_RUNNING_HEADER_PAGE_SHARE = 0.5
 
-    The first heading is what Docling's ``title`` label maps to and is the real printed
-    title on every fixture in ``tests/fixtures/pdfs``. The fallback is deliberately the
-    **row's** file name and not :attr:`ParsedDocument.source_name`: the parser is handed a
-    content-addressed path in the document store, so its idea of the source name is a
-    SHA-256 — a true fact about the file and a useless title. The tenant's own file name
-    is the weakest *honest* title available, and inventing one with a model call is
-    exactly the cost D7 exists to avoid.
+#: Pages a document needs before repetition means anything. On a one- or two-page
+#: document every heading trivially covers half the pages, so the test would reject the
+#: real title and every alternative to it.
+_MIN_PAGES_FOR_RUNNING_HEADER = 3
+
+
+def _running_headers(parsed: ParsedDocument) -> frozenset[str]:
+    """Return the heading texts this document prints as page furniture.
+
+    The evidence is repetition across *pages*, which is what a running header is and what
+    a title is not. It is counted per page rather than per block on purpose: a heading
+    Docling emits twice on one page is a parse artefact, not a header, and counting
+    occurrences would let it pass for one.
+
+    Args:
+        parsed: The parse output.
+
+    Returns:
+        Every heading text appearing on at least :data:`_RUNNING_HEADER_PAGE_SHARE` of the
+        document's pages, or an empty set on a document too short
+        (:data:`_MIN_PAGES_FOR_RUNNING_HEADER`) for repetition to mean anything.
+    """
+    if parsed.page_count < _MIN_PAGES_FOR_RUNNING_HEADER:
+        return frozenset()
+    pages: dict[str, set[int]] = defaultdict(set)
+    for block in parsed.blocks:
+        if block.kind is BlockKind.HEADING and block.text.strip():
+            pages[block.text.strip()].add(block.page_no)
+    threshold = parsed.page_count * _RUNNING_HEADER_PAGE_SHARE
+    return frozenset(text for text, seen in pages.items() if len(seen) >= threshold)
+
+
+def _derive_title(parsed: ParsedDocument, filename: str) -> str:
+    """Return the document's title: its first heading that is not page furniture.
+
+    The first heading is what Docling's ``title`` label maps to, and on a born-digital
+    paper it is the printed title. **On a reprint it is the running header**, and that is
+    not a rare shape — it is what every CFR part, every gazette and every bound statutory
+    volume looks like. Measured on this corpus: two different FTC rules, 16 CFR 435 and
+    16 CFR 703, both derived the title ``"Federal Trade Commission"``, because that is the
+    verso running head printed above the first section of each; and 12 CFR 1026.13 derived
+    ``"§1026.13"``, its recto running head, rather than
+    ``"§1026.13 Billing error resolution."``. Retrieval never suffered — the chunk prefix
+    carries the section path — but a screen listing ``documents.title`` showed two
+    identical rows for two unrelated regulations, which is a corpus a tenant cannot
+    navigate.
+
+    So the heading that names the document is the first one that is **not** printed on
+    page after page; see :func:`_running_headers`. A document whose every heading repeats
+    that way falls back to the first heading regardless, because a repeated heading is
+    still the document's own words and is strictly no worse than what this function
+    returned before.
+
+    The final fallback is deliberately the **row's** file name and not
+    :attr:`ParsedDocument.source_name`: the parser is handed a content-addressed path in
+    the document store, so its idea of the source name is a SHA-256 — a true fact about
+    the file and a useless title. The tenant's own file name is the weakest *honest* title
+    available, and inventing one with a model call is exactly the cost D7 exists to avoid.
 
     Args:
         parsed: The parse output.
@@ -347,15 +406,14 @@ def _derive_title(parsed: ParsedDocument, filename: str) -> str:
     Returns:
         The title, never empty.
     """
-    heading = next(
-        (
-            block.text.strip()
-            for block in parsed.blocks
-            if block.kind is BlockKind.HEADING and block.text.strip()
-        ),
-        "",
-    )
-    return heading or Path(filename).stem or filename
+    furniture = _running_headers(parsed)
+    headings = [
+        text
+        for block in parsed.blocks
+        if block.kind is BlockKind.HEADING and (text := block.text.strip())
+    ]
+    titled = next((text for text in headings if text not in furniture), "")
+    return titled or (headings[0] if headings else "") or Path(filename).stem or filename
 
 
 def _document_context(document: Document) -> DocumentContext:

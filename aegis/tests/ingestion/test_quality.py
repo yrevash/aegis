@@ -13,6 +13,8 @@ two-column document re-ordered into the failure — is in
 
 from __future__ import annotations
 
+import pytest
+
 from aegis.ingestion.blocks import BBox, BlockKind, ParsedBlock, ParsedDocument, ParsedPage
 from aegis.ingestion.probe import OcrDecision
 from aegis.ingestion.quality import (
@@ -26,6 +28,7 @@ from aegis.ingestion.quality import (
     assess_parse,
     fragment_rate,
     headings_are_flat,
+    lists_are_unpunctuated,
     ordering_agreement,
 )
 
@@ -252,6 +255,110 @@ def test_headings_and_tables_are_not_scored_for_fragmentation():
     ]
 
     assert fragment_rate(blocks) == (0.0, 0)
+
+
+# ── list items: entries or sentences, read off the document ──────────────────
+
+
+def _item(text: str, *, page: int = 1) -> ParsedBlock:
+    """One list item of at least the ten words the fragment signal scores."""
+    return _text(f"one two three four five six seven eight nine ten {text}",
+                 page=page, kind=BlockKind.LIST_ITEM)
+
+
+def test_a_glossary_of_unpunctuated_entries_is_not_a_document_full_of_fragments():
+    """The measured false positive, in miniature.
+
+    ``cfpb-consumer-complaint-database-breakdown-2013.pdf`` is a glossary and a taxonomy:
+    31 of its 37 scored list items end without a full stop because *entries do*, which
+    put the rate at 0.660 and ``confidence`` at **0.000** on a parse whose reading order
+    agrees with the raw PDFium layer at tau=0.999 over 453 anchors. The gate has to read
+    an unpunctuated list as a style, not as 31 severed paragraphs.
+    """
+    document = _document(blocks=[
+        _text("A paragraph of running prose that ends properly, as prose does."),
+        *(_item(f"entry number {i} naming a product with no terminal mark")
+          for i in range(8)),
+    ])
+
+    rate, scored = fragment_rate(document.blocks)
+
+    assert lists_are_unpunctuated(document.blocks)
+    assert (rate, scored) == (0.0, 1), (
+        "the unpunctuated list is the document's house style, so it carries no fragment "
+        "evidence and the rate is over running text alone"
+    )
+    assert assess_parse(document, ()).confidence == 1.0
+
+
+def test_a_regulation_whose_list_items_are_sentences_still_scores_them():
+    """The other half, and the half that keeps the signal alive.
+
+    Every real CFR fixture writes its list items as sentences — 74% to 94% of them end in
+    a full stop — so an unpunctuated one there is genuine evidence a paragraph was cut. A
+    fix that simply dropped ``LIST_ITEM`` would throw that away, and would have made this
+    test pass for the wrong reason.
+    """
+    document = _document(blocks=[
+        *(_item(f"the warrantor shall do thing number {i}.") for i in range(6)),
+        *(_item(f"the warrantor shall do thing number {i} and then") for i in range(2)),
+    ])
+
+    rate, scored = fragment_rate(document.blocks)
+
+    assert not lists_are_unpunctuated(document.blocks)
+    assert scored == 8, "a punctuated list stays in the population"
+    assert rate == pytest.approx(0.25)
+
+
+def test_too_few_list_items_are_not_a_house_style():
+    """Four unpunctuated entries are a coincidence. Dropping a document's whole list
+    population on that evidence would be the same over-reading in the other direction."""
+    document = _document(blocks=[
+        *(_item(f"entry number {i} with no terminal mark") for i in range(4)),
+    ])
+
+    assert not lists_are_unpunctuated(document.blocks)
+    assert fragment_rate(document.blocks) == (1.0, 4)
+
+
+def test_dropping_the_lists_does_not_disable_the_fragment_signal():
+    """A glossary whose *running text* is severed still flags.
+
+    This is the mutation guard for the fix: it fails if ``fragment_rate`` responds to an
+    unpunctuated list by returning ``(0.0, 0)`` — "no prose" — instead of by narrowing to
+    the prose that is left. Measured on the real document, severed at an interior word,
+    the rate rises to 0.375 and the confidence to 0.64, under ``LOW_CONFIDENCE``.
+    """
+    document = _document(blocks=[
+        *(_text(f"paragraph number {i} runs on and on and then stops abruptly and")
+          for i in range(8)),
+        *(_item(f"entry number {i} naming a product with no terminal mark")
+          for i in range(8)),
+    ])
+
+    rate, scored = fragment_rate(document.blocks)
+    quality = assess_parse(document, ())
+
+    assert lists_are_unpunctuated(document.blocks)
+    assert (rate, scored) == (1.0, 8)
+    assert quality.confidence == 0.0
+    assert quality.is_low
+
+
+def test_a_narrowed_population_is_said_out_loud():
+    """A rate measured over fewer blocks than the reader expects is a quiet narrowing,
+    and this module's whole contract is that it says what it did."""
+    document = _document(blocks=[
+        _text("A paragraph of running prose that ends properly, as prose does."),
+        *(_item(f"entry number {i} naming a product with no terminal mark")
+          for i in range(8)),
+    ])
+
+    reasons = " ".join(assess_parse(document, ()).reasons)
+
+    assert "unpunctuated by convention" in reasons
+    assert "running text alone" in reasons
 
 
 def test_a_short_block_has_no_clause_to_end_in_the_middle_of():

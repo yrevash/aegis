@@ -19,7 +19,7 @@ import type { Role } from '@/lib/stream'
 import DashboardCharts from './DashboardCharts'
 import { MyBudgetTile } from './MyBudgetTile'
 import { costSavedTrend, reductionPct, sessionSavedDelta } from './overview'
-import { formatUsd } from './roi'
+import { formatUsd, formatUsdAuto } from './roi'
 import { RoiPanel } from './RoiPanel'
 import { RoutingTable } from './RoutingTable'
 import { ValueSpine } from './ValueSpine'
@@ -113,7 +113,7 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
   const llmCalls = metrics?.total_calls ?? null
   const actionsApproved = metrics?.actions_approved ?? null
   const p95Ms = metrics?.p95_latency_ms ?? null
-  const reduction = reductionPct(baseline, costPer1k)
+  const reduction = reductionPct(baseline, saved)
   const savedTrend = costSavedTrend(series.history)
   const savedDelta = sessionSavedDelta(series.history)
 
@@ -142,7 +142,7 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
             className="col-span-12 lg:col-span-8 lg:row-span-2"
             label="Cost saved"
             value={saved}
-            format={(n) => formatUsd(n, 0)}
+            format={formatUsdAuto}
             signal="ok"
             trend={savedTrend}
             delta={

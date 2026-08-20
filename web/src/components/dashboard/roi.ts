@@ -104,6 +104,18 @@ export function savedPerCaseUsd(costPer1kUsd: number, a: RoiAssumptions): number
 // ── Formatting (pure) ───────────────────────────────────────────────────────
 
 /** Format a USD amount with fixed fraction digits (default 2). */
+/**
+ * Format a USD figure at a precision the figure can actually carry.
+ *
+ * `formatUsd(0.4789, 0)` returns **"$0"**, and that is what the client dashboard
+ * printed for a real, measured saving of 48 cents — the tile said the product had
+ * saved nothing while the same payload said it had saved 70%. Whole dollars is the
+ * right precision for a figure in the thousands and a lie for one under ten, and a
+ * demo tenant's spend is measured in cents.
+ *
+ * {@link formatUsdAuto} picks the precision from the magnitude, so a caller does
+ * not have to know which case it is in.
+ */
 export function formatUsd(value: number, fractionDigits = 2): string {
   return value.toLocaleString('en-US', {
     style: 'currency',
@@ -111,6 +123,15 @@ export function formatUsd(value: number, fractionDigits = 2): string {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   })
+}
+
+/**
+ * Format USD at a precision the magnitude can carry: cents below $10, whole
+ * dollars above. Use this for any figure whose size is not known in advance —
+ * which is every figure read from a live tenant.
+ */
+export function formatUsdAuto(value: number): string {
+  return formatUsd(value, Math.abs(value) < 10 ? 2 : 0)
 }
 
 /** Format a large USD amount compactly (e.g. `$1.2M`, `$3.9K`). */

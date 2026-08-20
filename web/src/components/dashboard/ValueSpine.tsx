@@ -169,7 +169,7 @@ export function ValueSpine({ metrics }: { metrics: MetricsResponse | null }): Re
   const baseline = metrics?.baseline_cost_usd ?? null
   const costPer1k = metrics?.cost_per_1k_queries_usd ?? null
   const saved = metrics?.cost_saved_usd ?? null
-  const reduction = reductionPct(baseline, costPer1k)
+  const reduction = reductionPct(baseline, saved)
 
   return (
     <>
