@@ -1,5 +1,200 @@
 [
   {
+    "id": "spend-over-time",
+    "title": "Spend over time",
+    "summary": "What this tenant spent per day, from the metered usage ledger.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
+    "datasourceId": 2,
+    "datasourceType": "table",
+    "groupby": [
+      "day"
+    ],
+    "metrics": [
+      "spend_usd"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
+  },
+  {
+    "id": "runs-over-time",
+    "title": "Runs over time",
+    "summary": "Agent runs per day, and how many of them a guardrail stopped.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
+    "datasourceId": 3,
+    "datasourceType": "table",
+    "groupby": [
+      "day"
+    ],
+    "metrics": [
+      "runs_total",
+      "blocks_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
+  },
+  {
+    "id": "gates-over-time",
+    "title": "Human gates over time",
+    "summary": "How many runs paused for a person each day.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
+    "datasourceId": 1,
+    "datasourceType": "table",
+    "groupby": [
+      "day"
+    ],
+    "metrics": [
+      "gates_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
+  },
+  {
+    "id": "jobs-over-time",
+    "title": "Background jobs over time",
+    "summary": "How much durable background work ran each day.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
+    "datasourceId": 4,
+    "datasourceType": "table",
+    "groupby": [
+      "day"
+    ],
+    "metrics": [
+      "jobs_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
+  },
+  {
+    "id": "audit-over-time",
+    "title": "Governed actions over time",
+    "summary": "How many governed actions the audit trail recorded each day.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops",
+      "client"
+    ],
+    "datasourceId": 5,
+    "datasourceType": "table",
+    "groupby": [
+      "day"
+    ],
+    "metrics": [
+      "events_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
+  },
+  {
+    "id": "tokens-over-time",
+    "title": "Token volume over time",
+    "summary": "Prompt and completion tokens per day \u2014 where the spend comes from.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops"
+    ],
+    "datasourceId": 2,
+    "datasourceType": "table",
+    "groupby": [
+      "day"
+    ],
+    "metrics": [
+      "tokens_total"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
+    "dashboardId": 1
+  },
+  {
+    "id": "latency-over-time",
+    "title": "Run latency over time",
+    "summary": "Mean agent latency per day, in milliseconds.",
+    "kinds": [
+      "chart"
+    ],
+    "audience": [
+      "platform_admin",
+      "tenant_admin",
+      "ai_team",
+      "devops"
+    ],
+    "datasourceId": 3,
+    "datasourceType": "table",
+    "groupby": [
+      "day"
+    ],
+    "metrics": [
+      "avg_latency_ms"
+    ],
+    "timeColumn": "day",
+    "defaultWindow": "last_30_days",
+    "rowLimit": 200,
+    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
+    "dashboardId": 1
+  },
+  {
     "id": "spend-by-model",
     "title": "Spend by model",
     "summary": "What this tenant spent per model, from the usage ledger.",
@@ -24,12 +219,12 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "token-volume",
-    "title": "Token volume",
+    "title": "Token volume by model",
     "summary": "Prompt and completion tokens per model \u2014 where the spend comes from.",
     "kinds": [
       "chart"
@@ -81,12 +276,12 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "run-latency",
-    "title": "Run latency",
+    "title": "Run latency by outcome",
     "summary": "Average agent latency per outcome, in milliseconds.",
     "kinds": [
       "chart"
@@ -113,7 +308,7 @@
   },
   {
     "id": "human-gates",
-    "title": "Human gates",
+    "title": "Human gates by risk",
     "summary": "Every run that paused for a person, by risk tier.",
     "kinds": [
       "chart"
@@ -135,8 +330,8 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "gate-decisions",
@@ -163,12 +358,12 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "job-throughput",
-    "title": "Job throughput",
+    "title": "Job throughput by type",
     "summary": "The durable job substrate: how many jobs ran, per job type.",
     "kinds": [
       "chart"
@@ -220,8 +415,8 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "governance-trail",
@@ -248,8 +443,8 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "redteam-defence",
@@ -277,8 +472,8 @@
     "timeColumn": "started_at",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "redteam-block-rate",
@@ -306,13 +501,13 @@
     "timeColumn": "started_at",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   },
   {
     "id": "operations",
     "title": "Operations dashboard",
-    "summary": "Eleven Superset charts over every analytics view, embedded in this page.",
+    "summary": "Seventeen Superset charts over all six analytics views, embedded here.",
     "kinds": [
       "chart",
       "dashboard"
@@ -362,7 +557,7 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "be2d6e6c-417b-4081-be5f-abb83f8364ff",
-    "dashboardId": 1
+    "embeddedUuid": "bd4b2b52-4ac5-48f2-976b-8976b0b66eeb",
+    "dashboardId": 2
   }
 ]
