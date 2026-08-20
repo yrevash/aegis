@@ -187,6 +187,26 @@ export interface BudgetStatusRow {
 
 /** Rolled-up ledger spend for one tenant scope. Mirrors `UsageSummary`. */
 export interface GovernanceUsageSummary {
+  /**
+   * Verified field-by-field against both live responses, because this interface was
+   * wrong in a way TypeScript could not catch: it is hand-written, `fetch` yields
+   * `unknown`, and a declared field the server never sends is simply `undefined` at
+   * runtime. `series` claimed `bucket` where the wire sends `ts`, so the spend chart
+   * read `p.bucket` and labelled **every** x tick `-`; `by_model` claimed
+   * `prompt_tokens`/`completion_tokens`/`calls` where the wire sends one `tokens`.
+   *
+   * **Two endpoints share this shape and they are not identical.**
+   * `GET /governance/dashboard` -> `usage` sends every field below.
+   * `GET /admin/usage` sends only `total_prompt_tokens`, `total_completion_tokens`,
+   * `total_cost_usd`, `by_model` and `series` - no `tenant_id`, `window`,
+   * `total_tokens` or `calls`. Read those four only from the governance payload, or
+   * prefer the generated `UsageResponse` from the OpenAPI schema, which models the
+   * narrower one correctly.
+   *
+   * Live rows, identical on both:
+   *   by_model[0] = { model: "genailab-maas-gpt-4o", cost_usd: 2.776, tokens: 939460 }
+   *   series[0]   = { ts: "2026-08-19T12:00:00+00:00", cost_usd: 0.280 }
+   */
   tenant_id: number | null
   window: string
   total_prompt_tokens: number
@@ -194,8 +214,8 @@ export interface GovernanceUsageSummary {
   total_tokens: number
   total_cost_usd: number
   calls: number
-  by_model: Array<{ model: string; prompt_tokens: number; completion_tokens: number; cost_usd: number; calls: number }>
-  series: Array<{ bucket: string; cost_usd: number; tokens: number }>
+  by_model: Array<{ model: string; cost_usd: number; tokens: number }>
+  series: Array<{ ts: string; cost_usd: number }>
 }
 
 /** Body for `GET /governance/dashboard` — the full tenant-scoped snapshot. */

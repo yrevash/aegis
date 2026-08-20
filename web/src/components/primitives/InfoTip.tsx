@@ -17,7 +17,9 @@ interface InfoTipProps {
 /**
  * The standard prose-relocation affordance (§2, §5): a small ⓘ trigger that
  * reveals an explanatory tooltip. The glass-box depth stays — it just lives one
- * layer down. `TooltipProvider` is already mounted at the app root.
+ * layer down. `TooltipProvider` is mounted at the app root in
+ * `components/auth/Providers.tsx` — this comment asserted that before it was
+ * true, and Radix answers a missing provider by throwing, not by degrading.
  */
 export function InfoTip({ children, label = 'More information', className }: InfoTipProps): ReactElement {
   return (
