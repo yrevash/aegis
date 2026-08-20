@@ -21,6 +21,16 @@ interface RankedBarsProps {
   color?: ChartColor
   /** Cap the visible rows; the remainder folds into a stated "other" row. */
   maxRows?: number
+  /**
+   * What to do with the rows past `maxRows`.
+   *
+   * `'sum'` (the default) folds them into one "n others" row, which is right for a
+   * magnitude: eleven models' spend really does add up to a number. It is wrong
+   * for a **rate** — the sum of eleven cost-per-1k-token figures is not a
+   * cost per 1k tokens, it is an artefact — so a rate list passes `'omit'` and the
+   * tail is named as dropped instead of silently added together.
+   */
+  tail?: 'sum' | 'omit'
   /** What the rows are, for the screen reader's list. */
   label: string
 }
@@ -51,13 +61,17 @@ export function RankedBars({
   valueFormatter = (v) => String(v),
   color = 'graph',
   maxRows = 6,
+  tail = 'sum',
   label,
 }: RankedBarsProps): ReactElement {
   const sorted = [...data].sort((a, b) => b.value - a.value)
   const shown = sorted.slice(0, maxRows)
   const rest = sorted.slice(maxRows)
   const restTotal = rest.reduce((sum, d) => sum + d.value, 0)
-  const rows = restTotal > 0 ? [...shown, { name: `${rest.length} others`, value: restTotal }] : shown
+  const rows =
+    tail === 'sum' && restTotal > 0
+      ? [...shown, { name: `${rest.length} others`, value: restTotal }]
+      : shown
   const max = rows.reduce((m, d) => Math.max(m, d.value), 0)
   const hex = chartHex(color)
 
@@ -91,6 +105,12 @@ export function RankedBars({
           </div>
         </li>
       ))}
+      {tail === 'omit' && rest.length > 0 ? (
+        <li className="pt-0.5 text-[0.72rem] text-muted-foreground">
+          {rest.length} more below {valueFormatter(shown[shown.length - 1]?.value ?? 0)} — not
+          summed, because these are rates.
+        </li>
+      ) : null}
     </ul>
   )
 }

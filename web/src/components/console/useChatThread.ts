@@ -29,6 +29,7 @@ import type { RunController } from '@/lib/api/transport'
 import type { ApprovalDecision } from '@/lib/api/types'
 
 import { questionWithAttachment, type TurnAttachment } from './composerAttachment'
+import { DEFAULT_RUN_MODE, wireMode, type RunMode } from './runMode'
 import { rememberChat, rememberedChat } from './lastChat'
 import {
   activeSession,
@@ -74,6 +75,23 @@ function pairTranscript(
   return turns
 }
 
+/**
+ * One question, as the composer configured it.
+ *
+ * An object rather than five positional arguments, for the reason `RunRequest` is one:
+ * the width axis was added to the wire a whole phase before anything could set it, and
+ * a positional list is exactly where the next such field gets forgotten.
+ */
+export interface AskRequest {
+  question: string
+  /** Adapter persona id; scopes data and tools. */
+  persona: string | null
+  /** The screened image this question carries, if any. */
+  attachment?: TurnAttachment | null
+  /** The width the person asked for. Defaults to Auto — the router decides. */
+  mode?: RunMode
+}
+
 /** What the chat shell reads and calls. */
 export interface UseChatThread {
   thread: ThreadState
@@ -83,12 +101,8 @@ export interface UseChatThread {
   live: Turn | null
   /** Whether a run is in flight (the composer is locked while it is). */
   running: boolean
-  /** Send a question in the active chat, with whatever image was screened for it. */
-  ask: (
-    question: string,
-    persona: string | null,
-    attachment?: TurnAttachment | null,
-  ) => void
+  /** Send a question in the active chat, exactly as the composer configured it. */
+  ask: (request: AskRequest) => void
   /** Open a new chat. */
   newChat: () => void
   /** Show an existing chat, loading its stored transcript the first time. */
@@ -164,6 +178,7 @@ export function useChatThread(token: string | null): UseChatThread {
       question: string,
       persona: string | null,
       attachment: TurnAttachment | null,
+      mode: RunMode,
     ): void => {
       const turnId = mintKey('turn')
       dispatch({
@@ -178,47 +193,55 @@ export function useChatThread(token: string | null): UseChatThread {
       // plus the screened description of the image, which is the only form an
       // attachment takes on this wire. A refused image contributes nothing.
       const query = questionWithAttachment(question, attachment)
-      controllerRef.current = startRun({ query, persona, sessionId: serverId }, token, {
-        onEvent: (event) => {
-          if (event.type === 'approval_required') approvalIdRef.current = event.approval_id
-          dispatch({ kind: 'event', turnId, event })
+      const width = wireMode(mode)
+      controllerRef.current = startRun(
+        {
+          query,
+          persona,
+          sessionId: serverId,
+          depthMode: width.depthMode,
+          requestedFanout: width.requestedFanout,
         },
-        onError: (error) =>
-          dispatch({
-            kind: 'event',
-            turnId,
-            event: { type: 'error', run_id: turnId, seq: -1, message: error.message },
-          }),
-        // A transport can end without a terminal event (a dropped connection); clear
-        // `running` so the composer unlocks regardless.
-        onClose: () => dispatch({ kind: 'closed', turnId }),
-      })
+        token,
+        {
+          onEvent: (event) => {
+            if (event.type === 'approval_required') approvalIdRef.current = event.approval_id
+            dispatch({ kind: 'event', turnId, event })
+          },
+          onError: (error) =>
+            dispatch({
+              kind: 'event',
+              turnId,
+              event: { type: 'error', run_id: turnId, seq: -1, message: error.message },
+            }),
+          // A transport can end without a terminal event (a dropped connection); clear
+          // `running` so the composer unlocks regardless.
+          onClose: () => dispatch({ kind: 'closed', turnId }),
+        },
+      )
     },
     [token],
   )
 
   const ask = useCallback(
-    (
-      question: string,
-      persona: string | null,
-      attachment: TurnAttachment | null = null,
-    ): void => {
+    (request: AskRequest): void => {
+      const { question, persona, attachment = null, mode = DEFAULT_RUN_MODE } = request
       const current = activeSession(thread)
       if (current === null) return
       approvalIdRef.current = null
       setApprovalResolved(false)
 
       if (current.serverId !== null) {
-        openRun(current.id, current.serverId, question, persona, attachment)
+        openRun(current.id, current.serverId, question, persona, attachment, mode)
         return
       }
       // First question of this chat: mint the conversation, then run in it.
       void createSession(token, question.slice(0, 80))
         .then((row) => {
           dispatch({ kind: 'bind_session', sessionId: current.id, serverId: row.id })
-          openRun(current.id, row.id, question, persona, attachment)
+          openRun(current.id, row.id, question, persona, attachment, mode)
         })
-        .catch(() => openRun(current.id, null, question, persona, attachment))
+        .catch(() => openRun(current.id, null, question, persona, attachment, mode))
     },
     [thread, openRun, token],
   )

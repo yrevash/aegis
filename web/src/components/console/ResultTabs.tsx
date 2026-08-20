@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -15,22 +15,35 @@ import { readSources } from './sources'
 import { SourcesTab } from './SourcesTab'
 import { TraceTab } from './TraceTab'
 
-/** The three questions a person asks of a finished run, in the order they ask them. */
-type TabId = 'answer' | 'sources' | 'trace'
+/** What a person opens on purpose, once the answer is already in front of them. */
+export type ResultTabId = 'sources' | 'trace'
 
 /**
- * The Answer tab — what was asked for, what it is worth, and what it stands on.
+ * The answer, and what it stands on — always in the flow, never behind a tab.
+ *
+ * This used to be the first of three tabs, which meant the thing the person actually
+ * asked for only existed once the run *settled* and only if they were on the right tab.
+ * A console shaped like a conversation streams the answer under the question; the two
+ * surfaces that are genuinely secondary — every source, and the full trace — keep their
+ * tabs.
  *
  * The trust summary above the answer is the reused {@link DecisionStrip}: guardrails
- * held, sources counted, cost measured. The citation strip below it names the sources
- * the answer actually stands on, with each one's page when the run reported one.
+ * held, sources counted, cost measured. The citation strip below names the sources the
+ * answer actually stands on, with each one's page when the run reported one.
  */
-function AnswerTab({ state, onSeeSources }: { state: RunState; onSeeSources: () => void }): ReactElement {
+export function AnswerBlock({
+  state,
+  onSeeSources,
+}: {
+  state: RunState
+  onSeeSources: () => void
+}): ReactElement {
   const cited = readSources(state.retrievalScores).slice(0, 3)
+  const settled = !state.running && state.events.length > 0
 
   return (
     <div className="flex flex-col gap-3">
-      <DecisionStrip state={state} />
+      {settled && <DecisionStrip state={state} />}
       <AnswerPanel state={state} />
 
       {cited.length > 0 && (
@@ -45,9 +58,7 @@ function AnswerTab({ state, onSeeSources }: { state: RunState; onSeeSources: () 
                 <span className="max-w-[16rem] truncate text-[0.74rem] text-foreground">
                   {source.label}
                 </span>
-                {source.page !== null && (
-                  <Badge tone="neutral">page {source.page}</Badge>
-                )}
+                {source.page !== null && <Badge tone="neutral">page {source.page}</Badge>}
                 {source.verbatim === 'verified' && <Badge tone="ok">verbatim</Badge>}
                 {source.verbatim === 'unverified' && <Badge tone="block">unverified</Badge>}
               </span>
@@ -71,24 +82,30 @@ interface ResultTabsProps {
   graph: GraphResponse
   metrics: MetricsResponse | null
   beat: Beat | null
+  /** Controlled, so the answer's "See all sources" link can open the right one. */
+  tab: ResultTabId
+  onTab: (tab: ResultTabId) => void
 }
 
 /**
- * The result tabs — Answer, Sources, Trace.
+ * The two surfaces a person opens on purpose: every source, and the whole trace.
  *
- * The split follows one rule: the first tab carries what a person asked for, and
- * anything they would only open on purpose gets its own. Three tabs, and the order is
- * the order of the questions — what is the answer, what backs it, how was it produced.
- * They are not numbered, because they are not a sequence a person walks through.
- *
- * Each tab's own empty state says what was missing. None of them draws an empty chart.
+ * The order is the order of the questions — what backs the answer, and how it was
+ * produced. They are not numbered, because they are not a sequence anybody walks
+ * through. Each tab's own empty state says what was missing; none of them draws an
+ * empty chart.
  */
-export function ResultTabs({ state, graph, metrics, beat }: ResultTabsProps): ReactElement {
-  const [tab, setTab] = useState<TabId>('answer')
+export function ResultTabs({
+  state,
+  graph,
+  metrics,
+  beat,
+  tab,
+  onTab,
+}: ResultTabsProps): ReactElement {
   const sourceCount = state.retrievalScores.length
 
-  const tabs: { id: TabId; label: string; count: number | null }[] = [
-    { id: 'answer', label: 'Answer', count: null },
+  const tabs: { id: ResultTabId; label: string; count: number | null }[] = [
     { id: 'sources', label: 'Sources', count: sourceCount > 0 ? sourceCount : null },
     { id: 'trace', label: 'Trace', count: null },
   ]
@@ -106,7 +123,7 @@ export function ResultTabs({ state, graph, metrics, beat }: ResultTabsProps): Re
               id={`result-tab-${entry.id}`}
               aria-selected={selected}
               aria-controls={`result-panel-${entry.id}`}
-              onClick={() => setTab(entry.id)}
+              onClick={() => onTab(entry.id)}
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                 'outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -137,11 +154,8 @@ export function ResultTabs({ state, graph, metrics, beat }: ResultTabsProps): Re
         aria-labelledby={`result-tab-${tab}`}
         tabIndex={-1}
       >
-        {tab === 'answer' && <AnswerTab state={state} onSeeSources={() => setTab('sources')} />}
         {tab === 'sources' && <SourcesTab state={state} />}
-        {tab === 'trace' && (
-          <TraceTab state={state} graph={graph} metrics={metrics} beat={beat} />
-        )}
+        {tab === 'trace' && <TraceTab state={state} graph={graph} metrics={metrics} beat={beat} />}
       </div>
     </div>
   )

@@ -20,8 +20,9 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 
-import { AreaChart } from '@/components/charts/AreaChart'
-import { RankedBars, type RankedDatum } from '@/components/charts/RankedBars'
+import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
+import { rampHex } from '@/components/charts/palette'
+import { StackedArea } from '@/components/charts/StackedArea'
 import { Figure } from '@/components/primitives/Figure'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
@@ -35,6 +36,7 @@ import {
   getGovernanceDashboard,
   getLatency,
   getSecurityPosture,
+  getUsage,
 } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type {
@@ -45,9 +47,12 @@ import type {
   PostureStatus,
   SecurityPostureResponse,
 } from '@/lib/api/platform'
+import type { UsageResponse } from '@/lib/api/types'
 import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
 import { useMetricsSeries } from '@/state/useMetrics'
+
+import { modelMix, shortModel, stackSpendByTenant, toDaily } from './adminOverview'
 
 // ── formatting helpers ───────────────────────────────────────────────────────
 
@@ -69,19 +74,6 @@ function fmtPct(frac: number | null | undefined): string {
 
 function fmtMs(ms: number | null | undefined): string {
   return ms == null || !Number.isFinite(ms) ? '—' : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
-}
-
-function fmtTs(value: unknown): string {
-  if (typeof value !== 'string') return value == null ? '—' : String(value)
-  const t = Date.parse(value)
-  if (Number.isNaN(t)) return value
-  return new Date(t).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'UTC',
-  })
 }
 
 /**
@@ -110,6 +102,21 @@ function postureTone(status: PostureStatus | string): BadgeTone {
     default:
       return 'block'
   }
+}
+
+/**
+ * A series worth drawing, or nothing.
+ *
+ * A sparkline is a claim that the figure has a shape. Two identical samples have
+ * no shape — the mark it produces is a horizontal rule under the number, which
+ * reads as a chart that failed to load rather than as a counter that has not
+ * moved. So a series that is constant (or shorter than two finite points) is
+ * withheld, and the tile simply has no sparkline until the figure does something.
+ */
+function movingSeries(values: readonly number[]): number[] | undefined {
+  const finite = values.filter((v) => Number.isFinite(v))
+  if (finite.length < 2) return undefined
+  return finite.some((v) => v !== finite[0]) ? finite : undefined
 }
 
 /** An honest dashed empty-state panel. */
@@ -146,6 +153,14 @@ function AdminCommandCenter(): ReactElement {
   const [gov, setGov] = useState<GovernanceDashboardResponse | null>(null)
   const [latency, setLatency] = useState<LatencyResponse | null>(null)
   const [posture, setPosture] = useState<SecurityPostureResponse | null>(null)
+  // The 30-day ledger roll-up, platform-wide. `gov.usage` carries the same shape
+  // for the *day* window only, which is fifteen hourly buckets — enough for a
+  // number, not enough for a shape. This is the series the trend and the stack
+  // are drawn from.
+  const [ledger, setLedger] = useState<UsageResponse | null>(null)
+  // Per-tenant slices of the same window, keyed by tenant id. Fetched in a second
+  // pass because the tenant list only exists once `/governance/dashboard` lands.
+  const [tenantLedger, setTenantLedger] = useState<Map<number, UsageResponse>>(new Map())
   // True once every accessor above has settled (fulfilled *or* rejected), so a
   // failed fetch resolves the spinner into the honest per-panel empty states
   // instead of leaving it spinning forever.
@@ -163,6 +178,7 @@ function AdminCommandCenter(): ReactElement {
       getGovernanceDashboard(token).then(set(setGov)),
       getLatency(token).then(set(setLatency)),
       getSecurityPosture(token).then(set(setPosture)),
+      getUsage(token, { window: 'month' }).then(set(setLedger)),
     ]).then(() => {
       if (alive) setSettled(true)
     })
@@ -170,6 +186,30 @@ function AdminCommandCenter(): ReactElement {
       alive = false
     }
   }, [token, hydrated])
+
+  // ── the per-tenant slices, once the tenant list is known ─────────────────────
+  const tenantIds = useMemo(() => (gov?.tenants ?? []).map((t) => t.id), [gov])
+  const tenantKey = tenantIds.join(',')
+  useEffect(() => {
+    if (!hydrated || tenantIds.length === 0) return
+    let alive = true
+    void Promise.allSettled(
+      tenantIds.map((id) =>
+        getUsage(token, { tenantId: id, window: 'month' }).then((u) => [id, u] as const),
+      ),
+    ).then((results) => {
+      if (!alive) return
+      const next = new Map<number, UsageResponse>()
+      for (const r of results) if (r.status === 'fulfilled') next.set(r.value[0], r.value[1])
+      setTenantLedger(next)
+    })
+    return () => {
+      alive = false
+    }
+    // `tenantKey` is the stable identity of `tenantIds`; the array is rebuilt on
+    // every `gov` change and would otherwise refire this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, hydrated, tenantKey])
 
   const summary = opt?.summary ?? null
   const usage = gov?.usage ?? null
@@ -185,60 +225,73 @@ function AdminCommandCenter(): ReactElement {
   const smallShare = summary?.small_model_share ?? metrics?.small_model_share ?? null
   const p95 = latency?.run_p95_ms ?? null
 
-  // ── real cost trend from the ledger's own time buckets ───────────────────────
-  const trend = useMemo(
-    () =>
-      (usage?.series ?? []).map((p) => ({
-        bucket: fmtTs(p.bucket),
-        cost: Number(p.cost_usd.toFixed(4)),
-      })),
-    [usage],
+  // The two figures that accumulate inside this process carry the polled
+  // `/metrics` window as their sparkline. It is short — one point per poll since
+  // the page opened — so it is passed only once there are two points to draw a
+  // segment between; a one-point "trend" is a flat line that means nothing.
+  const savedTrend = useMemo(
+    () => movingSeries(series.history.map((m) => m.cost_saved_usd)),
+    [series.history],
+  )
+  const callsTrend = useMemo(
+    () => movingSeries(series.history.map((m) => m.total_calls)),
+    [series.history],
   )
 
-  // ── model mix by real ledger spend (falls back to call count) ────────────────
-  const mix: RankedDatum[] = useMemo(() => {
-    const byModel = usage?.by_model ?? []
-    const withSpend = byModel.filter((m) => m.cost_usd > 0)
-    const rows = withSpend.length > 0 ? withSpend : byModel.filter((m) => m.calls > 0)
-    return rows
-      .slice()
-      .sort((a, b) => (withSpend.length ? b.cost_usd - a.cost_usd : b.calls - a.calls))
-      .map((m) => ({
-        name: m.model,
-        value: Number((withSpend.length ? m.cost_usd : m.calls).toFixed(4)),
-      }))
-  }, [usage])
-  const mixIsSpend = (usage?.by_model ?? []).some((m) => m.cost_usd > 0)
+  // ── the 30-day daily spend series, from the ledger's own buckets ─────────────
+  const daily = useMemo(() => toDaily(ledger?.series ?? []), [ledger])
+  const spendTrend = useMemo(() => daily.map((d) => d.cost), [daily])
+  const ledgerSpend = ledger?.total_cost_usd ?? null
 
-  // ── where the spend goes (per role) — as a pie ───────────────────────────────
-  const spendByRole: RankedDatum[] = useMemo(() => {
-    const roles = Object.entries(summary?.by_role ?? {})
-    const withCost = roles.filter(([, r]) => r.cost_usd > 0)
-    const rows = withCost.length > 0 ? withCost : roles.filter(([, r]) => r.calls > 0)
-    return rows
-      .sort((a, b) => (withCost.length ? b[1].cost_usd - a[1].cost_usd : b[1].calls - a[1].calls))
-      .map(([role, r]) => ({
-        name: role,
-        value: Number((withCost.length ? r.cost_usd : r.calls).toFixed(4)),
-      }))
-  }, [summary])
-  const spendIsCost = Object.values(summary?.by_role ?? {}).some((r) => r.cost_usd > 0)
+  // ── spend over time, stacked by who it was billed to ─────────────────────────
+  const stacked = useMemo(
+    () =>
+      stackSpendByTenant(
+        ledger?.series ?? [],
+        (gov?.tenants ?? []).map((t) => ({
+          id: t.id,
+          name: t.name,
+          series: tenantLedger.get(t.id)?.series ?? [],
+        })),
+      ),
+    [ledger, gov, tenantLedger],
+  )
+  const stackReady = stacked.rows.length > 0 && stacked.bands.length > 0
 
-  // ── model routing — how roles fan out across deployments, as a pie ───────────
-  const routingMix: RankedDatum[] = useMemo(() => {
-    const routing =
+  // ── model mix by real ledger spend, folded to the ramp's four steps ──────────
+  const mix: DonutDatum[] = useMemo(() => {
+    const slices = modelMix(ledger?.by_model ?? [])
+    return slices.map((slice, i) => ({
+      name: slice.name,
+      value: slice.value,
+      color: 'graph' as const,
+      hex: rampHex(i, slices.length),
+    }))
+  }, [ledger])
+  const topModel = useMemo(() => modelMix(ledger?.by_model ?? [])[0] ?? null, [ledger])
+
+  // ── model routing — which deployment each role lands on ──────────────────────
+  const routing = useMemo(() => {
+    const table =
       metrics?.routing && Object.keys(metrics.routing).length ? metrics.routing : opt?.config.routing ?? {}
-    const counts = new Map<string, number>()
-    for (const model of Object.values(routing)) counts.set(model, (counts.get(model) ?? 0) + 1)
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, value]) => ({ name, value }))
+    return Object.entries(table).map(([role, model]) => ({ role, model: shortModel(model) }))
   }, [metrics, opt])
 
   // ── tenant + budget health (top customers by spend) ──────────────────────────
   const budgetByTenant = useMemo(() => {
+    // `/governance/dashboard` sends budgets keyed by **scope**, not by a
+    // `tenant_id` field: a tenant cap arrives as `scope_type: "tenant"` with the
+    // tenant in `scope_id`, and a per-user cap as `scope_type: "user"`. Reading
+    // `budget.tenant_id` — which the response does not carry — matched nothing,
+    // so every customer row rendered "— calls" and "no cap" while real caps sat
+    // in the payload. The scope is read first and `tenant_id` kept as a fallback
+    // for any deployment that does send it.
     const map = new Map<number, BudgetStatusRow>()
-    for (const b of gov?.budgets ?? []) if (b.budget.tenant_id != null) map.set(b.budget.tenant_id, b)
+    for (const b of gov?.budgets ?? []) {
+      const id =
+        b.budget.tenant_id ?? (b.budget.scope_type === 'tenant' ? b.budget.scope_id : null)
+      if (id != null) map.set(id, b)
+    }
     return map
   }, [gov])
   const tenants = useMemo(() => gov?.tenants ?? [], [gov])
@@ -338,20 +391,47 @@ function AdminCommandCenter(): ReactElement {
         </Card>
       ) : (
         <>
-          {/* ── A · Business KPI band ──────────────────────────────────────────── */}
+          {/* ── A · Business KPI band ──────────────────────────────────────────────
+              Seven tiles in a four-column grid left three dead cells in the second
+              row, which reads as a page that ran out of things to say. The lead
+              tile takes two columns instead, so eight slots hold seven tiles and
+              both rows close. The `trend` sparkline is only passed where a real
+              series exists behind the figure — the ledger's own 30 daily buckets
+              for spend, the polled `/metrics` window for the two counters that
+              accumulate in-process. The rest are single samples and stay flat by
+              omission rather than by invention. ── */}
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <StatCard
+              className="col-span-2"
+              label="Total spend, 30 days"
+              value={fmtUsd(ledgerSpend ?? totalSpend)}
+              icon={Coins}
+              tone="graph"
+              trend={movingSeries(spendTrend)}
+              source={
+                ledgerSpend != null
+                  ? `GET /admin/usage · ${daily.length} days of the usage ledger`
+                  : 'GET /governance/dashboard · today'
+              }
+            />
             <StatCard
               label="Cost saved vs frontier"
               value={fmtUsd(costSaved)}
               icon={PiggyBank}
               tone="ok"
               delta={savingsPct != null ? { value: `${fmtPct(savingsPct)} saved`, direction: 'up' } : undefined}
+              trend={savedTrend}
             />
-            <StatCard label="Total spend" value={fmtUsd(totalSpend)} icon={Coins} tone="ml" />
-            <StatCard label="Queries served" value={fmtInt(queries)} icon={Zap} tone="agent" />
-            <StatCard label="Quality score" value={fmtPct(quality)} icon={Target} tone="ml" />
-            <StatCard label="Cache hit rate" value={fmtPct(cacheHit)} icon={DatabaseZap} tone="ok" />
+            <StatCard
+              label="Queries served"
+              value={fmtInt(queries)}
+              icon={Zap}
+              tone="agent"
+              trend={callsTrend}
+            />
             <StatCard label="Small-model share" value={fmtPct(smallShare)} icon={GitBranch} tone="graph" />
+            <StatCard label="Cache hit rate" value={fmtPct(cacheHit)} icon={DatabaseZap} tone="ok" />
+            <StatCard label="Quality score" value={fmtPct(quality)} icon={Target} tone="ml" />
             <StatCard label="p95 latency" value={fmtMs(p95)} icon={Timer} tone="graph" />
           </div>
 
@@ -467,22 +547,47 @@ function AdminCommandCenter(): ReactElement {
             </CardBody>
           </Card>
 
-          {/* ── D · Financials: real trend + model mix ─────────────────────────── */}
+          {/* ── D · Financials — where the money went, over time and by model ────
+              Both cards were `RankedBars`: a horizontal bar per row, which is a
+              fine mark and the wrong one here. Spend has a *shape* over thirty
+              days that a ranked list cannot show, and a model's share of a total
+              is a part-of-whole question that a bar answers only by arithmetic.
+              The stack answers the first, the donut the second, and neither
+              invents a category the ledger did not report. ── */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Card className="lg:col-span-2">
-              <CardHeader title="Cost trend" />
+              <CardHeader
+                title="Daily spend, by who it was billed to"
+                actions={
+                  <Badge tone="neutral" className="gap-1.5">
+                    <Coins className="size-3" aria-hidden />
+                    {daily.length} days
+                  </Badge>
+                }
+              />
               <CardBody className="pt-0">
-                {trend.length > 0 ? (
-                  <AreaChart
-                    data={trend}
-                    index="bucket"
-                    category="cost"
-                    color="graph"
-                    valueFormatter={(v) => fmtUsd(v)}
-                    height={220}
-                  />
+                {stackReady ? (
+                  <div className="flex flex-col gap-3">
+                    <StackedArea
+                      data={stacked.rows}
+                      index="day"
+                      series={stacked.bands.map((b) => ({ key: b.key, label: b.label, value: b.total }))}
+                      valueFormatter={(v) => fmtUsd(v)}
+                      height={240}
+                    />
+                    <Receipt
+                      origin="GET /admin/usage · one call per tenant, same window"
+                      detail="Bands sum to the platform total; untenanted work is its own band, not dropped."
+                    />
+                  </div>
+                ) : daily.length > 0 ? (
+                  <Empty>Spend is recorded, but no tenant attribution has landed yet.</Empty>
                 ) : (
-                  <Empty>No metered spend yet.</Empty>
+                  <Absence
+                    figure="Daily spend"
+                    why="The usage ledger has no rows in the last 30 days, so there is nothing to bucket."
+                    needed="One metered model call. Every gateway call writes a ledger row."
+                  />
                 )}
               </CardBody>
             </Card>
@@ -492,81 +597,68 @@ function AdminCommandCenter(): ReactElement {
               <CardBody className="pt-0">
                 {mix.length > 0 ? (
                   <div className="flex flex-col gap-4">
-                    <div>
-                      <p className="eyebrow">{mixIsSpend ? 'total spend' : 'total calls'}</p>
-                      <p className="mt-1">
-                        <Figure size="stat">
-                          {mixIsSpend ? fmtUsd(totalSpend) : fmtInt(queries)}
-                        </Figure>
-                      </p>
-                    </div>
-                    <RankedBars
-                      label={mixIsSpend ? 'Spend by model, highest first' : 'Calls by model, highest first'}
+                    <DonutChart
                       data={mix}
-                      valueFormatter={(v) => (mixIsSpend ? fmtUsd(v) : `${fmtInt(v)} calls`)}
+                      centerLabel={fmtUsd(ledgerSpend)}
+                      centerSub="30-day spend"
+                      valueFormatter={(v) => fmtUsd(v)}
+                      height={190}
                     />
+                    {topModel != null && (
+                      <Receipt
+                        origin="GET /admin/usage · by_model"
+                        detail={`${topModel.name} carries ${fmtPct(topModel.share)} of it.`}
+                      />
+                    )}
                   </div>
                 ) : (
-                  <Empty>No model usage yet.</Empty>
+                  <Absence
+                    figure="Spend by model"
+                    why="No priced model call is recorded in the window."
+                    needed="One metered call. Unpriced deployments are excluded rather than counted at zero."
+                  />
                 )}
               </CardBody>
             </Card>
           </div>
 
-          {/* ── E · Distribution: spend by role + routing, both as pies ────────── */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader title="Where the spend goes" />
-              <CardBody className="pt-0">
-                {spendByRole.length > 0 ? (
-                  <div className="flex flex-col gap-4">
-                    <div>
-                      <p className="eyebrow">{spendIsCost ? 'total, all roles' : 'total calls, all roles'}</p>
-                      <p className="mt-1">
-                        <Figure size="stat">
-                          {spendIsCost
-                            ? fmtUsd(summary?.total_cost_usd ?? null)
-                            : fmtInt(summary?.total_calls ?? null)}
-                        </Figure>
-                      </p>
-                    </div>
-                    <RankedBars
-                      label={spendIsCost ? 'Spend by role, highest first' : 'Calls by role, highest first'}
-                      data={spendByRole}
-                      valueFormatter={(v) => (spendIsCost ? fmtUsd(v) : `${fmtInt(v)} calls`)}
-                    />
-                  </div>
-                ) : (
-                  <Empty>No metered calls yet.</Empty>
-                )}
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardHeader title="Model routing" />
-              <CardBody className="pt-0">
-                {routingMix.length > 0 ? (
-                  <div className="flex flex-col gap-4">
-                    <div>
-                      <p className="eyebrow">roles routed</p>
-                      <p className="mt-1">
-                        <Figure size="stat">
-                          {String(routingMix.reduce((sum, d) => sum + d.value, 0))}
-                        </Figure>
-                      </p>
-                    </div>
-                    <RankedBars
-                      label="Roles per deployment, most first"
-                      data={routingMix}
-                      valueFormatter={(v) => `${v} role${v === 1 ? '' : 's'}`}
-                    />
-                  </div>
-                ) : (
-                  <Empty>Routing table unavailable.</Empty>
-                )}
-              </CardBody>
-            </Card>
-          </div>
+          {/* ── E · Routing — a mapping, so a table rather than a chart ───────────
+              This was a bar chart of "roles per deployment", which measured the
+              length of a `Object.values(...).length` and nothing a reader wants:
+              the question is never *how many* roles land on a model, it is *which*
+              one each role lands on. That is a two-column mapping, and DESIGN.md
+              §4 is explicit that anything countable is a table. ── */}
+          <Card>
+            <CardHeader
+              title="Model routing"
+              actions={
+                <Badge tone="neutral" className="gap-1.5">
+                  <GitBranch className="size-3" aria-hidden />
+                  {routing.length} roles
+                </Badge>
+              }
+            />
+            <CardBody className="pt-0">
+              {routing.length > 0 ? (
+                <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {routing.map(({ role, model }) => (
+                    <li
+                      key={role}
+                      className="flex items-center gap-2.5 rounded-md border border-border bg-surface-2/50 px-3 py-2"
+                    >
+                      <span className="shrink-0 text-sm font-medium text-foreground">{role}</span>
+                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <span className="min-w-0 truncate" title={model}>
+                        <Figure className="text-[0.78rem] text-muted-foreground">{model}</Figure>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <Empty>Routing table unavailable.</Empty>
+              )}
+            </CardBody>
+          </Card>
 
           {/* ── F · Health: security posture + latency (positive/green) ────────── */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

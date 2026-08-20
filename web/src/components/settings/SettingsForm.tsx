@@ -1,13 +1,29 @@
 'use client'
 
-import { AlertTriangle, Check, Loader2, Lock, PlugZap, SlidersHorizontal } from 'lucide-react'
+import {
+  AlertTriangle,
+  Bot,
+  Check,
+  Database,
+  IdCard,
+  Loader2,
+  Lock,
+  PlugZap,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  type LucideIcon,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
+import { TooltipProvider } from '@/components/primitives/tooltip'
 import {
   canWeaken,
   controlLabel,
@@ -46,6 +62,13 @@ import { cn } from '@/lib/utils'
  * behind "operating this platform never requires touching code". Nothing below is
  * styled per key, and nothing below may be.
  *
+ * **The layout is a rail and a panel**, not six stacked cards. Twenty-five controls,
+ * each carrying a description, a merge note, a provenance receipt and a control, is a
+ * page a reader scrolls rather than uses — and it was the screen the phone test called a
+ * text hell. One category is open at a time; the rail says how many controls each holds
+ * and how many of them are inert or read-only, so what is *not* on screen is still
+ * counted. Nothing is hidden that was not already below the fold.
+ *
  * What the screen refuses to hide, because each was a real defect:
  *
  * - **A control that binds to nothing.** `control.effective === false` renders as a
@@ -74,6 +97,27 @@ const INPUT =
   'w-full rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground ' +
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)] ' +
   'disabled:cursor-not-allowed disabled:opacity-60'
+
+/** The one focus treatment on this screen: the ring token, at 2px, always visible. */
+const FOCUS = 'outline-none focus-visible:ring-2 focus-visible:ring-ring'
+
+/**
+ * An icon per key **namespace**, for the category rail.
+ *
+ * Keyed on the namespace and never on the key, for exactly the reason
+ * `SECTION_TITLES` is: this is a hint about a *group*, and a namespace nobody
+ * anticipated still gets a rail entry — with the fallback glyph — rather than
+ * disappearing. A key→icon table would be the hand-written second catalogue the
+ * generated form exists to prevent.
+ */
+const SECTION_ICONS: Readonly<Record<string, LucideIcon>> = {
+  agent: Bot,
+  guardrails: ShieldCheck,
+  jobs: Database,
+  memory: Sparkles,
+  seat: IdCard,
+  skills: Sparkles,
+}
 
 /** One control: what is in force, who decided it, and the way to change it. */
 function SettingField({
@@ -132,7 +176,7 @@ function SettingField({
   return (
     <div
       className={cn(
-        'grid gap-4 py-5 first:pt-0 last:pb-0 md:grid-cols-[minmax(0,1fr)_20rem]',
+        'grid gap-3 py-4 first:pt-0 last:pb-0 md:grid-cols-[minmax(0,1fr)_18rem]',
         // An inert row is not a styled special case of a live row — it is drawn on a
         // different surface, with a marked edge, so it never reads as one control
         // among the working ones.
@@ -157,25 +201,43 @@ function SettingField({
               Read only
             </Badge>
           ) : null}
-          {canWeaken(row.control) ? null : <Badge tone="neutral">Cannot be weakened</Badge>}
+          {canWeaken(row.control) ? null : (
+            <Badge tone="neutral">
+              Cannot be weakened
+              {/* The merge rule is part of the value — a `tighten_only` key and an
+                  `override` key behave in opposite ways when a tenant writes them. It
+                  was a second paragraph on every row; it is the badge's own tip now. */}
+              <InfoTip label={`How ${row.key} merges across scopes`}>
+                {mergeNote(row.control)}
+              </InfoTip>
+            </Badge>
+          )}
         </div>
-        <p id={describedBy} className="mt-2 max-w-prose text-[0.8rem] leading-relaxed text-muted-foreground">
+        <p
+          id={describedBy}
+          className="mt-1.5 max-w-prose text-[0.8rem] leading-relaxed text-muted-foreground"
+        >
           {row.control.description}
         </p>
-        <p className="mt-2 max-w-prose text-[0.72rem] leading-relaxed text-muted-foreground">
-          {mergeNote(row.control)}
-        </p>
-        <Receipt
-          label="Decided by"
-          origin={`${provenance.label.toLowerCase()} · ${row.key}`}
-          detail={provenance.detail}
-          className="mt-3"
-        />
+        {/* The receipt names the deciding scope; the *sentence* explaining what that
+            scope means was three more lines on every one of twenty-five rows, so it
+            moved one layer down (DESIGN.md §4). Nothing is lost — the provenance is
+            still on the row, in the one treatment the console uses everywhere. */}
+        <span className="mt-2 flex flex-wrap items-center gap-1">
+          <Receipt
+            label="Decided by"
+            origin={`${provenance.label.toLowerCase()} · ${row.key}`}
+            variant="inline"
+          />
+          <InfoTip label={`What decided ${row.key}`}>{provenance.detail}</InfoTip>
+        </span>
       </div>
 
       <div className="min-w-0">
         <p className="eyebrow">In force</p>
-        <Figure className={cn('mt-1 break-words', inert ? 'text-muted-foreground' : 'text-foreground')}>
+        <Figure
+          className={cn('mt-0.5 break-words', inert ? 'text-muted-foreground' : 'text-foreground')}
+        >
           {formatValue(row.value)}
         </Figure>
         <div className="mt-2">
@@ -382,6 +444,8 @@ export function SettingsForm({
   const [userId, setUserId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [scope, setScope] = useState<SettingScope>('user')
+  const [open, setOpen] = useState<string | null>(null)
+  const [filter, setFilter] = useState('')
 
   useEffect(() => {
     // Wait for the persisted session; firing now would send no bearer.
@@ -431,6 +495,26 @@ export function SettingsForm({
 
   const sections = useMemo(() => (rows === null ? [] : groupSettings(rows)), [rows])
 
+  // A search crosses every category, so it is not a filter *inside* one — it is its own
+  // view. Selecting a category clears it, and typing clears the category.
+  const needle = filter.trim().toLowerCase()
+  const found = useMemo(
+    () =>
+      needle === '' || rows === null
+        ? []
+        : rows.filter(
+            (row) =>
+              row.key.toLowerCase().includes(needle) ||
+              row.control.description.toLowerCase().includes(needle),
+          ),
+    [rows, needle],
+  )
+
+  // Open the first category once the catalogue arrives, rather than opening on nothing.
+  useEffect(() => {
+    if (open === null && sections.length > 0) setOpen(sections[0].id)
+  }, [open, sections])
+
   if (error !== null) {
     return <ErrorState error={error} />
   }
@@ -447,55 +531,177 @@ export function SettingsForm({
     )
   }
 
-  return (
-    <div className="space-y-5">
-      <Card className="rounded-lg">
-        <CardBody className="flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0">
-            <label htmlFor="settings-scope" className="eyebrow mb-1 block">
-              Changes apply to
-            </label>
-            <select
-              id="settings-scope"
-              className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)]"
-              value={scope}
-              onChange={(event) => setScope(event.target.value as SettingScope)}
-            >
-              {scopes.map((option) => (
-                <option key={option.id} value={option.id} disabled={!option.available}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <p className="max-w-prose text-[0.74rem] leading-snug text-muted-foreground">
-            {scopes
-              .filter((option) => !option.available)
-              .map((option) => option.reason)
-              .join(' ')}
-          </p>
-        </CardBody>
-      </Card>
+  const active = sections.find((section) => section.id === open) ?? sections[0]
+  const unavailable = scopes.filter((option) => !option.available)
 
-      {sections.map((section) => (
-        <Card key={section.id} className="rounded-lg">
-          <CardHeader
-            title={section.title}
-            eyebrow={`${section.rows.length} ${section.rows.length === 1 ? 'control' : 'controls'} · platform → tenant → you`}
-          />
-          <CardBody className="divide-y divide-border">
-            {section.rows.map((row) => (
-              <SettingField
-                key={row.key}
-                row={row}
-                scope={scope}
-                token={token}
-                onWritten={replace}
+  return (
+    <TooltipProvider>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
+      {/* The rail: every category, always countable, one open at a time. */}
+      <div className="flex flex-col gap-4">
+        <Card>
+          <CardBody className="flex flex-col gap-3">
+            <div>
+              <label
+                htmlFor="settings-scope"
+                className="eyebrow mb-1 flex items-center gap-1"
+              >
+                Changes apply to
+                {unavailable.length > 0 ? (
+                  <InfoTip label="Why a layer is unavailable">
+                    {unavailable.map((option) => option.reason).join(' ')}
+                  </InfoTip>
+                ) : null}
+              </label>
+              <select
+                id="settings-scope"
+                className={cn(INPUT, 'text-sm')}
+                value={scope}
+                onChange={(event) => setScope(event.target.value as SettingScope)}
+              >
+                {scopes.map((option) => (
+                  <option key={option.id} value={option.id} disabled={!option.available}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="relative">
+              <label htmlFor="settings-search" className="sr-only">
+                Search every control
+              </label>
+              <Search
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground/60"
               />
-            ))}
+              <input
+                id="settings-search"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder="Search all controls…"
+                autoComplete="off"
+                spellCheck={false}
+                className={cn(INPUT, 'h-8 pl-8 text-xs')}
+              />
+            </div>
           </CardBody>
         </Card>
-      ))}
+
+        <Card>
+          <CardHeader eyebrow="settings catalogue" title="Categories" as="h3" />
+          <CardBody className="pt-0">
+            <ul className="flex flex-col gap-0.5">
+              {sections.map((section) => {
+                const Icon = SECTION_ICONS[section.id] ?? SlidersHorizontal
+                const on = needle === '' && active?.id === section.id
+                const inert = section.rows.filter(
+                  (row) => fieldFor(row).kind === 'inert',
+                ).length
+                const locked = section.rows.filter(
+                  (row) => fieldFor(row).kind === 'readOnly',
+                ).length
+                return (
+                  <li key={section.id}>
+                    <button
+                      type="button"
+                      aria-current={on ? 'true' : undefined}
+                      onClick={() => {
+                        setOpen(section.id)
+                        setFilter('')
+                      }}
+                      className={cn(
+                        'flex w-full touch-manipulation items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors duration-[--dur-fast]',
+                        FOCUS,
+                        on
+                          ? 'bg-blue-50 font-medium text-foreground'
+                          : 'text-muted-foreground hover:bg-surface-2/70',
+                      )}
+                    >
+                      <Icon
+                        aria-hidden
+                        className={cn('size-4 shrink-0', on ? 'text-blue-700' : '')}
+                      />
+                      <span className="min-w-0 flex-1 text-pretty leading-tight">{section.title}</span>
+                      {inert > 0 ? (
+                        <PlugZap
+                          className="size-3 shrink-0 text-risk-ink"
+                          aria-label={`${inert} not wired up`}
+                        />
+                      ) : null}
+                      {locked > 0 ? (
+                        <Lock
+                          className="size-3 shrink-0 text-muted-foreground"
+                          aria-label={`${locked} read only`}
+                        />
+                      ) : null}
+                      <Figure className="shrink-0 text-[0.7rem] text-muted-foreground">
+                        {section.rows.length}
+                      </Figure>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </CardBody>
+        </Card>
+      </div>
+
+      {/* The panel: one category, or every match for a search. */}
+      <div className="min-w-0">
+        {needle !== '' ? (
+          <Card>
+            <CardHeader
+              eyebrow={`${found.length} ${found.length === 1 ? 'control' : 'controls'} match`}
+              title={`Search “${filter.trim()}”`}
+            />
+            <CardBody className="divide-y divide-border pt-0">
+              {found.length === 0 ? (
+                <p className="py-4 text-sm text-muted-foreground italic">
+                  No control&rsquo;s key or description contains that.
+                </p>
+              ) : (
+                found.map((row) => (
+                  <SettingField
+                    key={row.key}
+                    row={row}
+                    scope={scope}
+                    token={token}
+                    onWritten={replace}
+                  />
+                ))
+              )}
+            </CardBody>
+          </Card>
+        ) : active ? (
+          <Card>
+            <CardHeader
+              title={active.title}
+              eyebrow={`${active.rows.length} ${active.rows.length === 1 ? 'control' : 'controls'} · ${active.id}.*`}
+              actions={
+                <InfoTip label="How a value is decided">
+                  Every value is resolved platform → tenant → you. A `tighten_only` key folds
+                  to the strictest of the three, so a write can be accepted and still not be
+                  the value in force; an `override` key takes the innermost scope that set
+                  it. Each row names which scope decided it.
+                </InfoTip>
+              }
+            />
+            <CardBody className="divide-y divide-border pt-0">
+              {active.rows.map((row) => (
+                <SettingField
+                  key={row.key}
+                  row={row}
+                  scope={scope}
+                  token={token}
+                  onWritten={replace}
+                />
+              ))}
+            </CardBody>
+          </Card>
+        ) : null}
+      </div>
     </div>
+    </TooltipProvider>
   )
 }

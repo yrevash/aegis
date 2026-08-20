@@ -59,6 +59,12 @@ const NODE_PRESENTATION: Record<string, NodePresentation> = {
   guard_input: { short: 'Guard in', signal: 'block' },
   route: { short: 'Route', signal: 'agent' },
   answer_memory: { short: 'Memory QA', signal: 'graph' },
+  // The fan-out. These three are the multi-agent story: the supervisor sizing a
+  // team, the lanes running concurrently, and the merge that names who was in the
+  // answer and who was omitted.
+  plan_team: { short: 'Plan team', signal: 'agent' },
+  run_team: { short: 'Fan-out', signal: 'agent' },
+  synthesize: { short: 'Synthesise', signal: 'graph' },
   recall_memory: { short: 'Recall', signal: 'graph' },
   retrieve: { short: 'Retrieve', signal: 'graph' },
   plan: { short: 'Plan', signal: 'agent' },

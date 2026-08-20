@@ -11,6 +11,8 @@ import {
 } from '@/components/forecast/sources'
 import { SourceLine } from '@/components/forecast/SourceLine'
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { Absence } from '@/components/primitives/Receipt'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { ApiError } from '@/lib/api/apiError'
@@ -148,7 +150,15 @@ export function ExplainabilityPanel(): ReactElement {
         }
       />
       <CardBody className="space-y-5">
-        <p className="rounded-lg border border-border bg-surface-2/40 p-3.5 text-[0.8rem] leading-relaxed text-foreground">
+        {/*
+          The sentence that keeps the two panels apart is the one piece of prose on
+          this page that is *not* moved into a tooltip. Everything else here explains
+          a mechanism, and DESIGN.md §4 puts that one layer down. This one prevents a
+          misreading — a reader who takes these attributions as an explanation of the
+          spend band above — and a warning nobody hovers is a warning nobody reads.
+          It is compressed to one line and given the panel's own eyebrow instead.
+        */}
+        <p className="rounded-lg border border-border bg-surface-2/40 px-3.5 py-2.5 text-[0.8rem] leading-5 text-foreground">
           {PANELS_ARE_DIFFERENT_MODELS}
         </p>
 
@@ -197,11 +207,16 @@ export function ExplainabilityPanel(): ReactElement {
 
             {result && typeof result.prediction === 'number' ? (
               <div className="space-y-3">
-                <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
-                  Every feature is at its training median or mode — the spine reports all{' '}
-                  <Figure className="text-foreground">{imputed}</Figure> of them as
-                  imputed — so this is the model&apos;s baseline attribution, not a prediction
-                  about a real case.
+                <p className="flex flex-wrap items-center gap-1.5 text-[0.78rem] text-muted-foreground">
+                  <span className="eyebrow rounded-sm border border-border px-1.5 py-0.5">
+                    baseline attribution
+                  </span>
+                  all <Figure className="text-foreground">{imputed}</Figure> features imputed
+                  <InfoTip label="What a baseline attribution is">
+                    Every feature sits at its training median or mode — the spine reports all{' '}
+                    {imputed} of them as imputed — so this is the model&apos;s baseline
+                    attribution, not a prediction about a real case.
+                  </InfoTip>
                 </p>
                 <ShapWaterfall
                   base={base}
@@ -212,15 +227,11 @@ export function ExplainabilityPanel(): ReactElement {
               </div>
             ) : null}
 
-            <div className="rounded-lg border border-border bg-surface-2/40 p-3.5">
-              <p className="eyebrow mb-1">not built</p>
-              <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
-                Retraining this spine on a subset of its features — and reporting the delta
-                against the served model — needs a training job on the durable substrate, and
-                an experiment must never overwrite the artifact being served. There is no
-                feature picker here because there is no endpoint behind it yet.
-              </p>
-            </div>
+            <Absence
+              figure="What the spine predicts without a given feature"
+              why="Answering it means retraining on a feature subset and comparing against the served artifact — a training job, not a read."
+              needed="POST /ml/experiment, which fits a subset spine and returns its delta without overwriting what is served."
+            />
           </>
         )}
 

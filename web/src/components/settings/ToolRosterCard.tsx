@@ -5,12 +5,29 @@ import { useEffect, useState, type ReactElement } from 'react'
 
 import { refusalSentence } from '@/components/settings/settingsCatalogue'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
-import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
+import { TooltipProvider } from '@/components/primitives/tooltip'
 import { getToolRoster, type ToolRosterResponse } from '@/lib/api/console'
 import { useAuth } from '@/lib/auth/AuthContext'
+
+/**
+ * Chrome adds a scroll container's overflowing content to the **document's** own
+ * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
+ * `position: static`, so a 200-row table inside a 30rem panel left the page
+ * 10,948px tall — nine thousand of them empty — while the panel itself correctly
+ * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
+ * 'relative'` takes the document from 10,948px back to 2,232px.
+ *
+ * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
+ * not own; this is the same fix applied through the `className` the component
+ * already exposes, targeting the scroll box by the `role="group"` it is given
+ * whenever `maxHeight` is set. Remove it once the primitive carries it.
+ */
+const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
 
 /**
  * The effective tool roster — "6 of 9", and why the other three.
@@ -57,79 +74,106 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
     }
   }, [token, hydrated, refreshKey])
 
+  const share =
+    roster === null || roster.total === 0 ? 0 : (roster.allowed_count / roster.total) * 100
+
   return (
-    <Card className="rounded-lg">
-      <CardHeader
-        title="Tools"
-        eyebrow="platform ∩ persona, then the tenant’s gate floor"
-        actions={
-          roster === null ? null : (
-            <Badge tone="neutral" className="gap-1.5">
-              <Wrench aria-hidden className="size-3" />
-              <Figure>{roster.allowed_count}</Figure> of <Figure>{roster.total}</Figure> available
-            </Badge>
-          )
-        }
-      />
-      <CardBody>
-        {error !== null ? (
-          <ErrorState error={error} />
-        ) : roster === null ? (
-          <LoadingState rows={3} label="Reading the roster…" />
-        ) : (
+    <TooltipProvider>
+    <DataPanel
+      title="Tools"
+      eyebrow="platform ∩ persona, then the tenant’s gate floor"
+      maxHeight={roster !== null && roster.rows.length > 8 ? '26rem' : undefined}
+      className={SCROLL_BOX}
+      actions={
+        roster === null ? null : (
+          <Badge tone="neutral" className="gap-1.5">
+            <Wrench aria-hidden className="size-3" />
+            <Figure>{roster.allowed_count}</Figure> of <Figure>{roster.total}</Figure> available
+          </Badge>
+        )
+      }
+      toolbar={
+        roster === null ? undefined : (
           <>
-            <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[0.74rem] text-muted-foreground">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <ShieldCheck aria-hidden className="size-3.5" />
-              Persona <Figure className="text-foreground">{roster.persona}</Figure> · human gate at{' '}
-              <Figure className="text-foreground">{roster.gate_min_risk}</Figure> risk and above
-            </p>
-            <div className="w-full overflow-x-auto">
-              <table className="w-full min-w-[34rem] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th scope="col" className="eyebrow pb-2 pr-4 font-normal">
-                      Tool
-                    </th>
-                    <th scope="col" className="eyebrow pb-2 pr-4 font-normal">
-                      Risk
-                    </th>
-                    <th scope="col" className="eyebrow pb-2 font-normal">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {roster.rows.map((tool) => {
-                    const decided = DECIDED_BY[tool.decided_by] ?? {
-                      label: tool.decided_by,
-                      tone: 'neutral' as BadgeTone,
-                    }
-                    return (
-                      <tr key={tool.name} className="border-t border-border align-top">
-                        <td className="py-3 pr-4">
-                          <Figure className="text-foreground">{tool.name}</Figure>
-                          <p className="mt-1 max-w-lg text-[0.74rem] leading-snug text-muted-foreground">
-                            {tool.description}
-                          </p>
-                        </td>
-                        <td className="py-3 pr-4 text-sm text-muted-foreground">{tool.risk}</td>
-                        <td className="py-3">
-                          <Badge tone={decided.tone}>{decided.label}</Badge>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <Receipt
-              origin="GET /v1/console/tools"
-              detail="platform allowlist ∩ persona, then anything at or above the tenant’s gate floor is marked for a human"
-              className="mt-4"
-            />
+              persona <Figure className="text-foreground">{roster.persona}</Figure>
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              human gate at <Figure className="text-foreground">{roster.gate_min_risk}</Figure> and
+              above
+              <InfoTip label="Where the gate floor comes from">
+                It is one of the resolved controls above — which is why this panel re-reads the
+                moment a setting is written. A tool at or above the floor is still offered; a call
+                to it stops for a human.
+              </InfoTip>
+            </span>
+            <span
+              className="ml-auto h-1.5 w-24 overflow-hidden rounded-full bg-surface-2"
+              role="img"
+              aria-label={`${roster.allowed_count} of ${roster.total} tools available`}
+            >
+              <span className="block h-full bg-blue-600" style={{ width: `${share}%` }} />
+            </span>
           </>
-        )}
-      </CardBody>
-    </Card>
+        )
+      }
+      footer={
+        roster === null ? undefined : (
+          <Receipt
+            origin="GET /v1/console/tools"
+            detail="platform allowlist ∩ persona, then anything at or above the tenant’s gate floor is marked for a human"
+            variant="inline"
+          />
+        )
+      }
+    >
+      {error !== null ? (
+        <ErrorState error={error} />
+      ) : roster === null ? (
+        <LoadingState rows={3} label="Reading the roster…" />
+      ) : (
+        <table className="w-full min-w-[28rem] text-left text-sm">
+          <thead>
+            <tr className="border-b border-border">
+              <th scope="col" className="eyebrow pb-2 pr-4 font-normal">
+                Tool
+              </th>
+              <th scope="col" className="eyebrow pb-2 pr-4 font-normal">
+                Risk
+              </th>
+              <th scope="col" className="eyebrow pb-2 font-normal">
+                Status
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {roster.rows.map((tool) => {
+              const decided = DECIDED_BY[tool.decided_by] ?? {
+                label: tool.decided_by,
+                tone: 'neutral' as BadgeTone,
+              }
+              return (
+                <tr key={tool.name} className="border-t border-border">
+                  <td className="py-2 pr-4">
+                    <span className="flex items-center gap-1.5">
+                      <Figure className="text-foreground">{tool.name}</Figure>
+                      {tool.description ? (
+                        <InfoTip label={`What ${tool.name} does`}>{tool.description}</InfoTip>
+                      ) : null}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-4 text-sm text-muted-foreground">{tool.risk}</td>
+                  <td className="py-2">
+                    <Badge tone={decided.tone}>{decided.label}</Badge>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </DataPanel>
+    </TooltipProvider>
   )
 }

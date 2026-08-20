@@ -7,14 +7,17 @@ import {
   Loader2,
   ScanText,
   Share2,
-  Table2,
   TriangleAlert,
   XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
-import { Card } from '@/components/ui/Card'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
+import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { Absence } from '@/components/primitives/Receipt'
 import {
   getIngestProgress,
   type IngestProgress,
@@ -22,6 +25,21 @@ import {
   type StageState,
 } from '@/lib/api/jobs'
 import { cn } from '@/lib/utils'
+
+/**
+ * Chrome adds a scroll container's overflowing content to the **document's** own
+ * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
+ * `position: static`, so a 200-row table inside a 30rem panel left the page
+ * 10,948px tall — nine thousand of them empty — while the panel itself correctly
+ * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
+ * 'relative'` takes the document from 10,948px back to 2,232px.
+ *
+ * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
+ * not own; this is the same fix applied through the `className` the component
+ * already exposes, targeting the scroll box by the `role="group"` it is given
+ * whenever `maxHeight` is set. Remove it once the primitive carries it.
+ */
+const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
 
 /** Statuses in which the document is still being worked on, so the log keeps polling. */
 const LIVE = new Set(['pending', 'running', 'reconciling'])
@@ -86,14 +104,11 @@ function chips(detail: Record<string, unknown>): Array<[string, string]> {
  * worker killed mid-pipeline and restarted cannot make this screen claim a stage that
  * never committed.
  *
- * Two panels earn their place beyond the stage strip:
- *
- * - **The parse's own verdict on itself.** A parser that reads a document in the wrong
- *   order does not raise; it produces text that chunks, embeds and answers questions
- *   exactly like correct text. The confidence score, the signals behind it and the
- *   heading histogram are the only place a human can find that out.
- * - **The graph as it is built.** Entities and relations with their mention counts, from
- *   the rows this tenant owns — not a node total from a store nobody can inspect.
+ * It used to say all of that on the page, in twenty-one prose blocks stacked down six
+ * cards. The mechanism is now in {@link InfoTip}s, the stage cards are one
+ * {@link StageTimeline}, and the three "this has not run yet" paragraphs are
+ * {@link Absence}es in the slot the figure would have occupied — the honesty is
+ * identical and it fits on a screen.
  */
 export function IngestLog({ documentId, token }: IngestLogProps): ReactElement {
   const [progress, setProgress] = useState<IngestProgress | null>(null)
@@ -139,7 +154,7 @@ export function IngestLog({ documentId, token }: IngestLogProps): ReactElement {
   if (progress === null) {
     return (
       <div className="flex min-h-[120px] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" />
+        <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
         Reading the ingest record…
       </div>
     )
@@ -147,9 +162,13 @@ export function IngestLog({ documentId, token }: IngestLogProps): ReactElement {
 
   return (
     <div className="flex flex-col gap-3">
-      <Header progress={progress} />
-      <StageStrip stages={progress.stages} />
-      <div className="grid gap-3 lg:grid-cols-2">
+      <Card>
+        <Header progress={progress} />
+        <div className="border-t border-border px-4 py-3">
+          <StageTimeline stages={progress.stages} />
+        </div>
+      </Card>
+      <div className="grid gap-3 xl:grid-cols-2">
         <ParsePanel progress={progress} />
         <GraphPanel progress={progress} />
       </div>
@@ -162,8 +181,8 @@ export function IngestLog({ documentId, token }: IngestLogProps): ReactElement {
 /** Document identity, terminal state, and the three counts a jury asks about. */
 function Header({ progress }: { progress: IngestProgress }): ReactElement {
   return (
-    <Card>
-      <div className="flex flex-wrap items-start justify-between gap-3 p-4">
+    <>
+      <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
         <div className="min-w-0">
           <p className="eyebrow mb-0.5">documents · live ingest log</p>
           <p className="truncate text-sm font-medium text-foreground">
@@ -186,61 +205,94 @@ function Header({ progress }: { progress: IngestProgress }): ReactElement {
         </div>
       </div>
       {progress.error ? (
-        <div className="border-t border-border px-4 py-2.5 text-xs text-block-ink">
+        <div className="border-t border-border px-4 py-2 text-xs text-block-ink">
           {progress.error}
         </div>
       ) : null}
-    </Card>
+    </>
   )
 }
 
-/** The six stages, in pipeline order, each with its state and what it produced. */
-function StageStrip({ stages }: { stages: IngestStage[] }): ReactElement {
+/**
+ * The six stages as one connected timeline rather than six stacked cards.
+ *
+ * A stage card carried its name, its state, its queue, its wall-clock time and up
+ * to six `key value` chips — six of those is most of a screen, and none of it is
+ * read until something goes wrong. What a reader wants at a glance is *how far it
+ * got and how long each step took*; the chips are a hover away, which is exactly
+ * the trade DESIGN.md §4 asks for.
+ */
+function StageTimeline({ stages }: { stages: IngestStage[] }): ReactElement {
   return (
-    <Card>
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <Braces className="size-4 text-muted-foreground" />
-        <p className="eyebrow mb-0">pipeline · read from documents.completed_stage</p>
+    <>
+      <div className="mb-2 flex items-center gap-1.5">
+        <Braces className="size-3.5 text-muted-foreground" aria-hidden />
+        <p className="eyebrow mb-0">pipeline · documents.completed_stage</p>
+        <InfoTip label="Where this timeline comes from">
+          Each step is read off the row the stage committed inside its own transaction — the
+          output and the `completed_stage` bump land together or not at all. A worker killed
+          mid-pipeline and restarted therefore cannot make this strip claim a stage that never
+          finished.
+        </InfoTip>
       </div>
-      <ol className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
-        {stages.map((stage) => (
-          <li key={stage.name} className="bg-card p-3.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-2">
+      <ol className="flex min-w-0 items-start gap-0 overflow-x-auto overscroll-x-contain pb-1">
+        {stages.map((stage, i) => {
+          const detail = chips(stage.detail)
+          return (
+            <li key={stage.name} className="flex min-w-0 flex-1 basis-0 items-start">
+              {i > 0 ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    'mt-[9px] h-px min-w-3 flex-1',
+                    stage.state === 'queued' ? 'bg-border' : 'bg-blue-400',
+                  )}
+                />
+              ) : null}
+              <div className="flex min-w-[6.5rem] flex-col items-center gap-1 px-1 text-center">
                 <StateIcon state={stage.state} />
-                <span className="font-mono text-sm font-medium text-foreground">
-                  {stage.name}
-                </span>
-              </span>
-              <span
-                className={cn(
-                  'font-mono text-xs',
-                  stage.state === 'failed' ? 'text-block-ink' : 'text-muted-foreground',
-                )}
-              >
-                {stage.state === 'completed' ? ms(stage.duration_ms) : stage.state}
-              </span>
-            </div>
-            <p className="mt-1 font-mono text-[0.7rem] text-muted-foreground">
-              {stage.queue}
-              {stage.at ? ` · ${clock(stage.at)}` : ''}
-            </p>
-            {chips(stage.detail).length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {chips(stage.detail).map(([key, value]) => (
-                  <span
-                    key={key}
-                    className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[0.68rem] text-muted-foreground"
-                  >
-                    {key} <span className="text-foreground">{value}</span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="font-mono text-xs font-medium text-foreground">
+                    {stage.name}
                   </span>
-                ))}
+                  {detail.length > 0 ? (
+                    <InfoTip label={`What the ${stage.name} stage produced`}>
+                      <span className="flex flex-col gap-0.5">
+                        <span className="text-muted-foreground">
+                          {stage.queue} queue{stage.at ? ` · ${clock(stage.at)}` : ''}
+                        </span>
+                        {detail.map(([key, value]) => (
+                          <span key={key} className="font-mono">
+                            {key} <span className="text-foreground">{value}</span>
+                          </span>
+                        ))}
+                      </span>
+                    </InfoTip>
+                  ) : null}
+                </span>
+                <span
+                  className={cn(
+                    'tabular font-mono text-[0.68rem]',
+                    stage.state === 'failed' ? 'text-block-ink' : 'text-muted-foreground',
+                  )}
+                >
+                  {stage.state === 'completed' ? ms(stage.duration_ms) : stage.state}
+                </span>
               </div>
-            ) : null}
-          </li>
-        ))}
+              {i < stages.length - 1 ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    'mt-[9px] h-px min-w-3 flex-1',
+                    stages[i + 1].state === 'queued' ? 'bg-border' : 'bg-blue-400',
+                  )}
+                />
+              ) : null}
+            </li>
+          )
+        })}
       </ol>
-    </Card>
+    </>
   )
 }
 
@@ -253,10 +305,13 @@ function StageStrip({ stages }: { stages: IngestStage[] }): ReactElement {
  * one was broken.
  */
 function StateIcon({ state }: { state: StageState }): ReactElement {
-  if (state === 'completed') return <CheckCircle2 className="size-4 text-ok" />
-  if (state === 'running') return <Loader2 className="size-4 animate-spin text-blue-700" />
-  if (state === 'failed') return <XCircle className="size-4 text-block" />
-  return <Circle className="size-4 text-muted-foreground/50" />
+  if (state === 'completed') return <CheckCircle2 className="size-[18px] text-ok" aria-label="completed" />
+  if (state === 'running')
+    return (
+      <Loader2 className="size-[18px] animate-spin text-blue-700 motion-reduce:animate-none" aria-label="running" />
+    )
+  if (state === 'failed') return <XCircle className="size-[18px] text-block" aria-label="failed" />
+  return <Circle className="size-[18px] text-muted-foreground/50" aria-label="queued" />
 }
 
 /** D-parse (§4.6c) made visible: the score, every signal behind it, and the structure. */
@@ -266,40 +321,52 @@ function ParsePanel({ progress }: { progress: IngestProgress }): ReactElement {
   const peak = levels.reduce((max, [, count]) => Math.max(max, count), 1)
 
   return (
-    <Card>
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-        <span className="flex items-center gap-2">
-          <ScanText className="size-4 text-muted-foreground" />
-          <p className="eyebrow mb-0">parse quality · the gate that catches a silent misread</p>
-        </span>
+    <Card className="flex flex-col">
+      <CardHeader
+        as="h3"
+        eyebrow="parse quality"
+        title={
+          <span className="inline-flex items-center gap-1.5">
+            <ScanText className="size-4 text-muted-foreground" aria-hidden />
+            Reading order
+            <InfoTip label="Why parse quality is scored at all">
+              A parser that reads a document in the wrong order does not raise. It produces
+              text that chunks, embeds and answers questions exactly like correct text — so
+              this score, and the signals behind it, are the only place a human can find out.
+            </InfoTip>
+          </span>
+        }
+        actions={
+          parse.confidence === null ? (
+            <Badge tone="neutral">not scored</Badge>
+          ) : (
+            <Badge tone={parse.low ? 'risk' : 'ok'}>
+              {parse.low ? <TriangleAlert /> : null}
+              {parse.confidence.toFixed(2)} / {parse.threshold.toFixed(2)}
+            </Badge>
+          )
+        }
+      />
+      <CardBody className="flex flex-col gap-3 py-4 md:py-4">
         {parse.confidence === null ? (
-          <Badge tone="neutral">not scored</Badge>
-        ) : (
-          <Badge tone={parse.low ? 'risk' : 'ok'}>
-            {parse.low ? <TriangleAlert /> : null}
-            {parse.confidence.toFixed(2)} / {parse.threshold.toFixed(2)}
-          </Badge>
-        )}
-      </div>
-      <div className="flex flex-col gap-3 p-4">
-        {parse.confidence === null ? (
-          <p className="text-sm text-muted-foreground">
-            The parse stage has not run yet, so nothing has scored this document. A blank
-            score means unread — never “no problems found”.
-          </p>
+          <Absence
+            figure="Parse confidence"
+            why="the parse stage has not run, so nothing has scored this document"
+            needed="A blank score means unread — never “no problems found”."
+          />
         ) : (
           <>
             {parse.low ? (
-              <p className="rounded-md border border-risk/60 bg-risk/10 px-3 py-2 text-xs text-risk-ink">
-                Indexed and searchable, but its reading order is suspect. A low score
-                flags a document; it never blocks it.
+              <p className="rounded-md border border-risk/60 bg-risk/10 px-3 py-1.5 text-xs text-risk-ink">
+                Reading order suspect. Indexed and searchable anyway — a low score flags, it
+                never blocks.
               </p>
             ) : null}
-            <ul className="flex flex-col gap-1.5">
+            <ul className="flex flex-col gap-1">
               {parse.reasons.map((reason) => (
                 <li
                   key={reason}
-                  className="border-l-2 border-border pl-2.5 text-xs leading-relaxed text-muted-foreground"
+                  className="border-l-2 border-border pl-2.5 text-xs leading-snug text-muted-foreground"
                 >
                   {reason}
                 </li>
@@ -309,50 +376,47 @@ function ParsePanel({ progress }: { progress: IngestProgress }): ReactElement {
         )}
 
         {parse.ocr_reason ? (
-          <div className="rounded-md border border-border bg-surface-2 px-3 py-2">
-            <p className="eyebrow mb-1">OCR decision</p>
-            <p className="text-xs text-muted-foreground">
-              <span className="font-mono text-foreground">
-                {parse.ocr_enabled ? 'on' : 'off'}
-              </span>{' '}
-              — {parse.ocr_reason}
-            </p>
-          </div>
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="rounded-full border border-border bg-surface-2 px-1.5 py-px font-mono text-[0.65rem] text-foreground">
+              OCR {parse.ocr_enabled ? 'on' : 'off'}
+            </span>
+            <InfoTip label="Why OCR was or was not used">{parse.ocr_reason}</InfoTip>
+          </p>
         ) : null}
 
         {levels.length > 0 ? (
           <div>
-            <p className="eyebrow mb-1.5">heading levels</p>
+            <p className="eyebrow mb-1.5 inline-flex items-center gap-1">
+              heading levels
+              <InfoTip label="How to read the heading histogram">
+                Everything at one level across a long document means the hierarchy is not
+                running — which is what a scrambled multi-column parse looks like.
+              </InfoTip>
+            </p>
             <div className="flex flex-col gap-1">
               {levels.map(([level, count]) => (
                 <div key={level} className="flex items-center gap-2">
-                  <span className="w-8 font-mono text-[0.7rem] text-muted-foreground">
+                  <span className="w-7 font-mono text-[0.7rem] text-muted-foreground">
                     h{level}
                   </span>
                   <span
                     className="h-2 rounded-sm bg-blue-400/50"
                     style={{ width: `${Math.max(4, (count / peak) * 100)}%` }}
                   />
-                  <span className="font-mono text-[0.7rem] text-muted-foreground">
-                    {count}
-                  </span>
+                  <Figure className="text-[0.7rem] text-muted-foreground">{count}</Figure>
                 </div>
               ))}
             </div>
-            <p className="mt-1.5 text-[0.7rem] text-muted-foreground">
-              Everything at one level across a long document means the hierarchy is not
-              running — which is what a scrambled multi-column parse looks like.
-            </p>
           </div>
         ) : null}
 
         {parse.parser ? (
-          <p className="font-mono text-[0.7rem] text-muted-foreground">
+          <p className="mt-auto font-mono text-[0.7rem] text-muted-foreground">
             {parse.parser}
             {parse.parse_seconds !== null ? ` · ${parse.parse_seconds.toFixed(2)} s` : ''}
           </p>
         ) : null}
-      </div>
+      </CardBody>
     </Card>
   )
 }
@@ -362,23 +426,34 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
   const { graph } = progress
 
   return (
-    <Card>
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-        <span className="flex items-center gap-2">
-          <Share2 className="size-4 text-muted-foreground" />
-          <p className="eyebrow mb-0">knowledge graph · built from chunks.meta</p>
-        </span>
-        <span className="flex gap-1.5">
-          <Badge tone="graph">{graph.entity_total} entities</Badge>
-          <Badge tone="graph">{graph.relation_total} relations</Badge>
-        </span>
-      </div>
-      <div className="flex flex-col gap-3 p-4">
+    <Card className="flex flex-col">
+      <CardHeader
+        as="h3"
+        eyebrow="knowledge graph"
+        title={
+          <span className="inline-flex items-center gap-1.5">
+            <Share2 className="size-4 text-muted-foreground" aria-hidden />
+            Entities and relations
+            <InfoTip label="Where the graph figures come from">
+              Read from `chunks.meta` — the rows this tenant owns — not a node total from a
+              graph store nobody can inspect.
+            </InfoTip>
+          </span>
+        }
+        actions={
+          <span className="flex gap-1.5">
+            <Badge tone="graph">{graph.entity_total} entities</Badge>
+            <Badge tone="graph">{graph.relation_total} relations</Badge>
+          </span>
+        }
+      />
+      <CardBody className="flex flex-col gap-3 py-4 md:py-4">
         {graph.entity_total === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            The graph stage has not run yet. This panel fills in as entities are
-            extracted — it is read from the rows, not from the graph store.
-          </p>
+          <Absence
+            figure="Entities and relations"
+            why="the graph stage has not run for this document yet"
+            needed="This panel fills in as the extractor commits rows."
+          />
         ) : (
           <>
             <div>
@@ -394,7 +469,7 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
                     <span className="font-mono text-[0.65rem] text-muted-foreground">
                       {entity.kind}
                     </span>
-                    <span className="font-mono text-[0.65rem] text-blue-600">
+                    <span className="font-mono text-[0.65rem] text-blue-700">
                       ×{entity.mentions}
                     </span>
                   </span>
@@ -426,11 +501,11 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
           </>
         )}
         {graph.extractor ? (
-          <p className="font-mono text-[0.7rem] text-muted-foreground">
+          <p className="mt-auto font-mono text-[0.7rem] text-muted-foreground">
             extractor {graph.extractor}
           </p>
         ) : null}
-      </div>
+      </CardBody>
     </Card>
   )
 }
@@ -438,71 +513,82 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
 /** The tables lifted out as their own chunks, and which of them were summarised (D8). */
 function TablePanel({ progress }: { progress: IngestProgress }): ReactElement {
   return (
-    <Card>
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-        <span className="flex items-center gap-2">
-          <Table2 className="size-4 text-muted-foreground" />
-          <p className="eyebrow mb-0">tables · own chunks, shape kept</p>
-        </span>
+    <DataPanel
+      as="h3"
+      eyebrow="tables · own chunks, shape kept"
+      title="Tables"
+      maxHeight="16rem"
+      className={SCROLL_BOX}
+      actions={
         <Badge tone="neutral">
           {progress.corpus.summarised} of {progress.corpus.tables} summarised
         </Badge>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-border bg-surface-2/50">
-            <tr className="text-[0.7rem] uppercase tracking-wide text-muted-foreground">
-              <th className="px-4 py-2 font-medium">Caption</th>
-              <th className="px-4 py-2 font-medium">Shape</th>
-              <th className="px-4 py-2 font-medium">Summary</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/70">
-            {progress.tables.map((table, index) => (
-              <tr key={`${table.caption ?? 'table'}-${index}`}>
-                <td className="max-w-[28rem] truncate px-4 py-2 text-xs text-foreground">
-                  {table.caption ?? <span className="text-muted-foreground">uncaptioned</span>}
-                </td>
-                <td className="px-4 py-2 font-mono text-xs text-muted-foreground">
+      }
+    >
+      <table className="w-full min-w-[32rem] text-left text-sm">
+        <thead className="sticky top-0 z-10 bg-surface-2">
+          <tr className="border-b border-border">
+            <th className="eyebrow px-3 py-2 font-medium">Caption</th>
+            <th className="eyebrow px-3 py-2 font-medium">Shape</th>
+            <th className="eyebrow px-3 py-2 font-medium">Summary</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/70">
+          {progress.tables.map((table, index) => (
+            <tr key={`${table.caption ?? 'table'}-${index}`}>
+              <td className="max-w-[26rem] truncate px-3 py-1.5 text-xs text-foreground">
+                {table.caption ?? <span className="text-muted-foreground italic">uncaptioned</span>}
+              </td>
+              <td className="px-3 py-1.5">
+                <Figure className="text-xs text-muted-foreground">
                   {table.rows ?? '?'} × {table.cols ?? '?'}
-                </td>
-                <td className="px-4 py-2 text-xs text-muted-foreground">
-                  {table.summarised ? (
-                    <Badge tone="ok">written</Badge>
-                  ) : (
-                    (table.reason ?? 'below the size threshold')
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
+                </Figure>
+              </td>
+              <td className="px-3 py-1.5 text-xs text-muted-foreground">
+                {table.summarised ? (
+                  <Badge tone="ok">written</Badge>
+                ) : (
+                  (table.reason ?? 'below the size threshold')
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </DataPanel>
   )
 }
 
 /** The chronological tail — every run of this document, oldest first. */
 function LogTail({ progress }: { progress: IngestProgress }): ReactElement {
   return (
-    <Card>
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <Braces className="size-4 text-muted-foreground" />
-        <p className="eyebrow mb-0">run_events · the durable record, replayed</p>
-      </div>
+    <DataPanel
+      as="h3"
+      eyebrow="run_events · the durable record, replayed"
+      title="Log"
+      maxHeight="14rem"
+      className={SCROLL_BOX}
+      actions={
+        <InfoTip label="Why the log cannot drift from the pipeline">
+          The entry and the stage bump are one transaction, so neither can exist without the
+          other. A refresh mid-ingest resumes this view instead of losing it.
+        </InfoTip>
+      }
+    >
       {progress.entries.length === 0 ? (
-        <p className="px-4 py-4 text-sm text-muted-foreground">
-          No entries yet. The first appears when a stage commits — the entry and the stage
-          are one transaction, so neither can exist without the other.
-        </p>
+        <Absence
+          figure="Run events"
+          why="no stage has committed yet"
+          needed="The first entry appears the moment one does."
+        />
       ) : (
-        <ul className="max-h-64 divide-y divide-border/70 overflow-y-auto">
+        <ul className="divide-y divide-border/70">
           {progress.entries.map((entry) => (
             <li
               key={`${entry.kind}-${entry.seq}-${entry.ts}`}
-              className="flex gap-3 px-4 py-1.5 font-mono text-xs"
+              className="flex gap-3 py-1 font-mono text-xs"
             >
-              <span className="shrink-0 text-muted-foreground">{clock(entry.ts)}</span>
+              <span className="tabular shrink-0 text-muted-foreground">{clock(entry.ts)}</span>
               <span
                 className={cn(
                   'truncate',
@@ -515,6 +601,6 @@ function LogTail({ progress }: { progress: IngestProgress }): ReactElement {
           ))}
         </ul>
       )}
-    </Card>
+    </DataPanel>
   )
 }

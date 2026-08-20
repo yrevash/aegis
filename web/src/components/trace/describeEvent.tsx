@@ -10,23 +10,31 @@ import {
   AlertTriangle,
   Ban,
   Brain,
+  BrainCircuit,
   CircleCheck,
   CircleDot,
+  CircleSlash,
   Eraser,
   Flag,
+  Hourglass,
   Inbox,
   Layers,
+  Merge,
   Network,
+  RefreshCw,
+  Route,
   ScanSearch,
   ShieldCheck,
   Sparkles,
   Timer,
+  Users,
   Wallet,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
 
 import { readApproval } from '@/components/approval/approvalActions'
+import { readSynthesis } from '@/components/console/eventViews'
 import type { Signal } from '@/config/signals'
 import { signalForEvent } from '@/config/signals'
 import type { GuardStage, StreamEvent } from '@/lib/stream'
@@ -44,6 +52,36 @@ const GUARD_STAGE_LABEL: Record<GuardStage, string> = {
   input: 'Input',
   output: 'Output',
   tool_result: 'Tool result',
+}
+
+/**
+ * How one sub-agent lifecycle beat reads.
+ *
+ * `timeout` is a **designed** terminal state (see `AgentStatus` in `@/lib/stream`), so it
+ * is a warning and never a failure; painting it red would misreport graceful degradation
+ * as a crash. `status` is a plain string on the wire, so an unknown beat degrades to a
+ * neutral dot carrying the server's own word rather than being dropped.
+ */
+interface AgentStatusView {
+  signal: Signal
+  icon: LucideIcon
+  word: string
+}
+
+const AGENT_STATUS_VIEW: Record<string, AgentStatusView> = {
+  queued: { signal: 'neutral', icon: Inbox, word: 'queued' },
+  started: { signal: 'agent', icon: CircleDot, word: 'started' },
+  thinking: { signal: 'agent', icon: Brain, word: 'thinking' },
+  acting: { signal: 'agent', icon: Wrench, word: 'acting' },
+  done: { signal: 'ok', icon: CircleCheck, word: 'done' },
+  failed: { signal: 'block', icon: CircleSlash, word: 'failed' },
+  timeout: { signal: 'risk', icon: Hourglass, word: 'timed out' },
+}
+
+const AGENT_STATUS_FALLBACK: AgentStatusView = {
+  signal: 'neutral',
+  icon: Users,
+  word: 'update',
 }
 
 /** Presentation for a single trace row. */
@@ -149,6 +187,64 @@ export function describeEvent(event: StreamEvent): TraceDescriptor {
     }
     case 'budget_exceeded':
       return { signal: 'block', icon: Wallet, title: 'Budget exceeded', detail: event.message }
+    case 'reflection': {
+      // The self-repair loop. `done` is the goal being met; `will_retry` is the agent
+      // choosing to go round again inside its own hard cap — both are wins, and neither
+      // is an error, so neither is ever painted as one.
+      const round = `round ${event.iteration}/${event.max_iterations}`
+      const verdict = event.done ? 'goal met' : event.will_retry ? 'retrying' : 'stopped'
+      return {
+        signal: event.done ? 'ok' : event.will_retry ? 'agent' : 'risk',
+        icon: event.done ? CircleCheck : RefreshCw,
+        title: `Reflection · ${verdict}`,
+        detail: `${round} · ${event.reason}`,
+      }
+    }
+    case 'routing': {
+      // Width is only trustworthy with its `decided_by`, so the detail always carries it.
+      const width = event.depth === 'team' ? `team of ${event.fanout}` : 'single lane'
+      const how = event.used_llm ? 'llm tiebreak' : 'deterministic'
+      return {
+        signal: 'ml',
+        icon: Route,
+        title: `Routed to ${event.role} · ${width}`,
+        detail: `${how} · chosen by ${event.decided_by} · ${event.reason}`,
+      }
+    }
+    case 'agent_status': {
+      const view = AGENT_STATUS_VIEW[event.status] ?? AGENT_STATUS_FALLBACK
+      const detail = event.detail === '' ? event.role : `${event.role} · ${event.detail}`
+      return {
+        signal: view.signal,
+        icon: view.icon,
+        title: `${event.label} · ${view.word}`,
+        detail,
+      }
+    }
+    case 'synthesis': {
+      // An omitted lane is graceful degradation, named out loud — never hidden.
+      const view = readSynthesis(event)
+      const contributing = view?.contributing.length ?? 0
+      const omitted = view?.omitted.length ?? 0
+      return {
+        signal: omitted > 0 ? 'risk' : 'graph',
+        icon: Merge,
+        title:
+          omitted > 0
+            ? `Synthesis · ${contributing} of ${contributing + omitted} agents`
+            : `Synthesis · ${contributing} agents`,
+        detail: event.summary,
+      }
+    }
+    case 'memory': {
+      const recalled = event.recalled_fact_count + event.recalled_message_count
+      return {
+        signal: recalled > 0 ? 'ml' : 'neutral',
+        icon: BrainCircuit,
+        title: recalled > 0 ? `Memory recalled · ${recalled}` : 'Memory · nothing recalled',
+        detail: `${event.recalled_fact_count} facts · ${event.recalled_message_count} turns · ${event.tokens_used} tok`,
+      }
+    }
     case 'token':
       return { signal, icon: Sparkles, title: 'Answer chunk', detail: event.text }
     case 'run_finished':

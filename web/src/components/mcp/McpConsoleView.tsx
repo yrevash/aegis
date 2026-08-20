@@ -4,8 +4,10 @@ import { RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Button } from '@/components/primitives/button'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
+import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { errorSentence } from '@/lib/api/apiError'
 import {
@@ -25,6 +27,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 
 import { AegisMcpPanel } from './AegisMcpPanel'
 import { Connections } from './Connections'
+import { McpPosture } from './McpPosture'
 import { ToolGovernance } from './ToolGovernance'
 
 /**
@@ -112,17 +115,24 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
-      <SectionHeader
-        as="h1"
+    <TooltipProvider>
+    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4">
+      <PageHeader
         eyebrow="aegis · mcp"
         title="Model Context Protocol"
-        note="Which external servers our agents may reach, what each of their tools may do, and what this deployment offers back over the protocol."
-        right={
-          <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
-            <RefreshCw className="mr-1 size-3" aria-hidden />
-            Reload
-          </Button>
+        actions={
+          <>
+            <InfoTip label="What this screen answers">
+              Which external servers our agents may reach, what each of their tools may do,
+              and what this deployment offers back over the protocol. Nothing on this page
+              executes an external tool — that path runs through the agent, behind the human
+              gate.
+            </InfoTip>
+            <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+              <RefreshCw className="mr-1 size-3" aria-hidden />
+              Reload
+            </Button>
+          </>
         }
       />
 
@@ -130,6 +140,7 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
 
       {data ? (
         <>
+          <McpPosture data={data} />
           <Connections
             data={data}
             busy={busy}
@@ -144,6 +155,7 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
         </>
       ) : null}
     </div>
+    </TooltipProvider>
   )
 }
 

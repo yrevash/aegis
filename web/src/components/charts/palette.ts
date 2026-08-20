@@ -36,3 +36,40 @@ const SERIES: Partial<Record<ChartColor, string>> = {
 export function chartHex(color: ChartColor): string {
   return SERIES[color] ?? SIGNALS[color].hex
 }
+
+/**
+ * The **ordinal ramp** — one hue, light → dark, for a chart whose categories are
+ * ranked rather than merely different: the slices of a spend donut, the bands of
+ * a stacked area, the segments of a share bar.
+ *
+ * Four steps, and four is the ceiling, because the ceiling was measured rather
+ * than chosen. `node scripts/validate_palette.js "#60a5fa,#1570ef,#175cd3,#0b3b8f"
+ * --ordinal --mode light --surface "#ffffff"` reports ALL CHECKS PASS — monotone
+ * lightness, every adjacent ΔL ≥ 0.06, the pale end at 2.54:1 against a white
+ * card, hue spread 6°. Adding `--blue-200 #bfdbfe` fails the light end at
+ * **1.42:1**, and adding `--blue-800 #1e40af` collapses the gap to `--blue-900`
+ * to **ΔL 0.045**. So a fifth category is never a fifth colour: it is folded into
+ * an "Other" band, which is also the honest thing to do with a long tail.
+ *
+ * Read dark → light by rank: the biggest share is the deepest step, so the eye
+ * finds the leader without consulting the legend.
+ */
+export const ORDINAL_RAMP = ['#0b3b8f', '#175cd3', '#1570ef', '#60a5fa'] as const
+
+/** The most categories the ordinal ramp can carry before an "Other" band is required. */
+export const ORDINAL_MAX = ORDINAL_RAMP.length
+
+/**
+ * The step for rank `i` of `n` ranked categories, darkest first.
+ *
+ * With fewer than four categories the ramp is *sampled*, not truncated, so two
+ * bands never come out as two neighbouring steps a reader cannot separate: n=2
+ * resolves to `#0b3b8f`/`#60a5fa` and n=3 to `#0b3b8f`/`#1570ef`/`#60a5fa`, both
+ * of which the validator passes on their own.
+ */
+export function rampHex(i: number, n: number): string {
+  if (n <= 1) return ORDINAL_RAMP[0]
+  const span = Math.min(n, ORDINAL_MAX)
+  const idx = Math.round((Math.min(i, span - 1) * (ORDINAL_MAX - 1)) / (span - 1))
+  return ORDINAL_RAMP[idx]
+}

@@ -12,21 +12,39 @@ import {
   TriangleAlert,
   XCircle,
 } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useState, type ReactElement } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
-import { Card } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { Figure } from '@/components/primitives/Figure'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { EmptyState, LoadingState } from '@/components/primitives/States'
+import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
 import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { CorpusPanel } from '@/components/jobs/CorpusPanel'
 import { IngestLog } from '@/components/jobs/IngestLog'
+import { PipelineIso } from '@/components/jobs/PipelineIso'
 import { UploadPanel } from '@/components/jobs/UploadPanel'
 import { cancelJob, getJobs, JobsApiError, requeueJob, type JobRunRow } from '@/lib/api/jobs'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
+
+/**
+ * Chrome adds a scroll container's overflowing content to the **document's** own
+ * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
+ * `position: static`, so a 200-row table inside a 30rem panel left the page
+ * 10,948px tall — nine thousand of them empty — while the panel itself correctly
+ * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
+ * 'relative'` takes the document from 10,948px back to 2,232px.
+ *
+ * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
+ * not own; this is the same fix applied through the `className` the component
+ * already exposes, targeting the scroll box by the `role="group"` it is given
+ * whenever `maxHeight` is set. Remove it once the primitive carries it.
+ */
+const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
 
 /** Load state for the jobs fetch. */
 type LoadState =
@@ -43,6 +61,23 @@ const TERMINAL = new Set(['succeeded', 'failed', 'cancelled'])
 /** The one focus treatment on this screen: the ring token, at 2px, always visible. */
 const FOCUS =
   'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+
+/** The four cuts of the queue a person actually asks for. */
+type Filter = 'all' | 'flight' | 'failed' | 'done'
+
+const FILTERS: Array<{ id: Filter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'flight', label: 'In flight' },
+  { id: 'failed', label: 'Failed' },
+  { id: 'done', label: 'Succeeded' },
+]
+
+function matches(row: JobRunRow, filter: Filter): boolean {
+  if (filter === 'all') return true
+  if (filter === 'flight') return IN_FLIGHT.has(row.status)
+  if (filter === 'failed') return row.status === 'failed' || row.status === 'cancelled'
+  return row.status === 'succeeded'
+}
 
 /** The signal colour each job status carries. Always beside the word, never alone. */
 function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'neutral' {
@@ -95,14 +130,16 @@ interface JobsViewProps {
  * only "failed" would reproduce it in the browser. **Cancel** signals the
  * orchestrator and records who asked on the row.
  *
- * **Watch** expands the row into `IngestLog` — the live, stage-by-stage record of the
- * document being read (§4.12). It is a projection over rows the ingest already
- * committed, so it survives a refresh and cannot claim a stage a killed worker never
- * finished.
+ * The screen is now two things rather than thirty-five panels: the funnel above
+ * ({@link PipelineIso} — the six ingest stages as isometric solids, height by the
+ * number of runs that committed each one) and this table beneath it. The prose
+ * that used to sit between them is in the column tips and the stage tips; the
+ * refusal banner and the stated absences stay, because those are the product.
  */
 export function JobsView({ token }: JobsViewProps): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [busy, setBusy] = useState<number | null>(null)
+  const [filter, setFilter] = useState<Filter>('all')
   // Which job's ingest log is expanded. One at a time: the log polls while its document
   // is still being read, and six open panels would be six polls saying the same thing.
   const [openJob, setOpenJob] = useState<number | null>(null)
@@ -157,61 +194,20 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
     }
   }
 
+  const rows = useMemo(() => (load.status === 'ready' ? load.rows : []), [load])
+  const shown = useMemo(() => rows.filter((row) => matches(row, filter)), [rows, filter])
+  const inFlight = rows.filter((row) => IN_FLIGHT.has(row.status)).length
+
   if (load.status === 'error') return <BackendUnavailable detail={load.message} />
 
-  const rows = load.status === 'ready' ? load.rows : []
-  const inFlight = rows.filter((row) => IN_FLIGHT.has(row.status)).length
   const NoticeIcon =
     notice?.kind === 'ok' ? CircleCheck : notice?.kind === 'refused' ? TriangleAlert : CircleAlert
 
   return (
     <div className="flex flex-col gap-4">
-      {/* The front door: an upload is what puts a document into this queue at all. */}
-      <UploadPanel
-        token={token}
-        onUploaded={() => {
-          void refresh()
-          setCorpusKey((n) => n + 1)
-        }}
-      />
-
-      {/* What this tenant has actually ingested — the answer to "show me your corpus".
-          Read from `documents`, not from the job queue, so a document whose ingest never
-          started is visible here even though it owns no job row. */}
-      <CorpusPanel
-        token={token}
-        reloadKey={corpusKey}
-        onOpen={(documentId) => setOpenDocument(openDocument === documentId ? null : documentId)}
-      />
-      {openDocument !== null ? (
-        <div className="rounded-lg border border-border bg-surface-2/40 p-4">
-          <IngestLog documentId={openDocument} token={token} />
-        </div>
-      ) : null}
-
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4 md:p-5">
-          <div className="flex items-center gap-3">
-            <Layers className="size-5 text-muted-foreground" aria-hidden />
-            <div>
-              <p className="eyebrow mb-0.5">job_runs · the record layer</p>
-              <p className="text-sm text-muted-foreground">
-                {load.status === 'loading'
-                  ? 'Reading the queue…'
-                  : `${rows.length} job${rows.length === 1 ? '' : 's'}, ${inFlight} in flight`}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className={`inline-flex h-11 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
-          >
-            <RefreshCw className="size-4" aria-hidden />
-            Refresh
-          </button>
-        </div>
-      </Card>
+      {/* The pipeline before the queue: one glance at where the corpus actually
+          is, then the rows that make it up. */}
+      <PipelineIso rows={rows} loading={load.status === 'loading'} />
 
       {notice ? (
         <p
@@ -241,116 +237,211 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
         </p>
       ) : null}
 
-      <Card className="overflow-hidden">
+      <DataPanel
+        eyebrow="job_runs · the record layer"
+        title="Queue"
+        maxHeight="30rem"
+        className={SCROLL_BOX}
+        actions={
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className={`inline-flex h-9 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
+          >
+            <RefreshCw className="size-4" aria-hidden />
+            Refresh
+          </button>
+        }
+        toolbar={
+          <>
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filter the queue">
+              {FILTERS.map((option) => {
+                const active = filter === option.id
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setFilter(option.id)}
+                    className={cn(
+                      'h-8 touch-manipulation rounded-full border px-3 text-xs font-medium transition-colors duration-[--dur-fast]',
+                      FOCUS,
+                      active
+                        ? 'border-blue-600 bg-blue-50 text-blue-700'
+                        : 'border-border bg-card text-muted-foreground hover:bg-surface-2',
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="ml-auto text-xs text-muted-foreground">
+              {load.status === 'loading' ? (
+                'Reading the queue…'
+              ) : (
+                <>
+                  <Figure className="text-foreground">{shown.length}</Figure> of{' '}
+                  <Figure className="text-foreground">{rows.length}</Figure> shown ·{' '}
+                  <Figure className="text-foreground">{inFlight}</Figure> in flight
+                </>
+              )}
+            </p>
+          </>
+        }
+      >
         {load.status === 'loading' ? (
-          <div className="p-4">
-            <LoadingState rows={4} label="Reading the job queue…" />
-          </div>
+          <LoadingState rows={4} label="Reading the job queue…" />
         ) : rows.length === 0 ? (
-          <div className="p-4">
-            <EmptyState
-              icon={Layers}
-              title="No background jobs yet"
-              body="Durable work appears here the moment it is queued, newest first. Nothing is simulated: an empty queue means this tenant has none. Upload a document above to put one in it."
-            />
-          </div>
+          <EmptyState
+            icon={Layers}
+            title="No background jobs yet"
+            body="Durable work appears here the moment it is queued, newest first. Nothing is simulated: an empty queue means this tenant has none."
+          />
+        ) : shown.length === 0 ? (
+          <EmptyState
+            icon={Layers}
+            title={`No ${FILTERS.find((f) => f.id === filter)?.label.toLowerCase()} jobs`}
+            body="The filter above matched nothing in this tenant's queue."
+          />
         ) : (
-          // Eight columns will not fit a phone, and squeezing them would make every
-          // one unreadable rather than one of them scrollable. The table keeps its
-          // width and scrolls inside this box; the page body never does.
-          <div className="w-full overflow-x-auto">
-            <table className="w-full min-w-[64rem] text-left text-sm">
-              <thead className="border-b border-border bg-surface-2/50">
-                <tr>
-                  {['Job', 'Status', 'Stage', 'Cost', 'Created', 'Detail', 'Ingest log'].map((h) => (
-                    <th key={h} scope="col" className="eyebrow px-4 py-2.5 font-medium">
-                      {h}
-                    </th>
-                  ))}
-                  <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">
-                    Action
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {rows.map((row) => (
-                  <Fragment key={row.id}>
-                    <tr className="align-middle transition-colors duration-[--dur-fast] hover:bg-surface-2/60">
-                      <td className="px-4 py-3">
-                        <Figure className="text-foreground">#{row.id}</Figure>
-                        <span className="ml-2 text-muted-foreground">{row.job_type}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge tone={statusVariant(row.status)}>{row.status}</Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        {row.completed_stage ? (
-                          <Figure className="text-muted-foreground">{row.completed_stage}</Figure>
-                        ) : (
-                          <NotRecorded what="no stage committed" />
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Figure className="text-muted-foreground">
-                          ${row.cost_usd.toFixed(4)}
-                        </Figure>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">
-                        {formatTime(row.created_at) ?? <NotRecorded />}
-                      </td>
-                      <td className="max-w-[22rem] truncate px-4 py-3 text-xs text-muted-foreground">
-                        {row.error ??
-                          (row.cancelled_by ? `cancelled by ${row.cancelled_by}` : row.workflow_id)}
-                      </td>
-                      <td className="px-4 py-3">
-                        {row.document_id === null ? (
-                          <NotRecorded what="no document" />
-                        ) : (
-                          <RowAction
-                            icon={openJob === row.id ? ChevronDown : ChevronRight}
-                            label={openJob === row.id ? 'Hide' : 'Watch'}
-                            hint={`the ingest log for job ${row.id}`}
-                            expanded={openJob === row.id}
-                            busy={false}
-                            onClick={() => setOpenJob(openJob === row.id ? null : row.id)}
-                          />
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {TERMINAL.has(row.status) ? (
-                          <RowAction
-                            icon={RotateCcw}
-                            label="Re-queue"
-                            hint={`job ${row.id}`}
-                            busy={busy === row.id}
-                            onClick={() => void act(row.id, 'requeue')}
-                          />
-                        ) : (
-                          <RowAction
-                            icon={XCircle}
-                            label="Cancel"
-                            hint={`job ${row.id}`}
-                            busy={busy === row.id}
-                            onClick={() => void act(row.id, 'cancel')}
-                          />
-                        )}
+          <table className="w-full min-w-[56rem] text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-surface-2">
+              <tr className="border-b border-border">
+                <Th>Job</Th>
+                <Th>Status</Th>
+                <Th tip="The last stage that committed inside its own transaction. A blank cell means the run never wrote one — not that it started at the beginning.">
+                  Stage
+                </Th>
+                <Th tip="Metered spend for this run alone, from the usage ledger. It is charged against the tenant's cap whether the run succeeds or fails.">
+                  Cost
+                </Th>
+                <Th>Created</Th>
+                <Th tip="The worker's own sentence when it failed, who cancelled it, or the workflow id when neither applies.">
+                  Detail
+                </Th>
+                <Th>Log</Th>
+                <Th className="text-right">Action</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {shown.map((row) => (
+                <Fragment key={row.id}>
+                  <tr className="align-middle transition-colors duration-[--dur-fast] hover:bg-surface-2/60">
+                    <td className="px-3 py-2">
+                      <Figure className="text-foreground">#{row.id}</Figure>
+                      <span className="ml-2 text-xs text-muted-foreground">{row.job_type}</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge tone={statusVariant(row.status)}>{row.status}</Badge>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {row.completed_stage ? (
+                        <Figure className="text-muted-foreground">{row.completed_stage}</Figure>
+                      ) : (
+                        <NotRecorded what="none committed" />
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <Figure className="text-muted-foreground">${row.cost_usd.toFixed(4)}</Figure>
+                    </td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap text-muted-foreground">
+                      {formatTime(row.created_at) ?? <NotRecorded />}
+                    </td>
+                    <td className="max-w-[20rem] truncate px-3 py-2 text-xs text-muted-foreground">
+                      {row.error ??
+                        (row.cancelled_by ? `cancelled by ${row.cancelled_by}` : row.workflow_id)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {row.document_id === null ? (
+                        <NotRecorded what="no document" />
+                      ) : (
+                        <RowAction
+                          icon={openJob === row.id ? ChevronDown : ChevronRight}
+                          label={openJob === row.id ? 'Hide' : 'Watch'}
+                          hint={`the ingest log for job ${row.id}`}
+                          expanded={openJob === row.id}
+                          busy={false}
+                          onClick={() => setOpenJob(openJob === row.id ? null : row.id)}
+                        />
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {TERMINAL.has(row.status) ? (
+                        <RowAction
+                          icon={RotateCcw}
+                          label="Re-queue"
+                          hint={`job ${row.id}`}
+                          busy={busy === row.id}
+                          onClick={() => void act(row.id, 'requeue')}
+                        />
+                      ) : (
+                        <RowAction
+                          icon={XCircle}
+                          label="Cancel"
+                          hint={`job ${row.id}`}
+                          busy={busy === row.id}
+                          onClick={() => void act(row.id, 'cancel')}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                  {openJob === row.id && row.document_id !== null ? (
+                    <tr>
+                      <td colSpan={8} className="bg-surface-2/40 p-3">
+                        <IngestLog documentId={row.document_id} token={token} />
                       </td>
                     </tr>
-                    {openJob === row.id && row.document_id !== null ? (
-                      <tr>
-                        <td colSpan={8} className="bg-surface-2/40 p-4">
-                          <IngestLog documentId={row.document_id} token={token} />
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  ) : null}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
         )}
-      </Card>
+      </DataPanel>
+
+      {/* The front door and the corpus, side by side beneath the queue: an upload
+          is what puts a document into it, and `documents` is what came out. */}
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <UploadPanel
+          token={token}
+          onUploaded={() => {
+            void refresh()
+            setCorpusKey((n) => n + 1)
+          }}
+        />
+        <CorpusPanel
+          token={token}
+          reloadKey={corpusKey}
+          onOpen={(documentId) => setOpenDocument(openDocument === documentId ? null : documentId)}
+        />
+      </div>
+      {openDocument !== null ? (
+        <div className="rounded-lg border border-border bg-surface-2/40 p-4">
+          <IngestLog documentId={openDocument} token={token} />
+        </div>
+      ) : null}
     </div>
+  )
+}
+
+/** One column heading, with the sentence that used to sit under the table. */
+function Th({
+  children,
+  tip,
+  className,
+}: {
+  children: ReactElement | string
+  tip?: string
+  className?: string
+}): ReactElement {
+  return (
+    <th scope="col" className={cn('eyebrow px-3 py-2 font-medium', className)}>
+      <span className={cn('inline-flex items-center gap-1', className === 'text-right' && 'justify-end')}>
+        {children}
+        {tip ? <InfoTip label={`About the ${children} column`}>{tip}</InfoTip> : null}
+      </span>
+    </th>
   )
 }
 
@@ -382,7 +473,7 @@ function RowAction({
       onClick={onClick}
       disabled={busy}
       aria-expanded={expanded}
-      className={`inline-flex h-9 touch-manipulation items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 disabled:opacity-50 ${FOCUS}`}
+      className={`inline-flex h-8 touch-manipulation items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 disabled:opacity-50 ${FOCUS}`}
     >
       {busy ? (
         <Loader2 className="size-3 animate-spin motion-reduce:animate-none" aria-hidden />
@@ -400,6 +491,7 @@ export function JobsMount(): ReactElement {
   // `GET /jobs` is RBAC-scoped and tenant-scoped: hand the child the real session
   // bearer, and hold it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
+  const [deep, setDeep] = useState(false)
 
   if (!hydrated) {
     return (
@@ -411,28 +503,39 @@ export function JobsMount(): ReactElement {
 
   return (
     <BackendGate>
+      <TooltipProvider>
       <div className="space-y-4">
-        <SectionHeader
-          as="h1"
+        <PageHeader
           eyebrow="Durable substrate"
           title="Jobs"
-          note={
+          actions={
             <>
-              Background work this tenant owns. Re-queueing passes admission control — the
-              in-flight cap and the budget pre-authorisation — and a refusal is shown with the
-              reason it carried, never queued out of sight. <strong>Watch</strong> opens the
-              live ingest log for a document: which stage is running, what each one produced,
-              the parse&rsquo;s own confidence in itself, and the graph as it is extracted.
+              <InfoTip label="How re-queue and cancel behave">
+                Re-queueing passes admission control — the in-flight cap and the budget
+                pre-authorisation — and a refusal is shown with the reason it carried, never
+                queued out of sight. Cancel signals the orchestrator and records who asked, on
+                the row.
+              </InfoTip>
+              <button
+                type="button"
+                aria-expanded={deep}
+                onClick={() => setDeep((open) => !open)}
+                className={`inline-flex h-9 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
+              >
+                {deep ? <ChevronDown className="size-4" aria-hidden /> : <ChevronRight className="size-4" aria-hidden />}
+                Pipeline health
+              </button>
             </>
           }
         />
-        {/* The pipeline before the queue. §7.10 is an aggregation over exactly the
-            rows this page then lists — depth, the oldest pending job, the failure
-            count, the per-stage timings the ingest already commits — so it belongs
-            above them rather than on a page of its own that reads the same tables. */}
-        <PipelineHealthPanel />
         <JobsView token={session?.token ?? null} />
+        {/* §7.10 is an aggregation over exactly the rows this page lists — worker
+            liveness, per-stage timings, the dependency table and everything it
+            states it cannot measure. It is nine panels, so it is behind a
+            disclosure rather than deleted: compressed, not lost. */}
+        {deep ? <PipelineHealthPanel /> : null}
       </div>
+      </TooltipProvider>
     </BackendGate>
   )
 }

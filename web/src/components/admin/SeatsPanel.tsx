@@ -3,9 +3,10 @@
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
-import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { errorSentence } from '@/lib/api/apiError'
 import { getSeats, putSeat, type Seat } from '@/lib/api/seats'
@@ -102,44 +103,61 @@ export function SeatsPanel({
     )
   }
 
-  if (load.status === 'loading') {
+  // The two non-ready states keep the panel's own title and eyebrow. A bare card
+  // holding a refusal sentence names nothing, so a reader who scrolled to it could
+  // not tell *which* region had failed — and the refusal here ("seats belong to a
+  // tenant; name one") is a rule worth attributing to the surface it governs.
+  if (load.status !== 'ready') {
     return (
-      <Card>
-        <CardBody>
+      <DataPanel className="rounded-lg" eyebrow="aegis.admin · seats" title="Named seats">
+        {load.status === 'loading' ? (
           <LoadingState rows={4} label="Reading the seats…" />
-        </CardBody>
-      </Card>
+        ) : (
+          <ErrorState error={load.message} />
+        )}
+      </DataPanel>
     )
   }
 
-  if (load.status === 'error') {
-    return (
-      <Card>
-        <CardBody>
-          <ErrorState error={load.message} />
-        </CardBody>
-      </Card>
-    )
-  }
+  const narrowed = load.rows.reduce(
+    (n, seat) => n + seat.capabilities.filter((c) => !c.allowed).length,
+    0,
+  )
 
   return (
-    <Card>
-      <CardHeader
-        title={
-          <span className="flex items-center gap-2">
-            <ShieldCheck className="size-4 shrink-0" aria-hidden />
-            Named seats
-          </span>
-        }
-      />
-      <CardBody className="space-y-4">
-        <p id="seats-direction" className="max-w-prose text-sm leading-relaxed text-muted-foreground">
-          A seat names what one person may do inside the role they already hold. Every toggle
-          here <span className="text-foreground">removes</span> a capability — the role guard
-          runs first, so a seat can narrow it and never widen it. Turning one back on restores
-          what your tenant already permits and can never exceed it.
+    <DataPanel
+      className="rounded-lg"
+      eyebrow="aegis.admin · seats"
+      title="Named seats"
+      maxHeight={520}
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="neutral" className="gap-1.5">
+            <ShieldCheck className="size-3" aria-hidden />
+            <Figure>{load.rows.length}</Figure> {load.rows.length === 1 ? 'seat' : 'seats'}
+          </Badge>
+          {narrowed > 0 ? (
+            <Badge tone="risk" className="gap-1.5">
+              <ShieldOff className="size-3" aria-hidden />
+              <Figure>{narrowed}</Figure> revoked
+            </Badge>
+          ) : null}
+        </div>
+      }
+      toolbar={
+        <p id="seats-direction" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          Every toggle here <span className="font-medium text-foreground">removes</span> a
+          capability — a seat narrows a role, never widens it.
+          <InfoTip label="How a seat is folded">
+            A seat names what one person may do inside the role they already hold. The role guard
+            runs first, so the strictest value wins: turning a capability back on restores what
+            your tenant already permits and can never exceed it. A refusal here is the server’s
+            own sentence — it is the authority.
+          </InfoTip>
         </p>
-
+      }
+    >
+      <div className="space-y-4">
         {refusal ? <ErrorState error={refusal} /> : null}
 
         <div className="space-y-3">
@@ -233,7 +251,7 @@ export function SeatsPanel({
             />
           ) : null}
         </div>
-      </CardBody>
-    </Card>
+      </div>
+    </DataPanel>
   )
 }

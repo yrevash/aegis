@@ -159,3 +159,67 @@ export function unexportableFilters(q: AuditQuery): string[] {
   if (q.tenantId !== null) dropped.push('tenant')
   return dropped
 }
+
+/**
+ * A `datetime-local` value for `hours` ago, in the reader's own zone.
+ *
+ * The quick ranges on the filter strip are the three questions actually asked of a
+ * trail — *what just happened*, *what happened today*, *what happened this week* — and
+ * typing two `datetime-local` fields to ask any of them is three interactions too many.
+ * The value goes through the same {@link localToIso} conversion as a typed one, so a
+ * preset and a hand-typed bound mean exactly the same thing to the server.
+ *
+ * @param hours - How far back to reach.
+ * @returns A `YYYY-MM-DDTHH:mm` string in local wall-clock time.
+ */
+export function localSinceHoursAgo(hours: number): string {
+  const at = new Date(Date.now() - hours * 3_600_000)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}` +
+    `T${pad(at.getHours())}:${pad(at.getMinutes())}`
+  )
+}
+
+/**
+ * The active filters, named for a reader, as removable chips.
+ *
+ * The strip could always *hold* eight predicates and could never *say* which of them
+ * were on: two of the controls sat in a second row that scrolled out of view, and an
+ * operator staring at four rows had no way to tell whether the trail was that quiet or
+ * whether a stale actor filter was still applied. Each entry carries the patch that
+ * clears just that one.
+ *
+ * @param q - The live filter.
+ * @param tenantName - Resolver for the tenant selector's label, when one is set.
+ * @returns One entry per active predicate, in the order the strip presents them.
+ */
+export function activeFilters(
+  q: AuditQuery,
+  tenantName?: (id: number) => string | undefined,
+): Array<{ key: string; label: string; clear: Partial<AuditQuery> }> {
+  const chips: Array<{ key: string; label: string; clear: Partial<AuditQuery> }> = []
+  if (q.text.trim() !== '')
+    chips.push({ key: 'text', label: `search “${q.text.trim()}”`, clear: { text: '' } })
+  if (q.actor.trim() !== '')
+    chips.push({ key: 'actor', label: `actor ${q.actor.trim()}`, clear: { actor: '' } })
+  if (q.actionPrefix.trim() !== '')
+    chips.push({
+      key: 'actionPrefix',
+      label: `action ${q.actionPrefix.trim()}*`,
+      clear: { actionPrefix: '' },
+    })
+  if (q.model.trim() !== '')
+    chips.push({ key: 'model', label: `model ${q.model.trim()}`, clear: { model: '' } })
+  if (q.outcome !== null)
+    chips.push({ key: 'outcome', label: `outcome ${q.outcome}`, clear: { outcome: null } })
+  if (q.since !== '') chips.push({ key: 'since', label: `from ${q.since}`, clear: { since: '' } })
+  if (q.until !== '') chips.push({ key: 'until', label: `to ${q.until}`, clear: { until: '' } })
+  if (q.tenantId !== null)
+    chips.push({
+      key: 'tenantId',
+      label: `tenant ${tenantName?.(q.tenantId) ?? q.tenantId}`,
+      clear: { tenantId: null },
+    })
+  return chips
+}

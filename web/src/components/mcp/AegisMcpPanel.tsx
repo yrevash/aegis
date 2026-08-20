@@ -10,6 +10,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { Button } from '@/components/primitives/button'
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState } from '@/components/primitives/States'
 import { errorSentence } from '@/lib/api/apiError'
@@ -102,7 +103,7 @@ export function AegisMcpPanel({
   if (!endpoint) {
     return (
       <Card className="rounded-lg">
-        <CardHeader title="Ask Aegis over MCP" eyebrow="This deployment’s own server" />
+        <CardHeader title="Ask Aegis over MCP" eyebrow="this deployment’s own server" />
         <CardBody>
           <EmptyState
             icon={Plug}
@@ -118,8 +119,17 @@ export function AegisMcpPanel({
     <Card className="rounded-lg">
       <CardHeader
         title="Ask Aegis over MCP"
-        eyebrow="This deployment’s own server"
+        eyebrow="this deployment’s own server"
         actions={
+          <span className="flex items-center gap-2">
+          <InfoTip label="What this panel proves">
+            The console connects as a real MCP client — the official protocol SDK over
+            Streamable HTTP, the same client any other host would use — carrying your own
+            bearer on every request. The list it returns is what the server offers{' '}
+            <em>you</em>: another principal connecting to the same address sees a different
+            one. There is no “call it” button, because a call belongs on the agent’s path,
+            behind the human gate.
+          </InfoTip>
           <Button
             type="button"
             onClick={() => void connect()}
@@ -140,15 +150,10 @@ export function AegisMcpPanel({
               </>
             )}
           </Button>
+          </span>
         }
       />
       <CardBody className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          The console connects as a real MCP client, with your own bearer on every request.
-          The list below is what the server offers <em>you</em> — another principal
-          connecting to the same address sees a different one.
-        </p>
-
         {connection.state === 'failed' ? (
           <ErrorState error={connection.detail} retry={() => void connect()} />
         ) : null}

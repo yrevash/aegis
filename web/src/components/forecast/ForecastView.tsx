@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, RefreshCw } from 'lucide-react'
+import { ChevronDown, Loader2, RefreshCw, ShieldCheck, Target, TrendingUp, Wallet } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { BacktestPanel } from '@/components/forecast/BacktestPanel'
@@ -12,11 +12,13 @@ import { HorizonChart, HorizonLegend } from '@/components/forecast/HorizonChart'
 import { NotRecordedPanel } from '@/components/forecast/NotRecordedPanel'
 import { RefusalNotice } from '@/components/forecast/RefusalNotice'
 import { SourceLine } from '@/components/forecast/SourceLine'
-import { FORECAST_SOURCE, forecastSourceDetail } from '@/components/forecast/sources'
+import { FORECAST_SOURCE, NOT_RECORDED, forecastSourceDetail } from '@/components/forecast/sources'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { StatCard } from '@/components/ui/StatCard'
 import {
   getForecastBudget,
   getForecastDomain,
@@ -47,6 +49,30 @@ function sourceBadge(source: string): { tone: BadgeTone; label: string } {
       return { tone: 'ml', label: 'adapter (synthetic domain)' }
     default:
       return { tone: 'neutral', label: source }
+  }
+}
+
+/**
+ * The word for one step of a series' own frequency.
+ *
+ * The response reports `freq` as a pandas offset alias — `D`, `W`, `H` — which is
+ * the right thing for it to say and the wrong thing for a tile label to repeat.
+ * "Next step · D" is a machine talking; "Next day" is the same fact.
+ */
+function stepWord(freq: string, count = 1): string {
+  const plural = count === 1 ? '' : 's'
+  switch (freq.toUpperCase()) {
+    case 'D':
+      return `day${plural}`
+    case 'W':
+      return `week${plural}`
+    case 'H':
+      return `hour${plural}`
+    case 'M':
+    case 'MS':
+      return `month${plural}`
+    default:
+      return `step${plural}`
   }
 }
 
@@ -114,6 +140,16 @@ function Segmented<T extends string | number>({
  * **Spend and calls are never on one pair of axes.** They are two measures of
  * different scale, and a second y-axis is the fastest way to imply a relationship
  * that was never measured; the metric switch redraws the same chart instead.
+ *
+ * **What changed in the redesign, and why.** The page was one card holding four
+ * stacked sections, and roughly sixteen blocks of prose explaining them. Every
+ * sentence was true, and together they buried three genuinely good charts. So: the
+ * controls moved up to the page header, the band, the burn-down and the backtest each
+ * became a card of their own, a band of four figures reads the projection before any
+ * chart is scrolled to, and the explanatory sentences moved into the `InfoTip`s
+ * DESIGN.md §4 says they belong in. Nothing was deleted — "what this page cannot tell
+ * you" is still five stated absences, now behind a disclosure with its count on the
+ * summary, so it is a footnote rather than a wall.
  *
  * The platform admin defaults to the **aggregate across every tenant** and may narrow
  * to one; a tenant admin sees its own tenant and the selector never renders, because
@@ -195,76 +231,97 @@ function ForecastView({ role }: { role: Role }): ReactElement {
     ? `${forecastSourceDetail(result.model, result.history_points, result.interval_method)} · ${scopeLabel}`
     : null
 
+  // ── the four figures that read the projection before a chart is reached ─────
+  // Each is already in the response; none is re-derived from a rounded display
+  // value, and the horizon total is the sum of the same points the band draws.
+  const fmt = (v: number): string => formatUnit(v, result?.unit ?? null)
+  const nextStep = result?.points[0] ?? null
+  const horizonTotal = result
+    ? result.points.reduce((sum, p) => sum + p.point, 0)
+    : null
+  const history = useMemo(
+    () => (result?.history ?? []).map((h) => h.value).filter((v) => Number.isFinite(v)),
+    [result],
+  )
+
+  /*
+    The controls are a **toolbar row of their own**, not the header's right slot.
+
+    `SectionHeader` wraps its `right` in `shrink-0`, which is correct for a badge
+    or a count and wrong for five controls: at 390px the cluster refused to
+    shrink and pushed the document 95px wider than the viewport, which DESIGN.md
+    §4 rules out outright — the page body never scrolls horizontally. A row that
+    owns its own line wraps instead of overflowing, and reads as what it is.
+  */
+  const controls = (
+    <div className="flex flex-wrap items-center gap-2 md:justify-end">
+      {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
+      {isPlatformAdmin ? (
+        <label className="flex items-center gap-1.5">
+          <span className="sr-only">Tenant</span>
+          <select
+            value={tenantId == null ? '' : String(tenantId)}
+            onChange={(event) =>
+              setTenantId(event.target.value === '' ? null : Number(event.target.value))
+            }
+            className="rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[0.72rem] text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <option value="">All tenants (platform)</option>
+            {tenants.map((tenant) => (
+              <option key={tenant.id} value={String(tenant.id)}>
+                {tenant.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {isLedgerView ? (
+        <Segmented label="Measure" options={METRICS} value={metric} onChange={setMetric} />
+      ) : null}
+      <Segmented
+        label="Horizon"
+        options={HORIZONS.map((h) => ({ id: h, label: String(h) }))}
+        value={horizon}
+        onChange={setHorizon}
+      />
+      <button
+        type="button"
+        onClick={load}
+        disabled={loading}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
+      >
+        {loading ? (
+          <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden />
+        ) : (
+          <RefreshCw className="size-3.5" aria-hidden />
+        )}
+        Refresh
+      </button>
+    </div>
+  )
+
   return (
     <TooltipProvider>
-      <div className="space-y-6">
-        <SectionHeader
-          as="h1"
-          eyebrow="statsforecast · conformal · measured coverage"
-          title="Forecast"
-        />
-
-        {/* ── Panel 1: the projection ───────────────────────────────────────── */}
-        <Card>
-          <CardHeader
-            eyebrow={isLedgerView ? 'aegis.forecast · platform' : 'aegis.forecast'}
-            title={result ? result.label : isLedgerView ? 'Ledger projection' : 'Domain demand'}
-            actions={
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : null}
-                {isPlatformAdmin ? (
-                  <label className="flex items-center gap-1.5">
-                    <span className="sr-only">Tenant</span>
-                    <select
-                      value={tenantId == null ? '' : String(tenantId)}
-                      onChange={(event) =>
-                        setTenantId(event.target.value === '' ? null : Number(event.target.value))
-                      }
-                      className="rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[0.72rem] text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                    >
-                      <option value="">All tenants (platform)</option>
-                      {tenants.map((tenant) => (
-                        <option key={tenant.id} value={String(tenant.id)}>
-                          {tenant.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                {isLedgerView ? (
-                  <Segmented
-                    label="Measure"
-                    options={METRICS}
-                    value={metric}
-                    onChange={setMetric}
-                  />
-                ) : null}
-                <Segmented
-                  label="Horizon"
-                  options={HORIZONS.map((h) => ({ id: h, label: String(h) }))}
-                  value={horizon}
-                  onChange={setHorizon}
-                />
-                <button
-                  type="button"
-                  onClick={load}
-                  disabled={loading}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
-                >
-                  {loading ? (
-                    <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden />
-                  ) : (
-                    <RefreshCw className="size-3.5" aria-hidden />
-                  )}
-                  Refresh
-                </button>
-              </div>
-            }
+      <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <SectionHeader
+            as="h1"
+            eyebrow="statsforecast · conformal · measured coverage"
+            title="Forecast"
+            className="min-w-0"
           />
-          <CardBody className="space-y-5">
-            {error ? (
+          {controls}
+        </div>
+
+        {error ? (
+          <Card>
+            <CardBody>
               <p className="py-8 text-center text-sm text-danger">{error}</p>
-            ) : loading && data == null ? (
+            </CardBody>
+          </Card>
+        ) : loading && data == null ? (
+          <Card>
+            <CardBody>
               <div
                 role="status"
                 className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"
@@ -272,39 +329,121 @@ function ForecastView({ role }: { role: Role }): ReactElement {
                 <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
                 Fitting and backtesting…
               </div>
-            ) : data == null ? null : !data.available ? (
-              data.refusal ? (
+            </CardBody>
+          </Card>
+        ) : data == null ? null : !data.available ? (
+          <Card>
+            <CardBody>
+              {data.refusal ? (
                 <RefusalNotice refusal={data.refusal} />
               ) : (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   No forecast and no stated reason — this should not happen.
                 </p>
-              )
-            ) : result ? (
-              <>
-                <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
-                  The band is the forecast; the line through it is only its centre. Read the
-                  achieved coverage under the chart before quoting either.
-                </p>
-                <HorizonChart result={result} valueFormatter={(v) => formatUnit(v, result.unit)} />
-                <HorizonLegend result={result} valueFormatter={(v) => formatUnit(v, result.unit)} />
-                <CoverageMeter result={result} />
-                {data.burndown ? (
-                  <div className="space-y-3 border-t border-border pt-5">
-                    <p className="eyebrow">burn-down against the cap · aegis.governance</p>
-                    <BurndownPanel burndown={data.burndown} />
-                  </div>
-                ) : null}
-                <div className="space-y-3 border-t border-border pt-5">
-                  <p className="eyebrow">rolling-origin backtest · held-out accuracy</p>
-                  <BacktestPanel result={result} />
-                </div>
-              </>
-            ) : null}
+              )}
+            </CardBody>
+          </Card>
+        ) : result ? (
+          <>
+            {/* ── The projection, as four figures ─────────────────────────── */}
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <StatCard
+                label={`Next ${stepWord(result.freq)}`}
+                value={nextStep ? fmt(nextStep.point) : '—'}
+                icon={TrendingUp}
+                tone="graph"
+                trend={history.length > 1 ? history : undefined}
+                source={`${result.history_points} observations · ${result.data_source}`}
+              />
+              <StatCard
+                label={`Projected, next ${result.horizon} ${stepWord(result.freq, result.horizon)}`}
+                value={horizonTotal == null ? '—' : fmt(horizonTotal)}
+                icon={Wallet}
+                tone="ml"
+                source={
+                  nextStep
+                    ? `Sum of the ${result.horizon} projected points · band ${fmt(nextStep.lo)}–${fmt(nextStep.hi)} at step 1`
+                    : undefined
+                }
+              />
+              {/*
+                The model tile leads with its *error*, not its name. A model name is
+                not a figure, and set at the 28px tile numeral it overflowed the tile
+                and collided with the chip beside it — the shape of the mistake was
+                the mistake. The number a reader can act on is how wrong the winner
+                was on held-out data; which winner it was is the provenance.
+              */}
+              <StatCard
+                label={`Held-out error · ${result.selection_metric}`}
+                value={`${result.backtest.smape.toFixed(1)}%`}
+                icon={Target}
+                tone="agent"
+                source={`${result.model} selected from ${result.candidates.length} candidates`}
+              />
+              <StatCard
+                label="Coverage achieved"
+                value={`${(result.backtest.empirical_coverage * 100).toFixed(0)}%`}
+                icon={ShieldCheck}
+                tone={result.backtest.coverage_meets_request ? 'ok' : 'risk'}
+                source={`${(result.backtest.requested_coverage * 100).toFixed(0)}% requested · ${result.backtest.n_points} held-out points`}
+              />
+            </div>
 
-            <SourceLine source={sourceLine} detail={sourceDetail} />
-          </CardBody>
-        </Card>
+            {/* ── Card 1 · the band ───────────────────────────────────────── */}
+            <Card>
+              <CardHeader
+                eyebrow={isLedgerView ? 'aegis.forecast · platform' : 'aegis.forecast'}
+                title={
+                  <span className="inline-flex items-center gap-1.5">
+                    {result.label}
+                    <InfoTip label="How to read the band">
+                      The band is the forecast; the line through it is only its centre. Read
+                      the achieved coverage under the chart before quoting either — it is
+                      normally lower than the level the interval was asked for.
+                    </InfoTip>
+                  </span>
+                }
+                actions={<Badge tone="neutral">{scopeLabel}</Badge>}
+              />
+              <CardBody className="space-y-4 pt-0">
+                <HorizonChart result={result} valueFormatter={fmt} />
+                <HorizonLegend result={result} valueFormatter={fmt} />
+                <CoverageMeter result={result} />
+                <SourceLine source={sourceLine} detail={sourceDetail} />
+              </CardBody>
+            </Card>
+
+            {/* ── Cards 2 & 3 · the burn-down and the selection evidence ──── */}
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+              {data.burndown ? (
+                <Card className="xl:col-span-7">
+                  <CardHeader
+                    eyebrow="aegis.governance"
+                    title="Burn-down against the cap"
+                  />
+                  <CardBody className="pt-0">
+                    <BurndownPanel burndown={data.burndown} />
+                  </CardBody>
+                </Card>
+              ) : null}
+
+              <Card className={data.burndown ? 'xl:col-span-5' : 'xl:col-span-12'}>
+                <CardHeader
+                  eyebrow="rolling-origin · held out"
+                  title="How the model was chosen"
+                  actions={
+                    <Badge tone="neutral" className="tabular font-mono">
+                      {result.backtest.windows} windows
+                    </Badge>
+                  }
+                />
+                <CardBody className="pt-0">
+                  <BacktestPanel result={result} />
+                </CardBody>
+              </Card>
+            </div>
+          </>
+        ) : null}
 
         {/* ── Panel 2: the supervised spine, which is a different model ─────── */}
         {isLedgerView ? <ExplainabilityPanel /> : null}
@@ -321,19 +460,44 @@ function ForecastView({ role }: { role: Role }): ReactElement {
           />
         ) : null}
 
-        {isLedgerView ? (
-          <Card>
-            <CardHeader
-              eyebrow="not recorded · not shown"
-              title="What this page cannot tell you"
-            />
-            <CardBody>
-              <NotRecordedPanel />
-            </CardBody>
-          </Card>
-        ) : null}
+        {isLedgerView ? <NotRecordedFootnote /> : null}
       </div>
     </TooltipProvider>
+  )
+}
+
+/**
+ * The five stated absences, collapsed.
+ *
+ * They were a full card of five three-line blocks at the bottom of the page — a
+ * wall of text that read as an apology and pushed the charts up out of the first
+ * screen. Nothing is removed: a stated absence is this product's signature and
+ * deleting one to tidy the page would be exactly the dishonesty the panel exists
+ * to prevent. It is a disclosure instead, with the count on the summary so a
+ * reader knows there is something behind it, and DESIGN.md §4's rule — prose that
+ * explains a mechanism lives one layer down — is finally followed here too.
+ */
+function NotRecordedFootnote(): ReactElement {
+  return (
+    <Card className="overflow-hidden">
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 select-none md:px-6">
+          <span className="text-base leading-6 font-semibold text-foreground">
+            What this page cannot tell you
+          </span>
+          <span className="eyebrow rounded-sm border border-border px-1.5 py-0.5">
+            {NOT_RECORDED.length} stated absences
+          </span>
+          <ChevronDown
+            className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
+            aria-hidden
+          />
+        </summary>
+        <div className="border-t border-border px-5 py-5 md:px-6">
+          <NotRecordedPanel />
+        </div>
+      </details>
+    </Card>
   )
 }
 

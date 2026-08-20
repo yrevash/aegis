@@ -23,6 +23,13 @@ interface AreaChartProps<T extends object> {
   /** Series colour by signal name. */
   color?: ChartColor
   valueFormatter?: (value: number) => string
+  /**
+   * Format the y-axis ticks. Defaults to `valueFormatter`, because an axis and a
+   * tooltip that disagree about a unit — `9` on the gridline, `$9.00` in the
+   * hover — make a reader check which one is lying. Pass a shorter formatter when
+   * the full one is too wide for the gutter.
+   */
+  axisFormatter?: (value: number) => string
   height?: number
 }
 
@@ -47,8 +54,10 @@ export function AreaChart<T extends object>({
   category,
   color = 'agent',
   valueFormatter,
+  axisFormatter,
   height = 200,
 }: AreaChartProps<T>): ReactElement {
+  const tickFormat = axisFormatter ?? valueFormatter
   const hex = chartHex(color)
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -64,7 +73,8 @@ export function AreaChart<T extends object>({
           tick={{ fill: 'var(--muted-foreground)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
           axisLine={false}
           tickLine={false}
-          width={40}
+          width={tickFormat ? 56 : 40}
+          tickFormatter={tickFormat ? (v: number) => tickFormat(v) : undefined}
         />
         <Tooltip
           cursor={{ stroke: 'var(--border)' }}

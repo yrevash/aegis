@@ -1,18 +1,16 @@
 'use client'
 
 import { Route } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useMemo, type ReactElement } from 'react'
 
 import { SIGNALS } from '@/config/signals'
-import { getAgentTopology } from '@/lib/api/client'
-import type { AgentTopologyResponse } from '@/lib/api/types'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 import type { NodeFinished } from '@/lib/stream'
 
 import type { Beat } from './motion'
+import { useAgentTopology } from './useAgentTopology'
 import {
-  FALLBACK_TOPOLOGY,
   buildFlowMap,
   edgeKey,
   flowIdForNode,
@@ -98,30 +96,6 @@ export function OrchestrationMap({ state, beat }: OrchestrationMapProps): ReactE
       </div>
     </div>
   )
-}
-
-/**
- * Fetch the real graph topology once, falling back to the generated snapshot.
- *
- * The fallback is the initial value, so the map paints immediately and a failed
- * or unauthenticated fetch simply leaves the correct offline picture in place.
- */
-function useAgentTopology(): AgentTopologyResponse {
-  const [topology, setTopology] = useState<AgentTopologyResponse>(FALLBACK_TOPOLOGY)
-  useEffect(() => {
-    let live = true
-    getAgentTopology(null)
-      .then((served) => {
-        if (live && served.nodes.length > 0) setTopology(served)
-      })
-      .catch(() => {
-        /* backend unreachable — the snapshot fallback already renders. */
-      })
-    return () => {
-      live = false
-    }
-  }, [])
-  return topology
 }
 
 /** A single flow node: circle mark + short label, coloured by lifecycle. */

@@ -8,11 +8,25 @@ import { Figure } from '@/components/primitives/Figure'
 import { ChartTooltip } from './ChartTooltip'
 import { chartHex, type ChartColor } from './palette'
 
+/** The step a slice is painted in — its explicit override, else its signal. */
+const sliceHex = (d: DonutDatum): string => d.hex ?? chartHex(d.color)
+
 /** One slice of the donut. */
 export interface DonutDatum {
   name: string
   value: number
   color: ChartColor
+  /**
+   * An explicit step, overriding `color`.
+   *
+   * A signal name resolves to one of three ramp steps, which is the right answer
+   * when the slices *mean* something (small model versus large). It is the wrong
+   * answer when they are simply ranked — four models by spend have no signal
+   * between them, only an order — and there is no signal named "third biggest".
+   * Pass `rampHex(i, n)` from `./palette` there; it is the same validated ramp,
+   * addressed by rank instead of by meaning.
+   */
+  hex?: string
 }
 
 interface DonutChartProps {
@@ -60,7 +74,7 @@ export function DonutChart({
               isAnimationActive={false}
             >
               {data.map((d) => (
-                <Cell key={d.name} fill={chartHex(d.color)} />
+                <Cell key={d.name} fill={sliceHex(d)} />
               ))}
             </Pie>
           </PieChart>
@@ -79,7 +93,7 @@ export function DonutChart({
             <li key={d.name} className="flex items-center gap-1.5 text-[0.72rem]">
               <span
                 className="size-2 shrink-0 rounded-[2px]"
-                style={{ background: chartHex(d.color) }}
+                style={{ background: sliceHex(d) }}
                 aria-hidden
               />
               <span className="text-muted-foreground">{d.name}</span>

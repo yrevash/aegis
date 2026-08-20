@@ -27,7 +27,7 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
   return (
     <div className="space-y-4">
       {/* One hairline-divided strip, not five separate boxes. */}
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-5">
+      <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-5">
         <Metric label="sMAPE" value={`${bt.smape.toFixed(2)}%`} />
         <Metric label="MAPE" value={bt.mape == null ? '—' : `${bt.mape.toFixed(2)}%`}>
           {bt.mape == null ? (
@@ -38,7 +38,11 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
           ) : null}
         </Metric>
         <Metric label="MAE" value={bt.mae.toFixed(3)} />
-        <Metric label="held-out points" value={String(bt.n_points)} />
+        <Metric label="points" value={String(bt.n_points)}>
+          <InfoTip label="What the points are">
+            Held-out actuals: observations the fit never saw, scored after the fact.
+          </InfoTip>
+        </Metric>
         <Metric label="windows" value={String(bt.windows)} />
       </div>
 
