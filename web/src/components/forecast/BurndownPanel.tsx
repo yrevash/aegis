@@ -17,6 +17,7 @@ import {
 
 import { ChartTooltip } from '@/components/charts/ChartTooltip'
 import { chartHex } from '@/components/charts/palette'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import type { ForecastBurndown } from '@/lib/api/types'
 
@@ -71,17 +72,16 @@ export function BurndownPanel({ burndown }: { burndown: ForecastBurndown }): Rea
           <p className="eyebrow">
             {!capped ? 'no cap configured' : over ? 'projected to run out' : 'cap holds'}
           </p>
-          <p
-            className="tabular mt-1 font-mono text-[1.75rem] leading-none font-bold"
-            style={{ color: over ? 'var(--danger)' : 'var(--foreground)' }}
-          >
-            {!capped
-              ? usd(burndown.projected_total_usd)
-              : over && burndown.exhaustion_ts
-                ? dayLabel(burndown.exhaustion_ts)
-                : burndown.headroom_usd == null
-                  ? '—'
-                  : usd(burndown.headroom_usd)}
+          <p className="mt-1">
+            <Figure size="stat" className={over ? 'text-danger' : 'text-foreground'}>
+              {!capped
+                ? usd(burndown.projected_total_usd)
+                : over && burndown.exhaustion_ts
+                  ? dayLabel(burndown.exhaustion_ts)
+                  : burndown.headroom_usd == null
+                    ? '—'
+                    : usd(burndown.headroom_usd)}
+            </Figure>
           </p>
           <p className="mt-1.5 text-[0.7rem] text-muted-foreground">
             {!capped
@@ -90,10 +90,10 @@ export function BurndownPanel({ burndown }: { burndown: ForecastBurndown }): Rea
                 ? `step ${burndown.exhaustion_step} of ${burndown.points.length} of the horizon`
                 : `headroom left after the ${burndown.points.length}-step horizon`}
             {' · '}
-            <span className="tabular font-mono">
+            <Figure className="text-[0.7rem] leading-4">
               {burndown.window} window · {burndown.scope}
               {burndown.scope_id == null ? '' : ` ${burndown.scope_id}`}
-            </span>
+            </Figure>
           </p>
         </div>
 
@@ -232,8 +232,8 @@ function Fact({ label, children }: { label: string; children: ReactNode }): Reac
   return (
     <div>
       <dt className="eyebrow">{label}</dt>
-      <dd className="tabular mt-1 font-mono text-[0.95rem] font-semibold text-foreground">
-        {children}
+      <dd className="mt-1">
+        <Figure className="text-[0.95rem] leading-5 font-semibold">{children}</Figure>
       </dd>
     </div>
   )

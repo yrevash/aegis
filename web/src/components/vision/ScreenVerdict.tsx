@@ -26,7 +26,7 @@ export function ScreenVerdictPanel({
 }): ReactElement {
   if (verdict == null) {
     return (
-      <div className="rounded-2xl border border-dashed border-border bg-surface-2/40 px-5 py-6">
+      <div className="rounded-lg border border-dashed border-border bg-surface-2/40 px-5 py-6">
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <ShieldQuestion className="size-4 shrink-0" />
           The injection screen was not reached — payload hygiene refused this image first.
@@ -64,7 +64,7 @@ export function ScreenVerdictPanel({
   const { Icon } = chrome
 
   return (
-    <div className={cn('rounded-2xl border px-5 py-5 md:px-6', chrome.wrap)}>
+    <div className={cn('rounded-lg border px-5 py-5 md:px-6', chrome.wrap)}>
       <div className="flex items-start gap-3">
         <Icon className={cn('mt-0.5 size-5 shrink-0', chrome.ink)} />
         <div className="min-w-0 space-y-2">

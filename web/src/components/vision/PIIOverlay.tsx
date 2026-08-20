@@ -33,7 +33,7 @@ export function PIIOverlay({
 
   return (
     <div className="space-y-2">
-      <div className="relative overflow-hidden rounded-xl border border-border bg-surface-2/40">
+      <div className="relative overflow-hidden rounded-lg border border-border bg-surface-2/40">
         {/* eslint-disable-next-line @next/next/no-img-element -- a client-side data: URL, never a remote asset */}
         <img src={src} alt={alt} className="block h-auto w-full" />
         {scalable

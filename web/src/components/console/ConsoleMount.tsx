@@ -16,7 +16,7 @@ const ChatConsole = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Loading console…
       </div>
     ),

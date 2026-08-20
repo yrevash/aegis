@@ -10,6 +10,7 @@ import {
   explainabilitySourceDetail,
 } from '@/components/forecast/sources'
 import { SourceLine } from '@/components/forecast/SourceLine'
+import { Figure } from '@/components/primitives/Figure'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { ApiError } from '@/lib/api/apiError'
@@ -37,9 +38,9 @@ const pct = (v: number): string => `${(v * 100).toFixed(1)}%`
 /** One measured fact off the card — a mono label over its value. */
 function Fact({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
-    <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2/40 p-3.5">
+    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
       <span className="eyebrow">{label}</span>
-      <span className="t-title tabular text-[0.95rem] font-semibold text-foreground">{value}</span>
+      <Figure className="text-[0.95rem] leading-5 font-semibold">{value}</Figure>
       {detail ? (
         <span className="text-[0.72rem] leading-snug text-muted-foreground">{detail}</span>
       ) : null}
@@ -147,7 +148,7 @@ export function ExplainabilityPanel(): ReactElement {
         }
       />
       <CardBody className="space-y-5">
-        <p className="rounded-xl border border-border bg-surface-2/40 p-3.5 text-[0.8rem] leading-relaxed text-foreground">
+        <p className="rounded-lg border border-border bg-surface-2/40 p-3.5 text-[0.8rem] leading-relaxed text-foreground">
           {PANELS_ARE_DIFFERENT_MODELS}
         </p>
 
@@ -195,7 +196,7 @@ export function ExplainabilityPanel(): ReactElement {
               <div className="space-y-3">
                 <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
                   Every feature is at its training median or mode — the spine reports all{' '}
-                  <span className="tabular font-mono text-foreground">{imputed}</span> of them as
+                  <Figure className="text-foreground">{imputed}</Figure> of them as
                   imputed — so this is the model&apos;s baseline attribution, not a prediction
                   about a real case.
                 </p>
@@ -208,7 +209,7 @@ export function ExplainabilityPanel(): ReactElement {
               </div>
             ) : null}
 
-            <div className="rounded-xl border border-border bg-surface-2/40 p-3.5">
+            <div className="rounded-lg border border-border bg-surface-2/40 p-3.5">
               <p className="eyebrow mb-1">not built</p>
               <p className="text-[0.78rem] leading-relaxed text-muted-foreground">
                 Retraining this spine on a subset of its features — and reporting the delta

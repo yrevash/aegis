@@ -1,4 +1,8 @@
+import type { ReactElement } from 'react'
+
 import { Mermaid } from '@/components/landing/Mermaid'
+
+import { LandingSection } from './LandingSection'
 
 /**
  * The real architecture, rendered with Mermaid.
@@ -31,26 +35,20 @@ const ARCHITECTURE = `flowchart TB
     class AD seam;
 `
 
-export function ArchitectureDiagram() {
+export function ArchitectureDiagram(): ReactElement {
   return (
-    <section id="architecture" className="border-b border-border bg-surface">
-      <div className="mx-auto max-w-6xl px-6 py-20">
-        <div className="mb-12 text-center">
-          <p className="eyebrow mb-3">Architecture</p>
-          <h2 className="text-3xl font-semibold tracking-tight text-foreground">
-            Four layers. The domain plugs into one seam.
-          </h2>
-        </div>
-
-        <div className="overflow-x-auto rounded-xl border border-border bg-card p-6">
-          <Mermaid chart={ARCHITECTURE} className="mx-auto min-w-[560px] [&_svg]:mx-auto" />
-        </div>
-
-        <p className="mx-auto mt-8 max-w-xl text-center text-sm text-muted-foreground">
-          The core is a package you import, not an application you fork — point it
-          at a new domain by writing one adapter.
-        </p>
+    <LandingSection
+      id="architecture"
+      eyebrow="Architecture"
+      title="Four layers. The domain plugs into one seam."
+      note="The core is a package you import, not an application you fork — point it at a new domain by writing one adapter."
+      className="bg-surface"
+    >
+      {/* The diagram is wider than a phone. It scrolls in its own container so the
+          page body never does — DESIGN.md §5. */}
+      <div className="overflow-x-auto rounded-lg border border-border bg-card p-4 sm:p-6">
+        <Mermaid chart={ARCHITECTURE} className="mx-auto min-w-[560px] [&_svg]:mx-auto" />
       </div>
-    </section>
+    </LandingSection>
   )
 }

@@ -124,7 +124,7 @@ export function Composer({
   return (
     <form
       onSubmit={submit}
-      className="rounded-2xl border border-border bg-card p-2.5 focus-within:border-ring"
+      className="rounded-lg border border-border bg-card p-2.5 focus-within:border-ring"
     >
       <div className="flex flex-wrap items-center gap-2 pb-2">
         {personas.length > 1 && (

@@ -1,15 +1,31 @@
 'use client'
 
-import { CheckCircle2, Gavel, Loader2, RefreshCw, ShieldAlert, Timer } from 'lucide-react'
+import {
+  CheckCircle2,
+  Gavel,
+  Loader2,
+  RefreshCw,
+  ShieldAlert,
+  Timer,
+  XCircle,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
-import { ProposedAction } from '@/components/approval/ApprovalCard'
+import {
+  ConsentStatement,
+  GateReceipt,
+  ProposedAction,
+} from '@/components/approval/ApprovalCard'
 import { readApproval } from '@/components/approval/approvalActions'
 import { Badge } from '@/components/primitives/badge'
 import { Button } from '@/components/primitives/button'
 import { Card, CardContent } from '@/components/primitives/card'
-import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
+import { Figure } from '@/components/primitives/Figure'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
+import { BackendGate } from '@/components/shared/BackendGate'
 import { signalForRisk } from '@/config/signals'
+import { errorSentence } from '@/lib/api/apiError'
 import {
   decideApproval,
   getApprovals,
@@ -117,6 +133,11 @@ interface ApprovalInboxProps {
  * sees them disabled, and reads why. Hiding them would hide the rule; enabling them
  * would earn a 403. Deriving the rule here in TypeScript would be a second copy of it
  * that can drift from the one the button is about to hit.
+ *
+ * **A failure here is a failure of the queue, not of the backend.** It used to render
+ * `BackendUnavailable`, which says the server is down — the sentence a 403 on one
+ * tenant's queue least deserves. The server's own sentence goes on the screen instead,
+ * with the retry beside it.
  */
 export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps): ReactElement {
   const [filter, setFilter] = useState<ApprovalStatusFilter>('pending')
@@ -159,7 +180,10 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
     } catch (error: unknown) {
       setLoad({
         status: 'error',
-        message: error instanceof Error ? error.message : 'The approvals queue did not load',
+        message: errorSentence(
+          error,
+          'The approvals queue did not load. Check the backend is reachable, then retry.',
+        ),
       })
     }
   }, [token, filter, lookback, tenant, canFilterByTenant])
@@ -189,21 +213,19 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
       // The server's refusal is the ownership rule stating itself. Show it verbatim.
       setNotice({
         kind: 'refused',
-        text: error instanceof Error ? error.message : 'The decision did not go through',
+        text: errorSentence(error, 'The decision did not go through. Try it again.'),
       })
     } finally {
       setBusy(null)
     }
   }
 
-  if (load.status === 'error') return <BackendUnavailable detail={load.message} />
-
   const waiting = rows.filter((row) => row.status === 'pending').length
 
   return (
     <div className="flex flex-col gap-4">
       {/* Controls: which queue, how far back, whose. */}
-      <Card>
+      <Card className="rounded-lg">
         <CardContent className="flex flex-wrap items-end gap-4 py-4">
           <fieldset className="min-w-0">
             <legend className="eyebrow mb-2">Queue</legend>
@@ -231,7 +253,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
               id="approvals-window"
               value={lookback}
               onChange={(event) => setLookback(event.target.value)}
-              className="h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-8 rounded-lg border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {WINDOWS.map((option) => (
                 <option key={option.id} value={option.id}>
@@ -250,7 +272,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
                 id="approvals-tenant"
                 value={tenant}
                 onChange={(event) => setTenant(event.target.value)}
-                className="h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="h-8 rounded-lg border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="all">Every tenant</option>
                 {knownTenants.map((id) => (
@@ -262,16 +284,22 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
             </div>
           )}
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-3 sm:ml-auto">
             <p className="text-sm text-muted-foreground">
-              {filter === 'decided'
-                ? `${rows.length} decided in this window`
-                : waiting === 0
-                  ? 'Nothing is waiting on a decision'
-                  : `${waiting} waiting on a decision`}
+              {filter === 'decided' ? (
+                <>
+                  <Figure>{rows.length}</Figure> decided in this window
+                </>
+              ) : waiting === 0 ? (
+                'Nothing is waiting on a decision'
+              ) : (
+                <>
+                  <Figure>{waiting}</Figure> waiting on a decision
+                </>
+              )}
             </p>
             <Button type="button" size="sm" variant="outline" onClick={() => void refresh()}>
-              <RefreshCw className="size-4" /> Refresh
+              <RefreshCw className="size-4" aria-hidden /> Refresh
             </Button>
           </div>
         </CardContent>
@@ -281,21 +309,29 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
         <p
           role="status"
           className={cn(
-            'rounded-lg border px-3 py-2 text-sm',
+            'flex items-start gap-2 rounded-lg border px-3 py-2 text-sm',
             notice.kind === 'ok'
               ? 'border-ok/60 bg-ok/10 text-ok-ink'
               : 'border-block/60 bg-block/10 text-block-ink',
           )}
         >
-          {notice.text}
+          {notice.kind === 'ok' ? (
+            <CheckCircle2 aria-hidden className="mt-0.5 size-4 shrink-0" />
+          ) : (
+            <XCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+          )}
+          <span>
+            <span className="font-medium">{notice.kind === 'ok' ? 'Recorded. ' : 'Refused. '}</span>
+            {notice.text}
+          </span>
         </p>
       )}
 
-      {load.status === 'loading' && (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" /> Reading the queue…
-        </p>
+      {load.status === 'error' && (
+        <ErrorState error={load.message} retry={() => void refresh()} />
       )}
+
+      {load.status === 'loading' && <LoadingState rows={3} label="Reading the queue…" />}
 
       {load.status === 'ready' && rows.length === 0 && <EmptyQueue filter={filter} />}
 
@@ -317,20 +353,19 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
 
 /** The empty state for each queue — an invitation, not a shrug. */
 function EmptyQueue({ filter }: { filter: ApprovalStatusFilter }): ReactElement {
-  const copy =
+  const body =
     filter === 'pending'
-      ? 'Nothing is waiting on you. When the agent proposes an action above the risk floor your tenant set, it parks here instead of running it — and the run waits until you decide.'
+      ? 'When the agent proposes an action above the risk floor your tenant set, it parks here instead of running it — and the run waits until you decide.'
       : filter === 'decided'
-        ? 'No gate has been decided in this window yet. Widen it, or look at what is waiting.'
+        ? 'No gate has been decided in this window. Widen it, or look at what is waiting.'
         : 'No action has reached the human gate in this window. Ask the console for something consequential and one will.'
-  return (
-    <Card>
-      <CardContent className="flex flex-col items-start gap-2 py-8">
-        <Gavel className="size-5 text-muted-foreground" />
-        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{copy}</p>
-      </CardContent>
-    </Card>
-  )
+  const title =
+    filter === 'pending'
+      ? 'Nothing is waiting on you'
+      : filter === 'decided'
+        ? 'No decisions in this window'
+        : 'No gates in this window'
+  return <EmptyState icon={Gavel} title={title} body={body} />
 }
 
 /**
@@ -339,7 +374,8 @@ function EmptyQueue({ filter }: { filter: ApprovalStatusFilter }): ReactElement 
  * The action list comes from `readApproval` — the same function the live card reads —
  * so a gate authorising three calls counts three here too. `action` alone is the
  * representative, and a queue that rendered it would ask a person to authorise a
- * fan-out while naming one of its writes.
+ * fan-out while naming one of its writes. The consent sentence and the gate receipt
+ * are the live card's own components for the same reason.
  */
 function GateRow({
   row,
@@ -362,18 +398,25 @@ function GateRow({
   const riskSignal = signalForRisk(row.risk)
   const pending = row.status === 'pending'
   const left = pending ? slaLeft(row.sla_deadline, now) : null
+  const consentId = `gate-consent-${row.id}`
 
   return (
-    <Card className={cn(pending && 'border-risk/40')}>
+    <Card className={cn('rounded-lg', pending && 'border-risk/40')}>
       <CardContent className="space-y-3 py-4">
         <div className="flex flex-wrap items-center gap-2">
           {pending ? (
-            <ShieldAlert className="size-4 text-risk" />
+            <ShieldAlert className="size-4 shrink-0 text-risk" aria-hidden />
           ) : (
-            <CheckCircle2 className="size-4 text-muted-foreground" />
+            <CheckCircle2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           )}
           <p className="font-medium text-foreground">
-            {view.many ? `${view.actions.length} calls await a decision` : 'One call awaits a decision'}
+            {view.many ? (
+              <>
+                <Figure>{view.actions.length}</Figure> calls await a decision
+              </>
+            ) : (
+              'One call awaits a decision'
+            )}
           </p>
           <Badge variant={statusVariant(row.status)} className="uppercase">
             {row.status}
@@ -384,7 +427,7 @@ function GateRow({
           <Badge variant="outline">{ownerLabel(row.tenant_id)}</Badge>
           {left && (
             <span className="inline-flex items-center gap-1 text-[0.72rem] text-muted-foreground">
-              <Timer className="size-3.5" /> {left}
+              <Timer className="size-3.5" aria-hidden /> {left}
             </span>
           )}
         </div>
@@ -406,44 +449,44 @@ function GateRow({
           </div>
         )}
 
-        <dl className="grid gap-x-6 gap-y-1 text-[0.72rem] text-muted-foreground sm:grid-cols-2">
-          <div className="flex justify-between gap-3">
-            <dt>Raised</dt>
-            <dd className="tabular font-mono text-foreground">{formatTime(row.created_at)}</dd>
-          </div>
-          <div className="flex justify-between gap-3">
-            <dt>Run</dt>
-            <dd className="truncate font-mono text-foreground">{row.run_id}</dd>
-          </div>
+        <dl className="grid grid-cols-[minmax(0,6rem)_minmax(0,1fr)] gap-x-4 gap-y-1 text-[0.72rem] text-muted-foreground sm:grid-cols-[minmax(0,6rem)_minmax(0,1fr)_minmax(0,6rem)_minmax(0,1fr)]">
+          <dt>Raised</dt>
+          <dd className="min-w-0">
+            <Figure className="text-foreground">{formatTime(row.created_at)}</Figure>
+          </dd>
+          <dt>Run</dt>
+          <dd className="min-w-0">
+            <Figure className="truncate text-foreground">{row.run_id}</Figure>
+          </dd>
           {CLOSED.has(row.status) && (
             <>
-              <div className="flex justify-between gap-3">
-                <dt>Decided</dt>
-                <dd className="tabular font-mono text-foreground">{formatTime(row.decided_at)}</dd>
-              </div>
-              <div className="flex justify-between gap-3">
-                <dt>Decided by</dt>
-                <dd className="truncate font-mono text-foreground">{row.decided_by ?? '—'}</dd>
-              </div>
+              <dt>Decided</dt>
+              <dd className="min-w-0">
+                <Figure className="text-foreground">{formatTime(row.decided_at)}</Figure>
+              </dd>
+              <dt>Decided by</dt>
+              <dd className="min-w-0">
+                <Figure className="truncate text-foreground">{row.decided_by ?? '—'}</Figure>
+              </dd>
             </>
           )}
         </dl>
 
-        {view.many && (
-          <p className="text-[0.8rem] leading-relaxed font-medium text-risk-ink">{view.summary}</p>
-        )}
+        {pending && <ConsentStatement id={consentId} view={view} />}
 
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button
-            className="bg-ok text-ok-foreground hover:bg-ok/90"
+            aria-describedby={pending ? consentId : undefined}
             disabled={!row.decidable || busy}
             onClick={() => onDecide('approve')}
           >
-            {busy ? <Loader2 className="size-4 animate-spin" /> : null} Approve
+            {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
           </Button>
           <Button
             variant="outline"
             className="border-block/60 text-block-ink hover:bg-block/10 hover:text-block-ink"
+            aria-describedby={pending ? consentId : undefined}
             disabled={!row.decidable || busy}
             onClick={() => onDecide('reject')}
           >
@@ -455,6 +498,8 @@ function GateRow({
             </p>
           )}
         </div>
+
+        <GateReceipt approvalId={row.id} view={view} />
       </CardContent>
     </Card>
   )
@@ -473,7 +518,7 @@ export function ApprovalsMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
         Connecting…
       </div>
     )
@@ -490,11 +535,7 @@ export function ApprovalsMount(): ReactElement {
   return (
     <BackendGate>
       <div className="space-y-4">
-        <div>
-          <p className="eyebrow mb-1">Bounded autonomy</p>
-          <h1 className="t-hero text-foreground">Approvals</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{blurb}</p>
-        </div>
+        <SectionHeader as="h1" eyebrow="Bounded autonomy" title="Approvals" note={blurb} />
         <ApprovalInbox token={session?.token ?? null} canFilterByTenant={platform} />
       </div>
     </BackendGate>

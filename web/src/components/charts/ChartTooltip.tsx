@@ -2,10 +2,17 @@
 
 import type { ReactElement } from 'react'
 
-/** One entry Recharts passes to a custom tooltip. */
+/**
+ * One entry Recharts passes to a custom tooltip.
+ *
+ * `value` is a pair when the series is a range `Area` — a forecast band, drawn
+ * between its own `lo` and `hi`. That case is the reason this type is not just
+ * `number`: an interval read out as its centre is the projection's uncertainty
+ * silently dropped, which is the one thing these charts exist to keep visible.
+ */
 interface TooltipEntry {
   name?: string | number
-  value?: string | number
+  value?: string | number | [number, number]
   color?: string
 }
 
@@ -15,6 +22,15 @@ interface ChartTooltipProps {
   payload?: TooltipEntry[]
   /** Optional formatter for values. */
   valueFormatter?: (value: number) => string
+}
+
+/** Format one entry's value — a range renders as its two bounds, never as a point. */
+function readValue(
+  value: TooltipEntry['value'],
+  format: (value: number) => string,
+): string {
+  if (Array.isArray(value)) return `${format(value[0])} – ${format(value[1])}`
+  return typeof value === 'number' ? format(value) : String(value ?? '—')
 }
 
 /** A light, card-styled Recharts tooltip shared by every chart. */
@@ -41,7 +57,7 @@ export function ChartTooltip({
             />
             <span className="text-muted-foreground">{entry.name}</span>
             <span className="tabular ml-auto font-mono font-medium text-foreground">
-              {typeof entry.value === 'number' ? valueFormatter(entry.value) : entry.value}
+              {readValue(entry.value, valueFormatter)}
             </span>
           </li>
         ))}

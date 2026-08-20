@@ -3,16 +3,16 @@
 import type { LucideIcon } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
 
-import { CountUp } from '@/components/shared/CountUp'
 import { MiniTrend } from '@/components/shared/MiniTrend'
 import { StatDelta, type DeltaDirection, type DeltaTone } from '@/components/shared/StatDelta'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { SIGNALS, type Signal } from '@/config/signals'
 import { cn } from '@/lib/utils'
 
 interface StatCardProps {
   label: string
-  /** Raw number — the tile owns the count-up + formatting. Null renders "—". */
+  /** Raw number — the tile owns the formatting. Null renders "—". */
   value: number | null
   format?: (n: number) => string
   icon?: LucideIcon
@@ -30,10 +30,17 @@ interface StatCardProps {
 }
 
 /**
- * A compact numeric stat tile for the Overview bento — icon chip, count-up
- * value, optional delta chip and inline trend. Numbers lead; any explanation
- * lives one layer down in the `info` tooltip. Honest to the end: live figures
- * carry a green dot, illustrative ones keep their `sample` badge.
+ * A compact numeric stat tile for the Overview bento — icon chip, figure,
+ * optional delta chip and inline trend. Numbers lead; any explanation lives one
+ * layer down in the `info` tooltip. Honest to the end: live figures carry a
+ * green dot, illustrative ones keep their `sample` badge.
+ *
+ * **The figure does not animate, and that is the point.** This tile draws spend
+ * against a cap (`MyBudgetTile`), and a governance figure that counts up to its
+ * value is a governance figure that looks approximate while it is arriving —
+ * DESIGN.md §6 rules it out for exactly that reason. It is now a {@link Figure},
+ * so it is mono and tabular as well: a column of these tiles aligns on the
+ * digits and none of them reflows sideways when a poll ticks the value.
  */
 export function StatCard({
   label,
@@ -75,9 +82,13 @@ export function StatCard({
 
       <div className="flex flex-wrap items-end gap-x-2 gap-y-0.5">
         {value == null ? (
-          <span className="t-metric text-muted-foreground">—</span>
+          <Figure size="display" className="text-muted-foreground" label="not recorded">
+            —
+          </Figure>
         ) : (
-          <CountUp value={value} format={format} className="t-metric text-foreground" />
+          <Figure size="display" className="text-foreground">
+            {format(value)}
+          </Figure>
         )}
         {delta && (
           <span className="mb-0.5">

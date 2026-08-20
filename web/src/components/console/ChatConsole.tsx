@@ -38,7 +38,7 @@ const EMPTY_GRAPH: GraphResponse = { nodes: [], edges: [] }
 function Question({ text, meta }: { text: string; meta: string }): ReactElement {
   return (
     <div className="flex flex-col items-end gap-1">
-      <div className="max-w-[46rem] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
+      <div className="max-w-[46rem] rounded-lg rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
         {text}
       </div>
       <span className="font-mono text-[0.66rem] text-muted-foreground">{meta}</span>
@@ -58,7 +58,7 @@ function RestoredTurnView({ turn }: { turn: RestoredTurn }): ReactElement {
     <article className="flex flex-col gap-3">
       {turn.question !== '' && <Question text={turn.question} meta="Sent earlier" />}
       {turn.answer !== '' && (
-        <div className="rounded-2xl rounded-bl-md border border-border bg-card px-4 py-3">
+        <div className="rounded-lg rounded-bl-md border border-border bg-card px-4 py-3">
           <Badge variant="outline" className="mb-2">
             from the transcript
           </Badge>
@@ -84,7 +84,7 @@ function AttachmentChip({ attachment }: { attachment: TurnAttachment }): ReactEl
   return (
     <div
       className={cn(
-        'flex items-start gap-2 self-end rounded-xl border px-3 py-2 text-[0.76rem] leading-snug',
+        'flex items-start gap-2 self-end rounded-lg border px-3 py-2 text-[0.76rem] leading-snug',
         verdict.blocked
           ? 'border-block/50 bg-block/10 text-block-ink'
           : 'border-border bg-surface-2/50 text-muted-foreground',

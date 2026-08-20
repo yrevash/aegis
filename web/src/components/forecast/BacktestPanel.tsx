@@ -2,6 +2,7 @@
 
 import type { ReactElement, ReactNode } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge } from '@/components/ui/Badge'
 import type { ForecastResult } from '@/lib/api/types'
@@ -26,7 +27,7 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
   return (
     <div className="space-y-4">
       {/* One hairline-divided strip, not five separate boxes. */}
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-5">
         <Metric label="sMAPE" value={`${bt.smape.toFixed(2)}%`} />
         <Metric label="MAPE" value={bt.mape == null ? '—' : `${bt.mape.toFixed(2)}%`}>
           {bt.mape == null ? (
@@ -52,45 +53,38 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
             </InfoTip>
           ) : null}
         </div>
-        <div className="overflow-x-auto rounded-xl border border-border">
+        <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-muted-foreground">
-                <th className="px-4 py-2 font-medium">model</th>
-                <th className="px-4 py-2 text-right font-medium">sMAPE</th>
-                <th className="px-4 py-2 text-right font-medium">MAE</th>
-                <th className="px-4 py-2 text-right font-medium">coverage</th>
+                <th scope="col" className="px-4 py-2 font-medium">model</th>
+                <th scope="col" className="px-4 py-2 text-right font-medium">sMAPE</th>
+                <th scope="col" className="px-4 py-2 text-right font-medium">MAE</th>
+                <th scope="col" className="px-4 py-2 text-right font-medium">coverage</th>
               </tr>
             </thead>
             <tbody>
               {result.candidates.map((c) => (
                 <tr
                   key={c.model}
-                  className="border-b border-border last:border-0"
-                  style={
-                    c.selected
-                      ? {
-                          background: 'color-mix(in srgb, var(--blue-100) 10%, transparent)',
-                        }
-                      : undefined
-                  }
+                  className={`border-b border-border last:border-0 ${c.selected ? 'bg-blue-50' : ''}`}
                 >
-                  <td className="px-4 py-2 font-mono text-foreground">
-                    {c.model}
+                  <th scope="row" className="px-4 py-2 text-left font-normal">
+                    <Figure>{c.model}</Figure>
                     {c.selected ? (
                       <Badge tone="ml" className="ml-2">
                         selected
                       </Badge>
                     ) : null}
+                  </th>
+                  <td className="px-4 py-2 text-right text-foreground">
+                    <Figure>{c.smape.toFixed(2)}%</Figure>
                   </td>
-                  <td className="tabular px-4 py-2 text-right font-mono text-foreground">
-                    {c.smape.toFixed(2)}%
+                  <td className="px-4 py-2 text-right text-foreground">
+                    <Figure>{c.mae.toFixed(3)}</Figure>
                   </td>
-                  <td className="tabular px-4 py-2 text-right font-mono text-foreground">
-                    {c.mae.toFixed(3)}
-                  </td>
-                  <td className="tabular px-4 py-2 text-right font-mono text-foreground">
-                    {pct(c.empirical_coverage)}
+                  <td className="px-4 py-2 text-right text-foreground">
+                    <Figure>{pct(c.empirical_coverage)}</Figure>
                   </td>
                 </tr>
               ))}
@@ -127,8 +121,8 @@ function Metric({
         {label}
         {children}
       </span>
-      <p className="t-title tabular mt-1 font-mono text-[0.95rem] font-semibold text-foreground">
-        {value}
+      <p className="mt-1">
+        <Figure className="text-[0.95rem] leading-5 font-semibold">{value}</Figure>
       </p>
     </div>
   )

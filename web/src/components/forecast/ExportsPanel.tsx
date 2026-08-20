@@ -101,7 +101,7 @@ export function ExportsPanel({
         {ROWS.map((row) => (
           <div
             key={row.id}
-            className="flex flex-col gap-3 rounded-xl border border-border bg-surface-2/40 p-4 sm:flex-row sm:items-start sm:justify-between"
+            className="flex flex-col gap-3 rounded-lg border border-border bg-surface-2/40 p-4 sm:flex-row sm:items-start sm:justify-between"
           >
             <div className="min-w-0 space-y-1.5">
               <p className="text-sm font-semibold text-foreground">{row.title}</p>

@@ -13,6 +13,7 @@ import { NotRecordedPanel } from '@/components/forecast/NotRecordedPanel'
 import { RefusalNotice } from '@/components/forecast/RefusalNotice'
 import { SourceLine } from '@/components/forecast/SourceLine'
 import { FORECAST_SOURCE, forecastSourceDetail } from '@/components/forecast/sources'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -197,10 +198,11 @@ function ForecastView({ role }: { role: Role }): ReactElement {
   return (
     <TooltipProvider>
       <div className="space-y-6">
-        <div>
-          <p className="eyebrow mb-1">statsforecast · conformal · measured coverage</p>
-          <h1 className="t-hero text-foreground">Forecast</h1>
-        </div>
+        <SectionHeader
+          as="h1"
+          eyebrow="statsforecast · conformal · measured coverage"
+          title="Forecast"
+        />
 
         {/* ── Panel 1: the projection ───────────────────────────────────────── */}
         <Card>

@@ -7,12 +7,15 @@ import {
   CircleX,
   Clock,
   Layers,
-  Loader2,
   TriangleAlert,
   type LucideIcon,
 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -44,6 +47,9 @@ const POLL_MS = 15000
  * established nothing, and colouring "nothing" the same as "no" is a lie in the safe
  * direction. `not_applicable` is likewise not a pass — it says the question does not
  * apply here (a non-Postgres dialect has no row security to bypass).
+ *
+ * Every one of the five carries a distinct **icon and word**, which is what a reader
+ * actually distinguishes them by; the tint is the third cue, never the only one.
  */
 const STATUS_META: Record<ComponentStatus, { tone: BadgeTone; label: string; icon: LucideIcon }> = {
   up: { tone: 'ok', label: 'up', icon: CircleCheck },
@@ -68,39 +74,44 @@ function age(seconds: number): string {
   return `${(seconds / 86_400).toFixed(1)} d`
 }
 
-/** A status pill — tinted band plus an icon plus the word, never colour alone. */
+/** A status chip — an icon, the word, and a tint. Never the tint alone. */
 function StatusPill({ status }: { status: ComponentStatus }): ReactElement {
   const meta = STATUS_META[status] ?? STATUS_META.unknown
   const Icon = meta.icon
   return (
-    <Badge tone={meta.tone} className="gap-1.5">
-      <Icon className="size-3" />
+    <Badge tone={meta.tone} className="gap-1.5 whitespace-nowrap">
+      <Icon className="size-3 shrink-0" aria-hidden />
       {meta.label}
     </Badge>
   )
 }
 
-/** One component row: what it is, its verdict, and the probe that produced it. */
+/**
+ * One component row: what it is, its verdict, and the probe that produced it.
+ *
+ * The evidence is not optional and not a tooltip. It is the middle column, at
+ * reading size, because a health page whose verdicts cannot be checked is a
+ * health page asking to be trusted — which is the one thing this product refuses
+ * to ask for (DESIGN.md §1).
+ */
 function ComponentRow({ row }: { row: ComponentHealth }): ReactElement {
   return (
     <TR className="align-top">
       <TD className="whitespace-nowrap">
         <div className="flex flex-col gap-0.5">
           <span className="text-sm font-medium text-foreground">{row.name}</span>
-          <span className="font-mono text-[0.68rem] uppercase tracking-wide text-muted-foreground">
+          <span className="eyebrow">
             {row.category}
             {row.required ? ' · required' : ''}
           </span>
         </div>
       </TD>
       <TD>
-        <div className="flex max-w-xl flex-col gap-1">
+        <div className="flex max-w-xl flex-col gap-1.5">
           {row.detail ? (
-            <span className="text-[0.8rem] leading-snug text-foreground">{row.detail}</span>
+            <span className="text-[0.8125rem] leading-relaxed text-foreground">{row.detail}</span>
           ) : null}
-          <span className="font-mono text-[0.68rem] leading-snug text-muted-foreground">
-            {row.evidence}
-          </span>
+          <Receipt label="Evidence" origin={row.evidence} variant="inline" />
         </div>
       </TD>
       <TD className="whitespace-nowrap text-right">
@@ -110,7 +121,15 @@ function ComponentRow({ row }: { row: ComponentHealth }): ReactElement {
   )
 }
 
-/** The gaps card — every figure the platform refuses to show, and what it would take. */
+/**
+ * The gaps card — every figure the platform refuses to show, and what it would take.
+ *
+ * This is the page's most easily "tidied" panel and it is the one that must not be:
+ * a dashboard's silences are invisible, so a reader who cannot tell a figure that is
+ * missing from one that was never possible invents the missing one. Each gap is an
+ * {@link Absence}, in the same treatment the rest of the console uses for a figure it
+ * cannot source.
+ */
 function NotRecordedCard({
   title,
   gaps,
@@ -122,18 +141,10 @@ function NotRecordedCard({
   return (
     <Card>
       <CardHeader eyebrow="stated, not filled in" title={title} />
-      <CardBody>
-        <dl className="divide-y divide-border/60">
-          {gaps.map((gap) => (
-            <div key={gap.figure} className="py-3 first:pt-0 last:pb-0">
-              <dt className="text-sm font-medium text-foreground">{gap.figure}</dt>
-              <dd className="mt-1 text-[0.8rem] leading-snug text-muted-foreground">
-                {gap.why}
-                <span className="block pt-1 text-foreground">Needs: {gap.needs}</span>
-              </dd>
-            </div>
-          ))}
-        </dl>
+      <CardBody className="grid gap-3 md:grid-cols-2">
+        {gaps.map((gap) => (
+          <Absence key={gap.figure} figure={gap.figure} why={gap.why} needed={gap.needs} />
+        ))}
       </CardBody>
     </Card>
   )
@@ -144,14 +155,15 @@ function NotRecordedCard({
  *
  * A zero value draws an empty track rather than the 2% minimum sliver: a declared stage
  * with no run in the window has no measurement, and a visible bar would read as a fast
- * one.
+ * one. The bar is `aria-hidden` because the figure beside it is the real read-out —
+ * announcing both would say every timing twice.
  */
 function StageBar({ value, max }: { value: number; max: number }): ReactElement {
   const pct = max > 0 && value > 0 ? Math.max(2, (value / max) * 100) : 0
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
+    <div aria-hidden className="h-1.5 w-full overflow-hidden rounded-sm bg-surface-2">
       <div
-        className="h-full rounded-full bg-blue-400 transition-[width] duration-500 motion-reduce:transition-none"
+        className="h-full rounded-sm bg-blue-600 transition-[width] duration-[--dur-slow] motion-reduce:transition-none"
         style={{ width: `${pct}%` }}
       />
     </div>
@@ -166,6 +178,11 @@ function ComponentPanel({ data }: { data: PlatformHealthResponse }): ReactElemen
         <CardHeader
           eyebrow="probed concurrently · every verdict carries its evidence"
           title="Dependencies"
+          actions={
+            <span className="text-xs text-muted-foreground">
+              <Figure>{data.components.length}</Figure> probed
+            </span>
+          }
         />
         <CardBody>
           <Table>
@@ -211,12 +228,12 @@ function PipelinePanel({
       <Card>
         <CardHeader eyebrow="job_runs · run_events" title="Pipeline" />
         <CardBody>
-          <p className="py-6 text-sm text-muted-foreground">
-            {data.unavailable_reason ??
-              'The job and run-event tables could not be read.'}{' '}
-            No figures are shown, because an unreadable pipeline and an idle one are
-            different facts.
-          </p>
+          <Absence
+            figure="Every pipeline figure on this page"
+            why={`${
+              data.unavailable_reason ?? 'The job and run-event tables could not be read.'
+            } No figures are shown, because an unreadable pipeline and an idle one are different facts.`}
+          />
         </CardBody>
       </Card>
     )
@@ -242,7 +259,12 @@ function PipelinePanel({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="In flight" value={String(data.in_flight)} icon={Layers} tone="agent" />
+        <StatCard
+          label="In flight"
+          value={String(data.in_flight)}
+          icon={Layers}
+          source="job_runs · pending, running or reconciling"
+        />
         <StatCard
           label="Oldest pending"
           value={
@@ -256,6 +278,7 @@ function PipelinePanel({
               ? 'risk'
               : 'neutral'
           }
+          source="job_runs.created_at · oldest not yet started"
         />
         <StatCard
           label={`Failed · last ${data.window_hours}h`}
@@ -266,11 +289,13 @@ function PipelinePanel({
           }
           icon={TriangleAlert}
           tone={data.failed_in_window > 0 ? 'block' : 'ok'}
+          source="job_runs.status · finished inside the window"
         />
         <StatCard
           label="Job duration p95"
           value={data.durations === null ? 'no finished job' : ms(data.durations.p95_ms)}
           icon={Clock}
+          source="job_runs · finished_at minus started_at"
         />
       </div>
 
@@ -279,9 +304,10 @@ function PipelinePanel({
           <CardHeader eyebrow="job_runs · grouped by kind and status" title="Queue depth" />
           <CardBody>
             {data.depth.length === 0 ? (
-              <p className="py-6 text-sm text-muted-foreground">
-                No job has ever been recorded for this scope.
-              </p>
+              <Absence
+                figure="Queue depth"
+                why="No job has ever been recorded for this scope, so there is no distribution to group."
+              />
             ) : (
               <Table>
                 <THead>
@@ -294,9 +320,13 @@ function PipelinePanel({
                 <TBody>
                   {data.depth.map((row) => (
                     <TR key={`${row.job_type}:${row.status}`}>
-                      <TD className="font-mono text-[0.75rem]">{row.job_type}</TD>
-                      <TD>{row.status}</TD>
-                      <TD className="tabular text-right">{row.count}</TD>
+                      <TD>
+                        <Figure>{row.job_type}</Figure>
+                      </TD>
+                      <TD className="text-[0.8125rem]">{row.status}</TD>
+                      <TD className="text-right">
+                        <Figure>{row.count}</Figure>
+                      </TD>
                     </TR>
                   ))}
                 </TBody>
@@ -312,26 +342,23 @@ function PipelinePanel({
           />
           <CardBody>
             {stageRows.length === 0 ? (
-              <p className="py-6 text-sm text-muted-foreground">
-                No ingest stage has committed in the last {data.window_hours} hours, so
-                there is nothing timed to show. This is the only pipeline the platform
-                writes stage events for — a query&rsquo;s node timings stream and are not
-                persisted.
-              </p>
+              <Absence
+                figure="Per-stage timings"
+                why={`No ingest stage has committed in the last ${data.window_hours} hours, so there is nothing timed to show.`}
+                needed="This is the only pipeline the platform writes stage events for — a query's node timings stream and are not persisted."
+              />
             ) : (
               <ul className="space-y-3">
                 {stageRows.map((row) => (
                   <li key={row.name}>
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-                      <span className="font-mono text-[0.75rem] text-foreground">
-                        {row.name}
+                      <span className="min-w-0">
+                        <Figure>{row.name}</Figure>
                         {row.label ? (
-                          <span className="pl-2 font-sans text-[0.7rem] text-muted-foreground">
-                            {row.label}
-                          </span>
+                          <span className="pl-2 text-xs text-muted-foreground">{row.label}</span>
                         ) : null}
                       </span>
-                      <span className="tabular text-[0.75rem] text-muted-foreground">
+                      <span className="tabular text-xs text-muted-foreground">
                         {row.timing === null
                           ? `no run in the last ${data.window_hours}h`
                           : `p50 ${ms(row.timing.p50_ms)} · p95 ${ms(row.timing.p95_ms)} · ${
@@ -368,10 +395,16 @@ function PipelinePanel({
               <TBody>
                 {data.recent_failures.map((row, index) => (
                   <TR key={`${row.job_type}:${row.finished_at}:${index}`} className="align-top">
-                    <TD className="whitespace-nowrap font-mono text-[0.75rem]">{row.job_type}</TD>
-                    <TD className="text-[0.8rem] leading-snug">{row.error}</TD>
-                    <TD className="whitespace-nowrap text-right text-[0.75rem] text-muted-foreground">
-                      {row.finished_at ? new Date(row.finished_at).toLocaleString() : '—'}
+                    <TD className="whitespace-nowrap">
+                      <Figure>{row.job_type}</Figure>
+                    </TD>
+                    <TD className="text-[0.8125rem] leading-relaxed">{row.error}</TD>
+                    <TD className="whitespace-nowrap text-right text-xs text-muted-foreground">
+                      {row.finished_at ? (
+                        <Figure>{new Date(row.finished_at).toLocaleString()}</Figure>
+                      ) : (
+                        'no finish time recorded'
+                      )}
                     </TD>
                   </TR>
                 ))}
@@ -393,7 +426,15 @@ function PipelinePanel({
                     ? 'block'
                     : 'neutral'
               }
+              className="gap-1.5"
             >
+              {data.worker.state === 'running' ? (
+                <CircleCheck className="size-3 shrink-0" aria-hidden />
+              ) : data.worker.state === 'down' ? (
+                <CircleX className="size-3 shrink-0" aria-hidden />
+              ) : (
+                <CircleHelp className="size-3 shrink-0" aria-hidden />
+              )}
               {data.worker.state}
             </Badge>
             <span className="text-sm text-muted-foreground">
@@ -405,24 +446,19 @@ function PipelinePanel({
             </span>
           </div>
           {data.worker.detail ? (
-            <p className="mt-2 text-[0.8rem] leading-snug text-foreground">{data.worker.detail}</p>
+            <p className="mt-2 text-[0.8125rem] leading-relaxed text-foreground">
+              {data.worker.detail}
+            </p>
           ) : null}
         </CardBody>
       </Card>
 
       <Card>
         <CardHeader eyebrow="provenance" title="Where each figure comes from" />
-        <CardBody>
-          <dl className="divide-y divide-border/60">
-            {Object.entries(data.sources).map(([key, sql]) => (
-              <div key={key} className="flex flex-col gap-1 py-2 first:pt-0 last:pb-0">
-                <dt className="eyebrow text-[0.58rem]">{key}</dt>
-                <dd className="font-mono text-[0.7rem] leading-snug text-muted-foreground">
-                  {sql}
-                </dd>
-              </div>
-            ))}
-          </dl>
+        <CardBody className="space-y-3">
+          {Object.entries(data.sources).map(([key, sql]) => (
+            <Receipt key={key} label={key} origin={sql} className="first:border-t-0 first:pt-0" />
+          ))}
         </CardBody>
       </Card>
 
@@ -495,43 +531,38 @@ export function PipelineHealthPanel(): ReactElement {
     }
   }, [hydrated, load])
 
-  if (error) {
-    return (
-      <Card>
-        <CardBody>
-          <p className="py-6 text-center text-sm text-danger">{error}</p>
-        </CardBody>
-      </Card>
-    )
-  }
-
-  if (pipeline === null) {
-    return (
-      <Card>
-        <CardBody>
-          <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
-            Aggregating the pipeline record…
-          </div>
-        </CardBody>
-      </Card>
-    )
-  }
-
   return (
     <section className="space-y-4">
-      <div>
-        <p className="eyebrow mb-1">job_runs · run_events · four probes</p>
-        <h2 className="t-title text-foreground">Pipeline health</h2>
-      </div>
-      {components ? <ComponentPanel data={components} /> : null}
-      <PipelinePanel
-        data={pipeline}
-        declared={
-          declared?.pipelines.find((spec) => spec.name === 'ingestion')?.stages ?? null
-        }
+      <SectionHeader
+        eyebrow="job_runs · run_events · four probes"
+        title="Pipeline health"
+        note="An aggregation over rows the platform already writes. Every verdict below names the probe or the query that produced it."
       />
-      {declared ? <PipelineDeclarationPanel data={declared} /> : null}
+
+      {error ? (
+        <Card>
+          <CardBody>
+            <ErrorState error={error} retry={() => void load()} />
+          </CardBody>
+        </Card>
+      ) : pipeline === null ? (
+        <Card>
+          <CardBody>
+            <LoadingState rows={4} label="Aggregating the pipeline record…" />
+          </CardBody>
+        </Card>
+      ) : (
+        <>
+          {components ? <ComponentPanel data={components} /> : null}
+          <PipelinePanel
+            data={pipeline}
+            declared={
+              declared?.pipelines.find((spec) => spec.name === 'ingestion')?.stages ?? null
+            }
+          />
+          {declared ? <PipelineDeclarationPanel data={declared} /> : null}
+        </>
+      )}
     </section>
   )
 }

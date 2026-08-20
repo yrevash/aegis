@@ -38,7 +38,7 @@ export function RailVerdict({
     <div className="space-y-4">
       <div className="flex items-center gap-3">
         <span
-          className={`flex size-9 items-center justify-center rounded-xl ${
+          className={`flex size-9 items-center justify-center rounded-lg ${
             blocked ? 'bg-block/12' : 'bg-ok/12'
           }`}
         >

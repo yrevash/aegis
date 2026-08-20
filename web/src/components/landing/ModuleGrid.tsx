@@ -15,7 +15,9 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
+
+import { LandingSection } from './LandingSection'
 
 import { getCapabilities } from '@/lib/api/client'
 import type { AegisModuleRow } from '@/lib/api/types'
@@ -32,6 +34,9 @@ import type { AegisModuleRow } from '@/lib/api/types'
  * If the fetch fails the section renders nothing. Showing a hardcoded module
  * list when the backend is unreachable would claim capabilities the page cannot
  * substantiate.
+ *
+ * The loading tiles are placeholder rows the shape of the real ones rather than
+ * a spinner, so the section does not resize when twelve names arrive.
  */
 
 /** Module name → icon. Falls back to a neutral glyph for an unknown module. */
@@ -50,7 +55,7 @@ const ICONS: Record<string, LucideIcon> = {
   'Aegis Tools / MCP': Wrench,
 }
 
-export function ModuleGrid() {
+export function ModuleGrid(): ReactElement | null {
   const [modules, setModules] = useState<AegisModuleRow[] | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -67,40 +72,39 @@ export function ModuleGrid() {
   if (failed) return null
 
   return (
-    <section id="modules" className="border-b border-border">
-      <div className="mx-auto max-w-6xl px-6 py-20">
-        <div className="mb-10 text-center">
-          <p className="eyebrow mb-3">The platform</p>
-          <h2 className="text-3xl font-semibold tracking-tight text-foreground">
-            Twelve modules. Every one names what it runs on.
-          </h2>
-        </div>
-
-        <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-          {(modules ?? Array.from({ length: 12 }, () => null)).map((m, i) => {
-            const Icon = m ? (ICONS[m.name] ?? Waypoints) : Waypoints
+    <LandingSection
+      id="modules"
+      eyebrow="The platform"
+      title="Twelve modules. Every one names what it runs on."
+      note="Read from the running platform's own capability manifest, so this list cannot drift from what is installed."
+    >
+      <ul
+        className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-4"
+        aria-busy={modules === null}
+      >
+        {(modules ?? Array.from({ length: 12 }, () => null)).map((m, i) => {
+          if (m === null) {
             return (
-              <div key={m?.name ?? i} className="flex items-center gap-3.5 bg-card px-5 py-5">
-                {m === null ? (
-                  <div className="h-9 w-full animate-pulse rounded bg-muted" />
-                ) : (
-                  <>
-                    <Icon className="size-5 shrink-0 text-muted-foreground" strokeWidth={1.6} />
-                    <div className="min-w-0">
-                      <h3 className="truncate text-sm font-semibold tracking-tight text-foreground">
-                        {m.name.replace(/^Aegis /, '')}
-                      </h3>
-                      <p className="truncate font-mono text-[0.66rem] text-blue-600">
-                        {m.tech}
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
+              <li key={`placeholder-${i}`} className="bg-card px-5 py-5">
+                <span className="sr-only">Loading the module list…</span>
+                <div aria-hidden className="h-9 w-full animate-pulse rounded-md bg-muted" />
+              </li>
             )
-          })}
-        </div>
-      </div>
-    </section>
+          }
+          const Icon = ICONS[m.name] ?? Waypoints
+          return (
+            <li key={m.name} className="flex items-center gap-3.5 bg-card px-5 py-5">
+              <Icon className="size-5 shrink-0 text-muted-foreground" strokeWidth={1.6} aria-hidden />
+              <div className="min-w-0">
+                <h3 className="truncate text-sm font-semibold tracking-[-0.01em] text-foreground">
+                  {m.name.replace(/^Aegis /, '')}
+                </h3>
+                <p className="truncate font-mono text-[0.68rem] text-blue-600">{m.tech}</p>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </LandingSection>
   )
 }

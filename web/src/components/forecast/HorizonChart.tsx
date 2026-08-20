@@ -13,8 +13,8 @@ import {
   YAxis,
 } from 'recharts'
 
-import { ChartTooltip } from '@/components/charts/ChartTooltip'
 import { chartHex } from '@/components/charts/palette'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import type { ForecastResult } from '@/lib/api/types'
 
@@ -32,6 +32,62 @@ interface Row {
   /** [lo, hi] — a Recharts range Area, so the band is drawn between two bounds. */
   band: [number, number] | null
   forecast: number | null
+}
+
+/**
+ * The hover read-out — and the reason this chart does not use the shared tooltip.
+ *
+ * On a projected step the number a reader takes away must be the **interval**, not
+ * the centre line running through it. A generic one-number-per-series tooltip reads
+ * out the point forecast and silently drops the band, which is the single way this
+ * chart could still overclaim after being drawn correctly. So a forecast row shows
+ * `lo – hi` first and marks the centre as a centre; an observed row shows the one
+ * measured value, because that one *is* a point.
+ */
+function HorizonTooltip({
+  active,
+  payload,
+  label,
+  format,
+}: {
+  active?: boolean
+  payload?: Array<{ payload?: Row }>
+  label?: string | number
+  format: (value: number) => string
+}): ReactElement | null {
+  const row = active ? payload?.[0]?.payload : undefined
+  if (!row) return null
+  const projected = row.band != null && row.forecast != null && row.observed == null
+  return (
+    <div className="rounded-md border border-border bg-popover px-3 py-2 shadow-pop">
+      <p className="mb-1 font-mono text-[0.68rem] tracking-wide text-muted-foreground uppercase">
+        {label}
+      </p>
+      {projected && row.band ? (
+        <dl className="flex flex-col gap-0.5 text-xs">
+          <div className="flex items-baseline gap-3">
+            <dt className="text-muted-foreground">band</dt>
+            <dd className="ml-auto">
+              <Figure className="font-medium text-foreground">
+                {format(row.band[0])} – {format(row.band[1])}
+              </Figure>
+            </dd>
+          </div>
+          <div className="flex items-baseline gap-3">
+            <dt className="text-muted-foreground">centre</dt>
+            <dd className="ml-auto">
+              <Figure className="text-muted-foreground">{format(row.forecast!)}</Figure>
+            </dd>
+          </div>
+        </dl>
+      ) : row.observed != null ? (
+        <div className="flex items-baseline gap-3 text-xs">
+          <span className="text-muted-foreground">observed</span>
+          <Figure className="ml-auto font-medium text-foreground">{format(row.observed)}</Figure>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 /** Render a timestamp as a compact `dd MMM` axis label. */
@@ -119,10 +175,10 @@ export function HorizonChart({
         />
         <Tooltip
           cursor={{ stroke: 'var(--border)' }}
-          content={<ChartTooltip valueFormatter={valueFormatter} />}
+          content={<HorizonTooltip format={valueFormatter ?? ((v: number) => v.toFixed(2))} />}
         />
-        {/* The band is a two-valued range; excluded from the tooltip, which reads
-            one number per row. Its bounds are shown beside the selected step. */}
+        {/* The band is a two-valued range, and the hover read-out above shows both
+            of its bounds before it shows the centre line. */}
         <Area
           dataKey="band"
           stroke={ml}

@@ -29,7 +29,7 @@ export function ReasoningLane({ state }: { state: RunState }): ReactElement | nu
   const thinking = state.phase === 'streaming' && state.answer.length === 0
 
   return (
-    <Card className="border-blue-200/40 bg-blue-200/[0.04]">
+    <Card className="border-blue-200 bg-blue-50">
       <CardHeader className="flex-row items-center gap-2 space-y-0">
         <BrainCircuit className="size-4 text-blue-700" />
         <CardTitle className="text-blue-700">Reasoning</CardTitle>

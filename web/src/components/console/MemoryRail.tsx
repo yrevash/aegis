@@ -77,7 +77,7 @@ function RailCard({
       {bare ? (
         children
       ) : (
-        <div className="rounded-xl border border-border bg-card px-4 py-3.5">
+        <div className="rounded-lg border border-border bg-card px-4 py-3.5">
           {children}
         </div>
       )}
@@ -203,7 +203,7 @@ function AddMenu({
       </button>
 
       {showing && (
-        <div className="absolute right-0 z-20 mt-1.5 w-72 max-w-[80vw] rounded-xl border border-border bg-card p-1.5 shadow-pop">
+        <div className="absolute right-0 z-20 mt-1.5 w-72 max-w-[80vw] rounded-lg border border-border bg-card p-1.5 shadow-pop">
           <ul className="flex flex-col gap-0.5">
             {closed.map((card) => {
               const evicted = cardToEvict(open, card.id)
@@ -343,7 +343,7 @@ export function MemoryRail({ token, subject }: MemoryRailProps): ReactElement {
       </header>
 
       {explanation !== null && (
-        <p className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-3 text-[0.78rem] leading-relaxed text-muted-foreground">
+        <p className="rounded-lg border border-dashed border-border bg-surface-2/40 px-4 py-3 text-[0.78rem] leading-relaxed text-muted-foreground">
           {explanation}
         </p>
       )}

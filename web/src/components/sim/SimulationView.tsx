@@ -96,7 +96,7 @@ function Lane({
     <div className="flex flex-col gap-4">
       <div
         className={cn(
-          'flex items-center gap-2.5 rounded-xl border p-3',
+          'flex items-center gap-2.5 rounded-lg border p-3',
           accent === 'agent' ? 'border-blue-200/40 bg-blue-200/[0.06]' : 'border-blue-400/40 bg-blue-400/[0.06]',
         )}
       >

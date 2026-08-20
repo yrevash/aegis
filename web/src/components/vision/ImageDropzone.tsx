@@ -96,7 +96,7 @@ export function ImageDropzone({
       onDragLeave={() => setOver(false)}
       onDrop={onDrop}
       className={cn(
-        'flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed px-6 py-12 text-center transition-colors',
+        'flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed px-6 py-12 text-center transition-colors',
         over ? 'border-blue-200 bg-blue-200/10' : 'border-border bg-surface-2/40',
         disabled && 'opacity-60',
       )}
@@ -110,7 +110,7 @@ export function ImageDropzone({
         type="button"
         disabled={disabled}
         onClick={() => inputRef.current?.click()}
-        className="rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+        className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
       >
         Browse files
       </button>

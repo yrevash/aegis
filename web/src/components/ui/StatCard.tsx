@@ -42,14 +42,14 @@ export function StatCard({
   return (
     <div
       className={cn(
-        'rounded-2xl border border-border bg-card p-5 transition-colors hover:border-input md:p-6',
+        'rounded-lg border border-border bg-card p-5 transition-colors duration-[--dur-fast] hover:border-input md:p-6',
         className,
       )}
     >
       {Icon ? (
         <div
           className={cn(
-            'flex h-11 w-11 items-center justify-center rounded-xl',
+            'flex size-10 items-center justify-center rounded-md',
             signal.bg,
             signal.text,
           )}
@@ -67,7 +67,7 @@ export function StatCard({
         {delta ? (
           <span
             className={cn(
-              'tabular flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-xs font-medium',
+              'tabular flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-xs font-medium',
               delta.direction === 'up'
                 ? 'bg-ok/20 text-[color:var(--success)]'
                 : 'bg-block/25 text-[color:var(--danger)]',

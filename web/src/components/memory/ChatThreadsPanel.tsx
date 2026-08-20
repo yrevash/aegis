@@ -107,7 +107,7 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
       )}
 
       {sessions != null && sessions.length > 0 && (
-        <ul className="divide-y divide-border rounded-xl border border-border">
+        <ul className="divide-y divide-border rounded-lg border border-border">
           {sessions.map((row) => (
             <li key={row.id} className="px-3 py-2.5">
               <div className="flex items-center gap-2">

@@ -3,6 +3,7 @@
 import { CalendarX2, PackageX, Ruler, TriangleAlert } from 'lucide-react'
 import type { ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import type { ForecastRefusal } from '@/lib/api/types'
 
@@ -52,9 +53,9 @@ export function RefusalNotice({ refusal }: { refusal: ForecastRefusal }): ReactE
   const pct = measured ? Math.min(100, Math.round((refusal.have! / refusal.need!) * 100)) : null
 
   return (
-    <div className="rounded-xl border border-border bg-surface-2/40 p-5">
+    <div className="rounded-lg border border-border bg-surface-2/40 p-5">
       <div className="flex items-start gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-foreground">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-foreground">
           <Icon className="size-4" />
         </div>
         <div className="min-w-0 flex-1 space-y-3">
@@ -66,18 +67,14 @@ export function RefusalNotice({ refusal }: { refusal: ForecastRefusal }): ReactE
           {measured ? (
             <div className="space-y-1.5">
               <div className="flex items-baseline gap-2">
-                <span className="tabular font-mono text-[1.35rem] font-bold leading-none text-foreground">
-                  {refusal.have}
-                </span>
-                <span className="tabular font-mono text-[0.72rem] text-muted-foreground">
+                <Figure size="stat">{refusal.have}</Figure>
+                <Figure className="text-[0.72rem] leading-4 text-muted-foreground">
                   of {refusal.need} observations needed
-                </span>
+                </Figure>
               </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-                <div
-                  className="h-full rounded-full bg-risk"
-                  style={{ width: `${pct}%` }}
-                />
+              {/* Decorative: both figures are stated above it in text. */}
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2" aria-hidden>
+                <div className="h-full rounded-full bg-risk-ink" style={{ width: `${pct}%` }} />
               </div>
             </div>
           ) : null}

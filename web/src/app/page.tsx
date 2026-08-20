@@ -33,7 +33,7 @@ export default function Home() {
   return (
     <div className="min-h-dvh bg-background">
       <LandingHeader />
-      <main>
+      <main id="main" tabIndex={-1}>
         <Hero />
         <ModuleGrid />
         <ArchitectureDiagram />

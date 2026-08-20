@@ -2,6 +2,8 @@
 
 import { type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
@@ -38,14 +40,12 @@ const CHANNEL_TONE: Record<EmissionChannel, BadgeTone> = {
 function StageRow({ stage, index }: { stage: PipelineStage; index: number }): ReactElement {
   return (
     <TR className="align-top">
-      <TD className="tabular whitespace-nowrap text-[0.75rem] text-muted-foreground">
-        {index + 1}
+      <TD className="whitespace-nowrap text-muted-foreground">
+        <Figure>{index + 1}</Figure>
       </TD>
       <TD className="whitespace-nowrap">
         <div className="flex flex-col gap-0.5">
-          <span className="font-mono text-[0.78rem] font-medium text-foreground">
-            {stage.name}
-          </span>
+          <Figure className="font-medium text-foreground">{stage.name}</Figure>
           <span className="text-[0.7rem] text-muted-foreground">{stage.label}</span>
           {stage.optional ? (
             <span className="pt-0.5">
@@ -57,9 +57,7 @@ function StageRow({ stage, index }: { stage: PipelineStage; index: number }): Re
       <TD>
         <div className="flex max-w-md flex-col gap-1">
           <span className="text-[0.8rem] leading-snug text-foreground">{stage.summary}</span>
-          <span className="font-mono text-[0.68rem] leading-snug text-muted-foreground">
-            {stage.owner}
-          </span>
+          <Figure className="leading-relaxed text-muted-foreground">{stage.owner}</Figure>
         </div>
       </TD>
       <TD>
@@ -73,9 +71,7 @@ function StageRow({ stage, index }: { stage: PipelineStage; index: number }): Re
                   <Badge tone={CHANNEL_TONE[emission.channel] ?? 'neutral'}>
                     {emission.channel}
                   </Badge>
-                  <span className="font-mono text-[0.72rem] text-foreground">
-                    {emission.name}
-                  </span>
+                  <Figure className="text-foreground">{emission.name}</Figure>
                 </span>
                 <span className="text-[0.72rem] leading-snug text-muted-foreground">
                   {emission.detail}
@@ -120,7 +116,7 @@ function PipelineCard({ pipeline }: { pipeline: PipelineDeclaration }): ReactEle
           </TBody>
         </Table>
         {pipeline.limits.length > 0 ? (
-          <div className="rounded-xl border border-border bg-surface-2 p-4">
+          <div className="rounded-lg border border-border bg-surface-2 p-4">
             <p className="eyebrow mb-2">What this pipeline does not record</p>
             <ul className="space-y-1.5">
               {pipeline.limits.map((limit) => (
@@ -146,10 +142,11 @@ function PipelineCard({ pipeline }: { pipeline: PipelineDeclaration }): ReactEle
 export function PipelineDeclarationPanel({ data }: { data: PipelinesResponse }): ReactElement {
   return (
     <section className="space-y-4">
-      <div>
-        <p className="eyebrow mb-1">GET /pipelines · verified against the code it describes</p>
-        <h2 className="t-title text-foreground">How the work flows</h2>
-      </div>
+      <SectionHeader
+        eyebrow="GET /pipelines · verified against the code it describes"
+        title="How the work flows"
+        note="A contract, not a drawing: the server checks this against the ingest stage tuple, the agent graph's own node labels and the retrieval observability model before serving it."
+      />
       <Card>
         <CardHeader eyebrow="one declaration, four consumers" title="Where a stage's output goes" />
         <CardBody>

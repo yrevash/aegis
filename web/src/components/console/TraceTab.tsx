@@ -148,7 +148,7 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
           <Suspense
             fallback={
               <Card className="h-full">
-                <div className="h-full animate-pulse rounded-xl bg-surface-2/30" />
+                <div className="h-full animate-pulse rounded-lg bg-surface-2/30" />
               </Card>
             }
           >

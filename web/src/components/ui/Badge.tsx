@@ -13,6 +13,12 @@ import { cn } from '@/lib/utils'
  * A status badge always ships with a **word**, never colour alone: `risk`,
  * `block` and `ok` fail CVD separation against each other by design, and the
  * label is what actually distinguishes them (DESIGN.md §2).
+ *
+ * Squared to the radius token rather than `rounded-full`. Some console screens
+ * carry a dozen of these in a single table column, and a dozen pills in a column
+ * is the "pill overuse" DESIGN.md §8 names — the shape stops meaning "status"
+ * once everything countable wears it. A 4px corner still reads as a chip and
+ * sits square against the table rules it lives between.
  */
 export type BadgeTone = Signal
 
@@ -29,7 +35,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center justify-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium',
+        'inline-flex items-center justify-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium',
         signal.bg,
         signal.text,
         className,

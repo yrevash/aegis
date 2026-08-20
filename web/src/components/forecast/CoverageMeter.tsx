@@ -2,6 +2,7 @@
 
 import type { ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge } from '@/components/ui/Badge'
 import type { ForecastResult } from '@/lib/api/types'
@@ -35,10 +36,12 @@ export function CoverageMeter({ result }: { result: ForecastResult }): ReactElem
 
   return (
     <div
-      className="rounded-xl border p-4"
+      className="rounded-lg border p-4"
       style={{
-        borderColor: `var(--${tone})`,
-        background: `color-mix(in srgb, var(--${tone}) 7%, transparent)`,
+        // The readable *ink* step carries the edge; the soft step is the wash
+        // behind it. A 2px hairline in the pale fill hue is not a visible border.
+        borderColor: `var(--${tone}-ink)`,
+        background: `color-mix(in srgb, var(--${tone}-ink) 6%, transparent)`,
       }}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -55,12 +58,10 @@ export function CoverageMeter({ result }: { result: ForecastResult }): ReactElem
       </div>
 
       <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
-        <span className="tabular font-mono text-[1.6rem] leading-none font-bold text-foreground">
-          {pct(bt.empirical_coverage)}
-        </span>
+        <Figure size="stat">{pct(bt.empirical_coverage)}</Figure>
         <span className="text-[0.74rem] text-muted-foreground">
           achieved, against{' '}
-          <span className="tabular font-mono text-foreground">{pct(bt.requested_coverage)}</span>{' '}
+          <Figure className="text-foreground">{pct(bt.requested_coverage)}</Figure>{' '}
           requested
         </span>
       </div>
@@ -69,7 +70,7 @@ export function CoverageMeter({ result }: { result: ForecastResult }): ReactElem
       <div className="relative mt-3 h-2 rounded-full bg-surface-2" aria-hidden>
         <div
           className="h-2 rounded-full"
-          style={{ width: `${achieved * 100}%`, background: `var(--${tone})` }}
+          style={{ width: `${achieved * 100}%`, background: `var(--${tone}-ink)` }}
         />
         <div
           className="absolute -top-1 -bottom-1 w-px bg-foreground"
@@ -78,11 +79,13 @@ export function CoverageMeter({ result }: { result: ForecastResult }): ReactElem
       </div>
 
       <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 text-[0.68rem] text-muted-foreground">
-        <span className="tabular font-mono">
+        <Figure className="text-[0.68rem] leading-4">
           {inside} of {bt.n_points} held-out actuals inside the band · {bt.windows} rolling-origin
           windows
-        </span>
-        <span className="tabular font-mono">↑ requested {pct(bt.requested_coverage)}</span>
+        </Figure>
+        <Figure className="text-[0.68rem] leading-4">
+          ↑ requested {pct(bt.requested_coverage)}
+        </Figure>
       </div>
     </div>
   )

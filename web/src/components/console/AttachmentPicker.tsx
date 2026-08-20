@@ -82,7 +82,7 @@ export function AttachmentPicker({
             run.
           </p>
           {screening ? (
-            <p className="flex items-center gap-2 rounded-2xl border border-dashed border-border bg-surface-2/40 px-6 py-12 text-sm text-muted-foreground">
+            <p className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-surface-2/40 px-6 py-12 text-sm text-muted-foreground">
               <Loader2 aria-hidden className="size-4 motion-safe:animate-spin" />
               Screening the image…
             </p>

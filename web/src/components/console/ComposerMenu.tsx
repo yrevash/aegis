@@ -83,7 +83,7 @@ export function ComposerMenu({
         <div
           id={panelId}
           className={cn(
-            'absolute bottom-full z-30 mb-1.5 w-[22rem] max-w-[85vw] rounded-xl border border-border bg-card p-3 shadow-pop',
+            'absolute bottom-full z-30 mb-1.5 w-[22rem] max-w-[85vw] rounded-lg border border-border bg-card p-3 shadow-pop',
             align === 'right' ? 'right-0' : 'left-0',
           )}
         >
