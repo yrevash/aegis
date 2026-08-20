@@ -128,6 +128,53 @@ export function chartAvailable(board: AnalyticsBoard): boolean {
   return board.kinds.includes('chart')
 }
 
+/** One heading on the gallery: a dimension, and every board broken down by it. */
+export interface BoardGroup {
+  /** The x column the boards share, verbatim from the server. Empty for the tail. */
+  dimension: string
+  boards: AnalyticsBoard[]
+}
+
+/**
+ * Split the catalogue into sections, one per dimension the boards are grouped by.
+ *
+ * Twenty cards in one flat grid is a wall, and the reader has no way to tell that
+ * *Spend by model* and *Token volume by model* are the same cut of the same data while
+ * *Runs by outcome* is a different one. The board's own `x` column is that fact, and it
+ * arrives from the server — so the sections are **read off the data**, not off a
+ * hand-kept list of themes that a board added next month would fall out of.
+ *
+ * **A dimension with one board is not a section.** Five headings each followed by a
+ * single card in a three-column grid is two thirds white space and reads as a fault;
+ * every such board is folded into one trailing group whose `dimension` is empty, and
+ * each card still names its own cut in its caption. So nothing is hidden — only the
+ * heading is dropped, and only where the heading said nothing the card did not.
+ *
+ * Ordered by size, largest first, then by name, with the folded tail last.
+ * Deliberately **not** ordered by "is this column temporal": that cannot be known
+ * before the rows arrive, and a gallery that reorders itself as each query lands is
+ * worse than one whose order is arbitrary but stable. Within a section the catalogue's
+ * own order is kept.
+ *
+ * @param boards - The chart-backed boards, in catalogue order.
+ */
+export function groupByDimension(boards: readonly AnalyticsBoard[]): BoardGroup[] {
+  const sections = new Map<string, AnalyticsBoard[]>()
+  for (const board of boards) {
+    const key = board.x || 'no dimension'
+    const bucket = sections.get(key)
+    if (bucket) bucket.push(board)
+    else sections.set(key, [board])
+  }
+  const named = [...sections.entries()]
+    .map(([dimension, grouped]) => ({ dimension, boards: grouped }))
+    .sort((a, b) => b.boards.length - a.boards.length || a.dimension.localeCompare(b.dimension))
+
+  const shared = named.filter((group) => group.boards.length > 1)
+  const alone = named.filter((group) => group.boards.length === 1).flatMap((g) => g.boards)
+  return alone.length > 0 ? [...shared, { dimension: '', boards: alone }] : shared
+}
+
 /** Compact number formatting for a chart axis and a table cell. */
 export function formatValue(value: number): string {
   if (!Number.isFinite(value)) return '—'

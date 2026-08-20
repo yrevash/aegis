@@ -30,6 +30,7 @@ import {
   countedRows,
   embedAvailable,
   formatValue,
+  groupByDimension,
   seriesColor,
   type AnalyticsState,
   type ChartRow,
@@ -120,6 +121,7 @@ export function SupersetBoards({
 
   const drawn = chartBoards.filter((board) => results[board.id]?.state === 'ready').length
   const embeddedBoard = boards.find((board) => board.id === embedded) ?? null
+  const groups = useMemo(() => groupByDimension(chartBoards), [chartBoards])
 
   return (
     <Card>
@@ -140,7 +142,7 @@ export function SupersetBoards({
           </span>
         }
       />
-      <CardBody className="space-y-4 pt-0">
+      <CardBody className="space-y-6 pt-0">
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm text-muted-foreground" htmlFor="analytics-window">
             Window
@@ -167,7 +169,7 @@ export function SupersetBoards({
                 active={embedded === null}
                 onClick={() => setEmbedded(null)}
                 icon={<BarChart3 className="size-4" aria-hidden />}
-                label="Aegis charts"
+                label={`Aegis charts · ${chartBoards.length}`}
               />
               {dashboards.map((board) => (
                 <ModeButton
@@ -192,16 +194,35 @@ export function SupersetBoards({
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
-              {chartBoards.map((board) => (
-                <BoardCard
-                  key={board.id}
-                  board={board}
-                  result={results[board.id] ?? { state: 'loading' }}
-                  windowLabel={windows[window_] ?? window_}
-                />
-              ))}
-            </div>
+            {groups.map((group) => (
+              <section key={group.dimension || 'tail'} className="space-y-3">
+                <h3 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border pb-1.5">
+                  <span className="text-sm font-semibold text-foreground">
+                    {group.dimension === '' ? (
+                      'One board each'
+                    ) : (
+                      <>
+                        Broken down by <Figure className="text-blue-700">{group.dimension}</Figure>
+                      </>
+                    )}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {group.boards.length} {group.boards.length === 1 ? 'board' : 'boards'}, one
+                    query each
+                  </span>
+                </h3>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                  {group.boards.map((board) => (
+                    <BoardCard
+                      key={board.id}
+                      board={board}
+                      result={results[board.id] ?? { state: 'loading' }}
+                      windowLabel={windows[window_] ?? window_}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
             <Receipt
               origin={`Apache Superset · ${status?.baseUrl || 'not reported'}`}
               detail={`${chartBoards.length} boards, each a query this server compiled — scoped by a WHERE clause no request body can move`}
@@ -247,7 +268,7 @@ function BoardCard({
   const temporal = rows.length > 1 && rows.every((row) => !Number.isNaN(Date.parse(row.label)))
 
   return (
-    <article className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
+    <article className="flex min-h-[19rem] min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
       <header className="flex items-start justify-between gap-2">
         <h3 className="flex min-w-0 items-center gap-1 text-sm font-semibold text-foreground">
           <span className="min-w-0 text-pretty">{board.title}</span>

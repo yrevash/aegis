@@ -109,7 +109,9 @@ export function SupersetEmbed({
       ref={mountPoint}
       // The SDK inserts its own iframe here; the height is ours so the frame does not
       // collapse to nothing while Superset is still painting.
-      className="min-h-[640px] w-full overflow-hidden rounded-lg border border-border bg-card [&_iframe]:h-[640px] [&_iframe]:w-full [&_iframe]:border-0"
+      // Tall enough that a section of the dashboard reads as a dashboard rather than as
+      // a letterbox somebody has to scroll a second scrollbar inside.
+      className="min-h-[900px] w-full overflow-hidden rounded-lg border border-border bg-card [&_iframe]:h-[900px] [&_iframe]:w-full [&_iframe]:border-0"
     />
   )
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  ChevronDown,
   CircleCheck,
   CircleHelp,
   CircleMinus,
@@ -13,11 +14,13 @@ import {
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import {
@@ -174,33 +177,31 @@ function StageBar({ value, max }: { value: number; max: number }): ReactElement 
 function ComponentPanel({ data }: { data: PlatformHealthResponse }): ReactElement {
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader
-          eyebrow="probed concurrently · every verdict carries its evidence"
-          title="Dependencies"
-          actions={
-            <span className="text-xs text-muted-foreground">
-              <Figure>{data.components.length}</Figure> probed
-            </span>
-          }
-        />
-        <CardBody>
-          <Table>
-            <THead>
-              <TR>
-                <TH>Component</TH>
-                <TH>What answered</TH>
-                <TH className="text-right">Status</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {data.components.map((row) => (
-                <ComponentRow key={row.key} row={row} />
-              ))}
-            </TBody>
-          </Table>
-        </CardBody>
-      </Card>
+      <DataPanel
+        eyebrow="probed concurrently · every verdict carries its evidence"
+        title="Dependencies"
+        maxHeight={420}
+        actions={
+          <span className="text-xs text-muted-foreground">
+            <Figure>{data.components.length}</Figure> probed
+          </span>
+        }
+      >
+        <Table className="min-w-[560px]">
+          <THead>
+            <TR>
+              <TH>Component</TH>
+              <TH>What answered</TH>
+              <TH className="text-right">Status</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {data.components.map((row) => (
+              <ComponentRow key={row.key} row={row} />
+            ))}
+          </TBody>
+        </Table>
+      </DataPanel>
       <NotRecordedCard title="What the dependency table does not measure" gaps={data.not_recorded} />
     </div>
   )
@@ -378,13 +379,12 @@ function PipelinePanel({
       </div>
 
       {data.recent_failures.length > 0 ? (
-        <Card>
-          <CardHeader
-            eyebrow="job_runs.error · the reason the worker recorded"
-            title="Recent failures"
-          />
-          <CardBody>
-            <Table>
+        <DataPanel
+          eyebrow="job_runs.error · the reason the worker recorded"
+          title="Recent failures"
+          maxHeight={320}
+        >
+          <Table className="min-w-[560px]">
               <THead>
                 <TR>
                   <TH>Kind</TH>
@@ -409,9 +409,8 @@ function PipelinePanel({
                   </TR>
                 ))}
               </TBody>
-            </Table>
-          </CardBody>
-        </Card>
+          </Table>
+        </DataPanel>
       ) : null}
 
       <Card>
@@ -453,14 +452,19 @@ function PipelinePanel({
         </CardBody>
       </Card>
 
-      <Card>
-        <CardHeader eyebrow="provenance" title="Where each figure comes from" />
-        <CardBody className="space-y-3">
+      {/*
+        The provenance block is the signature and it stays on the page — but it is five
+        SQL statements, and at full height it was a third of this screen. A DataPanel
+        with a `maxHeight` keeps every receipt readable and stops the page growing to
+        fit them (DESIGN.md §4: wide/tall content scrolls inside its own container).
+      */}
+      <DataPanel eyebrow="provenance" title="Where each figure comes from" maxHeight={200}>
+        <div className="space-y-3">
           {Object.entries(data.sources).map(([key, sql]) => (
             <Receipt key={key} label={key} origin={sql} className="first:border-t-0 first:pt-0" />
           ))}
-        </CardBody>
-      </Card>
+        </div>
+      </DataPanel>
 
       <NotRecordedCard title="What the pipeline view does not measure" gaps={data.not_recorded} />
     </div>
@@ -490,6 +494,11 @@ export function PipelineHealthPanel(): ReactElement {
   const [components, setComponents] = useState<PlatformHealthResponse | null>(null)
   const [declared, setDeclared] = useState<PipelinesResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The declaration is reference material — 31 stages, each with a sentence — and it
+  // was rendering unconditionally under the measured figures, which is most of why
+  // this screen was 9,673px tall. Nothing is dropped; it opens on request, the same
+  // disclosure `JobsView` uses for this very panel.
+  const [contract, setContract] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -536,7 +545,14 @@ export function PipelineHealthPanel(): ReactElement {
       <SectionHeader
         eyebrow="job_runs · run_events · four probes"
         title="Pipeline health"
-        note="An aggregation over rows the platform already writes. Every verdict below names the probe or the query that produced it."
+        right={
+          <InfoTip label="What this aggregation is">
+            An aggregation over rows the platform already writes — nothing here is a
+            monitoring subsystem. Every verdict below names the probe or the query that
+            produced it, and a figure with no source is stated as absent rather than
+            filled in.
+          </InfoTip>
+        }
       />
 
       {error ? (
@@ -560,7 +576,32 @@ export function PipelineHealthPanel(): ReactElement {
               declared?.pipelines.find((spec) => spec.name === 'ingestion')?.stages ?? null
             }
           />
-          {declared ? <PipelineDeclarationPanel data={declared} /> : null}
+          {declared ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={contract}
+                onClick={() => setContract((open) => !open)}
+                className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3 text-left text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 motion-reduce:transition-none"
+              >
+                <span className="min-w-0">
+                  How the work flows
+                  <span className="block eyebrow mt-0.5">
+                    {declared.pipelines.length} declared pipelines ·{' '}
+                    {declared.pipelines.reduce((n, p) => n + p.stages.length, 0)} stages ·
+                    verified against the code
+                  </span>
+                </span>
+                <ChevronDown
+                  aria-hidden
+                  className={`size-4 shrink-0 text-muted-foreground transition-transform duration-[--dur-fast] motion-reduce:transition-none ${
+                    contract ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+              {contract ? <PipelineDeclarationPanel data={declared} /> : null}
+            </>
+          ) : null}
         </>
       )}
     </section>

@@ -164,11 +164,19 @@ MEMORY_CORPUS: tuple[SubjectCorpus, ...] = (
                 importance=8,
             ),
             FactSpec(
+                # No colon in `object`: `_LABEL_PATTERN` admits letters, digits and a
+                # little punctuation and nothing else, which is what keeps the two
+                # label fields shaped like labels rather than like prose.
                 predicate="desk-hours",
-                object="09:00-18:00 IST",
+                object="0900 to 1800 IST",
+                # "The Northwind case desk is staffed…" was written first, and the PII
+                # rail read the proper noun in that position as a person and redacted
+                # it. The rail is not wrong to be cautious; the sentence is what
+                # changed, because a seeded corpus that reads as [REDACTED_PERSON] on
+                # screen teaches the wrong thing about the subsystem.
                 text=(
-                    "The Northwind case desk is staffed 09:00 to 18:00 IST; the "
-                    "40-day clock is counted in calendar days regardless."
+                    "The case desk is staffed 09:00 to 18:00 IST; the 40-day decision "
+                    "clock is counted in calendar days regardless."
                 ),
                 importance=4,
             ),
@@ -478,13 +486,33 @@ async def _login(client: httpx.AsyncClient, username: str, password: str) -> str
     return str(response.json()["token"])
 
 
+async def _self_subject(client: httpx.AsyncClient, token: str) -> str:
+    """Return the caller's own subject key, as the server composes it.
+
+    Read from ``GET /v1/memory/subjects`` rather than composed here. The subject shape
+    is the isolation key, and a seeder that builds its own would be asserting the very
+    thing the subsystem is supposed to decide.
+
+    Raises:
+        MemoryDemoError: If this sign-in is backed by no memory record at all.
+    """
+    response = await client.get(
+        "/v1/memory/subjects", headers={"authorization": f"Bearer {token}"}
+    )
+    response.raise_for_status()
+    subject = response.json().get("self_subject")
+    if not subject:
+        raise MemoryDemoError("this sign-in has no memory record of its own")
+    return str(subject)
+
+
 async def _own_facts(
-    client: httpx.AsyncClient, token: str, *, include_invalid: bool = False
+    client: httpx.AsyncClient, token: str, subject: str, *, include_invalid: bool = False
 ) -> list[dict[str, object]]:
     """Return the caller's own facts — the idempotency check and the wipe's worklist."""
     response = await client.get(
         "/v1/memory/facts",
-        params={"include_invalid": str(include_invalid).lower()},
+        params={"subject": subject, "include_invalid": str(include_invalid).lower()},
         headers={"authorization": f"Bearer {token}"},
     )
     response.raise_for_status()
@@ -508,7 +536,7 @@ async def seed_memory(
         What was written, skipped and refused.
     """
     summary = SeedSummary()
-    async with httpx.AsyncClient(base_url=base_url, timeout=60.0) as client:
+    async with httpx.AsyncClient(base_url=base_url, timeout=180.0) as client:
         for entry in MEMORY_CORPUS:
             try:
                 token = await _login(client, entry.username, password)
@@ -518,13 +546,14 @@ async def seed_memory(
 
             headers = {"authorization": f"Bearer {token}"}
             try:
+                subject = await _self_subject(client, token)
                 existing = {
-                    str(row.get("predicate", "")) for row in await _own_facts(client, token)
+                    str(row.get("predicate", ""))
+                    for row in await _own_facts(client, token, subject)
                 }
-            except httpx.HTTPStatusError as exc:
+            except (httpx.HTTPStatusError, MemoryDemoError) as exc:
                 summary.refused.append(
-                    f"{entry.username}: cannot read its own record "
-                    f"({exc.response.status_code}) — nothing written"
+                    f"{entry.username}: cannot read its own record ({exc}) — nothing written"
                 )
                 continue
 
@@ -567,7 +596,7 @@ async def wipe_memory(
         What was removed.
     """
     summary = WipeSummary()
-    async with httpx.AsyncClient(base_url=base_url, timeout=60.0) as client:
+    async with httpx.AsyncClient(base_url=base_url, timeout=180.0) as client:
         for entry in MEMORY_CORPUS:
             try:
                 token = await _login(client, entry.username, password)
@@ -576,11 +605,10 @@ async def wipe_memory(
                 continue
             headers = {"authorization": f"Bearer {token}"}
             try:
-                rows = await _own_facts(client, token, include_invalid=True)
-            except httpx.HTTPStatusError as exc:
-                summary.refused.append(
-                    f"{entry.username}: cannot read its own record ({exc.response.status_code})"
-                )
+                subject = await _self_subject(client, token)
+                rows = await _own_facts(client, token, subject, include_invalid=True)
+            except (httpx.HTTPStatusError, MemoryDemoError) as exc:
+                summary.refused.append(f"{entry.username}: cannot read its own record ({exc})")
                 continue
             removed = 0
             for row in rows:

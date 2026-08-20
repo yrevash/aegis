@@ -14,12 +14,14 @@ import {
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { Receipt } from '@/components/primitives/Receipt'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { StatCard } from '@/components/ui/StatCard'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import {
@@ -140,8 +142,7 @@ function RunPanel({
 
         {suite ? (
           <div className="rounded-lg border border-border bg-surface-2 px-4 py-3">
-            <p className="text-sm leading-relaxed text-foreground">{suite.summary}</p>
-            <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               {suite.owasp.map((id) => (
                 <Badge key={id} tone="neutral" className="font-mono">
                   {id}
@@ -151,6 +152,7 @@ function RunPanel({
                 {suite.attacks} attacks · {suite.controls} benign controls ·{' '}
                 {suite.semanticOnly} with no deterministic signature
               </span>
+              <InfoTip label={`What the ${suite.title} battery is`}>{suite.summary}</InfoTip>
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
               {Object.entries(suite.stages)
@@ -359,11 +361,16 @@ function RedteamView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
+      <PageHeader
         eyebrow="owasp llm top 10 · real verdicts"
         title="Red-team"
-        note="Every verdict on this page is what the rail returned for that exact string. Nothing here is composed in the browser."
+        actions={
+          <InfoTip label="Where these verdicts come from">
+            Every verdict on this page is what the rail returned for that exact string.
+            Nothing here is composed in the browser, and a probe with no deterministic
+            signature is reported as a leak on an offline run rather than hidden.
+          </InfoTip>
+        }
       />
 
       {error ? <ErrorState error={error} /> : null}
@@ -446,37 +453,51 @@ function RedteamView(): ReactElement {
             />
           </div>
 
+          {/*
+            The verdict, as one sentence and a row of measured chips.
+            It was four stacked paragraphs — the headline, what the mode means, the
+            comparison with the previous run, and the receipt — three of which were
+            explaining rather than reporting. The explanation is now an InfoTip on the
+            mode badge and the comparison is three deltas you can read at a glance
+            (DESIGN.md §9: never a paragraph where a badge would do).
+          */}
           <Card>
-            <CardBody className="space-y-2">
-              <p className="max-w-prose text-pretty text-sm leading-relaxed text-foreground">
-                {headline(run_)}.{' '}
-                <span className="text-muted-foreground">{verdictNote(run_)}</span>
+            <CardBody className="space-y-3">
+              <p className="text-pretty text-sm leading-relaxed text-foreground">
+                {headline(run_)}. <span className="text-muted-foreground">{verdictNote(run_)}</span>
               </p>
-              <p className="max-w-prose text-pretty text-xs leading-relaxed text-muted-foreground">
-                {run_.mode === 'live'
-                  ? run_.tenantId == null
-                    ? 'Live run against the platform’s own rails: the model-backed injection, content-safety and topical layers ran. There is no tenant to bill, so these calls are not in the usage ledger and the cost above is the estimate, not a charge.'
-                    : 'Live run: the model-backed injection, content-safety and topical layers ran, and the calls are in this tenant’s usage ledger.'
-                  : 'Offline run: no model was called, so this measures the deterministic signatures alone — not the whole stack.'}
-              </p>
-              {comparison ? (
-                <p className="max-w-prose text-pretty text-xs leading-relaxed text-muted-foreground">
-                  Against the previous {run_.mode} run of this battery (
-                  <Figure className="text-foreground">{comparison.previousRunId}</Figure>): block
-                  rate {points(comparison.blockRate.change)}, false-positive rate{' '}
-                  {points(comparison.falsePositiveRate.change)},{' '}
-                  {comparison.attacksLeakedDelta === 0
-                    ? 'the same attacks got through'
-                    : `${Math.abs(comparison.attacksLeakedDelta)} ${
-                        comparison.attacksLeakedDelta > 0 ? 'more' : 'fewer'
-                      } attacks got through`}
-                  .
-                </p>
-              ) : (
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  First run of this battery in this mode — there is nothing to compare it to yet.
-                </p>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone={run_.mode === 'live' ? 'risk' : 'neutral'}>{run_.mode} run</Badge>
+                <InfoTip label={`What a ${run_.mode} run measures`}>
+                  {run_.mode === 'live'
+                    ? run_.tenantId == null
+                      ? 'Live run against the platform’s own rails: the model-backed injection, content-safety and topical layers ran. There is no tenant to bill, so these calls are not in the usage ledger and the cost above is the estimate, not a charge.'
+                      : 'Live run: the model-backed injection, content-safety and topical layers ran, and the calls are in this tenant’s usage ledger.'
+                    : 'Offline run: no model was called, so this measures the deterministic signatures alone — not the whole stack.'}
+                </InfoTip>
+                {comparison ? (
+                  <>
+                    <span className="eyebrow">vs {comparison.previousRunId}</span>
+                    <Badge tone={comparison.blockRate.improved ? 'ok' : 'block'}>
+                      block rate {points(comparison.blockRate.change)}
+                    </Badge>
+                    <Badge tone="neutral">
+                      false positives {points(comparison.falsePositiveRate.change)}
+                    </Badge>
+                    <Badge tone={comparison.attacksLeakedDelta > 0 ? 'block' : 'ok'}>
+                      {comparison.attacksLeakedDelta === 0
+                        ? 'same attacks got through'
+                        : `${Math.abs(comparison.attacksLeakedDelta)} ${
+                            comparison.attacksLeakedDelta > 0 ? 'more' : 'fewer'
+                          } got through`}
+                    </Badge>
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    first run in this mode — nothing to compare to
+                  </span>
+                )}
+              </div>
               <Receipt
                 label="Run"
                 origin={`${run_.suite} · ${run_.runId}`}
@@ -488,59 +509,56 @@ function RedteamView(): ReactElement {
           </Card>
 
           {/* ── What the rails stopped ───────────────────────────────────────── */}
-          <Card>
-            <CardHeader
-              eyebrow="blocked"
-              title="Attacks the rails stopped"
-              actions={
-                <span className="text-xs text-muted-foreground">
-                  {report.rails.map((rail) => `${rail.layer} ${rail.blocks}`).join(' · ')}
-                </span>
-              }
-            />
-            <CardBody>
-              {report.blocked.length === 0 ? (
-                <EmptyState
-                  icon={ShieldAlert}
-                  title="Nothing was blocked"
-                  body="Every probe in this battery reached the model. On an offline run that is expected for probes with no deterministic signature; on a live run it is a finding."
-                />
-              ) : (
-                <Table>
-                  <THead>
-                    <TH className="w-24">Probe</TH>
-                    <TH>Attack</TH>
-                    <TH className="w-36">Rail</TH>
-                    <TH className="w-[38%]">Verdict</TH>
-                  </THead>
-                  <TBody>
-                    {report.blocked.map((probe) => (
-                      <ProbeRow key={probe.id} probe={probe} />
-                    ))}
-                  </TBody>
-                </Table>
-              )}
-            </CardBody>
-          </Card>
+          <DataPanel
+            eyebrow="blocked"
+            title="Attacks the rails stopped"
+            maxHeight={520}
+            actions={
+              <span className="text-xs text-muted-foreground">
+                {report.rails.map((rail) => `${rail.layer} ${rail.blocks}`).join(' · ')}
+              </span>
+            }
+          >
+            {report.blocked.length === 0 ? (
+              <EmptyState
+                icon={ShieldAlert}
+                title="Nothing was blocked"
+                body="Every probe in this battery reached the model. On an offline run that is expected for probes with no deterministic signature; on a live run it is a finding."
+              />
+            ) : (
+              <Table className="min-w-[720px]">
+                <THead>
+                  <TH className="w-24">Probe</TH>
+                  <TH>Attack</TH>
+                  <TH className="w-36">Rail</TH>
+                  <TH className="w-[38%]">Verdict</TH>
+                </THead>
+                <TBody>
+                  {report.blocked.map((probe) => (
+                    <ProbeRow key={probe.id} probe={probe} />
+                  ))}
+                </TBody>
+              </Table>
+            )}
+          </DataPanel>
 
           {/* ── What got through ─────────────────────────────────────────────── */}
-          <Card>
-            <CardHeader
-              eyebrow="got through"
-              title="Attacks nothing stopped"
-              actions={
-                <Badge tone={report.leaked.length === 0 ? 'ok' : 'block'} className="gap-1.5">
-                  {report.leaked.length === 0 ? (
-                    <CircleCheck className="size-3 shrink-0" aria-hidden />
-                  ) : (
-                    <CircleX className="size-3 shrink-0" aria-hidden />
-                  )}
-                  {report.leaked.length} of {run_.attacksTotal}
-                </Badge>
-              }
-            />
-            <CardBody>
-              {report.leaked.length === 0 ? (
+          <DataPanel
+            eyebrow="got through"
+            title="Attacks nothing stopped"
+            maxHeight={520}
+            actions={
+              <Badge tone={report.leaked.length === 0 ? 'ok' : 'block'} className="gap-1.5">
+                {report.leaked.length === 0 ? (
+                  <CircleCheck className="size-3 shrink-0" aria-hidden />
+                ) : (
+                  <CircleX className="size-3 shrink-0" aria-hidden />
+                )}
+                {report.leaked.length} of {run_.attacksTotal}
+              </Badge>
+            }
+          >
+            {report.leaked.length === 0 ? (
                 <EmptyState
                   icon={ShieldCheck}
                   title="Every attack in this battery was stopped"
@@ -555,7 +573,7 @@ function RedteamView(): ReactElement {
                       the rails, not in the configuration.
                     </p>
                   ) : null}
-                  <Table>
+                  <Table className="min-w-[720px]">
                     <THead>
                       <TH className="w-24">Probe</TH>
                       <TH>Attack</TH>
@@ -592,8 +610,7 @@ function RedteamView(): ReactElement {
                   </Table>
                 </>
               )}
-            </CardBody>
-          </Card>
+          </DataPanel>
 
           {/* ── Per category ─────────────────────────────────────────────────── */}
           <Card>
@@ -617,13 +634,12 @@ function RedteamView(): ReactElement {
       ) : null}
 
       {/* ── History ────────────────────────────────────────────────────────── */}
-      <Card>
-        <CardHeader
-          eyebrow="history"
-          title="Previous runs"
-          actions={<History className="size-4 text-muted-foreground" aria-hidden />}
-        />
-        <CardBody>
+      <DataPanel
+        eyebrow="history"
+        title="Previous runs"
+        maxHeight={420}
+        actions={<History className="size-4 text-muted-foreground" aria-hidden />}
+      >
           {history.length === 0 ? (
             <EmptyState
               icon={History}
@@ -631,7 +647,7 @@ function RedteamView(): ReactElement {
               body="Every battery you run is written to the platform's own record and appears here, newest first, so a block rate can be read as a trend rather than a snapshot."
             />
           ) : (
-            <Table>
+            <Table className="min-w-[720px]">
               <THead>
                 <TH>Run</TH>
                 <TH>Battery</TH>
@@ -684,8 +700,7 @@ function RedteamView(): ReactElement {
               </TBody>
             </Table>
           )}
-        </CardBody>
-      </Card>
+      </DataPanel>
 
       <Receipt
         label="Method"
