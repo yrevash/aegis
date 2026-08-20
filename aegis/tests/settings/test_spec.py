@@ -113,8 +113,18 @@ def test_the_catalogue_stays_small_enough_that_every_key_is_tested():
     ``backend/tests/api/test_seats.py``, and all five are in ``_STRICTER_END``. Six keys
     is the *whole* mechanism, which is the argument for the ceiling being a soft one:
     the alternative was six days of new schema, not six fewer keys.
+
+    Raised from 24 to 25 by §10.1, for **one** key: ``skills.enabled``. The price was
+    paid the way this ceiling asks it to be. It is read by
+    :func:`aegis.skills.store.resolve_skills`, which is the only thing that decides
+    which skills a run has; it is written by the skills authoring surface
+    (``backend/src/app/api/routes_skills.py``) in the same transaction as the row it
+    activates; and it is ``MergeRule.UNION`` because that is what makes "a tenant
+    cannot switch off a platform safety skill" arithmetic rather than a check. The
+    alternative was a second resolution mechanism — a scope column read by a bespoke
+    fold — which is exactly the thing this catalogue exists to prevent.
     """
-    assert len(SETTING_SPECS) <= 24
+    assert len(SETTING_SPECS) <= 25
 
 
 # ── the refusals, driven ──────────────────────────────────────────────────────

@@ -232,6 +232,11 @@ class MemoryDeps:
                 query_vec=query_vec,
                 config=self.config,
                 tenant_id=tenant_id,
+                # §10.1: the **user** layer of skill resolution. Without it a skill a
+                # person authored for themselves resolves at no layer they are in, and
+                # "the user has autonomy over how the agent works" is a screen with no
+                # effect on a run.
+                user_id=_current_user_id(),
             )
 
     async def persist(
@@ -503,10 +508,30 @@ def _get_shared_store() -> Any:  # noqa: ANN401 - adapter store type
 
 
 def _default_tool_definitions_for(persona_id: str) -> list[dict[str, Any]]:
-    """Return the allowlist-filtered tool schemas for ``persona_id``."""
-    from app.adapter import tool_definitions_for
+    """Return the allowlist-filtered tool schemas for ``persona_id``.
 
-    return tool_definitions_for(persona_id)
+    The in-process registry **and** any external MCP tool a platform admin has
+    admitted for this persona (§10.6), through one merged accessor rather than two
+    payloads the planner would have to be told about. An external server that is
+    merely declared contributes nothing here: the filter is the grant, so a tool a
+    persona may not call is never advertised to it — the property
+    :func:`app.adapter.tools.tool_definitions_for` already had, extended over the
+    namespace that arrives from somebody else's network.
+    """
+    from app.agent.skills_tool import LOAD_SKILL_TOOL, load_skill_definition
+    from app.mcp.client import merged_tool_definitions_for
+
+    definitions = merged_tool_definitions_for(persona_id)
+    # §10.2's ``load_skill``, appended for **every** persona. Not in the adapter's
+    # registry and not in the per-persona allowlist, because it is a platform
+    # capability: it reads a row this caller's own resolution already put in force,
+    # so there is nothing for an allowlist to narrow, and a domain swap must not be
+    # able to take the skills mechanism out with it.
+    if not any(
+        d.get("function", {}).get("name") == LOAD_SKILL_TOOL for d in definitions
+    ):
+        definitions.append(load_skill_definition())
+    return definitions
 
 
 def _default_tool_risk(tool_name: str) -> RiskLevel:
@@ -515,11 +540,20 @@ def _default_tool_risk(tool_name: str) -> RiskLevel:
     Unknown/unregistered tools fail **safe**: an unregistered name (e.g. a
     hallucinated tool the planner invented) is treated as HIGH risk so it can never
     slip under the autonomy ceiling and skip the human gate.
-    """
-    from app.adapter import TOOL_REGISTRY
 
-    spec = TOOL_REGISTRY.get(tool_name)
-    return spec.risk if spec is not None else RiskLevel.HIGH
+    Since §10.6 this resolves both namespaces, and the fail-safe is identical on each
+    side: an external tool is HIGH unless a platform admin lowered the tier for that
+    named, currently discovered tool, and an unrecognised external name is HIGH for
+    the same reason a hallucinated native one is. This is the single input to the
+    graph's gate node, so it is also the only place either namespace could have been
+    given a quieter default.
+    """
+    from app.agent.skills_tool import LOAD_SKILL_RISK, LOAD_SKILL_TOOL
+    from app.mcp.client import merged_tool_risk
+
+    if tool_name == LOAD_SKILL_TOOL:
+        return LOAD_SKILL_RISK
+    return merged_tool_risk(tool_name)
 
 
 def _default_render_system_prompt(
@@ -662,9 +696,26 @@ async def _default_run_tool(
     trace_id: str | None,
     approver: str | None,
 ) -> ToolOutcome:
-    """Execute an adapter tool with an audited, store-backed context."""
-    from app.adapter import ToolContext, run_tool
+    """Execute an adapter tool — or an admitted external MCP tool — with audit.
+
+    One dispatcher, because the graph has one ``act`` node and the human approved one
+    list. ``merged_run_tool`` routes on the reserved ``mcp__`` namespace, and both
+    halves re-check the allowlist before any side effect: the native half in
+    :func:`app.adapter.tools.run_tool`, the external half in
+    :meth:`app.mcp.client.ExternalToolRegistry.call` — which checks it *before it opens
+    a connection*, so an unauthorised call cannot even have been observed by the peer.
+    """
+    from app.agent.skills_tool import LOAD_SKILL_TOOL, run_load_skill
+
+    if tool_name == LOAD_SKILL_TOOL:
+        # Dispatched before the adapter is even imported: ``load_skill`` is the
+        # platform's, it takes no ``ToolContext``, and routing it through the domain's
+        # executor would put a retargetable allowlist in front of a platform tool.
+        return await run_load_skill(args)
+
+    from app.adapter import ToolContext
     from app.data import record_audit
+    from app.mcp.client import merged_run_tool
 
     ctx = ToolContext(
         store=_get_shared_store(),
@@ -674,4 +725,4 @@ async def _default_run_tool(
         approved_by=approver,
         audit=record_audit,
     )
-    return await run_tool(persona_id, tool_name, args, ctx)
+    return await merged_run_tool(persona_id, tool_name, args, ctx)

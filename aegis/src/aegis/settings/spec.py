@@ -882,6 +882,33 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
             "and it narrows only what that seat could already write."
         ),
     ),
+    SettingSpec(
+        key="skills.enabled",
+        type_=list,
+        default=[],
+        # Every role, including ``client``: §10.1's whole point is that a *user* has
+        # autonomy over how the agent works for them. The scope a role may write at is
+        # a separate question and the resolver already answers it — a business user
+        # writes the user layer and is refused the tenant one by
+        # ``_check_scope_permission``, exactly as with ``agent.model``.
+        writable_by=_EVERY_ROLE,
+        readable_by=_EVERY_ROLE,
+        # UNION, for the arithmetic reason and only that reason: the effective set is a
+        # superset of the platform's, so **no tenant and no user can remove a platform
+        # safety skill from the set**. OVERRIDE would let a user drop the platform's
+        # skills by writing a shorter list, and TIGHTEN_ONLY has no meaning here — no
+        # skill is "stricter" than another. The other half of the no-shadow rule, that a
+        # tenant cannot rebind a platform *name* to its own body, is enforced where the
+        # name is bound (:func:`aegis.skills.store.resolve_skills`), because it is a
+        # question about rows rather than about the set.
+        merge=MergeRule.UNION,
+        description=(
+            "Which authored skills are in force. A skill is a name, a description, a "
+            "body and a trigger, stored in `agent_skills`; this key is the set that is "
+            "actually live. Additive: a tenant may switch more on and cannot switch the "
+            "platform's off."
+        ),
+    ),
 )
 
 _BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in SETTING_SPECS}

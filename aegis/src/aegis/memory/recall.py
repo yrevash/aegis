@@ -25,7 +25,7 @@ The domain seam (profile rendering, skill selection) is the injected
 
 from __future__ import annotations
 
-import os
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -40,6 +40,8 @@ from aegis.memory.vector_ops import topk_by_cosine
 from aegis.retrieval.fusion import RankedList, reciprocal_rank_fusion
 from aegis.retrieval.models import Candidate
 from aegis.retrieval.types import RetrievalOrigin
+
+logger = logging.getLogger(__name__)
 
 
 def _tenant_clause(model, tenant_id: int | None):  # noqa: ANN001, ANN202 - mapped class
@@ -64,7 +66,9 @@ class RecallBundle:
         profile_text: The rendered "human block" (``spec.render_profile``), or "".
         facts: Ranked durable facts (Generative-Agents composite, or recency-only).
         episodic: RRF-fused earlier turns, EXCLUDING those already in the raw window.
-        skills: Selected procedural skills as ``(name, markdown_text)`` pairs.
+        skills: **Tier 1 only** — ``(name, one-line card)`` pairs for the skills in
+            force. The body is never here; it arrives through a ``load_skill`` tool
+            call, which is what makes the use of a skill visible in the trace.
         running_summary: The session's rolling summary (``MemorySession.summary``), or "".
     """
 
@@ -297,26 +301,61 @@ async def _recall_episodic(
     return out
 
 
-def _recall_skills(
-    query: str, persona: str | None, config: MemoryConfig, spec: MemorySpec
+async def _recall_skills(
+    session: AsyncSession,
+    query: str,
+    config: MemoryConfig,
+    *,
+    tenant_id: int | None,
+    user_id: int | None,
 ) -> list[tuple[str, str]]:
-    """Select procedural skills for the query and read their markdown bodies."""
+    """Return tier 1 of progressive disclosure: one card per skill in force.
+
+    **A body is never returned here.** Until §10.2 this function globbed a directory
+    named by ``memory_spec.SKILLS_DIR``, read whole Markdown files and handed them to
+    the assembler, which pasted them into the prompt. That burned context on skills the
+    query never needed, could not be scoped to a tenant or a user, could not be authored
+    from anywhere, and — the part that matters for a glass-box product — left no trace
+    that a skill had been used at all: a turn with a skill and a turn without one looked
+    identical.
+
+    Now the prompt carries only ``name (scope): description`` for each skill in force,
+    and the body arrives, if the model decides it needs one, through a **real
+    ``load_skill`` tool call** that appears in the trace like every other action.
+
+    Resolution is :func:`aegis.skills.store.resolve_skills`, which reads the
+    ``skills.enabled`` catalogue key through the Phase 3 settings resolver — so the
+    scoping is the platform's one scoping mechanism and not a second one, and a tenant
+    cannot switch off a platform safety skill because a union has no way to express it.
+
+    Args:
+        session: The async session (already tenant-scoped by the caller).
+        query: This turn's question — orders the cards, never filters them.
+        config: Recall fan-outs; ``n_skill`` caps how many cards are offered.
+        tenant_id: The tenant to resolve for.
+        user_id: The user to resolve for.
+
+    Returns:
+        ``(name, card)`` pairs. Best-effort: a skills store that cannot be read degrades
+        to no skills rather than failing the turn, exactly like every other recall tier.
+    """
     try:
-        available = [
-            f[:-3] for f in os.listdir(spec.SKILLS_DIR) if f.endswith(".md")
-        ]
-    except OSError:
+        from aegis.skills.store import resolve_skills
+    except ImportError:  # pragma: no cover - the data extra is not installed
         return []
-    selected = spec.select_skills(query, persona, available) or []
-    skills: list[tuple[str, str]] = []
-    for name in selected[: config.n_skill]:
-        path = os.path.join(spec.SKILLS_DIR, f"{name}.md")
-        try:
-            with open(path, encoding="utf-8") as fh:
-                skills.append((name, fh.read()))
-        except OSError:
-            continue
-    return skills
+    try:
+        resolved = await resolve_skills(
+            session,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            query=query,
+            limit=config.n_skill,
+        )
+    except Exception:  # noqa: BLE001 - a skills outage must not fail a turn
+        logger.warning("Skills unavailable this turn; continuing without them",
+                       exc_info=True)
+        return []
+    return [(skill.name, skill.card()) for skill in resolved]
 
 
 async def _bump_recall_access(
@@ -380,6 +419,7 @@ async def recall(
     query_vec: list[float] | None,
     config: MemoryConfig,
     tenant_id: int | None = None,
+    user_id: int | None = None,
     spec: MemorySpec | None = None,
 ) -> RecallBundle:
     """Gather all recall tiers for one turn (facts, profile, episodic, skills, summary).
@@ -392,11 +432,14 @@ async def recall(
         session: Async DB session.
         subject_id: The memory subject (app-level isolation key; required).
         session_id: The current conversation thread.
-        persona: Active persona (gates skill selection).
+        persona: Active persona (gates profile rendering).
         query: The user's query (drives fact/episodic relevance + skill keywords).
         query_vec: The recall-comparable query embedding, or ``None`` (recency-only facts).
         config: Recall fan-outs, weights, and half-lives.
         tenant_id: Optional tenant scope.
+        user_id: The caller's user id, for the **user** layer of skill resolution. A
+            skill authored by one person is theirs, so without this the user layer
+            cannot be reached and a person's own skills silently never apply.
         spec: The domain :class:`~aegis.memory.spec.MemorySpec`; defaults to the configured
             process-wide spec when ``None``.
 
@@ -429,7 +472,9 @@ async def recall(
         tenant_id=tenant_id,
         raw_window=raw_window,
     )
-    skills = _recall_skills(query, persona, config, spec)
+    skills = await _recall_skills(
+        session, query, config, tenant_id=tenant_id, user_id=user_id
+    )
 
     stmt = select(MemorySession).where(
         MemorySession.id == session_id,

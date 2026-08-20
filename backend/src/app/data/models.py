@@ -247,6 +247,52 @@ class ChatMessage(Base):
     )
 
 
+class McpServer(Base):
+    """A declared external MCP server — the durable half of an MCP connection (§10.6).
+
+    What an operator adds in the console and expects to still be there tomorrow: the
+    namespace id, a label, the endpoint, and which header the peer wants its credential
+    in. Platform-scoped by construction — there is deliberately **no** ``tenant_id``:
+    which third party's code an agent may reach is a decision about the whole fleet, so
+    there is nothing here for a per-tenant RLS policy to isolate.
+
+    **The credential is not in this table, and there is no column for it.** A secret set
+    through the console lives in the serving process and nowhere else, so there is
+    nothing to read back out of the API and nothing to read out of a database dump
+    either. What persists is :attr:`credential_fingerprint` — twelve hex characters of
+    SHA-256, enough for an operator to tell "the key I pasted" from "the key that was
+    already there" and useless for recovering either — plus who set it and when. A
+    deployment that wants a restart to re-arm the connection without a human supplies
+    the secret the way it supplies ``GENAILAB_API_KEY``: an environment variable,
+    ``AEGIS_MCP_CRED_<SERVER_ID>``.
+
+    ``enabled`` is not a soft delete. A disabled server's tools leave the planner's
+    payload entirely (``ExternalToolRegistry._visible``), because a tool the model can
+    still see is a tool it will still try.
+    """
+
+    __tablename__ = "mcp_servers"
+
+    #: The Aegis-side id, which **is** the tool namespace (``mcp__<id>__<tool>``). The
+    #: primary key rather than a surrogate, because two rows with the same namespace is
+    #: not a state the tool table can represent.
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    url: Mapped[str] = mapped_column(String(1024), default="")
+    #: The header this peer wants its credential in — ``Authorization`` for a bearer,
+    #: ``X-API-Key`` for plenty of others. Per server because there is no one answer.
+    auth_header: Mapped[str] = mapped_column(String(64), default="Authorization")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    #: A non-reversing fingerprint of the credential last set, or ``""``. Never the
+    #: credential.
+    credential_fingerprint: Mapped[str] = mapped_column(String(32), default="")
+    credential_set_by: Mapped[str | None] = mapped_column(String(255), default=None)
+    credential_set_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_by: Mapped[str | None] = mapped_column(String(255), default=None)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
 # ``Chunk`` / ``EvalResult`` / ``PromptStatus`` / ``PromptVersion`` are imported from
 # ``aegis.jobs.models`` / ``aegis.ops.models`` (both on ``aegis.data.AegisBase``) and
 # re-exported above under their historical names. Backend ``create_all`` covers them via

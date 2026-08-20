@@ -91,7 +91,19 @@ class MemorySpec(Protocol):
     def select_skills(
         self, query: str, persona: str | None, available: list[str]
     ) -> list[str] | None:
-        """Select procedural skill names for a query (subset of ``available``), or None."""
+        """Select procedural skill names for a query (subset of ``available``), or None.
+
+        **No longer on the recall path as of §10.1.** Skills are rows in ``agent_skills``
+        now, resolved ``platform u tenant u user`` through the settings resolver and
+        offered to the model as name-and-description cards, with the body fetched by a
+        ``load_skill`` tool call. A trigger is data on the row rather than a keyword
+        table compiled into a function, which is what lets a tenant admin write one.
+
+        The member stays because the ``skills/`` directory it selects from is still the
+        adapter's shipped starter content and the conformance suite still checks the two
+        are in step; it is not read by :mod:`aegis.memory.recall`. See the §10.1 report
+        for the conformance change this asks for.
+        """
         ...
 
 

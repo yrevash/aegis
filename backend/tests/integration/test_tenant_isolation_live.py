@@ -329,6 +329,13 @@ def _synthetic_value(column, tag: str) -> object:  # noqa: ANN001 - sqlalchemy C
 #: "first enum value" would be ``platform``, which the database would (correctly) refuse.
 _DEPENDENT_COLUMNS: dict[tuple[str, str], object] = {
     ("settings", "scope"): "tenant",
+    # ``agent_skills`` (§10.1) copies ``settings``' shape deliberately, check constraints
+    # included: ``(scope = 'platform') = (tenant_id IS NULL)``. The seeder is writing a
+    # *tenant's* row, so the discriminator has to say so — a synthetic string here is a
+    # CheckViolationError, and because provisioning is what raises it, the whole
+    # isolation module would SKIP with the constraint as the stated cause. A security
+    # suite that skips reads exactly like one that passed.
+    ("agent_skills", "scope"): "tenant",
 }
 
 

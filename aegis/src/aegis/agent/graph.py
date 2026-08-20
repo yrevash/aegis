@@ -882,9 +882,9 @@ def build_agent(
 
         Called by the ``recall_memory`` node on the single-pass path and by ``plan_team``
         on the fan-out path. The selection is the **adapter's** — ``deps.memory.assemble``
-        reaches ``memory_spec.render_profile`` / ``select_skills`` — so there is exactly
-        one selector in the codebase, for the same reason there is one tool-allowlist
-        intersection.
+        reaches ``memory_spec.render_profile``, and the skills tier resolves through the
+        settings resolver — so there is exactly one selector in the codebase, for the
+        same reason there is one tool-allowlist intersection.
         """
         if deps.memory is None or state.get("session_id") is None:
             return {}
