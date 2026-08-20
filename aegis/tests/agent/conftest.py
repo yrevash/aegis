@@ -105,7 +105,26 @@ def build_fake_deps(
     async def retrieve(query: str, *, scope: RetrievalScope) -> RetrievalResult:
         return RetrievalResult(
             answer_context="Spotlighted context about request R1.",
-            sources=[Source(id="kb-1", text="Escalation policy", score=0.9)],
+            # Metadata, because the real pipeline's sources carry it: ``_assemble``
+            # copies ``Candidate.metadata`` straight onto every ``Source``, and every
+            # recall arm writes ``file_path`` into it. A fake that returned a bare
+            # ``Source`` could not tell whether the graph forwards provenance to the
+            # wire, which is precisely the field that was missing. The second source
+            # carries no path on purpose: a chunk whose provenance was never recorded is
+            # a real shape, and it must render as an absence rather than a guess.
+            sources=[
+                Source(
+                    id="kb-1",
+                    text="Escalation policy",
+                    score=0.9,
+                    metadata={
+                        "file_path": "escalation-policy.pdf",
+                        "tenant_id": "t1",
+                        "origins": ["vector", "bm25"],
+                    },
+                ),
+                Source(id="kb-2", text="Unattributed passage", score=0.4),
+            ],
             num_candidates=5,
             graph_delta=GraphDelta(
                 nodes=[GraphNode(id="R1", label="Request R1", kind="request")],
