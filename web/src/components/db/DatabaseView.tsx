@@ -196,7 +196,7 @@ function Catalog({
               : 'text-muted-foreground hover:bg-surface-2/60'
           }`}
         >
-          <Figure className="truncate">{table.name}</Figure>
+          <Figure className="min-w-0 truncate">{table.name}</Figure>
           <span className="shrink-0 text-[0.68rem] text-muted-foreground/80">
             {estimate(table.rowEstimate)}
           </span>
@@ -589,15 +589,16 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
         eyebrow="read-only · parameterised"
         title="Database"
         note="A closed set of parameterised reads over a connection that holds SELECT and nothing else. Binding a tenant narrows every read on this page; it can never widen one."
-        right={
-          <ScopePicker
-            overview={overview}
-            tenantId={tenantId}
-            onChange={setTenantId}
-            disabled={busy}
-          />
-        }
       />
+
+      <div className="rounded-lg border border-border bg-surface-2/40 px-3 py-2.5">
+        <ScopePicker
+          overview={overview}
+          tenantId={tenantId}
+          onChange={setTenantId}
+          disabled={busy}
+        />
+      </div>
 
       <Posture overview={overview} />
 

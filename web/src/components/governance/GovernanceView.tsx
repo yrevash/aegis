@@ -234,8 +234,11 @@ function GovernanceView(): ReactElement {
         title="Governance"
         note="Every tenant, what it may spend, what it has spent, and who inside it holds which portal."
         right={
-          <Badge tone="neutral" className="gap-1.5">
-            <ShieldCheck className="size-3" aria-hidden />
+          <Badge
+            tone="neutral"
+            className="max-w-[52vw] gap-1.5 text-left whitespace-normal sm:max-w-none"
+          >
+            <ShieldCheck className="size-3 shrink-0" aria-hidden />
             {adminScopeCaption(session)}
           </Badge>
         }

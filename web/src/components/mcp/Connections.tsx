@@ -139,7 +139,7 @@ export function Connections({
                         {server.credentialFingerprint ? (
                           <p className="mt-1 max-w-[11rem] text-[0.68rem] text-muted-foreground">
                             One was set before this process started. Aegis never writes a
-                            peer&apos;s secret to its database — re-enter it, or set{' '}
+                            peer’s secret to its database — re-enter it, or set{' '}
                             <span className="font-mono">
                               AEGIS_MCP_CRED_
                               {server.serverId.toUpperCase().replace(/-/g, '_')}
@@ -339,7 +339,7 @@ export function Connections({
               inputMode="url"
             />
             <span className="text-[0.68rem] text-muted-foreground">
-              The peer&apos;s Streamable HTTP address.
+              The peer’s Streamable HTTP address.
             </span>
           </label>
           <label className="flex flex-col gap-1" htmlFor={`${id}-server-auth`}>
@@ -369,7 +369,7 @@ export function Connections({
             />
             <span className="text-[0.68rem] text-muted-foreground">
               Held by the serving process and nowhere else. Aegis never writes a third
-              party&apos;s secret to its own database, so there is nothing to read back —
+              party’s secret to its own database, so there is nothing to read back —
               not through this API, and not out of a database dump. What is stored is a
               fingerprint. After a restart, re-enter it or supply it as{' '}
               <span className="font-mono">AEGIS_MCP_CRED_&lt;ID&gt;</span>.

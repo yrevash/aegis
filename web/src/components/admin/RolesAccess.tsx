@@ -161,7 +161,7 @@ export function RolesAccess({
             fine tier so the page never presents one tenant's users as everyone. */}
         <Badge variant="outline">{adminScopeCaption(session)}</Badge>
         <InfoTip label="Why this matters">
-          Why this matters: in an enterprise the admin&apos;s real power is delegation. Each team should
+          Why this matters: in an enterprise the admin’s real power is delegation. Each team should
           see only its own portal — build, ops, or outcomes — never the whole platform. This is where
           that least-privilege line is drawn, granted, and revoked.
         </InfoTip>

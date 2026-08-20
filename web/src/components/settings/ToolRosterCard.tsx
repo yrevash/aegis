@@ -61,7 +61,7 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
     <Card className="rounded-lg">
       <CardHeader
         title="Tools"
-        eyebrow="platform ∩ persona, then the tenant's gate floor"
+        eyebrow="platform ∩ persona, then the tenant’s gate floor"
         actions={
           roster === null ? null : (
             <Badge tone="neutral" className="gap-1.5">
@@ -124,7 +124,7 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
             </div>
             <Receipt
               origin="GET /v1/console/tools"
-              detail="platform allowlist ∩ persona, then anything at or above the tenant's gate floor is marked for a human"
+              detail="platform allowlist ∩ persona, then anything at or above the tenant’s gate floor is marked for a human"
               className="mt-4"
             />
           </>

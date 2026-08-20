@@ -102,7 +102,7 @@ export function AegisMcpPanel({
   if (!endpoint) {
     return (
       <Card className="rounded-lg">
-        <CardHeader title="Ask Aegis over MCP" eyebrow="This deployment's own server" />
+        <CardHeader title="Ask Aegis over MCP" eyebrow="This deployment’s own server" />
         <CardBody>
           <EmptyState
             icon={Plug}
@@ -118,7 +118,7 @@ export function AegisMcpPanel({
     <Card className="rounded-lg">
       <CardHeader
         title="Ask Aegis over MCP"
-        eyebrow="This deployment's own server"
+        eyebrow="This deployment’s own server"
         actions={
           <Button
             type="button"

@@ -175,7 +175,7 @@ export function SeatsPanel({
               </div>
 
               <fieldset className="mt-3 grid gap-2 sm:grid-cols-2">
-                <legend className="sr-only">What {seat.username}&apos;s seat may do</legend>
+                <legend className="sr-only">What {seat.username}’s seat may do</legend>
                 {seat.capabilities.map((cap) => {
                   const marker = `${seat.userId}:${cap.key}`
                   return (

@@ -172,8 +172,11 @@ export function TenantRailPolicy(): ReactElement {
                 weaker one loses by arithmetic rather than by a check.
               </InfoTip>
               {policy ? (
-                <Badge tone={policy.model_layer_wired ? 'ok' : 'risk'} className="gap-1 uppercase">
-                  <ShieldCheck className="size-3" aria-hidden />
+                <Badge
+                  tone={policy.model_layer_wired ? 'ok' : 'risk'}
+                  className="max-w-[52vw] gap-1 text-left uppercase whitespace-normal sm:max-w-none"
+                >
+                  <ShieldCheck className="size-3 shrink-0" aria-hidden />
                   {policy.model_layer_wired ? 'model layers wired' : 'deterministic only'}
                 </Badge>
               ) : null}

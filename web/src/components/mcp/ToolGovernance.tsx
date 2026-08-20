@@ -269,7 +269,7 @@ export function ToolGovernance({
         <CardBody className="space-y-3">
           <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
             An external tool is code we did not write, reached over a network, returning
-            content into an agent&apos;s context — and it offers no way to undo itself. It
+            content into an agent’s context — and it offers no way to undo itself. It
             is therefore <span className="font-medium text-foreground">high</span> risk,
             stopping at the same human gate as a consequential domain write, until it is
             lowered here for a named tool. Whatever it returns passes the{' '}
@@ -280,7 +280,7 @@ export function ToolGovernance({
             <EmptyState
               icon={Network}
               title="No external tool discovered yet"
-              body="Reading a peer's tool list opens a connection to a third party, so it happens when you ask for it and not when this page loads."
+              body="Reading a peer’s tool list opens a connection to a third party, so it happens when you ask for it and not when this page loads."
               action={
                 <p className="text-sm text-muted-foreground">
                   Test a connection above, and everything it advertises lands here at high risk,
@@ -321,7 +321,7 @@ export function ToolGovernance({
         <CardHeader title="Aegis tools" eyebrow="Declared in code, not editable here" />
         <CardBody className="space-y-3">
           <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            Aegis&apos;s own tools and the tier each is gated at. There is no control here
+            Aegis’s own tools and the tier each is gated at. There is no control here
             because a tier is declared on the tool, in the module named in each row, and
             reviewed with the code that ships it — a runtime switch that could lower one
             would be a way to walk a consequential write out of the gate over HTTP.

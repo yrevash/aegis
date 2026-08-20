@@ -456,7 +456,7 @@ function GateRow({
           </dd>
           <dt>Run</dt>
           <dd className="min-w-0">
-            <Figure className="truncate text-foreground">{row.run_id}</Figure>
+            <Figure className="break-all text-foreground">{row.run_id}</Figure>
           </dd>
           {CLOSED.has(row.status) && (
             <>
@@ -466,7 +466,7 @@ function GateRow({
               </dd>
               <dt>Decided by</dt>
               <dd className="min-w-0">
-                <Figure className="truncate text-foreground">{row.decided_by ?? '—'}</Figure>
+                <Figure className="break-all text-foreground">{row.decided_by ?? '—'}</Figure>
               </dd>
             </>
           )}
