@@ -3,7 +3,7 @@
 import { DatabaseZap, GitMerge } from 'lucide-react'
 import type { ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { cn } from '@/lib/utils'
 import type { Provenance } from '@/lib/stream'
@@ -28,7 +28,7 @@ export function ProvenanceChip({ provenance, className }: ProvenanceChipProps): 
 
   return (
     <div className={cn('flex flex-wrap items-center gap-1', className)}>
-      <Badge variant={cache ? 'ml' : 'graph'} className="gap-1">
+      <Badge tone={cache ? 'ml' : 'graph'} className="gap-1">
         <Icon className="size-3" aria-hidden />
         {cache ? 'cached' : 'hybrid'}
       </Badge>

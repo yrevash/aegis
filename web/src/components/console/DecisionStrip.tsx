@@ -3,7 +3,7 @@
 import { Bot, Inbox, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
@@ -82,7 +82,7 @@ function ProposedActions({
           {calls.length > 1 ? `Actions · ${calls.length}` : 'Action'}
         </span>
         {queued && (
-          <Badge variant="risk" className="ml-auto gap-1">
+          <Badge tone="risk" className="ml-auto gap-1">
             <Inbox aria-hidden className="size-3" /> Awaiting a human
           </Badge>
         )}
@@ -100,7 +100,7 @@ function ProposedActions({
               <Figure className="min-w-0 flex-1 truncate font-medium text-foreground">
                 {call.tool}
               </Figure>
-              <Badge variant={riskVariant(call.risk)} className="shrink-0 uppercase">
+              <Badge tone={riskVariant(call.risk)} className="shrink-0 uppercase">
                 {call.risk} risk
               </Badge>
             </li>

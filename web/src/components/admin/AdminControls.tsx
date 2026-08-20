@@ -3,8 +3,8 @@
 import { Building2, Coins } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { getBudgets, getTenants, getUsers } from '@/lib/api/client'
@@ -122,14 +122,16 @@ function TenantList({
   loading: boolean
 }): ReactElement {
   return (
-    <Card className="rounded-lg">
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <CardTitle>Tenants</CardTitle>
-        <Badge variant="secondary">
-          <Figure>{tenants.length}</Figure>
-        </Badge>
-      </CardHeader>
-      <CardContent>
+    <Card>
+      <CardHeader
+        title="Tenants"
+        actions={
+          <Badge tone="neutral">
+            <Figure>{tenants.length}</Figure>
+          </Badge>
+        }
+      />
+      <CardBody>
         {loading ? (
           <LoadingState rows={3} label="Reading the tenants…" />
         ) : tenants.length === 0 ? (
@@ -178,7 +180,7 @@ function TenantList({
             </table>
           </div>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }
@@ -196,14 +198,16 @@ function BudgetList({
   loading: boolean
 }): ReactElement {
   return (
-    <Card className="rounded-lg">
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <CardTitle>Caps in force</CardTitle>
-        <Badge variant="secondary">
-          <Figure>{budgets.length}</Figure>
-        </Badge>
-      </CardHeader>
-      <CardContent>
+    <Card>
+      <CardHeader
+        title="Caps in force"
+        actions={
+          <Badge tone="neutral">
+            <Figure>{budgets.length}</Figure>
+          </Badge>
+        }
+      />
+      <CardBody>
         {loading ? (
           <LoadingState rows={3} label="Reading the caps…" />
         ) : budgets.length === 0 ? (
@@ -228,7 +232,7 @@ function BudgetList({
                 {budgets.map((b) => (
                   <tr key={`${b.scope_type}-${b.scope_id}-${b.window}`} className="border-b border-border/40 last:border-0">
                     <td className="py-2.5 text-foreground">
-                      <Badge variant="outline">{b.scope_type}</Badge>{' '}
+                      <Badge tone="neutral">{b.scope_type}</Badge>{' '}
                       {b.scope_type === 'tenant'
                         ? (tenants.find((t) => t.id === b.scope_id)?.name ?? `#${b.scope_id}`)
                         : (users.find((u) => u.id === b.scope_id)?.username ?? `#${b.scope_id}`)}
@@ -253,7 +257,7 @@ function BudgetList({
             </table>
           </div>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

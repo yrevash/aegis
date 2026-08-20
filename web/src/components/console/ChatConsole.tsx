@@ -4,7 +4,7 @@ import { ShieldAlert, ShieldCheck, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { ApprovalCard } from '@/components/approval/ApprovalCard'
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { TrustBar } from '@/components/layout/TrustBar'
 import { getGraph } from '@/lib/api/client'
@@ -59,7 +59,7 @@ function RestoredTurnView({ turn }: { turn: RestoredTurn }): ReactElement {
       {turn.question !== '' && <Question text={turn.question} meta="Sent earlier" />}
       {turn.answer !== '' && (
         <div className="rounded-lg rounded-bl-md border border-border bg-card px-4 py-3">
-          <Badge variant="outline" className="mb-2">
+          <Badge tone="neutral" className="mb-2">
             from the transcript
           </Badge>
           <p className="text-[0.9rem] leading-relaxed whitespace-pre-wrap text-foreground">

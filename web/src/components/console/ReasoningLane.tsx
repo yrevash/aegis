@@ -3,8 +3,8 @@
 import { BrainCircuit } from 'lucide-react'
 import { useEffect, useRef, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import type { RunState } from '@/state/runReducer'
 
 /**
@@ -30,20 +30,26 @@ export function ReasoningLane({ state }: { state: RunState }): ReactElement | nu
 
   return (
     <Card className="border-blue-200 bg-blue-50">
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <BrainCircuit className="size-4 text-blue-700" />
-        <CardTitle className="text-blue-700">Reasoning</CardTitle>
-        <Badge variant="agent" className="ml-auto">
-          {thinking ? (
-            <>
-              <span className="animate-pip mr-1 size-1.5 rounded-full bg-blue-200" /> thinking
-            </>
-          ) : (
-            'reasoning'
-          )}
-        </Badge>
-      </CardHeader>
-      <CardContent>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2 text-blue-700">
+            <BrainCircuit className="size-4 shrink-0" aria-hidden />
+            Reasoning
+          </span>
+        }
+        actions={
+          <Badge tone="agent">
+            {thinking ? (
+              <>
+                <span className="animate-pip mr-1 size-1.5 rounded-full bg-blue-200" /> thinking
+              </>
+            ) : (
+              'reasoning'
+            )}
+          </Badge>
+        }
+      />
+      <CardBody>
         <p
           ref={bodyRef}
           className="max-h-28 overflow-y-auto font-mono text-[0.78rem] leading-relaxed break-words text-foreground/80"
@@ -53,7 +59,7 @@ export function ReasoningLane({ state }: { state: RunState }): ReactElement | nu
             <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 animate-pulse bg-blue-700" />
           )}
         </p>
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

@@ -11,8 +11,8 @@ const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false 
 
 import { OrchestrationMap } from '@/components/console/OrchestrationMap'
 import { prefersReducedMotion, type Beat } from '@/components/console/motion'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader } from '@/components/ui/Card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { SIGNALS, colorForKind } from '@/config/signals'
 import type { GraphResponse } from '@/lib/api/types'
@@ -136,17 +136,25 @@ export function KnowledgeGraph({ base, state, beat }: KnowledgeGraphProps): Reac
 
   return (
     <Card className="flex h-full flex-col overflow-hidden">
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Waypoints className="size-4 text-blue-600" aria-hidden />
-        <CardTitle>Orchestration</CardTitle>
-        <InfoTip label="About Orchestration">
-          Which agent handled each step, drawn over the knowledge graph the run
-          traversed. Multi-agent orchestration on LangGraph.
-        </InfoTip>
-        <Badge variant="graph" className="ml-auto">
-          {touchedNodes.size}/{base.nodes.length} traversed
-        </Badge>
-      </CardHeader>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Waypoints className="size-4 shrink-0 text-blue-600" aria-hidden />
+            Orchestration
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <InfoTip label="About Orchestration">
+              Which agent handled each step, drawn over the knowledge graph the run traversed.
+              Multi-agent orchestration on LangGraph.
+            </InfoTip>
+            <Badge tone="graph">
+              {touchedNodes.size}/{base.nodes.length} traversed
+            </Badge>
+          </div>
+        }
+      />
 
       {/* Fused agent-trajectory layer above the graph. */}
       <OrchestrationMap state={state} beat={beat} />

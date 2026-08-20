@@ -3,8 +3,8 @@
 import { BadgeCheck, FileText, ShieldAlert } from 'lucide-react'
 import type { ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { RerankScoreboard } from '@/components/retrieval/RerankScoreboard'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
@@ -21,20 +21,20 @@ function SourceRow({ source, rank }: { source: SourceEvidence; rank: number }): 
       <div className="min-w-0">
         <p className="text-[0.8rem] leading-snug text-foreground">{source.label}</p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          <Badge variant="graph">{source.score.toFixed(2)}</Badge>
+          <Badge tone="graph">{source.score.toFixed(2)}</Badge>
 
           {/* Page is shown only when the run reported one. A default of "page 1" would
               be the single most quotable false statement this screen could make. */}
-          {source.page !== null && <Badge variant="secondary">page {source.page}</Badge>}
-          {source.located && <Badge variant="outline">located on page</Badge>}
+          {source.page !== null && <Badge tone="neutral">page {source.page}</Badge>}
+          {source.located && <Badge tone="neutral">located on page</Badge>}
 
           {source.verbatim === 'verified' && (
-            <Badge variant="ok">
+            <Badge tone="ok">
               <BadgeCheck aria-hidden /> verbatim in source
             </Badge>
           )}
           {source.verbatim === 'unverified' && (
-            <Badge variant="block">
+            <Badge tone="block">
               <ShieldAlert aria-hidden /> not found in source
               {source.matchedFraction !== null &&
                 ` · ${Math.round(source.matchedFraction * 100)}% matched`}
@@ -68,14 +68,14 @@ export function SourcesTab({ state }: { state: RunState }): ReactElement {
   if (sources.length === 0) {
     return (
       <Card>
-        <CardContent className="flex min-h-32 flex-col items-center justify-center gap-2 pt-5 text-center">
+        <CardBody className="flex min-h-32 flex-col items-center justify-center gap-2 text-center">
           <FileText aria-hidden className="size-6 text-muted-foreground/50" />
           <p className="text-sm text-muted-foreground">
             {state.candidates > 0
               ? `Retrieval recalled ${state.candidates} candidates but ranked none of them.`
               : 'This run retrieved nothing — the answer is not grounded in a document.'}
           </p>
-        </CardContent>
+        </CardBody>
       </Card>
     )
   }
@@ -89,14 +89,16 @@ export function SourcesTab({ state }: { state: RunState }): ReactElement {
       />
 
       <Card>
-        <CardHeader className="flex-row items-center gap-2 space-y-0">
-          <FileText aria-hidden className="size-4 text-blue-600" />
-          <CardTitle>Every ranked source</CardTitle>
-          <Badge variant="secondary" className="ml-auto">
-            {sources.length}
-          </Badge>
-        </CardHeader>
-        <CardContent>
+        <CardHeader
+          title={
+            <span className="flex items-center gap-2">
+              <FileText aria-hidden className="size-4 shrink-0 text-blue-600" />
+              Every ranked source
+            </span>
+          }
+          actions={<Badge tone="neutral">{sources.length}</Badge>}
+        />
+        <CardBody>
           <ol className="flex flex-col">
             {sources.map((source, index) => (
               <SourceRow key={source.id} source={source} rank={index + 1} />
@@ -114,7 +116,7 @@ export function SourcesTab({ state }: { state: RunState }): ReactElement {
               {!checked && 'No verbatim span check ran, so every quote here is the model’s claim.'}
             </p>
           )}
-        </CardContent>
+        </CardBody>
       </Card>
     </div>
   )

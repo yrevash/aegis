@@ -17,9 +17,9 @@ import {
   ProposedAction,
 } from '@/components/approval/ApprovalCard'
 import { readApproval } from '@/components/approval/approvalActions'
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardContent } from '@/components/primitives/card'
+import { Card, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
@@ -61,12 +61,12 @@ const WINDOWS: { id: string; label: string; hours: number | null }[] = [
 const CLOSED = new Set(['approved', 'rejected', 'expired'])
 
 /** The signal colour a lifecycle status carries. */
-function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'outline' {
+function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'neutral' {
   if (status === 'approved') return 'ok'
   if (status === 'rejected') return 'block'
   if (status === 'expired') return 'risk'
   if (status === 'pending' || status === 'resuming') return 'agent'
-  return 'outline'
+  return 'neutral'
 }
 
 /** Local wall-clock time from an ISO 8601 timestamp, or an em dash. */
@@ -226,7 +226,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
     <div className="flex flex-col gap-4">
       {/* Controls: which queue, how far back, whose. */}
       <Card className="rounded-lg">
-        <CardContent className="flex flex-wrap items-end gap-4 py-4">
+        <CardBody className="flex flex-wrap items-end gap-4 py-4">
           <fieldset className="min-w-0">
             <legend className="eyebrow mb-2">Queue</legend>
             <div className="flex flex-wrap gap-1.5">
@@ -302,7 +302,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
               <RefreshCw className="size-4" aria-hidden /> Refresh
             </Button>
           </div>
-        </CardContent>
+        </CardBody>
       </Card>
 
       {notice && (
@@ -402,7 +402,7 @@ function GateRow({
 
   return (
     <Card className={cn('rounded-lg', pending && 'border-risk/40')}>
-      <CardContent className="space-y-3 py-4">
+      <CardBody className="space-y-3 py-4">
         <div className="flex flex-wrap items-center gap-2">
           {pending ? (
             <ShieldAlert className="size-4 shrink-0 text-risk" aria-hidden />
@@ -418,13 +418,13 @@ function GateRow({
               'One call awaits a decision'
             )}
           </p>
-          <Badge variant={statusVariant(row.status)} className="uppercase">
+          <Badge tone={statusVariant(row.status)} className="uppercase">
             {row.status}
           </Badge>
-          <Badge variant={riskSignal === 'block' ? 'block' : 'risk'} className="uppercase">
+          <Badge tone={riskSignal === 'block' ? 'block' : 'risk'} className="uppercase">
             {row.risk} risk
           </Badge>
-          <Badge variant="outline">{ownerLabel(row.tenant_id)}</Badge>
+          <Badge tone="neutral">{ownerLabel(row.tenant_id)}</Badge>
           {left && (
             <span className="inline-flex items-center gap-1 text-[0.72rem] text-muted-foreground">
               <Timer className="size-3.5" aria-hidden /> {left}
@@ -500,7 +500,7 @@ function GateRow({
         </div>
 
         <GateReceipt approvalId={row.id} view={view} />
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

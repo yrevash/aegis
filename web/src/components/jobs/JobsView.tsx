@@ -14,8 +14,8 @@ import {
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { EmptyState, LoadingState } from '@/components/primitives/States'
@@ -45,12 +45,12 @@ const FOCUS =
   'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 
 /** The signal colour each job status carries. Always beside the word, never alone. */
-function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'outline' {
+function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'neutral' {
   if (status === 'succeeded') return 'ok'
   if (status === 'failed') return 'block'
   if (status === 'reconciling') return 'risk'
   if (status === 'running' || status === 'pending') return 'agent'
-  return 'outline'
+  return 'neutral'
 }
 
 /** Local wall-clock time from an ISO 8601 timestamp. */
@@ -189,7 +189,7 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
         </div>
       ) : null}
 
-      <Card className="gap-0 p-0">
+      <Card>
         <div className="flex flex-wrap items-center justify-between gap-3 p-4 md:p-5">
           <div className="flex items-center gap-3">
             <Layers className="size-5 text-muted-foreground" aria-hidden />
@@ -241,7 +241,7 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
         </p>
       ) : null}
 
-      <Card className="gap-0 overflow-hidden p-0">
+      <Card className="overflow-hidden">
         {load.status === 'loading' ? (
           <div className="p-4">
             <LoadingState rows={4} label="Reading the job queue…" />
@@ -281,7 +281,7 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
                         <span className="ml-2 text-muted-foreground">{row.job_type}</span>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
+                        <Badge tone={statusVariant(row.status)}>{row.status}</Badge>
                       </td>
                       <td className="px-4 py-3">
                         {row.completed_stage ? (

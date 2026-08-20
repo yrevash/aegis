@@ -3,9 +3,9 @@
 import { Building2, Loader2 } from 'lucide-react'
 import { useState, type FormEvent, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { createTenant } from '@/lib/api/client'
 import type { Tenant } from '@/lib/api/types'
 
@@ -81,13 +81,17 @@ export function CreateTenantForm({
   }
 
   return (
-    <Card className="rounded-lg">
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <Building2 className="size-4 text-blue-600" aria-hidden />
-        <CardTitle>Create a tenant</CardTitle>
-        <Badge variant="outline">platform only</Badge>
-      </CardHeader>
-      <CardContent>
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Building2 className="size-4 shrink-0 text-blue-600" aria-hidden />
+            Create a tenant
+          </span>
+        }
+        actions={<Badge tone="neutral">platform only</Badge>}
+      />
+      <CardBody>
         {tier !== 'platform' ? (
           <NotYours
             label="Onboarding a tenant"
@@ -142,7 +146,7 @@ export function CreateTenantForm({
             <Outcome outcome={outcome} />
           </form>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

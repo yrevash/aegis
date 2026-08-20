@@ -12,9 +12,9 @@ import {
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { checkPatches } from '@/lib/api/client'
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
@@ -61,10 +61,10 @@ const STATUS_TONE: Record<PatchStatus, string> = {
   unknown: 'text-muted-foreground',
 }
 
-const POSTURE_VARIANT: Record<PatchPosture, 'risk' | 'ok' | 'secondary'> = {
+const POSTURE_VARIANT: Record<PatchPosture, 'risk' | 'ok' | 'neutral'> = {
   'action-needed': 'risk',
   current: 'ok',
-  unverified: 'secondary',
+  unverified: 'neutral',
 }
 
 export function PatchCheck({ token }: { token: string | null }): ReactElement {
@@ -95,31 +95,34 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
 
   return (
     <Card>
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <ShieldCheck className="size-4 text-ok-ink" aria-hidden />
-        <CardTitle>Installed pins against the registry</CardTitle>
-        {posture && <Badge variant={POSTURE_VARIANT[posture]}>{POSTURE_LABEL[posture]}</Badge>}
-        <InfoTip label="Why this matters">
-          Why this matters: outdated dependencies are the most common source of known-CVE exposure.
-          This compares each installed pin against the latest release — and a patch claim you
-          can&rsquo;t verify is worse than none, so an offline check is shown as unverified, never
-          &ldquo;current&rdquo;.
-        </InfoTip>
-        <Button
-          size="sm"
-          className="ml-auto"
-          onClick={() => run()}
-          disabled={load.status === 'loading'}
-        >
-          {load.status === 'loading' ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="size-3.5" aria-hidden />
-          )}
-          {load.status === 'ready' ? 'Re-check' : 'Check for patches'}
-        </Button>
-      </CardHeader>
-      <CardContent>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <ShieldCheck className="size-4 shrink-0 text-ok-ink" aria-hidden />
+            Installed pins against the registry
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {posture && <Badge tone={POSTURE_VARIANT[posture]}>{POSTURE_LABEL[posture]}</Badge>}
+            <InfoTip label="Why this matters">
+              Why this matters: outdated dependencies are the most common source of known-CVE
+              exposure. This compares each installed pin against the latest release — and a patch
+              claim you can&rsquo;t verify is worse than none, so an offline check is shown as
+              unverified, never &ldquo;current&rdquo;.
+            </InfoTip>
+            <Button size="sm" onClick={() => run()} disabled={load.status === 'loading'}>
+              {load.status === 'loading' ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" aria-hidden />
+              )}
+              {load.status === 'ready' ? 'Re-check' : 'Check for patches'}
+            </Button>
+          </div>
+        }
+      />
+      <CardBody>
         {(load.status === 'idle' || load.status === 'loading') && (
           <LoadingState rows={5} label="Checking package freshness…" />
         )}
@@ -201,7 +204,7 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
             </div>
           </div>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

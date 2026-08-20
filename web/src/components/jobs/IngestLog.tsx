@@ -13,8 +13,8 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card } from '@/components/ui/Card'
 import {
   getIngestProgress,
   type IngestProgress,
@@ -59,12 +59,12 @@ function clock(iso: string | null): string {
 }
 
 /** The badge colour a document status carries. */
-function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'outline' {
+function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'neutral' {
   if (status === 'succeeded') return 'ok'
   if (status === 'failed') return 'block'
   if (status === 'reconciling') return 'risk'
   if (status === 'running' || status === 'pending') return 'agent'
-  return 'outline'
+  return 'neutral'
 }
 
 /** The scalar facts a stage reported, as `key value` pairs a person can scan. */
@@ -162,7 +162,7 @@ export function IngestLog({ documentId, token }: IngestLogProps): ReactElement {
 /** Document identity, terminal state, and the three counts a jury asks about. */
 function Header({ progress }: { progress: IngestProgress }): ReactElement {
   return (
-    <Card className="gap-0 p-0">
+    <Card>
       <div className="flex flex-wrap items-start justify-between gap-3 p-4">
         <div className="min-w-0">
           <p className="eyebrow mb-0.5">documents · live ingest log</p>
@@ -175,14 +175,14 @@ function Header({ progress }: { progress: IngestProgress }): ReactElement {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={statusVariant(progress.status)}>{progress.status}</Badge>
-          <Badge variant="secondary">
+          <Badge tone={statusVariant(progress.status)}>{progress.status}</Badge>
+          <Badge tone="neutral">
             {progress.page_count === null ? 'pages not parsed' : `${progress.page_count} pages`}
           </Badge>
-          <Badge variant="secondary">
+          <Badge tone="neutral">
             {progress.chunk_count === null ? 'not chunked' : `${progress.chunk_count} chunks`}
           </Badge>
-          <Badge variant="secondary">{progress.corpus.embedded} embedded</Badge>
+          <Badge tone="neutral">{progress.corpus.embedded} embedded</Badge>
         </div>
       </div>
       {progress.error ? (
@@ -197,7 +197,7 @@ function Header({ progress }: { progress: IngestProgress }): ReactElement {
 /** The six stages, in pipeline order, each with its state and what it produced. */
 function StageStrip({ stages }: { stages: IngestStage[] }): ReactElement {
   return (
-    <Card className="gap-0 p-0">
+    <Card>
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
         <Braces className="size-4 text-muted-foreground" />
         <p className="eyebrow mb-0">pipeline · read from documents.completed_stage</p>
@@ -266,16 +266,16 @@ function ParsePanel({ progress }: { progress: IngestProgress }): ReactElement {
   const peak = levels.reduce((max, [, count]) => Math.max(max, count), 1)
 
   return (
-    <Card className="gap-0 p-0">
+    <Card>
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <span className="flex items-center gap-2">
           <ScanText className="size-4 text-muted-foreground" />
           <p className="eyebrow mb-0">parse quality · the gate that catches a silent misread</p>
         </span>
         {parse.confidence === null ? (
-          <Badge variant="outline">not scored</Badge>
+          <Badge tone="neutral">not scored</Badge>
         ) : (
-          <Badge variant={parse.low ? 'risk' : 'ok'}>
+          <Badge tone={parse.low ? 'risk' : 'ok'}>
             {parse.low ? <TriangleAlert /> : null}
             {parse.confidence.toFixed(2)} / {parse.threshold.toFixed(2)}
           </Badge>
@@ -362,15 +362,15 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
   const { graph } = progress
 
   return (
-    <Card className="gap-0 p-0">
+    <Card>
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <span className="flex items-center gap-2">
           <Share2 className="size-4 text-muted-foreground" />
           <p className="eyebrow mb-0">knowledge graph · built from chunks.meta</p>
         </span>
         <span className="flex gap-1.5">
-          <Badge variant="graph">{graph.entity_total} entities</Badge>
-          <Badge variant="graph">{graph.relation_total} relations</Badge>
+          <Badge tone="graph">{graph.entity_total} entities</Badge>
+          <Badge tone="graph">{graph.relation_total} relations</Badge>
         </span>
       </div>
       <div className="flex flex-col gap-3 p-4">
@@ -438,13 +438,13 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
 /** The tables lifted out as their own chunks, and which of them were summarised (D8). */
 function TablePanel({ progress }: { progress: IngestProgress }): ReactElement {
   return (
-    <Card className="gap-0 p-0">
+    <Card>
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <span className="flex items-center gap-2">
           <Table2 className="size-4 text-muted-foreground" />
           <p className="eyebrow mb-0">tables · own chunks, shape kept</p>
         </span>
-        <Badge variant="secondary">
+        <Badge tone="neutral">
           {progress.corpus.summarised} of {progress.corpus.tables} summarised
         </Badge>
       </div>
@@ -468,7 +468,7 @@ function TablePanel({ progress }: { progress: IngestProgress }): ReactElement {
                 </td>
                 <td className="px-4 py-2 text-xs text-muted-foreground">
                   {table.summarised ? (
-                    <Badge variant="ok">written</Badge>
+                    <Badge tone="ok">written</Badge>
                   ) : (
                     (table.reason ?? 'below the size threshold')
                   )}
@@ -485,7 +485,7 @@ function TablePanel({ progress }: { progress: IngestProgress }): ReactElement {
 /** The chronological tail — every run of this document, oldest first. */
 function LogTail({ progress }: { progress: IngestProgress }): ReactElement {
   return (
-    <Card className="gap-0 p-0">
+    <Card>
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
         <Braces className="size-4 text-muted-foreground" />
         <p className="eyebrow mb-0">run_events · the durable record, replayed</p>

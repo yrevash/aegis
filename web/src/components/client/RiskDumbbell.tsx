@@ -3,7 +3,7 @@
 import { ShieldCheck } from 'lucide-react'
 import type { CSSProperties, ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
 
@@ -133,7 +133,7 @@ function Row({ move, ceiling }: { move: RiskMovement; ceiling: number }): ReactE
 
       {/* What is still carried — the one place colour is allowed to mean something. */}
       <div className="flex items-center md:justify-end">
-        <Badge variant={RESIDUAL_BADGE[risk.residual]}>
+        <Badge tone={RESIDUAL_BADGE[risk.residual]}>
           <span className="size-1.5 rounded-full" style={{ background: hue }} aria-hidden />
           {meta.label}
         </Badge>

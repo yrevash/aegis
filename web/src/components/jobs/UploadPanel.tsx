@@ -3,7 +3,7 @@
 import { FileUp, Loader2, Upload } from 'lucide-react'
 import { useRef, useState, type FormEvent, type ReactElement } from 'react'
 
-import { Card } from '@/components/primitives/card'
+import { Card } from '@/components/ui/Card'
 import { JobsApiError, uploadDocument, type DocumentUpload } from '@/lib/api/jobs'
 import { cn } from '@/lib/utils'
 
@@ -85,7 +85,7 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
   }
 
   return (
-    <Card className="gap-0 p-0">
+    <Card>
       <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-4 p-5">
         <div className="flex items-center gap-3">
           <FileUp className="size-5 text-muted-foreground" />

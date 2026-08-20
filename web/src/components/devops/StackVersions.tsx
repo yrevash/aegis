@@ -4,8 +4,8 @@ import { Boxes, Layers } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { getStack } from '@/lib/api/client'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
@@ -60,17 +60,26 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
 
   return (
     <Card>
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <Layers className="size-4 text-blue-700" aria-hidden />
-        <CardTitle>The resolved inventory</CardTitle>
-        <Badge variant="secondary">SBOM</Badge>
-        <InfoTip label="Why this matters">
-          Why this matters: DevOps needs the real installed versions, not a hand-maintained list. This
-          is a live inventory of every runtime, library and service the agent runs on — so you can
-          answer &ldquo;what exactly is in production?&rdquo; and spot unpinned or aged components.
-        </InfoTip>
-      </CardHeader>
-      <CardContent>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Layers className="size-4 shrink-0 text-blue-700" aria-hidden />
+            The resolved inventory
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="neutral">SBOM</Badge>
+            <InfoTip label="Why this matters">
+              Why this matters: DevOps needs the real installed versions, not a hand-maintained
+              list. This is a live inventory of every runtime, library and service the agent runs
+              on — so you can answer &ldquo;what exactly is in production?&rdquo; and spot unpinned
+              or aged components.
+            </InfoTip>
+          </div>
+        }
+      />
+      <CardBody>
         {load.status === 'loading' && <LoadingState rows={6} label="Reading the stack inventory…" />}
 
         {load.status === 'error' && (
@@ -134,7 +143,7 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
             ))}
           </div>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

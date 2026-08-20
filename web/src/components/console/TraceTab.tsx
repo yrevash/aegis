@@ -5,8 +5,8 @@ import { Suspense, lazy, type ReactElement } from 'react'
 import { NodeGantt } from '@/components/charts/NodeGantt'
 import { GuardrailReveal } from '@/components/guardrail/GuardrailReveal'
 import { EfficiencyPanel } from '@/components/metrics/EfficiencyPanel'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { AgentTracePanel } from '@/components/trace/AgentTracePanel'
 import type { GraphResponse, MetricsResponse } from '@/lib/api/types'
 import type { RunState } from '@/state/runReducer'
@@ -23,15 +23,15 @@ const KnowledgeGraph = lazy(() =>
 function Decision({
   title,
   detail,
-  tone = 'secondary',
+  tone = 'neutral',
 }: {
   title: string
   detail: string
-  tone?: 'secondary' | 'agent' | 'graph' | 'ok'
+  tone?: 'neutral' | 'agent' | 'graph' | 'ok'
 }): ReactElement {
   return (
     <li className="flex flex-wrap items-baseline gap-2 border-b border-border/60 py-2 last:border-b-0">
-      <Badge variant={tone}>{title}</Badge>
+      <Badge tone={tone}>{title}</Badge>
       <span className="min-w-0 flex-1 text-[0.78rem] text-muted-foreground">{detail}</span>
     </li>
   )
@@ -55,10 +55,8 @@ function Decisions({ state }: { state: RunState }): ReactElement | null {
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <CardTitle>Decisions</CardTitle>
-      </CardHeader>
-      <CardContent>
+      <CardHeader title="Decisions" />
+      <CardBody>
         <ul className="flex flex-col">
           {routing !== null && (
             <Decision
@@ -90,7 +88,7 @@ function Decisions({ state }: { state: RunState }): ReactElement | null {
             />
           )}
         </ul>
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }
@@ -122,24 +120,24 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
 
       {measured ? (
         <Card>
-          <CardHeader className="flex-row items-center gap-2 space-y-0">
-            <CardTitle>Per-node timing and cost</CardTitle>
-            {state.traceId !== null && (
-              <Badge variant="outline" className="ml-auto">
-                trace {state.traceId.slice(0, 12)}
-              </Badge>
-            )}
-          </CardHeader>
-          <CardContent>
+          <CardHeader
+            title="Per-node timing and cost"
+            actions={
+              state.traceId !== null ? (
+                <Badge tone="neutral">trace {state.traceId.slice(0, 12)}</Badge>
+              ) : null
+            }
+          />
+          <CardBody>
             <NodeGantt nodes={state.nodeLedger} />
-          </CardContent>
+          </CardBody>
         </Card>
       ) : (
         <Card>
-          <CardContent className="pt-5 text-sm text-muted-foreground">
+          <CardBody className="text-sm text-muted-foreground">
             No node finished with a measured duration on this run, so there is no timing
             breakdown to draw.
-          </CardContent>
+          </CardBody>
         </Card>
       )}
 

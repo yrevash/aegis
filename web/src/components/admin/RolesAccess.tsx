@@ -4,8 +4,8 @@ import { Check, KeyRound, Loader2, Lock } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { assignUserRole, getUsers } from '@/lib/api/client'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
@@ -151,23 +151,31 @@ export function RolesAccess({
   const total = load.status === 'ready' ? load.rows.length : null
 
   return (
-    <Card className="rounded-lg">
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <KeyRound className="size-4 shrink-0 text-blue-700" aria-hidden />
-        <CardTitle>Roles &amp; Access</CardTitle>
-        <Badge variant="secondary">RBAC</Badge>
-        {/* `GET /admin/users` is tenant-scoped server-side (`_scope_tenant`), so a
-            tenant admin's roster is a subset. The caption is driven by the session's
-            fine tier so the page never presents one tenant's users as everyone. */}
-        <Badge variant="outline">{adminScopeCaption(session)}</Badge>
-        <InfoTip label="Why this matters">
-          Why this matters: in an enterprise the admin’s real power is delegation. Each team should
-          see only its own portal — build, ops, or outcomes — never the whole platform. This is where
-          that least-privilege line is drawn, granted, and revoked.
-        </InfoTip>
-      </CardHeader>
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <KeyRound className="size-4 shrink-0 text-blue-700" aria-hidden />
+            Roles &amp; Access
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="neutral">RBAC</Badge>
+            {/* `GET /admin/users` is tenant-scoped server-side (`_scope_tenant`), so a
+                tenant admin's roster is a subset. The caption is driven by the session's
+                fine tier so the page never presents one tenant's users as everyone. */}
+            <Badge tone="neutral">{adminScopeCaption(session)}</Badge>
+            <InfoTip label="Why this matters">
+              Why this matters: in an enterprise the admin’s real power is delegation. Each team
+              should see only its own portal — build, ops, or outcomes — never the whole platform.
+              This is where that least-privilege line is drawn, granted, and revoked.
+            </InfoTip>
+          </div>
+        }
+      />
 
-      <CardContent>
+      <CardBody>
         {/* Header stat band — total + per-role head-count. */}
         {counts && total != null && (
           <div className="mb-5 flex flex-wrap items-stretch gap-2">
@@ -236,7 +244,7 @@ export function RolesAccess({
                       </td>
                       <td className="py-2.5">
                         <div className="flex items-center gap-1.5">
-                          <Badge variant="secondary">{ROLE_CATALOG[current].label}</Badge>
+                          <Badge tone="neutral">{ROLE_CATALOG[current].label}</Badge>
                           <Figure className="text-muted-foreground/70">{u.role}</Figure>
                         </div>
                       </td>
@@ -297,7 +305,7 @@ export function RolesAccess({
             </table>
           </div>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

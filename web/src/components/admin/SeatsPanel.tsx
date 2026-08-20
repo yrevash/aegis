@@ -3,8 +3,8 @@
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
-import { Badge } from '@/components/primitives/badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Badge } from '@/components/ui/Badge'
 import { Figure } from '@/components/primitives/Figure'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { errorSentence } from '@/lib/api/apiError'
@@ -104,33 +104,35 @@ export function SeatsPanel({
 
   if (load.status === 'loading') {
     return (
-      <Card className="rounded-lg">
-        <CardContent className="pt-5">
+      <Card>
+        <CardBody>
           <LoadingState rows={4} label="Reading the seats…" />
-        </CardContent>
+        </CardBody>
       </Card>
     )
   }
 
   if (load.status === 'error') {
     return (
-      <Card className="rounded-lg">
-        <CardContent className="pt-5">
+      <Card>
+        <CardBody>
           <ErrorState error={load.message} />
-        </CardContent>
+        </CardBody>
       </Card>
     )
   }
 
   return (
-    <Card className="rounded-lg">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ShieldCheck className="size-4 shrink-0" aria-hidden />
-          Named seats
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <ShieldCheck className="size-4 shrink-0" aria-hidden />
+            Named seats
+          </span>
+        }
+      />
+      <CardBody className="space-y-4">
         <p id="seats-direction" className="max-w-prose text-sm leading-relaxed text-muted-foreground">
           A seat names what one person may do inside the role they already hold. Every toggle
           here <span className="text-foreground">removes</span> a capability — the role guard
@@ -207,7 +209,7 @@ export function SeatsPanel({
                       <span className="min-w-0">
                         <span className="block text-foreground">{cap.title}</span>
                         <span className="mt-0.5 flex flex-wrap items-center gap-1">
-                          <Badge>{SOURCE_LABEL[cap.source] ?? cap.source}</Badge>
+                          <Badge tone="neutral">{SOURCE_LABEL[cap.source] ?? cap.source}</Badge>
                           {cap.allowed ? null : (
                             <span className="inline-flex items-center gap-1 text-xs text-risk-ink">
                               <ShieldOff className="size-3" aria-hidden />
@@ -231,7 +233,7 @@ export function SeatsPanel({
             />
           ) : null}
         </div>
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

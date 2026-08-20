@@ -7,8 +7,9 @@ import { getSavings } from '@/lib/api/client'
 import { BarChart } from '@/components/charts/BarChart'
 import { formatUsd } from '@/components/dashboard/roi'
 import { KpiHero } from '@/components/shared/KpiHero'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardBody } from '@/components/ui/Card'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -76,18 +77,18 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
   if (load.status === 'loading') {
     return (
       <Card>
-        <CardContent className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
+        <CardBody className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> Loading savings…
-        </CardContent>
+        </CardBody>
       </Card>
     )
   }
   if (load.status === 'error') {
     return (
       <Card>
-        <CardContent className="py-10 text-sm text-block-ink">
+        <CardBody className="py-10 text-sm text-block-ink">
           Could not load savings. {load.message}
-        </CardContent>
+        </CardBody>
       </Card>
     )
   }
@@ -116,7 +117,7 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
           </InfoTip>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Badge variant="secondary">value</Badge>
+          <Badge tone="neutral">value</Badge>
           {sample && (
             <span className="eyebrow rounded-sm border border-border/70 px-1.5 py-0.5 text-[0.58rem] text-muted-foreground">
               sample
@@ -147,7 +148,7 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
 
       {/* Breakdown by source — the derivation. */}
       <Card>
-        <CardContent className="pt-5">
+        <CardBody className="pt-5">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <span className="t-title text-foreground">Where the savings come from</span>
             <InfoTip label="About the breakdown">
@@ -189,7 +190,7 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
               </li>
             ))}
           </ul>
-        </CardContent>
+        </CardBody>
       </Card>
 
       <p className="font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
@@ -323,10 +324,10 @@ export function SavingsMount(): ReactElement {
     <BackendGate>
       <TooltipProvider>
         <div className="space-y-4">
-          <div>
-            <p className="eyebrow mb-1">baseline vs actual</p>
-            <h1 className="t-hero text-foreground">Savings</h1>
-          </div>
+          <PageHeader
+            eyebrow="baseline vs actual"
+            title="Savings"
+          />
           <SavingsView token={session?.token ?? null} />
         </div>
       </TooltipProvider>

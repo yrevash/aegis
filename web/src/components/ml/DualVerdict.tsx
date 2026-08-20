@@ -3,7 +3,7 @@
 import { Bot, Inbox, ShieldQuestion } from 'lucide-react'
 import type { ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
 import type { RiskLevel, ToolCall } from '@/lib/stream'
 
@@ -47,7 +47,7 @@ export function ActionVerdict({
           <span className="min-w-0 truncate font-mono text-[0.8rem] font-medium text-foreground">
             {proposed.tool}
           </span>
-          <Badge variant={riskVariant(proposed.risk)} className="uppercase">
+          <Badge tone={riskVariant(proposed.risk)} className="uppercase">
             {proposed.risk} risk
           </Badge>
         </>
@@ -58,7 +58,7 @@ export function ActionVerdict({
         </>
       )}
       {queued && (
-        <Badge variant="risk" className="ml-auto gap-1">
+        <Badge tone="risk" className="ml-auto gap-1">
           <Inbox className="size-3" aria-hidden /> Awaiting a human
         </Badge>
       )}

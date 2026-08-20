@@ -9,9 +9,10 @@ import { AnswerPanel } from '@/components/console/AnswerPanel'
 import { formatUsd } from '@/components/dashboard/roi'
 import { CapabilityMap, ComparisonCard, CountUp, RevealOnScroll, type Capability } from '@/components/shared'
 import { AgentTracePanel } from '@/components/trace/AgentTracePanel'
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -117,7 +118,7 @@ function Lane({
           </p>
           <p className="truncate text-[0.72rem] text-muted-foreground">{subtitle}</p>
         </div>
-        <Badge variant={accent === 'agent' ? 'agent' : 'graph'} className="ml-auto">
+        <Badge tone={accent === 'agent' ? 'agent' : 'graph'} className="ml-auto">
           <ScopeIcon className="size-3" /> {scopeLabel}
         </Badge>
       </div>
@@ -244,19 +245,19 @@ export function SimulationView(): ReactElement {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader className="gap-2 space-y-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="min-w-0">
-              <span className="eyebrow text-muted-foreground">Aegis Governance</span>
-              <CardTitle className="flex items-center gap-1.5">
-                Access demo
-                <InfoTip label="How this works">
-                  Role-based access, retrieval scope and the tool allowlist make one query resolve
-                  differently by who is asking — enforced on every request.
-                </InfoTip>
-              </CardTitle>
-            </div>
-            <div className="ml-auto flex gap-2">
+        <CardHeader
+          eyebrow="Aegis Governance"
+          title={
+            <span className="flex items-center gap-1.5">
+              Access demo
+              <InfoTip label="How this works">
+                Role-based access, retrieval scope and the tool allowlist make one query resolve
+                differently by who is asking — enforced on every request.
+              </InfoTip>
+            </span>
+          }
+          actions={
+            <div className="flex flex-wrap gap-2">
               <Button onClick={runBoth} disabled={running}>
                 <Play className="size-4" /> Run demo
               </Button>
@@ -264,9 +265,9 @@ export function SimulationView(): ReactElement {
                 <RotateCcw className="size-4" /> Reset
               </Button>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          }
+        />
+        <CardBody className="space-y-3">
           <p className="t-body text-muted-foreground">
             Same question, two roles — see what each is allowed to do. The operations lead may call
             update_request_status behind the human gate; the client is scoped to their own account
@@ -276,7 +277,7 @@ export function SimulationView(): ReactElement {
             <span className="eyebrow mt-0.5 shrink-0">question</span>
             <p className="font-mono text-[0.72rem] leading-relaxed text-foreground">{SIM_QUERY}</p>
           </div>
-        </CardContent>
+        </CardBody>
       </Card>
 
       <RevealOnScroll>
@@ -289,17 +290,19 @@ export function SimulationView(): ReactElement {
 
       <RevealOnScroll delayMs={40}>
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-1.5 text-[0.95rem]">
-              Controls at work
-              <InfoTip label="Governance controls">
-                The four governance checks that decide the outcome — active as the runs progress.
-              </InfoTip>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+          <CardHeader
+            title={
+              <span className="flex items-center gap-1.5">
+                Controls at work
+                <InfoTip label="Governance controls">
+                  The four governance checks that decide the outcome — active as the runs progress.
+                </InfoTip>
+              </span>
+            }
+          />
+          <CardBody>
             <CapabilityMap items={controls} layout="grid" />
-          </CardContent>
+          </CardBody>
         </Card>
       </RevealOnScroll>
 
@@ -339,10 +342,10 @@ export function SimulationMount(): ReactElement {
     <BackendGate>
       <TooltipProvider>
         <div className="space-y-4">
-          <div>
-            <p className="eyebrow mb-1">RBAC scope</p>
-            <h1 className="t-hero text-foreground">Access demo</h1>
-          </div>
+          <PageHeader
+            eyebrow="RBAC scope"
+            title="Access demo"
+          />
           <SimulationView />
         </div>
       </TooltipProvider>

@@ -2,7 +2,7 @@
 
 import type { ReactElement, ReactNode } from 'react'
 
-import { Card } from '@/components/primitives/card'
+import { Card } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import type { Signal } from '@/config/signals'
@@ -63,7 +63,7 @@ export function KpiHero({
   className,
 }: KpiHeroProps): ReactElement {
   return (
-    <Card className={cn('h-full gap-4 p-6', className)}>
+    <Card className={cn('flex h-full flex-col gap-4 p-6', className)}>
       <div className="flex items-center gap-2">
         <span className="eyebrow">{label}</span>
         {info != null && <InfoTip label={`About ${label}`}>{info}</InfoTip>}

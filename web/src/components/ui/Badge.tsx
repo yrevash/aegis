@@ -37,7 +37,13 @@ export function Badge({
       className={cn(
         'inline-flex items-center justify-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium',
         signal.bg,
-        signal.text,
+        // `neutral` is the one tone whose signal ink is not legible on its own
+        // fill: `--muted-foreground` `#64748d` is 4.75:1 on white — which is where
+        // the rest of the signal map spends it — but only **4.37:1** on
+        // `--surface-2`, and this text is 12px. The losing `primitives/badge`
+        // spelled this same chip `bg-surface-2 text-foreground`, so foreground ink
+        // is what these badges have always looked like; it measures 15.43:1.
+        tone === 'neutral' ? 'text-foreground' : signal.text,
         className,
       )}
     >

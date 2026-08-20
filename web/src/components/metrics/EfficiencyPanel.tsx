@@ -3,8 +3,8 @@
 import { Coins, DatabaseZap, Gauge, Cpu } from 'lucide-react'
 import type { ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { Receipt } from '@/components/primitives/Receipt'
 import { Separator } from '@/components/primitives/separator'
@@ -63,14 +63,16 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Gauge className="size-4 text-ok" aria-hidden />
-        <CardTitle>Efficiency & evals</CardTitle>
-        <Badge variant="ok" className="ml-auto">
-          fleet
-        </Badge>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Gauge className="size-4 shrink-0 text-ok" aria-hidden />
+            Efficiency &amp; evals
+          </span>
+        }
+        actions={<Badge tone="ok">fleet</Badge>}
+      />
+      <CardBody className="space-y-4">
         <div className="grid grid-cols-2 gap-x-5 gap-y-4">
           <Stat
             icon={DatabaseZap}
@@ -107,9 +109,9 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
             <span className="eyebrow">This run</span>
             {usage &&
               (usage.cache_hit ? (
-                <Badge variant="ok">cache hit</Badge>
+                <Badge tone="ok">cache hit</Badge>
               ) : (
-                <Badge variant="secondary">cache miss</Badge>
+                <Badge tone="neutral">cache miss</Badge>
               ))}
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
@@ -146,7 +148,7 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
             detail="the run figures come from the run_finished event on the open stream"
           />
         </div>
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

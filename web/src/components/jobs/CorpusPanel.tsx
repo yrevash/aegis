@@ -3,8 +3,8 @@
 import { FileText, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { NotRecorded } from '@/components/jobs/JobsView'
@@ -30,11 +30,11 @@ type LoadState =
   | { status: 'ready'; rows: DocumentRow[] }
 
 /** The signal colour each document status carries. */
-function statusVariant(status: string): 'ok' | 'block' | 'agent' | 'outline' {
+function statusVariant(status: string): 'ok' | 'block' | 'agent' | 'neutral' {
   if (status === 'succeeded') return 'ok'
   if (status === 'failed') return 'block'
   if (status === 'running' || status === 'pending') return 'agent'
-  return 'outline'
+  return 'neutral'
 }
 
 /** Human-readable size, so a 4 MB PDF does not read as 4194304. */
@@ -85,7 +85,7 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
   const rows = load.status === 'ready' ? load.rows : []
 
   return (
-    <Card className="gap-0 overflow-hidden p-0">
+    <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-5">
         <div className="flex items-center gap-3">
           <FileText className="size-5 text-muted-foreground" />
@@ -163,7 +163,7 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
                     </p>
                   </td>
                   <td className="px-4 py-2.5">
-                    <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
+                    <Badge tone={statusVariant(row.status)}>{row.status}</Badge>
                   </td>
                   <td className="px-4 py-2.5 text-xs text-muted-foreground">
                     {row.completed_stage ? (

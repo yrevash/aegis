@@ -7,8 +7,8 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { beatFromSignal } from '@/components/console/motion'
 import { QueryBar } from '@/components/console/QueryBar'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { ScrollArea } from '@/components/primitives/scroll-area'
 import { TooltipProvider } from '@/components/primitives/tooltip'
@@ -31,9 +31,7 @@ const KnowledgeGraph = dynamic(
     ssr: false,
     loading: () => (
       <Card className="flex h-full flex-col overflow-hidden">
-        <CardHeader className="flex-row items-center gap-2 space-y-0">
-          <CardTitle>Knowledge graph</CardTitle>
-        </CardHeader>
+        <CardHeader title="Knowledge graph" />
         <div className="min-h-0 flex-1 animate-pulse bg-surface-2/30" />
       </Card>
     ),
@@ -167,22 +165,30 @@ function GraphView({ role }: { role: Role }): ReactElement {
 
         {/* Entity list + kind legend. */}
         <Card className="flex min-w-0 flex-col overflow-hidden xl:col-span-1">
-          <CardHeader className="flex-row items-center gap-2 space-y-0">
-            <Waypoints className="size-4 text-blue-600" aria-hidden />
-            <CardTitle>Entities in view</CardTitle>
-            <InfoTip label="About Entities in view">
-              Every typed entity node the graph is painting, with its kind and its degree — how many
-              relations touch it. Once a run traverses, the list narrows to that answer&apos;s
-              evidence subgraph.
-            </InfoTip>
-            <Badge variant="graph" className="ml-auto">
-              {view.nodes.length} {view.nodes.length === 1 ? 'entity' : 'entities'}
-            </Badge>
-          </CardHeader>
+          <CardHeader
+            title={
+              <span className="flex items-center gap-2">
+                <Waypoints className="size-4 shrink-0 text-blue-600" aria-hidden />
+                Entities in view
+              </span>
+            }
+            actions={
+              <div className="flex flex-wrap items-center gap-2">
+                <InfoTip label="About Entities in view">
+                  Every typed entity node the graph is painting, with its kind and its degree — how
+                  many relations touch it. Once a run traverses, the list narrows to that
+                  answer&apos;s evidence subgraph.
+                </InfoTip>
+                <Badge tone="graph">
+                  {view.nodes.length} {view.nodes.length === 1 ? 'entity' : 'entities'}
+                </Badge>
+              </div>
+            }
+          />
 
           {/* Entity-kind colour legend. */}
           {kinds.length > 0 && (
-            <div className="flex flex-wrap gap-x-3 gap-y-1.5 px-5 pb-3">
+            <div className="flex flex-wrap gap-x-3 gap-y-1.5 px-5 pt-3 pb-3">
               {kinds.map((kind) => (
                 <KindChip key={kind} kind={kind} />
               ))}
@@ -224,17 +230,21 @@ function GraphView({ role }: { role: Role }): ReactElement {
 
       {/* Relations — the real relation phrases between entities in view. */}
       <Card>
-        <CardHeader className="flex-row items-center gap-2 space-y-0">
-          <CardTitle>Relations</CardTitle>
-          <InfoTip label="About Relations">
-            The directed edges between entities, each carrying its real relation phrase. These are the
-            paths the retriever can traverse to reason over connected evidence.
-          </InfoTip>
-          <Badge variant="graph" className="ml-auto">
-            {view.edges.length} {view.edges.length === 1 ? 'relation' : 'relations'}
-          </Badge>
-        </CardHeader>
-        <CardContent>
+        <CardHeader
+          title="Relations"
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <InfoTip label="About Relations">
+                The directed edges between entities, each carrying its real relation phrase. These
+                are the paths the retriever can traverse to reason over connected evidence.
+              </InfoTip>
+              <Badge tone="graph">
+                {view.edges.length} {view.edges.length === 1 ? 'relation' : 'relations'}
+              </Badge>
+            </div>
+          }
+        />
+        <CardBody>
           {view.edges.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No relations yet — run a query to traverse the graph.
@@ -260,7 +270,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
               ))}
             </div>
           )}
-        </CardContent>
+        </CardBody>
       </Card>
     </div>
   )

@@ -3,9 +3,9 @@
 import { Check, ShieldAlert, X } from 'lucide-react'
 import { useId, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { Receipt } from '@/components/primitives/Receipt'
 import { signalForRisk } from '@/config/signals'
@@ -69,14 +69,20 @@ export function ApprovalCard({
         !resolved && 'border-2 border-risk',
       )}
     >
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <ShieldAlert className="size-4 shrink-0 text-risk" aria-hidden />
-        <CardTitle className="text-risk-ink">Approval required</CardTitle>
-        <Badge variant={riskSignal === 'block' ? 'block' : 'risk'} className="ml-auto uppercase">
-          {approval.risk} risk
-        </Badge>
-      </CardHeader>
-      <CardContent className="space-y-3">
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2 text-risk-ink">
+            <ShieldAlert className="size-4 shrink-0 text-risk" aria-hidden />
+            Approval required
+          </span>
+        }
+        actions={
+          <Badge tone={riskSignal === 'block' ? 'block' : 'risk'} className="uppercase">
+            {approval.risk} risk
+          </Badge>
+        }
+      />
+      <CardBody className="space-y-3">
         {view.actions.length > 0 && (
           <div>
             <p className="eyebrow mb-1.5">
@@ -129,7 +135,7 @@ export function ApprovalCard({
         </div>
 
         <GateReceipt approvalId={approval.approval_id} view={view} />
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }
@@ -223,7 +229,7 @@ export function ProposedAction({
         </p>
         {showRisk && (
           <Badge
-            variant={signal === 'block' ? 'block' : signal === 'risk' ? 'risk' : 'ok'}
+            tone={signal === 'block' ? 'block' : signal === 'risk' ? 'risk' : 'ok'}
             className="shrink-0 uppercase"
           >
             {action.risk}

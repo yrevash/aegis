@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Card, CardBody } from '@/components/ui/Card'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { ChatThreadsPanel } from '@/components/memory/ChatThreadsPanel'
 import { ErrorRow, LoadingRow } from '@/components/memory/StateRow'
@@ -69,10 +70,10 @@ function MemoryControl({ token }: { token: string | null }): ReactElement {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1">long-term memory · Postgres + Qdrant</p>
-        <h1 className="t-hero text-foreground">Memory</h1>
-      </div>
+      <PageHeader
+        eyebrow="long-term memory · Postgres + Qdrant"
+        title="Memory"
+      />
 
       <div className="grid items-start gap-6 lg:grid-cols-5">
         <Card className="lg:col-span-2">

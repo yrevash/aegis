@@ -4,7 +4,7 @@ import { ChevronRight, Users } from 'lucide-react'
 import { useState, type ReactElement } from 'react'
 
 import { SIGNALS } from '@/config/signals'
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 
@@ -92,11 +92,11 @@ function LaneCard({
           {lane.label}
         </span>
         {lane.role !== null && lane.role !== '' && (
-          <Badge variant="outline" className="hidden sm:inline-flex">
+          <Badge tone="neutral" className="hidden sm:inline-flex">
             {lane.role}
           </Badge>
         )}
-        <Badge variant={failed ? 'block' : finished ? 'secondary' : 'agent'}>{lane.status}</Badge>
+        <Badge tone={failed ? 'block' : finished ? 'neutral' : 'agent'}>{lane.status}</Badge>
         <ChevronRight
           aria-hidden
           className={cn(

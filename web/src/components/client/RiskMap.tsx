@@ -4,8 +4,9 @@ import { Loader2, ShieldAlert } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { getRiskMap } from '@/lib/api/client'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardBody } from '@/components/ui/Card'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -86,18 +87,18 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
   if (load.status === 'loading') {
     return (
       <Card>
-        <CardContent className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
+        <CardBody className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> Loading risk map…
-        </CardContent>
+        </CardBody>
       </Card>
     )
   }
   if (load.status === 'error') {
     return (
       <Card>
-        <CardContent className="py-10 text-sm text-block-ink">
+        <CardBody className="py-10 text-sm text-block-ink">
           Could not load the risk map. {load.message}
-        </CardContent>
+        </CardBody>
       </Card>
     )
   }
@@ -128,7 +129,7 @@ export function RiskMap({ token }: { token: string | null }): ReactElement {
           </InfoTip>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Badge variant="secondary">OWASP-Agentic</Badge>
+          <Badge tone="neutral">OWASP-Agentic</Badge>
           {sample && (
             <span className="eyebrow rounded-sm border border-border/70 px-1.5 py-0.5 text-[0.58rem] text-muted-foreground">
               sample
@@ -179,7 +180,7 @@ function ReductionHero({
   const pctOf = (n: number): number => (totals.inherent > 0 ? (n / totals.inherent) * 100 : 0)
 
   return (
-    <Card className="gap-0 p-6">
+    <Card className="p-6">
       <div className="flex items-center gap-2">
         <span className="size-2 rounded-full" style={{ background: SIGNALS.ok.hex }} aria-hidden />
         <span className="eyebrow">Risk removed by Aegis</span>
@@ -316,10 +317,10 @@ export function RiskMount(): ReactElement {
     <BackendGate>
       <TooltipProvider>
         <div className="space-y-4">
-          <div>
-            <p className="eyebrow mb-1">OWASP-Agentic</p>
-            <h1 className="t-hero text-foreground">Risk Map</h1>
-          </div>
+          <PageHeader
+            eyebrow="OWASP-Agentic"
+            title="Risk Map"
+          />
           <RiskMap token={session?.token ?? null} />
         </div>
       </TooltipProvider>

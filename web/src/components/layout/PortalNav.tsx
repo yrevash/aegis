@@ -35,10 +35,33 @@ interface PortalNavProps {
  * itself in one component is what stops the five portals — whose section sets
  * genuinely differ — from drifting between the two.
  *
- * The active row is marked three ways on purpose: `aria-current="page"` for a
- * screen reader, weight and ink for a sighted reader, and the blue edge marker
- * for the glance. Never the marker alone — DESIGN.md §2, colour is never the
- * only carrier.
+ * ## It sits on navy, and the contrast is measured
+ *
+ * The rail is `--rail` `#0b1f3f`, the product's single dark surface, so every
+ * value here is stated against that ground rather than against white:
+ *
+ * | Element | Colours | Ratio |
+ * |---|---|---|
+ * | Idle row label | `--rail-text` `#a8c0e0` on `--rail` | **8.80:1** |
+ * | Group heading | `--rail-text` at 70% (`#7890b0`) on `--rail` | **5.01:1** |
+ * | Hover row label | `#ffffff` on `--rail-hover` `#12305e` | **13.04:1** |
+ * | Active row label | `#ffffff` on `--rail-active` `#1570ef` | **4.57:1** |
+ * | Active left marker | `#ffffff` on `--rail-active` | **4.57:1** |
+ * | Focus ring | `#ffffff` on `--rail` / on `--rail-active` | **16.38:1 / 4.57:1** |
+ *
+ * **The focus ring is white, not `--blue-600`.** DESIGN.md §8 asks for a 2px
+ * `--blue-600` ring, and on the navy ground that would be a defensible 3.59:1 —
+ * but the active row is *filled* with that same `--blue-600`, so the ring would
+ * land at 1:1 on the one row a keyboard user is most likely to be standing on.
+ * A ring that disappears on the current page is not a focus indicator.
+ * Accessibility wins the conflict order (DESIGN.md §10), so it is white on both
+ * grounds and clears 3:1 either way.
+ *
+ * The active row is marked **four** ways on purpose: `aria-current="page"` for a
+ * screen reader, and — for a sighted reader — a solid fill, a heavier weight in
+ * white ink, and the left edge marker. Never the fill alone; the fill is also
+ * the one cue that a colour-blind reader tells apart by *lightness* rather than
+ * hue, which is why it is a saturated step rather than a tint (DESIGN.md §2).
  */
 export function PortalNav({
   portal,
@@ -52,7 +75,11 @@ export function PortalNav({
     <nav aria-label="Sections" className={cn('flex flex-col gap-6', className)}>
       {navGroupsFor(portal).map((group) => (
         <div key={group.heading}>
-          <h2 className="eyebrow mb-2 px-3">{group.heading}</h2>
+          {/* Not `.eyebrow`: that utility hard-sets `--muted-foreground`, which
+              is 3.45:1 on navy and fails AA at 11px. Same anatomy, rail ink. */}
+          <h2 className="mb-2 px-3 font-mono text-[0.68rem] font-medium uppercase tracking-[0.16em] text-rail-text/70">
+            {group.heading}
+          </h2>
           <ul className="space-y-0.5">
             {group.items.map((item) => {
               const Icon = item.icon
@@ -66,17 +93,17 @@ export function PortalNav({
                     onClick={onNavigate}
                     className={cn(
                       'group relative flex w-full touch-manipulation items-center gap-3 rounded-lg px-3 text-sm outline-none transition-colors duration-[--dur-fast]',
-                      'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+                      'focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-rail',
                       roomy ? 'min-h-11 py-2.5' : 'py-2',
                       isActive
-                        ? 'bg-blue-50 font-medium text-blue-700'
-                        : 'text-muted-foreground hover:bg-surface-2 hover:text-foreground',
+                        ? 'bg-rail-active font-semibold text-white'
+                        : 'text-rail-text hover:bg-rail-hover hover:text-white',
                     )}
                   >
                     <span
                       aria-hidden
                       className={cn(
-                        'absolute top-1/2 left-0 h-4 -translate-y-1/2 rounded-r-full bg-blue-600 transition-[width] duration-[--dur-fast] motion-reduce:transition-none',
+                        'absolute top-1/2 left-0 h-4 -translate-y-1/2 rounded-r-full bg-white transition-[width] duration-[--dur-fast] motion-reduce:transition-none',
                         isActive ? 'w-1' : 'w-0',
                       )}
                     />

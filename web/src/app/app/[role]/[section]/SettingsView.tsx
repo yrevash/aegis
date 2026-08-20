@@ -2,6 +2,7 @@
 
 import { useCallback, useState, type ReactElement } from 'react'
 
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SettingsForm } from '@/components/settings/SettingsForm'
 import { ToolRosterCard } from '@/components/settings/ToolRosterCard'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -34,10 +35,10 @@ function SettingsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1">platform → tenant → you · every value names who decided</p>
-        <h1 className="t-hero text-foreground">Settings</h1>
-      </div>
+      <PageHeader
+        eyebrow="platform → tenant → you · every value names who decided"
+        title="Settings"
+      />
 
       <SettingsForm onWritten={bump} />
       <SkillsPanel />

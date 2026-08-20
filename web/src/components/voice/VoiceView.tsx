@@ -18,6 +18,7 @@ import {
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/primitives/button'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { RailVerdict } from '@/components/voice/RailVerdict'
@@ -152,10 +153,10 @@ function VoiceView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1">Whisper · rails</p>
-        <h1 className="t-hero text-foreground">Voice</h1>
-      </div>
+      <PageHeader
+        eyebrow="Whisper · rails"
+        title="Voice"
+      />
 
       <Card>
         <CardBody className="space-y-4">

@@ -3,7 +3,7 @@
 import { Route } from 'lucide-react'
 import type { ReactElement } from 'react'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 
 /**
@@ -15,11 +15,15 @@ export function RoutingTable({ routing }: { routing: Record<string, string> }): 
   const rows = Object.entries(routing)
   return (
     <Card>
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Route className="size-4 text-blue-700" aria-hidden />
-        <CardTitle>Model routing</CardTitle>
-      </CardHeader>
-      <CardContent>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Route className="size-4 shrink-0 text-blue-700" aria-hidden />
+            Model routing
+          </span>
+        }
+      />
+      <CardBody>
         {/* A deployment id is an unbroken identifier of unbounded length, so the
             table scrolls inside its own container rather than widening the page
             (DESIGN.md §5 — the page body never scrolls horizontally). */}
@@ -51,7 +55,7 @@ export function RoutingTable({ routing }: { routing: Record<string, string> }): 
             </tbody>
           </table>
         </div>
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

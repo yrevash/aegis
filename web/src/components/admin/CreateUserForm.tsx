@@ -3,9 +3,9 @@
 import { Loader2, UserPlus } from 'lucide-react'
 import { useState, type FormEvent, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { createUser } from '@/lib/api/client'
 import type { AdminUser, Tenant } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
@@ -94,19 +94,25 @@ export function CreateUserForm({
   }
 
   return (
-    <Card className="rounded-lg">
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <UserPlus className="size-4 text-blue-700" aria-hidden />
-        <CardTitle>Create a user</CardTitle>
-        <Badge variant="outline">
-          {tier === 'platform'
-            ? 'any tenant'
-            : ownTenantId != null
-              ? `tenant #${ownTenantId}`
-              : 'your tenant'}
-        </Badge>
-      </CardHeader>
-      <CardContent>
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <UserPlus className="size-4 shrink-0 text-blue-700" aria-hidden />
+            Create a user
+          </span>
+        }
+        actions={
+          <Badge tone="neutral">
+            {tier === 'platform'
+              ? 'any tenant'
+              : ownTenantId != null
+                ? `tenant #${ownTenantId}`
+                : 'your tenant'}
+          </Badge>
+        }
+      />
+      <CardBody>
         {tier === 'none' ? (
           <NotYours label="Provisioning a user" reason="Only an admin provisions users." />
         ) : (
@@ -196,7 +202,7 @@ export function CreateUserForm({
             <Outcome outcome={outcome} />
           </form>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

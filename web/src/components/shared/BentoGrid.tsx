@@ -2,7 +2,7 @@
 
 import type { ReactElement, ReactNode } from 'react'
 
-import { Card } from '@/components/primitives/card'
+import { Card } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
 
 import { RevealOnScroll } from './RevealOnScroll'

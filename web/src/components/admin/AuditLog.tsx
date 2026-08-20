@@ -16,8 +16,8 @@ import {
   EMPTY_AUDIT_QUERY,
   type AuditQuery,
 } from '@/components/audit/query'
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
@@ -126,7 +126,7 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
 
   return (
     <div className="flex flex-col gap-4">
-      <Card className="gap-0 rounded-lg p-0">
+      <Card>
         <div className="grid grid-cols-2 gap-4 p-5 lg:grid-cols-[1fr_1fr_1fr_1.6fr] lg:divide-x lg:divide-border/70">
           <HeaderStat label="Events" icon={ListChecks} signal="neutral" value={counts.total} sub="recorded" />
           <HeaderStat
@@ -159,37 +159,40 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
         </div>
       </Card>
 
-      <Card className="rounded-lg">
-        <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-          <ScrollText className="size-4 shrink-0 text-blue-700" aria-hidden />
-          <CardTitle>Audit trail</CardTitle>
-          <div className="ml-1 flex items-center gap-1">
-            <Badge variant="secondary">append-only</Badge>
-            <InfoTip label="What append-only means">
-              Rows are only ever added, never edited or deleted — a tamper-evident record. This is a
-              real, load-bearing property of the trail.
-            </InfoTip>
-          </div>
+      <Card>
+        <CardHeader
+          title={
+            <span className="flex items-center gap-2">
+              <ScrollText className="size-4 shrink-0 text-blue-700" aria-hidden />
+              Audit trail
+            </span>
+          }
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="neutral">append-only</Badge>
+              <InfoTip label="What append-only means">
+                Rows are only ever added, never edited or deleted — a tamper-evident record. This is
+                a real, load-bearing property of the trail.
+              </InfoTip>
+              <button
+                type="button"
+                onClick={exportCsv}
+                title="Download the whole filtered trail as CSV"
+                className="inline-flex h-8 touch-manipulation items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <Download aria-hidden className="size-3.5" /> CSV
+              </button>
+              <InfoTip label="What the CSV contains">
+                The whole filtered trail, not the page on screen — streamed from the server with
+                no row limit, scoped to what you may read, and opening with a preamble naming the
+                scope, window and filters it was built from. The download is itself recorded as a
+                report.export row.
+              </InfoTip>
+            </div>
+          }
+        />
 
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
-              onClick={exportCsv}
-              title="Download the whole filtered trail as CSV"
-              className="inline-flex h-8 touch-manipulation items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              <Download aria-hidden className="size-3.5" /> CSV
-            </button>
-            <InfoTip label="What the CSV contains">
-              The whole filtered trail, not the page on screen — streamed from the server with
-              no row limit, scoped to what you may read, and opening with a preamble naming the
-              scope, window and filters it was built from. The download is itself recorded as a
-              report.export row.
-            </InfoTip>
-          </div>
-        </CardHeader>
-
-        <CardContent className="flex flex-col gap-4">
+        <CardBody className="flex flex-col gap-4">
           {exportError !== null && (
             <p role="alert" className="flex items-start gap-2 text-sm text-block-ink">
               <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0" />
@@ -284,7 +287,7 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
                 : 'filtered server-side, so the figures above describe the same set as the table'
             }
           />
-        </CardContent>
+        </CardBody>
       </Card>
     </div>
   )

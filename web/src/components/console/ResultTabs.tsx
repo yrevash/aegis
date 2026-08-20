@@ -2,8 +2,8 @@
 
 import { useState, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardBody } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
 import type { GraphResponse, MetricsResponse } from '@/lib/api/types'
 import type { RunState } from '@/state/runReducer'
@@ -35,7 +35,7 @@ function AnswerTab({ state, onSeeSources }: { state: RunState; onSeeSources: () 
 
       {cited.length > 0 && (
         <Card>
-          <CardContent className="flex flex-wrap items-center gap-2 pt-4">
+          <CardBody className="flex flex-wrap items-center gap-2 pt-4">
             <span className="eyebrow mr-1">Stands on</span>
             {cited.map((source) => (
               <span
@@ -46,10 +46,10 @@ function AnswerTab({ state, onSeeSources }: { state: RunState; onSeeSources: () 
                   {source.label}
                 </span>
                 {source.page !== null && (
-                  <Badge variant="secondary">page {source.page}</Badge>
+                  <Badge tone="neutral">page {source.page}</Badge>
                 )}
-                {source.verbatim === 'verified' && <Badge variant="ok">verbatim</Badge>}
-                {source.verbatim === 'unverified' && <Badge variant="block">unverified</Badge>}
+                {source.verbatim === 'verified' && <Badge tone="ok">verbatim</Badge>}
+                {source.verbatim === 'unverified' && <Badge tone="block">unverified</Badge>}
               </span>
             ))}
             <button
@@ -59,7 +59,7 @@ function AnswerTab({ state, onSeeSources }: { state: RunState; onSeeSources: () 
             >
               See all sources
             </button>
-          </CardContent>
+          </CardBody>
         </Card>
       )}
     </div>

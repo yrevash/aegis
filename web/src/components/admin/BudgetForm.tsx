@@ -3,9 +3,9 @@
 import { Loader2, Wallet } from 'lucide-react'
 import { useState, type FormEvent, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { createBudget } from '@/lib/api/client'
 import type { AdminUser, Budget, BudgetScope, Tenant } from '@/lib/api/types'
 
@@ -112,13 +112,19 @@ export function BudgetForm({
   }
 
   return (
-    <Card className="rounded-lg">
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <Wallet className="size-4 text-blue-800" aria-hidden />
-        <CardTitle>Set a budget</CardTitle>
-        <Badge variant="outline">{tier === 'platform' ? 'tenants and users' : 'your users'}</Badge>
-      </CardHeader>
-      <CardContent>
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Wallet className="size-4 shrink-0 text-blue-800" aria-hidden />
+            Set a budget
+          </span>
+        }
+        actions={
+          <Badge tone="neutral">{tier === 'platform' ? 'tenants and users' : 'your users'}</Badge>
+        }
+      />
+      <CardBody>
         {tier === 'none' ? (
           <NotYours label="Setting a cap" reason="Only an admin sets budgets." />
         ) : (
@@ -242,7 +248,7 @@ export function BudgetForm({
             <Outcome outcome={outcome} />
           </form>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

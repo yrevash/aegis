@@ -3,8 +3,8 @@
 import { MessageSquareText, ShieldAlert, ShieldCheck } from 'lucide-react'
 import type { ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 
@@ -40,21 +40,27 @@ export function AnswerPanel({ state }: { state: RunState }): ReactElement {
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <MessageSquareText aria-hidden className="size-4 text-blue-700" />
-        <CardTitle>Answer</CardTitle>
-        {outputGuard && (
-          <Badge variant={passed ? 'ok' : 'block'} className="ml-auto gap-1">
-            {passed ? (
-              <ShieldCheck aria-hidden className="size-3" />
-            ) : (
-              <ShieldAlert aria-hidden className="size-3" />
-            )}
-            {passed ? 'output checked' : 'output blocked'}
-          </Badge>
-        )}
-      </CardHeader>
-      <CardContent>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <MessageSquareText aria-hidden className="size-4 shrink-0 text-blue-700" />
+            Answer
+          </span>
+        }
+        actions={
+          outputGuard ? (
+            <Badge tone={passed ? 'ok' : 'block'} className="gap-1">
+              {passed ? (
+                <ShieldCheck aria-hidden className="size-3" />
+              ) : (
+                <ShieldAlert aria-hidden className="size-3" />
+              )}
+              {passed ? 'output checked' : 'output blocked'}
+            </Badge>
+          ) : null
+        }
+      />
+      <CardBody>
         <div className="min-h-10">
           {state.answer.length === 0 ? (
             <div className="flex flex-col gap-1">
@@ -88,7 +94,7 @@ export function AnswerPanel({ state }: { state: RunState }): ReactElement {
             </p>
           )}
         </div>
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

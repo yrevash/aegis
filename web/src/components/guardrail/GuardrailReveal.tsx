@@ -3,8 +3,8 @@
 import { Ban, ChevronDown, Eraser, ShieldCheck, type LucideIcon } from 'lucide-react'
 import { useMemo, useState, type ReactElement } from 'react'
 
-import { Badge } from '@/components/primitives/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Badge } from '@/components/ui/Badge'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { cn } from '@/lib/utils'
 import type { Guardrail, GuardVerdict } from '@/lib/stream'
@@ -66,33 +66,49 @@ export function GuardrailReveal({ guardrails }: GuardrailRevealProps): ReactElem
   const [open, setOpen] = useState(fired > 0)
 
   return (
-    <Card className="rounded-lg">
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <ShieldCheck className={cn('size-4', fired > 0 ? 'text-block-ink' : 'text-ok-ink')} />
-        <CardTitle>Guardrails</CardTitle>
-        <InfoTip label="About Guardrails">
-          Input and output rails — prompt-injection, PII, and schema checks — run
-          on every request. A fired rail redacted or blocked something.
-        </InfoTip>
-        <Badge variant={fired > 0 ? 'block' : 'ok'} className="ml-auto">
-          {checks === 0 ? 'idle' : fired > 0 ? `${fired} fired` : `${checks} checks ✓`}
-        </Badge>
-        {checks > 0 && (
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            className="inline-grid size-5 place-items-center rounded-md text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
-          </button>
-        )}
-      </CardHeader>
+    <Card>
+      <CardHeader
+        className={open ? undefined : 'pb-5 md:pb-6'}
+        title={
+          <span className="flex items-center gap-2">
+            <ShieldCheck
+              className={cn('size-4 shrink-0', fired > 0 ? 'text-block-ink' : 'text-ok-ink')}
+              aria-hidden
+            />
+            Guardrails
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <InfoTip label="About Guardrails">
+              Input and output rails — prompt-injection, PII, and schema checks — run on every
+              request. A fired rail redacted or blocked something.
+            </InfoTip>
+            <Badge tone={fired > 0 ? 'block' : 'ok'}>
+              {checks === 0 ? 'idle' : fired > 0 ? `${fired} fired` : `${checks} checks ✓`}
+            </Badge>
+            {checks > 0 && (
+              <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+                aria-label={open ? 'Hide the rail verdicts' : 'Show the rail verdicts'}
+                className="inline-grid size-5 place-items-center rounded-md text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronDown
+                  aria-hidden
+                  className={cn('size-3.5 transition-transform', open && 'rotate-180')}
+                />
+              </button>
+            )}
+          </div>
+        }
+      />
       {open && (
-        <CardContent className="space-y-2">
+        <CardBody className="space-y-2">
           {checks === 0 ? (
             <div className="flex min-h-20 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
-              <ShieldCheck className="size-6 text-muted-foreground/50" />
+              <ShieldCheck className="size-6 text-muted-foreground/50" aria-hidden />
               <p>Input and output rails report their verdicts here.</p>
             </div>
           ) : (
@@ -102,7 +118,7 @@ export function GuardrailReveal({ guardrails }: GuardrailRevealProps): ReactElem
               ))}
             </ol>
           )}
-        </CardContent>
+        </CardBody>
       )}
     </Card>
   )
@@ -130,7 +146,7 @@ function GuardrailRow({ entry }: { entry: GuardrailEntry }): ReactElement {
           {entry.stage}
           {entry.layer ? ` · ${LAYER_LABEL[entry.layer] ?? entry.layer}` : ''}
         </span>
-        <Badge variant={meta.variant} className="ml-auto uppercase">
+        <Badge tone={meta.variant} className="ml-auto uppercase">
           {meta.label}
         </Badge>
       </div>
@@ -143,7 +159,7 @@ function GuardrailRow({ entry }: { entry: GuardrailEntry }): ReactElement {
           <MaskedLine label="after" text={entry.after!} tone="ok" />
           <div className="flex flex-wrap gap-1 pt-0.5">
             {entry.redactions.map((r, i) => (
-              <Badge key={`${r.kind}-${i}`} variant="secondary" className="uppercase">
+              <Badge key={`${r.kind}-${i}`} tone="neutral" className="uppercase">
                 {r.kind}
               </Badge>
             ))}

@@ -31,6 +31,13 @@ const FOCUSABLE =
  * focus lands on the close button when it opens and returns to the trigger when
  * it shuts, the page behind it cannot scroll, and the backdrop is a click target
  * rather than decoration.
+ *
+ * **The panel is navy, like the rail it stands in for.** It is the same surface
+ * at a different width, not a second design — a drawer that opened white while
+ * the `lg` rail was `--rail` would be the two-component-systems problem again,
+ * one breakpoint down. The trigger stays on the light topbar, because that is
+ * where it lives; everything inside the panel is on `--rail` and carries the
+ * ratios stated in {@link PortalNav}.
  */
 export function MobileNav({ portal }: { portal: Portal }): ReactElement {
   const pathname = usePathname()
@@ -139,17 +146,17 @@ export function MobileNav({ portal }: { portal: Portal }): ReactElement {
             aria-modal="true"
             aria-label={`${portalLabelFor(portal)} navigation`}
             className={cn(
-              'absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] flex-col border-r border-border bg-surface transition-transform duration-[--dur-base] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+              'absolute inset-y-0 left-0 flex w-[min(20rem,88vw)] flex-col border-r border-rail-border bg-rail transition-transform duration-[--dur-base] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
               shown ? 'translate-x-0' : '-translate-x-full',
             )}
           >
-            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-              <AegisLockup size="sm" />
+            <div className="flex items-center justify-between gap-3 border-b border-rail-border px-4 py-3">
+              <AegisLockup size="sm" className="text-white" />
               <button
                 ref={closeRef}
                 type="button"
                 onClick={close}
-                className="inline-flex size-11 shrink-0 touch-manipulation items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors duration-[--dur-fast] hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                className="inline-flex size-11 shrink-0 touch-manipulation items-center justify-center rounded-lg text-rail-text outline-none transition-colors duration-[--dur-fast] hover:bg-rail-hover hover:text-white focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-rail"
               >
                 <X className="size-5" aria-hidden />
                 <span className="sr-only">Close the navigation</span>
@@ -168,7 +175,9 @@ export function MobileNav({ portal }: { portal: Portal }): ReactElement {
               />
             </div>
 
-            <p className="eyebrow border-t border-border px-4 py-3">{portalLabelFor(portal)}</p>
+            <p className="border-t border-rail-border px-4 py-3 font-mono text-[0.68rem] font-medium uppercase tracking-[0.16em] text-rail-text/70">
+              {portalLabelFor(portal)}
+            </p>
           </div>
         </div>
       ) : null}

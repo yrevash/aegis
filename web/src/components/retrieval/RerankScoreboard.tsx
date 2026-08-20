@@ -3,7 +3,7 @@
 import { ListFilter } from 'lucide-react'
 import { useMemo, type ReactElement } from 'react'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import type { Provenance, ScoredSource } from '@/lib/stream'
 
@@ -47,16 +47,24 @@ export function RerankScoreboard({
 
   return (
     <Card>
-      <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <ListFilter className="size-4 text-blue-600" aria-hidden />
-        <CardTitle>Sources</CardTitle>
-        <InfoTip label="About Sources">
-          Hybrid search then rerank — vector, graph, and keyword candidates fused
-          and re-scored. Bars show relevance relative to the top match.
-        </InfoTip>
-        <ProvenanceChip provenance={provenance} className="ml-auto" />
-      </CardHeader>
-      <CardContent className="space-y-3">
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <ListFilter className="size-4 shrink-0 text-blue-600" aria-hidden />
+            Sources
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <InfoTip label="About Sources">
+              Hybrid search then rerank — vector, graph, and keyword candidates fused and re-scored.
+              Bars show relevance relative to the top match.
+            </InfoTip>
+            <ProvenanceChip provenance={provenance} />
+          </div>
+        }
+      />
+      <CardBody className="space-y-3">
         {kept === 0 ? (
           <div className="flex min-h-20 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
             <ListFilter className="size-6 text-muted-foreground/50" aria-hidden />
@@ -100,7 +108,7 @@ export function RerankScoreboard({
             )}
           </>
         )}
-      </CardContent>
+      </CardBody>
     </Card>
   )
 }

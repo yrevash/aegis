@@ -15,6 +15,7 @@ import { useState, type ReactElement } from 'react'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { StatCard } from '@/components/ui/StatCard'
 import { ControlLadder } from '@/components/vision/ControlLadder'
 import { ImageDropzone, type PickedImage } from '@/components/vision/ImageDropzone'
@@ -96,41 +97,40 @@ function VisionView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="eyebrow mb-1">screen · then model</p>
-          <h1 className="t-hero text-foreground">Vision</h1>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {image != null ? (
+      <PageHeader
+        eyebrow="screen · then model"
+        title="Vision"
+        actions={
+          <>
+            {image != null ? (
+              <button
+                type="button"
+                onClick={clear}
+                disabled={running}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm font-medium text-muted-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+              >
+                <Trash2 className="size-4" /> Clear
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={clear}
-              disabled={running}
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm font-medium text-muted-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+              onClick={run}
+              disabled={running || image == null}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Trash2 className="size-4" /> Clear
+              {running ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" /> Screening…
+                </>
+              ) : (
+                <>
+                  <ScanEye className="size-4" /> Screen &amp; analyse
+                </>
+              )}
             </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={run}
-            disabled={running || image == null}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {running ? (
-              <>
-                <Loader2 className="size-4 animate-spin" /> Screening…
-              </>
-            ) : (
-              <>
-                <ScanEye className="size-4" /> Screen &amp; analyse
-              </>
-            )}
-          </button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Headline figures — only once there is something measured to show. */}
       {analysis != null ? (

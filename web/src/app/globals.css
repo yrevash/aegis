@@ -169,6 +169,15 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  /* The rail — the one dark surface, exposed as utilities so the navigation
+     never hand-rolls a navy. `bg-rail`, `bg-rail-hover`, `bg-rail-active`,
+     `text-rail-text`, `border-rail-border`. */
+  --color-rail: var(--rail);
+  --color-rail-hover: var(--rail-hover);
+  --color-rail-active: var(--rail-active);
+  --color-rail-text: var(--rail-text);
+  --color-rail-border: var(--rail-border);
+
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -227,6 +236,15 @@
     color: var(--foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* A card body that follows a card header does not pay for the gap twice.
+     This lives in `base` on purpose: `utilities` is a later cascade layer, so a
+     call site that genuinely wants space back writes `pt-4` on the body and wins
+     — which the `pt-0` idiom this replaces could not do, because an unprefixed
+     `pt-0` is emitted before `md:py-6` and lost from 768px up. */
+  [data-slot='card-header'] + [data-slot='card-body'] {
+    padding-top: 0;
   }
 
   ::-webkit-scrollbar {
