@@ -9,6 +9,7 @@ import { InfoTip } from '@/components/primitives/InfoTip'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 
+import { AnswerBody } from './AnswerBody'
 import { answerAbsence } from './answerAbsence'
 import { useRevealedText } from './useRevealedText'
 
@@ -41,9 +42,13 @@ import { useRevealedText } from './useRevealedText'
  * that occupies width from the start rather than an element that appears and pushes the
  * final word onto the next line.
  *
- * The answer is `whitespace-pre-wrap`. A model that returns a list returned newlines,
- * and collapsing them turned every list this console has ever streamed into one
- * paragraph.
+ * ## Why the body is parsed rather than pre-wrapped
+ *
+ * `whitespace-pre-wrap` kept a model's newlines, which was the right fix while an answer
+ * was a paragraph. It is the wrong one now that an answer is a briefing: `**bold**`,
+ * `## headings` and numbered steps rendered as literal punctuation running down the
+ * page. {@link AnswerBody} renders the structure instead — as React elements, never as
+ * HTML.
  */
 export function AnswerPanel({ state }: { state: RunState }): ReactElement {
   const outputGuard = state.guardrails.find((g) => g.stage === 'output')
@@ -101,23 +106,23 @@ export function AnswerPanel({ state }: { state: RunState }): ReactElement {
               )}
             </div>
           ) : (
-            <p
-              aria-live="polite"
-              aria-busy={streaming}
-              className="text-sm leading-relaxed break-words whitespace-pre-wrap text-foreground"
-            >
-              {revealed.text}
-              {/* Always in the flow, never mounted mid-sentence: the caret reserves its
-                  own 2px from the first chunk, so the last word does not re-wrap when
-                  the run settles and the caret goes. */}
-              <span
-                aria-hidden
-                className={cn(
-                  'ml-0.5 inline-block h-4 w-0.5 translate-y-0.5',
-                  streaming ? 'animate-pulse bg-blue-700' : 'bg-transparent',
-                )}
+            <div aria-live="polite" aria-busy={streaming}>
+              <AnswerBody
+                text={revealed.text}
+                caret={
+                  /* Always in the flow, never mounted mid-sentence: the caret reserves
+                     its own 2px from the first chunk, so the last word does not re-wrap
+                     when the run settles and the caret goes. */
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'ml-0.5 inline-block h-4 w-0.5 translate-y-0.5',
+                      streaming ? 'animate-pulse bg-blue-700' : 'bg-transparent',
+                    )}
+                  />
+                }
               />
-            </p>
+            </div>
           )}
         </div>
       </CardBody>

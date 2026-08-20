@@ -124,6 +124,16 @@ const LANE_BRIEF: NodeBrief = { what: 'A sub-agent working its own brief', signa
 /** The neutral brief a node the frontend has not heard of still renders under. */
 const UNKNOWN_BRIEF: NodeBrief = { what: '', signal: 'neutral' }
 
+/**
+ * The nodes the bounded self-repair loop runs, once per round.
+ *
+ * A run that judged its own first attempt insufficient shows `plan → gate → act →
+ * reflect` twice, and the console rendered it as eight rows of duplicated noise. It is
+ * the opposite of noise — it is the agent catching itself — so the rows are grouped
+ * into the rounds the wire already numbers.
+ */
+const LOOP_NODES: ReadonlySet<string> = new Set(['plan', 'gate', 'approval', 'act', 'reflect'])
+
 /** One stage of a run: a `node_started`, and its `node_finished` once it lands. */
 export interface Stage {
   /** Stable key — the node name plus the sequence number that opened it. */
@@ -139,6 +149,16 @@ export interface Stage {
   signal: Signal
   /** The fan-out lane this stage belongs to, or `null` for a graph-level stage. */
   agentId: string | null
+  /**
+   * The self-repair round this stage ran in, or `null` for a stage outside the loop.
+   *
+   * The number is the wire's: `Reflection.iteration` names the round that just closed,
+   * so the round a stage belongs to is read rather than counted by watching node names
+   * repeat.
+   */
+  round: number | null
+  /** The loop's own budget (`Reflection.max_iterations`), once a round has closed. */
+  maxRounds: number | null
   /** True while the stage has no `node_finished`. */
   running: boolean
   /** The wire's own `duration_ms`, or `null` while the stage is still in flight. */
@@ -178,6 +198,10 @@ export interface RunTiming {
   tokens: number
   /** True once at least one stage has finished and reported a duration. */
   measured: boolean
+  /** How many self-repair rounds the loop entered. `0` when it never ran. */
+  rounds: number
+  /** The loop's configured budget, once a `reflection` has reported one. */
+  roundBudget: number | null
 }
 
 /** The empty timing, for a turn that has not started. */
@@ -189,6 +213,8 @@ const EMPTY: RunTiming = {
   costUsd: 0,
   tokens: 0,
   measured: false,
+  rounds: 0,
+  roundBudget: null,
 }
 
 /** Whether a stage is one of the two guardrail nodes. */
@@ -215,6 +241,9 @@ export function deriveTiming(state: RunState): RunTiming {
   const stages: Stage[] = []
   /** Indices into `stages` of the stages still open, oldest first. */
   const open: number[] = []
+  /** The self-repair round the loop is currently in. Advanced by `reflection`. */
+  let round = 1
+  let maxRounds: number | null = null
 
   for (const event of state.events) {
     if (event.type === 'node_started') {
@@ -229,6 +258,8 @@ export function deriveTiming(state: RunState): RunTiming {
         chain: brief.chain ?? [],
         signal: brief.signal,
         agentId: agentIdOfNode(event.node) ?? agentIdOf(event),
+        round: LOOP_NODES.has(event.node) ? round : null,
+        maxRounds,
         running: true,
         durationMs: null,
         costUsd: null,
@@ -254,6 +285,22 @@ export function deriveTiming(state: RunState): RunTiming {
       stage.costUsd = event.cost_usd
       stage.tokens = event.prompt_tokens + event.completion_tokens
       stage.model = event.model
+      continue
+    }
+
+    if (event.type === 'reflection') {
+      // The round that just closed, and why it did or did not go round again — the one
+      // moment the agent is visibly correcting itself, and it used to render as a
+      // duplicate row.
+      maxRounds = event.max_iterations
+      for (let i = stages.length - 1; i >= 0; i -= 1) {
+        if (stages[i].node !== 'reflect') continue
+        stages[i].verdict = event.reason
+        stages[i].round = event.iteration
+        stages[i].maxRounds = event.max_iterations
+        break
+      }
+      if (event.will_retry) round = event.iteration + 1
       continue
     }
 
@@ -287,6 +334,7 @@ export function deriveTiming(state: RunState): RunTiming {
   }
 
   const openStages = open.map((index) => stages[index])
+  const rounds = stages.reduce((most, stage) => Math.max(most, stage.round ?? 0), 0)
   return {
     stages,
     current: openStages.at(-1) ?? null,
@@ -295,6 +343,8 @@ export function deriveTiming(state: RunState): RunTiming {
     costUsd,
     tokens,
     measured,
+    rounds,
+    roundBudget: maxRounds,
   }
 }
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { Clock, ShieldCheck, Sparkles } from 'lucide-react'
+import { Clock, RotateCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
@@ -63,6 +63,10 @@ interface StageRowProps {
   liveMs: number | null
   /** The longest stage in the run, for scaling the bar. */
   scaleMs: number
+  /** The self-repair round this row opens, or `null` when it continues one. */
+  openRound: number | null
+  /** The loop's configured budget, when a `reflection` has reported one. */
+  roundBudget: number | null
 }
 
 /**
@@ -72,7 +76,13 @@ interface StageRowProps {
  * never the status palette, which would paint a passing guardrail red for the crime of
  * being a guardrail. Identity is carried by the label, the shield and the dot.
  */
-function StageRow({ stage, liveMs, scaleMs }: StageRowProps): ReactElement {
+function StageRow({
+  stage,
+  liveMs,
+  scaleMs,
+  openRound,
+  roundBudget,
+}: StageRowProps): ReactElement {
   const token = SIGNALS[stage.signal]
   const shownMs = stage.durationMs ?? liveMs
   const width = shownMs === null || scaleMs <= 0 ? 0 : Math.min(100, (shownMs / scaleMs) * 100)
@@ -87,33 +97,75 @@ function StageRow({ stage, liveMs, scaleMs }: StageRowProps): ReactElement {
   return (
     <li
       className={cn(
-        'flex min-w-0 flex-col gap-1 rounded-md px-2 py-1.5',
+        'flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1',
         lane && 'ml-3 border-l-2 border-blue-100 pl-3',
         stage.running && 'bg-blue-50',
         stage.blocked && 'bg-block/10',
       )}
     >
-      <div className="flex min-w-0 items-baseline gap-2">
+      {openRound !== null && (
+        <p
+          className={cn(
+            'flex items-baseline gap-2',
+            openRound > 1 && 'mt-1 border-t border-border pt-2',
+          )}
+        >
+          <RotateCw aria-hidden className="size-3 shrink-0 translate-y-0.5 text-blue-700" />
+          <span className="eyebrow">
+            Round {openRound}
+            {roundBudget !== null && ` of ${roundBudget}`}
+          </span>
+          {openRound > 1 && (
+            <span className="text-[0.72rem] text-muted-foreground">
+              it judged the previous round insufficient and went again
+            </span>
+          )}
+        </p>
+      )}
+
+      {/* One line per stage: what it is, a bar for how long it took, and the figure.
+          Fourteen stages is a normal run — the two-line row this used to be turned a
+          settled turn into eight hundred pixels of timeline above its own answer. */}
+      <div className="flex min-w-0 items-center gap-2">
         <span
           aria-hidden
-          className={cn('size-1.5 shrink-0 translate-y-[-1px] rounded-full', stage.running && 'animate-pip')}
+          className={cn('size-1.5 shrink-0 rounded-full', stage.running && 'animate-pip')}
           style={{ backgroundColor: token.hex, ['--pip-color' as string]: token.hex }}
         />
-        {guard && <ShieldCheck aria-hidden className="size-3.5 shrink-0 translate-y-0.5 text-block-ink" />}
+        {guard && <ShieldCheck aria-hidden className="size-3.5 shrink-0 text-block-ink" />}
         <span
           className={cn(
-            'min-w-0 flex-1 truncate text-[0.82rem]',
+            'min-w-0 shrink truncate text-[0.82rem] sm:w-[11rem] sm:shrink-0',
             stage.running ? 'font-medium text-foreground' : 'text-muted-foreground',
           )}
           title={stage.node}
         >
           {stage.label}
         </span>
-        {stage.model !== null && (
-          <span className="hidden shrink-0 truncate font-mono text-[0.66rem] text-muted-foreground/80 sm:inline">
-            {stage.model}
-          </span>
-        )}
+
+        <div className="hidden h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2 sm:block">
+          <div
+            className={cn(
+              'relative h-full rounded-full transition-[width] duration-[var(--dur-fast)] ease-linear',
+              stage.running ? 'bg-blue-600' : 'bg-blue-400',
+            )}
+            style={{ width: `${width}%` }}
+          >
+            {stage.running && (
+              <span
+                aria-hidden
+                className="animate-trust-shimmer absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/50 to-transparent"
+              />
+            )}
+          </div>
+        </div>
+
+        {/* A fixed slot, empty on a non-LLM node, so every bar track ends at the same
+            x and the column of durations reads as a column. A model name that reserved
+            width only on the rows that had one left the chart ragged. */}
+        <span className="hidden w-[8.5rem] shrink-0 truncate text-right font-mono text-[0.66rem] text-muted-foreground/80 lg:inline-block">
+          {stage.model ?? ''}
+        </span>
         <Figure
           className={cn('shrink-0', stage.running ? 'text-blue-700' : 'text-muted-foreground')}
           label={stage.durationMs === null ? 'elapsed so far' : undefined}
@@ -122,27 +174,18 @@ function StageRow({ stage, liveMs, scaleMs }: StageRowProps): ReactElement {
         </Figure>
       </div>
 
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+      {/* Below `sm` the label needs the whole line, so the bar takes its own. */}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2 sm:hidden">
         <div
-          className={cn(
-            'relative h-full rounded-full transition-[width] duration-[var(--dur-fast)] ease-linear',
-            stage.running ? 'bg-blue-600' : 'bg-blue-400',
-          )}
+          className={cn('h-full rounded-full', stage.running ? 'bg-blue-600' : 'bg-blue-400')}
           style={{ width: `${width}%` }}
-        >
-          {stage.running && (
-            <span
-              aria-hidden
-              className="animate-trust-shimmer absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/50 to-transparent"
-            />
-          )}
-        </div>
+        />
       </div>
 
       {detail !== '' && (
         <p
           className={cn(
-            'text-[0.72rem] leading-snug',
+            'pl-3.5 text-[0.72rem] leading-snug',
             stage.blocked ? 'text-block-ink' : 'text-muted-foreground',
           )}
         >
@@ -155,7 +198,7 @@ function StageRow({ stage, liveMs, scaleMs }: StageRowProps): ReactElement {
           who can see what is being screened reads a governed product rather than a
           slow one. */}
       {guard && stage.running && stage.chain.length > 0 && (
-        <p className="flex flex-wrap items-center gap-1">
+        <p className="flex flex-wrap items-center gap-1 pl-3.5">
           {stage.chain.map((layer) => (
             <span
               key={layer}
@@ -290,12 +333,22 @@ export function RunStages({ state }: { state: RunState }): ReactElement | null {
         </p>
       ) : (
         <ol className="flex flex-col gap-0.5">
-          {timing.stages.map((stage) => (
+          {timing.stages.map((stage, index) => (
             <StageRow
               key={stage.key}
               stage={stage}
               liveMs={stage.key === currentKey ? liveMs : null}
               scaleMs={scaleMs}
+              // A round header where the round changes. The self-repair loop runs
+              // `plan → gate → act → reflect` once per round, and eight identical-looking
+              // rows read as duplicated noise rather than as an agent that judged its own
+              // first attempt insufficient and went again.
+              openRound={
+                stage.round !== null && stage.round !== (index === 0 ? null : timing.stages[index - 1].round)
+                  ? stage.round
+                  : null
+              }
+              roundBudget={timing.roundBudget}
             />
           ))}
         </ol>

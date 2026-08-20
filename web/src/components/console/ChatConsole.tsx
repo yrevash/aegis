@@ -165,7 +165,8 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
       initial={reduced ? false : { opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduced ? 0 : 0.24, ease: [0.16, 1, 0.3, 1] }}
-      className="@container/turn flex flex-col gap-4 border-b border-border pb-8 last:border-b-0"
+      data-turn=""
+      className="@container/turn flex scroll-mt-4 flex-col gap-4 border-b border-border pb-8 last:border-b-0"
     >
       <Question text={turn.question} meta={running ? `Sent ${sent} · running` : `Sent ${sent}`} />
 
@@ -313,16 +314,22 @@ function IdleConsole({
  * reasons to write a skill are different moments: one is "that run went well, keep it",
  * and the other is "our refund window is 30 days and the agent should know". The second
  * one has no run behind it and used to require leaving for the settings screen.
+ *
+ * It says **Add a skill** rather than "Skills". The owner's verdict on the shipped
+ * console was that there was *no way to add a skill in the UI* — while this button, and
+ * the editor behind it, had been here the whole time. A noun labels a place; somebody
+ * looking for an action scans past it. The drawer still lists what is in force the
+ * moment it opens, so nothing is lost by naming the thing people are hunting for.
  */
 function SkillsButton({ onOpen }: { onOpen: () => void }): ReactElement {
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/70 px-3 py-1 text-[0.78rem] font-medium text-blue-700 outline-none transition-colors duration-[var(--dur-fast)] hover:border-blue-200 hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
+      className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-[0.78rem] font-medium text-blue-700 outline-none transition-colors duration-[var(--dur-fast)] hover:bg-blue-100 focus-visible:ring-2 focus-visible:ring-ring"
     >
       <BookOpen aria-hidden className="size-3.5" />
-      Skills
+      Add a skill
     </button>
   )
 }
@@ -406,6 +413,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   // timer, because a settled run is the only thing that can have moved the figure.
   const [budgetKey, setBudgetKey] = useState(0)
   const threadEndRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement>(null)
 
   const wasRunning = useRef(false)
   useEffect(() => {
@@ -445,8 +453,24 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   // Clearance is `scroll-mb-48` on the end marker rather than padding on the thread:
   // `scrollIntoView` honours scroll-margin, so the newest content lands *above* the
   // composer instead of behind it, and nothing has to guess the composer's height.
+  //
+  // While the run is live the target is the *top* of the newest turn, not the bottom of
+  // the thread. A live turn is a tall block — the stage spine, the lanes, the activity
+  // rail — and scrolling to its end parked the viewport on an empty answer card with
+  // everything that was actually happening above the fold. The complaint that a
+  // seventy-second run "shows nothing" was partly this: it was showing plenty, off
+  // screen. Once the run settles the end is the right target again, because by then the
+  // answer and its tabs are the thing to be looking at.
   useEffect(() => {
     if (view !== 'run') return
+    if (chat.running) {
+      const turns = threadRef.current?.querySelectorAll('[data-turn]')
+      const newest = turns?.[turns.length - 1]
+      if (newest !== undefined) {
+        newest.scrollIntoView({ block: 'start' })
+        return
+      }
+    }
     threadEndRef.current?.scrollIntoView({ block: 'end' })
   }, [turnCount, chat.running, view])
 
@@ -571,6 +595,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
             </div>
 
             <div
+              ref={threadRef}
               role="tabpanel"
               id="console-panel-run"
               aria-labelledby="console-tab-run"

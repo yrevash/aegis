@@ -18,7 +18,10 @@ import {
   type AgentLane,
   type LaneTool,
 } from './agentLanes'
-import { reasoningByLane } from './laneStream'
+import { reasoningChunksByLane, reasoningSteps } from './laneStream'
+
+/** A lane that has not reasoned yet. One frozen instance, so no render allocates one. */
+const EMPTY_THINKING: readonly string[] = []
 
 /** Compact preview of a tool call's arguments — the first value, elided. */
 function argPreview(args: Record<string, unknown>): string {
@@ -28,25 +31,56 @@ function argPreview(args: Record<string, unknown>): string {
   return text.length > 30 ? `${text.slice(0, 29)}…` : text
 }
 
-/** One tool call as a discrete chip: what was called, and what came back. */
+/**
+ * One tool call as a discrete chip: what was called, and what came back.
+ *
+ * ## Why a failed call is not painted as an error
+ *
+ * A run watched by the owner called `load_skill` twice for a skill that had been
+ * removed, and both times the console printed the server's whole sentence — *"No skill
+ * named 'Refund Policy' is in force for you…"* — in block red, inline, mid-transcript.
+ * It read as the product breaking. It is the opposite: a tool returned nothing, the
+ * agent saw that, and the self-repair loop went round again. That is the system working
+ * exactly as designed.
+ *
+ * So an unsuccessful call keeps every word the server said, and says it as an *outcome*:
+ * the amber risk tone rather than the red block tone (nothing was blocked and nothing is
+ * unsafe), a plain "no result" verdict beside the tool name, and the sentence itself on
+ * its own line in ordinary muted ink rather than as a coloured dump. The block tone
+ * stays reserved for what it means everywhere else in this product — a rail that
+ * refused.
+ */
 function ToolChip({ tool }: { tool: LaneTool }): ReactElement {
   const pending = tool.ok === null
+  const failed = tool.ok === false
+  const detail = failed && tool.summary !== null && tool.summary !== '' ? tool.summary : null
+
   return (
     <li
       className={cn(
-        'flex min-w-0 items-baseline gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.68rem]',
+        'flex min-w-0 flex-col gap-0.5 rounded-md border px-2 py-1',
         pending
-          ? 'border-blue-200/50 bg-blue-200/[0.08] text-blue-700'
-          : tool.ok
-            ? 'border-border bg-surface-2/60 text-muted-foreground'
-            : 'border-block/50 bg-block/10 text-block-ink',
+          ? 'border-blue-200/50 bg-blue-200/[0.08]'
+          : failed
+            ? 'border-risk/40 bg-risk/[0.07]'
+            : 'border-border bg-surface-2/60',
       )}
     >
-      <span className="shrink-0 font-medium text-foreground">{tool.tool}</span>
-      <span className="truncate">({argPreview(tool.args)})</span>
-      <span className="ml-auto shrink-0 pl-1">
-        {pending ? 'running' : `→ ${tool.summary ?? (tool.ok ? 'ok' : 'failed')}`}
-      </span>
+      <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[0.68rem]">
+        <span className="shrink-0 font-medium text-foreground">{tool.tool}</span>
+        <span className="truncate text-muted-foreground">({argPreview(tool.args)})</span>
+        <span
+          className={cn(
+            'ml-auto shrink-0 pl-1',
+            pending ? 'text-blue-700' : failed ? 'text-risk-ink' : 'text-muted-foreground',
+          )}
+        >
+          {pending ? 'running' : failed ? 'no result' : (tool.summary ?? 'ok')}
+        </span>
+      </div>
+      {detail !== null && (
+        <p className="text-[0.68rem] leading-snug text-muted-foreground">{detail}</p>
+      )}
     </li>
   )
 }
@@ -59,37 +93,53 @@ function ToolChip({ tool }: { tool: LaneTool }): ReactElement {
  * layout exists to show, that four agents are working at once.
  */
 function LaneThinking({
-  text,
+  chunks,
   live,
   className,
 }: {
-  text: string
+  chunks: readonly string[]
   live: boolean
   className?: string
 }): ReactElement {
-  const ref = useRef<HTMLParagraphElement>(null)
+  const ref = useRef<HTMLOListElement>(null)
+  const steps = reasoningSteps(chunks)
 
   useEffect(() => {
     const el = ref.current
     if (el !== null) el.scrollTop = el.scrollHeight
-  }, [text])
+  }, [chunks])
 
   return (
-    <p
+    <ol
       ref={ref}
       className={cn(
-        'max-h-24 overflow-y-auto rounded-md px-2 py-1.5 font-mono text-[0.7rem] leading-relaxed break-words text-foreground/75',
+        'flex max-h-32 flex-col gap-1 overflow-y-auto rounded-md px-2 py-1.5',
         className ?? 'bg-surface-2/60',
       )}
     >
-      {text}
-      {live && (
-        <span
-          aria-hidden
-          className="ml-0.5 inline-block h-3 w-1 translate-y-0.5 animate-pulse bg-blue-700 align-baseline"
-        />
-      )}
-    </p>
+      {steps.map((step, index) => (
+        <li
+          key={`${index}-${step.slice(0, 24)}`}
+          className="animate-trace-in flex min-w-0 items-start gap-1.5 text-[0.72rem] leading-snug break-words text-foreground/80"
+        >
+          <span
+            aria-hidden
+            className="tabular mt-px shrink-0 font-mono text-[0.62rem] text-muted-foreground/70"
+          >
+            {index + 1}
+          </span>
+          <span className="min-w-0">
+            {step}
+            {live && index === steps.length - 1 && (
+              <span
+                aria-hidden
+                className="ml-0.5 inline-block h-3 w-1 translate-y-0.5 animate-pulse bg-blue-700 align-baseline"
+              />
+            )}
+          </span>
+        </li>
+      ))}
+    </ol>
   )
 }
 
@@ -101,7 +151,7 @@ function LaneCard({
   reduced,
 }: {
   lane: AgentLane
-  thinking: string
+  thinking: readonly string[]
   index: number
   reduced: boolean
 }): ReactElement {
@@ -163,7 +213,7 @@ function LaneCard({
         {lane.detail === '' ? (finished ? 'No detail reported.' : 'Working…') : lane.detail}
       </p>
 
-      {thinking !== '' && <LaneThinking text={thinking} live={live} />}
+      {thinking.length > 0 && <LaneThinking chunks={thinking} live={live} />}
 
       {lane.tools.length > 0 && (
         <ul className="flex flex-col gap-1">
@@ -226,6 +276,44 @@ function RoutingReceipt({ state }: { state: RunState }): ReactElement | null {
 }
 
 /**
+ * What the lane board is called before any lane has reported.
+ *
+ * The width is known from `routing` long before the first `agent_status` arrives, and
+ * for those seconds this panel used to announce "Single lane" over a run the router had
+ * just sized as a team of two. Read the routing event when there is one; fall back to
+ * the lane count only when there is not.
+ */
+function laneHeading(state: RunState, attributed: boolean, count: number): string {
+  if (attributed) return `Agents · ${count}`
+  const routing = state.routing
+  if (routing !== null && routing.depth === 'team') return `Team of ${routing.fanout}`
+  return 'Single lane'
+}
+
+/**
+ * The one line under the heading, when no lane has reported its own identity.
+ *
+ * Three different facts used to share one sentence — *"This run reported no per-agent
+ * identity, so it reads as one lane"* — and only the last of them was true. A run the
+ * router sized for one agent is a **decision**, and saying so with `decided_by` beside
+ * it is the receipt. A team whose lanes have not checked in yet is simply **early**. The
+ * degraded sentence is for what is left: a run that finished without ever stamping an
+ * identity, which is the only case where the panel really is showing less than happened.
+ */
+function laneSentence(state: RunState): string {
+  const routing = state.routing
+  if (routing === null) {
+    return 'This run reported no per-agent identity, so it reads as one lane.'
+  }
+  if (routing.depth !== 'team') {
+    return `Sized for one agent — ${routing.decided_by} chose a single lane for this question, and it ran the whole turn.`
+  }
+  return state.running
+    ? `Sized for a team of ${routing.fanout} — each lane appears here the moment its agent reports in.`
+    : `Sized for a team of ${routing.fanout}, but no event carried an agent identity, so this reads as one lane.`
+}
+
+/**
  * The live agent lanes — one card per agent, side by side, each streaming its own work.
  *
  * The cards are laid out in a grid rather than a list for one reason: a fan-out is
@@ -243,26 +331,24 @@ function RoutingReceipt({ state }: { state: RunState }): ReactElement | null {
  */
 export function LaneBoard({ state }: { state: RunState }): ReactElement {
   const { lanes, attributed, synthesis } = deriveAgentPanel(state)
-  const thinking = reasoningByLane(state)
+  const thinking = reasoningChunksByLane(state)
   const reduced = useReducedMotion() ?? false
   const supervisorThinking = lanes.some((lane) => lane.id === SUPERVISOR_LANE)
-    ? ''
-    : (thinking.get(SUPERVISOR_LANE) ?? '')
+    ? []
+    : (thinking.get(SUPERVISOR_LANE) ?? [])
 
   return (
     <section aria-label="Agents" className="flex flex-col gap-2">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="flex items-center gap-2">
           <Users aria-hidden className="size-4 text-muted-foreground" />
-          <h3 className="eyebrow">{attributed ? `Agents · ${lanes.length}` : 'Agent'}</h3>
+          <h3 className="eyebrow">{laneHeading(state, attributed, lanes.length)}</h3>
         </span>
         <RoutingReceipt state={state} />
       </header>
 
       {!attributed && (
-        <p className="text-[0.75rem] text-muted-foreground">
-          This run reported no per-agent identity, so it reads as one lane.
-        </p>
+        <p className="text-[0.75rem] text-muted-foreground">{laneSentence(state)}</p>
       )}
 
       {/* Container queries, not viewport breakpoints. The lane board lives in a column
@@ -275,13 +361,13 @@ export function LaneBoard({ state }: { state: RunState }): ReactElement {
           supervisor, so the planner's chain-of-thought — every `reasoning` chunk that
           arrived with no `agent_id` — belonged to nobody and was dropped on the floor.
           It is the run deciding how to answer, which is worth a strip of its own. */}
-      {supervisorThinking !== '' && (
+      {supervisorThinking.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-blue-200 bg-blue-50 p-3">
           <span className="flex items-center gap-1.5 text-[0.72rem] font-medium text-blue-700">
             <BrainCircuit aria-hidden className="size-3.5 shrink-0" />
             Supervisor reasoning
           </span>
-          <LaneThinking text={supervisorThinking} live={state.running} className="bg-surface/70" />
+          <LaneThinking chunks={supervisorThinking} live={state.running} className="bg-surface/70" />
         </div>
       )}
 
@@ -297,7 +383,7 @@ export function LaneBoard({ state }: { state: RunState }): ReactElement {
             <LaneCard
               key={lane.id}
               lane={lane}
-              thinking={thinking.get(lane.id) ?? ''}
+              thinking={thinking.get(lane.id) ?? EMPTY_THINKING}
               index={index}
               reduced={reduced}
             />

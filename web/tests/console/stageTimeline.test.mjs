@@ -143,3 +143,60 @@ test('durations read as a person reads them', () => {
   assert.equal(formatDuration(999), '999 ms')
   assert.equal(formatDuration(3142), '3.1 s')
 })
+
+const reflection = (iteration, will_retry, reason) =>
+  at({ type: 'reflection', iteration, max_iterations: 3, done: !will_retry, will_retry, reason })
+
+test('the self-repair loop is grouped into the rounds the wire numbers', () => {
+  seq = 0
+  const timing = deriveTiming(
+    runOf([
+      started('retrieve', 'Agentic retrieval'),
+      finished('retrieve', 'Agentic retrieval', 30500),
+      started('plan', 'Reason & plan'),
+      finished('plan', 'Reason & plan', 1500),
+      started('act', 'Execute actions'),
+      finished('act', 'Execute actions', 3600),
+      started('reflect', 'Reflect & self-repair'),
+      reflection(1, true, 'The tool returned nothing usable; replanning.'),
+      finished('reflect', 'Reflect & self-repair', 1),
+      started('plan', 'Reason & plan'),
+      finished('plan', 'Reason & plan', 6800),
+      started('act', 'Execute actions'),
+      finished('act', 'Execute actions', 4300),
+      started('reflect', 'Reflect & self-repair'),
+      reflection(2, false, 'The goal was met.'),
+      finished('reflect', 'Reflect & self-repair', 0),
+      started('generate', 'Generate answer'),
+      finished('generate', 'Generate answer', 2400),
+    ]),
+  )
+  assert.equal(timing.rounds, 2)
+  assert.equal(timing.roundBudget, 3)
+
+  const rounds = timing.stages.map((s) => [s.node, s.round])
+  assert.deepEqual(rounds, [
+    // Retrieval is one stage that ran its own rounds internally, not a loop node.
+    ['retrieve', null],
+    ['plan', 1],
+    ['act', 1],
+    ['reflect', 1],
+    ['plan', 2],
+    ['act', 2],
+    ['reflect', 2],
+    ['generate', null],
+  ])
+
+  const firstReflect = timing.stages.find((s) => s.node === 'reflect')
+  assert.equal(firstReflect.verdict, 'The tool returned nothing usable; replanning.')
+})
+
+test('a run that never loops carries no round on any stage', () => {
+  seq = 0
+  const timing = deriveTiming(
+    runOf([started('generate', 'Generate answer'), finished('generate', 'Generate answer', 2400)]),
+  )
+  assert.equal(timing.rounds, 0)
+  assert.equal(timing.roundBudget, null)
+  assert.equal(timing.stages[0].round, null)
+})

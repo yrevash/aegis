@@ -147,14 +147,14 @@ export function SkillsDrawer({
       title={draft === null ? 'Skills' : 'Save this run as a skill'}
       subtitle={
         draft === null
-          ? 'An instruction sheet the agent loads on demand, as a visible load_skill tool call.'
+          ? 'Paste a SKILL.md you wrote anywhere — in here, or in another tool — and the agent loads it on demand, as a visible load_skill tool call.'
           : 'Drafted from what this run actually did. Edit it into what should happen every time.'
       }
     >
       <div className="flex flex-col gap-5">
         <section className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="eyebrow">Write one · SKILL.md</p>
+            <p className="eyebrow">Add a skill · SKILL.md</p>
             {data !== null && (
               <Badge tone="agent" className="ml-auto">
                 <BookOpen aria-hidden className="size-3" />
@@ -187,7 +187,7 @@ export function SkillsDrawer({
             className="mt-1 text-[0.78rem] font-medium text-foreground"
             htmlFor="console-skill-document"
           >
-            The skill
+            Paste or write the SKILL.md
           </label>
           <textarea
             id="console-skill-document"
@@ -204,6 +204,21 @@ export function SkillsDrawer({
             you can watch in the trace.
           </p>
 
+          {/* What actually decides where a skill applies — said plainly, because the
+              obvious guess is wrong. `POST /v1/skills` forbids unknown fields and has no
+              agent or role on it: the layer above chooses *who* it reaches, and the
+              document's own `triggers:` frontmatter is what makes an agent reach for it.
+              Implying a per-agent assignment this API cannot make would be a control that
+              silently does nothing. */}
+          <p className="rounded-md border border-border bg-surface-2/50 px-3 py-2 text-[0.74rem] leading-snug text-muted-foreground">
+            <span className="font-medium text-foreground">Which agent picks it up</span> is
+            not a field on this form, because it is not a field on the API. The layer above
+            decides <em>who</em> the skill reaches; the{' '}
+            <span className="font-mono">triggers:</span> list in the document&rsquo;s own
+            frontmatter is what decides <em>when</em> an agent reaches for it. Write the
+            triggers as the phrases a question would really contain.
+          </p>
+
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -211,7 +226,7 @@ export function SkillsDrawer({
               onClick={() => void save()}
               className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
             >
-              {busy ? 'Saving…' : 'Save skill'}
+              {busy ? 'Saving…' : 'Add skill'}
             </button>
             {busy && (
               // A save is not instant and the reason is the product: the whole body goes
@@ -268,6 +283,26 @@ export function SkillsDrawer({
                     <p className="mt-1 text-[0.7rem] text-muted-foreground">
                       {SCOPE_LABEL[skill.scope]}
                     </p>
+                    {/* The triggers are the assignment: they are what an agent matches a
+                        question against before it spends a load_skill call. A skill listed
+                        without them looks like it applies to everything, always. */}
+                    {skill.triggers.length > 0 ? (
+                      <p className="mt-1 flex flex-wrap items-center gap-1">
+                        <span className="eyebrow mr-0.5">Loads on</span>
+                        {skill.triggers.map((trigger) => (
+                          <span
+                            key={trigger}
+                            className="rounded-full border border-border bg-surface px-1.5 py-0.5 font-mono text-[0.64rem] text-muted-foreground"
+                          >
+                            {trigger}
+                          </span>
+                        ))}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-[0.7rem] text-muted-foreground">
+                        No triggers declared, so nothing narrows when the agent loads it.
+                      </p>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {skill.isSafety ? (

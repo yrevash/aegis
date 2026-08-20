@@ -3,6 +3,37 @@ const nextConfig = {
   reactStrictMode: true,
 
   /**
+   * No gzip from the Next server — because it was eating the whole event stream.
+   *
+   * Measured, not guessed. The same `POST /v1/query` through this origin:
+   *
+   * ```
+   * curl -N                        → 40 frames, first at +0.0s, guardrail at +10.7s
+   * curl -N -H 'Accept-Encoding: gzip' → 1 frame, 2,260 bytes, at +72.5s
+   * ```
+   *
+   * The backend is innocent: hit `127.0.0.1:8110` directly with the same header and
+   * it answers `transfer-encoding: chunked` with no `Content-Encoding` at all, and
+   * every frame arrives when it happens. It is Next's own `compress: true` default
+   * that gzips the proxied response, and its compressor holds the stream until the
+   * upstream closes — so a browser (which always sends `Accept-Encoding: gzip`) got
+   * one burst of 40 events after the run had already finished.
+   *
+   * That is the whole of "after search no streaming". Not the console's rendering,
+   * not the `stream` node's 0 ms: every live surface in this product — the chat
+   * console, RAG, Harness, Graph, Voice, Simulation — watched a run in silence and
+   * then had its entire history handed to it at once, and the answer landed as one
+   * paste because all 64 `token` events did.
+   *
+   * `compress` governs only what this Node server does to its own responses. In
+   * production the CDN/edge negotiates encoding, and it knows not to buffer
+   * `text/event-stream`; there is no per-route escape hatch here, and there is no
+   * version of this product where holding an SSE stream for 72 seconds is the right
+   * trade against gzipping a few HTML documents in dev.
+   */
+  compress: false,
+
+  /**
    * Build output directory, overridable per process.
    *
    * `next build` writes the same `.next` that a running `next dev` serves from, so
