@@ -111,27 +111,35 @@ export function ApprovalCard({
           <p className="text-[0.8rem] leading-relaxed text-muted-foreground">{approval.rationale}</p>
         </div>
 
-        <ConsentStatement id={consentId} view={view} />
-
-        <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-          <Button
-            className="flex-1"
-            aria-describedby={consentId}
-            disabled={resolved}
-            onClick={() => onDecision('approve')}
-          >
-            <Check className="size-4" aria-hidden />
-            {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
-          </Button>
-          <Button
-            variant="outline"
-            className="flex-1 border-block/60 text-block-ink hover:bg-block/10 hover:text-block-ink"
-            aria-describedby={consentId}
-            disabled={resolved}
-            onClick={() => onDecision('reject')}
-          >
-            <X className="size-4" aria-hidden /> Reject
-          </Button>
+        {/* The consent sentence encloses the two controls it describes, rather than
+            floating above them: the record of what a person authorised and the thing
+            they pressed are one object, at one weight, in one box. */}
+        <div className="rounded-md border border-risk/45 bg-risk/[0.08] p-3">
+          <p className="flex items-center gap-1.5 font-mono text-[0.68rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
+            <ShieldAlert className="size-3.5 shrink-0" aria-hidden />
+            What approving authorises
+          </p>
+          <ConsentStatement id={consentId} view={view} className="mt-1.5 text-[0.82rem]" />
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <Button
+              className="flex-1"
+              aria-describedby={consentId}
+              disabled={resolved}
+              onClick={() => onDecision('approve')}
+            >
+              <Check className="size-4" aria-hidden />
+              {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
+              aria-describedby={consentId}
+              disabled={resolved}
+              onClick={() => onDecision('reject')}
+            >
+              <X className="size-4" aria-hidden /> Reject
+            </Button>
+          </div>
         </div>
 
         <GateReceipt approvalId={approval.approval_id} view={view} />
@@ -176,16 +184,23 @@ export function ConsentStatement({
 export function GateReceipt({
   approvalId,
   view,
+  variant,
   className,
 }: {
   approvalId: string
   view: ApprovalView
+  /**
+   * `block` (default) closes a panel under a hairline; `inline` sits in a row of
+   * provenance beside the run id, where a second rule would be a second box.
+   */
+  variant?: 'block' | 'inline'
   className?: string
 }): ReactElement {
   return (
     <Receipt
       label="Gate"
       origin={approvalId}
+      variant={variant}
       detail={
         view.representativeOnly
           ? 'this gate enumerated no call list — the action shown is the one it named'
@@ -222,8 +237,8 @@ export function ProposedAction({
   const signal = signalForRisk(action.risk)
 
   return (
-    <li className="rounded-lg border border-border bg-surface-2 p-2.5">
-      <div className="flex items-baseline gap-2">
+    <li className="min-w-0 overflow-hidden rounded-md border border-border bg-surface">
+      <div className="flex items-baseline gap-2 px-3 py-2">
         <p className="min-w-0 flex-1 font-mono text-[0.8rem] font-medium break-words text-foreground">
           {action.name}
         </p>
@@ -238,7 +253,7 @@ export function ProposedAction({
       </div>
 
       {entries.length > 0 && (
-        <dl className="mt-1.5 grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-border pt-1.5">
+        <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-border bg-surface-2/70 px-3 py-2">
           {entries.map(([k, v]) => (
             <div key={k} className="contents">
               <dt className="font-mono text-[0.68rem] tracking-wide text-muted-foreground uppercase">

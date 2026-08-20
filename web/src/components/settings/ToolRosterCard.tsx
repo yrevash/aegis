@@ -10,24 +10,8 @@ import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { getToolRoster, type ToolRosterResponse } from '@/lib/api/console'
 import { useAuth } from '@/lib/auth/AuthContext'
-
-/**
- * Chrome adds a scroll container's overflowing content to the **document's** own
- * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
- * `position: static`, so a 200-row table inside a 30rem panel left the page
- * 10,948px tall — nine thousand of them empty — while the panel itself correctly
- * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
- * 'relative'` takes the document from 10,948px back to 2,232px.
- *
- * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
- * not own; this is the same fix applied through the `className` the component
- * already exposes, targeting the scroll box by the `role="group"` it is given
- * whenever `maxHeight` is set. Remove it once the primitive carries it.
- */
-const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
 
 /**
  * The effective tool roster — "6 of 9", and why the other three.
@@ -78,12 +62,10 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
     roster === null || roster.total === 0 ? 0 : (roster.allowed_count / roster.total) * 100
 
   return (
-    <TooltipProvider>
     <DataPanel
       title="Tools"
       eyebrow="platform ∩ persona, then the tenant’s gate floor"
       maxHeight={roster !== null && roster.rows.length > 8 ? '26rem' : undefined}
-      className={SCROLL_BOX}
       actions={
         roster === null ? null : (
           <Badge tone="neutral" className="gap-1.5">
@@ -174,6 +156,5 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
         </table>
       )}
     </DataPanel>
-    </TooltipProvider>
   )
 }

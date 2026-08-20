@@ -7,7 +7,6 @@ import { Button } from '@/components/primitives/button'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { errorSentence } from '@/lib/api/apiError'
 import {
@@ -27,6 +26,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 
 import { AegisMcpPanel } from './AegisMcpPanel'
 import { Connections } from './Connections'
+import { HowMcpWorks } from './HowMcpWorks'
 import { McpPosture } from './McpPosture'
 import { ToolGovernance } from './ToolGovernance'
 
@@ -115,7 +115,6 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
   }
 
   return (
-    <TooltipProvider>
     <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4">
       <PageHeader
         eyebrow="aegis · mcp"
@@ -140,6 +139,7 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
 
       {data ? (
         <>
+          <HowMcpWorks data={data} />
           <McpPosture data={data} />
           <Connections
             data={data}
@@ -155,7 +155,6 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
         </>
       ) : null}
     </div>
-    </TooltipProvider>
   )
 }
 

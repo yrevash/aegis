@@ -25,25 +25,39 @@ export function ComposerMenu({
   children,
   disabled = false,
   align = 'left',
+  width = 'default',
 }: {
   /** The control's name, sentence case. */
   label: string
   /** Its current value, shown on the chip. */
   value: string
   icon?: ReactNode
-  children: ReactNode
+  /**
+   * The panel's contents. Given as a function when the panel closes on a choice —
+   * a mode menu that stayed open after Team was picked would cover the composer's
+   * own degree row, which is the thing the choice just revealed.
+   */
+  children: ReactNode | ((close: () => void) => ReactNode)
   disabled?: boolean
   /** Which edge the panel hangs from. */
   align?: 'left' | 'right'
+  /** Widen the panel when its rows carry a sentence each rather than a word. */
+  width?: 'default' | 'wide'
 }): ReactElement {
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
 
   useEffect(() => {
     if (!open) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false)
+      // Focus returns to the chip, so Escape does not drop the person at the top of
+      // the document with the composer still under their cursor.
+      if (event.key === 'Escape') {
+        setOpen(false)
+        triggerRef.current?.focus()
+      }
     }
     const onDown = (event: MouseEvent): void => {
       if (!(event.target instanceof Node)) return
@@ -61,8 +75,10 @@ export function ComposerMenu({
   return (
     <div ref={boxRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
+        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((was) => !was)}
@@ -83,11 +99,17 @@ export function ComposerMenu({
         <div
           id={panelId}
           className={cn(
-            'absolute bottom-full z-30 mb-1.5 w-[22rem] max-w-[85vw] rounded-lg border border-border bg-card p-3 shadow-pop',
+            'absolute bottom-full z-30 mb-1.5 max-w-[85vw] rounded-lg border border-border bg-card p-3 shadow-pop',
+            width === 'wide' ? 'w-[24rem]' : 'w-[22rem]',
             align === 'right' ? 'right-0' : 'left-0',
           )}
         >
-          {children}
+          {typeof children === 'function'
+            ? children(() => {
+                setOpen(false)
+                triggerRef.current?.focus()
+              })
+            : children}
         </div>
       )}
     </div>

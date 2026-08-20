@@ -1,10 +1,12 @@
 'use client'
 
-import { ShieldAlert, ShieldCheck, Workflow } from 'lucide-react'
+import { BookOpen, ShieldAlert, ShieldCheck, Workflow } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { ApprovalCard } from '@/components/approval/ApprovalCard'
+import { SkillsDrawer } from '@/components/skills/SkillsDrawer'
+import { draftFromRun } from '@/components/skills/skillDraft'
 import { AegisLockup } from '@/components/brand/AegisLockup'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
@@ -30,10 +32,12 @@ import { MemoryRail } from './MemoryRail'
 import { memorySubjectOf } from './memorySubject'
 import { beatFromSignal } from './motion'
 import { AnswerBlock, ResultTabs, type ResultTabId } from './ResultTabs'
+import { readSources } from './sources'
 import { DEFAULT_RUN_MODE, type RunMode } from './runMode'
 import { SessionRail } from './SessionRail'
 import { StreamBanners } from './StreamBanners'
 import { isEmptyChat, type RestoredTurn, type Turn } from './threadReducer'
+import { WidthReceipt } from './WidthReceipt'
 import { useChatThread } from './useChatThread'
 
 const EMPTY_GRAPH: GraphResponse = { nodes: [], edges: [] }
@@ -123,6 +127,8 @@ interface TurnViewProps {
   turn: Turn
   graph: GraphResponse
   metrics: MetricsResponse | null
+  /** Open the skills drawer with a draft written from this turn. */
+  onSaveAsSkill: (turn: Turn) => void
 }
 
 /**
@@ -137,7 +143,7 @@ interface TurnViewProps {
  * The cards stay after the run finishes, dimmed and carrying their duration and cost:
  * who did what is part of the answer.
  */
-function TurnView({ turn, graph, metrics }: TurnViewProps): ReactElement {
+function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): ReactElement {
   const { run } = turn
   const beat = beatFromSignal(run.lastSignal)
   const running = run.running
@@ -204,6 +210,11 @@ function TurnView({ turn, graph, metrics }: TurnViewProps): ReactElement {
         )}
       </div>
 
+      {/* What the run actually ran at, from its own `routing` event — above the
+          answer, because the width is a fact about how the answer was produced and
+          reading it afterwards tells the story backwards. */}
+      {settled && <WidthReceipt state={run} requested={turn.mode} />}
+
       <AnswerBlock state={run} onSeeSources={() => setTab('sources')} />
 
       {settled && (
@@ -214,6 +225,21 @@ function TurnView({ turn, graph, metrics }: TurnViewProps): ReactElement {
           beat={beat}
           tab={tab}
           onTab={setTab}
+          actions={
+            // Only on a turn that produced an answer: a skill drafted from a run with
+            // nothing in it would be a template with a question glued to the top, and
+            // the button would be an invitation to save nothing.
+            run.answer.trim() === '' ? null : (
+              <button
+                type="button"
+                onClick={() => onSaveAsSkill(turn)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface/70 px-2.5 py-1.5 text-[0.78rem] font-medium text-blue-700 outline-none transition-colors duration-[var(--dur-fast)] hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <BookOpen aria-hidden className="size-3.5" />
+                Save as skill
+              </button>
+            )
+          }
         />
       )}
     </motion.article>
@@ -271,6 +297,27 @@ function IdleConsole({
         </div>
       )}
     </motion.div>
+  )
+}
+
+/**
+ * The console's own way into skills — the same drawer the turn's action opens.
+ *
+ * It sits in the console header rather than only on a finished turn because the two
+ * reasons to write a skill are different moments: one is "that run went well, keep it",
+ * and the other is "our refund window is 30 days and the agent should know". The second
+ * one has no run behind it and used to require leaving for the settings screen.
+ */
+function SkillsButton({ onOpen }: { onOpen: () => void }): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface/70 px-3 py-1 text-[0.78rem] font-medium text-blue-700 outline-none transition-colors duration-[var(--dur-fast)] hover:border-blue-200 hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <BookOpen aria-hidden className="size-3.5" />
+      Skills
+    </button>
   )
 }
 
@@ -345,6 +392,10 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   const [mode, setMode] = useState<RunMode>(DEFAULT_RUN_MODE)
   const [view, setView] = useState<ConsoleView>('run')
   const [decided, setDecided] = useState(false)
+  // The skills drawer, and the draft it opens with. `null` is a skill written from the
+  // blank template; a string is one drafted from a finished run.
+  const [skillsOpen, setSkillsOpen] = useState(false)
+  const [skillDraft, setSkillDraft] = useState<string | null>(null)
   // Bumped every time a run settles. The budget line re-reads on it rather than on a
   // timer, because a settled run is the only thing that can have moved the figure.
   const [budgetKey, setBudgetKey] = useState(0)
@@ -397,6 +448,31 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
     setDecided(false)
     setView('run')
     chat.ask({ question, persona: personaId, attachment, mode })
+  }
+
+  /**
+   * Draft a skill from a finished turn.
+   *
+   * Everything in the draft is read off the run — the question as it was written, the
+   * tools it actually called, the sources it actually stood on. The console never
+   * writes a step the run did not take; the author edits what happened into what should
+   * happen next time. See {@link draftFromRun}.
+   */
+  const saveAsSkill = (turn: Turn): void => {
+    setSkillDraft(
+      draftFromRun({
+        question: turn.question,
+        answer: turn.run.answer,
+        tools: turn.run.toolCalls.map((call) => call.tool),
+        sources: readSources(turn.run.retrievalScores).map((source) => source.label),
+      }),
+    )
+    setSkillsOpen(true)
+  }
+
+  const openSkills = (): void => {
+    setSkillDraft(null)
+    setSkillsOpen(true)
   }
 
   const handleDecision = (decision: ApprovalDecision): void => {
@@ -465,9 +541,14 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
         </div>
 
         {idle ? (
-          <IdleConsole samples={samples} onPick={send}>
-            {composer}
-          </IdleConsole>
+          <>
+            <div className="flex items-center justify-end">
+              <SkillsButton onOpen={openSkills} />
+            </div>
+            <IdleConsole samples={samples} onPick={send}>
+              {composer}
+            </IdleConsole>
+          </>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -478,6 +559,9 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
                   The compiled graph, read from the running backend
                 </span>
               )}
+              <div className="ml-auto">
+                <SkillsButton onOpen={openSkills} />
+              </div>
             </div>
 
             <div
@@ -491,7 +575,13 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
                 <RestoredTurnView key={`restored-${turn.turnIndex}`} turn={turn} />
               ))}
               {current?.turns.map((turn) => (
-                <TurnView key={turn.id} turn={turn} graph={graph} metrics={metrics} />
+                <TurnView
+                  key={turn.id}
+                  turn={turn}
+                  graph={graph}
+                  metrics={metrics}
+                  onSaveAsSkill={saveAsSkill}
+                />
               ))}
               <div ref={threadEndRef} className="scroll-mb-48" />
             </div>
@@ -537,6 +627,14 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
           <MemoryRail token={token} subject={memorySubject} />
         </div>
       )}
+
+      {/* Skills, over the console rather than a screen away from it. */}
+      <SkillsDrawer
+        open={skillsOpen}
+        onClose={() => setSkillsOpen(false)}
+        token={token}
+        draft={skillDraft}
+      />
 
       {/* Human-approval spotlight — scrims the console while a decision is due. */}
       {approval !== null && (

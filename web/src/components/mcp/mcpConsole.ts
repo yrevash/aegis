@@ -14,7 +14,7 @@
  * `web/tests/components/mcpConsole.test.mjs` exercises both directly.
  */
 
-import type { McpRisk, McpToolRow } from '@/lib/api/mcp'
+import type { McpProbe, McpRisk, McpToolRow } from '@/lib/api/mcp'
 
 /** The three tiers, in the order a reader ranks them. Mirrors `aegis.core.types.RiskLevel`. */
 export const RISKS: McpRisk[] = ['low', 'medium', 'high']
@@ -63,4 +63,54 @@ export function tierProvenance(tool: Pick<McpToolRow, 'riskIsDefault' | 'reason'
     return 'The honest default for code we did not write, reached over a network, that cannot undo itself.'
   }
   return tool.reason || 'Lowered with no stated reason.'
+}
+
+/**
+ * The four states a declared peer can be in, from this console's point of view.
+ *
+ * The page used to show only `enabled`/`disabled`, which answers a configuration
+ * question and not the one a reader actually has — *is it connected?* Those are
+ * different: a peer can be enabled and unreachable, and the old page rendered that as a
+ * green badge.
+ *
+ * `answered` is claimed only where something really answered in this process: either
+ * the probe in hand says so, or the peer has tools that could only have arrived from a
+ * successful `tools/list`. Absent both, the state is `untested` — never `answered` by
+ * optimism.
+ */
+export type PeerState = 'disabled' | 'answered' | 'unreachable' | 'untested'
+
+/**
+ * Which of {@link PeerState} a peer is in.
+ *
+ * @param server - The peer's row from the console aggregate.
+ * @param probe - The result of the most recent Test **on this peer**, or null.
+ */
+export function peerState(
+  server: { enabled: boolean; discoveredTools: number },
+  probe: McpProbe | null,
+): PeerState {
+  if (!server.enabled) return 'disabled'
+  if (probe) return probe.reachable ? 'answered' : 'unreachable'
+  return server.discoveredTools > 0 ? 'answered' : 'untested'
+}
+
+/** What each peer state is called, and what it means for an agent, in one clause. */
+export const PEER_STATE_TEXT: Record<PeerState, { label: string; means: string }> = {
+  answered: {
+    label: 'connected',
+    means: 'it answered the protocol handshake and listed its tools',
+  },
+  unreachable: {
+    label: 'not answering',
+    means: 'the last Test did not complete, so no tool of its is offered',
+  },
+  untested: {
+    label: 'not tested yet',
+    means: 'nothing has been discovered from it — press Test',
+  },
+  disabled: {
+    label: 'disabled',
+    means: 'its tools leave the agent’s payload entirely; the configuration stays',
+  },
 }

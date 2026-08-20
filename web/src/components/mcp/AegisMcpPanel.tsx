@@ -103,11 +103,11 @@ export function AegisMcpPanel({
   if (!endpoint) {
     return (
       <Card className="rounded-lg">
-        <CardHeader title="Ask Aegis over MCP" eyebrow="this deployment’s own server" />
+        <CardHeader title="Aegis as an MCP server" eyebrow="the other direction · what this deployment offers" />
         <CardBody>
           <EmptyState
             icon={Plug}
-            title="No MCP endpoint is configured"
+            title="This deployment publishes no MCP address"
             body="Set AEGIS_MCP_SERVER_URL to the address this deployment serves Streamable HTTP on. Nothing is guessed here: a made-up URL would render as a live address for a server that is not running."
           />
         </CardBody>
@@ -118,8 +118,8 @@ export function AegisMcpPanel({
   return (
     <Card className="rounded-lg">
       <CardHeader
-        title="Ask Aegis over MCP"
-        eyebrow="this deployment’s own server"
+        title="Aegis as an MCP server"
+        eyebrow="the other direction · what this deployment offers"
         actions={
           <span className="flex items-center gap-2">
           <InfoTip label="What this panel proves">

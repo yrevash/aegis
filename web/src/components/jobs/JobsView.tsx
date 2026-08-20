@@ -20,7 +20,6 @@ import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { EmptyState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
 import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { CorpusPanel } from '@/components/jobs/CorpusPanel'
@@ -32,19 +31,16 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 
 /**
- * Chrome adds a scroll container's overflowing content to the **document's** own
- * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
- * `position: static`, so a 200-row table inside a 30rem panel left the page
- * 10,948px tall — nine thousand of them empty — while the panel itself correctly
- * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
- * 'relative'` takes the document from 10,948px back to 2,232px.
+ * How often the queue is re-read, in ms.
  *
- * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
- * not own; this is the same fix applied through the `className` the component
- * already exposes, targeting the scroll box by the `role="group"` it is given
- * whenever `maxHeight` is set. Remove it once the primitive carries it.
+ * Two cadences rather than one, because a fixed interval has to choose between
+ * being useless and being rude: 15 s is too slow to watch a stage move, and 4 s
+ * against a quiet queue is nine hundred pointless round trips an hour. So the
+ * page asks quickly exactly while `job_runs` says something is in flight, and
+ * settles back the moment nothing is. A hidden tab asks for nothing at all.
  */
-const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
+const POLL_BUSY_MS = 4_000
+const POLL_IDLE_MS = 15_000
 
 /** Load state for the jobs fetch. */
 type LoadState =
@@ -153,17 +149,36 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
     null,
   )
 
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const res = await getJobs(token)
-      setLoad({ status: 'ready', rows: res.rows })
-    } catch (error: unknown) {
-      setLoad({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Failed to load jobs',
-      })
-    }
-  }, [token])
+  // Epoch ms of the last read that actually agreed with the database. Never "now":
+  // a live surface that stamps itself on render says it is fresh when it is frozen.
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null)
+  const [polling, setPolling] = useState(true)
+
+  /**
+   * Re-read `GET /jobs`.
+   *
+   * `background` is what makes the timer safe to run: a poll that fails must not
+   * replace a screen full of real rows with a backend-unavailable panel, because
+   * one dropped request is not an outage. A background failure therefore leaves
+   * the last good rows and the last good timestamp standing — the stamp stops
+   * advancing, which is itself the signal that something is wrong.
+   */
+  const refresh = useCallback(
+    async (background = false): Promise<void> => {
+      try {
+        const res = await getJobs(token)
+        setLoad({ status: 'ready', rows: res.rows })
+        setUpdatedAt(Date.now())
+      } catch (error: unknown) {
+        if (background) return
+        setLoad({
+          status: 'error',
+          message: error instanceof Error ? error.message : 'Failed to load jobs',
+        })
+      }
+    },
+    [token],
+  )
 
   useEffect(() => {
     void refresh()
@@ -198,6 +213,34 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
   const shown = useMemo(() => rows.filter((row) => matches(row, filter)), [rows, filter])
   const inFlight = rows.filter((row) => IN_FLIGHT.has(row.status)).length
 
+  /**
+   * The live feed.
+   *
+   * The cadence is a function of the queue's own state, so the interval is torn
+   * down and rebuilt only when work starts or stops — not on every poll. A row
+   * action holds the timer off while it is in flight, because a re-queue and a
+   * poll racing each other is how a button appears to undo itself.
+   */
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const period = inFlight > 0 ? POLL_BUSY_MS : POLL_IDLE_MS
+    const timer = setInterval(() => {
+      if (document.hidden || busy !== null) return
+      void refresh(true)
+    }, period)
+    const onVisibility = (): void => {
+      const visible = !document.hidden
+      setPolling(visible)
+      if (visible) void refresh(true)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    setPolling(!document.hidden)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [inFlight, busy, refresh])
+
   if (load.status === 'error') return <BackendUnavailable detail={load.message} />
 
   const NoticeIcon =
@@ -207,7 +250,12 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
     <div className="flex flex-col gap-4">
       {/* The pipeline before the queue: one glance at where the corpus actually
           is, then the rows that make it up. */}
-      <PipelineIso rows={rows} loading={load.status === 'loading'} />
+      <PipelineIso
+        rows={rows}
+        loading={load.status === 'loading'}
+        updatedAt={updatedAt}
+        polling={polling}
+      />
 
       {notice ? (
         <p
@@ -241,7 +289,6 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
         eyebrow="job_runs · the record layer"
         title="Queue"
         maxHeight="30rem"
-        className={SCROLL_BOX}
         actions={
           <button
             type="button"
@@ -503,7 +550,6 @@ export function JobsMount(): ReactElement {
 
   return (
     <BackendGate>
-      <TooltipProvider>
       <div className="space-y-4">
         <PageHeader
           eyebrow="Durable substrate"
@@ -535,7 +581,6 @@ export function JobsMount(): ReactElement {
             disclosure rather than deleted: compressed, not lost. */}
         {deep ? <PipelineHealthPanel /> : null}
       </div>
-      </TooltipProvider>
     </BackendGate>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, KeyRound, Loader2, Lock, Plus, ShieldCheck } from 'lucide-react'
+import { Building2, Check, Globe2, KeyRound, Loader2, Lock, Plus, ShieldCheck } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { assignUserRole, getUsers } from '@/lib/api/client'
@@ -12,8 +12,8 @@ import { Button } from '@/components/primitives/button'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { errorSentence } from '@/lib/api/apiError'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -23,6 +23,7 @@ import type { AdminUser } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 
 import { AdminControls, type AccessWrite } from './AdminControls'
+import { DelegationMap } from './DelegationMap'
 import { SeatsPanel } from './SeatsPanel'
 import { adminTier } from './adminForms'
 import {
@@ -163,148 +164,184 @@ export function RolesAccess({
   const total = load.status === 'ready' ? load.rows.length : null
 
   return (
-    <div className="grid gap-6 xl:grid-cols-3 [&>*]:min-w-0">
-      <DataPanel
-        className="rounded-lg xl:col-span-2"
-        eyebrow="aegis.admin · /admin/users"
-        title="Who has access"
-        maxHeight={520}
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            {total != null && (
-              <Badge tone="neutral" className="gap-1.5">
-                <KeyRound className="size-3" aria-hidden />
-                <Figure>{total}</Figure> {total === 1 ? 'user' : 'users'}
-              </Badge>
-            )}
-            {onAddUser && (
-              <Button type="button" size="sm" variant="outline" onClick={onAddUser}>
-                <Plus className="size-4" aria-hidden /> Add user
-              </Button>
-            )}
-          </div>
-        }
-      >
-        {load.status === 'loading' && <LoadingState rows={5} label="Reading the roster…" />}
+    <div className="space-y-6">
+      {/*
+        The permission model, before the roster that assigns it. A reader who has not
+        seen what a portal *buys* cannot read a column of role words, and the roster
+        used to open with exactly that column.
+      */}
+      <DelegationMap />
 
-        {load.status === 'error' && <ErrorState error={load.message} />}
-
-        {load.status === 'ready' && load.rows.length === 0 && (
-          <EmptyState
-            icon={KeyRound}
-            title="No users in scope"
-            body="Everyone this sign-in may administer appears here with the portal their role grants them."
-            action={
-              onAddUser && (
-                <Button type="button" size="sm" onClick={onAddUser}>
-                  Create the first user
+      <div className="grid gap-6 xl:grid-cols-3 [&>*]:min-w-0">
+        <DataPanel
+          className="rounded-lg xl:col-span-2"
+          eyebrow="aegis.admin · /admin/users"
+          title="Who has access"
+          maxHeight={520}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              {total != null && (
+                <Badge tone="neutral" className="gap-1.5">
+                  <KeyRound className="size-3" aria-hidden />
+                  <Figure>{total}</Figure> {total === 1 ? 'user' : 'users'}
+                </Badge>
+              )}
+              {onAddUser && (
+                <Button type="button" size="sm" variant="outline" onClick={onAddUser}>
+                  <Plus className="size-4" aria-hidden /> Add user
                 </Button>
-              )
-            }
-          />
-        )}
+              )}
+            </div>
+          }
+        >
+          {load.status === 'loading' && <LoadingState rows={5} label="Reading the roster…" />}
 
-        {load.status === 'ready' && load.rows.length > 0 && (
-          <Table>
-            <THead>
-              <TH className="text-left">User</TH>
-              <TH className="text-left">Email · tenant</TH>
-              <TH className="text-left">Current role</TH>
-              <TH className="text-left">Assign portal</TH>
-            </THead>
-            <TBody>
-              {load.rows.map((u) => {
-                const current = normalizeRole(u.role)
-                const isSelf = currentUsername != null && u.username === currentUsername
-                // First locked reason for this row (all demotions share it).
-                const lock = PORTAL_ROLES.map((target) =>
-                  roleOptionGuard({ user: u, target, currentUsername, users: load.rows }),
-                ).find((g) => g.disabled)
-                const isSaving = saving.has(u.id)
+          {load.status === 'error' && <ErrorState error={load.message} />}
 
-                return (
-                  <TR key={u.id}>
-                    <TD className="text-sm font-medium whitespace-nowrap text-foreground">
-                      {u.username}
-                      {isSelf && (
-                        <span className="ml-1.5 align-middle text-[0.6rem] tracking-wide text-muted-foreground uppercase">
-                          you
-                        </span>
-                      )}
-                    </TD>
-                    <TD>
-                      <Figure className="text-muted-foreground">
-                        {`${u.email ?? '—'}${u.tenant_id != null ? ` · t#${u.tenant_id}` : ''}`}
-                      </Figure>
-                    </TD>
-                    <TD>
-                      <div className="flex items-center gap-1.5 whitespace-nowrap">
-                        <Badge tone="neutral">{ROLE_CATALOG[current].label}</Badge>
-                        <Figure className="text-muted-foreground/70">{u.role}</Figure>
-                      </div>
-                    </TD>
-                    <TD>
-                      <div className="flex items-center gap-2">
-                        <select
-                          id={`assign-portal-${u.id}`}
-                          value={current}
-                          disabled={isSaving}
-                          onChange={(e) => reassign(u, e.target.value as Role)}
-                          className={cn(
-                            'h-7 rounded-lg border border-border bg-card px-2 font-mono text-[0.68rem] text-foreground',
-                            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-                            isSaving && 'opacity-60',
-                          )}
-                          aria-label={`Assign portal role for ${u.username}`}
-                        >
-                          {PORTAL_ROLES.map((r) => {
-                            const g = roleOptionGuard({
-                              user: u,
-                              target: r,
-                              currentUsername,
-                              users: load.rows,
-                            })
-                            return (
-                              <option key={r} value={r} disabled={g.disabled}>
-                                {ROLE_CATALOG[r].label}
-                                {g.disabled ? ' — locked' : ''}
-                              </option>
-                            )
-                          })}
-                        </select>
+          {load.status === 'ready' && load.rows.length === 0 && (
+            <EmptyState
+              icon={KeyRound}
+              title="No users in scope"
+              body="Everyone this sign-in may administer appears here with the portal their role grants them."
+              action={
+                onAddUser && (
+                  <Button type="button" size="sm" onClick={onAddUser}>
+                    Create the first user
+                  </Button>
+                )
+              }
+            />
+          )}
 
-                        {isSaving && (
-                          <Loader2
-                            aria-hidden
-                            className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none"
-                          />
-                        )}
-                        {!isSaving && flash.has(u.id) && (
+          {load.status === 'ready' && load.rows.length > 0 && (
+            <Table>
+              <THead>
+                <TH className="text-left">User</TH>
+                <TH className="text-left">Scope</TH>
+                <TH className="text-left">Holds</TH>
+                <TH className="text-left">Assign portal</TH>
+              </THead>
+              <TBody>
+                {load.rows.map((u) => {
+                  const current = normalizeRole(u.role)
+                  const isSelf = currentUsername != null && u.username === currentUsername
+                  // First locked reason for this row (all demotions share it).
+                  const lock = PORTAL_ROLES.map((target) =>
+                    roleOptionGuard({ user: u, target, currentUsername, users: load.rows }),
+                  ).find((g) => g.disabled)
+                  const isSaving = saving.has(u.id)
+
+                  return (
+                    <TR key={u.id}>
+                      <TD className="whitespace-nowrap">
+                        <span className="flex items-center gap-2.5">
                           <span
-                            role="status"
-                            className="flex items-center gap-1 text-[0.68rem] text-ok-ink"
+                            aria-hidden
+                            className="grid size-7 shrink-0 place-items-center rounded-md bg-blue-100/70 font-mono text-[0.72rem] font-medium text-blue-800 uppercase"
                           >
-                            <Check className="size-3.5" aria-hidden /> updated
+                            {u.username.slice(0, 2)}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-foreground">
+                              {u.username}
+                              {isSelf && (
+                                <span className="ml-1.5 align-middle text-[0.6rem] tracking-wide text-muted-foreground uppercase">
+                                  you
+                                </span>
+                              )}
+                            </span>
+                            <Figure className="block text-[0.68rem] text-muted-foreground">
+                              {u.email ?? 'no email recorded'}
+                            </Figure>
+                          </span>
+                        </span>
+                      </TD>
+                      <TD className="whitespace-nowrap">
+                        {u.tenant_id == null ? (
+                          <span className="flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
+                            <Globe2 className="size-3.5 shrink-0" aria-hidden />
+                            Platform — no tenant
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
+                            <Building2 className="size-3.5 shrink-0" aria-hidden />
+                            <Figure>{`tenant #${u.tenant_id}`}</Figure>
                           </span>
                         )}
-                        {!isSaving && !flash.has(u.id) && lock && (
-                          <InfoTip label="Why this role is locked" className="text-risk-ink/80">
-                            <span className="flex items-start gap-1.5">
-                              <Lock className="mt-px size-3 shrink-0" aria-hidden /> {lock.reason}
-                            </span>
-                          </InfoTip>
-                        )}
-                      </div>
-                    </TD>
-                  </TR>
-                )
-              })}
-            </TBody>
-          </Table>
-        )}
-      </DataPanel>
+                      </TD>
+                      <TD>
+                        <div className="flex items-center gap-1.5 whitespace-nowrap">
+                          <Badge tone="neutral">{ROLE_CATALOG[current].label}</Badge>
+                          <Figure className="text-[0.68rem] text-muted-foreground">{u.role}</Figure>
+                        </div>
+                      </TD>
+                      <TD>
+                        <div className="flex items-center gap-2">
+                          <select
+                            id={`assign-portal-${u.id}`}
+                            value={current}
+                            disabled={isSaving}
+                            onChange={(e) => reassign(u, e.target.value as Role)}
+                            className={cn(
+                              // A fixed width, because a native select sizes to its
+                              // longest option: the row whose options carry "— locked"
+                              // grew half a column wider than every other row and was
+                              // clipped by the panel that holds them.
+                              'h-8 w-[8.5rem] rounded-md border border-border bg-surface px-2 text-[0.8125rem] text-foreground transition-colors duration-[--dur-fast] motion-reduce:transition-none hover:border-input',
+                              'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                              isSaving && 'opacity-60',
+                            )}
+                            aria-label={`Assign portal role for ${u.username}`}
+                          >
+                            {PORTAL_ROLES.map((r) => {
+                              const g = roleOptionGuard({
+                                user: u,
+                                target: r,
+                                currentUsername,
+                                users: load.rows,
+                              })
+                              return (
+                                <option key={r} value={r} disabled={g.disabled}>
+                                  {ROLE_CATALOG[r].label}
+                                  {g.disabled ? ' — locked' : ''}
+                                </option>
+                              )
+                            })}
+                          </select>
 
-      <PortalLegend counts={counts} total={total} />
+                          {isSaving && (
+                            <Loader2
+                              aria-hidden
+                              className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none"
+                            />
+                          )}
+                          {!isSaving && flash.has(u.id) && (
+                            <span
+                              role="status"
+                              className="flex items-center gap-1 text-[0.68rem] text-ok-ink"
+                            >
+                              <Check className="size-3.5" aria-hidden /> updated
+                            </span>
+                          )}
+                          {!isSaving && !flash.has(u.id) && lock && (
+                            <InfoTip label="Why this role is locked">
+                              <span className="flex items-start gap-1.5">
+                                <Lock className="mt-px size-3 shrink-0" aria-hidden /> {lock.reason}
+                              </span>
+                            </InfoTip>
+                          )}
+                        </div>
+                      </TD>
+                    </TR>
+                  )
+                })}
+              </TBody>
+            </Table>
+          )}
+        </DataPanel>
+
+        <PortalLegend counts={counts} total={total} />
+      </div>
     </div>
   )
 }
@@ -345,29 +382,57 @@ function PortalLegend({
             const n = counts?.[r] ?? null
             const share = counts && total != null && total > 0 ? (counts[r] / total) * 100 : 0
             return (
-              <li key={r} className="min-w-0 border-b border-border pb-3 last:border-0 last:pb-0">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <ShieldCheck className="size-3.5 shrink-0 text-blue-700" aria-hidden />
+              <li
+                key={r}
+                className="min-w-0 rounded-md border border-border bg-surface-2/50 p-3 transition-colors duration-[--dur-fast] motion-reduce:transition-none hover:border-input"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      aria-hidden
+                      className="grid size-6 shrink-0 place-items-center rounded-md bg-blue-100/70 text-blue-800"
+                    >
+                      <ShieldCheck className="size-3.5" />
+                    </span>
                     <span className="truncate text-sm font-medium text-foreground">
                       {meta.label}
                     </span>
                   </span>
-                  <span className="shrink-0">
-                    <Figure className="text-sm text-foreground">{n ?? '—'}</Figure>
+                  <span className="flex shrink-0 items-baseline gap-1">
+                    <Figure className="text-sm font-semibold text-foreground">{n ?? '—'}</Figure>
+                    <span className="text-[0.68rem] text-muted-foreground">
+                      {n === 1 ? 'holder' : 'holders'}
+                    </span>
                   </span>
                 </div>
-                <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-surface-2">
+                <div
+                  className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface"
+                  role="img"
+                  aria-label={
+                    n == null || total == null
+                      ? `${meta.label}: head count not loaded`
+                      : `${meta.label}: ${n} of ${total} users in scope`
+                  }
+                >
                   <div
                     className="h-full rounded-full bg-blue-600 transition-[width] duration-[--dur-base] motion-reduce:transition-none"
                     style={{ width: `${Math.max(share > 0 ? 3 : 0, share)}%` }}
                   />
                 </div>
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{meta.sees}</p>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{meta.sees}</p>
               </li>
             )
           })}
         </ul>
+        <Receipt
+          className="mt-4"
+          origin="aegis.admin · /admin/users"
+          detail={
+            total == null
+              ? 'the roster has not answered yet, so no share is drawn'
+              : `${total} users in scope, each counted once against the role it holds`
+          }
+        />
       </CardBody>
     </Card>
   )
@@ -396,8 +461,7 @@ export function RolesAccessMount(): ReactElement {
 
   return (
     <BackendGate>
-      <TooltipProvider>
-        <div className="space-y-6">
+      <div className="space-y-6">
           <PageHeader
             eyebrow="tenants · seats · caps"
             title="Roles & access"
@@ -434,10 +498,13 @@ export function RolesAccessMount(): ReactElement {
               answering "what can this person do?" needs both halves, and a permission
               answer split across two pages is one nobody trusts.
             */}
-            <SeatsPanel token={session?.token ?? null} tenantId={session?.tenantId ?? null} />
-          </AdminControls>
-        </div>
-      </TooltipProvider>
+            <SeatsPanel
+              token={session?.token ?? null}
+              tenantId={session?.tenantId ?? null}
+              canChooseTenant={adminTier(session?.fineRole) === 'platform'}
+            />
+        </AdminControls>
+      </div>
     </BackendGate>
   )
 }

@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  HelpCircle,
   KeyRound,
   Loader2,
   Network,
@@ -12,7 +13,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useId, useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactElement, type ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -29,6 +30,23 @@ import type {
   McpServerUpdate,
 } from '@/lib/api/mcp'
 import { cn } from '@/lib/utils'
+
+import { PEER_STATE_TEXT, peerState, type PeerState } from './mcpConsole'
+
+/** Badge tone per connection state. Never the only carrier — the word is beside it. */
+const STATE_TONE: Record<PeerState, 'ok' | 'block' | 'neutral' | 'risk'> = {
+  answered: 'ok',
+  unreachable: 'block',
+  untested: 'neutral',
+  disabled: 'risk',
+}
+
+const STATE_ICON = {
+  answered: CheckCircle2,
+  unreachable: AlertTriangle,
+  untested: HelpCircle,
+  disabled: Power,
+} as const
 
 /**
  * Connections — declare an external MCP server, prove it answers, turn it off, forget it.
@@ -84,6 +102,21 @@ export function Connections({
   const [confirming, setConfirming] = useState<string | null>(null)
   const id = useId()
 
+  /*
+    Every peer's most recent answer, not only the last one tested.
+
+    The probe arrives from the parent as a single value, so testing a second peer used
+    to erase the first peer's result from the screen — leaving a card that had just
+    reported "did not answer" looking identical to one nobody had touched. Keeping the
+    answers per server id means the page states, for every peer at once, whether it is
+    connected. Nothing is invented: a peer with no entry renders as "not tested yet".
+  */
+  const [probes, setProbes] = useState<Record<string, McpProbe>>({})
+  useEffect(() => {
+    if (!probe) return
+    setProbes((current) => ({ ...current, [probe.serverId]: probe }))
+  }, [probe])
+
   const submit = (): void => {
     onCreate({ ...draft, serverId: draft.serverId.trim() })
     setDraft({ serverId: '', label: '', url: '', authHeader: 'Authorization', credential: '' })
@@ -93,8 +126,8 @@ export function Connections({
   return (
     <Card>
       <CardHeader
-        title="Connections"
-        eyebrow="external MCP servers · peers"
+        title="Peers — the external servers Aegis may reach"
+        eyebrow="step 1 and 2 · declare, then test"
         actions={
           <Button
             type="button"
@@ -120,7 +153,7 @@ export function Connections({
                 key={server.serverId}
                 server={server}
                 busy={busy === server.serverId}
-                probe={probe?.serverId === server.serverId ? probe : null}
+                probe={probes[server.serverId] ?? null}
                 confirming={confirming === server.serverId}
                 onConfirm={(open) => setConfirming(open ? server.serverId : null)}
                 onTest={() => onTest(server.serverId)}
@@ -305,6 +338,14 @@ function PeerCard({
 }): ReactElement {
   const share =
     server.discoveredTools > 0 ? (server.grantedTools / server.discoveredTools) * 100 : 0
+  const state = peerState(server, probe)
+  const StateIcon = STATE_ICON[state]
+  const identity =
+    state === 'answered' && probe?.reachable
+      ? [probe.serverName, probe.protocolVersion ? `protocol ${probe.protocolVersion}` : '']
+          .filter(Boolean)
+          .join(' · ')
+      : ''
 
   return (
     <li
@@ -320,97 +361,112 @@ function PeerCard({
             <span className="truncate text-sm font-medium text-foreground">{server.label}</span>
           </span>
           <p className="mt-0.5 truncate font-mono text-[0.68rem] text-muted-foreground">
-            mcp__{server.serverId}__ · {server.url || 'in-process'}
+            {server.url || 'in-process'}
           </p>
         </div>
-        {server.enabled ? (
-          <Badge tone="ok" className="gap-1">
-            <CheckCircle2 className="size-3" aria-hidden />
-            enabled
-          </Badge>
-        ) : (
-          <Badge tone="risk" className="gap-1">
-            <Power className="size-3" aria-hidden />
-            disabled
-            <InfoTip label="What disabled means">
-              Its tools are not offered to any agent — they leave the payload entirely, so a
-              model cannot see them and cannot try them. The connection stays configured.
-            </InfoTip>
-          </Badge>
-        )}
+        <Badge tone={STATE_TONE[state]} className="shrink-0 gap-1 whitespace-nowrap">
+          <StateIcon className="size-3" aria-hidden />
+          {PEER_STATE_TEXT[state].label}
+        </Badge>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        {server.hasCredential ? (
-          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <KeyRound className="size-3.5 text-ok-ink" aria-hidden />
-            credential set
-            <Figure className="text-[0.68rem]">{server.credentialFingerprint}</Figure>
-            {server.credentialSetBy ? <>by {server.credentialSetBy}</> : null}
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <KeyRound className="size-3.5" aria-hidden />
-            no credential
-            {server.credentialFingerprint ? (
-              <InfoTip label="Why the credential is gone">
-                One was set before this process started. Aegis never writes a peer&rsquo;s secret
-                to its database — re-enter it, or set{' '}
-                <span className="font-mono">
-                  AEGIS_MCP_CRED_{server.serverId.toUpperCase().replace(/-/g, '_')}
-                </span>
-                .
-              </InfoTip>
-            ) : null}
-          </span>
-        )}
-        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Figure className="text-foreground">{server.grantedTools}</Figure>
-          callable of
-          <Figure className="text-foreground">{server.discoveredTools}</Figure>
-          found
-          <InfoTip label="Found versus callable">
-            Found is what the peer advertised at the last Test. Callable is how many of those
-            a persona has been admitted to — everything else is discovered and inert.
-          </InfoTip>
-        </span>
-      </div>
+      {/* The state, said as a consequence rather than as an adjective. */}
+      <p className="text-xs leading-5 text-muted-foreground">
+        {PEER_STATE_TEXT[state].means}
+        {identity ? (
+          <>
+            {' — '}
+            <Figure className="text-[0.68rem] text-foreground">{identity}</Figure>
+          </>
+        ) : null}
+      </p>
 
-      <div
-        className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2"
-        role="img"
-        aria-label={`${server.grantedTools} of ${server.discoveredTools} tools callable`}
-      >
-        <span className="block h-full bg-blue-600" style={{ width: `${share}%` }} />
-      </div>
+      {/* The three facts about a peer that are not its address. */}
+      <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-border bg-border">
+        <Fact
+          label="tools found"
+          value={String(server.discoveredTools)}
+          tip="What the peer advertised the last time Test ran in this process. Nothing is discovered when the page loads."
+        />
+        <Fact
+          label="callable"
+          value={String(server.grantedTools)}
+          tip="How many of those a persona has been admitted to. Everything else is discovered and inert — an agent is never offered it."
+        />
+        <Fact
+          label="namespace"
+          value={`mcp__${server.serverId}__`}
+          mono
+          tip="Every tool this peer offers is prefixed with this, which is what stops a peer shadowing an Aegis tool of the same name."
+        />
+      </dl>
 
-      {probe ? (
+      <div>
         <div
+          className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2"
+          role="img"
+          aria-label={`${server.grantedTools} of ${server.discoveredTools} tools callable`}
+        >
+          <span className="block h-full bg-blue-600" style={{ width: `${share}%` }} />
+        </div>
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.68rem] text-muted-foreground">
+          <span>
+            {server.grantedTools} of {server.discoveredTools} tools callable
+          </span>
+          {server.hasCredential ? (
+            <span className="inline-flex items-center gap-1">
+              <KeyRound className="size-3 text-ok-ink" aria-hidden />
+              credential
+              <Figure className="text-[0.68rem]">{server.credentialFingerprint}</Figure>
+              {server.credentialSetBy ? <>set by {server.credentialSetBy}</> : null}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1">
+              <KeyRound className="size-3" aria-hidden />
+              no credential
+              {server.credentialFingerprint ? (
+                <InfoTip label="Why the credential is gone">
+                  One was set before this process started. Aegis never writes a peer&rsquo;s
+                  secret to its database — re-enter it, or set{' '}
+                  <span className="font-mono">
+                    AEGIS_MCP_CRED_{server.serverId.toUpperCase().replace(/-/g, '_')}
+                  </span>
+                  .
+                </InfoTip>
+              ) : null}
+            </span>
+          )}
+        </p>
+      </div>
+
+      {probe && !probe.reachable ? (
+        <p
           role="status"
           aria-live="polite"
-          className={cn(
-            'rounded-md border px-3 py-2 text-xs leading-relaxed',
-            probe.reachable ? 'border-ok bg-ok/10' : 'border-block bg-block/10',
-          )}
+          className="flex items-start gap-1.5 rounded-md border border-block bg-block/10 px-3 py-2 text-xs leading-relaxed text-foreground"
         >
-          {probe.reachable ? (
-            <>
-              <p className="flex items-center gap-1.5 text-foreground">
-                <CheckCircle2 className="size-3.5 shrink-0 text-ok-ink" aria-hidden />
-                Answered
-                {probe.serverName ? ` as ${probe.serverName}` : ''}
-                {probe.protocolVersion ? ` on protocol ${probe.protocolVersion}` : ''}.
-              </p>
-              <p className="mt-1 font-mono text-[0.68rem] text-muted-foreground">
-                {probe.tools.length > 0 ? probe.tools.join(' · ') : 'it advertises no tools'}
-              </p>
-            </>
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-block-ink" aria-hidden />
+          <span className="min-w-0">{probe.detail}</span>
+        </p>
+      ) : null}
+
+      {probe?.reachable ? (
+        <div role="status" aria-live="polite">
+          <p className="eyebrow mb-1.5">it advertises</p>
+          {probe.tools.length > 0 ? (
+            <ul className="flex flex-wrap gap-1">
+              {probe.tools.map((tool) => (
+                <li
+                  key={tool}
+                  className="tabular rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[0.68rem] text-foreground"
+                >
+                  {tool}
+                </li>
+              ))}
+            </ul>
           ) : (
-            <p className="flex items-start gap-1.5 text-foreground">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-block-ink" aria-hidden />
-              <span>
-                Did not answer. <span className="text-muted-foreground">{probe.detail}</span>
-              </span>
+            <p className="text-xs text-muted-foreground">
+              nothing — it answered, and its tool list is empty
             </p>
           )}
         </div>
@@ -463,5 +519,34 @@ function PeerCard({
         </div>
       )}
     </li>
+  )
+}
+
+/** One fact about a peer: a label, a value, and the paragraph behind it in a tip. */
+function Fact({
+  label,
+  value,
+  tip,
+  mono,
+}: {
+  label: string
+  value: string
+  tip: string
+  mono?: boolean
+}): ReactElement {
+  return (
+    <div className="min-w-0 bg-card px-2.5 py-2">
+      <dt className="flex items-center gap-1 text-[0.68rem] text-muted-foreground">
+        {label}
+        <InfoTip label={`About ${label}`}>{tip}</InfoTip>
+      </dt>
+      <dd className="mt-0.5 truncate">
+        {mono ? (
+          <Figure className="text-[0.68rem] text-foreground">{value}</Figure>
+        ) : (
+          <Figure className="text-foreground">{value}</Figure>
+        )}
+      </dd>
+    </div>
   )
 }

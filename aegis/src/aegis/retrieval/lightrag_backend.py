@@ -53,6 +53,7 @@ imports cleanly with no LightRAG install, no `aegis[data]` extra and no live sto
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Sequence
@@ -60,6 +61,12 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from aegis.core.models import ModelRole
+from aegis.retrieval.chunk_index import (
+    DEFAULT_CHUNK_COLLECTION,
+    ChunkPoint,
+    audit_chunk_index,
+    publish_chunk_points,
+)
 from aegis.retrieval.fusion import RankedList, RankedRecall
 from aegis.retrieval.models import Candidate, Chunk, Recall
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
@@ -313,6 +320,42 @@ class LightRAGBackend:
         self._extract_role = extract_role
         self._rag: object | None = None
         self._session_factory = session_factory
+        self._chunk_collection = DEFAULT_CHUNK_COLLECTION
+        self._qdrant: object | None = None
+
+    def _vector_store(self) -> object:
+        """Return a Qdrant client for the collection LightRAG's dense arm searches.
+
+        Built from the same ``QDRANT_URL`` LightRAG's own storage reads (exported by
+        :func:`_apply_store_env`), because a dense write that landed on a different node
+        would raise ``points_count`` on a store no query reads — a more convincing
+        version of the outage this path exists to end.
+
+        Cached on the instance: the backend is a process-wide singleton and a client per
+        publish would open a connection per document.
+
+        Returns:
+            A connected ``qdrant_client.QdrantClient``.
+
+        Raises:
+            RuntimeError: If no Qdrant URL is configured. There is deliberately no
+                embedded fallback — an index nothing serves from is worse than an error.
+        """
+        if self._qdrant is not None:
+            return self._qdrant
+        from qdrant_client import QdrantClient  # noqa: PLC0415 - lazy, heavy
+
+        _apply_store_env(self._config)
+        url = (getattr(self._config, "qdrant_url", "") or os.environ.get("QDRANT_URL", "")).strip()
+        if not url:
+            raise RuntimeError(
+                "no QDRANT_URL is configured, so there is no dense index to publish "
+                "into; falling back to an embedded store here would write vectors no "
+                "query reads"
+            )
+        api_key = (getattr(self._config, "qdrant_api_key", "") or "").strip() or None
+        self._qdrant = QdrantClient(url=url, api_key=api_key)
+        return self._qdrant
 
     def _build_llm_func(self) -> object:
         """Return an async callable matching LightRAG's `llm_model_func` signature."""
@@ -408,10 +451,17 @@ class LightRAGBackend:
             A `(entities, relations)` delta for this ingest; either element is ``None``
             when the graph store cannot report that count.
         """
-        rag = await self._ensure()
         texts = [c.text for c in chunks]
         if not texts:
             return (0, 0)
+
+        # A caller that already holds the embedding of record takes the direct route.
+        # See :meth:`publish_vectors` for why that is not merely an optimisation.
+        if any(c.vector for c in chunks):
+            await self.publish_vectors(chunks)
+            return (None, None)
+
+        rag = await self._ensure()
         ids = [c.id for c in chunks]
         file_paths = [
             _tag_file_path(
@@ -426,6 +476,96 @@ class LightRAGBackend:
         after_nodes, after_edges = await _graph_counts(rag)
 
         return (_delta(before_nodes, after_nodes), _delta(before_edges, after_edges))
+
+    def _dense_points(self, chunks: Sequence[Chunk]) -> list[ChunkPoint]:
+        """Shape ``chunks`` into dense-index points, keeping only the embedded ones.
+
+        Args:
+            chunks: The chunks to publish.
+
+        Returns:
+            One :class:`~aegis.retrieval.chunk_index.ChunkPoint` per chunk that carries a
+            vector, in the order given.
+        """
+        return [
+            ChunkPoint(
+                key=chunk.id,
+                content=chunk.text,
+                file_path=_tag_file_path(
+                    str(chunk.metadata.get("source") or chunk.doc_id),
+                    chunk.metadata.get(TENANT_METADATA_KEY),
+                ),
+                full_doc_id=str(chunk.doc_id),
+                vector=chunk.vector or [],
+            )
+            for chunk in chunks
+            if chunk.vector
+        ]
+
+    async def publish_vectors(self, chunks: Sequence[Chunk]) -> int:
+        """Write chunks that already carry their embedding straight into the dense index.
+
+        **Why this bypasses ``ainsert`` rather than feeding it.** LightRAG's insert API is
+        document-shaped: each text handed to it is a *document* that it will chunk, embed
+        and extract for itself. Aegis has already done all three. Passing 37 finished
+        chunks through it means 37 documents that share one ``file_path`` — the source
+        document's — and LightRAG 1.5.6 deduplicates on file name, so 36 of the 37 are
+        rejected as duplicates and recorded ``FAILED`` in its own doc-status store while
+        ``ainsert`` returns normally. That is measured, not theorised: 73 such rows sit in
+        ``lightrag_doc_status`` for this corpus, and the ``index`` stage recorded
+        ``{"indexed": 37}`` against a collection holding zero points.
+
+        Re-deriving what we already hold was never the intent either — ``chunks.embedding``
+        is the embedding of record precisely so an index can be rebuilt from it without
+        paying the provider twice for unchanged text.
+
+        So the dense arm is written directly, under LightRAG's own point-addressing and
+        payload contract, which is what keeps these points readable by the same ``naive``
+        query that reads LightRAG's own (see :mod:`aegis.retrieval.chunk_index`).
+
+        Args:
+            chunks: Chunks carrying their vectors. Any without one is skipped — it has no
+                embedding of record to publish, and inventing one here would put an
+                unsearchable row into the index under a real chunk's id.
+
+        Returns:
+            The number of points written.
+        """
+        points = self._dense_points(chunks)
+        if not points:
+            return 0
+        store = self._vector_store()
+        return await asyncio.to_thread(
+            publish_chunk_points, store, points, collection=self._chunk_collection
+        )
+
+    async def audit_chunks(self, chunks: Sequence[Chunk]) -> int | None:
+        """Return how many of ``chunks`` the dense index actually holds, or ``None``.
+
+        The question the ``index`` stage never asked. A writer's own count is a claim; a
+        count read back out of the store is evidence, and the gap between the two is
+        where five months of silently-empty retrieval lived.
+
+        Args:
+            chunks: The chunks whose presence to check.
+
+        Returns:
+            The number present, or ``None`` when the store cannot be reached at all — an
+            honest unknown, never a fabricated zero, because "the audit could not run" and
+            "the audit found nothing" call for opposite responses.
+        """
+        points = self._dense_points(chunks)
+        if not points:
+            return 0
+        try:
+            store = self._vector_store()
+            drift = await asyncio.to_thread(
+                audit_chunk_index, store, points, collection=self._chunk_collection
+            )
+        except Exception:  # noqa: BLE001 - an unreachable store is an honest unknown
+            logger.exception("could not audit the dense index; reporting unknown")
+            return None
+        return len(drift.present)
 
     async def recall(self, query: str, *, top_k: int, scope: RetrievalScope) -> Recall:
         """Retrieve a wide candidate set plus the touched graph slice, scoped to a tenant.

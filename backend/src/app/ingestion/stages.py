@@ -141,6 +141,10 @@ class IngestDependencies:
         extractor: The entity/relation extractor. ``None`` builds the best available one
             (:func:`aegis.retrieval.graph_extract.build_extractor`), whose ``name`` is
             honest about which one actually ran.
+        verify: Coroutine taking the chunks just published and returning how many the
+            search index actually holds — or ``None`` when it cannot tell. Left unset,
+            the process retriever's backend is asked. See :meth:`count_indexed`; this is
+            the seam that stops a publish from being taken on trust.
     """
 
     store: DocumentStoreProtocol
@@ -148,6 +152,7 @@ class IngestDependencies:
     publish: Any = None  # noqa: ANN401 - a coroutine fn; see publish_chunks
     extractor: Extractor | None = None
     complete: CompleteFn | None = None
+    verify: Any = None  # noqa: ANN401 - a coroutine fn; see count_indexed
 
     def resolve_embed(self) -> EmbedFn:
         """Return the embedding function, resolving the platform default on first use."""
@@ -183,6 +188,39 @@ class IngestDependencies:
         from app.retrieval.pipeline import get_retriever  # noqa: PLC0415 - lazy
 
         await get_retriever().backend.ingest_chunks(chunks)
+
+    async def count_indexed(self, chunks: Sequence[RetrievalChunk]) -> int | None:
+        """Return how many of ``chunks`` the search index actually holds, or ``None``.
+
+        The counterweight to :meth:`publish_chunks`. A publish that returns without
+        raising is not evidence that anything was written — ``LightRAG.ainsert`` records
+        per-document failures into its own doc-status store and returns normally, which
+        is how the ``index`` stage came to log ``{"indexed": 37}`` against a collection
+        holding zero points for five months.
+
+        ``None`` is a real answer and means "this deployment cannot audit its index",
+        never "the index is empty". The two demand opposite responses — one is a gap in
+        observability, the other is an outage — so they are never collapsed into a
+        number. A test that injects its own ``publish`` owns a store this process knows
+        nothing about, so it gets ``None`` and the stage records an honest "unverified"
+        rather than failing every ingest that runs against a fake.
+
+        Args:
+            chunks: The chunks that were just published.
+
+        Returns:
+            The number present in the index, or ``None`` when it cannot be audited.
+        """
+        if self.verify is not None:
+            return await self.verify(chunks)
+        if self.publish is not None:
+            return None
+        from app.retrieval.pipeline import get_retriever  # noqa: PLC0415 - lazy
+
+        audit = getattr(get_retriever().backend, "audit_chunks", None)
+        if audit is None:
+            return None
+        return await audit(chunks)
 
 
 _dependencies: IngestDependencies | None = None
@@ -486,6 +524,36 @@ async def _document_chunks(
         )
     ).all()
     return [(row[0], row[1], dict(row[2] or {})) for row in rows]
+
+
+async def _document_vectors(
+    session: AsyncSession, document_id: int
+) -> dict[int, list[float]]:
+    """Return ``{chunk_id: embedding}`` for a document's already-embedded chunks.
+
+    Read separately from :func:`_document_chunks` rather than widened into it, because
+    only the ``index`` stage needs the vectors and they are the largest column in the
+    table — a 3072-float row each. ``embed`` and ``graph`` iterate the same rows and
+    would carry megabytes they never look at.
+
+    Chunks still holding the ``_UNEMBEDDED`` sentinel are absent from the result rather
+    than present with an empty value, so the caller's ``.get()`` yields ``None`` and the
+    chunk is published as text for the backend to embed — the pre-existing behaviour,
+    unchanged, for the only case where it is still correct.
+
+    Args:
+        session: The scoped session.
+        document_id: The document.
+
+    Returns:
+        The embedding of record per chunk id, omitting unembedded rows.
+    """
+    rows = (
+        await session.execute(
+            select(Chunk.id, Chunk.embedding).where(Chunk.document_id == document_id)
+        )
+    ).all()
+    return {row[0]: list(row[1]) for row in rows if row[1]}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -901,13 +969,29 @@ async def index_stage(
         document_id: The document to publish.
         stage: The stage name (``"index"``).
 
+    Each chunk is published **with the embedding of record already written onto its row**
+    by the ``embed`` stage, rather than as bare text for the backend to embed again. That
+    is what makes this stage deterministic and free: the vector the index serves is
+    byte-for-byte the vector the database holds, so the two stores cannot answer
+    differently, and rebuilding the index later costs nothing (see
+    :mod:`app.ingestion.vector_index`).
+
+    **The stage then reads the index back and refuses to report a success it cannot
+    show.** It used to log ``"indexed 37 chunk(s)"`` on the strength of a publish call
+    that had returned without raising, and record ``{"indexed": 37}`` onto the ingest log
+    — while the collection held zero points. Every downstream reading of the platform,
+    the Jobs funnel included, inherited that number. A count the writer chose is a claim;
+    only the store can supply evidence.
+
     Returns:
         An empty mapping: what this stage produced lives in the backend's index, and the
         row already records the chunk count that was published.
 
     Raises:
         ApplicationError: Non-retryable, when the document is not visible or owns no
-            tenant.
+            tenant, or when the index is auditable and does **not** hold what was just
+            published. Failing here costs a re-run of one stage; succeeding here costs a
+            corpus that answers every question with silence.
     """
     document = await _document(session, document_id)
     owner = _owning_tenant(document, stage)
@@ -917,6 +1001,7 @@ async def index_stage(
         report_stage_facts(indexed=0)
         return {}
     owner_token = tenant_metadata_value(owner)
+    vectors = await _document_vectors(session, document_id)
     published = [
         RetrievalChunk(
             id=f"{owner_token}:{meta.get('content_id') or chunk_id}",
@@ -929,12 +1014,34 @@ async def index_stage(
                 "document_id": document_id,
                 "source": meta.get("source") or document.filename,
             },
+            vector=vectors.get(chunk_id) or None,
         )
         for chunk_id, content, meta in rows
     ]
     await _deps().publish_chunks(published)
-    logger.info("indexed %d chunk(s) of document %s", len(published), document_id)
-    report_stage_facts(indexed=len(published), collection=owner_token)
+
+    indexed = await _deps().count_indexed(published)
+    if indexed is not None and indexed < len(published):
+        raise _fatal(
+            f"the index stage published {len(published)} chunk(s) of document "
+            f"{document_id} but the search index holds {indexed} of them. The publish "
+            "call returned without raising, which is exactly how this failure stayed "
+            "invisible before: the corpus is not searchable and the run must not record "
+            "a success for it.",
+            kind="IndexNotWritten",
+        )
+
+    logger.info(
+        "indexed %d chunk(s) of document %s; the index reports holding %s",
+        len(published),
+        document_id,
+        "an unauditable number" if indexed is None else indexed,
+    )
+    report_stage_facts(
+        indexed=len(published),
+        verified=indexed,
+        collection=owner_token,
+    )
     return {}
 
 

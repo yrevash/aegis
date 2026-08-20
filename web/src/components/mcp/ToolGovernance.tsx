@@ -2,12 +2,14 @@
 
 import {
   AlertTriangle,
+  ChevronDown,
   Loader2,
   Lock,
   Network,
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
+  Users,
 } from 'lucide-react'
 import { useEffect, useId, useState, type ReactElement } from 'react'
 
@@ -21,23 +23,9 @@ import { Input } from '@/components/primitives/input'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { EmptyState } from '@/components/primitives/States'
 import type { McpConsole, McpGrantWrite, McpRisk, McpToolRow } from '@/lib/api/mcp'
+import { cn } from '@/lib/utils'
 
 import { RISKS, consequenceOf, gatesAt, tierProvenance } from './mcpConsole'
-
-/**
- * Chrome adds a scroll container's overflowing content to the **document's** own
- * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
- * `position: static`, so a 200-row table inside a 30rem panel left the page
- * 10,948px tall — nine thousand of them empty — while the panel itself correctly
- * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
- * 'relative'` takes the document from 10,948px back to 2,232px.
- *
- * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
- * not own; this is the same fix applied through the `className` the component
- * already exposes, targeting the scroll box by the `role="group"` it is given
- * whenever `maxHeight` is set. Remove it once the primitive carries it.
- */
-const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
 
 /**
  * Tool governance — the tier every tool is gated at, and who may call it.
@@ -51,17 +39,17 @@ const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
  * dropdown, that this runs without a human seeing it first. A dropdown that only said
  * "low" would be asking the operator to hold the gating rule in their head. Lowering a
  * tool out of the gate is a **privilege-lowering action**, so the moment the draft would
- * do it the cell says so on a marked surface, and the button stops saying `Apply` and
+ * do it the panel says so on a marked surface, and the button stops saying `Apply` and
  * starts saying what it will do — `Lower to LOW · runs unattended`.
  *
- * That sentence stays exactly where it was, because it is the one piece of prose on this
- * screen that is read *at the moment a decision is made*. What went was the four
- * sentences repeated on **every** row underneath it — the tier's provenance, the "runs
- * without a human seeing it first" warning, the "its server is disabled" note, and the
- * two paragraphs above the table. A consequence a reader has already read nine times is
- * not a warning any more, it is wallpaper. Those are now one {@link InfoTip} per column
- * plus a badge with an icon and a word, which is DESIGN.md §4's rule applied to the
- * densest screen in the product.
+ * **Why this stopped being a table.** A four-column table put the tool's identity, its
+ * tier, a column of checkboxes and a whole edit form on one row, so every tool was as
+ * loud as every other and the reader could not tell reading from deciding. What a tool
+ * *is* — its name, the sentence describing it, the tier in force and what that tier
+ * does to a call — now reads as one line per tool, grouped under the peer that
+ * advertised it, because a peer owning a set of tools is the model this screen is
+ * teaching. Deciding is a disclosure under that line: opened deliberately, one at a
+ * time, with the consequence beside the control.
  *
  * **Aegis's own tools are here and are read-only.** "Which tools exist and what does
  * each cost you" is one question, and answering half of it invites the reader to assume
@@ -119,8 +107,47 @@ function ColumnTip({
   )
 }
 
-/** One external tool: its tier, who may call it, and the decision that put it there. */
-function ToolRow({
+/**
+ * What the tier in force does to a call, in the fewest words that are still true.
+ *
+ * This is the sentence the whole screen exists to make legible, so it is rendered as a
+ * badge on every tool rather than as a paragraph anybody has to go and find.
+ */
+function GateBadge({
+  risk,
+  gateRisk,
+  admitted,
+}: {
+  risk: McpRisk
+  gateRisk: McpRisk
+  admitted: number
+}): ReactElement {
+  if (admitted === 0) {
+    return (
+      <Badge tone="neutral" className="gap-1 whitespace-nowrap">
+        <Users className="size-3" aria-hidden />
+        nobody may call it
+      </Badge>
+    )
+  }
+  if (gatesAt(risk, gateRisk)) {
+    return (
+      <Badge tone="risk" className="gap-1 whitespace-nowrap">
+        <ShieldQuestion className="size-3" aria-hidden />
+        waits for a person
+      </Badge>
+    )
+  }
+  return (
+    <Badge tone="block" className="gap-1 whitespace-nowrap">
+      <AlertTriangle className="size-3" aria-hidden />
+      runs unattended
+    </Badge>
+  )
+}
+
+/** One external tool: what it is, what its tier does, and — on request — the decision. */
+function ToolItem({
   tool,
   personas,
   gateRisk,
@@ -136,6 +163,7 @@ function ToolRow({
   const [risk, setRisk] = useState<McpRisk>(tool.risk)
   const [reason, setReason] = useState(tool.reason)
   const [admitted, setAdmitted] = useState<string[]>(tool.personas)
+  const [open, setOpen] = useState(false)
   const id = useId()
 
   // Re-sync when the server's answer changes underneath — the aggregate is the truth,
@@ -156,7 +184,7 @@ function ToolRow({
   const loweringOutOfGate =
     admitted.length > 0 && !gatesAt(risk, gateRisk) && gatesAt(tool.risk, gateRisk)
   const consequenceId = `${id}-consequence`
-  const unattended = !gatesAt(tool.risk, gateRisk) && tool.personas.length > 0
+  const panelId = `${id}-panel`
   const toggle = (persona: string): void =>
     setAdmitted((current) =>
       current.includes(persona)
@@ -165,142 +193,218 @@ function ToolRow({
     )
 
   return (
-    <TR>
-      <TD className="align-top">
-        <span className="flex items-center gap-1.5">
-          <Figure className="text-foreground">{tool.name}</Figure>
-          {tool.description ? (
-            <InfoTip label={`What ${tool.name} does`}>{tool.description}</InfoTip>
-          ) : null}
-          {!tool.callableNow ? (
-            <Badge tone="neutral" className="gap-1">
-              <AlertTriangle className="size-3" aria-hidden />
-              server off
-              <InfoTip label="Why this tool is not offered">
-                Its server is disabled, so no agent is offered this tool. The grant below stays
-                configured and takes effect the moment the peer is enabled again.
+    <li className="bg-card p-4">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Figure className="text-foreground">{tool.name}</Figure>
+            <Badge tone={badge.tone} className="gap-1 whitespace-nowrap">
+              {badge.icon}
+              {tool.risk}
+              <InfoTip label={`Why ${tool.name} sits at ${tool.risk}`}>
+                {tierProvenance(tool)}
               </InfoTip>
             </Badge>
-          ) : null}
-        </span>
-        <Receipt
-          origin={tool.serverId}
-          detail={`advertised as ${tool.remoteName}`}
-          variant="inline"
-          className="mt-1"
-        />
-      </TD>
-      <TD className="align-top">
-        <span className="flex flex-col items-start gap-1">
-          <Badge tone={badge.tone} className="gap-1 whitespace-nowrap">
-            {badge.icon}
-            {tool.risk}
-            <InfoTip label={`Why ${tool.name} sits at ${tool.risk}`}>
-              {tierProvenance(tool)}
-            </InfoTip>
-          </Badge>
-          {unattended ? (
-            <Badge tone="block" className="gap-1 whitespace-nowrap">
-              <AlertTriangle className="size-3" aria-hidden />
-              unattended
-            </Badge>
-          ) : null}
-        </span>
-      </TD>
-      <TD className="align-top">
-        <fieldset className="flex flex-col gap-1">
-          <legend className="sr-only">Personas admitted for {tool.name}</legend>
-          {personas.map((persona) => (
-            <label
-              key={persona}
-              htmlFor={`${id}-persona-${persona}`}
-              className="flex items-center gap-2 text-xs text-foreground"
-            >
-              <input
-                id={`${id}-persona-${persona}`}
-                type="checkbox"
-                className="size-3.5 rounded border-border accent-[color:var(--primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--primary)]"
-                checked={admitted.includes(persona)}
-                onChange={() => toggle(persona)}
-              />
-              <span className="font-mono">{persona}</span>
-            </label>
-          ))}
-          {tool.personas.length === 0 ? (
-            <span className="text-[0.68rem] text-muted-foreground italic">nobody may call it</span>
-          ) : null}
-        </fieldset>
-      </TD>
-      <TD className="align-top">
-        <div className="flex w-[17rem] flex-col gap-2">
-          <label htmlFor={`${id}-risk`} className="eyebrow">
-            Risk tier
-          </label>
-          <select
-            id={`${id}-risk`}
-            aria-describedby={consequenceId}
-            value={risk}
-            onChange={(event) => setRisk(event.target.value as McpRisk)}
-            className="rounded-lg border border-border bg-card px-2 py-1.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--primary)]"
-          >
-            {RISKS.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
+            <GateBadge risk={tool.risk} gateRisk={gateRisk} admitted={tool.personas.length} />
+            {!tool.callableNow ? (
+              <Badge tone="neutral" className="gap-1 whitespace-nowrap">
+                <AlertTriangle className="size-3" aria-hidden />
+                its peer is off
+                <InfoTip label="Why this tool is not offered">
+                  Its server is disabled, so no agent is offered this tool. The grant below
+                  stays configured and takes effect the moment the peer is enabled again.
+                </InfoTip>
+              </Badge>
+            ) : null}
+          </span>
 
-          {/* The consequence, at the moment of the change. This is the one sentence on
-              the screen that is read while a decision is being made, so it is the one
-              that stays on the page rather than moving into a tip. */}
-          <p
-            id={consequenceId}
-            className={
-              loweringOutOfGate
-                ? 'flex items-start gap-1.5 rounded-lg border border-block/60 bg-block/10 px-2 py-1.5 text-[0.68rem] leading-relaxed font-medium text-block-ink'
-                : gatesAt(risk, gateRisk)
-                  ? 'text-[0.68rem] leading-relaxed text-muted-foreground'
-                  : 'flex items-start gap-1.5 text-[0.68rem] leading-relaxed text-block-ink'
-            }
-          >
-            {gatesAt(risk, gateRisk) ? null : (
-              <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
-            )}
-            <span>{consequenceOf(risk, gateRisk)}</span>
+          {/* What the tool does, on the page. A reader who cannot see this cannot judge
+              the tier, and hiding it behind an icon made the decision unanswerable. */}
+          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+            {tool.description || 'The peer advertised no description for this tool.'}
           </p>
 
-          <label htmlFor={`${id}-reason`} className="sr-only">
-            Reason for the tier on {tool.name}
-          </label>
-          <Input
-            id={`${id}-reason`}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Why this tier…"
-            autoComplete="off"
-            className="h-8 rounded-lg text-xs"
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant={admitted.length === 0 || loweringOutOfGate ? 'outline' : 'default'}
-            className={
-              admitted.length === 0 || loweringOutOfGate
-                ? 'border-block/60 text-block-ink hover:bg-block/10 hover:text-block-ink'
-                : undefined
-            }
-            aria-describedby={consequenceId}
-            disabled={busy || !dirty}
-            onClick={() => onWrite(tool.name, { personas: admitted, risk, reason })}
-          >
-            {busy ? (
-              <Loader2 className="mr-1 size-3 animate-spin motion-reduce:animate-none" aria-hidden />
-            ) : null}
-            {actionLabel(admitted, risk, gateRisk, loweringOutOfGate)}
-          </Button>
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.68rem] text-muted-foreground">
+            <Users className="size-3" aria-hidden />
+            {tool.personas.length > 0 ? (
+              <Figure className="text-[0.68rem] text-foreground">
+                {tool.personas.join(', ')}
+              </Figure>
+            ) : (
+              <span className="italic">nobody is admitted</span>
+            )}
+            <span aria-hidden>·</span>
+            <Figure className="text-[0.68rem]">
+              {tool.serverId} advertises it as {tool.remoteName}
+            </Figure>
+          </p>
         </div>
-      </TD>
-    </TR>
+
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <ChevronDown
+            className={cn(
+              'mr-1 size-3 transition-transform duration-[--dur-fast] motion-reduce:transition-none',
+              open && 'rotate-180',
+            )}
+            aria-hidden
+          />
+          {open ? 'Close' : 'Change access'}
+        </Button>
+      </div>
+
+      {open ? (
+        <div
+          id={panelId}
+          className="mt-3 grid gap-4 rounded-lg border border-border bg-surface-2/60 p-3 md:grid-cols-2"
+        >
+          <fieldset className="flex min-w-0 flex-col gap-1.5">
+            <legend className="eyebrow mb-1 flex items-center gap-1">
+              Who may call it
+              <InfoTip label="About admitting a persona">
+                Admitting nobody is a valid, enforced state — a discovered tool that nobody is
+                admitted to is inert, and an agent is never offered it.
+              </InfoTip>
+            </legend>
+            {personas.map((persona) => (
+              <label
+                key={persona}
+                htmlFor={`${id}-persona-${persona}`}
+                className="flex items-center gap-2 text-xs text-foreground"
+              >
+                <input
+                  id={`${id}-persona-${persona}`}
+                  type="checkbox"
+                  className="size-3.5 rounded border-border accent-[color:var(--primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--primary)]"
+                  checked={admitted.includes(persona)}
+                  onChange={() => toggle(persona)}
+                />
+                <span className="font-mono">{persona}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <div className="flex min-w-0 flex-col gap-2">
+            <label htmlFor={`${id}-risk`} className="eyebrow">
+              Risk tier
+            </label>
+            <select
+              id={`${id}-risk`}
+              aria-describedby={consequenceId}
+              value={risk}
+              onChange={(event) => setRisk(event.target.value as McpRisk)}
+              className="rounded-lg border border-border bg-card px-2 py-1.5 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--primary)]"
+            >
+              {RISKS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+
+            {/* The consequence, at the moment of the change. This is the one sentence on
+                the screen that is read while a decision is being made, so it is the one
+                that stays on the page rather than moving into a tip. */}
+            <p
+              id={consequenceId}
+              className={
+                loweringOutOfGate
+                  ? 'flex items-start gap-1.5 rounded-lg border border-block/60 bg-block/10 px-2 py-1.5 text-[0.68rem] leading-relaxed font-medium text-block-ink'
+                  : gatesAt(risk, gateRisk)
+                    ? 'text-[0.68rem] leading-relaxed text-muted-foreground'
+                    : 'flex items-start gap-1.5 text-[0.68rem] leading-relaxed text-block-ink'
+              }
+            >
+              {gatesAt(risk, gateRisk) ? null : (
+                <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
+              )}
+              <span>{consequenceOf(risk, gateRisk)}</span>
+            </p>
+
+            <label htmlFor={`${id}-reason`} className="sr-only">
+              Reason for the tier on {tool.name}
+            </label>
+            <Input
+              id={`${id}-reason`}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Why this tier…"
+              autoComplete="off"
+              className="h-8 rounded-lg text-xs"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant={admitted.length === 0 || loweringOutOfGate ? 'outline' : 'default'}
+              className={
+                admitted.length === 0 || loweringOutOfGate
+                  ? 'border-block/60 text-block-ink hover:bg-block/10 hover:text-block-ink'
+                  : undefined
+              }
+              aria-describedby={consequenceId}
+              disabled={busy || !dirty}
+              onClick={() => onWrite(tool.name, { personas: admitted, risk, reason })}
+            >
+              {busy ? (
+                <Loader2
+                  className="mr-1 size-3 animate-spin motion-reduce:animate-none"
+                  aria-hidden
+                />
+              ) : null}
+              {actionLabel(admitted, risk, gateRisk, loweringOutOfGate)}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </li>
+  )
+}
+
+/** The external tools of one peer, under the peer's own name. */
+function PeerTools({
+  serverId,
+  tools,
+  personas,
+  gateRisk,
+  busy,
+  onWrite,
+}: {
+  serverId: string
+  tools: McpToolRow[]
+  personas: string[]
+  gateRisk: McpRisk
+  busy: string | null
+  onWrite: (name: string, next: McpGrantWrite) => void
+}): ReactElement {
+  const callable = tools.filter((tool) => tool.callableNow && tool.personas.length > 0).length
+  return (
+    <section className="overflow-hidden rounded-lg border border-border">
+      <h3 className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-surface-2 px-4 py-2.5">
+        <Network className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <Figure className="text-foreground">{serverId}</Figure>
+        <span className="text-xs text-muted-foreground">
+          {tools.length} {tools.length === 1 ? 'tool' : 'tools'} · {callable} callable
+        </span>
+      </h3>
+      <ul className="divide-y divide-border">
+        {tools.map((tool) => (
+          <ToolItem
+            key={tool.name}
+            tool={tool}
+            personas={personas}
+            gateRisk={gateRisk}
+            busy={busy === tool.name}
+            onWrite={onWrite}
+          />
+        ))}
+      </ul>
+    </section>
   )
 }
 
@@ -313,13 +417,25 @@ export function ToolGovernance({
   busy: string | null
   onWrite: (name: string, next: McpGrantWrite) => void
 }): ReactElement {
+  // Grouped by the peer that advertised them, in the order the peers are declared, so
+  // the page reads the way the model does: a peer owns a set of tools.
+  const byPeer = data.servers
+    .map((server) => ({
+      serverId: server.serverId,
+      tools: data.tools.filter((tool) => tool.serverId === server.serverId),
+    }))
+    .filter((group) => group.tools.length > 0)
+  const orphaned = data.tools.filter(
+    (tool) => !data.servers.some((server) => server.serverId === tool.serverId),
+  )
+  const groups = orphaned.length > 0 ? [...byPeer, { serverId: 'unknown peer', tools: orphaned }] : byPeer
+
   return (
     <>
       <DataPanel
-        title="External tools"
-        eyebrow="tier, and who may call it"
-        maxHeight={data.tools.length > 4 ? '38rem' : undefined}
-        className={SCROLL_BOX}
+        title="External tools — what each may do, and to whom"
+        eyebrow="step 3 · admitted per named tool"
+        maxHeight={data.tools.length > 4 ? '44rem' : undefined}
         actions={
           <InfoTip label="Why an external tool starts at high">
             An external tool is code we did not write, reached over a network, returning
@@ -348,40 +464,25 @@ export function ToolGovernance({
             />
           )
         ) : (
-          <Table>
-            <THead>
-              <ColumnTip tip="The namespaced name an agent sees, and the peer that advertised it. The namespace is what stops a peer shadowing an Aegis tool.">
-                Tool
-              </ColumnTip>
-              <ColumnTip tip="The tier the platform is enforcing right now, and whether it stops at the human gate. An `unattended` badge means a call runs with nobody watching.">
-                In force
-              </ColumnTip>
-              <ColumnTip tip="Which personas may call it. Admitting nobody is a valid, enforced state — a discovered tool that nobody is admitted to is inert.">
-                Personas
-              </ColumnTip>
-              <ColumnTip tip="The change you are about to make, with its consequence stated before you press the button. Nothing here applies until you do.">
-                Decide
-              </ColumnTip>
-            </THead>
-            <TBody>
-              {data.tools.map((tool) => (
-                <ToolRow
-                  key={tool.name}
-                  tool={tool}
-                  personas={data.personas}
-                  gateRisk={data.gateRisk}
-                  busy={busy === tool.name}
-                  onWrite={onWrite}
-                />
-              ))}
-            </TBody>
-          </Table>
+          <div className="flex flex-col gap-4">
+            {groups.map((group) => (
+              <PeerTools
+                key={group.serverId}
+                serverId={group.serverId}
+                tools={group.tools}
+                personas={data.personas}
+                gateRisk={data.gateRisk}
+                busy={busy}
+                onWrite={onWrite}
+              />
+            ))}
+          </div>
         )}
       </DataPanel>
 
       <DataPanel
-        title="Aegis tools"
-        eyebrow="declared in code, not editable here"
+        title="Aegis tools — declared in code, not editable here"
+        eyebrow="for comparison · the same gate applies"
         actions={
           <InfoTip label="Why these have no control">
             A tier is declared on the tool, in the module named in each row, and reviewed with
@@ -395,7 +496,7 @@ export function ToolGovernance({
             <ColumnTip tip="Aegis’s own tools — the ones the agent reaches without leaving this deployment.">
               Tool
             </ColumnTip>
-            <ColumnTip tip="The tier declared on the tool, and whether it stops at this deployment’s human gate.">
+            <ColumnTip tip="The tier declared on the tool, and what that tier does to a call on this deployment.">
               In force
             </ColumnTip>
             <ColumnTip tip="Which personas the tool is offered to. A persona not listed never sees the tool at all.">
@@ -419,13 +520,17 @@ export function ToolGovernance({
                     </span>
                   </TD>
                   <TD className="align-top">
-                    <Badge tone={badge.tone} className="gap-1 whitespace-nowrap">
-                      {badge.icon}
-                      {tool.risk}
-                    </Badge>
-                    <p className="mt-1 text-[0.68rem] text-muted-foreground">
-                      {gatesAt(tool.risk, data.gateRisk) ? 'stops at the gate' : 'unattended'}
-                    </p>
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <Badge tone={badge.tone} className="gap-1 whitespace-nowrap">
+                        {badge.icon}
+                        {tool.risk}
+                      </Badge>
+                      <GateBadge
+                        risk={tool.risk}
+                        gateRisk={data.gateRisk}
+                        admitted={tool.personas.length}
+                      />
+                    </span>
                   </TD>
                   <TD className="align-top">
                     <Figure className="text-muted-foreground">
@@ -446,10 +551,9 @@ export function ToolGovernance({
       </DataPanel>
 
       <DataPanel
-        title="Decisions"
-        eyebrow="who lowered what, and what they said"
+        title="Decisions — who lowered what, and what they said"
+        eyebrow="recorded in the audit trail"
         maxHeight={data.decisions.length > 6 ? '24rem' : undefined}
-        className={SCROLL_BOX}
         footer={
           <Receipt
             origin="audit trail · mcp.tool_risk_decided"
@@ -512,9 +616,7 @@ export function ToolGovernance({
                     </Figure>
                   </TD>
                   <TD className="max-w-xs text-xs leading-relaxed text-muted-foreground">
-                    {decision.reason || (
-                      <span className="italic">no reason given</span>
-                    )}
+                    {decision.reason || <span className="italic">no reason given</span>}
                   </TD>
                 </TR>
               ))}

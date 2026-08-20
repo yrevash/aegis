@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   Clock3,
@@ -17,13 +18,13 @@ import { ConsentStatement, GateReceipt, ProposedAction } from '@/components/appr
 import { readApproval } from '@/components/approval/approvalActions'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
+import { Card } from '@/components/ui/Card'
 import { DataPanel } from '@/components/ui/DataPanel'
-import { StatCard } from '@/components/ui/StatCard'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { signalForRisk } from '@/config/signals'
 import { errorSentence } from '@/lib/api/apiError'
@@ -61,6 +62,10 @@ const WINDOWS: { id: string; label: string; hours: number | null }[] = [
 /** Statuses that mean the gate is closed — nothing more will happen to it. */
 const CLOSED = new Set(['approved', 'rejected', 'expired'])
 
+/** One spelling of the console's native select, so three of them agree. */
+const SELECT =
+  'h-8 rounded-md border border-border bg-surface px-2 text-sm text-foreground outline-none transition-colors duration-[--dur-fast] motion-reduce:transition-none hover:border-input focus-visible:ring-2 focus-visible:ring-ring'
+
 /** The signal colour a lifecycle status carries. */
 function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'neutral' {
   if (status === 'approved') return 'ok'
@@ -68,6 +73,14 @@ function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'neu
   if (status === 'expired') return 'risk'
   if (status === 'pending' || status === 'resuming') return 'agent'
   return 'neutral'
+}
+
+/** The icon that ships with a status word, so the tone is never alone. */
+function statusIcon(status: string): typeof CheckCircle2 {
+  if (status === 'approved') return CheckCircle2
+  if (status === 'rejected') return XCircle
+  if (status === 'expired') return Clock3
+  return ShieldAlert
 }
 
 /** Local wall-clock time from an ISO 8601 timestamp, or an em dash. */
@@ -137,6 +150,30 @@ function slaSpent(createdAt: string | null, deadline: string | null, now: number
   return Math.max(0, Math.min(1, (now - from) / (to - from)))
 }
 
+/** The fraction of the SLA window at which a gate stops being routine. */
+const URGENT_AT = 0.75
+
+/** Which urgency band a waiting gate is in — the ladder on the board, and the rail's hue. */
+type Urgency = 'overdue' | 'soon' | 'ontrack' | 'unbounded'
+
+function urgencyOf(row: ApprovalInboxRow, now: number): Urgency {
+  if (isOverdue(row.sla_deadline, now)) return 'overdue'
+  const spent = slaSpent(row.created_at, row.sla_deadline, now)
+  if (spent == null) return 'unbounded'
+  return spent >= URGENT_AT ? 'soon' : 'ontrack'
+}
+
+/** How each band reads: a word, an icon and a fill — never the fill alone. */
+const URGENCY: Record<Urgency, { word: string; icon: typeof Clock3; fill: string; ink: string }> = {
+  overdue: { word: 'Past deadline', icon: AlertTriangle, fill: 'var(--block)', ink: 'text-block-ink' },
+  soon: { word: 'Under a quarter left', icon: Timer, fill: 'var(--risk)', ink: 'text-risk-ink' },
+  ontrack: { word: 'On track', icon: Clock3, fill: 'var(--blue-600)', ink: 'text-muted-foreground' },
+  unbounded: { word: 'No deadline recorded', icon: Clock3, fill: 'var(--blue-200)', ink: 'text-muted-foreground' },
+}
+
+/** The order the ladder reads in — worst first, because that is what is scanned for. */
+const URGENCY_ORDER: Urgency[] = ['overdue', 'soon', 'ontrack', 'unbounded']
+
 /** Who a gate belongs to, said plainly. */
 function ownerLabel(tenantId: number | null): string {
   return tenantId === null ? 'Aegis · no tenant' : `Tenant #${tenantId}`
@@ -173,8 +210,14 @@ interface ApprovalInboxProps {
  * arrived at the same size, in the same order, in the same voice — and the reader had
  * to read all hundred to find the five. Here the split is structural: what is waiting
  * is opened, ordered by how little time is left, and carries the decision; what is
- * decided is a dense row that opens only if asked. The counting strip above says how
- * many of each there are before either list is read.
+ * decided is a dense row that opens only if asked.
+ *
+ * **The board above both lists is one instrument, not five boxes.** It used to be a
+ * bordered control strip followed by four equal stat cards, which is the "stacked
+ * boxes" reading the screen was criticised for: five surfaces of identical weight,
+ * none of them the subject. One panel now carries the controls, the waiting figure,
+ * the **urgency ladder** that says how much of the queue is actually urgent, and the
+ * outcome split of everything already decided. Same facts, one hierarchy.
  *
  * **Who sees what is the server's answer, not this component's.** Every row arrives
  * with `decidable` and, when it is false, the `blocked_reason` the decision endpoint
@@ -249,7 +292,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
    * little time is left, because a queue sorted by arrival buries the one that is
    * about to expire; decided gates stay newest-first, which is how history reads.
    */
-  const { waiting, decided, counts } = useMemo(() => {
+  const { waiting, decided, counts, ladder } = useMemo(() => {
     const pend = rows.filter((r) => r.status === 'pending' || r.status === 'resuming')
     const done = rows.filter((r) => CLOSED.has(r.status))
     const deadline = (r: ApprovalInboxRow): number => {
@@ -260,12 +303,15 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
       const t = new Date(r.decided_at ?? r.created_at).getTime()
       return Number.isNaN(t) ? 0 : t
     }
+    const bands: Record<Urgency, number> = { overdue: 0, soon: 0, ontrack: 0, unbounded: 0 }
+    for (const row of pend) bands[urgencyOf(row, now)] += 1
     return {
       waiting: [...pend].sort((a, b) => deadline(a) - deadline(b)),
       decided: [...done].sort((a, b) => decidedAt(b) - decidedAt(a)),
+      ladder: bands,
       counts: {
         waiting: pend.length,
-        overdue: pend.filter((r) => isOverdue(r.sla_deadline, now)).length,
+        overdue: bands.overdue,
         approved: done.filter((r) => r.status === 'approved').length,
         rejected: done.filter((r) => r.status === 'rejected').length,
         expired: done.filter((r) => r.status === 'expired').length,
@@ -298,131 +344,32 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
 
   const windowLabel = WINDOWS.find((w) => w.id === lookback)?.label ?? 'this window'
   const scope = `aegis.approvals · ${windowLabel.toLowerCase()}`
-  // A tile only appears when the loaded set could contain what it counts. On the
-  // Decided queue the server sends no pending rows, so a "Waiting on a decision: 0"
-  // tile would be counting rows it was never given — and five gates really are
-  // waiting one tab away. An absence of data is not a zero.
-  const showPendingTiles = filter !== 'decided'
-  const showDecidedTiles = filter !== 'pending'
+  // A half of the board only appears when the loaded set could contain what it counts.
+  // On the Decided queue the server sends no pending rows, so a "Waiting: 0" figure
+  // would be counting rows it was never given — and five gates really are waiting one
+  // tab away. An absence of data is not a zero, and it is said in one line.
+  const showWaiting = filter !== 'decided'
+  const showDecided = filter !== 'pending'
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* ── The one control strip, above both lists ─────────────────────────── */}
-      <div className="flex flex-wrap items-end gap-x-4 gap-y-3 rounded-lg border border-border bg-surface px-4 py-3">
-        <fieldset className="min-w-0">
-          <legend className="eyebrow mb-1.5">Queue</legend>
-          <div className="flex flex-wrap gap-1.5">
-            {FILTERS.map((option) => (
-              <Button
-                key={option.id}
-                type="button"
-                size="sm"
-                variant={filter === option.id ? 'default' : 'outline'}
-                aria-pressed={filter === option.id}
-                onClick={() => setFilter(option.id)}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        </fieldset>
-
-        <div className="min-w-0">
-          <label htmlFor="approvals-window" className="eyebrow mb-1.5 block">
-            Raised
-          </label>
-          <select
-            id="approvals-window"
-            value={lookback}
-            onChange={(event) => setLookback(event.target.value)}
-            className="h-8 rounded-lg border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {WINDOWS.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {canFilterByTenant && (
-          <div className="min-w-0">
-            <label htmlFor="approvals-tenant" className="eyebrow mb-1.5 block">
-              Whose gate
-            </label>
-            <select
-              id="approvals-tenant"
-              value={tenant}
-              onChange={(event) => setTenant(event.target.value)}
-              className="h-8 rounded-lg border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="all">Every tenant</option>
-              {knownTenants.map((id) => (
-                <option key={id} value={String(id)}>
-                  Tenant #{id}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div className="flex items-center gap-2 sm:ml-auto">
-          <Button type="button" size="sm" variant="outline" onClick={() => void refresh()}>
-            <RefreshCw className="size-4" aria-hidden /> Refresh
-          </Button>
-        </div>
-      </div>
-
-      {/* ── What the queue holds, before either list is read ─────────────────── */}
-      {load.status === 'ready' && rows.length > 0 && (
-        <div
-          className={cn(
-            'grid grid-cols-2 gap-4 [&>*]:min-w-0',
-            showPendingTiles && showDecidedTiles ? 'lg:grid-cols-4' : 'lg:grid-cols-2',
-          )}
-        >
-          {showPendingTiles && (
-            <>
-              <StatCard
-                label="Waiting on a decision"
-                value={String(counts.waiting)}
-                icon={ShieldAlert}
-                tone={counts.waiting > 0 ? 'risk' : 'ok'}
-                source={scope}
-                className="rounded-lg"
-              />
-              <StatCard
-                label="Past its deadline"
-                value={String(counts.overdue)}
-                icon={Clock3}
-                tone={counts.overdue > 0 ? 'block' : 'neutral'}
-                source={`${scope} · the sweeper decides these if a person does not`}
-                className="rounded-lg"
-              />
-            </>
-          )}
-          {showDecidedTiles && (
-            <>
-              <StatCard
-                label="Approved"
-                value={String(counts.approved)}
-                icon={CheckCircle2}
-                tone="ok"
-                source={scope}
-                className="rounded-lg"
-              />
-              <StatCard
-                label="Rejected or expired"
-                value={String(counts.rejected + counts.expired)}
-                icon={XCircle}
-                tone="block"
-                source={`${scope} · ${counts.rejected} rejected, ${counts.expired} expired`}
-                className="rounded-lg"
-              />
-            </>
-          )}
-        </div>
-      )}
+    <div className="flex flex-col gap-5">
+      <QueueBoard
+        filter={filter}
+        onFilter={setFilter}
+        lookback={lookback}
+        onLookback={setLookback}
+        tenant={tenant}
+        onTenant={setTenant}
+        knownTenants={canFilterByTenant ? knownTenants : null}
+        onRefresh={() => void refresh()}
+        busy={load.status === 'loading'}
+        ready={load.status === 'ready'}
+        showWaiting={showWaiting}
+        showDecided={showDecided}
+        counts={counts}
+        ladder={ladder}
+        scope={scope}
+      />
 
       {notice && (
         <p
@@ -472,11 +419,17 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
               auto-rejected — so not deciding is itself a decision.
             </InfoTip>
           </div>
-          <ul className="grid gap-3">
-            {waiting.map((row) => (
-              <li key={row.id}>
+          <ul className="grid gap-4">
+            {waiting.map((row, index) => (
+              <li
+                key={row.id}
+                className="animate-section"
+                style={{ animationDelay: `${Math.min(index, 6) * 55}ms` }}
+              >
                 <WaitingGate
                   row={row}
+                  rank={index + 1}
+                  total={waiting.length}
                   now={now}
                   busy={busy === row.id}
                   onDecide={(decision) => void decide(row.id, decision)}
@@ -512,6 +465,301 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
   )
 }
 
+// ── the board above both lists ───────────────────────────────────────────────
+
+/** What the four counts are, once the query has answered. */
+interface QueueCounts {
+  waiting: number
+  overdue: number
+  approved: number
+  rejected: number
+  expired: number
+}
+
+/**
+ * The queue's whole state, and its controls, as one instrument.
+ *
+ * The controls sit in the panel's own toolbar because they decide what every figure
+ * below them counts; splitting them into a separate bordered strip made two surfaces
+ * out of one thought. The waiting figure is the screen's single display numeral
+ * (DESIGN.md §3) — a second one would be a hierarchy failure rather than emphasis.
+ *
+ * The **urgency ladder** is the risk visual the board turns on. A bare "5 waiting"
+ * says nothing about whether any of them is close to deciding itself; five bars, worst
+ * band first, each with its icon, its word and its count, says it at a glance and
+ * still reads with the colour removed.
+ */
+function QueueBoard({
+  filter,
+  onFilter,
+  lookback,
+  onLookback,
+  tenant,
+  onTenant,
+  knownTenants,
+  onRefresh,
+  busy,
+  ready,
+  showWaiting,
+  showDecided,
+  counts,
+  ladder,
+  scope,
+}: {
+  filter: ApprovalStatusFilter
+  onFilter: (next: ApprovalStatusFilter) => void
+  lookback: string
+  onLookback: (next: string) => void
+  tenant: string
+  onTenant: (next: string) => void
+  /** Tenants this operator may target, or `null` when they may not target one. */
+  knownTenants: number[] | null
+  onRefresh: () => void
+  busy: boolean
+  ready: boolean
+  showWaiting: boolean
+  showDecided: boolean
+  counts: QueueCounts
+  ladder: Record<Urgency, number>
+  scope: string
+}): ReactElement {
+  const decidedTotal = counts.approved + counts.rejected + counts.expired
+  const bands = URGENCY_ORDER.filter(
+    (band) => ladder[band] > 0 || band === 'overdue' || band === 'ontrack',
+  )
+  const ladderMax = Math.max(1, ...URGENCY_ORDER.map((band) => ladder[band]))
+
+  const outcomes: { key: string; word: string; n: number; fill: string; icon: typeof CheckCircle2 }[] =
+    [
+      { key: 'approved', word: 'Approved', n: counts.approved, fill: 'var(--ok)', icon: CheckCircle2 },
+      { key: 'rejected', word: 'Rejected', n: counts.rejected, fill: 'var(--block)', icon: XCircle },
+      { key: 'expired', word: 'Expired', n: counts.expired, fill: 'var(--risk)', icon: Clock3 },
+    ]
+
+  return (
+    <Card className="overflow-hidden shadow-card">
+      {/* ── the controls, which decide what everything below them counts ────── */}
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-3 border-b border-border bg-surface-2/60 px-4 py-3 md:px-5">
+        <div
+          role="group"
+          aria-label="Which queue"
+          className="inline-flex rounded-lg border border-border bg-surface p-0.5"
+        >
+          {FILTERS.map((option) => {
+            const active = filter === option.id
+            return (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onFilter(option.id)}
+                className={cn(
+                  'touch-manipulation rounded-md px-3 py-1 text-sm font-medium transition-colors duration-[--dur-fast] outline-none motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-ring',
+                  active
+                    ? 'bg-blue-600 text-white'
+                    : 'text-muted-foreground hover:bg-surface-2 hover:text-foreground',
+                )}
+              >
+                {option.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="min-w-0 flex-1 sm:flex-none">
+          <label htmlFor="approvals-window" className="eyebrow mb-1 block">
+            Raised
+          </label>
+          <select
+            id="approvals-window"
+            value={lookback}
+            onChange={(event) => onLookback(event.target.value)}
+            className={cn(SELECT, 'w-full sm:w-auto')}
+          >
+            {WINDOWS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {knownTenants !== null && (
+          <div className="min-w-0 flex-1 sm:flex-none">
+            <label htmlFor="approvals-tenant" className="eyebrow mb-1 block">
+              Whose gate
+            </label>
+            <select
+              id="approvals-tenant"
+              value={tenant}
+              onChange={(event) => onTenant(event.target.value)}
+              className={cn(SELECT, 'w-full sm:w-auto')}
+            >
+              <option value="all">Every tenant</option>
+              {knownTenants.map((id) => (
+                <option key={id} value={String(id)}>
+                  Tenant #{id}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="w-full sm:ml-auto sm:w-auto"
+          onClick={onRefresh}
+        >
+          {busy ? (
+            <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+          ) : (
+            <RefreshCw className="size-4" aria-hidden />
+          )}
+          Refresh
+        </Button>
+      </div>
+
+      {/* ── what the queue holds, before either list is read ────────────────── */}
+      <div className="grid gap-6 px-4 py-5 md:px-5 lg:grid-cols-2 lg:gap-0 lg:divide-x lg:divide-border [&>*]:min-w-0">
+        <div className="lg:pr-8">
+          <p className="eyebrow">Waiting on a decision</p>
+          {showWaiting ? (
+            <>
+              <div className="mt-1 flex items-end gap-2.5">
+                <Figure
+                  size="display"
+                  className={counts.waiting > 0 ? 'text-risk-ink' : 'text-foreground'}
+                >
+                  {ready ? String(counts.waiting) : '—'}
+                </Figure>
+                <span className="pb-1 text-sm text-muted-foreground">
+                  {counts.waiting === 1 ? 'gate is parked' : 'gates are parked'}
+                </span>
+              </div>
+              <ul className="mt-4 space-y-2">
+                {bands.map((band) => {
+                  const meta = URGENCY[band]
+                  const Icon = meta.icon
+                  const n = ladder[band]
+                  return (
+                    <li
+                      key={band}
+                      className="grid grid-cols-[minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-x-3"
+                    >
+                      <span
+                        className={cn(
+                          'flex min-w-0 items-center gap-1.5 text-[0.72rem]',
+                          n > 0 ? meta.ink : 'text-muted-foreground',
+                        )}
+                      >
+                        <Icon className="size-3.5 shrink-0" aria-hidden />
+                        <span className="truncate">{meta.word}</span>
+                      </span>
+                      <span className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+                        <span
+                          className="block h-full rounded-full transition-[width] duration-[--dur-base] motion-reduce:transition-none"
+                          style={{
+                            width: `${n === 0 ? 0 : Math.max(6, (n / ladderMax) * 100)}%`,
+                            background: meta.fill,
+                          }}
+                        />
+                      </span>
+                      <Figure className="w-6 text-right text-xs text-foreground">{n}</Figure>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          ) : (
+            <NotInThisQueue what="This query asked the server for decided gates only, so nothing here counts what is still waiting. The Waiting tab loads them." />
+          )}
+        </div>
+
+        <div className="lg:pl-8">
+          <p className="eyebrow">Already decided</p>
+          {showDecided ? (
+            <>
+              <div className="mt-1 flex items-end gap-2.5">
+                <Figure size="stat" className="text-foreground">
+                  {ready ? String(decidedTotal) : '—'}
+                </Figure>
+                <span className="pb-0.5 text-sm text-muted-foreground">
+                  {decidedTotal === 1 ? 'gate is closed' : 'gates are closed'}
+                </span>
+              </div>
+              <div
+                className="mt-3 flex h-2.5 w-full overflow-hidden rounded-full bg-surface-2"
+                role="img"
+                aria-label={outcomes.map((o) => `${o.n} ${o.word.toLowerCase()}`).join(', ')}
+              >
+                {outcomes.map((o) =>
+                  o.n === 0 ? null : (
+                    <span
+                      key={o.key}
+                      className="h-full transition-[width] duration-[--dur-base] motion-reduce:transition-none"
+                      style={{
+                        width: `${decidedTotal > 0 ? (o.n / decidedTotal) * 100 : 0}%`,
+                        background: o.fill,
+                      }}
+                    />
+                  ),
+                )}
+              </div>
+              <ul className="mt-3 grid grid-cols-3 gap-3">
+                {outcomes.map((o) => {
+                  const Icon = o.icon
+                  return (
+                    <li key={o.key} className="min-w-0">
+                      <span className="flex min-w-0 items-center gap-1.5 text-[0.72rem] text-muted-foreground">
+                        <span
+                          aria-hidden
+                          className="size-2 shrink-0 rounded-full"
+                          style={{ background: o.fill }}
+                        />
+                        <Icon className="size-3 shrink-0" aria-hidden />
+                        <span className="truncate">{o.word}</span>
+                      </span>
+                      <Figure className="mt-0.5 block text-sm text-foreground">{o.n}</Figure>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          ) : (
+            <NotInThisQueue what="This query asked the server for waiting gates only, so nothing here counts what has already been decided. The Decided tab loads them." />
+          )}
+        </div>
+      </div>
+
+      <div className="border-t border-border px-4 py-2.5 md:px-5">
+        <Receipt
+          variant="inline"
+          origin={scope}
+          detail="every figure above counts the rows this query loaded, and nothing outside it"
+        />
+      </div>
+    </Card>
+  )
+}
+
+/**
+ * The half of the board this query did not load, as one line.
+ *
+ * Zero is a claim. A queue that asked the server only for decided gates has not been
+ * told that nothing is waiting — it has been told nothing at all, and printing `0`
+ * there would be the dashboard inventing a fact in the reader's favour.
+ */
+function NotInThisQueue({ what }: { what: string }): ReactElement {
+  return (
+    <p className="mt-2 max-w-prose text-xs leading-relaxed text-muted-foreground">
+      <span className="font-medium text-foreground">Not counted in this queue. </span>
+      {what}
+    </p>
+  )
+}
+
 /** The empty state for each queue — an invitation, not a shrug. */
 function EmptyQueue({ filter }: { filter: ApprovalStatusFilter }): ReactElement {
   const body =
@@ -532,14 +780,17 @@ function EmptyQueue({ filter }: { filter: ApprovalStatusFilter }): ReactElement 
 // ── the SLA meter ────────────────────────────────────────────────────────────
 
 /**
- * How much of the gate's own deadline has been spent, drawn.
+ * How much of the gate's own deadline has been spent, drawn full-width.
  *
- * The bar is the risk visual the queue turns on: it fills as the window closes, and
- * takes the block hue once the sweeper rather than a person is going to decide. The
- * words beside it say the same thing, because a bar alone is a colour carrying a
- * verdict. A gate with no deadline draws no bar and says so.
+ * The rail is the one strong risk visual on a gate, so it spans the card rather than
+ * hiding in a side box: five stacked gates then read as five stacked meters a person
+ * can compare down the column without reading a word. It fills as the window closes,
+ * takes the risk hue past three-quarters and the block hue once the sweeper rather
+ * than a person is going to decide, and carries a tick at the threshold where it
+ * changes. The words beside it say the same thing, because a bar alone is a colour
+ * carrying a verdict. A gate with no deadline draws no bar and says so.
  */
-function SlaMeter({
+function SlaRail({
   createdAt,
   deadline,
   now,
@@ -553,45 +804,62 @@ function SlaMeter({
   const spent = slaSpent(createdAt, deadline, now)
   const left = slaLeft(deadline, now)
   const overdue = isOverdue(deadline, now)
-  const urgent = spent != null && spent >= 0.75
+  const urgent = spent != null && spent >= URGENT_AT
 
   if (spent == null || left == null) {
     return (
-      <p className={cn('text-[0.72rem] text-muted-foreground', className)}>
-        No SLA deadline recorded on this gate.
+      <p
+        className={cn(
+          'flex items-center gap-1.5 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-[0.72rem] text-muted-foreground',
+          className,
+        )}
+      >
+        <Clock3 className="size-3.5 shrink-0" aria-hidden />
+        No SLA deadline is recorded on this gate, so there is no window to draw.
       </p>
     )
   }
 
   const pct = Math.round(spent * 100)
+  const fill = overdue ? 'var(--block)' : urgent ? 'var(--risk)' : 'var(--blue-600)'
+
   return (
     <div className={cn('min-w-0', className)}>
-      <p className="eyebrow">Time on the clock</p>
-      <p
-        className={cn(
-          'mt-1 flex items-center gap-1.5 text-sm font-semibold',
-          overdue ? 'text-block-ink' : urgent ? 'text-risk-ink' : 'text-foreground',
-        )}
-      >
-        <Timer className="size-4 shrink-0" aria-hidden />
-        {left}
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p
+          className={cn(
+            'flex items-center gap-1.5 text-sm font-semibold',
+            overdue ? 'text-block-ink' : urgent ? 'text-risk-ink' : 'text-foreground',
+          )}
+        >
+          {overdue ? (
+            <AlertTriangle className="size-4 shrink-0" aria-hidden />
+          ) : (
+            <Timer className="size-4 shrink-0" aria-hidden />
+          )}
+          {left}
+        </p>
+        <p className="text-[0.72rem] text-muted-foreground">
+          <Figure>{`${pct}%`}</Figure> of the window spent · act by{' '}
+          <Figure>{formatTime(deadline)}</Figure>
+        </p>
+      </div>
       <div
-        className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-2"
+        className="relative mt-2 h-2 w-full overflow-hidden rounded-full bg-surface-2"
         role="img"
         aria-label={`${pct}% of the SLA window spent — ${left}`}
       >
         <div
           className="h-full rounded-full transition-[width] duration-[--dur-base] motion-reduce:transition-none"
-          style={{
-            width: `${Math.max(2, pct)}%`,
-            background: overdue ? 'var(--block)' : urgent ? 'var(--risk)' : 'var(--blue-600)',
-          }}
+          style={{ width: `${Math.max(2, pct)}%`, background: fill }}
+        />
+        {/* the threshold at which the rail changes hue and the row changes band */}
+        <span
+          aria-hidden
+          className="absolute inset-y-0 w-px bg-foreground/30"
+          style={{ left: `${URGENT_AT * 100}%` }}
         />
       </div>
-      <p className="mt-1.5 text-[0.68rem] leading-relaxed text-muted-foreground">
-        <Figure>{`${pct}%`}</Figure> spent · deadline <Figure>{formatTime(deadline)}</Figure>
-      </p>
     </div>
   )
 }
@@ -607,14 +875,25 @@ function SlaMeter({
  * fan-out while naming one of its writes. The consent sentence and the gate receipt
  * are the live card's own components for the same reason: a second spelling of the
  * sentence that records what a person authorised is a second thing to keep true.
+ *
+ * **The card is banded rather than stacked.** A tinted head carries the identity of
+ * what would run, the SLA rail spans the width directly beneath it, the calls sit in
+ * the body, and the consent sentence *encloses the two buttons it describes* — so the
+ * record of what a human authorised is physically the thing they pressed, not a
+ * paragraph floating above it. That is four levels of weight where there was one.
  */
 function WaitingGate({
   row,
+  rank,
+  total,
   now,
   busy,
   onDecide,
 }: {
   row: ApprovalInboxRow
+  /** Position in the urgency order, so the queue's ranking is visible not implied. */
+  rank: number
+  total: number
   now: number
   busy: boolean
   onDecide: (decision: ApprovalDecision) => void
@@ -630,63 +909,94 @@ function WaitingGate({
   const overdue = isOverdue(row.sla_deadline, now)
   const consentId = `gate-consent-${row.id}`
   const persona = personaLabel(row.persona)
+  const headline = view.actions[0]?.name ?? row.action
 
   return (
     <article
       className={cn(
-        'relative overflow-hidden rounded-lg border bg-surface shadow-card',
+        'relative overflow-hidden rounded-lg border bg-surface shadow-card transition-shadow duration-[--dur-fast] motion-reduce:transition-none hover:shadow-hover',
         overdue ? 'border-block/60' : 'border-risk/60',
       )}
     >
-      {/* The severity rail — the one piece of pure colour, and never alone: the risk
-          word, the status badge and the countdown all say it in text as well. */}
+      {/* The severity spine — the one piece of pure colour, and never alone: the risk
+          word, the countdown and the band on the board all say it in text as well. */}
       <span
         aria-hidden
-        className="absolute inset-y-0 left-0 w-1"
+        className="absolute inset-y-0 left-0 w-1.5"
         style={{ background: overdue ? 'var(--block)' : 'var(--risk)' }}
       />
-      <div className="space-y-3 py-4 pr-4 pl-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <ShieldAlert
-            className={cn('size-4 shrink-0', overdue ? 'text-block' : 'text-risk')}
-            aria-hidden
-          />
-          <p className="font-medium text-foreground">
-            {view.many ? (
-              <>
-                <Figure>{view.actions.length}</Figure> calls await a decision
-              </>
-            ) : (
-              'One call awaits a decision'
+
+      {/* ── head: what would run, and whose it is ─────────────────────────── */}
+      <div
+        className={cn(
+          'flex flex-wrap items-start gap-x-3 gap-y-2 border-b py-3 pr-4 pl-6',
+          overdue ? 'border-block/40 bg-block/[0.07]' : 'border-risk/40 bg-risk/[0.08]',
+        )}
+      >
+        <span
+          className={cn(
+            'mt-0.5 grid size-9 shrink-0 place-items-center rounded-md',
+            overdue ? 'bg-block/30 text-block-ink' : 'bg-risk/35 text-risk-ink',
+          )}
+        >
+          <ShieldAlert className="size-4" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <Figure className="text-[0.9rem] font-semibold break-all text-foreground">
+              {headline}
+            </Figure>
+            {view.many && (
+              <span className="text-[0.72rem] text-muted-foreground">
+                and <Figure>{view.actions.length - 1}</Figure> more in the same gate
+              </span>
             )}
           </p>
-          <Badge tone={riskSignal === 'block' ? 'block' : 'risk'} className="uppercase">
-            {row.risk} risk
-          </Badge>
-          <Badge tone="neutral">{ownerLabel(row.tenant_id)}</Badge>
-          {persona && <Badge tone="neutral">Raised for {persona}</Badge>}
-          <span className="ml-auto text-[0.72rem] text-muted-foreground">
-            raised <Figure>{ago(row.created_at, now) ?? formatTime(row.created_at)}</Figure>
-          </span>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.72rem] text-muted-foreground">
+            <Badge tone={riskSignal === 'block' ? 'block' : 'risk'} className="uppercase">
+              {row.risk} risk
+            </Badge>
+            <span>{ownerLabel(row.tenant_id)}</span>
+            {persona && (
+              <>
+                <span aria-hidden>·</span>
+                <span>raised for {persona}</span>
+              </>
+            )}
+            <span aria-hidden>·</span>
+            <span>
+              raised <Figure>{ago(row.created_at, now) ?? formatTime(row.created_at)}</Figure>
+            </span>
+          </p>
         </div>
+        <span className="shrink-0 self-center text-[0.68rem] whitespace-nowrap text-muted-foreground">
+          <Figure aria-label={`gate ${rank} of ${total} by urgency`}>{`${rank} / ${total}`}</Figure>{' '}
+          by urgency
+        </span>
+      </div>
 
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,15rem)]">
-          <div className="min-w-0 space-y-2">
-            <p className="eyebrow">If approved, this runs</p>
-            <ul className="grid gap-2">
-              {view.actions.map((action, index) => (
-                <ProposedAction
-                  key={action.id === '' ? `${action.name}-${index}` : action.id}
-                  action={action}
-                  showRisk={view.many}
-                />
-              ))}
-            </ul>
-          </div>
+      <div className="space-y-4 py-4 pr-4 pl-6">
+        <SlaRail createdAt={row.created_at} deadline={row.sla_deadline} now={now} />
 
-          <div className="min-w-0 rounded-lg border border-border bg-surface-2/50 p-3">
-            <SlaMeter createdAt={row.created_at} deadline={row.sla_deadline} now={now} />
-          </div>
+        <div className="min-w-0">
+          <p className="eyebrow mb-1.5">
+            If approved, this runs
+            {view.many ? (
+              <>
+                {' · '}
+                <Figure>{view.actions.length}</Figure> calls
+              </>
+            ) : null}
+          </p>
+          <ul className="grid gap-2">
+            {view.actions.map((action, index) => (
+              <ProposedAction
+                key={action.id === '' ? `${action.name}-${index}` : action.id}
+                action={action}
+                showRisk={view.many}
+              />
+            ))}
+          </ul>
         </div>
 
         {row.rationale && (
@@ -699,48 +1009,49 @@ function WaitingGate({
           </p>
         )}
 
-        {/* Load-bearing: the sentence that records what approving authorised. It sits
-            directly above the control it describes and is its accessible description. */}
-        <ConsentStatement
-          id={consentId}
-          view={view}
-          className="rounded-md border border-risk/40 bg-risk/[0.06] px-3 py-2"
-        />
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            aria-describedby={consentId}
-            disabled={!row.decidable || busy}
-            onClick={() => onDecide('approve')}
-          >
-            {busy ? (
-              <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-            ) : (
-              <CheckCircle2 className="size-4" aria-hidden />
+        {/* Load-bearing: the sentence that records what approving authorised. It
+            encloses the controls it describes and is their accessible description. */}
+        <div className="rounded-md border border-risk/50 bg-surface-2 p-3">
+          <p className="flex items-center gap-1.5 font-mono text-[0.68rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
+            <Gavel className="size-3.5 shrink-0" aria-hidden />
+            What approving authorises
+          </p>
+          <ConsentStatement id={consentId} view={view} className="mt-1.5 text-[0.82rem]" />
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              aria-describedby={consentId}
+              disabled={!row.decidable || busy}
+              onClick={() => onDecide('approve')}
+            >
+              {busy ? (
+                <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : (
+                <CheckCircle2 className="size-4" aria-hidden />
+              )}
+              {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
+            </Button>
+            <Button
+              variant="outline"
+              className="border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
+              aria-describedby={consentId}
+              disabled={!row.decidable || busy}
+              onClick={() => onDecide('reject')}
+            >
+              <XCircle className="size-4" aria-hidden /> Reject
+            </Button>
+            {row.blocked_reason && (
+              <p className="flex min-w-0 flex-1 items-start gap-1.5 text-[0.75rem] leading-relaxed text-muted-foreground">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span>{row.blocked_reason}</span>
+              </p>
             )}
-            {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
-          </Button>
-          <Button
-            variant="outline"
-            className="border-block/60 text-block-ink hover:bg-block/10 hover:text-block-ink"
-            aria-describedby={consentId}
-            disabled={!row.decidable || busy}
-            onClick={() => onDecide('reject')}
-          >
-            <XCircle className="size-4" aria-hidden /> Reject
-          </Button>
-          {row.blocked_reason && (
-            <p className="min-w-0 flex-1 text-[0.78rem] leading-relaxed text-muted-foreground">
-              {row.blocked_reason}
-            </p>
-          )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <GateReceipt approvalId={row.id} view={view} />
+          <GateReceipt approvalId={row.id} view={view} variant="inline" />
           <span className="text-[0.68rem] text-muted-foreground">
-            run <Figure className="break-all">{row.run_id}</Figure> · raised{' '}
-            <Figure>{formatTime(row.created_at)}</Figure>
+            run <Figure className="break-all">{row.run_id}</Figure>
           </span>
         </div>
       </div>
@@ -769,6 +1080,7 @@ function DecidedRow({ row, now }: { row: ApprovalInboxRow; now: number }): React
     actions: row.actions,
   })
   const panelId = `gate-detail-${row.id}`
+  const StatusIcon = statusIcon(row.status)
 
   return (
     <li className="min-w-0">
@@ -777,9 +1089,10 @@ function DecidedRow({ row, now }: { row: ApprovalInboxRow; now: number }): React
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((v) => !v)}
-        className="grid w-full grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-md px-1 py-2.5 text-left transition-colors duration-[--dur-fast] motion-reduce:transition-none hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none md:grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)_minmax(0,7rem)_minmax(0,9rem)_auto]"
+        className="grid w-full grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-md px-1 py-2.5 text-left transition-colors duration-[--dur-fast] motion-reduce:transition-none hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none md:grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_minmax(0,7rem)_minmax(0,9rem)_auto]"
       >
-        <Badge tone={statusVariant(row.status)} className="uppercase">
+        <Badge tone={statusVariant(row.status)} className="gap-1 uppercase">
+          <StatusIcon className="size-3 shrink-0" aria-hidden />
           {row.status}
         </Badge>
         <span className="min-w-0 truncate font-mono text-[0.8rem] text-foreground">
@@ -823,7 +1136,7 @@ function DecidedRow({ row, now }: { row: ApprovalInboxRow; now: number }): React
             </p>
           )}
 
-          <dl className="grid grid-cols-[minmax(0,6rem)_minmax(0,1fr)] gap-x-4 gap-y-1 text-[0.72rem] text-muted-foreground sm:grid-cols-[minmax(0,6rem)_minmax(0,1fr)_minmax(0,6rem)_minmax(0,1fr)]">
+          <dl className="grid grid-cols-[minmax(0,6rem)_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md bg-surface-2/60 p-3 text-[0.72rem] text-muted-foreground sm:grid-cols-[minmax(0,6rem)_minmax(0,1fr)_minmax(0,6rem)_minmax(0,1fr)]">
             <dt>Raised</dt>
             <dd className="min-w-0">
               <Figure className="text-foreground">{formatTime(row.created_at)}</Figure>
@@ -885,23 +1198,21 @@ export function ApprovalsMount(): ReactElement {
 
   return (
     <BackendGate>
-      <TooltipProvider>
-        <div className="space-y-4">
-          <PageHeader
-            eyebrow="bounded autonomy"
-            title="Approvals"
-            note={note}
-            actions={
-              <Badge tone="neutral" className="gap-1.5">
-                <Gavel className="size-3 shrink-0" aria-hidden />
-                Human gate
-                <InfoTip label="What this screen decides">{detail}</InfoTip>
-              </Badge>
-            }
-          />
-          <ApprovalInbox token={session?.token ?? null} canFilterByTenant={platform} />
-        </div>
-      </TooltipProvider>
+      <div className="space-y-5">
+        <PageHeader
+          eyebrow="bounded autonomy"
+          title="Approvals"
+          note={note}
+          actions={
+            <Badge tone="neutral" className="gap-1.5">
+              <Gavel className="size-3 shrink-0" aria-hidden />
+              Human gate
+              <InfoTip label="What this screen decides">{detail}</InfoTip>
+            </Badge>
+          }
+        />
+        <ApprovalInbox token={session?.token ?? null} canFilterByTenant={platform} />
+      </div>
     </BackendGate>
   )
 }

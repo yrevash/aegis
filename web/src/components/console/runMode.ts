@@ -33,6 +33,11 @@ export const DEPTH_CHOICES: readonly DepthChoice[] = [
   { id: 'team', label: 'Team', hint: 'Fan out to concurrent specialists, then synthesise.' },
 ]
 
+/** The chosen width in one word, for a menu chip that has no room for the sentence. */
+export function depthLabel(depth: DepthMode): string {
+  return DEPTH_CHOICES.find((choice) => choice.id === depth)?.label ?? depth
+}
+
 /** The team widths the composer offers. Clamped DOWN by the tenant cap, never up. */
 export const FANOUT_CHOICES: readonly number[] = [2, 3, 4, 5]
 
@@ -70,4 +75,113 @@ export function describeMode(mode: RunMode): string {
   if (mode.depth === 'auto') return 'Auto width'
   if (mode.depth === 'single') return 'Single lane'
   return mode.fanout === null ? 'Team · router sizes it' : `Team of ${mode.fanout}`
+}
+
+// ── What the run actually did with the request ───────────────────────────────
+
+/**
+ * The fields of the run's own `routing` event this module reads.
+ *
+ * Structural rather than an import of `RoutingEvent`, so the rule below stays a pure
+ * module with no dependency on the stream types — and so a caller cannot pass an event
+ * that merely looks close enough.
+ */
+export interface RoutingFacts {
+  /** 'single' (one lane) or 'team' (a fan-out). */
+  depth: string
+  /** How many sub-agents a team turn fanned out to. 0 on a single lane. */
+  fanout: number
+  /** 'auto' | 'user' | 'tenant_default' | 'platform_cap'. */
+  decided_by: string
+  /** The run's own sentence for the decision. */
+  reason: string
+}
+
+/**
+ * What the run reports about its own width, and whether that is what was asked for.
+ *
+ * Every field here is read off the `routing` event — never off the composer's own
+ * selection. That is the whole point: the composer's request is a *request*, and the
+ * screen has already been wrong about it once by echoing the chosen chip back as
+ * though it were the outcome. The router can pick a different width (`decided_by:
+ * 'auto'`), the tenant can have no team roster (`tenant_default`), and
+ * `max_parallel_agents` can clamp a five-agent request to three (`platform_cap`).
+ */
+export interface WidthOutcome {
+  /** The width the run actually ran at, e.g. `Team of 3` or `Single lane`. */
+  ran: string
+  /** Who chose it, in words, from `decided_by`. */
+  decidedBy: string
+  /** `decided_by` verbatim, for the receipt's origin line. */
+  decidedByCode: string
+  /** The run's own reason string, shown verbatim or not at all. */
+  reason: string
+  /** Whether the run's width differs from what the composer asked for. */
+  differs: boolean
+  /**
+   * One sentence naming the difference — what was asked, what ran — or `null` when the
+   * request was honoured or when nothing was asked for (Auto).
+   */
+  note: string | null
+}
+
+/** `decided_by`, in the words the console uses for it. Unknown codes pass through. */
+const DECIDED_BY: Readonly<Record<string, string>> = {
+  auto: 'the router',
+  user: 'you',
+  tenant_default: 'the tenant default',
+  platform_cap: 'the tenant’s parallel-agent cap',
+}
+
+/** How a routed width reads back: `Single lane`, `Team of 3`, `Team`. */
+function ranAs(routing: RoutingFacts): string {
+  if (routing.depth !== 'team') return 'Single lane'
+  return routing.fanout > 0 ? `Team of ${routing.fanout}` : 'Team'
+}
+
+/**
+ * Compare the width that was asked for with the width the run reports.
+ *
+ * Auto never "differs": nothing was asked, so there is nothing to have been overridden,
+ * and saying "the router chose Single" is the whole of the story. A Team request that
+ * comes back single, or comes back smaller than it asked for, is the case this exists
+ * for — the run says so in `decided_by`, and the screen must not quietly show the chip
+ * the person picked as if it had been obeyed.
+ */
+export function widthOutcome(requested: RunMode, routing: RoutingFacts): WidthOutcome {
+  const ran = ranAs(routing)
+  const outcome: WidthOutcome = {
+    ran,
+    decidedBy: DECIDED_BY[routing.decided_by] ?? routing.decided_by,
+    decidedByCode: routing.decided_by,
+    reason: routing.reason,
+    differs: false,
+    note: null,
+  }
+
+  if (requested.depth === 'auto') return outcome
+
+  if (requested.depth === 'single' && routing.depth === 'team') {
+    return { ...outcome, differs: true, note: `You asked for a single lane; this run ran as ${ran}.` }
+  }
+
+  if (requested.depth === 'team') {
+    if (routing.depth !== 'team') {
+      return {
+        ...outcome,
+        differs: true,
+        note: 'You asked for a team; this run went out as a single lane.',
+      }
+    }
+    if (requested.fanout !== null && routing.fanout > 0 && routing.fanout !== requested.fanout) {
+      const verb = routing.fanout < requested.fanout ? 'clamped to' : 'widened to'
+      return {
+        ...outcome,
+        differs: true,
+        note: `You asked for ${requested.fanout} agents; this run was ${verb} ${routing.fanout}.`,
+      }
+    }
+  }
+
+  return outcome
 }

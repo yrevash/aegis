@@ -1,11 +1,17 @@
 'use client'
 
-import { BarChart3, LayoutDashboard, PlugZap, Table2 } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import {
+  BarChart3,
+  LayoutDashboard,
+  PlugZap,
+  Table2,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { BarChart } from '@/components/charts/BarChart'
 import { RankedBars } from '@/components/charts/RankedBars'
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -26,17 +32,37 @@ import {
   formatValue,
   seriesColor,
   type AnalyticsState,
+  type ChartRow,
 } from './analyticsBoard'
 import { SupersetEmbed } from './SupersetEmbed'
 
+/** What one board is doing right now. Exhaustive — there is no fourth state. */
+type BoardResult =
+  | { state: 'loading' }
+  | { state: 'ready'; data: AnalyticsBoardData }
+  | { state: 'failed'; detail: string }
+
 /**
- * The Superset half of the Analytics screen — the boards, when there are boards.
+ * The Superset half of the Analytics screen — every board this role may see, at once.
  *
- * It used to *be* the screen, which is why the screen died when Superset was off.
- * It is now one section of a page whose charts come from the usage ledger, so its
- * absence costs a section rather than the surface. Nothing about how a board is
- * drawn has changed: the same server-compiled query, the same tenant `WHERE`
- * clause, the same choice between Aegis-drawn charts and the embedded dashboard.
+ * **Why it stopped being a tab strip.** The section used to render *one* board at a
+ * time behind a row of buttons, which meant a page called "analytics" showed a single
+ * chart and hid the rest behind a click nobody makes during a demo. The catalogue is
+ * the deployment's real BI surface — spend, runs, latency, human gates, job throughput,
+ * the governance trail and the red-team record, each narrowed to the caller's tenant by
+ * a `WHERE` clause the browser cannot remove — so all of it is drawn, as a gallery of
+ * small multiples on one window.
+ *
+ * **Every card is one server-compiled query.** Nothing is derived from another card and
+ * nothing is a placeholder: a board that fails renders the backend's own sentence in
+ * the space its chart would occupy, and a board that returns no rows says exactly that.
+ * There is no skeleton chart anywhere in this file, because a grey chart on an
+ * analytics page is indistinguishable from a real one at a glance.
+ *
+ * **The embed is a second view of the same catalogue.** A board that declares the
+ * `dashboard` kind can be opened as the Superset dashboard itself, under a short-lived
+ * guest token carrying the same tenant clause; the gallery is what the section opens
+ * on, because it keeps working when the iframe does not.
  */
 export function SupersetBoards({
   status,
@@ -47,90 +73,76 @@ export function SupersetBoards({
   boards: AnalyticsBoard[]
   windows: Record<string, string>
 }): ReactElement {
-  const [selected, setSelected] = useState<string>(boards[0]?.id ?? '')
-  const [window_, setWindow] = useState<string>(boards[0]?.window ?? '')
-  const [data, setData] = useState<AnalyticsBoardData | null>(null)
-  const [dataError, setDataError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [mode, setMode] = useState<'charts' | 'dashboard'>('charts')
+  const chartBoards = useMemo(() => boards.filter(chartAvailable), [boards])
+  const dashboards = useMemo(
+    () => boards.filter((board) => embedAvailable(board, status)),
+    [boards, status],
+  )
 
-  const board = boards.find((entry) => entry.id === selected) ?? boards[0] ?? null
+  const [window_, setWindow] = useState<string>(
+    () => boards[0]?.window ?? Object.keys(windows)[0] ?? '',
+  )
+  const [embedded, setEmbedded] = useState<string | null>(null)
+  const [results, setResults] = useState<Record<string, BoardResult>>({})
 
-  const load = useCallback(async (boardId: string, chosen: string) => {
-    setLoading(true)
-    setDataError(null)
-    try {
-      setData(await getAnalyticsBoardData(boardId, chosen || null))
-    } catch (err) {
-      setData(null)
-      setDataError(analyticsMessage(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const loadAll = useCallback(
+    (chosen: string, alive: () => boolean) => {
+      setResults(
+        Object.fromEntries(
+          chartBoards.map((board) => [board.id, { state: 'loading' } as BoardResult]),
+        ),
+      )
+      for (const board of chartBoards) {
+        void getAnalyticsBoardData(board.id, chosen || null)
+          .then((data) => {
+            if (!alive()) return
+            setResults((current) => ({ ...current, [board.id]: { state: 'ready', data } }))
+          })
+          .catch((error: unknown) => {
+            if (!alive()) return
+            setResults((current) => ({
+              ...current,
+              [board.id]: { state: 'failed', detail: analyticsMessage(error) },
+            }))
+          })
+      }
+    },
+    [chartBoards],
+  )
 
   useEffect(() => {
-    if (board === null || !chartAvailable(board)) {
-      setData(null)
-      return
+    let live = true
+    loadAll(window_, () => live)
+    return () => {
+      live = false
     }
-    void load(board.id, window_)
-  }, [board, window_, load])
+  }, [loadAll, window_])
 
-  if (board === null) return <></>
-
-  const rows = data === null ? [] : chartRows(data)
-  const counted = data === null ? { drawn: 0, dropped: 0 } : countedRows(data)
-  const canEmbed = embedAvailable(board, status)
-  /*
-    Which mark a board's x column deserves.
-
-    Every board this deployment ships is *categorical* — `model`, `status` — and a
-    vertical bar chart of fourteen model deployment ids draws fourteen 50-character
-    labels along one axis, which overlap into an unreadable smear at any width. The
-    fix is not a rotation or a truncated tick; it is the right mark. Aligned lengths
-    with the label beside each bar is what DESIGN.md §2 asks for when identity comes
-    from a name, and it is what `RankedBars` already draws everywhere else.
-
-    A board whose x really is time keeps the bar chart, because the order of the
-    categories is then the meaning and sorting them by magnitude would destroy it.
-    Time is detected from the values rather than from the column name, so a board
-    called `bucket` and a board called `day` behave the same.
-  */
-  const temporal =
-    rows.length > 1 && rows.every((row) => !Number.isNaN(Date.parse(row.label)))
-  const showing = canEmbed && mode === 'dashboard'
+  const drawn = chartBoards.filter((board) => results[board.id]?.state === 'ready').length
+  const embeddedBoard = boards.find((board) => board.id === embedded) ?? null
 
   return (
     <Card>
       <CardHeader
-        title={board.title}
-        eyebrow="Apache Superset"
-        actions={<Badge tone="ok">Superset answering</Badge>}
+        eyebrow="Apache Superset · one guest token per board, carrying this tenant’s WHERE clause"
+        title={`Insight boards — ${boards.length} for your role`}
+        actions={
+          <span className="flex flex-wrap items-center gap-2">
+            <Badge tone="ok" className="gap-1.5">
+              <PlugZap className="size-3" aria-hidden />
+              Superset answering
+            </Badge>
+            <InfoTip label="Which boards you can see">
+              Each board declares the roles it is for, and the server refuses one you are not
+              an audience for with the same 404 it gives for a board that does not exist — so
+              the list cannot be used to enumerate what you are not allowed to open.
+            </InfoTip>
+          </span>
+        }
       />
-      <CardBody className="space-y-5 pt-0">
+      <CardBody className="space-y-4 pt-0">
         <div className="flex flex-wrap items-center gap-2">
-          {boards.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              onClick={() => {
-                setSelected(entry.id)
-                setWindow(entry.window)
-                setMode('charts')
-              }}
-              aria-pressed={entry.id === board.id}
-              className={
-                entry.id === board.id
-                  ? 'rounded-md border border-blue-600 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
-                  : 'rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
-              }
-            >
-              {entry.title}
-            </button>
-          ))}
-
-          <label className="ml-auto text-sm text-muted-foreground" htmlFor="analytics-window">
+          <label className="text-sm text-muted-foreground" htmlFor="analytics-window">
             Window
           </label>
           <select
@@ -145,113 +157,185 @@ export function SupersetBoards({
               </option>
             ))}
           </select>
+          <span className="text-xs text-muted-foreground">
+            <Figure className="text-foreground">{drawn}</Figure> of {chartBoards.length} drawn
+          </span>
 
-          {canEmbed ? (
-            <div className="flex items-center gap-1 rounded-lg border border-border p-1">
+          {dashboards.length > 0 ? (
+            <div className="ml-auto flex flex-wrap items-center gap-1 rounded-lg border border-border p-1">
               <ModeButton
-                active={mode === 'charts'}
-                onClick={() => setMode('charts')}
+                active={embedded === null}
+                onClick={() => setEmbedded(null)}
                 icon={<BarChart3 className="size-4" aria-hidden />}
                 label="Aegis charts"
               />
-              <ModeButton
-                active={mode === 'dashboard'}
-                onClick={() => setMode('dashboard')}
-                icon={<LayoutDashboard className="size-4" aria-hidden />}
-                label="Superset dashboard"
-              />
+              {dashboards.map((board) => (
+                <ModeButton
+                  key={board.id}
+                  active={embedded === board.id}
+                  onClick={() => setEmbedded(board.id)}
+                  icon={<LayoutDashboard className="size-4" aria-hidden />}
+                  label={board.title}
+                />
+              ))}
             </div>
           ) : null}
         </div>
 
-        {showing ? (
-          <SupersetEmbed boardId={board.id} title={board.title} />
-        ) : dataError !== null ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {dataError}
-          </p>
-        ) : loading ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            Asking Superset for {board.title.toLowerCase()}…
-          </p>
-        ) : rows.length === 0 ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            Superset ran the query and returned no rows for this window. Widen the window,
-            or check the dataset behind this board has data for your tenant.
-          </p>
-        ) : (
-          <div className="space-y-6">
-            {board.series.map((series) => (
-              <figure key={series} className="space-y-2">
-                <figcaption className="text-sm font-medium text-foreground">{series}</figcaption>
-                {temporal ? (
-                  <BarChart
-                    data={rows}
-                    index="label"
-                    category={series}
-                    color={seriesColor(board, series)}
-                    valueFormatter={formatValue}
-                    height={220}
-                  />
-                ) : (
-                  <RankedBars
-                    label={`${series} by ${data?.x ?? 'category'}, highest first`}
-                    data={rows.map((row) => ({ name: row.label, value: Number(row[series]) }))}
-                    valueFormatter={formatValue}
-                    color={seriesColor(board, series)}
-                    maxRows={8}
-                  />
-                )}
-              </figure>
-            ))}
-
-            <details className="group rounded-lg border border-border">
-              <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm font-medium text-foreground select-none">
-                <Table2 className="size-4 text-muted-foreground" aria-hidden />
-                The rows behind the charts
-                <span className="tabular ml-auto font-mono text-[0.72rem] text-muted-foreground">
-                  {counted.drawn} plotted
-                  {counted.dropped > 0 ? ` · ${counted.dropped} without an x value` : ''}
-                </span>
-              </summary>
-              <div className="overflow-x-auto border-t border-border">
-                <Table>
-                  <THead>
-                    <TH>{data?.x}</TH>
-                    {board.series.map((series) => (
-                      <TH key={series} className="text-right">
-                        {series}
-                      </TH>
-                    ))}
-                  </THead>
-                  <TBody>
-                    {rows.map((row) => (
-                      <TR key={row.label}>
-                        <TD>{row.label}</TD>
-                        {board.series.map((series) => (
-                          <TD key={series} className="text-right">
-                            <Figure>{formatValue(Number(row[series]))}</Figure>
-                          </TD>
-                        ))}
-                      </TR>
-                    ))}
-                  </TBody>
-                </Table>
-              </div>
-            </details>
+        {embeddedBoard !== null ? (
+          <div className="space-y-3">
+            <SupersetEmbed boardId={embeddedBoard.id} title={embeddedBoard.title} />
+            <Receipt
+              origin={`embedded Superset dashboard · ${status?.baseUrl || 'not reported'}`}
+              detail="drawn by Superset under a short-lived guest token whose signed RLS clause the browser cannot edit"
+            />
           </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+              {chartBoards.map((board) => (
+                <BoardCard
+                  key={board.id}
+                  board={board}
+                  result={results[board.id] ?? { state: 'loading' }}
+                  windowLabel={windows[window_] ?? window_}
+                />
+              ))}
+            </div>
+            <Receipt
+              origin={`Apache Superset · ${status?.baseUrl || 'not reported'}`}
+              detail={`${chartBoards.length} boards, each a query this server compiled — scoped by a WHERE clause no request body can move`}
+            />
+          </>
         )}
-
-        <Receipt
-          origin={`Apache Superset · ${status?.baseUrl || 'not reported'}`}
-          detail={
-            data?.tenantScoped === false
-              ? 'read across every tenant'
-              : 'scoped by a server-compiled WHERE clause'
-          }
-        />
       </CardBody>
     </Card>
+  )
+}
+
+/**
+ * One board, drawn small.
+ *
+ * The card plots the board's **first** measure, named in its own caption, because a
+ * gallery cell is not big enough to tell two series apart honestly and a second axis is
+ * forbidden outright (DESIGN.md §2). Every other measure the board returned is in the
+ * disclosure underneath, with the rows, so nothing is dropped — it is deferred.
+ */
+function BoardCard({
+  board,
+  result,
+  windowLabel,
+}: {
+  board: AnalyticsBoard
+  result: BoardResult
+  windowLabel: string
+}): ReactElement {
+  const data = result.state === 'ready' ? result.data : null
+  const rows: ChartRow[] = data ? chartRows(data) : []
+  const counted = data ? countedRows(data) : { drawn: 0, dropped: 0 }
+  const primary = board.series[0] ?? ''
+  /*
+    Which mark this board's x column deserves.
+
+    Every categorical board — `model`, `status`, `action` — draws long identifiers, and
+    a vertical bar chart of fourteen 50-character model ids overlaps into a smear at any
+    width. Aligned lengths with the label beside each bar is the right mark when identity
+    comes from a name. A board whose x really is time keeps the bar chart, because the
+    order of the categories is then the meaning. Time is detected from the values rather
+    than the column name, so `bucket` and `day` behave the same.
+  */
+  const temporal = rows.length > 1 && rows.every((row) => !Number.isNaN(Date.parse(row.label)))
+
+  return (
+    <article className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
+      <header className="flex items-start justify-between gap-2">
+        <h3 className="flex min-w-0 items-center gap-1 text-sm font-semibold text-foreground">
+          <span className="min-w-0 text-pretty">{board.title}</span>
+          <InfoTip label={`About ${board.title}`}>{board.summary}</InfoTip>
+        </h3>
+        {result.state === 'ready' ? (
+          <Badge tone="neutral" className="shrink-0 whitespace-nowrap">
+            {counted.drawn} {counted.drawn === 1 ? 'row' : 'rows'}
+          </Badge>
+        ) : null}
+      </header>
+
+      {result.state === 'failed' ? (
+        <p role="status" className="text-xs leading-5 text-muted-foreground">
+          {result.detail}
+        </p>
+      ) : result.state === 'loading' ? (
+        <p role="status" className="py-6 text-center text-xs text-muted-foreground">
+          Asking Superset…
+        </p>
+      ) : rows.length === 0 ? (
+        <p role="status" className="text-xs leading-5 text-muted-foreground">
+          Superset ran the query and returned no rows in this window for your tenant.
+        </p>
+      ) : (
+        <>
+          <figure className="space-y-1.5">
+            <figcaption className="text-[0.68rem] text-muted-foreground">
+              {primary} by {data?.x ?? 'category'}
+            </figcaption>
+            {temporal ? (
+              <BarChart
+                data={rows}
+                index="label"
+                category={primary}
+                color={seriesColor(board, primary)}
+                valueFormatter={formatValue}
+                height={180}
+              />
+            ) : (
+              <RankedBars
+                label={`${primary} by ${data?.x ?? 'category'}, highest first`}
+                data={rows.map((row) => ({ name: row.label, value: Number(row[primary]) }))}
+                valueFormatter={formatValue}
+                color={seriesColor(board, primary)}
+                maxRows={6}
+              />
+            )}
+          </figure>
+
+          <details className="group mt-auto rounded-md border border-border">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-foreground select-none">
+              <Table2 className="size-3.5 text-muted-foreground" aria-hidden />
+              {board.series.length > 1
+                ? `${board.series.length - 1} more measure${board.series.length > 2 ? 's' : ''}, and the rows`
+                : 'The rows behind the chart'}
+              <span className="tabular ml-auto font-mono text-[0.68rem] text-muted-foreground">
+                {counted.dropped > 0 ? `${counted.dropped} without an x value` : windowLabel}
+              </span>
+            </summary>
+            <div className="overflow-x-auto border-t border-border">
+              <Table>
+                <THead>
+                  <TH>{data?.x}</TH>
+                  {board.series.map((series) => (
+                    <TH key={series} className="text-right">
+                      {series}
+                    </TH>
+                  ))}
+                </THead>
+                <TBody>
+                  {rows.map((row) => (
+                    <TR key={row.label}>
+                      <TD>{row.label}</TD>
+                      {board.series.map((series) => (
+                        <TD key={series} className="text-right">
+                          <Figure>{formatValue(Number(row[series]))}</Figure>
+                        </TD>
+                      ))}
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          </details>
+        </>
+      )}
+    </article>
   )
 }
 

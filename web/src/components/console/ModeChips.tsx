@@ -1,52 +1,14 @@
 'use client'
 
-import { Gauge, Users } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import { cn } from '@/lib/utils'
 import { getPersona, personasForRole } from '@/config/personas'
 import type { Role } from '@/lib/stream'
 
-import { DEPTH_CHOICES, FANOUT_CHOICES, type RunMode } from './runMode'
+import { ModeMenu } from './ModeMenu'
+import type { RunMode } from './runMode'
 import { ModelsMenu } from './ModelsMenu'
-
-/**
- * One chip in the mode row. Fully round per DESIGN.md §1, filled in `--blue-600` when
- * selected (a fill step, not a text step) and a hairline otherwise.
- */
-function Chip({
-  selected,
-  onClick,
-  title,
-  children,
-  className,
-}: {
-  selected: boolean
-  onClick: () => void
-  title?: string
-  children: React.ReactNode
-  className?: string
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={selected}
-      title={title}
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.78rem] font-medium',
-        'outline-none transition-colors duration-[var(--dur-fast)]',
-        'focus-visible:ring-2 focus-visible:ring-ring',
-        selected
-          ? 'bg-primary text-primary-foreground'
-          : 'border border-border bg-surface/70 text-muted-foreground hover:border-blue-200 hover:text-blue-700',
-        className,
-      )}
-    >
-      {children}
-    </button>
-  )
-}
 
 interface ModeChipsProps {
   role: Role
@@ -69,7 +31,10 @@ interface ModeChipsProps {
  * - **Width** (`depth_mode` / `requested_fanout`) writes straight onto the wire. It has
  *   been carried by `QueryRequest` since Phase 5 and posted by `startRun` since, always
  *   as `null` — so every turn ran in Auto and the fan-out was reachable only by luck of
- *   the classifier. These chips are the missing half.
+ *   the classifier. {@link ModeMenu} is the missing half: a named dropdown rather than
+ *   the three unlabelled chips it replaced, because this is the axis that decides
+ *   whether the audience sees one lane or the fan-out, and a chip row has no room to
+ *   say what any of the three does.
  * - **Persona** scopes the data and the tool roster and always did.
  * - **Model** is a *report*: `GET /models` answers what the gateway would actually do.
  *   A per-user preference is `agent.model` in settings, resolved platform → tenant →
@@ -90,61 +55,7 @@ export function ModeChips({
 
   return (
     <div className={cn('flex flex-wrap items-center', compact ? 'gap-1.5' : 'gap-2')}>
-      <span className="sr-only" id="mode-chips-label">
-        How wide this turn runs
-      </span>
-      <div
-        role="group"
-        aria-labelledby="mode-chips-label"
-        className={cn('flex flex-wrap items-center', compact ? 'gap-1' : 'gap-1.5')}
-      >
-        <Gauge aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-        {DEPTH_CHOICES.map((choice) => (
-          <Chip
-            key={choice.id}
-            selected={mode.depth === choice.id}
-            title={choice.hint}
-            onClick={() =>
-              onModeChange({
-                depth: choice.id,
-                // A fanout only exists in Team; leaving one behind would be posted and
-                // refused, since the server rejects it in any other mode.
-                fanout: choice.id === 'team' ? mode.fanout : null,
-              })
-            }
-          >
-            {choice.label}
-          </Chip>
-        ))}
-      </div>
-
-      {mode.depth === 'team' && (
-        <div
-          role="group"
-          aria-label="How many agents"
-          className={cn('flex flex-wrap items-center', compact ? 'gap-1' : 'gap-1.5')}
-        >
-          <Users aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-          <Chip
-            selected={mode.fanout === null}
-            title="Let the supervisor size the team from the question."
-            onClick={() => onModeChange({ depth: 'team', fanout: null })}
-          >
-            Auto
-          </Chip>
-          {FANOUT_CHOICES.map((n) => (
-            <Chip
-              key={n}
-              selected={mode.fanout === n}
-              title={`Ask for ${n} concurrent agents. The tenant cap can clamp this down.`}
-              onClick={() => onModeChange({ depth: 'team', fanout: n })}
-              className="tabular font-mono"
-            >
-              {n}
-            </Chip>
-          ))}
-        </div>
-      )}
+      <ModeMenu mode={mode} onModeChange={onModeChange} />
 
       {personas.length > 1 && (
         <>

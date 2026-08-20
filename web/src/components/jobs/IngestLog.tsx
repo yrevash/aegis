@@ -26,20 +26,6 @@ import {
 } from '@/lib/api/jobs'
 import { cn } from '@/lib/utils'
 
-/**
- * Chrome adds a scroll container's overflowing content to the **document's** own
- * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
- * `position: static`, so a 200-row table inside a 30rem panel left the page
- * 10,948px tall — nine thousand of them empty — while the panel itself correctly
- * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
- * 'relative'` takes the document from 10,948px back to 2,232px.
- *
- * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
- * not own; this is the same fix applied through the `className` the component
- * already exposes, targeting the scroll box by the `role="group"` it is given
- * whenever `maxHeight` is set. Remove it once the primitive carries it.
- */
-const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
 
 /** Statuses in which the document is still being worked on, so the log keeps polling. */
 const LIVE = new Set(['pending', 'running', 'reconciling'])
@@ -518,7 +504,6 @@ function TablePanel({ progress }: { progress: IngestProgress }): ReactElement {
       eyebrow="tables · own chunks, shape kept"
       title="Tables"
       maxHeight="16rem"
-      className={SCROLL_BOX}
       actions={
         <Badge tone="neutral">
           {progress.corpus.summarised} of {progress.corpus.tables} summarised
@@ -567,7 +552,6 @@ function LogTail({ progress }: { progress: IngestProgress }): ReactElement {
       eyebrow="run_events · the durable record, replayed"
       title="Log"
       maxHeight="14rem"
-      className={SCROLL_BOX}
       actions={
         <InfoTip label="Why the log cannot drift from the pipeline">
           The entry and the stage bump are one transaction, so neither can exist without the

@@ -31,9 +31,15 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-dev-lane2/types/**/*.ts",
+    ".next-lane2/types/**/*.ts",
+    ".next-lane3-dev/types/**/*.ts",
+    ".next-lane4-dev/types/**/*.ts",
+    ".next-lane6dev/types/**/*.ts",
+    ".next-verify/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-verify/types/**/*.ts"
+    ".next-lane5-dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

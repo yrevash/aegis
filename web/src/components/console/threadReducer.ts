@@ -28,6 +28,7 @@ import type { StreamEvent } from '@/lib/stream'
 import { initialRunState, runReducer, type RunState } from '@/state/runReducer'
 
 import type { TurnAttachment } from './composerAttachment'
+import { DEFAULT_RUN_MODE, type RunMode } from './runMode'
 
 /** One question and the run it started, in this tab. */
 export interface Turn {
@@ -45,6 +46,15 @@ export interface Turn {
    * next question by the time the answer arrives.
    */
   attachment: TurnAttachment | null
+  /**
+   * The width this turn was *asked* to run at.
+   *
+   * Kept on the turn, not read back off the composer, because the composer has already
+   * moved on: a person who sends a Team question and then flips the menu back to Auto
+   * would otherwise have the settled turn re-label itself. It is the request half of the
+   * width receipt — the outcome half is the run's own `routing` event.
+   */
+  mode: RunMode
   run: RunState
 }
 
@@ -114,6 +124,8 @@ export type ThreadAction =
       turnId: string
       question: string
       attachment?: TurnAttachment | null
+      /** The width the composer asked for. Defaults to Auto. */
+      mode?: RunMode
       at: number
     }
   /** One stream event, routed to the turn that owns the run. */
@@ -284,6 +296,7 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
         question: action.question,
         askedAt: action.at,
         attachment: action.attachment ?? null,
+        mode: action.mode ?? DEFAULT_RUN_MODE,
         // `running` up front, so the composer locks before `run_started` arrives.
         run: { ...initialRunState, running: true },
       }

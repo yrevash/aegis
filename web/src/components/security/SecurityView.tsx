@@ -12,10 +12,12 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { Receipt } from '@/components/primitives/Receipt'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { errorSentence } from '@/lib/api/apiError'
 import { getSecurityPosture } from '@/lib/api/client'
@@ -77,15 +79,19 @@ function PostureRow({ entry }: { entry: PostureEntry }): ReactElement {
       </TD>
       <TD>
         <div className="flex max-w-xl flex-col gap-1">
-          <span className="text-sm font-medium text-foreground">{entry.control}</span>
+          <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+            {entry.control}
+            {/*
+              The per-row explanation used to be a third line of prose on every
+              row — seventeen paragraphs stacked into a table, which is the exact
+              shape DESIGN.md §4 sends to a tooltip. Nothing is deleted: the same
+              sentence is one keystroke away, and the row is now scannable.
+            */}
+            {entry.detail ? <InfoTip label={`How ${entry.control} holds this down`}>{entry.detail}</InfoTip> : null}
+          </span>
           <Figure className="text-muted-foreground">
             {`${entry.module} · ${entry.mechanism}`}
           </Figure>
-          {entry.detail ? (
-            <span className="text-[0.72rem] leading-relaxed text-muted-foreground">
-              {entry.detail}
-            </span>
-          ) : null}
         </div>
       </TD>
       <TD className="whitespace-nowrap text-right">
@@ -197,8 +203,7 @@ function SecurityView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
+      <PageHeader
         eyebrow="OWASP-Agentic · posture"
         title="Security"
         note="One row per threat, the Aegis control holding it down, and a status derived from what is actually wired — not from a claim."

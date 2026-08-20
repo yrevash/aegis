@@ -23,13 +23,25 @@ from aegis.retrieval.types import FusionMethod, GraphEdge, GraphNode, RetrievalO
 
 
 class Chunk(BaseModel):
-    """A single chunk of a source document, ready for extraction/embedding."""
+    """A single chunk of a source document, ready for extraction/embedding.
+
+    ``vector`` is optional and its absence is meaningful. A chunk that arrives **with**
+    one is saying "my embedding of record already exists — index this, do not re-derive
+    it", which is what lets an index rebuild replay ``chunks.embedding`` instead of paying
+    the provider again for text that has not changed. A chunk that arrives **without** one
+    leaves the backend to embed it, exactly as before.
+    """
 
     id: str = Field(description="Stable content-addressed id for the chunk.")
     doc_id: str = Field(description="Id of the document this chunk came from.")
     ordinal: int = Field(description="0-based position of the chunk within its document.")
     text: str = Field(description="The chunk's text content.")
     metadata: dict = Field(default_factory=dict, description="Free-form provenance metadata.")
+    vector: list[float] | None = Field(
+        default=None,
+        description="The chunk's embedding of record, when the caller already holds it. "
+        "``None`` means the backend must derive it.",
+    )
 
 
 class IngestReport(BaseModel):

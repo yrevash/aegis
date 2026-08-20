@@ -187,6 +187,7 @@ export function useChatThread(token: string | null): UseChatThread {
         turnId,
         question,
         attachment,
+        mode,
         at: Date.now(),
       })
       // The thread shows the question the person wrote; the run receives that question

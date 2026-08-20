@@ -14,12 +14,14 @@ import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import { checkPatches } from '@/lib/api/client'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
-import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Card, CardBody } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
+import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { PageHeader } from '@/components/primitives/PageHeader'
+import { Receipt } from '@/components/primitives/Receipt'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
@@ -34,6 +36,7 @@ import {
   summarizePatches,
   type PatchPosture,
   type PatchStatus,
+  type PatchSummary,
 } from './stackDisplay'
 
 /**
@@ -57,7 +60,7 @@ type LoadState =
 
 const STATUS_TONE: Record<PatchStatus, string> = {
   current: 'text-ok-ink',
-  outdated: 'text-risk-ink',
+  outdated: 'text-block-ink',
   unknown: 'text-muted-foreground',
 }
 
@@ -93,145 +96,245 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
   const rows =
     load.status === 'ready' ? sortByStatus(filterByName(load.data.results, filter)) : []
 
-  return (
-    <Card>
-      <CardHeader
-        title={
-          <span className="flex items-center gap-2">
-            <ShieldCheck className="size-4 shrink-0 text-ok-ink" aria-hidden />
-            Installed pins against the registry
-          </span>
-        }
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            {posture && <Badge tone={POSTURE_VARIANT[posture]}>{POSTURE_LABEL[posture]}</Badge>}
-            <InfoTip label="Why this matters">
-              Why this matters: outdated dependencies are the most common source of known-CVE
-              exposure. This compares each installed pin against the latest release — and a patch
-              claim you can&rsquo;t verify is worse than none, so an offline check is shown as
-              unverified, never &ldquo;current&rdquo;.
-            </InfoTip>
-            <Button size="sm" onClick={() => run()} disabled={load.status === 'loading'}>
-              {load.status === 'loading' ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="size-3.5" aria-hidden />
-              )}
-              {load.status === 'ready' ? 'Re-check' : 'Check for patches'}
-            </Button>
-          </div>
-        }
-      />
-      <CardBody>
-        {(load.status === 'idle' || load.status === 'loading') && (
+  if (load.status === 'idle' || load.status === 'loading') {
+    return (
+      <Card>
+        <CardBody>
           <LoadingState rows={5} label="Checking package freshness…" />
-        )}
+        </CardBody>
+      </Card>
+    )
+  }
 
-        {load.status === 'error' && (
+  if (load.status === 'error') {
+    return (
+      <Card>
+        <CardBody>
           <ErrorState
             error={load.message}
             fallback="The patch check could not be run."
             retry={() => run()}
           />
-        )}
+        </CardBody>
+      </Card>
+    )
+  }
 
-        {load.status === 'ready' && summary && (
-          <div className="flex flex-col gap-4">
-            {/* Honest online / offline banner */}
-            {load.data.online ? (
-              <div className="flex items-start gap-2 rounded-md border border-ok/50 bg-ok/10 p-2.5 text-[0.78rem] text-ok-ink">
-                <CheckCircle2 className="mt-px size-4 shrink-0" aria-hidden />
-                <span>Verified against the package registry. {load.data.note}</span>
-              </div>
-            ) : (
-              <div className="flex items-start gap-2 rounded-md border border-risk/50 bg-risk/10 p-2.5 text-[0.78rem] text-risk-ink">
-                <WifiOff className="mt-px size-4 shrink-0" aria-hidden />
-                <span>
-                  <strong className="font-semibold">Offline — patch status could not be verified</strong>{' '}
-                  against the registry. Do not read the rows below as confirmation that anything is up
-                  to date. {load.data.note}
-                </span>
-              </div>
-            )}
+  if (summary == null || posture == null) return <span />
 
-            {/* Summary strip */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Chip label="outdated" count={summary.outdated} tone="risk" icon={AlertTriangle} />
-              <Chip label="current" count={summary.current} tone="ok" icon={CheckCircle2} />
-              <Chip label="unverified" count={summary.unknown} tone="muted" />
-              <span className="ml-auto font-mono text-[0.68rem] text-muted-foreground">
-                checked {new Date(load.data.checked_at).toLocaleString()}
-              </span>
-            </div>
+  const online = load.data.online
 
-            {/* Package filter */}
-            <label className="flex items-center gap-2 rounded-md border border-border/70 bg-surface/40 px-2.5 py-1.5 text-sm focus-within:ring-2 focus-within:ring-ring">
-              <Search className="size-3.5 text-muted-foreground" aria-hidden />
-              <input
-                type="text"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter packages…"
-                aria-label="Filter packages by name"
-                className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
-              />
-            </label>
-
-            <div className="overflow-x-auto rounded-lg border border-border/60">
-              <table className="w-full min-w-[600px] text-sm">
-                <thead>
-                  <tr className="border-b border-border/60 bg-surface-2/40 text-left">
-                    <th className="eyebrow px-3 py-2 font-normal">Package</th>
-                    <th className="eyebrow px-3 py-2 font-normal">Installed</th>
-                    <th className="eyebrow px-3 py-2 font-normal">Latest</th>
-                    <th className="eyebrow px-3 py-2 font-normal">Status</th>
-                    <th className="eyebrow px-3 py-2 font-normal">Note</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <PatchRow key={r.name} result={r} />
-                  ))}
-                  {rows.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-3 py-6 text-center text-sm text-muted-foreground">
-                        No packages match &ldquo;{filter.trim()}&rdquo;.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+  return (
+    <div className="flex flex-col gap-4">
+      {/* The verdict, and the freshness split that reconciles it. */}
+      <Card>
+        <CardBody className="flex flex-col gap-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge tone={POSTURE_VARIANT[posture]} className="gap-1.5">
+              {posture === 'action-needed' ? (
+                <AlertTriangle className="size-3 shrink-0" aria-hidden />
+              ) : posture === 'current' ? (
+                <CheckCircle2 className="size-3 shrink-0" aria-hidden />
+              ) : (
+                <WifiOff className="size-3 shrink-0" aria-hidden />
+              )}
+              {POSTURE_LABEL[posture]}
+            </Badge>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 text-[0.8125rem]',
+                online ? 'text-ok-ink' : 'text-risk-ink',
+              )}
+            >
+              {online ? (
+                <CheckCircle2 className="size-3.5 shrink-0" aria-hidden />
+              ) : (
+                <WifiOff className="size-3.5 shrink-0" aria-hidden />
+              )}
+              {online ? 'Verified against the registry' : 'Registry unreachable — nothing below is confirmed'}
+            </span>
+            <InfoTip label="Why an offline check is never “current”">
+              Outdated dependencies are the most common source of known-CVE exposure, so this
+              compares each installed pin against the latest published release. A patch claim
+              nobody could verify is worse than none — when the registry does not answer, the
+              posture stays “unverified” and never resolves to up to date.{' '}
+              {load.data.note}
+            </InfoTip>
+            <Button
+              size="sm"
+              className="ml-auto"
+              onClick={() => run()}
+              disabled={load.status !== 'ready'}
+            >
+              <RefreshCw className="size-3.5" aria-hidden />
+              Re-check
+            </Button>
           </div>
+
+          <FreshnessBar summary={summary} online={online} />
+        </CardBody>
+      </Card>
+
+      <DataPanel
+        eyebrow="installed vs latest"
+        title="Every pin, worst first"
+        maxHeight={560}
+        toolbar={
+          <label className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/40 px-2.5 py-1.5 text-sm focus-within:ring-2 focus-within:ring-ring sm:max-w-xs">
+            <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <input
+              type="text"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter packages…"
+              aria-label="Filter packages by name"
+              className="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+            />
+          </label>
+        }
+        actions={
+          <Badge tone="neutral" className="gap-1.5">
+            <ShieldCheck className="size-3 shrink-0" aria-hidden />
+            <Figure>{rows.length}</Figure>
+          </Badge>
+        }
+        footer={
+          <Receipt
+            label="Checked"
+            origin={new Date(load.data.checked_at).toLocaleString()}
+            detail={online ? 'against the package registry' : 'registry unreachable — statuses are unverified'}
+            className="w-full border-t-0 pt-0"
+          />
+        }
+      >
+        <Table className="min-w-[620px]">
+          <THead>
+            <TH className="text-left">Package</TH>
+            <TH className="text-left">Installed</TH>
+            <TH className="text-left">Latest</TH>
+            <TH className="text-left">Status</TH>
+            <TH className="text-left">Note</TH>
+          </THead>
+          <TBody>
+            {rows.map((r) => (
+              <PatchRow key={r.name} result={r} />
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                  No packages match &ldquo;{filter.trim()}&rdquo;.
+                </td>
+              </tr>
+            )}
+          </TBody>
+        </Table>
+      </DataPanel>
+    </div>
+  )
+}
+
+/**
+ * The freshness split — one bar, three ordered bands, drawn from the same counts
+ * the table below reconciles against.
+ *
+ * The screen used to state those counts as three chips, and a reader had to do
+ * the division themselves to know whether "4 outdated" was a rounding error or a
+ * third of the stack. Status hues carry it here because this *is* the reserved
+ * status set (DESIGN.md §2), and every band ships with its icon and its word.
+ * When the registry did not answer, the whole bar goes neutral: an unverified
+ * check has no green to give.
+ */
+function FreshnessBar({
+  summary,
+  online,
+}: {
+  summary: PatchSummary
+  online: boolean
+}): ReactElement {
+  const bands = [
+    { key: 'outdated', label: 'update available', count: summary.outdated, fill: 'bg-block', ink: 'text-block-ink', Icon: AlertTriangle },
+    { key: 'unknown', label: 'unverified', count: summary.unknown, fill: 'bg-surface-2', ink: 'text-muted-foreground', Icon: WifiOff },
+    { key: 'current', label: 'current', count: summary.current, fill: 'bg-ok', ink: 'text-ok-ink', Icon: CheckCircle2 },
+  ] as const
+  const total = Math.max(1, summary.total)
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        className="flex h-4 w-full gap-0.5 overflow-hidden rounded-full bg-surface-2"
+        role="img"
+        aria-label={bands
+          .map((b) => `${b.count} of ${summary.total} ${b.label}`)
+          .join('; ')}
+      >
+        {bands.map((b) =>
+          b.count === 0 ? null : (
+            <span
+              key={b.key}
+              className={cn(
+                'h-full first:rounded-l-full last:rounded-r-full',
+                // An unverified check has no verified band to colour.
+                online || b.key === 'outdated' ? b.fill : 'bg-surface-2 ring-1 ring-inset ring-border',
+              )}
+              style={{ width: `${(b.count / total) * 100}%` }}
+            />
+          ),
         )}
-      </CardBody>
-    </Card>
+      </div>
+      <ul className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        {bands.map((b) => (
+          <li key={b.key} className="flex items-center gap-1.5">
+            <b.Icon className={cn('size-3.5 shrink-0', b.ink)} aria-hidden />
+            <Figure size="stat" className="text-foreground">
+              {b.count}
+            </Figure>
+            <span className="text-[0.8125rem] text-muted-foreground">{b.label}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
 /** One package row; outdated rows carry a subtle warning wash. */
 function PatchRow({ result }: { result: PatchResult }): ReactElement {
   return (
-    <tr
-      className={cn(
-        'border-b border-border/40 last:border-0',
-        result.status === 'outdated' && 'bg-risk/5',
-      )}
-    >
-      <td className="px-3 py-2 font-medium text-foreground">{result.name}</td>
-      <td className="px-3 py-2 text-[0.72rem] text-muted-foreground">
-        {result.installed === null ? <NotPublished what="not installed" /> : <Figure>{result.installed}</Figure>}
-      </td>
-      <td className="px-3 py-2 text-[0.72rem] text-muted-foreground">
-        {result.latest === null ? <NotPublished what="registry did not answer" /> : <Figure>{result.latest}</Figure>}
-      </td>
-      <td className={cn('px-3 py-2 text-[0.8125rem] font-medium', STATUS_TONE[result.status])}>
-        {PATCH_STATUS_LABEL[result.status]}
-      </td>
-      <td className="px-3 py-2 text-[0.8125rem] text-muted-foreground">
+    <TR className={cn(result.status === 'outdated' && 'bg-block/5')}>
+      <TD className="font-medium">{result.name}</TD>
+      <TD className="whitespace-nowrap">
+        {result.installed === null ? (
+          <NotPublished what="not installed" />
+        ) : (
+          <Figure className="text-muted-foreground">{result.installed}</Figure>
+        )}
+      </TD>
+      <TD className="whitespace-nowrap">
+        {result.latest === null ? (
+          <NotPublished what="registry did not answer" />
+        ) : (
+          <Figure className="text-muted-foreground">{result.latest}</Figure>
+        )}
+      </TD>
+      <TD className="whitespace-nowrap">
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 text-[0.8125rem] font-medium',
+            STATUS_TONE[result.status],
+          )}
+        >
+          {result.status === 'outdated' ? (
+            <AlertTriangle className="size-3 shrink-0" aria-hidden />
+          ) : result.status === 'current' ? (
+            <CheckCircle2 className="size-3 shrink-0" aria-hidden />
+          ) : (
+            <WifiOff className="size-3 shrink-0" aria-hidden />
+          )}
+          {PATCH_STATUS_LABEL[result.status]}
+        </span>
+      </TD>
+      <TD className="text-[0.8125rem] text-muted-foreground">
         {result.note ?? <NotPublished what="no note" />}
-      </td>
-    </tr>
+      </TD>
+    </TR>
   )
 }
 
@@ -244,38 +347,6 @@ function PatchRow({ result }: { result: PatchResult }): ReactElement {
  */
 function NotPublished({ what }: { what: string }): ReactElement {
   return <span className="text-xs text-muted-foreground italic">{what}</span>
-}
-
-/** One count chip in the summary strip. */
-function Chip({
-  label,
-  count,
-  tone,
-  icon: Icon,
-}: {
-  label: string
-  count: number
-  tone: 'risk' | 'ok' | 'muted'
-  icon?: typeof AlertTriangle
-}): ReactElement {
-  const toneClass =
-    tone === 'risk'
-      ? 'border-risk/50 bg-risk/10 text-risk-ink'
-      : tone === 'ok'
-        ? 'border-ok/50 bg-ok/10 text-ok-ink'
-        : 'border-border/70 bg-surface-2/50 text-muted-foreground'
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.72rem]',
-        toneClass,
-      )}
-    >
-      {Icon && count > 0 && <Icon className="size-3" aria-hidden />}
-      <Figure className="font-semibold">{count}</Figure>
-      {label}
-    </span>
-  )
 }
 
 /** Client entry for the Patch Check section — gated on a reachable backend. */
@@ -295,17 +366,10 @@ export function PatchMount(): ReactElement {
 
   return (
     <BackendGate>
-      <TooltipProvider>
-        <div className="space-y-4">
-          <SectionHeader
-            as="h1"
-            eyebrow="installed vs latest"
-            title="Patch check"
-            note="Each installed pin against the latest published release. An offline check never resolves to “up to date” — a patch claim nobody could verify is worse than none."
-          />
-          <PatchCheck token={session?.token ?? null} />
-        </div>
-      </TooltipProvider>
+      <div className="space-y-4">
+        <PageHeader eyebrow="installed vs latest" title="Patch check" />
+        <PatchCheck token={session?.token ?? null} />
+      </div>
     </BackendGate>
   )
 }

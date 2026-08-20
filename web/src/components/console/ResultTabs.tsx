@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -85,6 +85,15 @@ interface ResultTabsProps {
   /** Controlled, so the answer's "See all sources" link can open the right one. */
   tab: ResultTabId
   onTab: (tab: ResultTabId) => void
+  /**
+   * What can be *done* with this settled turn, right-aligned in the tab row.
+   *
+   * It sits with the tabs rather than under the answer because both are the same kind
+   * of thing — what a person opens or does once the answer is already in front of them
+   * — and a second row of controls under a settled turn is a row of chrome between one
+   * turn and the next.
+   */
+  actions?: ReactNode
 }
 
 /**
@@ -102,6 +111,7 @@ export function ResultTabs({
   beat,
   tab,
   onTab,
+  actions,
 }: ResultTabsProps): ReactElement {
   const sourceCount = state.retrievalScores.length
 
@@ -146,6 +156,7 @@ export function ResultTabs({
             </button>
           )
         })}
+        {actions != null && <div className="ml-auto flex items-center gap-2">{actions}</div>}
       </div>
 
       <div

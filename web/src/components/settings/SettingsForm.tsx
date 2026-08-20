@@ -23,7 +23,6 @@ import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import {
   canWeaken,
   controlLabel,
@@ -185,8 +184,14 @@ function SettingField({
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <h4 id={nameId} className="text-sm font-medium text-foreground">
+          <h4 id={nameId} className="flex items-center gap-1 text-sm font-medium text-foreground">
             {controlLabel(row.key)}
+            {/* The catalogue's own sentence for this control. It was a paragraph under
+                every one of twenty-five rows, which is what made this screen read as an
+                essay; DESIGN.md §4 puts a paragraph that explains a mechanism in a tip.
+                The same text stays in the DOM as the row's `aria-describedby` target
+                below, so nothing is lost to a screen reader or to the search box. */}
+            <InfoTip label={`What ${row.key} controls`}>{row.control.description}</InfoTip>
           </h4>
           <Badge tone={provenance.tone}>{provenance.label}</Badge>
           {inert ? (
@@ -213,17 +218,14 @@ function SettingField({
             </Badge>
           )}
         </div>
-        <p
-          id={describedBy}
-          className="mt-1.5 max-w-prose text-[0.8rem] leading-relaxed text-muted-foreground"
-        >
+        <p id={describedBy} className="sr-only">
           {row.control.description}
         </p>
         {/* The receipt names the deciding scope; the *sentence* explaining what that
             scope means was three more lines on every one of twenty-five rows, so it
             moved one layer down (DESIGN.md §4). Nothing is lost — the provenance is
             still on the row, in the one treatment the console uses everywhere. */}
-        <span className="mt-2 flex flex-wrap items-center gap-1">
+        <span className="mt-1.5 flex flex-wrap items-center gap-1">
           <Receipt
             label="Decided by"
             origin={`${provenance.label.toLowerCase()} · ${row.key}`}
@@ -318,9 +320,19 @@ function Editor({
   if (field.kind === 'inert' || field.kind === 'readOnly') {
     const Icon = field.kind === 'inert' ? PlugZap : Lock
     return (
+      // Two lines, then a tip. The refusal is the server's own sentence and is never
+      // paraphrased, but four of them stacked down a category turned a control panel
+      // into a page of apologies — so the first clause is on the page and the rest is
+      // one layer down, in the tip beside it.
       <p className="flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-[0.74rem] leading-relaxed text-foreground">
         <Icon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-        <span>{field.reason}</span>
+        <span className="line-clamp-2 min-w-0">{field.reason}</span>
+        <InfoTip
+          className="mt-0.5 shrink-0"
+          label={field.kind === 'inert' ? 'Why this control does nothing' : 'Why this is read only'}
+        >
+          {field.reason}
+        </InfoTip>
       </p>
     )
   }
@@ -535,7 +547,6 @@ export function SettingsForm({
   const unavailable = scopes.filter((option) => !option.available)
 
   return (
-    <TooltipProvider>
     <div className="grid gap-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
       {/* The rail: every category, always countable, one open at a time. */}
       <div className="flex flex-col gap-4">
@@ -702,6 +713,5 @@ export function SettingsForm({
         ) : null}
       </div>
     </div>
-    </TooltipProvider>
   )
 }
