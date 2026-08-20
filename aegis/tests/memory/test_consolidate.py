@@ -635,7 +635,8 @@ async def test_the_sweep_declares_platform_scope_before_reading_the_queue(db, mo
         real_execute = s.execute
 
         async def watched_execute(stmt, *a, **kw):
-            if "memory_consolidation_job" in str(stmt).lower() and "select" in str(stmt).lower()[:12]:
+            sql = str(stmt).lower()
+            if "memory_consolidation_job" in sql and sql.startswith("select"):
                 order.append("queue-read")
             return await real_execute(stmt, *a, **kw)
 
