@@ -104,3 +104,42 @@ curl -s localhost:8110/v1/documents -H "Authorization: Bearer $TOKEN" \
 
 **Temporal must be up** or the upload stores the bytes and returns 503 with the
 ingest never started: `temporal server start-dev`.
+
+## As ingested (2026-08-20)
+
+Uploaded through `POST /v1/documents` as `northwind.admin` and `vertex.admin` —
+a platform admin has no tenant, and `chunks.tenant_id` is `NOT NULL`, so the
+upload of a document to nobody is refused rather than indexed invisibly.
+
+| id | tenant | title read off the document | doc_type | doc_date | pages | chunks | parse_confidence |
+|---|---|---|---|---|---|---|---|
+| 8 | 1 | Federal Trade Commission | regulation | 2023-01-01 | 5 | 21 | 0.928 |
+| 9 | 1 | Federal Trade Commission | regulation | 2023-01-01 | 6 | 17 | 0.993 |
+| 10 | 2 | §1026.13 | regulation | 2023-01-01 | 4 | 12 | 0.989 |
+| 11 | 2 | Consumer Complaint Database Breakdown | complaint report | 2013-03-22 | 10 | 26 | 0.000 |
+
+113 chunks across the corpus, 113 embeddings, 113 points in
+`lightrag_vdb_chunks`; `python -m app.ingestion --verify` reports 0 missing and
+0 orphaned.
+
+Two things on that table are worth reading rather than skipping.
+
+**The titles for 8 and 9 are the running header, not the part name.** A CFR
+reprint puts *Federal Trade Commission* at the top of every page, and the
+title heuristic takes the first heading. It costs nothing here because the
+chunk prefix carries the section path beside the title — retrieval sees
+`[Federal Trade Commission · regulation · 2023-01-01 · PART 703-INFORMAL
+DISPUTE SETTLEMENT PROCEDURES > §703.5 …]` — but a screen that shows only
+`documents.title` will show two rows called *Federal Trade Commission*.
+
+**Document 11's `parse_confidence` of 0.000 is a false positive, and the parse
+artifact says which signal produced it.** Reading order agrees with the raw
+PDFium text layer at **tau = 0.999** over 453 anchor tokens on 10 pages — as
+good as the corpus gets. What scored zero is the fragment rate: 66% of the 47
+blocks it measured end without terminal punctuation, because Docling read this
+document's statistics rows as `list_item` blocks (130 of them) and a table row
+does not end in a full stop. `fragment_rate` excludes headings, captions and
+table Markdown for exactly that reason but keeps `LIST_ITEM`. The gate flags
+and does not block, by design, so the ingest completed and the answers it
+grounds are exact — asked which credit-card issue draws the most complaints,
+the run returns *Billing disputes, 2,939, 22.39%*, which is what page 2 says.
