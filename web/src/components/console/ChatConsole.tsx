@@ -32,6 +32,7 @@ import { MemoryRail } from './MemoryRail'
 import { memorySubjectOf } from './memorySubject'
 import { beatFromSignal } from './motion'
 import { AnswerBlock, ResultTabs, type ResultTabId } from './ResultTabs'
+import { RunStages } from './RunStages'
 import { readSources } from './sources'
 import { DEFAULT_RUN_MODE, type RunMode } from './runMode'
 import { SessionRail } from './SessionRail'
@@ -179,6 +180,11 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
           <span className="font-semibold">The run stopped.</span> {run.error}
         </p>
       )}
+
+      {/* The spine, directly under the question and above everything the run produced.
+          It is the first thing that has anything to say: the input rail takes three
+          seconds before a single agent exists, and this is what fills them. */}
+      <RunStages state={run} />
 
       {/* Again a container query: the activity rail only earns a column when the turn
           itself is wide, which at 1440px with both rails out it is not. */}
