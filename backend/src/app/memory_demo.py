@@ -404,6 +404,8 @@ class SeedSummary:
 
     written: dict[str, int] = field(default_factory=dict)
     skipped: dict[str, int] = field(default_factory=dict)
+    #: Duplicate rows removed before writing — see the race documented in `seed_memory`.
+    deduped: dict[str, int] = field(default_factory=dict)
     refused: list[str] = field(default_factory=list)
     redacted: list[str] = field(default_factory=list)
     unembedded: int = 0
@@ -419,8 +421,12 @@ class SeedSummary:
         for username in corpus_usernames():
             wrote = self.written.get(username, 0)
             skip = self.skipped.get(username, 0)
-            if wrote or skip:
-                out.append(f"  {username:<20} {wrote} written, {skip} already present")
+            dedup = self.deduped.get(username, 0)
+            if wrote or skip or dedup:
+                line = f"  {username:<20} {wrote} written, {skip} already present"
+                if dedup:
+                    line += f", {dedup} duplicate(s) removed"
+                out.append(line)
         for note in self.refused:
             out.append(f"  REFUSED  {note}")
         for note in self.redacted:
@@ -520,6 +526,30 @@ async def _own_facts(
     return [row for row in rows if isinstance(row, dict)]
 
 
+def _duplicate_ids(rows: list[dict[str, object]]) -> set[object]:
+    """Return the ids of every tagged row whose predicate already appears on a newer one.
+
+    Args:
+        rows: The subject's facts, as ``GET /v1/memory/facts`` returned them.
+
+    Returns:
+        The ids to remove — oldest first, keeping exactly one row per tagged predicate.
+    """
+    by_predicate: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        predicate = str(row.get("predicate", ""))
+        if predicate.startswith(DEMO_PREFIX):
+            by_predicate.setdefault(predicate, []).append(row)
+    stale: set[object] = set()
+    for duplicates in by_predicate.values():
+        if len(duplicates) < 2:
+            continue
+        # Ascending id == ascending age, since the column is a serial.
+        duplicates.sort(key=lambda row: int(row.get("id") or 0))
+        stale.update(row.get("id") for row in duplicates[:-1])
+    return stale
+
+
 async def seed_memory(
     *, base_url: str = DEFAULT_BASE_URL, password: str = DEFAULT_PASSWORD
 ) -> SeedSummary:
@@ -547,15 +577,35 @@ async def seed_memory(
             headers = {"authorization": f"Bearer {token}"}
             try:
                 subject = await _self_subject(client, token)
-                existing = {
-                    str(row.get("predicate", ""))
-                    for row in await _own_facts(client, token, subject)
-                }
+                rows = await _own_facts(client, token, subject)
             except (httpx.HTTPStatusError, MemoryDemoError) as exc:
                 summary.refused.append(
                     f"{entry.username}: cannot read its own record ({exc}) — nothing written"
                 )
                 continue
+
+            # Drop any tagged predicate that ended up on the record twice before
+            # deciding what to write.
+            #
+            # This is not defensive tidiness — it repairs a race this seeder can lose.
+            # A write takes ~18 s (the input rail, then the embedding), so a client that
+            # times out mid-POST leaves a request the server goes on to commit. The next
+            # run reads the record *before* that row lands, sees the predicate missing,
+            # and writes a second copy. Both rows are real, both are tagged, and the
+            # screen shows the same sentence twice.
+            #
+            # Keeping the newest is the right side of the choice: the corpus text may
+            # have been edited between runs, and the later row is the current wording.
+            duplicates = _duplicate_ids(rows)
+            for fact_id in duplicates:
+                response = await client.delete(f"/v1/memory/facts/{fact_id}", headers=headers)
+                if response.status_code == 200:
+                    summary.deduped[entry.username] = summary.deduped.get(entry.username, 0) + 1
+            existing = {
+                str(row.get("predicate", ""))
+                for row in rows
+                if row.get("id") not in duplicates
+            }
 
             for fact in entry.facts:
                 if fact.tag() in existing:

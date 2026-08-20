@@ -59,31 +59,51 @@ function FactRow({ fact }: { fact: MemoryFactRow }): ReactElement {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-full flex-col items-start gap-1 px-3 py-2 text-left transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
+        {/*
+          **The fact gets its own line. The metadata sits under it.**
+
+          This row was `flex items-center` with the statement in `flex-1` beside
+          *four* `shrink-0` siblings — confidence, recall count, a status badge and
+          the chevron. In this panel's home, the console's memory rail, the column
+          is 21rem; minus padding and three gaps the four fixed items claimed most
+          of it and left the statement about 110px, so a sentence like "every case
+          opened here is a merchandise-order case under 16 CFR 435" wrapped at one
+          or two words per line and a single fact ran the height of the viewport.
+
+          The trigger was `sm:inline` on the recall count. `sm` is a **viewport**
+          breakpoint: at 1512px it fires, whatever the container is doing. That is
+          the third time a viewport query has been used to size something inside a
+          narrow column in this codebase, and stacking removes the class of bug
+          rather than re-tuning one instance of it — the statement is the content,
+          and content should not compete with its own annotations for width.
+        */}
         <span
           className={cn(
-            'min-w-0 flex-1 text-sm leading-snug',
+            'w-full text-sm leading-snug',
             invalid ? 'text-muted-foreground line-through decoration-block/40' : 'font-medium text-foreground',
           )}
         >
           {fact.text}
         </span>
-        <span
-          className="tabular shrink-0 font-mono text-[0.68rem] text-foreground"
-          title={`Confidence ${Math.round(fact.confidence * 100)}%`}
-        >
-          {Math.round(fact.confidence * 100)}%
+        <span className="flex w-full items-center gap-2">
+          <span
+            className="tabular shrink-0 font-mono text-[0.68rem] text-muted-foreground"
+            title={`Confidence ${Math.round(fact.confidence * 100)}%`}
+          >
+            {Math.round(fact.confidence * 100)}%
+          </span>
+          <span className="tabular shrink-0 font-mono text-[0.6rem] text-muted-foreground">
+            {fact.access_count}× recalled
+          </span>
+          <Badge tone={status.tone === 'ok' ? 'ok' : 'neutral'} className="shrink-0 text-[0.56rem]">
+            {status.label}
+          </Badge>
+          <ChevronDown
+            className={cn('ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')}
+          />
         </span>
-        <span className="tabular hidden shrink-0 font-mono text-[0.6rem] text-muted-foreground sm:inline">
-          {fact.access_count}× recalled
-        </span>
-        <Badge tone={status.tone === 'ok' ? 'ok' : 'neutral'} className="shrink-0 text-[0.56rem]">
-          {status.label}
-        </Badge>
-        <ChevronDown
-          className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')}
-        />
       </button>
       {open && <FactDetail fact={fact} />}
     </li>
