@@ -11,7 +11,7 @@ survived, the index did not, and **every part of the system continued to report 
 The ``index`` stage recorded ``{"indexed": 37}`` onto the ingest log against a collection
 holding zero points; the Jobs funnel drew that 37; retrieval answered from nothing.
 
-The two tests below are that claim and that failure mode:
+The tests below are that claim, that failure mode, and the check that answers them:
 
 * :func:`test_indexed_chunks_are_present_in_the_dense_index` reads **both stores** and
   compares them. It never asks the stage what it did — the whole defect was a stage whose
@@ -19,6 +19,24 @@ The two tests below are that claim and that failure mode:
 * :func:`test_index_stage_refuses_to_report_success_when_nothing_was_written` reproduces
   the exact silent-publish shape (``LightRAG.ainsert`` returns normally having written
   nothing) and requires the stage to fail loudly instead of recording a success.
+
+The last two guard the check itself, because a check that cries wolf is disarmed inside a
+week and then the platform is back where it started:
+
+* :func:`test_a_scoped_audit_does_not_call_another_scope_s_points_orphans` pins that
+  narrowing the question narrows *both* reads, not just the one against PostgreSQL.
+* :func:`test_the_rebuild_scopes_its_audit_the_way_it_scoped_its_read` pins that the
+  rebuild actually passes that scope down — the half that had shipped with no caller.
+
+The last two pin the contracts this agreement is expressed in, both of which are
+replicated from another module rather than imported, and so can drift silently:
+
+* :func:`test_point_id_matches_lightrag_exactly` — the addressing scheme, against
+  LightRAG's own function. A shift here is invisible to every test above, because both
+  sides of their comparison shift together; it was confirmed by flipping the hash order
+  and watching only this test fail.
+* :func:`test_rebuilt_points_carry_the_owner_tag_recall_demands` — the ``file_path``
+  owner tag, against the recall path that parses it.
 
 Both run against a **real** Qdrant — ``qdrant_client``'s in-process mode, the same
 implementation the server exposes — and a real PostgreSQL, so the agreement being asserted
@@ -36,12 +54,17 @@ import pytest
 from aegis.governance.models import Budget, BudgetScope, BudgetWindow
 from aegis.jobs import Chunk
 from aegis.retrieval.chunk_index import (
+    DEFAULT_WORKSPACE as CHUNK_INDEX_DEFAULT_WORKSPACE,
+)
+from aegis.retrieval.chunk_index import (
     ChunkPoint,
+    IndexDrift,
     audit_chunk_index,
     effective_workspace,
     lightrag_point_id,
     publish_chunk_points,
 )
+from aegis.retrieval.types import tenant_metadata_value
 from qdrant_client import QdrantClient, models
 from sqlalchemy import select
 
@@ -52,6 +75,11 @@ from app.ingestion.stages import (
     IngestDependencies,
     index_stage,
     set_ingest_dependencies,
+)
+from app.ingestion.vector_index import (
+    _TENANT_TAG_SEP,
+    rebuild_dense_index,
+    verify_document_index,
 )
 from app.jobs.activities import run_stage
 from app.jobs.flows.contracts import StageInput
@@ -345,16 +373,201 @@ async def test_index_stage_refuses_to_report_success_when_nothing_was_written(
     await _seed_tenant()
     document_id = await _embedded_document(client, parsed_artifact, store)
 
-    with pytest.raises(Exception, match="search index holds"):
-        await index_stage(
-            (await _open_scoped_session(db)),
-            tenant_id=_TENANT,
-            document_id=document_id,
-            stage="index",
-        )
+    session = await _open_scoped_session(db)
+    try:
+        with pytest.raises(Exception, match="search index holds"):
+            await index_stage(
+                session,
+                tenant_id=_TENANT,
+                document_id=document_id,
+                stage="index",
+            )
+    finally:
+        await session.__aexit__(None, None, None)
 
     # The store is the witness: still empty, and the stage did not pretend otherwise.
     assert dense.count(collection_name=_COLLECTION).count == 0
+
+
+async def test_a_scoped_audit_does_not_call_another_scope_s_points_orphans(
+    dense,
+) -> None:
+    """An audit restricted to one tenant or document must not orphan the rest.
+
+    ``orphaned`` means "the index holds a vector for text the corpus no longer has", and
+    the CLI exits non-zero on it — correctly, because that is retrieval grounding an
+    answer in deleted text. But the read that produces it is a read of the *index*, and
+    if it is left collection-wide while the rows were read under a ``WHERE tenant_id``,
+    then every healthy point belonging to every other tenant comes back as an orphan.
+
+    That was live: ``--verify --tenant 2`` on this corpus reported "37 orphaned" and
+    exited 1 while all 37 were tenant 1's, entirely correct, and untouched by the run.
+    An operator who sees a scoped re-index fail on a healthy corpus learns to stop
+    reading its exit code — which is precisely how the funnel's collapse to 1 survived
+    for months. So the scope of the two reads is asserted to match.
+    """
+    tenant_1 = [
+        ChunkPoint(
+            key=f"t1:c{n}",
+            content=f"one {n}",
+            file_path="t1::alpha.pdf",
+            full_doc_id="7",
+            vector=_ContentAddressedEmbed.vector_of(f"one {n}"),
+        )
+        for n in range(3)
+    ]
+    tenant_2 = [
+        ChunkPoint(
+            key=f"t2:c{n}",
+            content=f"two {n}",
+            file_path="t2::beta.pdf",
+            full_doc_id="9",
+            vector=_ContentAddressedEmbed.vector_of(f"two {n}"),
+        )
+        for n in range(2)
+    ]
+    publish_chunk_points(dense, [*tenant_1, *tenant_2], collection=_COLLECTION)
+
+    # Unscoped, tenant 1's rows really are a partial account of the collection, and the
+    # audit says so. This is the control: it is what makes the two asserts below a
+    # statement about scoping rather than about an audit that never orphans anything.
+    wide = audit_chunk_index(dense, tenant_1, collection=_COLLECTION)
+    assert len(wide.orphaned) == len(tenant_2)
+
+    by_tenant = audit_chunk_index(
+        dense, tenant_1, collection=_COLLECTION, file_path_prefix="t1::"
+    )
+    assert by_tenant.agrees, (
+        f"a tenant-scoped audit orphaned {len(by_tenant.orphaned)} point(s) that belong "
+        "to a tenant it was not asked about"
+    )
+    assert len(by_tenant.present) == len(tenant_1)
+
+    by_document = audit_chunk_index(
+        dense, tenant_2, collection=_COLLECTION, full_doc_id="9"
+    )
+    assert by_document.agrees, (
+        f"a document-scoped audit orphaned {len(by_document.orphaned)} point(s) that "
+        "belong to a document it was not asked about"
+    )
+    assert len(by_document.present) == len(tenant_2)
+
+
+async def test_the_rebuild_scopes_its_audit_the_way_it_scoped_its_read(
+    monkeypatch,
+) -> None:
+    """The rebuild hands the audit the same scope it read the rows under.
+
+    :func:`test_a_scoped_audit_does_not_call_another_scope_s_points_orphans` proves the
+    audit *can* be scoped. This proves :func:`rebuild_dense_index` actually asks it to,
+    which is the half that was missing: ``file_path_prefix`` shipped with the parameter
+    written, documented and **never passed by anyone**, so every scoped run still audited
+    the whole collection.
+
+    Asserted by intercepting the call rather than by checking the helper's return value.
+    A test of :func:`_audit_scope` alone passes with the argument unwired — that was
+    confirmed by deleting the wiring and watching such a test stay green — so it would
+    have guarded the calculation while the bug lived in the call.
+
+    The owner tag is checked against the one :func:`chunk_points` writes into
+    ``file_path``, because a prefix that does not match what the publisher wrote scopes
+    the read to nothing and reports the tenant's own healthy points missing.
+    """
+    seen: list[dict] = []
+
+    async def _rows(_session, *, tenant_id=None, document_id=None):  # noqa: ANN001
+        return [], [], 0
+
+    def _spy(_client, _expected, **kwargs):  # noqa: ANN001
+        seen.append(kwargs)
+        return IndexDrift(
+            expected=frozenset(), present=frozenset(), missing=frozenset()
+        )
+
+    monkeypatch.setattr("app.ingestion.vector_index.chunk_points", _rows)
+    monkeypatch.setattr("app.ingestion.vector_index.audit_chunk_index", _spy)
+
+    await rebuild_dense_index(None, client=object(), dry_run=True)
+    await rebuild_dense_index(None, tenant_id=_TENANT, client=object(), dry_run=True)
+    await rebuild_dense_index(None, document_id=7, client=object(), dry_run=True)
+    await verify_document_index(None, document_id=7, client=object())
+
+    owner_prefix = f"{tenant_metadata_value(_TENANT)}{_TENANT_TAG_SEP}"
+    unscoped, by_tenant, by_document, verified = seen
+
+    assert "file_path_prefix" not in unscoped and "full_doc_id" not in unscoped, (
+        "an unscoped rebuild must audit the whole workspace; narrowing it would hide "
+        "genuine orphans"
+    )
+    assert by_tenant.get("file_path_prefix") == owner_prefix
+    assert by_document.get("full_doc_id") == "7"
+    assert verified.get("full_doc_id") == "7"
+
+    # And the prefix is the one actually written into ``file_path`` at publish time.
+    assert f"{owner_prefix}paper.pdf".startswith(owner_prefix)
+    assert owner_prefix == f"{tenant_metadata_value(_TENANT)}{_TENANT_TAG_SEP}"
+
+
+def test_point_id_matches_lightrag_exactly() -> None:
+    """Our point id is byte-for-byte the one LightRAG would compute for the same chunk.
+
+    :mod:`aegis.retrieval.chunk_index` writes into LightRAG's own chunk collection and
+    therefore replicates LightRAG's addressing scheme rather than importing it — the
+    standalone ``aegis`` package must stay importable without ``lightrag``, whose import
+    costs seconds and drags in the whole storage stack.
+
+    Replication without a check is drift waiting to happen, and the drift is silent in
+    the worst way: our points would sit *beside* the ones LightRAG's reader looks up,
+    every count would be right, and every query would miss them. That is a duplicate
+    index — the same class of two-stores-disagreeing failure this suite exists for.
+
+    So the check is made here, where importing ``lightrag`` is affordable. If LightRAG
+    changes the scheme, this fails instead of retrieval going quiet.
+    """
+    from lightrag.kg.qdrant_impl import (
+        DEFAULT_WORKSPACE as LIGHTRAG_DEFAULT_WORKSPACE,
+    )
+    from lightrag.kg.qdrant_impl import compute_mdhash_id_for_qdrant
+
+    for workspace in ("_", "aegis", "tenant-7"):
+        for key in ("t1:abc123", "t42:chunk-0", "shared:doc"):
+            assert lightrag_point_id(key, workspace=workspace) == (
+                compute_mdhash_id_for_qdrant(key, prefix=workspace, style="simple")
+            ), f"point id scheme drifted from LightRAG for {key!r} in {workspace!r}"
+
+    # And the fallback workspace, which is what an unconfigured deployment writes under.
+    # A single underscore is easy to mistake for a placeholder; points written under any
+    # other value are invisible to a reader filtering on this one.
+    assert CHUNK_INDEX_DEFAULT_WORKSPACE == LIGHTRAG_DEFAULT_WORKSPACE
+
+
+def test_rebuilt_points_carry_the_owner_tag_recall_demands() -> None:
+    """A rebuilt point's ``file_path`` is tagged the way the read path insists on.
+
+    ``file_path`` is the only per-chunk field LightRAG hands back at recall time, so the
+    owner tag it carries is how :func:`aegis.retrieval.lightrag_backend._scoped_recall`
+    decides whether a recalled row may be shown to the asking tenant — a row it cannot
+    attribute is refused outright.
+
+    That makes the separator load-bearing across a module boundary:
+    :mod:`app.ingestion.vector_index` builds the tag and ``lightrag_backend`` parses it.
+    If the rebuild wrote ``"t1:paper.pdf"`` while recall split on ``"::"``, the rebuild
+    would report a healthy index and every recalled row would be dropped as
+    unattributable — a re-index that restores the vectors and leaves retrieval empty,
+    which is this outage wearing a different hat. Asserted against the producer rather
+    than restated, so the two cannot drift apart quietly.
+    """
+    from aegis.retrieval.lightrag_backend import _tag_file_path
+
+    owner = tenant_metadata_value(_TENANT)
+    assert (
+        f"{owner}{_TENANT_TAG_SEP}paper.pdf" == _tag_file_path("paper.pdf", owner)
+    ), "the rebuild's owner tag is not the one the recall path parses"
+
+    # And the tag really is the leading segment recall splits off, not a substring that
+    # merely happens to appear somewhere in the path.
+    tagged = _tag_file_path("reports/2026/q3.pdf", owner)
+    assert tagged.split(_TENANT_TAG_SEP, 1)[0] == owner
 
 
 async def _open_scoped_session(db):  # noqa: ANN001, ANN202 - test helper

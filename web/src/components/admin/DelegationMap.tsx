@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, Minus, ShieldCheck } from 'lucide-react'
+import { Check, Minus, ShieldCheck, Users } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import { DataPanel } from '@/components/ui/DataPanel'
@@ -8,8 +8,11 @@ import { Badge } from '@/components/ui/Badge'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
+import type { AdminUser } from '@/lib/api/types'
 import { PORTALS, ROLE_SECTIONS, SECTIONS, isValidSection, type Portal } from '@/lib/portal'
 import { cn } from '@/lib/utils'
+
+import { normalizeRole } from './roleCatalog'
 
 /**
  * One band of authority: what it lets a person do, and the sections that carry it.
@@ -118,6 +121,40 @@ function reachedSections(portal: Portal, authority: Authority): string[] {
 }
 
 /**
+ * How many real people land in each portal, from the roster the roster panel reads.
+ *
+ * The map alone says what a portal *buys*; it could not say who holds it, and a
+ * permission model nobody is standing in is an abstraction. The two admin portals are
+ * told apart the way the backend tells them apart — **by tenant**: an admin-tier
+ * account with no tenant is platform staff (`platform_admin`, every tenant, pinned to
+ * none), and an admin-tier account pinned to one is that tenant's own admin. The other
+ * three portals are the role itself. `normalizeRole` folds every wire spelling onto the
+ * four portal roles first and falls to `client` for an unknown one, so a role this
+ * build has never seen is counted at the *least* privileged column, never the most.
+ *
+ * `null` in, `null` out: a roster that has not answered is not a roster of nobody.
+ */
+function holdersByPortal(users: AdminUser[] | null): Record<Portal, number> | null {
+  if (users === null) return null
+  const counts: Record<Portal, number> = {
+    platform_admin: 0,
+    tenant_admin: 0,
+    ai_team: 0,
+    devops: 0,
+    client: 0,
+  }
+  for (const user of users) {
+    const role = normalizeRole(user.role)
+    if (role === 'admin') {
+      counts[user.tenant_id == null ? 'platform_admin' : 'tenant_admin'] += 1
+    } else {
+      counts[role] += 1
+    }
+  }
+  return counts
+}
+
+/**
  * Where each portal's authority stops — the permission model as one object.
  *
  * This screen's job is to make a reader believe there is a real access model behind
@@ -135,7 +172,17 @@ function reachedSections(portal: Portal, authority: Authority): string[] {
  * A mark is a filled tile **and** a tick **and** a screen-reader sentence: the tile
  * alone would be colour carrying the whole verdict, which DESIGN.md §2 forbids.
  */
-export function DelegationMap(): ReactElement {
+export function DelegationMap({
+  users = null,
+  total = null,
+}: {
+  /** The roster in scope, so each column can say how many people stand in it. */
+  users?: AdminUser[] | null
+  /** Head-count in scope, or `null` while the roster has not answered. */
+  total?: number | null
+}): ReactElement {
+  const holders = holdersByPortal(users)
+
   return (
     <DataPanel
       className="rounded-lg"
@@ -147,27 +194,41 @@ export function DelegationMap(): ReactElement {
             <ShieldCheck className="size-3" aria-hidden />
             <Figure>{PORTALS.length}</Figure> portals
           </Badge>
+          {total != null && (
+            <Badge tone="neutral" className="gap-1.5">
+              <Users className="size-3" aria-hidden />
+              <Figure>{total}</Figure> {total === 1 ? 'holder' : 'holders'}
+            </Badge>
+          )}
           <InfoTip label="What this map is">
             Not a description of the permission model — the model itself. Each mark asks
             the console’s own routing catalogue whether that portal navigates a section
             carrying that authority. The backend asserts every section in that catalogue
             against a live route, so a portal that gains a surface gains a mark here, and
-            a hand-written table of permissions can never drift away from it.
+            a hand-written table of permissions can never drift away from it. The
+            head-count under each portal is the live roster, split the way the backend
+            splits it: an admin with no tenant is platform staff, an admin pinned to one
+            is that tenant’s.
           </InfoTip>
         </div>
       }
       footer={
         <Receipt
           variant="inline"
-          origin="lib/portal.ts · ROLE_SECTIONS"
-          detail="each mark is computed, not recorded — the catalogue the navigation renders"
+          origin="lib/portal.ts · ROLE_SECTIONS · /admin/users"
+          detail={
+            holders == null
+              ? 'each mark is computed from the catalogue the navigation renders; the roster has not answered, so no head-count is drawn'
+              : 'each mark is computed, not recorded — the catalogue the navigation renders, counted against the live roster'
+          }
         />
       }
     >
       <table className="w-full min-w-[46rem] border-collapse text-left">
         <caption className="sr-only">
           Bands of authority down the side, the five portals across the top. A tick means
-          that portal navigates at least one section carrying that authority.
+          that portal navigates at least one section carrying that authority, and the
+          head-count under each portal is how many people hold it.
         </caption>
         <thead>
           <tr>
@@ -180,29 +241,52 @@ export function DelegationMap(): ReactElement {
                 scope="col"
                 className="px-2 pb-3 text-center align-bottom font-normal"
               >
-                <span className="flex flex-col items-center gap-0.5">
-                  <span className="text-[0.8rem] leading-4 font-semibold text-foreground">
-                    {PORTAL_SHORT[portal]}
-                  </span>
+                <span className="flex flex-col items-center gap-1">
                   <span className="flex items-center gap-1">
-                    <Figure className="text-[0.68rem] text-muted-foreground">
-                      {`${ROLE_SECTIONS[portal].length} sections`}
-                    </Figure>
+                    <span className="text-[0.8rem] leading-4 font-semibold text-foreground">
+                      {PORTAL_SHORT[portal]}
+                    </span>
                     <InfoTip label={`What the ${PORTAL_SHORT[portal]} portal is for`}>
                       {PORTAL_PURPOSE[portal]}
                     </InfoTip>
                   </span>
+                  {/* Who is standing in it, and how much of the console it opens. A
+                      portal nobody holds still exists, and says so with a zero. */}
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.68rem]',
+                      holders != null && holders[portal] > 0
+                        ? 'bg-blue-100/70 text-blue-800'
+                        : 'bg-surface-2 text-muted-foreground',
+                    )}
+                  >
+                    <Users className="size-3 shrink-0" aria-hidden />
+                    {holders == null ? (
+                      <span>roster not loaded</span>
+                    ) : (
+                      <>
+                        <Figure>{holders[portal]}</Figure>
+                        <span>{holders[portal] === 1 ? 'holder' : 'holders'}</span>
+                      </>
+                    )}
+                  </span>
+                  <Figure className="text-[0.66rem] text-muted-foreground">
+                    {`${ROLE_SECTIONS[portal].length} sections`}
+                  </Figure>
                 </span>
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-border">
+        <tbody>
           {AUTHORITY.map((authority) => (
-            <tr key={authority.id} className="group">
+            <tr
+              key={authority.id}
+              className="border-t border-border transition-colors duration-[--dur-fast] motion-reduce:transition-none hover:bg-surface-2/60"
+            >
               <th
                 scope="row"
-                className="min-w-0 py-2.5 pr-4 pl-1 text-left align-middle font-normal"
+                className="min-w-0 py-2 pr-4 pl-1 text-left align-middle font-normal"
               >
                 <span className="flex items-center gap-1.5">
                   <span className="text-[0.8125rem] font-medium text-foreground">
@@ -223,7 +307,7 @@ export function DelegationMap(): ReactElement {
                 const has = reached.length > 0
                 const partial = has && reached.length < authority.sections.length
                 return (
-                  <td key={portal} className="px-2 py-2.5 text-center align-middle">
+                  <td key={portal} className="px-2 py-2 text-center align-middle">
                     <span
                       title={
                         has
@@ -235,7 +319,7 @@ export function DelegationMap(): ReactElement {
                               .join(', ')}`
                       }
                       className={cn(
-                        'inline-flex h-7 min-w-[3.25rem] items-center justify-center gap-1 rounded-md border text-[0.68rem] font-medium transition-colors duration-[--dur-fast] motion-reduce:transition-none',
+                        'inline-flex h-6 min-w-[2.75rem] items-center justify-center gap-1 rounded-md border text-[0.68rem] font-medium transition-colors duration-[--dur-fast] motion-reduce:transition-none',
                         has
                           ? 'border-blue-600 bg-blue-600 text-white'
                           : 'border-border bg-surface-2 text-muted-foreground',

@@ -70,11 +70,22 @@ export function wireMode(mode: RunMode): WireMode {
   return { depthMode: 'team', requestedFanout: mode.fanout }
 }
 
-/** How the chosen mode reads back in one line, for the turn's own record. */
+/**
+ * How the chosen mode reads back on the closed chip.
+ *
+ * The chip carries **the option's own name** — `Auto`, `Single`, `Team` — and nothing
+ * else but the degree, because a dropdown whose closed state renames its options makes
+ * the person open it to work out which one is selected. `Auto width` and `Single lane`
+ * described the axis rather than naming the choice, and the axis is already named twice
+ * over: by the chip's `Mode:` prefix and by the panel's own `How wide this turn runs`.
+ *
+ * Team keeps its degree, because `Team` and `Team of 3` are two different requests and
+ * the difference is the whole reason the degree row exists.
+ */
 export function describeMode(mode: RunMode): string {
-  if (mode.depth === 'auto') return 'Auto width'
-  if (mode.depth === 'single') return 'Single lane'
-  return mode.fanout === null ? 'Team · router sizes it' : `Team of ${mode.fanout}`
+  if (mode.depth === 'auto') return 'Auto'
+  if (mode.depth === 'single') return 'Single'
+  return mode.fanout === null ? 'Team · auto size' : `Team of ${mode.fanout}`
 }
 
 // ── What the run actually did with the request ───────────────────────────────

@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { widthOutcome, wireMode } from '../../src/components/console/runMode.ts'
+import { DEPTH_CHOICES, describeMode, widthOutcome, wireMode } from '../../src/components/console/runMode.ts'
 
 /** A `routing` event carrying only the fields the outcome reads. */
 function routingOf(overrides) {
@@ -57,6 +57,20 @@ test('an honoured team request is not dressed up as a correction', () => {
   assert.equal(outcome.differs, false)
   assert.equal(outcome.note, null)
   assert.equal(outcome.decidedBy, 'you')
+})
+
+test('the closed chip names the option that is selected, not the axis', () => {
+  // The dropdown is only obvious if its closed state says which of the three is on. A
+  // label that renamed the choice ("Auto width") made the person open the panel to find
+  // out, which is the one job the chip exists to save them.
+  for (const choice of DEPTH_CHOICES) {
+    const label = describeMode({ depth: choice.id, fanout: null })
+    assert.ok(
+      label.startsWith(choice.label),
+      `the chip read "${label}" for the option named "${choice.label}"`,
+    )
+  }
+  assert.equal(describeMode({ depth: 'team', fanout: 3 }), 'Team of 3', 'the degree is on the chip')
 })
 
 test('a fanout never travels without the team mode that makes it legal', () => {

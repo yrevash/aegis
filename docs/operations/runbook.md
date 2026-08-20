@@ -219,6 +219,13 @@ and **exit non-zero if the two disagree** — so this is safe to wire into a smo
 non-destructive (nothing is deleted first, so a half-finished run leaves strictly more
 of the corpus searchable than it found).
 
+A scoped run audits **within its scope**: `--tenant 1` compares tenant 1's rows against
+tenant 1's points only, so another tenant's healthy vectors are not reported as orphans
+and the exit code stays trustworthy on a partial run. Read the two counts it prints as
+two different faults — `missing` means retrieval is silently empty (rebuild), `orphaned`
+means the index still answers from text the corpus no longer has (re-chunk the owning
+documents, then re-run).
+
 This is deliberately *not* the same thing as the scheduled re-index
 (`app.ingestion.reindex.reindex_corpus`), which re-runs every stage but `parse` and is
 the right answer when the chunker, the D7 prefix or the **embedding model** changed.

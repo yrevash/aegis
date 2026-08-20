@@ -26,7 +26,10 @@ install() {
   # psycopg2 is NOT bundled: without it every dataset call 500s with
   # "No module named 'psycopg2'", while the dataset *list* still renders fine
   # because listing reads Superset's own metadata DB and never touches Postgres.
-  VIRTUAL_ENV="$VENV" uv pip install "apache-superset==6.1.0" psycopg2-binary
+  #  is imported by superset/cli/test_db.py but is not declared as a
+  # dependency of the 6.1.0 wheel, so every CLI invocation dies on
+  # ModuleNotFoundError before doing anything.
+  VIRTUAL_ENV="$VENV" uv pip install "apache-superset==6.1.0" psycopg2-binary rich
   "$SUPERSET" db upgrade
   "$SUPERSET" fab create-admin --username admin --firstname A --lastname D \
       --email admin@aegis.local --password admin || true
@@ -37,7 +40,7 @@ install() {
 }
 
 import_assets() {
-  local pw="${AEGIS_SUPERSET_DB_PASSWORD:?set AEGIS_SUPERSET_DB_PASSWORD to the aegis_superset role's password}"
+  local pw="${AEGIS_SUPERSET_DB_PASSWORD:?set AEGIS_SUPERSET_DB_PASSWORD to the aegis_superset role password}"
   local staged; staged="$(mktemp -d)"
   cp -R "$ROOT/docs/operations/superset/"* "$staged/"
   rm -f "$staged/aegis-boards.json"

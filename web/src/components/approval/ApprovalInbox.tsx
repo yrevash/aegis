@@ -543,7 +543,7 @@ function QueueBoard({
         <div
           role="group"
           aria-label="Which queue"
-          className="inline-flex rounded-lg border border-border bg-surface p-0.5"
+          className="flex w-full rounded-lg border border-border bg-surface p-0.5 sm:inline-flex sm:w-auto"
         >
           {FILTERS.map((option) => {
             const active = filter === option.id
@@ -554,7 +554,7 @@ function QueueBoard({
                 aria-pressed={active}
                 onClick={() => onFilter(option.id)}
                 className={cn(
-                  'touch-manipulation rounded-md px-3 py-1 text-sm font-medium transition-colors duration-[--dur-fast] outline-none motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-ring',
+                  'flex-1 touch-manipulation rounded-md px-3 py-1 text-sm font-medium transition-colors duration-[--dur-fast] outline-none motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-none',
                   active
                     ? 'bg-blue-600 text-white'
                     : 'text-muted-foreground hover:bg-surface-2 hover:text-foreground',
@@ -566,7 +566,10 @@ function QueueBoard({
           })}
         </div>
 
-        <div className="min-w-0 flex-1 sm:flex-none">
+        {/* `min-w-0` here let the two chooser columns collapse to the width of their
+            own chevrons at 390px, and the two labels above them printed on top of one
+            another. A select needs a floor, not a zero. */}
+        <div className="min-w-[9rem] flex-1 sm:flex-none">
           <label htmlFor="approvals-window" className="eyebrow mb-1 block">
             Raised
           </label>
@@ -585,7 +588,7 @@ function QueueBoard({
         </div>
 
         {knownTenants !== null && (
-          <div className="min-w-0 flex-1 sm:flex-none">
+          <div className="min-w-[9rem] flex-1 sm:flex-none">
             <label htmlFor="approvals-tenant" className="eyebrow mb-1 block">
               Whose gate
             </label>
@@ -638,7 +641,7 @@ function QueueBoard({
                   {counts.waiting === 1 ? 'gate is parked' : 'gates are parked'}
                 </span>
               </div>
-              <ul className="mt-4 space-y-2">
+              <ul className="mt-4 max-w-[26rem] space-y-2">
                 {bands.map((band) => {
                   const meta = URGENCY[band]
                   const Icon = meta.icon
@@ -690,7 +693,7 @@ function QueueBoard({
                 </span>
               </div>
               <div
-                className="mt-3 flex h-2.5 w-full overflow-hidden rounded-full bg-surface-2"
+                className="mt-3 flex h-2.5 w-full max-w-[26rem] overflow-hidden rounded-full bg-surface-2"
                 role="img"
                 aria-label={outcomes.map((o) => `${o.n} ${o.word.toLowerCase()}`).join(', ')}
               >
@@ -707,7 +710,7 @@ function QueueBoard({
                   ),
                 )}
               </div>
-              <ul className="mt-3 grid grid-cols-3 gap-3">
+              <ul className="mt-3 grid max-w-[26rem] grid-cols-3 gap-3">
                 {outcomes.map((o) => {
                   const Icon = o.icon
                   return (
@@ -876,11 +879,18 @@ function SlaRail({
  * are the live card's own components for the same reason: a second spelling of the
  * sentence that records what a person authorised is a second thing to keep true.
  *
- * **The card is banded rather than stacked.** A tinted head carries the identity of
- * what would run, the SLA rail spans the width directly beneath it, the calls sit in
- * the body, and the consent sentence *encloses the two buttons it describes* — so the
- * record of what a human authorised is physically the thing they pressed, not a
- * paragraph floating above it. That is four levels of weight where there was one.
+ * **Evidence on the left, the decision on the right.** The card used to be six full
+ * width bands stacked down a 1150px column, every one of them tinted the same amber:
+ * five of those side by side read as a wall, not a queue, and nothing in it was louder
+ * than anything else. Now a thin tinted head carries the identity of what would run,
+ * the body splits at `lg` into what the gate *is* (the calls, the rationale) and what
+ * you *do about it* (the SLA meter, the consent sentence, the two buttons) in a rail
+ * with its own ground. Colour is spent once — the spine and the head — instead of on
+ * every surface, so the risk hue still means something when it appears.
+ *
+ * The consent sentence stays inside the rail and still *encloses the two buttons it
+ * describes*: the record of what a human authorised and the thing they pressed are one
+ * object, at one weight, in one box.
  */
 function WaitingGate({
   row,
@@ -914,36 +924,36 @@ function WaitingGate({
   return (
     <article
       className={cn(
-        'relative overflow-hidden rounded-lg border bg-surface shadow-card transition-shadow duration-[--dur-fast] motion-reduce:transition-none hover:shadow-hover',
-        overdue ? 'border-block/60' : 'border-risk/60',
+        'relative overflow-hidden rounded-lg border border-border bg-surface shadow-card transition-shadow duration-[--dur-fast] motion-reduce:transition-none hover:shadow-hover',
+        overdue && 'border-block/50',
       )}
     >
       {/* The severity spine — the one piece of pure colour, and never alone: the risk
           word, the countdown and the band on the board all say it in text as well. */}
       <span
         aria-hidden
-        className="absolute inset-y-0 left-0 w-1.5"
+        className="absolute inset-y-0 left-0 w-1"
         style={{ background: overdue ? 'var(--block)' : 'var(--risk)' }}
       />
 
       {/* ── head: what would run, and whose it is ─────────────────────────── */}
-      <div
+      <header
         className={cn(
-          'flex flex-wrap items-start gap-x-3 gap-y-2 border-b py-3 pr-4 pl-6',
-          overdue ? 'border-block/40 bg-block/[0.07]' : 'border-risk/40 bg-risk/[0.08]',
+          'flex flex-wrap items-center gap-x-3 gap-y-2 border-b py-3 pr-4 pl-5 md:pl-6',
+          overdue ? 'border-block/30 bg-block/[0.06]' : 'border-risk/30 bg-risk/[0.07]',
         )}
       >
         <span
           className={cn(
-            'mt-0.5 grid size-9 shrink-0 place-items-center rounded-md',
-            overdue ? 'bg-block/30 text-block-ink' : 'bg-risk/35 text-risk-ink',
+            'grid size-8 shrink-0 place-items-center rounded-md',
+            overdue ? 'bg-block/25 text-block-ink' : 'bg-risk/30 text-risk-ink',
           )}
         >
           <ShieldAlert className="size-4" aria-hidden />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-[14rem]">
           <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <Figure className="text-[0.9rem] font-semibold break-all text-foreground">
+            <Figure className="text-[0.9rem] font-semibold break-words text-foreground">
               {headline}
             </Figure>
             {view.many && (
@@ -953,9 +963,6 @@ function WaitingGate({
             )}
           </p>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.72rem] text-muted-foreground">
-            <Badge tone={riskSignal === 'block' ? 'block' : 'risk'} className="uppercase">
-              {row.risk} risk
-            </Badge>
             <span>{ownerLabel(row.tenant_id)}</span>
             {persona && (
               <>
@@ -969,90 +976,121 @@ function WaitingGate({
             </span>
           </p>
         </div>
-        <span className="shrink-0 self-center text-[0.68rem] whitespace-nowrap text-muted-foreground">
-          <Figure aria-label={`gate ${rank} of ${total} by urgency`}>{`${rank} / ${total}`}</Figure>{' '}
-          by urgency
+        <span className="flex shrink-0 items-center gap-2">
+          <Badge tone={riskSignal === 'block' ? 'block' : 'risk'} className="gap-1 uppercase">
+            <ShieldAlert className="size-3 shrink-0" aria-hidden />
+            {row.risk} risk
+          </Badge>
+          <span className="rounded-md border border-border bg-surface px-2 py-0.5 text-[0.68rem] whitespace-nowrap text-muted-foreground">
+            <Figure aria-label={`gate ${rank} of ${total} by urgency`}>
+              {`${rank}/${total}`}
+            </Figure>{' '}
+            by urgency
+          </span>
         </span>
-      </div>
+      </header>
 
-      <div className="space-y-4 py-4 pr-4 pl-6">
-        <SlaRail createdAt={row.created_at} deadline={row.sla_deadline} now={now} />
+      {/*
+        Two halves at `lg`: what the gate is, and what to do about it. Below that the
+        rail simply follows the evidence, which is the same reading order.
+      */}
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(21rem,26rem)] [&>*]:min-w-0">
+        {/* ── the evidence ─────────────────────────────────────────────────── */}
+        <div className="flex flex-col gap-4 py-4 pr-4 pl-5 md:pl-6">
+          <div className="min-w-0">
+            <p className="eyebrow mb-1.5">
+              If approved, this runs
+              {view.many ? (
+                <>
+                  {' · '}
+                  <Figure>{view.actions.length}</Figure> calls
+                </>
+              ) : null}
+            </p>
+            <ul className="grid gap-2">
+              {view.actions.map((action, index) => (
+                <ProposedAction
+                  key={action.id === '' ? `${action.name}-${index}` : action.id}
+                  action={action}
+                  showRisk={view.many}
+                />
+              ))}
+            </ul>
+          </div>
 
-        <div className="min-w-0">
-          <p className="eyebrow mb-1.5">
-            If approved, this runs
-            {view.many ? (
-              <>
-                {' · '}
-                <Figure>{view.actions.length}</Figure> calls
-              </>
-            ) : null}
-          </p>
-          <ul className="grid gap-2">
-            {view.actions.map((action, index) => (
-              <ProposedAction
-                key={action.id === '' ? `${action.name}-${index}` : action.id}
-                action={action}
-                showRisk={view.many}
-              />
-            ))}
-          </ul>
+          {row.rationale && (
+            <p className="flex items-start gap-1.5 text-[0.78rem] leading-relaxed text-muted-foreground">
+              <Gavel className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <span>
+                <span className="font-medium text-foreground">Why a person: </span>
+                {row.rationale}
+              </span>
+            </p>
+          )}
+
+          {/*
+            `mt-auto` is not tidiness. The two columns are grid siblings, so the taller
+            one — the rail, once the server has a refusal to state — sets the row height
+            and the evidence column used to end a hundred pixels above the card's floor.
+            Anchoring the provenance line to the bottom closes the card on both sides.
+          */}
+          <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+            <GateReceipt approvalId={row.id} view={view} variant="inline" />
+            <span className="text-[0.68rem] text-muted-foreground">
+              run <Figure className="break-all">{row.run_id}</Figure>
+            </span>
+          </div>
         </div>
 
-        {row.rationale && (
-          <p className="flex items-start gap-1.5 text-[0.78rem] leading-relaxed text-muted-foreground">
-            <Gavel className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <span>
-              <span className="font-medium text-foreground">Why a person: </span>
-              {row.rationale}
-            </span>
-          </p>
-        )}
+        {/* ── the decision rail ────────────────────────────────────────────── */}
+        <div className="space-y-4 border-t border-border bg-surface-2/50 px-5 py-4 md:px-6 lg:border-t-0 lg:border-l">
+          <SlaRail createdAt={row.created_at} deadline={row.sla_deadline} now={now} />
 
-        {/* Load-bearing: the sentence that records what approving authorised. It
-            encloses the controls it describes and is their accessible description. */}
-        <div className="rounded-md border border-risk/50 bg-surface-2 p-3">
-          <p className="flex items-center gap-1.5 font-mono text-[0.68rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
-            <Gavel className="size-3.5 shrink-0" aria-hidden />
-            What approving authorises
-          </p>
-          <ConsentStatement id={consentId} view={view} className="mt-1.5 text-[0.82rem]" />
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button
-              aria-describedby={consentId}
-              disabled={!row.decidable || busy}
-              onClick={() => onDecide('approve')}
-            >
-              {busy ? (
-                <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-              ) : (
-                <CheckCircle2 className="size-4" aria-hidden />
-              )}
-              {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
-            </Button>
-            <Button
-              variant="outline"
-              className="border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
-              aria-describedby={consentId}
-              disabled={!row.decidable || busy}
-              onClick={() => onDecide('reject')}
-            >
-              <XCircle className="size-4" aria-hidden /> Reject
-            </Button>
+          {/* Load-bearing: the sentence that records what approving authorised. It
+              encloses the controls it describes and is their accessible description. */}
+          <div
+            className={cn(
+              'rounded-md border bg-surface p-3',
+              overdue ? 'border-block/40' : 'border-risk/40',
+            )}
+          >
+            <p className="flex items-center gap-1.5 font-mono text-[0.66rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
+              <Gavel className="size-3.5 shrink-0" aria-hidden />
+              What approving authorises
+            </p>
+            <ConsentStatement id={consentId} view={view} className="mt-1.5 text-[0.82rem]" />
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <Button
+                aria-describedby={consentId}
+                disabled={!row.decidable || busy}
+                onClick={() => onDecide('approve')}
+              >
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+                ) : (
+                  <CheckCircle2 className="size-4" aria-hidden />
+                )}
+                {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
+              </Button>
+              <Button
+                variant="outline"
+                className="border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
+                aria-describedby={consentId}
+                disabled={!row.decidable || busy}
+                onClick={() => onDecide('reject')}
+              >
+                <XCircle className="size-4" aria-hidden /> Reject
+              </Button>
+            </div>
+            {/* The server's own rule, on its own line. Squeezed into the button row it
+                had ~40px of column at 390px and read one word to a line. */}
             {row.blocked_reason && (
-              <p className="flex min-w-0 flex-1 items-start gap-1.5 text-[0.75rem] leading-relaxed text-muted-foreground">
+              <p className="mt-3 flex items-start gap-1.5 border-t border-border pt-3 text-[0.75rem] leading-relaxed text-muted-foreground">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
                 <span>{row.blocked_reason}</span>
               </p>
             )}
           </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <GateReceipt approvalId={row.id} view={view} variant="inline" />
-          <span className="text-[0.68rem] text-muted-foreground">
-            run <Figure className="break-all">{row.run_id}</Figure>
-          </span>
         </div>
       </div>
     </article>

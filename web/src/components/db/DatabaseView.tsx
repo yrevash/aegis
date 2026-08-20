@@ -2,10 +2,7 @@
 
 import {
   Database,
-  KeyRound,
-  Link2,
   Loader2,
-  Lock,
   Play,
   PowerOff,
   Search,
@@ -40,6 +37,7 @@ import {
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 
+import { SchemaMap } from './SchemaMap'
 import {
   cell,
   coverage,
@@ -50,21 +48,6 @@ import {
   isAbsent,
   nextCursor,
 } from './dbView'
-
-/**
- * Chrome adds a scroll container's overflowing content to the **document's** own
- * scroll extent unless that container is positioned. `DataPanel`'s scroll box is
- * `position: static`, so a 200-row table inside a 30rem panel left the page
- * 10,948px tall — nine thousand of them empty — while the panel itself correctly
- * scrolled at 480px. Measured in Chrome 1440x1000: `box.style.position =
- * 'relative'` takes the document from 10,948px back to 2,232px.
- *
- * The real fix is one word in `components/ui/DataPanel.tsx`, which this lane does
- * not own; this is the same fix applied through the `className` the component
- * already exposes, targeting the scroll box by the `role="group"` it is given
- * whenever `maxHeight` is set. Remove it once the primitive carries it.
- */
-const SCROLL_BOX = '[&>[data-slot=card-body]>[role=group]]:relative'
 
 /** What the operator has selected on the left: a table to browse, or an inspection to run. */
 type Selection =
@@ -503,65 +486,6 @@ function Inspections({
   )
 }
 
-/** The columns of the selected table, including the ones this connection may not read. */
-function Structure({ table }: { table: DbTable }): ReactElement {
-  return (
-    <Card>
-      <CardHeader
-        as="h3"
-        eyebrow={`structure · ${table.columns.length} columns · ${estimate(table.rowEstimate)}`}
-        title={table.name}
-        actions={
-          <span className="flex flex-wrap items-center gap-1.5">
-            <Badge tone={table.tenantScoped ? 'graph' : 'neutral'}>
-              {table.tenantScoped ? 'tenant-scoped' : 'platform'}
-            </Badge>
-            {table.withheldColumns.length > 0 ? (
-              <Badge tone="risk" className="gap-1">
-                <Lock className="size-3" aria-hidden />
-                {table.withheldColumns.length} withheld
-                <InfoTip label="What withheld means">
-                  {table.withheldColumns.join(', ')}{' '}
-                  {table.withheldColumns.length === 1 ? 'is' : 'are'} withheld from this
-                  connection by a column grant, so{' '}
-                  {table.withheldColumns.length === 1 ? 'it is' : 'they are'} not in the
-                  catalogue and cannot be read, ordered by or filtered on.
-                </InfoTip>
-              </Badge>
-            ) : null}
-          </span>
-        }
-      />
-      <CardBody className="flex flex-col gap-2 pt-0">
-        <ul className="flex flex-wrap gap-1.5">
-          {table.columns.map((column) => (
-            <li
-              key={column.name}
-              className="flex items-center gap-1.5 rounded-md border border-border bg-surface-2/60 px-2 py-0.5"
-            >
-              {column.isPrimaryKey ? (
-                <KeyRound className="size-3 text-blue-700" aria-label="primary key" />
-              ) : null}
-              <Figure className="text-xs text-foreground">{column.name}</Figure>
-              <span className="text-[0.65rem] text-muted-foreground">{column.dataType}</span>
-            </li>
-          ))}
-        </ul>
-        {table.foreignKeys.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.7rem] text-muted-foreground">
-            <Link2 className="size-3" aria-hidden />
-            {table.foreignKeys.map((key) => (
-              <Figure key={`${key.column}-${key.referencesTable}`} className="text-[0.7rem]">
-                {`${key.column} → ${key.referencesTable}.${key.referencesColumn}`}
-              </Figure>
-            ))}
-          </div>
-        ) : null}
-      </CardBody>
-    </Card>
-  )
-}
-
 /** One executed read, with the statement that produced it and the bounds that fired. */
 function Result({
   result,
@@ -582,7 +506,6 @@ function Result({
       eyebrow={`${result.durationMs} ms · ${result.planSummary}`}
       title={result.label}
       maxHeight={result.rowCount === 0 ? undefined : '28rem'}
-      className={SCROLL_BOX}
       actions={
         <div className="flex items-center gap-2">
           {canPage ? (
@@ -690,6 +613,19 @@ function Result({
  *   bound decided that — as chips now rather than a paragraph, with the full sentence a
  *   hover away.
  */
+/**
+ * What the page is currently reading as, in the same words the server uses.
+ *
+ * The scope is a real authority boundary, so the diagram's receipt names it rather than
+ * saying "the schema" — a reader who cannot tell which tenant a picture was drawn under
+ * cannot tell whether the picture is theirs.
+ */
+function tenantName(overview: DbOverview, tenantId: number | null): string {
+  if (tenantId === null) return 'every tenant'
+  const tenant = overview.tenants.find((entry) => entry.id === tenantId)
+  return tenant ? `${tenant.name} (#${tenant.id})` : `tenant ${tenantId}`
+}
+
 function DatabaseConsole({ token }: { token: string | null }): ReactElement {
   const [overview, setOverview] = useState<DbOverview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -862,6 +798,20 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
 
       <Posture overview={overview} />
 
+      {/* The ER diagram, before the browser: the shape of the schema is the first thing
+          anybody asks of a database, and it is the one question a table list cannot
+          answer. Drawn from the same payload the rail is built from, so it moves with a
+          migration rather than with somebody remembering to redraw it. */}
+      <SchemaMap
+        tables={overview.tables}
+        scope={tenantName(overview, tenantId)}
+        selected={selection.kind === 'table' ? selection.name : null}
+        onSelect={(name) => {
+          setSelection({ kind: 'table', name })
+          void browse(name)
+        }}
+      />
+
       <div className="grid gap-4 lg:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]">
         <Catalog
           overview={overview}
@@ -881,7 +831,6 @@ function DatabaseConsole({ token }: { token: string | null }): ReactElement {
             onSelect={(id) => setSelection({ kind: 'inspection', id })}
             onRun={(inspection) => void inspect(inspection)}
           />
-          {table ? <Structure table={table} /> : null}
           {refusal !== null ? <ErrorState error={refusal} /> : null}
           {result !== null ? (
             <Result

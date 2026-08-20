@@ -215,6 +215,39 @@ async def chunk_points(
     return points, unembedded, len(documents)
 
 
+def _audit_scope(
+    *, tenant_id: int | None = None, document_id: int | None = None
+) -> dict[str, str]:
+    """Return the payload filters that narrow an audit to the rows' own scope.
+
+    The rule is one sentence: whatever restricted the ``SELECT`` must restrict the read
+    of the index too, or the two sides of the comparison are not answering the same
+    question. ``orphaned`` is the direction that goes wrong — it is defined as "points
+    the index holds *for this scope* that no durable row claims", and an unscoped read
+    hands it every point belonging to every document the operator did not ask about.
+
+    Args:
+        tenant_id: The tenant the rebuild was restricted to, if any.
+        document_id: The document the rebuild was restricted to, if any.
+
+    Returns:
+        Keyword arguments for :func:`audit_chunk_index`; empty for an unscoped run,
+        which genuinely does want the whole workspace.
+    """
+    scope: dict[str, str] = {}
+    if tenant_id is not None:
+        # The owner tag is a *prefix* of ``file_path``, which is why this needs no
+        # payload index — see ``stored_point_ids``.
+        scope["file_path_prefix"] = (
+            f"{tenant_metadata_value(tenant_id)}{_TENANT_TAG_SEP}"
+        )
+    if document_id is not None:
+        # ``documents.id`` is a global primary key, so the document alone pins the
+        # scope; no tenant filter is needed alongside it.
+        scope["full_doc_id"] = str(document_id)
+    return scope
+
+
 async def rebuild_dense_index(
     session: AsyncSession,
     *,
@@ -263,7 +296,18 @@ async def rebuild_dense_index(
         # Audited whether or not anything was written, and audited from the *store*.
         # A rebuild that reports what it intended to write is the writer believing
         # itself, which is the defect this whole module answers.
-        report.drift = audit_chunk_index(qdrant, points, collection=collection)
+        #
+        # The audit is given the *same* scope the rows were read under. Without that it
+        # asks a narrow question of PostgreSQL and a collection-wide one of Qdrant, so
+        # every other tenant's healthy points come back as orphans and a scoped rebuild
+        # exits non-zero on a corpus that is entirely correct. A failure signal that
+        # fires on success is worse than none: it is the funnel's "1" all over again.
+        report.drift = audit_chunk_index(
+            qdrant,
+            points,
+            collection=collection,
+            **_audit_scope(tenant_id=tenant_id, document_id=document_id),
+        )
     finally:
         if owned:
             qdrant.close()
@@ -314,7 +358,12 @@ async def verify_document_index(
     owned = client is None
     qdrant = client or open_qdrant_client()
     try:
-        return audit_chunk_index(qdrant, points, collection=collection)
+        return audit_chunk_index(
+            qdrant,
+            points,
+            collection=collection,
+            **_audit_scope(document_id=document_id),
+        )
     finally:
         if owned:
             qdrant.close()

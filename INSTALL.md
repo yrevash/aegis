@@ -234,6 +234,20 @@ LOG_LEVEL=INFO
 > `AGENT_CHECKPOINTER=postgres` for durable, resumable HITL runs; the `memory` default
 > keeps single-process/offline runs zero-dependency.
 
+> **If Qdrant's storage is ever lost or replaced, the corpus is not.** Postgres holds the
+> embedding of record, so the search index is rebuilt from it — no re-parse, no re-embed,
+> no provider spend:
+>
+> ```bash
+> cd backend            # venv active
+> python -m app.ingestion --verify     # audit only, writes nothing; exits 1 on drift
+> python -m app.ingestion --reindex    # replay chunks.embedding into Qdrant
+> ```
+>
+> Run `--verify` after any vector-store change. An empty index is invisible from the
+> outside — retrieval simply answers with nothing — so nothing else will tell you. See
+> *Rebuilding the dense index* in `docs/operations/runbook.md` for the scoped forms.
+
 Run the API:
 
 ```bash

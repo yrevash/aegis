@@ -14,9 +14,10 @@ import {
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { BackendGate } from '@/components/shared/BackendGate'
+import { MiniTrend } from '@/components/shared/MiniTrend'
 import { Badge } from '@/components/ui/Badge'
+import { Card } from '@/components/ui/Card'
 import { DataPanel } from '@/components/ui/DataPanel'
-import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
 import { Figure } from '@/components/primitives/Figure'
 import { Gauge } from '@/components/primitives/Gauge'
@@ -24,8 +25,7 @@ import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
-import type { Signal } from '@/config/signals'
+import { SIGNALS, type Signal } from '@/config/signals'
 import { errorSentence } from '@/lib/api/apiError'
 import { getGovernanceDashboard } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -309,12 +309,96 @@ function TenantGauge({
   )
 }
 
+// ── one figure in the usage band ─────────────────────────────────────────────
+
+/**
+ * One of the three window figures — label above the value at 4px, the value in the
+ * `stat` step, the qualifier below in muted ink (DESIGN.md §3's tile anatomy).
+ *
+ * Deliberately not a `StatCard`: a card per figure is three surfaces for one fact,
+ * and the two without a series drew a tall empty box beside the one that had one.
+ */
+function UsageFigure({
+  label,
+  icon: Icon,
+  value,
+  sub,
+  className,
+}: {
+  label: string
+  icon: typeof Coins
+  value: string
+  sub: string
+  className?: string
+}): ReactElement {
+  return (
+    <div className={cn('min-w-0', className)}>
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            'grid size-6 shrink-0 place-items-center rounded-md',
+            SIGNALS.graph.bg,
+            SIGNALS.graph.text,
+          )}
+        >
+          <Icon aria-hidden className="size-3.5" />
+        </span>
+        <span className="eyebrow">{label}</span>
+      </div>
+      <Figure size="stat" className="mt-1 block break-all text-foreground">
+        {value}
+      </Figure>
+      <p className="mt-0.5 text-[0.68rem] text-muted-foreground">{sub}</p>
+    </div>
+  )
+}
+
 // ── tenant + budget table row ────────────────────────────────────────────────
 
 /**
- * One tenant joined to its budget row. The spend-vs-limit bars are driven by the
- * ledger-derived `cost_usd_used` / `tokens_used` against the budget's caps — real
- * figures the accessor computes from the ledger, never fabricated.
+ * One bounded value as a figure and a verdict, with no bar.
+ *
+ * The bars live on the gauges above, where the comparison is the point. Repeating
+ * them here drew the same two proportions twice on one screen and left the table —
+ * the surface whose whole job is *countable* precision — reading as a second, blurrier
+ * copy of the picture. This prints the pair and the band word instead.
+ */
+function CapFigure({
+  used,
+  cap,
+  format,
+}: {
+  used: number | null | undefined
+  cap: number | null | undefined
+  format: (n: number | null | undefined) => string
+}): ReactElement {
+  const frac = cap != null && cap > 0 && used != null ? used / cap : null
+  const b = frac == null ? null : band(frac)
+  return (
+    <div className="flex flex-col items-end gap-0.5 whitespace-nowrap">
+      <span className="flex items-baseline gap-1">
+        <Figure className="text-[0.8125rem] text-foreground">{format(used)}</Figure>
+        <Figure className="text-[0.72rem] text-muted-foreground">
+          {cap == null ? '· uncapped' : `/ ${format(cap)}`}
+        </Figure>
+      </span>
+      {frac != null && b != null ? (
+        <span className={cn('flex items-center gap-1 text-[0.68rem]', b.ink)}>
+          {b.alert ? <AlertTriangle aria-hidden className="size-3 shrink-0" /> : null}
+          <Figure>{`${Math.round(frac * 100)}%`}</Figure>
+          <span>{b.word}</span>
+        </span>
+      ) : (
+        <span className="text-[0.68rem] text-muted-foreground">no cap recorded</span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One tenant joined to its budget row — the ledger line under the gauges. Every
+ * figure is the accessor's own `cost_usd_used` / `tokens_used` against the budget's
+ * caps, computed from the usage ledger and never fabricated.
  */
 function TenantRow({
   name,
@@ -326,28 +410,18 @@ function TenantRow({
   budget: BudgetStatusRow | undefined
 }): ReactElement {
   return (
-    <TR className="align-top">
+    <TR>
       <TD className="whitespace-nowrap">
         <div className="flex flex-col gap-0.5">
           <span className="text-sm font-medium text-foreground">{name}</span>
           <Figure className="text-muted-foreground">{`tenant #${tenantId}`}</Figure>
         </div>
       </TD>
-      <TD className="min-w-[11rem]">
-        <BulletBar
-          label="USD"
-          used={budget?.cost_usd_used}
-          cap={budget?.budget.usd_cap}
-          format={fmtUsd}
-        />
+      <TD className="text-right">
+        <CapFigure used={budget?.cost_usd_used} cap={budget?.budget.usd_cap} format={fmtUsd} />
       </TD>
-      <TD className="min-w-[11rem]">
-        <BulletBar
-          label="Tokens"
-          used={budget?.tokens_used}
-          cap={budget?.budget.token_cap}
-          format={fmtCompact}
-        />
+      <TD className="text-right">
+        <CapFigure used={budget?.tokens_used} cap={budget?.budget.token_cap} format={fmtCompact} />
       </TD>
       <TD className="whitespace-nowrap text-right">
         <Figure className="text-foreground">{fmtUsd(budget?.usd_remaining)}</Figure>
@@ -486,6 +560,11 @@ function GovernanceView(): ReactElement {
   // Memoised because the flagged-tenant roll-up below depends on it, and a fresh
   // `[]` on every render would recompute the reduction on every render.
   const tenants = useMemo(() => data?.tenants ?? [], [data])
+  /** Tenant id → name, so the roster can say who a user belongs to rather than which key. */
+  const tenantName = useMemo(
+    () => new Map(tenants.map((t) => [t.id, t.name])),
+    [tenants],
+  )
   const users = data?.users ?? []
   const audit = data?.recent_audit ?? []
   const usage = data?.usage ?? null
@@ -600,33 +679,68 @@ function GovernanceView(): ReactElement {
             </section>
           ) : null}
 
-          {/* ── Usage summary tiles ───────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <StatCard
-              label="Calls"
-              value={fmtInt(usage?.calls ?? 0)}
-              icon={PhoneCall}
-              source={source}
-              className="rounded-lg"
-            />
-            <StatCard
-              label="Tokens"
-              value={fmtInt(usage?.total_tokens ?? 0)}
-              icon={Sigma}
-              source={source}
-              className="rounded-lg"
-            />
-            <StatCard
-              label="Cost"
-              value={fmtUsd(usage?.total_cost_usd ?? 0)}
-              icon={Coins}
-              trend={costTrend.length > 1 ? costTrend : undefined}
-              source={`${source} · usage ledger`}
-              className="rounded-lg"
-            />
-          </div>
+          {/*
+            What the window actually cost, as one instrument.
 
-          <div className="grid gap-6 xl:grid-cols-3 [&>*]:min-w-0">
+            These were three `StatCard`s side by side. Only one of them had a series to
+            draw, so the grid stretched all three to the tallest and the two without a
+            sparkline shipped ~90px of empty card under their figure — three boxes of
+            identical weight, two of them mostly nothing. One panel, three figures over
+            a shared hairline, and the recorded cost shape as a full-bleed band beneath
+            (DESIGN.md §3) says the same facts with one surface instead of three.
+          */}
+          <Card>
+            <div className="grid gap-4 px-5 pt-5 pb-4 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border/70 md:px-6">
+              <UsageFigure
+                label="Calls"
+                icon={PhoneCall}
+                value={fmtInt(usage?.calls ?? 0)}
+                sub="billed to the ledger"
+              />
+              <UsageFigure
+                label="Tokens"
+                icon={Sigma}
+                value={fmtInt(usage?.total_tokens ?? 0)}
+                sub="prompt + completion"
+                className="sm:pl-5"
+              />
+              <UsageFigure
+                label="Cost"
+                icon={Coins}
+                value={fmtUsd(usage?.total_cost_usd ?? 0)}
+                sub="at the recorded per-model rate"
+                className="sm:pl-5"
+              />
+            </div>
+            <div className="border-t border-border px-5 pt-3 pb-4 md:px-6">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="eyebrow">Cost shape</span>
+                <span className="font-mono text-[0.62rem] text-muted-foreground">
+                  {window ? `per ${window}, oldest → newest` : 'oldest → newest'}
+                </span>
+              </div>
+              {costTrend.length > 1 ? (
+                <div className="-mx-1 mt-2" aria-hidden>
+                  <MiniTrend data={costTrend} color="graph" height={56} />
+                </div>
+              ) : (
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  The ledger returned{' '}
+                  <Figure>{costTrend.length === 1 ? 'one bucket' : 'no buckets'}</Figure> for this
+                  window, so there is no shape to draw — a curve through one point would be
+                  invented.
+                </p>
+              )}
+              <Receipt
+                className="mt-3"
+                variant="inline"
+                origin={`${source} · usage ledger`}
+                detail="summed from recorded calls; nothing here is projected"
+              />
+            </div>
+          </Card>
+
+          <div className="grid items-start gap-6 xl:grid-cols-3 [&>*]:min-w-0">
             {/* ── Tenants + budgets ───────────────────────────────────────────── */}
             <DataPanel
               className="rounded-lg xl:col-span-2"
@@ -650,8 +764,8 @@ function GovernanceView(): ReactElement {
                 <Table>
                   <THead>
                     <TH className="text-left">Tenant</TH>
-                    <TH className="text-left">Spend / cap</TH>
-                    <TH className="text-left">Tokens / cap</TH>
+                    <TH className="text-right">Spend / cap</TH>
+                    <TH className="text-right">Tokens / cap</TH>
                     <TH className="text-right">USD left</TH>
                     <TH className="text-right">Calls</TH>
                   </THead>
@@ -741,10 +855,27 @@ function GovernanceView(): ReactElement {
                             {u.role}
                           </Badge>
                         </TD>
-                        <TD>
-                          <Figure className="text-muted-foreground">
-                            {u.tenant_id == null ? 'platform' : `#${u.tenant_id}`}
-                          </Figure>
+                        {/*
+                          The tenant by name, with the id beneath it. `#2` is the
+                          join key, not an answer: an operator reading a roster wants
+                          "Vertex Logistics", and the id printed under it is what they
+                          quote back. A tenant the snapshot did not carry keeps the id
+                          alone rather than borrowing a name.
+                        */}
+                        <TD className="whitespace-nowrap">
+                          {u.tenant_id == null ? (
+                            <span className="flex items-center gap-1.5 text-[0.8125rem] text-muted-foreground">
+                              <Landmark className="size-3.5 shrink-0" aria-hidden />
+                              Platform — no tenant
+                            </span>
+                          ) : (
+                            <span className="flex flex-col gap-0.5">
+                              <span className="text-[0.8125rem] text-foreground">
+                                {tenantName.get(u.tenant_id) ?? 'tenant not in this snapshot'}
+                              </span>
+                              <Figure className="text-muted-foreground">{`#${u.tenant_id}`}</Figure>
+                            </span>
+                          )}
                         </TD>
                         <TD className="min-w-[10rem]">
                           {ub ? (
@@ -829,17 +960,14 @@ function GovernanceView(): ReactElement {
 /**
  * Client entry for the Governance section — gated on a reachable backend.
  *
- * The `TooltipProvider` is not decoration: `InfoTip` is a Radix tooltip, and Radix
- * throws rather than degrading when one is used outside a provider. The screen carries
- * an `InfoTip` because DESIGN.md §4 puts a mechanism in a tooltip instead of on the
- * page, so the provider is part of that decision.
+ * `InfoTip` is a Radix tooltip and Radix throws rather than degrading outside a
+ * provider, so this screen used to mount its own. One is mounted at the root in
+ * `auth/Providers` now; a second only gives the same tooltips a second delay budget.
  */
 export function GovernanceMount(): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
-        <GovernanceView />
-      </TooltipProvider>
+      <GovernanceView />
     </BackendGate>
   )
 }

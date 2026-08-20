@@ -137,7 +137,14 @@ export function ModeMenu({
   )
 }
 
-/** One degree of fan-out. Fully round per DESIGN.md §1, filled in `--blue-600`. */
+/**
+ * One degree of fan-out. Fully round per DESIGN.md §1.
+ *
+ * Selected is `bg-primary`, the same filled treatment every other committing control in
+ * this product wears, rather than `--blue-600`: `--primary` is `#101828` here, and a
+ * lone blue pill beside a near-black Send button would read as a different kind of
+ * control rather than the same one in a chosen state.
+ */
 function DegreeButton({
   selected,
   label,

@@ -170,7 +170,7 @@ export function RolesAccess({
         seen what a portal *buys* cannot read a column of role words, and the roster
         used to open with exactly that column.
       */}
-      <DelegationMap />
+      <DelegationMap users={load.status === 'ready' ? load.rows : null} total={total} />
 
       <div className="grid gap-6 xl:grid-cols-3 [&>*]:min-w-0">
         <DataPanel

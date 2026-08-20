@@ -17,13 +17,13 @@ import {
   type AuditQuery,
 } from '@/components/audit/query'
 import { Badge } from '@/components/ui/Badge'
-import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Card } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { Receipt } from '@/components/primitives/Receipt'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { SIGNALS, type Signal } from '@/config/signals'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -126,8 +126,15 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
 
   return (
     <div className="flex flex-col gap-4">
+      {/*
+        The pulse, as one instrument rather than four boxes: three figures over one
+        hairline, and the shape they came from underneath at a height a person can
+        actually read. The activity chart used to be 72px tall in a fourth column,
+        which is a sparkline pretending to be a chart — its axis labels collided and
+        a spike and a lull looked the same.
+      */}
       <Card>
-        <div className="grid grid-cols-2 gap-4 p-5 lg:grid-cols-[1fr_1fr_1fr_1.6fr] lg:divide-x lg:divide-border/70">
+        <div className="grid gap-4 px-5 pt-5 pb-4 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border/70 md:px-6">
           <HeaderStat label="Events" icon={ListChecks} signal="neutral" value={counts.total} sub="recorded" />
           <HeaderStat
             label="Blocked"
@@ -135,7 +142,7 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
             signal="block"
             value={counts.blocked}
             sub="guardrail / denied"
-            className="lg:pl-5"
+            className="sm:pl-5"
           />
           <HeaderStat
             label="Approved"
@@ -143,143 +150,105 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
             signal="ok"
             value={counts.approved}
             sub="human-gated"
-            className="lg:pl-5"
+            className="sm:pl-5"
           />
-          <div className="col-span-2 lg:col-span-1 lg:pl-5">
-            <div className="mb-1 flex items-center gap-2">
-              <span className="eyebrow">Activity</span>
-              <span className="font-mono text-[0.62rem] text-muted-foreground">last 12h</span>
-            </div>
-            {load.status === 'ready' ? (
-              <BarChart data={perHour} index="hour" category="count" color="graph" height={72} />
-            ) : (
-              <div className="h-[72px]" />
-            )}
+        </div>
+        <div className="border-t border-border px-5 pt-4 pb-5 md:px-6">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="eyebrow">Activity</span>
+            <span className="font-mono text-[0.62rem] text-muted-foreground">
+              events per hour · last 12h
+            </span>
           </div>
+          {load.status === 'ready' ? (
+            <BarChart data={perHour} index="hour" category="count" color="graph" height={200} />
+          ) : (
+            <div className="h-[200px]" />
+          )}
+          <Receipt
+            className="mt-3"
+            variant="inline"
+            origin="GET /audit · bucketed by hour"
+            detail="counts the rows this query loaded, and nothing outside it"
+          />
         </div>
       </Card>
 
-      <Card>
-        <CardHeader
-          title={
-            <span className="flex items-center gap-2">
-              <ScrollText className="size-4 shrink-0 text-blue-700" aria-hidden />
-              Audit trail
-            </span>
-          }
-          actions={
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="neutral">append-only</Badge>
-              <InfoTip label="What append-only means">
-                Rows are only ever added, never edited or deleted — a tamper-evident record. This is
-                a real, load-bearing property of the trail.
-              </InfoTip>
-              <button
-                type="button"
-                onClick={exportCsv}
-                title="Download the whole filtered trail as CSV"
-                className="inline-flex h-8 touch-manipulation items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              >
-                <Download aria-hidden className="size-3.5" /> CSV
-              </button>
-              <InfoTip label="What the CSV contains">
-                The whole filtered trail, not the page on screen — streamed from the server with
-                no row limit, scoped to what you may read, and opening with a preamble naming the
-                scope, window and filters it was built from. The download is itself recorded as a
-                report.export row.
-              </InfoTip>
-            </div>
-          }
-        />
+      {/*
+        `DataPanel`, not a hand-rolled `overflow-auto` div. The trail is a 900px-wide
+        table, and inside a plain `CardBody` that width became the *page's* width:
+        measured at 390px the body ran 231px past the viewport, so the whole document
+        slid sideways instead of the table scrolling inside its own box. The panel owns
+        a scroll container that cannot widen its card at any width.
+      */}
+      <DataPanel
+        eyebrow="aegis.governance · GET /audit"
+        title={
+          <span className="flex items-center gap-2">
+            <ScrollText className="size-4 shrink-0 text-blue-700" aria-hidden />
+            Audit trail
+          </span>
+        }
+        maxHeight={520}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="neutral">append-only</Badge>
+            <InfoTip label="What append-only means">
+              Rows are only ever added, never edited or deleted — a tamper-evident record. This is
+              a real, load-bearing property of the trail.
+            </InfoTip>
+            <button
+              type="button"
+              onClick={exportCsv}
+              title="Download the whole filtered trail as CSV"
+              className="inline-flex h-8 touch-manipulation items-center gap-1.5 rounded-md border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <Download aria-hidden className="size-3.5" /> CSV
+            </button>
+            <InfoTip label="What the CSV contains">
+              The whole filtered trail, not the page on screen — streamed from the server with
+              no row limit, scoped to what you may read, and opening with a preamble naming the
+              scope, window and filters it was built from. The download is itself recorded as a
+              report.export row.
+            </InfoTip>
+          </div>
+        }
+        toolbar={
+          <div className="w-full space-y-3">
+            {exportError !== null && (
+              <p role="alert" className="flex items-start gap-2 text-sm text-block-ink">
+                <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  <span className="font-medium">Export refused. </span>
+                  {exportError}
+                </span>
+              </p>
+            )}
 
-        <CardBody className="flex flex-col gap-4">
-          {exportError !== null && (
-            <p role="alert" className="flex items-start gap-2 text-sm text-block-ink">
-              <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0" />
-              <span>
-                <span className="font-medium">Export refused. </span>
-                {exportError}
-              </span>
-            </p>
-          )}
+            {/* The export takes the actor, action prefix and time range; the rest of this
+                form has no counterpart on the route. Saying so is the point: a file that
+                quietly holds more than the table it came from is evidence of the wrong
+                thing. */}
+            {dropped.length > 0 && (
+              <p className="rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
+                The CSV carries the actor, action prefix and time range. It cannot narrow by{' '}
+                <span className="text-foreground">{dropped.join(', ')}</span>, so it will hold more
+                rows than the table below. Clear those filters before exporting if the file must
+                match what you see.
+              </p>
+            )}
 
-          {/* The export takes the actor, action prefix and time range; the rest of this
-              form has no counterpart on the route. Saying so is the point: a file that
-              quietly holds more than the table it came from is evidence of the wrong
-              thing. */}
-          {dropped.length > 0 && (
-            <p className="rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
-              The CSV carries the actor, action prefix and time range. It cannot narrow by{' '}
-              <span className="text-foreground">{dropped.join(', ')}</span>, so it will hold more
-              rows than the table below. Clear those filters before exporting if the file must
-              match what you see.
-            </p>
-          )}
-
-          <AuditFilterBar
-            value={query}
-            onChange={setQuery}
-            tenants={tenants}
-            busy={load.status === 'loading'}
-          />
-
-          {load.status === 'loading' && <LoadingState rows={6} label="Reading the audit trail…" />}
-
-          {load.status === 'error' && <ErrorState error={load.message} />}
-
-          {load.status === 'ready' && rows.length === 0 && (
-            <EmptyState icon={ScrollText} title={empty.title} body={empty.hint} />
-          )}
-
-          {load.status === 'ready' && rows.length > 0 && (
-            <div className="max-h-[520px] overflow-auto">
-              <table className="w-full min-w-[900px] text-sm [&_td]:pr-8 [&_td:last-child]:pr-0 [&_th]:pr-8 [&_th:last-child]:pr-0">
-                <thead className="sticky top-0 z-10 bg-card">
-                  <tr className="border-b border-border/70 text-left">
-                    {COLUMNS.map((h) => (
-                      <th
-                        key={h}
-                        scope="col"
-                        className="eyebrow pb-2 font-normal whitespace-nowrap"
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr
-                      key={r.id}
-                      className="border-b border-border/40 align-top transition-colors last:border-0 hover:bg-surface-2/50"
-                    >
-                      <td className="tabular py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
-                        {formatTime(r.ts)}
-                      </td>
-                      <td className="min-w-[16rem] py-2.5 font-medium text-foreground">{r.action}</td>
-                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
-                        {r.actor ?? '—'}
-                      </td>
-                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-blue-700">
-                        {r.model ?? '—'}
-                      </td>
-                      <td className="py-2.5 whitespace-nowrap">
-                        <TraceChip traceId={r.trace_id} />
-                      </td>
-                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
-                        {r.approved_by ?? '—'}
-                      </td>
-                      <td className="py-2.5 whitespace-nowrap">
-                        <ResultDot result={r.outcome} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
+            <AuditFilterBar
+              value={query}
+              onChange={setQuery}
+              tenants={tenants}
+              busy={load.status === 'loading'}
+            />
+          </div>
+        }
+        footer={
           <Receipt
+            variant="inline"
             origin="GET /audit · Postgres, append-only"
             detail={
               load.status === 'ready'
@@ -287,8 +256,58 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
                 : 'filtered server-side, so the figures above describe the same set as the table'
             }
           />
-        </CardBody>
-      </Card>
+        }
+      >
+        {load.status === 'loading' && <LoadingState rows={6} label="Reading the audit trail…" />}
+
+        {load.status === 'error' && <ErrorState error={load.message} />}
+
+        {load.status === 'ready' && rows.length === 0 && (
+          <EmptyState icon={ScrollText} title={empty.title} body={empty.hint} />
+        )}
+
+        {load.status === 'ready' && rows.length > 0 && (
+          <table className="w-full min-w-[900px] text-sm [&_td]:pr-8 [&_td:last-child]:pr-0 [&_th]:pr-8 [&_th:last-child]:pr-0">
+            <thead className="sticky top-0 z-10 bg-card">
+              <tr className="border-b border-border/70 text-left">
+                {COLUMNS.map((h) => (
+                  <th key={h} scope="col" className="eyebrow pb-2 font-normal whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr
+                  key={r.id}
+                  className="border-b border-border/40 align-top transition-colors last:border-0 hover:bg-surface-2/50"
+                >
+                  <td className="tabular py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
+                    {formatTime(r.ts)}
+                  </td>
+                  <td className="min-w-[16rem] py-2.5 font-medium text-foreground">{r.action}</td>
+                  <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
+                    {r.actor ?? '—'}
+                  </td>
+                  <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-blue-700">
+                    {r.model ?? '—'}
+                  </td>
+                  <td className="py-2.5 whitespace-nowrap">
+                    <TraceChip traceId={r.trace_id} />
+                  </td>
+                  <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
+                    {r.approved_by ?? '—'}
+                  </td>
+                  <td className="py-2.5 whitespace-nowrap">
+                    <ResultDot result={r.outcome} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </DataPanel>
     </div>
   )
 }
@@ -405,17 +424,16 @@ export function AuditMount(): ReactElement {
 
   return (
     <BackendGate>
-      <TooltipProvider>
-        <div className="space-y-4">
-          <SectionHeader
-            as="h1"
-            eyebrow="Postgres audit"
-            title="Audit"
-            note="Every recorded action with its actor, model, trace id and approver. The filters run on the server, so a search reaches the whole trail rather than the page in view."
-          />
-          <AuditLog token={token} tenants={tenants} />
-        </div>
-      </TooltipProvider>
+      {/* No `TooltipProvider` here: one is mounted at the root in `auth/Providers`,
+          and a second is a second delay budget for the same tooltips. */}
+      <div className="space-y-4">
+        <PageHeader
+          eyebrow="postgres · append-only"
+          title="Audit"
+          note="Every recorded action with its actor, model, trace id and approver. The filters run on the server, so a search reaches the whole trail rather than the page in view."
+        />
+        <AuditLog token={token} tenants={tenants} />
+      </div>
     </BackendGate>
   )
 }

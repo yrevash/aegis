@@ -341,6 +341,7 @@ def stored_point_ids(
     collection: str = DEFAULT_CHUNK_COLLECTION,
     workspace: str | None = None,
     file_path_prefix: str | None = None,
+    full_doc_id: str | None = None,
     limit: int = 10_000,
 ) -> frozenset[str]:
     """Return the ids of the points this scope holds in the dense index.
@@ -356,6 +357,11 @@ def stored_point_ids(
         file_path_prefix: When given, keep only points whose ``file_path`` starts with
             it — the owner tag (``"t1::"``) is a prefix, so this scopes the read to one
             tenant without needing a payload index on the field.
+        full_doc_id: When given, keep only points whose payload names this owning
+            document. Matched in Python for the same reason as ``file_path_prefix``: a
+            server-side condition on an unindexed payload field is a full scan anyway,
+            and requiring an index would make the audit fail on a collection LightRAG
+            created rather than merely run slower.
         limit: Ceiling on points scanned, so an audit against a large corpus cannot turn
             into an unbounded read.
 
@@ -397,6 +403,10 @@ def stored_point_ids(
                 path = str(payload.get("file_path") or "")
                 if not path.startswith(file_path_prefix):
                     continue
+            if full_doc_id is not None and str(
+                payload.get("full_doc_id") or ""
+            ) != str(full_doc_id):
+                continue
             found.add(str(record.id).replace("-", ""))
         if offset is None or not records:
             break
@@ -410,6 +420,7 @@ def audit_chunk_index(
     collection: str = DEFAULT_CHUNK_COLLECTION,
     workspace: str | None = None,
     file_path_prefix: str | None = None,
+    full_doc_id: str | None = None,
 ) -> IndexDrift:
     """Compare what the durable rows claim against what the dense index holds.
 
@@ -427,6 +438,12 @@ def audit_chunk_index(
         file_path_prefix: Restrict the "what is actually there" read to one tenant's
             owner tag, so ``orphaned`` means "orphaned for this tenant" rather than
             "belongs to a tenant this audit did not ask about".
+        full_doc_id: Restrict that read further, to one document. Both scopes exist for
+            the same reason: an audit that asks a narrow question of the rows and a wide
+            one of the index reports every *other* document's healthy points as orphans,
+            and a scoped re-index that always exits non-zero teaches operators to ignore
+            the exit code — which is how the funnel's collapse to 1 went unread for
+            months.
 
     Returns:
         The :class:`IndexDrift` between the two stores.
@@ -444,6 +461,7 @@ def audit_chunk_index(
         collection=collection,
         workspace=ws,
         file_path_prefix=file_path_prefix,
+        full_doc_id=full_doc_id,
     )
     return IndexDrift(
         expected=expected_ids,
