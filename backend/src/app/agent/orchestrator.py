@@ -456,7 +456,25 @@ async def decide_approval(
     status = resolution.status if resolution else None
     run_id = resolution.run_id if resolution else None
 
-    if won and decision is ApprovalDecision.APPROVE and not live_woken:
+    if won and decision is ApprovalDecision.APPROVE and _is_mcp_proposal(run_id):
+        # An MCP-originated gate is not a parked graph run — there is no checkpoint to
+        # resume — so the approved tool is executed directly, under the persona and the
+        # tenant the row itself records. Without this the row wedged in ``RESUMING``:
+        # gone from the pending inbox, unmatched by ``resolve_approval`` and by the SLA
+        # sweeper, and rendered by the console as an action in flight that had not
+        # happened and never would.
+        executed = await _execute_mcp_proposal(approval_id, approver)
+        if executed:
+            await _safe_finalize(approval_id)
+            status = "approved"
+        else:
+            # Nothing ran, so nothing may claim it did. Back to ``PENDING``: visible,
+            # decidable again, and still swept — the same compensation a failed resume
+            # gets, for the same reason.
+            await _safe_release(approval_id)
+            status = "pending"
+            accepted = live_woken
+    elif won and decision is ApprovalDecision.APPROVE and not live_woken:
         # The run parked: continue it out-of-band from the checkpoint (in-process
         # handle if present, else rehydrated by ``thread_id`` on a fresh worker).
         resumed = await resume_parked_run(
@@ -558,6 +576,28 @@ async def resume_parked_run(
     if resumed:
         await _safe_finalize(approval_id)
     return resumed
+
+
+def _is_mcp_proposal(run_id: str | None) -> bool:
+    """Return whether this gate came from an MCP call rather than from a graph run.
+
+    Imported lazily and tolerantly: the ``mcp`` SDK is an optional extra, and a
+    deployment without it has no MCP rows to recognise.
+    """
+    try:
+        from app.mcp.server import is_mcp_proposal
+    except ImportError:  # pragma: no cover - the MCP extra is not installed
+        return False
+    return is_mcp_proposal(run_id)
+
+
+async def _execute_mcp_proposal(approval_id: str, approver: str | None) -> bool:
+    """Carry out an approved MCP proposal; ``False`` if it did not run."""
+    try:
+        from app.mcp.server import execute_approved_proposal
+    except ImportError:  # pragma: no cover - the MCP extra is not installed
+        return False
+    return await execute_approved_proposal(approval_id, approver=approver)
 
 
 async def _safe_resolve(

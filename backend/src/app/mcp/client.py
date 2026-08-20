@@ -56,10 +56,12 @@ seven phases of governance an external server must arrive *inside*, not beside:
    boundary** — before it becomes an audit payload, a stream event or a console row,
    and regardless of whether the caller is the agent graph (which screens again in
    ``act``, for every tool) or the admin console (which is not the graph and would
-   otherwise have no rail at all). The peer's *tool descriptions* are screened the
-   same way at discovery, because a description is text an external party writes that
-   lands verbatim in the planner's system prompt — the injection vector that is easy
-   to miss precisely because it never looks like a "result".
+   otherwise have no rail at all). The peer's *tool descriptions* **and its argument
+   schemas** are screened the same way at discovery, because both land verbatim in the
+   planner's system prompt — the injection vector that is easy to miss precisely
+   because it never looks like a "result". Screening the description alone left the
+   schema's own ``description`` and ``title`` fields as an unscreened way into the same
+   prompt; :func:`_screen_schema` closes it.
 
 5. **A disabled server's tools cease to exist**, rather than being refused on call.
    :meth:`ExternalToolRegistry.tools` and every governance answer below filter on the
@@ -649,7 +651,10 @@ class ExternalToolRegistry:
           (:class:`ExternalToolCollisionError`) — the external tool loses, always;
         * a **description the ``TOOL_RESULT`` rail blocks** is dropped, because the
           description is text the peer writes that lands verbatim in the planner's
-          system prompt. It is the injection vector that does not look like one.
+          system prompt. It is the injection vector that does not look like one — and
+          so is the **argument schema**, whose per-property ``description`` and
+          ``title`` reach the same prompt by the same route, so it is screened too
+          (:func:`_screen_schema`) and a block drops the tool identically.
 
         Discovery replaces this server's previously discovered tools rather than
         merging: a tool the peer has withdrawn must disappear from the payload, and a
@@ -697,6 +702,10 @@ class ExternalToolRegistry:
                     verdict.reason,
                 )
                 continue
+            raw_schema = dict(getattr(tool, "input_schema", None) or {"type": "object"})
+            schema = await _screen_schema(raw_schema, qualified, screen)
+            if schema is None:
+                continue
             recorded[qualified] = ExternalTool(
                 qualified_name=qualified,
                 server_id=server_id,
@@ -705,7 +714,7 @@ class ExternalToolRegistry:
                 # is what may be shown, and passing the original through would mean the
                 # redaction did not happen.
                 description=str(verdict.text if verdict.text is not None else description),
-                input_schema=dict(getattr(tool, "input_schema", None) or {"type": "object"}),
+                input_schema=schema,
             )
 
         for name in [n for n, t in self._tools.items() if t.server_id == server_id]:
@@ -977,6 +986,119 @@ class ExternalToolRegistry:
             },
         )
         return ToolActionResult(ok=False, changed=False, summary=summary)
+
+
+class _SchemaBlocked(Exception):
+    """Internal signal: the rail blocked one prose field inside a peer's schema."""
+
+    def __init__(self, reason: str, layer: str) -> None:
+        """Carry the rail's own reason and layer up to the one place that logs them."""
+        super().__init__(reason)
+        self.reason = reason
+        self.layer = layer
+
+
+#: Schema keys whose value is **prose the model reads**, and which can therefore be
+#: rewritten with the rail's redacted text without changing what the tool means. Every
+#: other string in a schema (a property name, an ``enum`` member, a ``pattern``, a
+#: ``const``) is part of the contract: redacting one would silently change the call, so
+#: those are screened for a BLOCK and never rewritten.
+_SCHEMA_PROSE_KEYS = frozenset({"description", "title", "$comment"})
+
+
+def _schema_contract_text(node: Any) -> list[str]:  # noqa: ANN401 - arbitrary peer JSON
+    """Return every peer-authored string in ``node`` that is *not* rewritable prose.
+
+    Property names, ``enum`` members, ``const``/``default`` values, ``pattern``s and
+    ``format``s all reach the planner verbatim inside the tool payload, so they are
+    screened — but they carry meaning the tool call depends on, so they are screened
+    for a refusal rather than redacted in place.
+    """
+    out: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            out.append(str(key))
+            if key in _SCHEMA_PROSE_KEYS and isinstance(value, str):
+                continue
+            out.extend(_schema_contract_text(value))
+    elif isinstance(node, list):
+        for item in node:
+            out.extend(_schema_contract_text(item))
+    elif isinstance(node, str):
+        out.append(node)
+    return out
+
+
+async def _screen_schema(
+    schema: dict[str, Any], qualified_name: str, screen: ScreenFn
+) -> dict[str, Any] | None:
+    """Screen a peer's argument schema, or return ``None`` if it must not be admitted.
+
+    **The other half of the description.** A tool's ``description`` is screened because
+    it lands verbatim in the planner's system prompt; so does its *input schema* — every
+    ``description`` and ``title`` a peer wrote against a property, and every ``enum``
+    member and ``pattern`` besides. Screening one and not the other left the injection
+    vector open in the half nobody looks at, which is the same reason
+    :func:`_payload_text` folds structured content in with the text blocks.
+
+    Two treatments, because a schema is not uniformly prose:
+
+    * **Prose** (:data:`_SCHEMA_PROSE_KEYS`) is screened field by field and replaced with
+      the rail's own text, so a REDACT verdict actually redacts — the same handling the
+      tool description gets.
+    * **The contract** (property names, ``enum`` members, ``const``, ``pattern``, …) is
+      folded into one string and screened for a BLOCK only. Rewriting it would change
+      what the tool call means, so the only honest options are "admit" and "refuse".
+
+    Args:
+        schema: The peer's advertised JSON schema.
+        qualified_name: The Aegis-side tool name, for the rail's rationale and the log.
+        screen: The ``TOOL_RESULT`` rail.
+
+    Returns:
+        The screened schema, or ``None`` when the rail blocked any part of it — in which
+        case the tool is not admitted at all, exactly as for a blocked description.
+    """
+    contract = "\n".join(_schema_contract_text(schema))
+    if contract.strip():
+        verdict = await screen(contract, qualified_name)
+        if verdict.verdict is GuardVerdict.BLOCK:
+            logger.error(
+                "MCP client: the TOOL_RESULT rail BLOCKED the argument schema of %r "
+                "(layer=%s): %s — the tool is not admitted",
+                qualified_name,
+                verdict.layer,
+                verdict.reason,
+            )
+            return None
+
+    async def _walk(node: Any) -> Any:  # noqa: ANN401 - arbitrary peer JSON
+        if isinstance(node, dict):
+            out: dict[str, Any] = {}
+            for key, value in node.items():
+                if key in _SCHEMA_PROSE_KEYS and isinstance(value, str):
+                    result = await screen(value, qualified_name)
+                    if result.verdict is GuardVerdict.BLOCK:
+                        raise _SchemaBlocked(str(result.reason), str(result.layer or ""))
+                    out[key] = str(result.text if result.text is not None else value)
+                else:
+                    out[key] = await _walk(value)
+            return out
+        if isinstance(node, list):
+            return [await _walk(item) for item in node]
+        return node
+
+    try:
+        return dict(await _walk(schema))
+    except _SchemaBlocked as blocked:
+        logger.error(
+            "MCP client: the TOOL_RESULT rail BLOCKED a description inside the "
+            "argument schema of %r (layer=%s): %s — the tool is not admitted",
+            qualified_name,
+            blocked.layer,
+            blocked.reason,
+        )
+        return None
 
 
 def _payload_text(result: Any) -> str:  # noqa: ANN401 - SDK CallToolResult

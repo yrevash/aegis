@@ -497,6 +497,11 @@ def _get_shared_store() -> Any:  # noqa: ANN401 - adapter store type
     carrying the domain's real label — not LLM-written prose. Seeding a real
     store is what gives ``run_tool`` concrete records to act on, so a gated action
     changes an actual row rather than succeeding against nothing.
+
+    **There is exactly one of these per process**, and :func:`shared_record_store` is
+    its public name — the MCP front door (§10.4) runs the *same* tools against the
+    *same* records, so a second store would mean a note added over MCP was invisible to
+    the agent that is supposed to be looking at the same request.
     """
     global _shared_store
     if _shared_store is None:
@@ -505,6 +510,16 @@ def _get_shared_store() -> Any:  # noqa: ANN401 - adapter store type
         dataset = generate_synthetic_sync()
         _shared_store = InMemoryRecordStore.from_dataset(dataset)
     return _shared_store
+
+
+def shared_record_store() -> Any:  # noqa: ANN401 - adapter store type
+    """Return the platform's one in-process record store.
+
+    The public name for :func:`_get_shared_store`, so a caller outside this module (the
+    MCP transport) does not have to reach for a private one to get *the* store rather
+    than *a* store. See :func:`_get_shared_store` for what it holds and why.
+    """
+    return _get_shared_store()
 
 
 def _default_tool_definitions_for(persona_id: str) -> list[dict[str, Any]]:

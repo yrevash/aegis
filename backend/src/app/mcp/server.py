@@ -89,7 +89,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
-from aegis.governance.types import Role
+from aegis.governance.types import GovernanceContext, Role
 from aegis.retrieval.types import (
     AllTenants,
     TenantScope,
@@ -150,6 +150,14 @@ MCP_ACTOR = "mcp"
 Over the wire the audit actor is ``mcp:<username>``: the trail has to name *which*
 principal proposed an action, not merely that MCP did. The bare prefix remains the
 default for the in-process facade, which has no caller.
+"""
+
+MCP_RUN_PREFIX = f"{MCP_ACTOR}:"
+"""Prefix on the synthetic ``run_id``/``thread_id`` of an MCP-originated approval row.
+
+It is what tells the decide path that this gate is **not** a parked LangGraph run, so
+there is no checkpoint to resume and the approved tool has to be executed directly. See
+:func:`execute_approved_proposal`.
 """
 
 MCP_PATH = "/mcp"
@@ -271,6 +279,27 @@ def _annotations_for(spec: object | None, risk: RiskLevel) -> dict[str, bool]:
         "idempotent_hint": bool(idempotent),
         "open_world_hint": bool(getattr(spec, "open_world", False)),
     }
+
+
+def _platform_record_store() -> RecordStore:
+    """Return the platform's **one** in-process record store.
+
+    Not a fresh :class:`~app.adapter.InMemoryRecordStore` per MCP server. The facade
+    runs the platform's real tools, and running them against a store nothing else can
+    see makes the MCP front door a parallel universe: a write tool called over MCP
+    answered ``changed: true`` and wrote an audit row, and its effect was invisible to
+    the agent graph, to ``/query`` and to the console — because they were all reading a
+    different dict. One process, one set of records.
+
+    Falls back to a private store only when the agent package cannot be imported at all,
+    which is the same "the domain is not wired here" case the rest of this module treats
+    as optional.
+    """
+    try:
+        from app.agent.deps import shared_record_store  # noqa: PLC0415 - avoid a cycle
+    except ImportError:  # pragma: no cover - the agent package is always present
+        return InMemoryRecordStore.from_dataset(generate_synthetic_sync())
+    return shared_record_store()
 
 
 def _resolve_default_audit() -> AuditFn | None:
@@ -986,11 +1015,7 @@ class GovernedMcpServer:
                 the governed path without an HTTP request, and for no other reason —
                 the wire path always uses :func:`resolve_caller`.
         """
-        self._store = (
-            store
-            if store is not None
-            else InMemoryRecordStore.from_dataset(generate_synthetic_sync())
-        )
+        self._store = store if store is not None else _platform_record_store()
         self._audit = audit
         self._resolve = resolve
 
@@ -1153,6 +1178,111 @@ class GovernedMcpServer:
             if auth.role in spec.roles
         )
         return json.dumps(document, indent=2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The other half of the gate — carrying out what a human approved
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def is_mcp_proposal(run_id: str | None) -> bool:
+    """Return whether ``run_id`` belongs to an MCP-originated approvals row."""
+    return bool(run_id) and str(run_id).startswith(MCP_RUN_PREFIX)
+
+
+async def execute_approved_proposal(
+    approval_id: str, *, approver: str | None = None
+) -> bool:
+    """Run the HIGH-risk tool an MCP caller proposed, now that a human has approved it.
+
+    **Why this exists.** A gate that can be approved and can never complete is not a
+    gate; it is a queue item that dead-ends. An MCP proposal is not a parked LangGraph
+    run, so :func:`app.agent.resume_parked_run` finds no checkpoint and reports "nothing
+    to resume" — which left the durable row wedged in ``RESUMING`` for ever: invisible to
+    the pending inbox, unmatched by :func:`app.data.resolve_approval` and by the SLA
+    sweeper, and rendered by the console as an action that is *in flight*. The operator
+    was told ``accepted: true`` about something that had not happened and never would.
+
+    So the approval is carried out here, under the authority the row itself records:
+
+    * the **persona** stored on the row, whose allowlist is re-checked — a grant may have
+      been withdrawn between the proposal and the decision, and the decision does not
+      re-authorise a tool the persona has since lost;
+    * the **tenant** stored on the row, bound as the governance context, so the execution
+      audits under the tenant that proposed it and not under whoever pressed approve;
+    * the **approver**, carried into :class:`~app.adapter.ToolContext` so the audit row
+      names the human the action rests on.
+
+    Exactly-once is the caller's: :func:`app.agent.decide_approval` has already won the
+    optimistic ``PENDING → RESUMING`` transition keyed by ``approval_id``, so only one
+    decision ever reaches this function for a given row.
+
+    Args:
+        approval_id: The approvals row that was just approved.
+        approver: The human who approved it.
+
+    Returns:
+        ``True`` when the tool was executed (whatever it returned), ``False`` when this
+        row is not an MCP proposal or could not be executed — in which case the caller
+        must release the row rather than leave it claiming to be resuming.
+    """
+    from app.core.governance import (  # noqa: PLC0415 - avoid an import cycle
+        reset_governance_context,
+        set_governance_context,
+    )
+    from app.data import get_approval, record_audit  # noqa: PLC0415 - DB optional at boot
+
+    row = await get_approval(approval_id)
+    if row is None or not is_mcp_proposal(row.run_id):
+        return False
+
+    persona = row.persona or DEFAULT_PERSONA_ID
+    name = row.action
+    if name not in TOOL_REGISTRY or not is_allowed(persona, name):
+        logger.error(
+            "Approved MCP proposal %s names tool %r, which persona %r may not call now. "
+            "Nothing was executed; the gate is released rather than closed.",
+            approval_id,
+            name,
+            persona,
+        )
+        return False
+
+    governance = GovernanceContext(tenant_id=row.tenant_id, role=Role.ADMIN)
+    token = set_governance_context(governance)
+    try:
+        result = await run_tool(
+            persona,
+            name,
+            dict(row.args or {}),
+            ToolContext(
+                store=_platform_record_store(),
+                actor=f"{MCP_ACTOR}:approved",
+                approved_by=approver,
+                audit=record_audit,
+            ),
+        )
+    except Exception:  # noqa: BLE001 - a failed execution must not close the gate
+        logger.error(  # noqa: TRY400 - traceback carried by exc_info
+            "Approved MCP proposal %s failed while executing %r; the gate is released "
+            "rather than closed.",
+            approval_id,
+            name,
+            exc_info=True,
+        )
+        return False
+    finally:
+        reset_governance_context(token)
+
+    logger.info(
+        "Approved MCP proposal %s executed %r (ok=%s) for tenant %s, approved by %s.",
+        approval_id,
+        name,
+        result.ok,
+        row.tenant_id,
+        approver,
+    )
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1336,7 +1466,12 @@ class McpTransportMount:
     the SDK's ``RuntimeError: Task group is not initialized`` surfacing as a 500.
 
     The record store is built once and handed to every rebuild, so a restart of the
-    transport does not silently discard the domain state the previous one wrote.
+    transport does not silently discard the domain state the previous one wrote — and
+    it is the platform's **one** store (:func:`app.agent.deps.shared_record_store`),
+    not a second one minted here. Minting one made the MCP front door a parallel
+    universe: a write tool called over MCP returned ``changed: true``, wrote an audit
+    row, and its effect was invisible to the agent, the console and every HTTP read,
+    because they were all looking at a different dict.
     """
 
     def __init__(self, store: RecordStore | None = None) -> None:
@@ -1347,8 +1482,6 @@ class McpTransportMount:
     @asynccontextmanager
     async def running(self) -> AsyncIterator[Starlette]:
         """Build and run the transport for the duration of one host lifespan."""
-        if self._store is None:
-            self._store = InMemoryRecordStore.from_dataset(generate_synthetic_sync())
         inner = build_http_app(self._store)
         async with inner.router.lifespan_context(inner):
             self.app = inner
