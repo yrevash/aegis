@@ -167,6 +167,7 @@ check that gets disabled.
 | First `pytest` is slow (~30–60s) | One-time SHAP/numba JIT compile; later runs are ~2s. |
 | Console banner says "mock" unexpectedly | The boot probe couldn't reach the backend — check `NEXT_PUBLIC_API_BASE` and that `:8000` is up. |
 | Queries answer with no sources / retrieval returns nothing, but `/documents` shows SUCCEEDED | The dense index is empty while the chunks are fine — the two stores disagree. Confirm with `curl -s localhost:6333/collections/lightrag_vdb_chunks \| grep points_count`, then rebuild from the rows that survived: `python -m app.ingestion --reindex` (see *Rebuilding the dense index* below). |
+| Every query errors with `LightRAG returned an unattributable blended context` | **Not** an empty index — check `points_count` first; if it is healthy this is the read path, not the store. LightRAG's `aquery(only_need_context=True)` returns merged prose with no per-chunk `file_path`, and the tenant filter has nothing to attribute, so it refuses rather than serving another tenant's text. The backend must call `aquery_data` instead (`LightRAGBackend._context`); a `no aquery_data()` WARNING in the log means the installed LightRAG is too old and the refusal is correct. |
 
 ---
 
