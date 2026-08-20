@@ -33,9 +33,17 @@ function fmtInt(n: number | null | undefined): string {
   return n == null ? '—' : Math.round(n).toLocaleString('en-US')
 }
 
-/** USD with cents, or an em-dash for null. */
+/**
+ * USD with cents, or an em-dash for null.
+ *
+ * Through `Intl.NumberFormat` rather than a template string, so a five-figure cap is
+ * grouped rather than arriving as `$12345.00` — which is the one shape a spend cap must
+ * not have on a screen somebody reads in a hurry.
+ */
+const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
 function fmtUsd(n: number | null | undefined): string {
-  return n == null ? '—' : `$${n.toFixed(2)}`
+  return n == null ? '—' : USD.format(n)
 }
 
 /** A short human timestamp (UTC) for the audit tail; passes through non-dates. */

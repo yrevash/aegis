@@ -1,12 +1,19 @@
 'use client'
 
-import { CircleSlash, FileText, Loader2, RefreshCw } from 'lucide-react'
+import { FileText, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/primitives/badge'
 import { Card } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
+import { NotRecorded } from '@/components/jobs/JobsView'
 import { getDocuments, type DocumentRow } from '@/lib/api/jobs'
 import { cn } from '@/lib/utils'
+
+/** The one focus treatment on this panel: the ring token, at 2px, always visible. */
+const FOCUS =
+  'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 
 interface CorpusPanelProps {
   token: string | null
@@ -37,9 +44,9 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** Local date from an ISO 8601 timestamp, or an em dash. */
-function formatDate(iso: string | null): string {
-  if (!iso) return '—'
+/** Local date from an ISO 8601 timestamp, or `null` when none was written. */
+function formatDate(iso: string | null): string | null {
+  if (!iso) return null
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: '2-digit' })
@@ -94,81 +101,88 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
         <button
           type="button"
           onClick={() => void refresh()}
-          className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-2"
+          className={`inline-flex h-11 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
         >
-          <RefreshCw className="size-3.5" />
+          <RefreshCw className="size-3.5" aria-hidden />
           Refresh
         </button>
       </div>
 
       {load.status === 'loading' ? (
-        <div className="flex min-h-[160px] items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" />
-          Loading
+        <div className="p-4">
+          <LoadingState rows={3} label="Reading the corpus…" />
         </div>
       ) : load.status === 'error' ? (
-        <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 px-6 text-center">
-          <CircleSlash className="size-7 text-muted-foreground/50" />
-          <p className="text-sm font-medium text-foreground">The corpus could not be read</p>
-          <p className="max-w-md text-sm text-muted-foreground">{load.message}</p>
+        <div className="p-4">
+          <ErrorState
+            error={load.message}
+            fallback="The corpus could not be read."
+            retry={() => void refresh()}
+          />
         </div>
       ) : rows.length === 0 ? (
-        <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 px-6 text-center">
-          <CircleSlash className="size-7 text-muted-foreground/50" />
-          <p className="text-sm font-medium text-foreground">No documents yet</p>
-          <p className="max-w-md text-sm text-muted-foreground">
-            Upload a PDF above and it appears here the moment its row is written — before
-            a single page has been parsed.
-          </p>
+        <div className="p-4">
+          <EmptyState
+            icon={FileText}
+            title="No documents yet"
+            body="Every document this tenant has put into the platform is listed here, newest first. Upload a PDF above and it appears the moment its row is written, before a single page has been parsed."
+          />
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-border bg-surface-2/50">
-              <tr className="text-[0.7rem] uppercase tracking-wide text-muted-foreground">
-                <th className="px-4 py-2 font-medium">Document</th>
-                <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium">Stage</th>
-                <th className="px-4 py-2 font-medium">Pages</th>
-                <th className="px-4 py-2 font-medium">Chunks</th>
-                <th className="px-4 py-2 font-medium">Size</th>
-                <th className="px-4 py-2 font-medium">Uploaded</th>
-                <th className="px-4 py-2 font-medium">Detail</th>
+              <tr>
+                {['Document', 'Status', 'Stage', 'Pages', 'Chunks', 'Size', 'Uploaded', 'Detail'].map(
+                  (h) => (
+                    <th key={h} scope="col" className="eyebrow px-4 py-2.5 font-medium">
+                      {h}
+                    </th>
+                  ),
+                )}
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/70">
+            <tbody className="divide-y divide-border">
               {rows.map((row) => (
-                <tr key={row.document_id} className="align-middle">
+                <tr
+                  key={row.document_id}
+                  className="align-middle transition-colors duration-[--dur-fast] hover:bg-surface-2/60"
+                >
                   <td className="px-4 py-2.5">
                     <button
                       type="button"
                       onClick={() => onOpen?.(row.document_id)}
-                      className="text-left font-medium text-foreground underline-offset-2 hover:underline"
+                      className={`rounded-sm text-left font-medium text-foreground underline-offset-2 hover:underline ${FOCUS}`}
                     >
                       {row.title ?? row.filename}
+                      <span className="sr-only">, open the ingest log</span>
                     </button>
-                    <p className="font-mono text-[0.68rem] text-muted-foreground">
-                      #{row.document_id} · {row.doc_type ?? 'untyped'} ·{' '}
+                    <p className="text-[0.68rem] text-muted-foreground">
+                      <Figure>#{row.document_id}</Figure> · {row.doc_type ?? 'untyped'} ·{' '}
                       {row.doc_date ?? 'undated'}
                     </p>
                   </td>
                   <td className="px-4 py-2.5">
                     <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
                   </td>
-                  <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                    {row.completed_stage ?? '—'}
-                  </td>
-                  <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                    {row.page_count ?? '—'}
-                  </td>
-                  <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                    {row.chunk_count ?? '—'}
-                  </td>
-                  <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                    {formatBytes(row.size_bytes)}
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                    {row.completed_stage ? (
+                      <Figure>{row.completed_stage}</Figure>
+                    ) : (
+                      <NotRecorded what="not started" />
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                    {formatDate(row.created_at)}
+                    {row.page_count === null ? <NotRecorded what="not parsed" /> : <Figure>{row.page_count}</Figure>}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                    {row.chunk_count === null ? <NotRecorded what="not chunked" /> : <Figure>{row.chunk_count}</Figure>}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                    <Figure>{formatBytes(row.size_bytes)}</Figure>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                    {formatDate(row.created_at) ?? <NotRecorded />}
                   </td>
                   <td
                     className={cn(
@@ -176,7 +190,7 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
                       row.error ? 'text-block-ink' : 'text-muted-foreground',
                     )}
                   >
-                    {row.error ?? row.workflow_id ?? '—'}
+                    {row.error ?? row.workflow_id ?? <NotRecorded what="no workflow" />}
                   </td>
                 </tr>
               ))}

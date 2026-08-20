@@ -186,7 +186,7 @@ export function PromptControl(): ReactElement {
                 readOnly={!editable}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={8}
-                className="w-full rounded-xl border border-border bg-card px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                className="w-full rounded-lg border border-border bg-card px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
               />
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button
@@ -217,7 +217,7 @@ export function PromptControl(): ReactElement {
                   No versions yet. Saving one puts it here as a draft.
                 </p>
               ) : (
-                <ul className="divide-y divide-border rounded-xl border border-border">
+                <ul className="divide-y divide-border rounded-lg border border-border">
                   {screen.versions.map((row) => (
                     <VersionLine
                       key={row.id}
@@ -242,7 +242,7 @@ export function PromptControl(): ReactElement {
               <h4 className="t-label mb-2 text-foreground">
                 Platform floor — composed underneath every version
               </h4>
-              <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-surface-2 px-3 py-2 font-mono text-xs text-muted-foreground">
+              <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-surface-2 px-3 py-2 font-mono text-xs text-muted-foreground">
                 {screen.floor}
               </pre>
             </div>
@@ -290,7 +290,7 @@ export function PromptControl(): ReactElement {
                 </p>
               ) : (
                 <>
-                  <ul className="divide-y divide-border rounded-xl border border-border">
+                  <ul className="divide-y divide-border rounded-lg border border-border">
                     {runs.map((run) => (
                       <li
                         key={run.runId}

@@ -151,7 +151,8 @@ export function SeatsPanel({
                 <input
                   id={`seat-name-${seat.userId}`}
                   className="min-w-[12rem] rounded-lg border border-border bg-surface-2 px-2 py-1 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="Name this seat — e.g. Support Lead"
+                  placeholder="Name this seat — e.g. Support Lead…"
+                  autoComplete="off"
                   value={draftLabel[seat.userId] ?? seat.label}
                   onChange={(e) =>
                     setDraftLabel((d) => ({ ...d, [seat.userId]: e.target.value }))
@@ -159,7 +160,7 @@ export function SeatsPanel({
                 />
                 <button
                   type="button"
-                  className="rounded-lg border border-border px-2 py-1 text-xs text-foreground transition-colors outline-none hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                  className="touch-manipulation rounded-lg border border-border px-2 py-1 text-xs text-foreground transition-colors outline-none hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={saving === `label:${seat.userId}`}
                   onClick={() =>
                     apply(

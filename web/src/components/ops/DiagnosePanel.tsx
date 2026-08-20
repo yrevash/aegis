@@ -95,16 +95,20 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
           type="button"
           onClick={() => void runDiagnose()}
           disabled={busy !== null}
-          className="inline-flex items-center gap-2 rounded-lg bg-foreground px-3.5 py-2 text-[0.82rem] font-medium text-background transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-foreground h-11 touch-manipulation px-4 text-[0.82rem] font-medium text-background transition-opacity hover:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
         >
-          {busy === 'diagnose' ? <Loader2 className="size-4 animate-spin" /> : <FlaskConical className="size-4" />}
+          {busy === 'diagnose' ? (
+            <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+          ) : (
+            <FlaskConical className="size-4" aria-hidden />
+          )}
           {busy === 'diagnose' ? 'Diagnosing…' : 'Diagnose failures'}
         </button>
 
         {error && <p className="text-xs text-danger">{error}</p>}
 
         {diag && (
-          <div className="space-y-3 rounded-xl border border-border bg-surface-2/40 p-4">
+          <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-4">
             <div className="flex flex-wrap items-center gap-2">
               <span className="eyebrow">Failing metrics</span>
               <span className="font-mono text-[0.62rem] text-muted-foreground">
@@ -133,16 +137,16 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
                 type="button"
                 onClick={() => void runRelease()}
                 disabled={busy !== null || diag.draft_version_id == null}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border h-10 touch-manipulation px-3 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
               >
-                {busy === 'release' ? 'Releasing…' : 'Release draft'} <ArrowRight className="size-3.5" />
+                {busy === 'release' ? 'Releasing…' : 'Release draft'} <ArrowRight className="size-3.5" aria-hidden />
               </button>
             )}
           </div>
         )}
 
         {release && (
-          <div className="space-y-2.5 rounded-xl border border-border p-4">
+          <div className="space-y-2.5 rounded-lg border border-border p-4">
             <div className="flex flex-wrap items-center gap-2">
               <span className="eyebrow">Release outcome</span>
               <Badge tone={RISK_TONE[release.risk_level] ?? 'risk'} className="text-[0.56rem]">
@@ -160,7 +164,7 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
                 <CountUp
                   value={release.eval_score}
                   format={(n) => n.toFixed(3)}
-                  className="t-title font-semibold text-ok-ink"
+                  className="text-base leading-6 font-semibold text-ok-ink"
                 />
                 <span className="font-mono text-[0.6rem] text-muted-foreground">draft</span>
               </div>

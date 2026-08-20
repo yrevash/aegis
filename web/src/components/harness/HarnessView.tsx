@@ -14,6 +14,8 @@ import {
 } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
@@ -196,7 +198,7 @@ function ConfigPanel({ config }: { config: HarnessConfigResponse }): ReactElemen
         title={`Tweakable configuration · ${config.knobs.length} knobs`}
         actions={
           <Badge tone="neutral" className="gap-1.5">
-            <Cpu className="size-3" />
+            <Cpu className="size-3" aria-hidden />
             read-only
             <InfoTip label="Why this panel is read-only">
               These are the effective values the running graph reads. Real tuning is host-side (the{' '}
@@ -254,11 +256,11 @@ function ConfigPanel({ config }: { config: HarnessConfigResponse }): ReactElemen
 /** A labelled outcome tile in the totals strip. */
 function TotalTile({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }): ReactElement {
   return (
-    <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2/40 p-3.5">
+    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
       <span className="eyebrow inline-flex items-center gap-1.5">
-        <Icon className="size-3" /> {label}
+        <Icon className="size-3" aria-hidden /> {label}
       </span>
-      <span className="t-title tabular text-[0.95rem] font-semibold text-foreground">{value}</span>
+      <Figure className="text-[0.95rem] leading-5 font-semibold">{value}</Figure>
     </div>
   )
 }
@@ -269,7 +271,7 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
     return (
       <Card>
         <CardBody>
-          <div className="rounded-xl border border-dashed border-border bg-surface-2/30 px-4 py-10 text-center text-sm text-muted-foreground">
+          <div className="rounded-lg border border-dashed border-border bg-surface-2/30 px-4 py-10 text-center text-sm text-muted-foreground">
             No run yet — ask the agent something above to fold its live trace into this record.
           </div>
         </CardBody>
@@ -318,10 +320,10 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
 
         {/* Gate + iterations */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+          <div className="rounded-lg border border-border bg-surface-2/40 p-4">
             <div className={cn('flex items-center justify-between', trace.gate.gated && 'mb-2')}>
               <span className="eyebrow inline-flex items-center gap-1.5">
-                <Hand className="size-3.5" /> approval gate
+                <Hand className="size-3.5" aria-hidden /> approval gate
                 <InfoTip label="About the approval gate">
                   A run is gated when a tool call reaches the risk floor set by{' '}
                   <code className="font-mono">gate_min_risk</code>. &ldquo;No gate&rdquo; means
@@ -344,11 +346,11 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
                   <span className="text-muted-foreground">·</span>
                   {trace.gate.resolved ? (
                     <span className="inline-flex items-center gap-1 text-[color:var(--success)]">
-                      <CircleCheck className="size-3.5" /> resolved
+                      <CircleCheck className="size-3.5" aria-hidden /> resolved
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-risk-ink">
-                      <CircleDashed className="size-3.5" /> awaiting decision
+                      <CircleDashed className="size-3.5" aria-hidden /> awaiting decision
                     </span>
                   )}
                 </p>
@@ -364,10 +366,10 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
             ) : null}
           </div>
 
-          <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+          <div className="rounded-lg border border-border bg-surface-2/40 p-4">
             <div className="flex items-center justify-between">
               <span className="eyebrow inline-flex items-center gap-1.5">
-                <RefreshCcw className="size-3.5" /> self-repair
+                <RefreshCcw className="size-3.5" aria-hidden /> self-repair
                 <InfoTip label="About self-repair">
                   The bounded Reflexion loop reflects and re-plans after a failed or insufficient
                   action. Zero iterations means the run was a single linear pass.
@@ -383,10 +385,10 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
         {/* Tool calls */}
         <div>
           <p className="eyebrow mb-2 inline-flex items-center gap-1.5">
-            <Wrench className="size-3.5" /> tool calls
+            <Wrench className="size-3.5" aria-hidden /> tool calls
           </p>
           {trace.tools.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border bg-surface-2/30 px-4 py-6 text-center text-sm text-muted-foreground">
+            <div className="rounded-lg border border-dashed border-border bg-surface-2/30 px-4 py-6 text-center text-sm text-muted-foreground">
               No tools were called — the agent answered from retrieval alone.
             </div>
           ) : (
@@ -483,10 +485,7 @@ function HarnessView({ role }: { role: Role }): ReactElement {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1">graph · view + tweak</p>
-        <h1 className="t-hero text-foreground">Harness</h1>
-      </div>
+      <SectionHeader as="h1" eyebrow="graph · view + tweak" title="Harness" />
 
       {/* Config (view + tweak) */}
       {error ? (
@@ -498,8 +497,11 @@ function HarnessView({ role }: { role: Role }): ReactElement {
       ) : config === null ? (
         <Card>
           <CardBody>
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
+            <div
+              role="status"
+              className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"
+            >
+              <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
               Loading harness config…
             </div>
           </CardBody>

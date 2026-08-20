@@ -51,6 +51,8 @@ export function AuditFilterBar({
               value={value.text}
               onChange={(e) => set('text', e.target.value)}
               placeholder="Action, actor, model, trace…"
+              autoComplete="off"
+              spellCheck={false}
               className={cn(INPUT, 'w-full pl-7')}
             />
           </div>
@@ -61,7 +63,9 @@ export function AuditFilterBar({
             id={`${id}-actor`}
             value={value.actor}
             onChange={(e) => set('actor', e.target.value)}
-            placeholder="exact username"
+            placeholder="exact username, e.g. dana.okoye…"
+            autoComplete="off"
+            spellCheck={false}
             className={cn(INPUT, 'w-40')}
           />
         </Field>
@@ -71,7 +75,9 @@ export function AuditFilterBar({
             id={`${id}-action`}
             value={value.actionPrefix}
             onChange={(e) => set('actionPrefix', e.target.value)}
-            placeholder="ops. · tool:"
+            placeholder="ops. · tool:…"
+            autoComplete="off"
+            spellCheck={false}
             className={cn(INPUT, 'w-36')}
           />
         </Field>
@@ -81,7 +87,9 @@ export function AuditFilterBar({
             id={`${id}-model`}
             value={value.model}
             onChange={(e) => set('model', e.target.value)}
-            placeholder="deployment id"
+            placeholder="deployment id, e.g. gpt-4o-mini…"
+            autoComplete="off"
+            spellCheck={false}
             className={cn(INPUT, 'w-40')}
           />
         </Field>
@@ -168,7 +176,7 @@ export function AuditFilterBar({
             type="button"
             onClick={() => onChange({ ...EMPTY_AUDIT_QUERY, limit: value.limit })}
             disabled={!isFiltered(value)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-8 touch-manipulation items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45"
           >
             <RotateCcw aria-hidden className="size-3.5" /> Clear filters
           </button>

@@ -48,10 +48,20 @@ export interface RetrievalObservability {
 }
 
 /** The colour (signal name) each recall origin owns in the provenance donut. */
+/**
+ * The ramp step each recall arm is drawn in.
+ *
+ * `bm25` used to be `ok` — the reserved status green. A recall arm is a subject,
+ * not a state, and DESIGN.md §2 keeps the three status hues out of series colour
+ * for exactly this reason: green on a retrieval chart reads as a verdict about
+ * the retrieval rather than as the name of an arm. All three arms are now steps
+ * on the one blue ramp, and they are told apart by their legend label and count
+ * first, the step second.
+ */
 export const ORIGIN_COLOR = {
   vector: 'graph',
   graph: 'ml',
-  bm25: 'ok',
+  bm25: 'agent',
   cache: 'neutral',
 } as const
 

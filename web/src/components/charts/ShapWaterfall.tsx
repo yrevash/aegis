@@ -2,6 +2,7 @@
 
 import type { ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import type { ShapFeature } from '@/lib/stream'
 
 import { buildWaterfall, waterfallPercent } from './waterfallLayout'
@@ -19,9 +20,29 @@ interface ShapWaterfallProps {
   maxRows?: number
 }
 
-/** Colour a raises/lowers segment by direction (not good/bad). */
+/**
+ * Colour a raises/lowers segment by direction (not good/bad).
+ *
+ * This is the one **diverging** scale in the console, and it was drawn in red and
+ * green — the single worst pair a diverging scale can use, because red/green is
+ * exactly the axis most colour-vision deficiency runs along. `scripts/validate_palette.js`
+ * puts numbers on it: `#12b76a ↔ #d92d20` separates by only **ΔE 10.9 under
+ * deuteranopia** (against ΔE 35.2 for normal vision — so a deutan reader loses
+ * two thirds of the signal), and the green also warns at 2.55:1 against the
+ * surface, below the 3:1 mark floor.
+ *
+ * DESIGN.md §2 already specified the replacement — *diverging = blue ↔ warm* —
+ * and this file's own docstring already claimed "raises are warm, lowers are
+ * cool"; only the implementation had drifted. The specified pair validates at
+ * **ΔE 31.1 under protanopia** with every check passing, contrast included.
+ *
+ * Red and green also carried a verdict this scale must not carry: a SHAP driver
+ * that pushes a prediction up is not a *bad* driver, and green/red is read as
+ * good/bad before it is read as up/down. Direction never rests on hue alone
+ * regardless — every row prints a signed figure beside its bar.
+ */
 function hue(raises: boolean): string {
-  return raises ? 'var(--danger)' : 'var(--success)'
+  return raises ? 'var(--risk-ink)' : 'var(--blue-600)'
 }
 
 function fmt(value: number, unit?: string): string {
@@ -57,9 +78,9 @@ export function ShapWaterfall({
           />
           SHAP · why this prediction
         </span>
-        <span className="tabular font-mono text-[0.66rem] text-muted-foreground">
+        <Figure className="text-[0.66rem] leading-4 text-muted-foreground">
           base {fmt(base, unit)}
-        </span>
+        </Figure>
       </div>
 
       <div className="flex flex-col divide-y divide-border/60">
@@ -73,15 +94,19 @@ export function ShapWaterfall({
               className="grid grid-cols-[minmax(0,1fr)_1.7fr_auto] items-center gap-3 py-1.5"
             >
               <div className="flex min-w-0 items-baseline gap-1.5">
-                <span className="min-w-0 flex-1 truncate font-mono text-[0.74rem] text-foreground">
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-[0.74rem] text-foreground"
+                  translate="no"
+                >
                   {step.feature}
                 </span>
-                <span className="tabular shrink-0 font-mono text-[0.62rem] text-muted-foreground">
+                <Figure className="shrink-0 text-[0.62rem] leading-4 text-muted-foreground">
                   {fmt(step.value)}
-                </span>
+                </Figure>
               </div>
 
-              <div className="relative h-3.5">
+              {/* The bar restates the signed figure printed beside it. */}
+              <div className="relative h-3.5" aria-hidden>
                 <div className="absolute inset-y-0 left-0 right-0 rounded-sm bg-muted/60" />
                 <div
                   className="absolute inset-y-0 rounded-sm"
@@ -93,12 +118,11 @@ export function ShapWaterfall({
                 />
               </div>
 
-              <span
-                className="tabular w-16 text-right font-mono text-[0.8rem] font-semibold tracking-tight"
-                style={{ color: hue(step.raises) }}
-              >
-                {step.raises ? '+' : '−'}
-                {fmt(Math.abs(step.contribution), unit)}
+              <span className="w-16 text-right" style={{ color: hue(step.raises) }}>
+                <Figure className="text-[0.8rem] leading-5 font-semibold">
+                  {step.raises ? '+' : '−'}
+                  {fmt(Math.abs(step.contribution), unit)}
+                </Figure>
               </span>
             </div>
           )
@@ -109,17 +133,14 @@ export function ShapWaterfall({
         <div className="flex items-center gap-2">
           <span className="eyebrow text-foreground">prediction</span>
           {hidden > 0 && (
-            <span className="tabular font-mono text-[0.62rem] text-muted-foreground">
+            <Figure className="text-[0.62rem] leading-4 text-muted-foreground">
               +{hidden} more driver{hidden > 1 ? 's' : ''}
-            </span>
+            </Figure>
           )}
         </div>
-        <span
-          className="tabular font-mono text-[1.1rem] font-bold tracking-tight"
-          style={{ color: 'var(--blue-800)' }}
-        >
+        <Figure size="stat" className="text-blue-800">
           {fmt(prediction, unit)}
-        </span>
+        </Figure>
       </div>
     </div>
   )

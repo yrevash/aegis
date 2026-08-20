@@ -5,6 +5,8 @@ import type { ReactElement } from 'react'
 
 import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
 import { Separator } from '@/components/primitives/separator'
 import { cn } from '@/lib/utils'
 import type { MetricsResponse } from '@/lib/api/types'
@@ -22,14 +24,20 @@ function Stat({ icon: Icon, label, value, meter, meterColor }: StatProps): React
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-1.5">
-        <Icon className="size-3.5 text-muted-foreground" />
+        <Icon className="size-3.5 text-muted-foreground" aria-hidden />
         <span className="eyebrow">{label}</span>
       </div>
-      <p className="tabular font-display text-lg leading-none font-semibold">{value}</p>
+      <Figure size="stat" className="text-lg leading-6">{value}</Figure>
       {meter != null && (
-        <div className="h-1 w-full overflow-hidden rounded-full bg-surface-2">
+        /*
+          Decorative: the figure above states the same rate. The 700ms
+          `transition-all` is gone — DESIGN.md §6 caps product motion at 200ms and
+          spends it on confirming a state change, and a rate sliding into place
+          over two-thirds of a second reads as a rate still being decided.
+        */
+        <div className="h-1 w-full overflow-hidden rounded-full bg-surface-2" aria-hidden>
           <div
-            className="h-full rounded-full transition-all duration-700"
+            className="h-full rounded-full"
             style={{ width: `${Math.round(meter * 100)}%`, background: meterColor }}
           />
         </div>
@@ -56,7 +64,7 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
   return (
     <Card>
       <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Gauge className="size-4 text-ok" />
+        <Gauge className="size-4 text-ok" aria-hidden />
         <CardTitle>Efficiency & evals</CardTitle>
         <Badge variant="ok" className="ml-auto">
           fleet
@@ -94,8 +102,8 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
 
         <Separator />
 
-        <div>
-          <div className="mb-2 flex items-center justify-between">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
             <span className="eyebrow">This run</span>
             {usage &&
               (usage.cache_hit ? (
@@ -106,15 +114,15 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-md border border-border/70 bg-surface/50 py-2">
-              <p className="tabular font-display text-base font-semibold text-blue-700">
+              <Figure className="text-base leading-6 font-semibold">
                 {runTokens ?? (state.phase === 'streaming' ? '···' : '—')}
-              </p>
+              </Figure>
               <p className="eyebrow mt-0.5">tokens</p>
             </div>
             <div className="rounded-md border border-border/70 bg-surface/50 py-2">
-              <p className="tabular font-display text-base font-semibold text-foreground">
+              <Figure className="text-base leading-6 font-semibold">
                 {usage ? `$${usage.cost_usd.toFixed(4)}` : '—'}
-              </p>
+              </Figure>
               <p className="eyebrow mt-0.5">cost</p>
             </div>
             <div className="rounded-md border border-border/70 bg-surface/50 py-2">
@@ -133,6 +141,10 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
               <p className="eyebrow mt-0.5">status</p>
             </div>
           </div>
+          <Receipt
+            origin="GET /metrics · fleet · this process"
+            detail="the run figures come from the run_finished event on the open stream"
+          />
         </div>
       </CardContent>
     </Card>

@@ -15,7 +15,10 @@ import { checkPatches } from '@/lib/api/client'
 import { Badge } from '@/components/primitives/badge'
 import { Button } from '@/components/primitives/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -93,8 +96,8 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <ShieldCheck className="size-4 text-ok" />
-        <CardTitle>Patch Check</CardTitle>
+        <ShieldCheck className="size-4 text-ok-ink" aria-hidden />
+        <CardTitle>Installed pins against the registry</CardTitle>
         {posture && <Badge variant={POSTURE_VARIANT[posture]}>{POSTURE_LABEL[posture]}</Badge>}
         <InfoTip label="Why this matters">
           Why this matters: outdated dependencies are the most common source of known-CVE exposure.
@@ -111,20 +114,22 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
           {load.status === 'loading' ? (
             <Loader2 className="size-3.5 animate-spin" />
           ) : (
-            <RefreshCw className="size-3.5" />
+            <RefreshCw className="size-3.5" aria-hidden />
           )}
           {load.status === 'ready' ? 'Re-check' : 'Check for patches'}
         </Button>
       </CardHeader>
       <CardContent>
         {(load.status === 'idle' || load.status === 'loading') && (
-          <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Checking package freshness…
-          </div>
+          <LoadingState rows={5} label="Checking package freshness…" />
         )}
 
         {load.status === 'error' && (
-          <div className="py-10 text-sm text-destructive">Could not run the check. {load.message}</div>
+          <ErrorState
+            error={load.message}
+            fallback="The patch check could not be run."
+            retry={() => run()}
+          />
         )}
 
         {load.status === 'ready' && summary && (
@@ -211,18 +216,31 @@ function PatchRow({ result }: { result: PatchResult }): ReactElement {
       )}
     >
       <td className="px-3 py-2 font-medium text-foreground">{result.name}</td>
-      <td className="px-3 py-2 font-mono text-[0.72rem] text-muted-foreground">
-        {result.installed ?? '—'}
+      <td className="px-3 py-2 text-[0.72rem] text-muted-foreground">
+        {result.installed === null ? <NotPublished what="not installed" /> : <Figure>{result.installed}</Figure>}
       </td>
-      <td className="px-3 py-2 font-mono text-[0.72rem] text-muted-foreground">
-        {result.latest ?? '—'}
+      <td className="px-3 py-2 text-[0.72rem] text-muted-foreground">
+        {result.latest === null ? <NotPublished what="registry did not answer" /> : <Figure>{result.latest}</Figure>}
       </td>
       <td className={cn('px-3 py-2 text-[0.8125rem] font-medium', STATUS_TONE[result.status])}>
         {PATCH_STATUS_LABEL[result.status]}
       </td>
-      <td className="px-3 py-2 text-[0.8125rem] text-muted-foreground">{result.note ?? '—'}</td>
+      <td className="px-3 py-2 text-[0.8125rem] text-muted-foreground">
+        {result.note ?? <NotPublished what="no note" />}
+      </td>
     </tr>
   )
+}
+
+/**
+ * A version the check could not establish.
+ *
+ * It was an em dash, which on this table is actively misleading: an unreachable
+ * registry and an uninstalled package produce the same blank, and the whole point
+ * of the page is that a patch claim you cannot verify is worse than none.
+ */
+function NotPublished({ what }: { what: string }): ReactElement {
+  return <span className="text-xs text-muted-foreground italic">{what}</span>
 }
 
 /** One count chip in the summary strip. */
@@ -251,7 +269,7 @@ function Chip({
       )}
     >
       {Icon && count > 0 && <Icon className="size-3" aria-hidden />}
-      <span className="tabular font-semibold">{count}</span>
+      <Figure className="font-semibold">{count}</Figure>
       {label}
     </span>
   )
@@ -266,8 +284,8 @@ export function PatchMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
+      <div className="rounded-lg border border-dashed border-border bg-surface-2/40 p-4">
+        <LoadingState rows={4} label="Restoring the session…" />
       </div>
     )
   }
@@ -276,10 +294,12 @@ export function PatchMount(): ReactElement {
     <BackendGate>
       <TooltipProvider>
         <div className="space-y-4">
-          <div>
-            <p className="eyebrow mb-1">installed vs latest</p>
-            <h1 className="t-hero text-foreground">Patch Check</h1>
-          </div>
+          <SectionHeader
+            as="h1"
+            eyebrow="installed vs latest"
+            title="Patch check"
+            note="Each installed pin against the latest published release. An offline check never resolves to “up to date” — a patch claim nobody could verify is worse than none."
+          />
           <PatchCheck token={session?.token ?? null} />
         </div>
       </TooltipProvider>

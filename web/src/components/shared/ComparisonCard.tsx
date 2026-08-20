@@ -36,7 +36,9 @@ export function ComparisonCard({
   return (
     <Card className={cn('overflow-hidden p-0', className)}>
       <table className="w-full border-collapse text-left">
-        <caption className="t-title px-5 pt-4 pb-3 text-left text-foreground">{title}</caption>
+        <caption className="px-5 pt-4 pb-3 text-left text-base leading-6 font-semibold text-foreground">
+          {title}
+        </caption>
         <thead>
           <tr className="border-b border-border">
             <th scope="col" className="eyebrow px-5 py-2 font-normal">

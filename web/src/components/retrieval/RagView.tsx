@@ -7,6 +7,7 @@ import { ArsenalPanel } from '@/components/retrieval/ArsenalPanel'
 import { ProvenanceDonut } from '@/components/retrieval/ProvenanceDonut'
 import { RerankScoreboard } from '@/components/retrieval/RerankScoreboard'
 import { QueryBar } from '@/components/console/QueryBar'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { personasForRole } from '@/config/personas'
@@ -82,10 +83,7 @@ function RagView({ role }: { role: Role }): ReactElement {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1">hybrid · rerank</p>
-        <h1 className="t-hero text-foreground">RAG</h1>
-      </div>
+      <SectionHeader as="h1" eyebrow="hybrid · rerank" title="RAG" />
 
       <QueryBar
         role={role}
@@ -97,8 +95,8 @@ function RagView({ role }: { role: Role }): ReactElement {
       />
 
       {data === null ? (
-        <div className="flex min-h-64 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border bg-surface-2/40 text-center">
-          <Layers className="size-8 text-muted-foreground/50" />
+        <div className="flex min-h-64 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-surface-2/40 text-center">
+          <Layers className="size-8 text-muted-foreground/50" aria-hidden />
           <div>
             <p className="text-sm font-medium text-foreground">No retrieval measured yet</p>
             <p className="mt-1 text-sm text-muted-foreground">

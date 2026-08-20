@@ -304,7 +304,9 @@ export function Connections({
               id={`${id}-server-id`}
               value={draft.serverId}
               onChange={(event) => setDraft({ ...draft, serverId: event.target.value })}
-              placeholder="acme"
+              placeholder="acme…"
+              autoComplete="off"
+              spellCheck={false}
               required
             />
             <span className="text-[0.68rem] text-muted-foreground">
@@ -321,7 +323,8 @@ export function Connections({
               id={`${id}-server-label`}
               value={draft.label}
               onChange={(event) => setDraft({ ...draft, label: event.target.value })}
-              placeholder="Acme tools"
+              placeholder="Acme tools…"
+              autoComplete="off"
             />
           </label>
           <label className="flex flex-col gap-1" htmlFor={`${id}-server-url`}>
@@ -330,7 +333,9 @@ export function Connections({
               id={`${id}-server-url`}
               value={draft.url}
               onChange={(event) => setDraft({ ...draft, url: event.target.value })}
-              placeholder="https://acme.example/mcp"
+              placeholder="https://acme.example/mcp…"
+              autoComplete="off"
+              spellCheck={false}
               inputMode="url"
             />
             <span className="text-[0.68rem] text-muted-foreground">
@@ -343,7 +348,9 @@ export function Connections({
               id={`${id}-server-auth`}
               value={draft.authHeader}
               onChange={(event) => setDraft({ ...draft, authHeader: event.target.value })}
-              placeholder="Authorization"
+              placeholder="Authorization…"
+              autoComplete="off"
+              spellCheck={false}
             />
             <span className="text-[0.68rem] text-muted-foreground">
               Where the credential goes — <span className="font-mono">Authorization</span>{' '}
@@ -358,7 +365,7 @@ export function Connections({
               autoComplete="off"
               value={draft.credential}
               onChange={(event) => setDraft({ ...draft, credential: event.target.value })}
-              placeholder="paste the peer's secret"
+              placeholder="paste the peer’s secret…"
             />
             <span className="text-[0.68rem] text-muted-foreground">
               Held by the serving process and nowhere else. Aegis never writes a third

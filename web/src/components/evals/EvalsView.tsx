@@ -3,6 +3,9 @@
 import { CheckCircle2, Gauge, HelpCircle, ShieldCheck, XCircle } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -81,7 +84,10 @@ function MetricCard({ m }: { m: EvalMetricConfig }): ReactElement {
   return (
     <div
       className={cn(
-        'rounded-2xl border bg-card p-5 transition-shadow md:p-6',
+        // `transition-shadow` was transitioning a shadow this card does not have:
+        // DESIGN.md §4 keeps one shadow token for floating layers and a border
+        // everywhere else.
+        'rounded-lg border bg-card p-5 md:p-6',
         pass ? 'border-ok/40' : 'border-block/50',
       )}
     >
@@ -91,27 +97,32 @@ function MetricCard({ m }: { m: EvalMetricConfig }): ReactElement {
           <p className="mt-0.5 text-xs text-muted-foreground">{metricGloss(m.name)}</p>
         </div>
         <Badge tone={pass ? 'ok' : 'block'} className="shrink-0">
-          {pass ? <CheckCircle2 className="size-3.5" /> : <XCircle className="size-3.5" />}
+          {pass ? <CheckCircle2 className="size-3.5" aria-hidden /> : <XCircle className="size-3.5" aria-hidden />}
           {pass ? 'Pass' : 'Fail'}
         </Badge>
       </div>
 
       <div className="mt-4 flex items-end justify-between">
         <div>
-          <p
-            className={cn(
-              't-metric tabular',
-              pass ? 'text-[color:var(--success)]' : 'text-[color:var(--danger)]',
-            )}
-          >
+          {/*
+            The passing figure used to be painted green. The Pass/Fail badge sits
+            two lines above it carrying the same verdict with an icon and a word,
+            so the colour was restating a decision the reader had already been
+            given — and once every passing metric on the page is green, green
+            stops being information. DESIGN.md §2 spends colour where it means
+            something: the figure stays in foreground ink, and only a failure is
+            coloured, because a failure is the thing worth finding by eye.
+          */}
+          <Figure size="stat" className={pass ? 'text-foreground' : 'text-danger'}>
             {pct(m.value)}
-          </p>
+          </Figure>
           <p className="mt-1 text-xs text-muted-foreground">
-            threshold {cmp} <span className="tabular">{pct(m.threshold)}</span>
+            threshold {cmp} <Figure className="text-xs leading-4">{pct(m.threshold)}</Figure>
           </p>
         </div>
-        <span className="rounded-full bg-surface-2 px-2.5 py-0.5 text-xs text-muted-foreground">
-          {m.cases} {m.cases === 1 ? 'case' : 'cases'}
+        <span className="text-xs text-muted-foreground">
+          <Figure className="text-xs leading-4">{m.cases}</Figure>{' '}
+          {m.cases === 1 ? 'case' : 'cases'}
         </span>
       </div>
     </div>
@@ -143,11 +154,11 @@ function EvalsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div>
-        <p className="eyebrow mb-1">retrieval quality · offline regression gate</p>
-        <h1 className="t-hero text-foreground">Evals</h1>
-      </div>
+      <SectionHeader
+        as="h1"
+        eyebrow="retrieval quality · offline regression gate"
+        title="Evals"
+      />
 
       {report.error ? (
         <Card>
@@ -160,7 +171,6 @@ function EvalsView(): ReactElement {
         <CardHeader
           eyebrow="release verdict"
           title="Regression gate"
-          description="Deterministic · reproducible · no LLM judge in the loop."
           actions={
             <span
               className={cn(
@@ -182,31 +192,26 @@ function EvalsView(): ReactElement {
             <div className="flex items-center gap-4">
               <span
                 className={cn(
-                  'grid size-14 place-items-center rounded-2xl',
+                  'grid size-14 place-items-center rounded-lg',
                   overallPass ? 'bg-ok/15 text-ok-ink' : 'bg-block/20 text-block-ink',
                 )}
               >
                 {overallPass ? (
-                  <CheckCircle2 className="size-7" />
+                  <CheckCircle2 className="size-7" aria-hidden />
                 ) : (
-                  <XCircle className="size-7" />
+                  <XCircle className="size-7" aria-hidden />
                 )}
               </span>
               <div>
-                <p
-                  className={cn(
-                    't-metric tabular',
-                    overallPass ? 'text-[color:var(--success)]' : 'text-[color:var(--danger)]',
-                  )}
-                >
+                <Figure size="display" className={overallPass ? 'text-foreground' : 'text-danger'}>
                   {pct(data?.overall)}
-                </p>
+                </Figure>
                 <p className="mt-1 text-sm text-muted-foreground">
                   mean score across {metrics.length} gated metric
                   {metrics.length === 1 ? '' : 's'}
                   {gateThreshold != null ? (
                     <>
-                      {' '}· tightest bar ≥ <span className="tabular">{pct(gateThreshold)}</span>
+                      {' '}· tightest bar ≥ <Figure>{pct(gateThreshold)}</Figure>
                     </>
                   ) : null}
                 </p>
@@ -216,12 +221,15 @@ function EvalsView(): ReactElement {
               <Badge tone={overallPass ? 'ok' : 'block'}>
                 {overallPass ? 'Gate passed' : 'Gate failed'}
               </Badge>
-              <Badge tone="neutral" className="font-mono lowercase">
-                source: {data?.source ?? '—'}
-              </Badge>
-              <span className="text-xs text-muted-foreground">
-                honest · deterministic · no LLM
-              </span>
+              {/* This was a badge that said `source:` — which is a receipt with a
+                  border round it. It is now the one provenance treatment the
+                  console shares (DESIGN.md §1). */}
+              <Receipt
+                origin={data?.source ?? 'not reported'}
+                detail="deterministic · reproducible · no LLM judge in the loop"
+                variant="inline"
+                className="text-right"
+              />
             </div>
           </div>
         </CardBody>
@@ -235,7 +243,7 @@ function EvalsView(): ReactElement {
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="h-40 animate-pulse rounded-2xl border border-border bg-surface-2/50"
+                className="h-40 animate-pulse rounded-lg border border-border bg-surface-2/50"
               />
             ))}
           </div>
@@ -257,17 +265,16 @@ function EvalsView(): ReactElement {
         <CardHeader
           eyebrow="ragas · answer relevancy"
           title="Answer relevancy — not computed"
-          description="Shown honestly rather than fabricated."
           actions={
             <span className="grid size-8 place-items-center rounded-lg bg-surface-2">
-              <HelpCircle className="size-4 text-muted-foreground" />
+              <HelpCircle className="size-4 text-muted-foreground" aria-hidden />
             </span>
           }
         />
         <CardBody>
           <div className="flex flex-wrap items-center gap-3">
             <Badge tone="neutral">
-              <Gauge className="size-3.5" />
+              <Gauge className="size-3.5" aria-hidden />
               needs an LLM judge
             </Badge>
           </div>
@@ -279,11 +286,12 @@ function EvalsView(): ReactElement {
         <CardHeader
           eyebrow="seed corpus"
           title="Per-case breakdown"
-          description="Each seed case with its per-metric score, threshold and verdict."
         />
         <CardBody className="px-0 py-0 md:px-0 md:py-0">
           {report.loading ? (
-            <div className="px-6 py-8 text-sm text-muted-foreground">Loading cases…</div>
+            <div role="status" className="px-6 py-8 text-sm text-muted-foreground">
+              Loading cases…
+            </div>
           ) : cases.length ? (
             <Table>
               <THead>
@@ -309,9 +317,13 @@ function EvalsView(): ReactElement {
                       <TD className="whitespace-nowrap font-mono text-xs text-muted-foreground">
                         {m.name}
                       </TD>
-                      <TD className="tabular text-right">{pct(m.value)}</TD>
-                      <TD className="tabular text-right text-muted-foreground">
-                        {m.higherIsBetter ? '≥' : '≤'} {pct(m.threshold)}
+                      <TD className="text-right">
+                        <Figure>{pct(m.value)}</Figure>
+                      </TD>
+                      <TD className="text-right text-muted-foreground">
+                        <Figure>
+                          {m.higherIsBetter ? '≥' : '≤'} {pct(m.threshold)}
+                        </Figure>
                       </TD>
                       <TD className="pr-6 text-right">
                         <Badge tone={m.passed ? 'ok' : 'block'}>

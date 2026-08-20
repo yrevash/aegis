@@ -4,6 +4,9 @@ import { BarChart3, LayoutDashboard, PlugZap, Table2 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { BarChart } from '@/components/charts/BarChart'
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -136,21 +139,15 @@ function AnalyticsView(): ReactElement {
 
   return (
     <div className="space-y-6">
+      <SectionHeader
+        as="h1"
+        eyebrow="Aegis Analytics · Apache Superset"
+        title="Analytics"
+        right={<Badge tone="ok">Superset answering</Badge>}
+      />
       <Card>
-        <CardHeader
-          title="Analytics"
-          eyebrow="Aegis Analytics · Apache Superset"
-          actions={
-            <Badge tone="ok">
-              Superset answering
-            </Badge>
-          }
-        />
-        <CardBody className="space-y-4 pt-0">
+        <CardBody className="space-y-4 pt-5">
           <p className="text-sm text-muted-foreground">
-            Read from Superset at{' '}
-            <span className="font-mono text-[0.72rem]">{status?.baseUrl}</span>, and drawn
-            here.{' '}
             {data?.tenantScoped === false
               ? 'This sign-in reads across every tenant.'
               : 'Every row is filtered to your tenant by a WHERE clause the browser cannot remove.'}
@@ -169,8 +166,8 @@ function AnalyticsView(): ReactElement {
                 aria-pressed={entry.id === board.id}
                 className={
                   entry.id === board.id
-                    ? 'rounded-full border border-blue-400 bg-blue-400/12 px-3 py-1.5 text-sm text-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
-                    : 'rounded-full border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
+                    ? 'rounded-md border border-blue-600 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                    : 'rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
                 }
               >
                 {entry.title}
@@ -186,7 +183,7 @@ function AnalyticsView(): ReactElement {
               id="analytics-window"
               value={window_}
               onChange={(event) => setWindow(event.target.value)}
-              className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
+              className="rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
               {Object.entries(windows).map(([key, label]) => (
                 <option key={key} value={key}>
@@ -200,18 +197,27 @@ function AnalyticsView(): ReactElement {
                 <ModeButton
                   active={mode === 'charts'}
                   onClick={() => setMode('charts')}
-                  icon={<BarChart3 className="size-4" />}
+                  icon={<BarChart3 className="size-4" aria-hidden />}
                   label="Aegis charts"
                 />
                 <ModeButton
                   active={mode === 'dashboard'}
                   onClick={() => setMode('dashboard')}
-                  icon={<LayoutDashboard className="size-4" />}
+                  icon={<LayoutDashboard className="size-4" aria-hidden />}
                   label="Superset dashboard"
                 />
               </div>
             ) : null}
           </div>
+
+          <Receipt
+            origin={`Apache Superset · ${status?.baseUrl ?? 'not reported'}`}
+            detail={
+              data?.tenantScoped === false
+                ? 'read across every tenant'
+                : 'scoped by a server-compiled WHERE clause'
+            }
+          />
         </CardBody>
       </Card>
 
@@ -253,7 +259,7 @@ function AnalyticsView(): ReactElement {
 
               <div className="space-y-2">
                 <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  <Table2 className="size-4 text-muted-foreground" />
+                  <Table2 className="size-4 text-muted-foreground" aria-hidden />
                   The rows behind the charts
                 </p>
                 <Table>
@@ -270,8 +276,8 @@ function AnalyticsView(): ReactElement {
                       <TR key={row.label}>
                         <TD>{row.label}</TD>
                         {board.series.map((series) => (
-                          <TD key={series} className="tabular text-right">
-                            {formatValue(Number(row[series]))}
+                          <TD key={series} className="text-right">
+                            <Figure>{formatValue(Number(row[series]))}</Figure>
                           </TD>
                         ))}
                       </TR>
@@ -312,8 +318,8 @@ function ModeButton({
       aria-pressed={active}
       className={
         active
-          ? 'flex items-center gap-2 rounded-md bg-surface-2 px-3 py-1.5 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
-          : 'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
+          ? 'flex items-center gap-2 rounded-md bg-surface-2 px-3 py-1.5 text-sm font-medium text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+          : 'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors duration-[var(--dur-fast)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
       }
     >
       {icon}
@@ -342,9 +348,9 @@ function NotReady({ status }: { status: AnalyticsStatus | null }): ReactElement 
       <CardBody>
         <div
           role="status"
-          className="flex min-h-[320px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border bg-surface-2/40 px-6 py-10 text-center"
+          className="flex min-h-[320px] flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-surface-2/40 px-6 py-10 text-center"
         >
-          <PlugZap className="size-8 text-muted-foreground/50" />
+          <PlugZap className="size-8 text-muted-foreground/50" aria-hidden />
           <div className="max-w-xl">
             <p className="text-sm font-medium text-foreground">{detail}</p>
             <p className="mt-2 text-sm text-muted-foreground">{action}</p>

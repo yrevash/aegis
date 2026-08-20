@@ -116,7 +116,7 @@ export function EvalTrend({ rows, loading, error }: Props): ReactElement {
                       })
                     }
                     className={cn(
-                      'rounded-xl border p-3 text-left transition-all',
+                      'rounded-lg border p-3 text-left transition-[background-color,border-color] duration-[--dur-fast] motion-reduce:transition-none',
                       off ? 'border-border/60 bg-surface-2/30 opacity-55' : 'border-border bg-card',
                     )}
                   >
@@ -128,10 +128,12 @@ export function EvalTrend({ rows, loading, error }: Props): ReactElement {
                       <CountUp
                         value={score}
                         format={(n) => n.toFixed(3)}
-                        className="t-metric mt-1 block text-foreground"
+                        className="tabular mt-1 block font-mono text-xl leading-7 font-semibold tracking-[-0.01em] text-foreground"
                       />
                     ) : (
-                      <p className="t-metric mt-1 text-muted-foreground">—</p>
+                      <p className="mt-1 text-[0.8125rem] leading-7 text-muted-foreground italic">
+                        not scored
+                      </p>
                     )}
                   </button>
                 )

@@ -277,8 +277,8 @@ export function RolesAccess({
                             />
                           )}
                           {!isSaving && flash.has(u.id) && (
-                            <span className="flex items-center gap-1 text-[0.68rem] text-ok-ink">
-                              <Check className="size-3.5" /> updated
+                            <span role="status" className="flex items-center gap-1 text-[0.68rem] text-ok-ink">
+                              <Check className="size-3.5" aria-hidden /> updated
                             </span>
                           )}
                           {!isSaving && !flash.has(u.id) && lock && (

@@ -225,7 +225,8 @@ function ToolRow({
             id={`${id}-reason`}
             value={reason}
             onChange={(event) => setReason(event.target.value)}
-            placeholder="Why this tier"
+            placeholder="Why this tier…"
+            autoComplete="off"
             className="h-8 rounded-lg text-xs"
           />
           <Button

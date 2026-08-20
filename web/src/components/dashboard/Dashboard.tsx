@@ -7,6 +7,7 @@ import { StatCard } from '@/components/metrics/StatCard'
 import { BentoGrid, BentoTile } from '@/components/shared/BentoGrid'
 import { KpiHero } from '@/components/shared/KpiHero'
 import { Card } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
 import { Gauge } from '@/components/primitives/Gauge'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
@@ -23,11 +24,17 @@ import { RoiPanel } from './RoiPanel'
 import { RoutingTable } from './RoutingTable'
 import { ValueSpine } from './ValueSpine'
 
-/** A small section kicker (eyebrow + optional detail tooltip). */
+/**
+ * A small section kicker (eyebrow + optional detail tooltip).
+ *
+ * It is a real `<h2>` rather than a styled `<span>`: a screen reader's heading
+ * list is the fastest way anyone navigates a dense console, and this surface had
+ * no headings in it at all.
+ */
 function SectionHead({ label, info }: { label: string; info?: ReactNode }): ReactElement {
   return (
     <div className="flex items-center gap-2">
-      <span className="eyebrow text-foreground">{label}</span>
+      <h2 className="eyebrow text-foreground">{label}</h2>
       {info != null && <InfoTip label={label}>{info}</InfoTip>}
     </div>
   )
@@ -40,7 +47,7 @@ function Expander({ summary, children }: { summary: string; children: ReactNode 
       <details className="group">
         <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 select-none">
           <span className="t-title text-foreground">{summary}</span>
-          <ChevronDown className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180" />
+          <ChevronDown className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180" aria-hidden />
         </summary>
         <div className="border-t border-border/70 px-5 py-4">{children}</div>
       </details>
@@ -55,7 +62,7 @@ function QualityTile({ quality }: { quality: number | null }): ReactElement {
       <div className="flex h-full flex-col gap-2">
         <div className="flex items-center gap-2">
           <span className="grid size-6 shrink-0 place-items-center rounded-md bg-blue-100/12">
-            <Target className="size-3.5 text-blue-800" />
+            <Target className="size-3.5 text-blue-800" aria-hidden />
           </span>
           <span className="eyebrow">Quality</span>
           <InfoTip label="About Quality">
@@ -73,7 +80,9 @@ function QualityTile({ quality }: { quality: number | null }): ReactElement {
         </div>
         <div className="grid flex-1 place-items-center">
           {quality == null ? (
-            <span className="t-metric text-muted-foreground">—</span>
+            <Figure size="display" className="text-muted-foreground" label="not recorded">
+              —
+            </Figure>
           ) : (
             <Gauge value={quality} color="ml" size={116} />
           )}
@@ -147,7 +156,9 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
           />
         ) : (
           <Card className="col-span-12 flex min-h-[200px] items-center justify-center p-6 lg:col-span-8 lg:row-span-2">
-            <span className="text-sm text-muted-foreground">Awaiting live metrics…</span>
+            <span role="status" className="text-sm text-muted-foreground">
+              Awaiting live metrics…
+            </span>
           </Card>
         )}
 
@@ -221,7 +232,7 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
         {isAdmin && metrics && (
           <Expander summary="Model routing">
             <div className="flex items-center gap-2 pb-3">
-              <Route className="size-3.5 text-blue-700" />
+              <Route className="size-3.5 text-blue-700" aria-hidden />
               <span className="eyebrow">Role → deployment</span>
               <InfoTip label="About model routing">
                 How heterogeneous routing sends cheap work to small models — the
@@ -244,7 +255,10 @@ export function DashboardMount({ role }: { role: Role }): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+      <div
+        role="status"
+        className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground"
+      >
         Connecting…
       </div>
     )

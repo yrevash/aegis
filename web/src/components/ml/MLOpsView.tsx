@@ -6,6 +6,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactElement } from 're
 import { ConformalBand } from '@/components/charts/ConformalBand'
 import { ShapWaterfall } from '@/components/charts/ShapWaterfall'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { Figure } from '@/components/primitives/Figure'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -64,9 +66,9 @@ function Fact({
   detail?: string
 }): ReactElement {
   return (
-    <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2/40 p-3.5">
+    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
       <span className="eyebrow">{label}</span>
-      <span className="t-title tabular text-[0.95rem] font-semibold text-foreground">{value}</span>
+      <Figure className="text-[0.95rem] leading-5 font-semibold">{value}</Figure>
       {detail ? (
         <span className="text-[0.72rem] leading-snug text-muted-foreground">{detail}</span>
       ) : null}
@@ -144,22 +146,17 @@ function MLOpsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div>
-        <p className="eyebrow mb-1">SHAP · conformal · XGBoost + MAPIE</p>
-        <h1 className="t-hero text-foreground">MLOps</h1>
-      </div>
+      <SectionHeader as="h1" eyebrow="SHAP · conformal · XGBoost + MAPIE" title="MLOps" />
 
       {/* ── Model card ─────────────────────────────────────────────────────────── */}
       <Card>
         <CardHeader
           eyebrow="aegis.ml"
           title="Model card"
-          description="Measured metadata for the fitted ensemble — no fabricated figures."
           actions={
             source ? (
               <Badge tone={source.tone} className="gap-1.5">
-                <Sigma className="size-3" />
+                <Sigma className="size-3" aria-hidden />
                 {source.label}
               </Badge>
             ) : null
@@ -169,8 +166,11 @@ function MLOpsView(): ReactElement {
           {cardError ? (
             <p className="py-8 text-center text-sm text-danger">{cardError}</p>
           ) : card == null ? (
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
+            <div
+              role="status"
+              className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"
+            >
+              <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
               Loading model card…
             </div>
           ) : (
@@ -244,22 +244,26 @@ function MLOpsView(): ReactElement {
               {/* Ensemble members */}
               <div>
                 <p className="eyebrow mb-2">ensemble members · soft-voting</p>
-                <div className="overflow-x-auto rounded-xl border border-border">
+                <div className="overflow-x-auto rounded-lg border border-border">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-muted-foreground">
-                        <th className="px-4 py-2 font-medium">member</th>
-                        <th className="px-4 py-2 font-medium">kind</th>
-                        <th className="px-4 py-2 text-right font-medium">weight</th>
+                        <th scope="col" className="px-4 py-2 font-medium">member</th>
+                        <th scope="col" className="px-4 py-2 font-medium">kind</th>
+                        <th scope="col" className="px-4 py-2 text-right font-medium">weight</th>
                       </tr>
                     </thead>
                     <tbody>
                       {card.ensemble_members.map((m) => (
                         <tr key={m.name} className="border-b border-border last:border-0">
-                          <td className="px-4 py-2 font-mono text-foreground">{m.name}</td>
+                          <th scope="row" className="px-4 py-2 text-left font-normal">
+                            <Figure>
+                              <span translate="no">{m.name}</span>
+                            </Figure>
+                          </th>
                           <td className="px-4 py-2 text-muted-foreground">{m.kind}</td>
-                          <td className="tabular px-4 py-2 text-right font-mono text-foreground">
-                            {m.weight.toFixed(2)}
+                          <td className="px-4 py-2 text-right text-foreground">
+                            <Figure>{m.weight.toFixed(2)}</Figure>
                           </td>
                         </tr>
                       ))}
@@ -277,7 +281,6 @@ function MLOpsView(): ReactElement {
         <CardHeader
           eyebrow="aegis.ml"
           title="Explain a prediction"
-          description="A sample feature set, scored and explained — gauge + calibrated band on one side, the full SHAP driver walk on the other."
           actions={
             <button
               type="button"
@@ -286,9 +289,9 @@ function MLOpsView(): ReactElement {
               className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             >
               {loading ? (
-                <Loader2 className="size-3.5 animate-spin" />
+                <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden />
               ) : (
-                <RefreshCw className="size-3.5" />
+                <RefreshCw className="size-3.5" aria-hidden />
               )}
               Explain
             </button>
@@ -313,13 +316,13 @@ function MLOpsView(): ReactElement {
             <p className="py-8 text-center text-sm text-danger">{error}</p>
           ) : result == null ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
+              <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
               Scoring…
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               {/* Confidence — gauge + calibrated band */}
-              <div className="flex flex-col gap-4 rounded-xl border border-border bg-surface-2/40 p-4">
+              <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface-2/40 p-4">
                 {result.conformal_confidence != null && (
                   <div className="flex justify-center">
                     <Gauge
@@ -340,7 +343,7 @@ function MLOpsView(): ReactElement {
               </div>
 
               {/* Why — full SHAP waterfall */}
-              <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+              <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                 {numeric && typeof result.prediction === 'number' ? (
                   <ShapWaterfall
                     base={base}

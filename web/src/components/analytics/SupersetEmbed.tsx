@@ -93,7 +93,7 @@ export function SupersetEmbed({
     return (
       <div
         role="status"
-        className="rounded-xl border border-dashed border-border bg-surface-2/40 px-5 py-8 text-center"
+        className="rounded-lg border border-dashed border-border bg-surface-2/40 px-5 py-8 text-center"
       >
         <p className="text-sm font-medium text-foreground">The embedded dashboard did not load</p>
         <p className="mx-auto mt-1 max-w-xl text-sm text-muted-foreground">{error}</p>
@@ -109,7 +109,7 @@ export function SupersetEmbed({
       ref={mountPoint}
       // The SDK inserts its own iframe here; the height is ours so the frame does not
       // collapse to nothing while Superset is still painting.
-      className="min-h-[640px] w-full overflow-hidden rounded-xl border border-border bg-card [&_iframe]:h-[640px] [&_iframe]:w-full [&_iframe]:border-0"
+      className="min-h-[640px] w-full overflow-hidden rounded-lg border border-border bg-card [&_iframe]:h-[640px] [&_iframe]:w-full [&_iframe]:border-0"
     />
   )
 }

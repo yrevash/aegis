@@ -48,7 +48,7 @@ function VersionRow({
         type="button"
         onClick={() => onSelect(row.version)}
         className={cn(
-          'min-w-0 flex-1 rounded-xl border p-3 text-left transition-colors',
+          'min-w-0 flex-1 rounded-lg border p-3 text-left transition-colors',
           role
             ? 'border-primary/40 bg-surface-2/60 ring-1 ring-primary/20'
             : 'border-border bg-card hover:bg-surface-2/40',
@@ -122,14 +122,14 @@ function unifiedDiff(base: string[], target: string[]): DiffLine[] {
 function DiffBody({ base, target }: { base: DiffSide; target: DiffSide }): ReactElement {
   if (base.text == null || target.text == null) {
     return (
-      <p className="rounded-xl border border-dashed border-border/70 p-3 text-xs text-muted-foreground">
+      <p className="rounded-lg border border-dashed border-border/70 p-3 text-xs text-muted-foreground">
         The API does not expose the prompt body for v{base.text == null ? base.version : target.version}.
       </p>
     )
   }
   const lines = unifiedDiff(base.text.split('\n'), target.text.split('\n'))
   return (
-    <pre className="overflow-auto rounded-xl border border-border bg-surface-2/40 p-3 font-mono text-[0.68rem] leading-relaxed">
+    <pre className="overflow-auto rounded-lg border border-border bg-surface-2/40 p-3 font-mono text-[0.68rem] leading-relaxed">
       {lines.map((line, i) => (
         <div
           key={i}
@@ -271,7 +271,7 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
                 )}
               </div>
               {!baseSide || !targetSide ? (
-                <div className="flex h-full min-h-[200px] items-center justify-center rounded-xl border border-dashed border-border/70 py-8 text-center text-sm text-muted-foreground">
+                <div className="flex h-full min-h-[200px] items-center justify-center rounded-lg border border-dashed border-border/70 py-8 text-center text-sm text-muted-foreground">
                   Select two versions on the timeline to compare them.
                 </div>
               ) : (

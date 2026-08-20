@@ -56,7 +56,7 @@ export function RefusalNotice({ refusal }: { refusal: ForecastRefusal }): ReactE
     <div className="rounded-lg border border-border bg-surface-2/40 p-5">
       <div className="flex items-start gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-foreground">
-          <Icon className="size-4" />
+          <Icon className="size-4" aria-hidden />
         </div>
         <div className="min-w-0 flex-1 space-y-3">
           <div className="flex flex-wrap items-center gap-2">

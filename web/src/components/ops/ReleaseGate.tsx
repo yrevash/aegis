@@ -50,10 +50,10 @@ function ReleaseRow({
   }
 
   return (
-    <li className="rounded-xl border border-border bg-card p-3.5">
+    <li className="rounded-lg border border-border bg-card p-3.5">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={RISK_TONE[row.risk] ?? 'risk'}>
-          <ShieldAlert className="size-3" /> {row.risk} risk
+          <ShieldAlert className="size-3" aria-hidden /> {row.risk} risk
         </Badge>
         {row.prompt_key && <span className="font-mono text-[0.7rem] text-foreground">{row.prompt_key}</span>}
         {row.draft_version_id != null && (
@@ -72,7 +72,11 @@ function ReleaseRow({
             decided.outcome === 'promoted' ? 'bg-ok/15 text-ok-ink' : 'bg-surface-2 text-muted-foreground',
           )}
         >
-          {decided.outcome === 'promoted' ? <ShieldCheck className="size-3.5" /> : <X className="size-3.5" />}
+          {decided.outcome === 'promoted' ? (
+            <ShieldCheck className="size-3.5" aria-hidden />
+          ) : (
+            <X className="size-3.5" aria-hidden />
+          )}
           {decided.outcome === 'promoted'
             ? `Shipped — now live${decided.activeVersion != null ? ` (v${decided.activeVersion})` : ''}.`
             : 'Rejected — draft archived, live version unchanged.'}
@@ -83,18 +87,22 @@ function ReleaseRow({
             type="button"
             onClick={() => void decide(true)}
             disabled={busy !== null}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-[0.78rem] font-medium text-background transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-foreground h-10 touch-manipulation px-3 text-[0.78rem] font-medium text-background transition-opacity hover:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
           >
-            {busy === 'approve' ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+            {busy === 'approve' ? (
+              <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <Check className="size-3.5" aria-hidden />
+            )}
             {busy === 'approve' ? 'Approving…' : 'Approve'}
           </button>
           <button
             type="button"
             onClick={() => void decide(false)}
             disabled={busy !== null}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border h-10 touch-manipulation px-3 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
           >
-            <X className="size-3.5" /> Reject
+            <X className="size-3.5" aria-hidden /> Reject
           </button>
           {error && <span className="text-xs text-danger">{error}</span>}
         </div>
@@ -174,7 +182,7 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
             <Loader2 className="size-4 animate-spin" /> Loading the release queue…
           </div>
         ) : rows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/70 py-10 text-center text-sm text-muted-foreground">
+          <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 py-10 text-center text-sm text-muted-foreground">
             <ShieldCheck className="size-6 text-ok-ink" />
             <p>Nothing awaiting approval — the loop is caught up.</p>
           </div>
@@ -202,17 +210,17 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
           <p className="min-w-0 font-mono text-[0.68rem] text-muted-foreground">{PROMPT_KEY}</p>
           {rollback ? (
             <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-ok-ink">
-              <RotateCcw className="size-3.5" />
-              Reverted to v{rollback.version ?? '—'}
+              <RotateCcw className="size-3.5" aria-hidden />
+              Reverted to {rollback.version == null ? 'the last good version' : `v${rollback.version}`}
             </span>
           ) : (
             <button
               type="button"
               onClick={() => void doRollback()}
               disabled={rollingBack}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border h-10 touch-manipulation px-3 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
             >
-              <RotateCcw className="size-3.5" /> {rollingBack ? 'Rolling back…' : 'Roll back to last-good'}
+              <RotateCcw className="size-3.5" aria-hidden /> {rollingBack ? 'Rolling back…' : 'Roll back to last-good'}
             </button>
           )}
           {rollbackError && <p className="w-full text-xs text-danger">{rollbackError}</p>}

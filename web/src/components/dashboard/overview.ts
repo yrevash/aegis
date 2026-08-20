@@ -73,11 +73,21 @@ export function queryVolumeSeries(history: readonly MetricsResponse[]): QueryVol
   return points
 }
 
-/** One slice of the model-mix donut (signal-named colour, no recharts import). */
+/**
+ * One slice of the model-mix donut (signal-named colour, no recharts import).
+ *
+ * The pair is two steps of the one blue ramp — `graph` (#1570ef) against `ml`
+ * (#60a5fa). It used to be `agent` (#0b3b8f) against `ml`, which
+ * `scripts/validate_palette.js` fails on the categorical lightness band: at
+ * L 0.38 the deepest ramp step is darker than a categorical slot may be, and two
+ * slices sitting either side of the band read as ink and tint rather than as two
+ * of a kind. `graph` sits inside the band and keeps ΔE 15.2 against `ml` under
+ * deuteranopia, so the pair passes on separation as well.
+ */
 export interface ModelMixSlice {
   name: string
   value: number
-  color: 'agent' | 'ml'
+  color: 'graph' | 'ml'
 }
 
 /**
@@ -88,7 +98,7 @@ export function modelMixData(share: number | null): ModelMixSlice[] {
   if (share == null || !Number.isFinite(share)) return []
   const small = Math.round(Math.max(0, Math.min(1, share)) * 100)
   return [
-    { name: 'Small model', value: small, color: 'agent' },
+    { name: 'Small model', value: small, color: 'graph' },
     { name: 'Large model', value: 100 - small, color: 'ml' },
   ]
 }

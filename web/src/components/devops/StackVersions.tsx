@@ -1,12 +1,16 @@
 'use client'
 
-import { Boxes, Layers, Loader2 } from 'lucide-react'
+import { Boxes, Layers } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { getStack } from '@/lib/api/client'
 import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -57,8 +61,8 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <Layers className="size-4 text-blue-700" />
-        <CardTitle>Tech Stack &amp; Versions</CardTitle>
+        <Layers className="size-4 text-blue-700" aria-hidden />
+        <CardTitle>The resolved inventory</CardTitle>
         <Badge variant="secondary">SBOM</Badge>
         <InfoTip label="Why this matters">
           Why this matters: DevOps needs the real installed versions, not a hand-maintained list. This
@@ -67,18 +71,18 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
         </InfoTip>
       </CardHeader>
       <CardContent>
-        {load.status === 'loading' && (
-          <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading stack inventory…
-          </div>
-        )}
+        {load.status === 'loading' && <LoadingState rows={6} label="Reading the stack inventory…" />}
 
         {load.status === 'error' && (
-          <div className="py-10 text-sm text-destructive">Could not load the stack. {load.message}</div>
+          <ErrorState error={load.message} fallback="The stack inventory could not be read." />
         )}
 
         {load.status === 'ready' && load.data.components.length === 0 && (
-          <p className="py-10 text-sm text-muted-foreground">No components reported.</p>
+          <EmptyState
+            icon={Boxes}
+            title="No components reported"
+            body="This is a live inventory of what the running process resolved. An empty one means the backend answered, and had nothing to declare."
+          />
         )}
 
         {load.status === 'ready' && summary && load.data.components.length > 0 && (
@@ -95,10 +99,11 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
               <Stat label="Layers" value={summary.categories} />
             </div>
 
-            <p className="font-mono text-[0.68rem] text-muted-foreground">
-              <Boxes className="mr-1 inline size-3 -translate-y-px" aria-hidden />
-              Inventoried {new Date(load.data.generated_at).toLocaleString()}
-            </p>
+            <Receipt
+              label="Inventoried"
+              origin={new Date(load.data.generated_at).toLocaleString()}
+              detail="resolved pins from the running process, not a maintained list"
+            />
 
             {groups.map((group) => (
               <section key={group.category}>
@@ -140,7 +145,9 @@ function StackRow({ component }: { component: StackComponent }): ReactElement {
   return (
     <tr className="border-b border-border/40 last:border-0">
       <td className="px-3 py-2 font-medium text-foreground">{component.name}</td>
-      <td className="px-3 py-2 font-mono text-[0.72rem] text-muted-foreground">{component.package}</td>
+      <td className="px-3 py-2 text-[0.72rem] text-muted-foreground">
+        <Figure>{component.package}</Figure>
+      </td>
       <td className="px-3 py-2">
         <span
           className={cn(
@@ -179,7 +186,9 @@ function Stat({
   return (
     <div className="rounded-lg border border-border/70 bg-surface/40 p-3">
       <p className="eyebrow mb-1">{label}</p>
-      <p className="t-metric tabular text-foreground">{value}</p>
+      <Figure size="stat" className="text-foreground">
+        {value}
+      </Figure>
       {hint && (
         <p
           className={cn(
@@ -203,8 +212,8 @@ export function StackMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
+      <div className="rounded-lg border border-dashed border-border bg-surface-2/40 p-4">
+        <LoadingState rows={4} label="Restoring the session…" />
       </div>
     )
   }
@@ -213,10 +222,12 @@ export function StackMount(): ReactElement {
     <BackendGate>
       <TooltipProvider>
         <div className="space-y-4">
-          <div>
-            <p className="eyebrow mb-1">SBOM</p>
-            <h1 className="t-hero text-foreground">Tech Stack &amp; Versions</h1>
-          </div>
+          <SectionHeader
+            as="h1"
+            eyebrow="SBOM"
+            title="Tech stack and versions"
+            note="Every runtime, library and service the agent runs on, grouped by layer, at the versions this process actually resolved. A missing version is shown as unresolved, never papered over."
+          />
           <StackVersions token={session?.token ?? null} />
           {/*
             Pipeline health lives here as well as under `jobs`, because `GET /jobs` is

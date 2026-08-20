@@ -41,24 +41,31 @@ export function analyticsState(status: AnalyticsStatus | null): AnalyticsState {
 /**
  * The fixed categorical order. Assigned in sequence, never cycled.
  *
- * A seventh series does not get a generated hue — {@link seriesColor} folds everything
- * past the sixth onto `neutral`, which reads as "other" rather than as a new subsystem.
+ * The order is **three steps of the one blue ramp, and nothing else**. It used to run
+ * six deep — `risk`, `ok` and `block` filled slots four to six — which handed the
+ * reserved status hues to whichever measure happened to be declared fourth. A spend
+ * series drawn in the guardrail red is a series that reads as an alarm, and DESIGN.md §2
+ * reserves those three hues so that reading is always the right one.
+ *
+ * Three is also all this page needs. Each series is drawn as its **own** chart under its
+ * own caption — small multiples, not one plot — so nothing has to be told apart by hue
+ * in the first place; the ramp step is there to keep a measure recognisable as you move
+ * down the page. The steps are ordered by contrast against the card, brightest first, so
+ * the pale `#60a5fa` (2.48:1, below the 3:1 mark floor `scripts/validate_palette.js`
+ * enforces) is the last one reached and always sits beside its own caption and table.
+ *
+ * A fourth series does not get a generated hue — {@link seriesColor} folds everything
+ * past the third onto `neutral`, which reads as "other" rather than as a new subsystem.
  * A board with seven measures is a board that should be two boards.
  */
-export const SERIES_ORDER: readonly ChartColor[] = [
-  'graph',
-  'agent',
-  'ml',
-  'risk',
-  'ok',
-  'block',
-]
+export const SERIES_ORDER: readonly ChartColor[] = ['graph', 'agent', 'ml']
 
 /**
  * The colour for one series of a board.
  *
  * Keyed on the series' position in the **board's** declared list, so the colour follows
- * the measure and not its rank in the current result set.
+ * the measure and not its rank in the current result set: filtering the result set down
+ * to fewer rows never repaints the series that survive.
  *
  * @param board - The board being drawn.
  * @param series - One of `board.series`.

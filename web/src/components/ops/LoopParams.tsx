@@ -18,7 +18,8 @@ function TermChips({
   terms: string[]
   tone: 'block' | 'risk'
 }): ReactElement {
-  if (terms.length === 0) return <span className="text-sm text-muted-foreground">—</span>
+  if (terms.length === 0)
+    return <span className="text-sm text-muted-foreground italic">none configured</span>
   return (
     <div className="flex flex-wrap gap-1.5">
       {terms.map((t) => (
@@ -101,7 +102,7 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
 
             {/* Term lists that force a human gate */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+              <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                 <div className="mb-2.5 flex items-center gap-1.5">
                   <ShieldAlert className="size-3.5 text-block-ink" />
                   <span className="eyebrow">safety terms</span>
@@ -115,7 +116,7 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
                 </div>
                 <TermChips terms={params.safety_terms} tone="block" />
               </div>
-              <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+              <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                 <div className="mb-2.5 flex items-center gap-1.5">
                   <ShieldAlert className="size-3.5 text-risk-ink" />
                   <span className="eyebrow">critical config markers</span>
@@ -133,7 +134,7 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
             {/* Auto-tunable config keys + their per-release cap */}
             <div>
               <p className="eyebrow mb-2">auto-tunable config keys · max Δ per release</p>
-              <div className="overflow-hidden rounded-xl border border-border">
+              <div className="overflow-hidden rounded-lg border border-border">
                 <Table>
                   <THead>
                     <TH>config key</TH>
@@ -143,14 +144,16 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
                     {tunable.length === 0 ? (
                       <TR>
                         <TD className="text-muted-foreground">— none tunable</TD>
-                        <TD className="text-right text-muted-foreground">—</TD>
+                        <TD className="text-right text-xs text-muted-foreground italic">
+                          not bounded
+                        </TD>
                       </TR>
                     ) : (
                       tunable.map((t) => (
                         <TR key={t.key}>
                           <TD className="font-mono">{t.key}</TD>
                           <TD className="tabular text-right font-mono">
-                            {t.max != null ? `±${t.max}` : '—'}
+                            {t.max != null ? `±${t.max}` : 'unbounded'}
                           </TD>
                         </TR>
                       ))

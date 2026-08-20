@@ -78,7 +78,7 @@ export function Topbar({ portal }: { portal: Portal }): ReactElement {
             aria-hidden
             className="flex size-6 items-center justify-center rounded-md bg-surface-2 text-muted-foreground"
           >
-            <UserRound className="size-4" />
+            <UserRound className="size-4" aria-hidden />
           </span>
           <span className="hidden min-w-0 flex-col leading-tight sm:flex">
             <span className="truncate font-medium capitalize">{displayName}</span>

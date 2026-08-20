@@ -1,8 +1,12 @@
 'use client'
 
-import { Activity, Gauge, Hash, Loader2, Timer, TrendingUp } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { Activity, Gauge, Hash, Timer, TrendingUp } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -12,58 +16,58 @@ import { getLatency } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { LatencyResponse, NodeLatency } from '@/lib/api/platform'
 
-/** Format a millisecond figure honestly — `null` (no reading) reads as an em dash. */
-function fmtMs(ms: number | null | undefined): string {
-  if (ms == null) return '—'
+/**
+ * Format a millisecond figure, or say plainly that there is no reading.
+ *
+ * It returned an em dash, which in a column of timings is indistinguishable from
+ * a zero and from a broken cell. DESIGN.md §1: a figure that cannot be sourced is
+ * a stated absence in the slot the number would have occupied.
+ */
+function fmtMs(ms: number | null | undefined): string | null {
+  if (ms == null) return null
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(1)}ms`
 }
 
+/** A timing cell: the figure, or the words for its absence. */
+function Ms({ value, className }: { value: number | null | undefined; className?: string }): ReactElement {
+  const text = fmtMs(value)
+  if (text === null) return <span className="text-xs text-muted-foreground italic">no reading</span>
+  return <Figure className={className}>{text}</Figure>
+}
+
 /**
- * Per-node p95 bars — a NodeGantt-style horizontal track per node, each bar
- * scaled to the slowest node's p95 so the tail latencies read at a glance, with
- * the p95 figure pinned in an aligned tabular-mono right column (never inside
- * the bar, so it stays legible).
+ * Per-node p95 bars — one horizontal track per node, each scaled to the slowest
+ * node's p95 so the tail latencies read at a glance, with the p95 figure pinned in
+ * an aligned tabular-mono right column (never inside the bar, so it stays legible).
+ *
+ * The bars are `aria-hidden`: the figure in the right column is the reading, and
+ * announcing both would say every timing twice.
  */
 function NodeP95Bars({ nodes }: { nodes: NodeLatency[] }): ReactElement {
   const maxP95 = Math.max(1, ...nodes.map((n) => n.p95_ms))
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between">
-        <span className="eyebrow flex items-center gap-1.5">
-          <span
-            className="inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: 'var(--blue-600)' }}
-          />
-          p95 latency · per node
-        </span>
-        <span className="tabular font-mono text-[0.62rem] text-muted-foreground">ms</span>
+        <span className="eyebrow">p95 latency · per node</span>
+        <span className="eyebrow">ms</span>
       </div>
 
-      <div className="flex flex-col gap-1.5">
+      <ul className="flex flex-col gap-1.5">
         {nodes.map((n) => (
-          <div
-            key={n.node}
-            className="grid grid-cols-[minmax(0,1fr)_1.9fr_auto] items-center gap-3"
-          >
-            <span className="min-w-0 truncate font-mono text-[0.74rem] text-foreground">
-              {n.node}
-            </span>
-            <div className="relative h-4 rounded-sm bg-muted/50">
+          <li key={n.node} className="grid grid-cols-[minmax(0,1fr)_1.9fr_auto] items-center gap-3">
+            <Figure className="min-w-0 truncate text-foreground">{n.node}</Figure>
+            <div aria-hidden className="relative h-3 overflow-hidden rounded-sm bg-surface-2">
               <div
-                className="absolute inset-y-0 rounded-sm"
-                style={{
-                  left: 0,
-                  width: `${Math.max((n.p95_ms / maxP95) * 100, 1.5)}%`,
-                  background: 'var(--blue-600)',
-                }}
+                className="absolute inset-y-0 left-0 rounded-sm bg-blue-600"
+                style={{ width: `${Math.max((n.p95_ms / maxP95) * 100, 1.5)}%` }}
               />
             </div>
-            <span className="tabular w-20 text-right font-mono text-[0.76rem] font-semibold text-foreground">
-              {fmtMs(n.p95_ms)}
+            <span className="w-20 text-right">
+              <Ms value={n.p95_ms} className="font-semibold text-foreground" />
             </span>
-          </div>
+          </li>
         ))}
-      </div>
+      </ul>
     </div>
   )
 }
@@ -71,66 +75,65 @@ function NodeP95Bars({ nodes }: { nodes: NodeLatency[] }): ReactElement {
 /** The full per-node table: node, count, p50, p95, max, total — all tabular-mono. */
 function NodeTable({ nodes }: { nodes: NodeLatency[] }): ReactElement {
   return (
-    <div className="overflow-hidden rounded-xl border border-border">
-      <Table>
-        <THead>
-          <TH className="text-left">Node</TH>
-          <TH className="text-right">Count</TH>
-          <TH className="text-right">p50</TH>
-          <TH className="text-right">p95</TH>
-          <TH className="text-right">Max</TH>
-          <TH className="text-right">Total</TH>
-        </THead>
-        <TBody>
-          {nodes.map((n) => (
-            <TR key={n.node}>
-              <TD className="font-mono text-[0.8rem] font-medium">{n.node}</TD>
-              <TD className="tabular text-right font-mono text-[0.8rem] text-muted-foreground">
-                {n.count}
-              </TD>
-              <TD className="tabular text-right font-mono text-[0.8rem]">{fmtMs(n.p50_ms)}</TD>
-              <TD className="tabular text-right font-mono text-[0.8rem] font-semibold text-foreground">
-                {fmtMs(n.p95_ms)}
-              </TD>
-              <TD className="tabular text-right font-mono text-[0.8rem]">{fmtMs(n.max_ms)}</TD>
-              <TD className="tabular text-right font-mono text-[0.8rem] text-muted-foreground">
-                {fmtMs(n.total_ms)}
-              </TD>
-            </TR>
-          ))}
-        </TBody>
-      </Table>
-    </div>
+    <Table>
+      <THead>
+        <TH className="text-left">Node</TH>
+        <TH className="text-right">Count</TH>
+        <TH className="text-right">p50</TH>
+        <TH className="text-right">p95</TH>
+        <TH className="text-right">Max</TH>
+        <TH className="text-right">Total</TH>
+      </THead>
+      <TBody>
+        {nodes.map((n) => (
+          <TR key={n.node}>
+            <TD>
+              <Figure className="font-medium">{n.node}</Figure>
+            </TD>
+            <TD className="text-right">
+              <Figure className="text-muted-foreground">{n.count}</Figure>
+            </TD>
+            <TD className="text-right">
+              <Ms value={n.p50_ms} />
+            </TD>
+            <TD className="text-right">
+              <Ms value={n.p95_ms} className="font-semibold text-foreground" />
+            </TD>
+            <TD className="text-right">
+              <Ms value={n.max_ms} />
+            </TD>
+            <TD className="text-right">
+              <Ms value={n.total_ms} className="text-muted-foreground" />
+            </TD>
+          </TR>
+        ))}
+      </TBody>
+    </Table>
   )
 }
 
 /**
  * The honest empty state — no runs have been recorded in the per-process window
- * yet. We show the real `source` + `window_capacity` provenance and a clear call
- * to run a query, NOT fabricated zeros dressed as measurements.
+ * yet. It shows the real `source` + `window_capacity` provenance and what would
+ * fill the window, NOT fabricated zeros dressed as measurements.
  */
 function LatencyEmpty({ data }: { data: LatencyResponse }): ReactElement {
   return (
     <Card>
-      <CardBody>
-        <div className="flex flex-col items-center gap-3 py-12 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-surface-2 text-muted-foreground">
-            <Timer className="size-6" />
-          </div>
-          <p className="text-base font-medium text-foreground">No runs recorded yet</p>
-          <p className="max-w-md text-sm text-muted-foreground">
-            The latency window is per-process and resets on restart. Run a query to populate the
-            window — percentiles appear here as soon as the first run completes.
-          </p>
-          <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-            <Badge tone="neutral" className="font-mono">
-              source · {data.source}
-            </Badge>
-            <Badge tone="neutral" className="font-mono">
-              window capacity · {data.window_capacity ?? '—'}
-            </Badge>
-          </div>
-        </div>
+      <CardBody className="space-y-4">
+        <Absence
+          figure="Every percentile on this page"
+          why="The latency window is per-process and resets on restart, and no run has completed in this one yet."
+          needed="Run a query. Percentiles appear here as soon as the first run finishes — there is no seeded window."
+        />
+        <Receipt
+          origin={data.source}
+          detail={
+            data.window_capacity === null
+              ? 'window capacity not reported'
+              : `window capacity ${data.window_capacity}`
+          }
+        />
       </CardBody>
     </Card>
   )
@@ -152,9 +155,7 @@ function LatencyView(): ReactElement {
   const [data, setData] = useState<LatencyResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    // Wait for the persisted session; firing now would send no bearer.
-    if (!hydrated) return
+  const load = useCallback(() => {
     let alive = true
     getLatency(token)
       .then((d) => {
@@ -169,30 +170,29 @@ function LatencyView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token, hydrated])
+  }, [token])
 
+  useEffect(() => {
+    // Wait for the persisted session; firing now would send no bearer.
+    if (!hydrated) return
+    return load()
+  }, [hydrated, load])
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div>
-        <p className="eyebrow mb-1">latency · p50 · p95</p>
-        <h1 className="t-hero text-foreground">Latency</h1>
-      </div>
+      <SectionHeader
+        as="h1"
+        eyebrow="latency · p50 · p95"
+        title="Latency"
+        note="Real samples from a per-process rolling window. The window resets on restart, so these are the timings of this process and no other."
+      />
 
       {error ? (
-        <Card>
-          <CardBody>
-            <p className="py-8 text-center text-sm text-danger">{error}</p>
-          </CardBody>
-        </Card>
+        <ErrorState error={error} retry={load} />
       ) : data == null ? (
         <Card>
           <CardBody>
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading latency…
-            </div>
+            <LoadingState rows={4} label="Reading the latency window…" />
           </CardBody>
         </Card>
       ) : data.empty ? (
@@ -201,15 +201,29 @@ function LatencyView(): ReactElement {
         <>
           {/* ── Run-latency summary tiles ─────────────────────────────────────── */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <StatCard label="Run p50" value={fmtMs(data.run_p50_ms)} icon={Gauge} tone="graph" />
-            <StatCard label="Run p95" value={fmtMs(data.run_p95_ms)} icon={TrendingUp} tone="ml" />
-            <StatCard label="Run max" value={fmtMs(data.run_max_ms)} icon={Activity} tone="risk" />
-            <StatCard label="Runs recorded" value={String(data.run_count)} icon={Hash} tone="neutral" />
+            <StatCard
+              label="Run p50"
+              value={fmtMs(data.run_p50_ms) ?? 'no reading'}
+              icon={Gauge}
+              tone="graph"
+            />
+            <StatCard
+              label="Run p95"
+              value={fmtMs(data.run_p95_ms) ?? 'no reading'}
+              icon={TrendingUp}
+              tone="graph"
+            />
+            <StatCard
+              label="Run max"
+              value={fmtMs(data.run_max_ms) ?? 'no reading'}
+              icon={Activity}
+              tone="risk"
+            />
+            <StatCard label="Runs recorded" value={String(data.run_count)} icon={Hash} />
             <StatCard
               label="Slowest node"
-              value={data.slowest_node ?? '—'}
+              value={data.slowest_node ?? 'no node timed'}
               icon={Timer}
-              tone="block"
             />
           </div>
 
@@ -218,16 +232,13 @@ function LatencyView(): ReactElement {
             <CardHeader
               eyebrow="aegis · /latency"
               title="Per-node p95"
-              description="Tail latency by graph node — each bar scaled to the slowest node's p95."
               actions={
-                data ? (
-                  <Badge tone="neutral" className="gap-1.5 font-mono">
-                    {data.source}
-                  </Badge>
-                ) : null
+                <Badge tone="neutral" className="font-mono">
+                  {data.source}
+                </Badge>
               }
             />
-            <CardBody className="pt-0">
+            <CardBody>
               <NodeP95Bars nodes={data.per_node} />
             </CardBody>
           </Card>
@@ -237,24 +248,25 @@ function LatencyView(): ReactElement {
             <CardHeader
               eyebrow="aegis · /latency"
               title="Per-node breakdown"
-              description="One row per node — count, p50, p95, max and total, from real samples."
               actions={
-                <Badge tone="neutral" className="gap-1.5">
-                  {data.per_node.length} nodes
+                <Badge tone="neutral">
+                  <Figure>{data.per_node.length}</Figure> nodes
                 </Badge>
               }
             />
-            <CardBody className="pt-0">
+            <CardBody>
               <NodeTable nodes={data.per_node} />
             </CardBody>
           </Card>
 
-          {/* ── Honest provenance note ────────────────────────────────────────── */}
-          <p className="text-[0.72rem] leading-snug text-muted-foreground">
-            Source <span className="font-mono text-foreground">{data.source}</span> · window capacity{' '}
-            <span className="font-mono text-foreground">{data.window_capacity ?? '—'}</span>. The
-            window is a per-process rolling buffer that resets on restart.
-          </p>
+          <Receipt
+            origin={data.source}
+            detail={`${
+              data.window_capacity === null
+                ? 'window capacity not reported'
+                : `window capacity ${data.window_capacity}`
+            } · a per-process rolling buffer that resets on restart`}
+          />
         </>
       )}
     </div>

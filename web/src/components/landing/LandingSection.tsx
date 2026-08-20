@@ -44,8 +44,10 @@ export function LandingSection({
   children,
   className,
 }: LandingSectionProps): ReactElement {
+  // `scroll-mt-16` clears the 64px sticky header: without it every anchor in the
+  // nav landed with its own heading hidden behind the bar.
   return (
-    <section id={id} className={cn('border-b border-border', className)}>
+    <section id={id} className={cn('scroll-mt-16 border-b border-border', className)}>
       <div
         className={cn(
           'mx-auto px-6 py-16 sm:py-20',

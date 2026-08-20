@@ -3,8 +3,9 @@
 import { Clock, TrendingDown, Users } from 'lucide-react'
 import type { ReactElement } from 'react'
 
-import { CountUp } from '@/components/shared/CountUp'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Receipt } from '@/components/primitives/Receipt'
 import type { MetricsResponse } from '@/lib/api/types'
 
 import {
@@ -28,22 +29,22 @@ interface ProjectionProps {
   sub: string
 }
 
-/** A soft-tinted "cost at scale" projection tile with a count-up figure. */
+/**
+ * A soft-tinted "cost at scale" projection tile.
+ *
+ * The figure does not animate. These are money projections read next to a spend
+ * cap, and DESIGN.md §6 rules out a governance figure that counts up to itself —
+ * a number still arriving reads as a number still being decided.
+ */
 function Projection({ label, value, format, sub }: ProjectionProps): ReactElement {
   return (
     <div className="rounded-lg border border-border bg-tint-blue p-3.5">
       <p className="eyebrow">{label}</p>
-      {value == null ? (
-        <p className="tabular font-display mt-1.5 text-2xl leading-none font-semibold text-muted-foreground">
-          —
-        </p>
-      ) : (
-        <CountUp
-          value={value}
-          format={format}
-          className="font-display mt-1.5 block text-2xl leading-none font-semibold text-foreground"
-        />
-      )}
+      <p className="mt-1.5">
+        <Figure size="stat" className={value == null ? 'text-muted-foreground' : 'text-foreground'}>
+          {value == null ? '—' : format(value)}
+        </Figure>
+      </p>
       <p className="mt-1.5 font-mono text-[0.64rem] text-muted-foreground">{sub}</p>
     </div>
   )
@@ -82,7 +83,7 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
       {/* Cost at scale — projected from the measured per-1k rate. */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
-          <TrendingDown className="size-3.5 text-blue-600" />
+          <TrendingDown className="size-3.5 text-blue-600" aria-hidden />
           <span className="eyebrow">Cost at scale</span>
           <InfoTip label="About cost at scale">
             {`$/1M is measured (cost-per-1k × 1,000). $/month assumes ~${formatCountCompact(a.monthlyVolume)} queries/month; baseline savings use the real frontier-model cost.`}
@@ -102,12 +103,16 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
             sub={savedPerMonth != null ? `saves ${formatUsdCompact(savedPerMonth)} / month` : 'awaiting metrics'}
           />
         </div>
+        <Receipt
+          origin="GET /metrics · cost_per_1k_queries_usd"
+          detail={`projected at a sample volume of ${formatCountCompact(a.monthlyVolume)} queries/month`}
+        />
       </div>
 
       {/* Manual vs agent — real unit cost against a sample labour rate. */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
-          <Users className="size-3.5 text-blue-800" />
+          <Users className="size-3.5 text-blue-800" aria-hidden />
           <span className="eyebrow">Manual vs agent · per case</span>
           <InfoTip label="About manual vs agent">
             {savedPerCase != null && unitCost != null
@@ -118,29 +123,32 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
         <div className="flex items-stretch gap-3">
           <div className="flex-1 rounded-lg border border-border bg-surface-2/60 p-3">
             <p className="eyebrow">Human, unaided</p>
-            <p className="tabular font-display mt-1.5 text-xl leading-none font-semibold text-foreground">
-              {formatUsd(manualCostPerCaseUsd(a))}
+            <p className="mt-1.5">
+              <Figure size="stat">{formatUsd(manualCostPerCaseUsd(a))}</Figure>
             </p>
             <p className="mt-1.5 flex items-center gap-1 font-mono text-[0.64rem] text-muted-foreground">
-              <Clock className="size-3" /> ~{a.manualMinutes} min · ${a.laborRateUsdPerHour}/hr
+              <Clock className="size-3" aria-hidden /> ~{a.manualMinutes} min · ${a.laborRateUsdPerHour}/hr
             </p>
           </div>
           <div className="flex items-center justify-center">
-            <span className="tabular font-display text-sm font-semibold text-ok-ink">
+            <Figure className="font-semibold text-ok-ink" unit="cheaper">
               {multiple != null ? `${Math.round(multiple).toLocaleString('en-US')}×` : '—'}
-              <span className="ml-1 text-[0.6rem] font-normal text-muted-foreground">cheaper</span>
-            </span>
+            </Figure>
           </div>
           <div className="flex-1 rounded-lg border border-ok/30 bg-ok/[0.06] p-3">
             <p className="eyebrow text-ok-ink">Agent</p>
-            <p className="tabular font-display mt-1.5 text-xl leading-none font-semibold text-foreground">
-              {unitCost != null ? formatUsd(unitCost, 4) : '—'}
+            <p className="mt-1.5">
+              <Figure size="stat">{unitCost != null ? formatUsd(unitCost, 4) : '—'}</Figure>
             </p>
             <p className="mt-1.5 flex items-center gap-1 font-mono text-[0.64rem] text-muted-foreground">
-              <Clock className="size-3" /> ~{a.agentSeconds}s · measured unit cost
+              <Clock className="size-3" aria-hidden /> ~{a.agentSeconds}s · measured unit cost
             </p>
           </div>
         </div>
+        <Receipt
+          origin="GET /metrics · cost_per_1k_queries_usd"
+          detail={`compared against a sample rate of $${a.laborRateUsdPerHour}/hr over ${a.manualMinutes} min — the human side is an assumption, not a measurement`}
+        />
       </div>
     </div>
   )

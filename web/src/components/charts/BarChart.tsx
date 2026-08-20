@@ -53,7 +53,13 @@ export function BarChart<T extends object>({
           cursor={{ fill: 'var(--surface-2)' }}
           content={<ChartTooltip valueFormatter={valueFormatter} />}
         />
-        <Bar dataKey={category as never} fill={hex} radius={[4, 4, 0, 0]} maxBarSize={42} />
+        <Bar
+          dataKey={category as never}
+          fill={hex}
+          radius={[4, 4, 0, 0]}
+          maxBarSize={42}
+          isAnimationActive={false}
+        />
       </RechartsBarChart>
     </ResponsiveContainer>
   )

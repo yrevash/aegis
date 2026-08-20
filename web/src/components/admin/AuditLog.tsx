@@ -176,7 +176,7 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
               type="button"
               onClick={exportCsv}
               title="Download the whole filtered trail as CSV"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              className="inline-flex h-8 touch-manipulation items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 font-mono text-[0.7rem] text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
               <Download aria-hidden className="size-3.5" /> CSV
             </button>
@@ -350,7 +350,7 @@ function TraceChip({ traceId }: { traceId: string | null }): ReactElement {
     <button
       type="button"
       onClick={copy}
-      className="group inline-flex items-center gap-1 rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-600 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group inline-flex touch-manipulation items-center gap-1 rounded-lg border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-600 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       title="Copy trace id"
     >
       {traceId}

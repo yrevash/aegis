@@ -305,7 +305,7 @@ function Editor({
           onDraft(next)
           onSave(next)
         }}
-        className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)] disabled:cursor-not-allowed disabled:opacity-60"
+        className="inline-flex touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)] disabled:cursor-not-allowed disabled:opacity-60"
       >
         <span
           aria-hidden
@@ -335,7 +335,9 @@ function Editor({
         min={field.kind === 'number' ? field.minimum : undefined}
         max={field.kind === 'number' ? field.maximum : undefined}
         step={field.kind === 'number' ? field.step : undefined}
-        placeholder={field.kind === 'tags' ? 'comma separated' : undefined}
+        placeholder={field.kind === 'tags' ? 'comma separated, e.g. EMAIL, PHONE…' : undefined}
+        autoComplete="off"
+        spellCheck={false}
         className={cn(INPUT, 'tabular font-mono')}
         value={draft}
         disabled={saving}
@@ -348,7 +350,7 @@ function Editor({
         type="button"
         disabled={saving}
         onClick={() => onSave(draft)}
-        className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)] disabled:cursor-not-allowed disabled:opacity-60"
+        className="shrink-0 touch-manipulation rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)] disabled:cursor-not-allowed disabled:opacity-60"
       >
         {saving ? (
           <Loader2 aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />

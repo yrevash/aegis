@@ -70,7 +70,7 @@ interface TrustBarProps {
 /** Renders the trust pipeline, lighting stages as the run completes them. */
 export function TrustBar({ state, beat = null, idle = false }: TrustBarProps): ReactElement {
   return (
-    <div className="relative flex flex-wrap items-center gap-x-2 gap-y-2 overflow-hidden rounded-xl border border-border bg-card px-3 py-2.5">
+    <div className="relative flex flex-wrap items-center gap-x-2 gap-y-2 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5">
       {/* Idle attract-loop: a slow shimmer sweep across the dormant bar. */}
       {idle && (
         <span
@@ -87,7 +87,7 @@ export function TrustBar({ state, beat = null, idle = false }: TrustBarProps): R
           <div key={stage.key} className="flex items-center gap-2">
             <div
               className={cn(
-                'relative flex items-center gap-1.5 rounded-lg border px-2.5 py-1 transition-all duration-500',
+                'relative flex items-center gap-1.5 rounded-lg border px-2.5 py-1 transition-[background-color,border-color,color] duration-500 motion-reduce:transition-none',
                 done ? cn(token.border, token.bg) : 'border-border bg-surface-2',
               )}
             >
@@ -107,7 +107,7 @@ export function TrustBar({ state, beat = null, idle = false }: TrustBarProps): R
                 )}
                 style={done ? { boxShadow: `0 0 10px -2px ${token.hex}` } : undefined}
               >
-                {done ? <Check className="size-2.5" strokeWidth={3} /> : i + 1}
+                {done ? <Check className="size-2.5" strokeWidth={3} aria-hidden /> : i + 1}
               </span>
               <span
                 className={cn(

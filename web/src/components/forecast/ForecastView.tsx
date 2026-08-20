@@ -252,9 +252,9 @@ function ForecastView({ role }: { role: Role }): ReactElement {
                   className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
                 >
                   {loading ? (
-                    <Loader2 className="size-3.5 motion-safe:animate-spin" />
+                    <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden />
                   ) : (
-                    <RefreshCw className="size-3.5" />
+                    <RefreshCw className="size-3.5" aria-hidden />
                   )}
                   Refresh
                 </button>
@@ -265,8 +265,11 @@ function ForecastView({ role }: { role: Role }): ReactElement {
             {error ? (
               <p className="py-8 text-center text-sm text-danger">{error}</p>
             ) : loading && data == null ? (
-              <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-                <Loader2 className="size-4 motion-safe:animate-spin" />
+              <div
+                role="status"
+                className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"
+              >
+                <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
                 Fitting and backtesting…
               </div>
             ) : data == null ? null : !data.available ? (

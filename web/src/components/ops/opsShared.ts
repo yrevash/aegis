@@ -62,11 +62,17 @@ export const RISK_TONE: Record<string, 'ok' | 'risk' | 'block'> = {
   high: 'block',
 }
 
-/** A compact relative-time label ("3h ago"); web has no shared datetime util. */
+/**
+ * A compact relative-time label ("3h ago"); web has no shared datetime util.
+ *
+ * A missing timestamp says so. It used to return an em dash, which in a column of
+ * ages reads as "just now" as easily as "never recorded" — DESIGN.md §1 wants the
+ * absence stated in the slot the figure would have occupied.
+ */
 export function formatAgo(value: string | null): string {
-  if (!value) return '—'
+  if (!value) return 'no timestamp'
   const then = new Date(value).getTime()
-  if (Number.isNaN(then)) return '—'
+  if (Number.isNaN(then)) return 'no timestamp'
   const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
   if (secs < 60) return `${secs}s ago`
   const mins = Math.round(secs / 60)

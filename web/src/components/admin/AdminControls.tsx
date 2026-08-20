@@ -11,6 +11,9 @@ import { getBudgets, getTenants, getUsers } from '@/lib/api/client'
 import type { AdminUser, Budget, Tenant } from '@/lib/api/types'
 
 import { refusalSentence, type AdminTier } from './adminForms'
+
+/** A cap is money, so it is formatted as money — grouped, with a currency mark. */
+const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 import { BudgetForm } from './BudgetForm'
 import { CreateTenantForm } from './CreateTenantForm'
 import { CreateUserForm } from './CreateUserForm'
@@ -163,7 +166,9 @@ function TenantList({
                       <td className="py-2.5 text-muted-foreground">{t.status}</td>
                       <td className="py-2.5">
                         <Figure className="text-foreground">
-                          {cap?.usd_cap != null ? `$${cap.usd_cap} a ${cap.window}` : 'uncapped'}
+                          {cap?.usd_cap != null
+                            ? `${USD.format(cap.usd_cap)} a ${cap.window}`
+                            : 'uncapped'}
                         </Figure>
                       </td>
                     </tr>
@@ -231,7 +236,7 @@ function BudgetList({
                     <td className="py-2.5 text-muted-foreground">{b.window}</td>
                     <td className="py-2.5">
                       <Figure className="text-foreground">
-                        {b.usd_cap != null ? `$${b.usd_cap}` : '—'}
+                        {b.usd_cap != null ? USD.format(b.usd_cap) : '—'}
                       </Figure>
                     </td>
                     <td className="py-2.5">

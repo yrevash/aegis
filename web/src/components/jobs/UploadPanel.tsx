@@ -106,7 +106,7 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
               type="file"
               accept="application/pdf,.pdf"
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-              className="rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground file:mr-3 file:rounded file:border-0 file:bg-surface-2 file:px-3 file:py-1 file:text-sm file:text-foreground"
+              className="h-11 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background file:mr-3 file:rounded-md file:border-0 file:bg-surface-2 file:px-3 file:py-1 file:text-sm file:text-foreground"
             />
           </label>
 
@@ -117,7 +117,7 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
               value={docType}
               placeholder="policy · 10-K · lab report"
               onChange={(event) => setDocType(event.target.value)}
-              className="rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground"
+              className="h-11 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             />
             <span className="text-xs text-muted-foreground">
               Recorded as <code>untyped</code> if left blank — never inferred.
@@ -130,7 +130,7 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
               type="date"
               value={docDate}
               onChange={(event) => setDocDate(event.target.value)}
-              className="rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground"
+              className="h-11 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             />
             <span className="text-xs text-muted-foreground">
               The date the document is <em>from</em>, not today.
@@ -141,9 +141,13 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
             <button
               type="submit"
               disabled={!file || busy}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-2 disabled:opacity-50"
+              className="inline-flex h-11 touch-manipulation items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 disabled:opacity-50 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+              {busy ? (
+                <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : (
+                <Upload className="size-4" aria-hidden />
+              )}
               {busy ? 'Uploading…' : 'Upload and ingest'}
             </button>
             <span className="text-xs text-muted-foreground">

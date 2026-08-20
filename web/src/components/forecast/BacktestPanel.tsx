@@ -70,7 +70,9 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
                   className={`border-b border-border last:border-0 ${c.selected ? 'bg-blue-50' : ''}`}
                 >
                   <th scope="row" className="px-4 py-2 text-left font-normal">
-                    <Figure>{c.model}</Figure>
+                    <Figure>
+                      <span translate="no">{c.model}</span>
+                    </Figure>
                     {c.selected ? (
                       <Badge tone="ml" className="ml-2">
                         selected
@@ -97,7 +99,10 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
         <ul className="space-y-1">
           {result.excluded_models.map((e) => (
             <li key={e.model} className="text-[0.72rem] text-muted-foreground">
-              <span className="font-mono text-foreground">{e.model}</span> — excluded: {e.reason}
+              <span className="font-mono text-foreground" translate="no">
+                {e.model}
+              </span>{' '}
+              — excluded: {e.reason}
             </li>
           ))}
         </ul>

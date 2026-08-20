@@ -37,16 +37,22 @@ interface IngestLogProps {
   token: string | null
 }
 
-/** `1.42s`, or `—` when the duration was never recorded. */
+/**
+ * `1.42 s`, or the words for a duration the stage never wrote.
+ *
+ * These read `—` until the design pass. An em dash in a timing column cannot be
+ * told apart from a zero, a pending stage or a broken cell, and DESIGN.md §1 asks
+ * for the absence to be stated in the slot the figure would have occupied.
+ */
 function ms(value: number | null): string {
-  if (value === null) return '—'
+  if (value === null) return 'not timed'
   if (value < 1000) return `${value} ms`
   return `${(value / 1000).toFixed(2)} s`
 }
 
-/** Local wall-clock time from an ISO 8601 timestamp. */
+/** Local wall-clock time from an ISO 8601 timestamp, or the reason there is none. */
 function clock(iso: string | null): string {
-  if (!iso) return '—'
+  if (!iso) return 'no timestamp'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -170,8 +176,12 @@ function Header({ progress }: { progress: IngestProgress }): ReactElement {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={statusVariant(progress.status)}>{progress.status}</Badge>
-          <Badge variant="secondary">{progress.page_count ?? '—'} pages</Badge>
-          <Badge variant="secondary">{progress.chunk_count ?? '—'} chunks</Badge>
+          <Badge variant="secondary">
+            {progress.page_count === null ? 'pages not parsed' : `${progress.page_count} pages`}
+          </Badge>
+          <Badge variant="secondary">
+            {progress.chunk_count === null ? 'not chunked' : `${progress.chunk_count} chunks`}
+          </Badge>
           <Badge variant="secondary">{progress.corpus.embedded} embedded</Badge>
         </div>
       </div>

@@ -29,7 +29,7 @@ export function ProvenanceChip({ provenance, className }: ProvenanceChipProps): 
   return (
     <div className={cn('flex flex-wrap items-center gap-1', className)}>
       <Badge variant={cache ? 'ml' : 'graph'} className="gap-1">
-        <Icon className="size-3" />
+        <Icon className="size-3" aria-hidden />
         {cache ? 'cached' : 'hybrid'}
       </Badge>
       <InfoTip label="Retrieval detail">

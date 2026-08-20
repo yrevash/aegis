@@ -3,17 +3,22 @@
 import {
   ChevronDown,
   ChevronRight,
-  CircleSlash,
+  CircleAlert,
+  CircleCheck,
   Layers,
   Loader2,
   RefreshCw,
   RotateCcw,
+  TriangleAlert,
   XCircle,
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/primitives/badge'
 import { Card } from '@/components/primitives/card'
+import { Figure } from '@/components/primitives/Figure'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, LoadingState } from '@/components/primitives/States'
 import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate'
 import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { CorpusPanel } from '@/components/jobs/CorpusPanel'
@@ -35,7 +40,11 @@ const IN_FLIGHT = new Set(['pending', 'running', 'reconciling'])
 /** Statuses a job can never leave — a re-queue is offered, a cancel is not. */
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled'])
 
-/** The signal colour each job status carries. */
+/** The one focus treatment on this screen: the ring token, at 2px, always visible. */
+const FOCUS =
+  'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+
+/** The signal colour each job status carries. Always beside the word, never alone. */
 function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'outline' {
   if (status === 'succeeded') return 'ok'
   if (status === 'failed') return 'block'
@@ -44,9 +53,9 @@ function statusVariant(status: string): 'ok' | 'block' | 'risk' | 'agent' | 'out
   return 'outline'
 }
 
-/** Local wall-clock time from an ISO 8601 timestamp, or an em dash. */
-function formatTime(iso: string | null): string {
-  if (!iso) return '—'
+/** Local wall-clock time from an ISO 8601 timestamp. */
+function formatTime(iso: string | null): string | null {
+  if (!iso) return null
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleString([], {
@@ -55,6 +64,19 @@ function formatTime(iso: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+/**
+ * A cell whose value the record does not carry.
+ *
+ * These were all an em dash, in eight cells across three tables, and an em dash
+ * is a glyph a reader has to decode before they can tell "the worker never wrote
+ * this" from "this is zero" from "the column is broken". DESIGN.md §1 asks for a
+ * stated absence in the slot the value would have occupied, so that is what this
+ * is — short enough for a table cell, and read aloud correctly.
+ */
+export function NotRecorded({ what = 'not recorded' }: { what?: string }): ReactElement {
+  return <span className="text-xs text-muted-foreground italic">{what}</span>
 }
 
 interface JobsViewProps {
@@ -139,6 +161,8 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
 
   const rows = load.status === 'ready' ? load.rows : []
   const inFlight = rows.filter((row) => IN_FLIGHT.has(row.status)).length
+  const NoticeIcon =
+    notice?.kind === 'ok' ? CircleCheck : notice?.kind === 'refused' ? TriangleAlert : CircleAlert
 
   return (
     <div className="flex flex-col gap-4">
@@ -157,20 +181,18 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
       <CorpusPanel
         token={token}
         reloadKey={corpusKey}
-        onOpen={(documentId) =>
-          setOpenDocument(openDocument === documentId ? null : documentId)
-        }
+        onOpen={(documentId) => setOpenDocument(openDocument === documentId ? null : documentId)}
       />
       {openDocument !== null ? (
-        <div className="rounded-2xl border border-border bg-surface-2/40 p-4">
+        <div className="rounded-lg border border-border bg-surface-2/40 p-4">
           <IngestLog documentId={openDocument} token={token} />
         </div>
       ) : null}
 
       <Card className="gap-0 p-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 md:p-5">
           <div className="flex items-center gap-3">
-            <Layers className="size-5 text-muted-foreground" />
+            <Layers className="size-5 text-muted-foreground" aria-hidden />
             <div>
               <p className="eyebrow mb-0.5">job_runs · the record layer</p>
               <p className="text-sm text-muted-foreground">
@@ -183,99 +205,123 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
           <button
             type="button"
             onClick={() => void refresh()}
-            className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-2"
+            className={`inline-flex h-11 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
           >
-            <RefreshCw className="size-3.5" />
+            <RefreshCw className="size-4" aria-hidden />
             Refresh
           </button>
         </div>
       </Card>
 
       {notice ? (
-        <div
+        <p
           role="status"
           className={cn(
-            'rounded-lg border px-4 py-3 text-sm',
-            notice.kind === 'ok' && 'border-ok/60 bg-ok/10 text-ok-ink',
-            notice.kind === 'refused' && 'border-risk/60 bg-risk/10 text-risk-ink',
-            notice.kind === 'error' && 'border-block/60 bg-block/10 text-block-ink',
+            'flex items-start gap-2 rounded-lg border px-4 py-3 text-sm leading-relaxed',
+            notice.kind === 'ok' && 'border-ok bg-ok/10 text-foreground',
+            notice.kind === 'refused' && 'border-risk bg-risk/10 text-foreground',
+            notice.kind === 'error' && 'border-block bg-block/10 text-foreground',
           )}
         >
-          {notice.text}
-        </div>
+          <NoticeIcon
+            aria-hidden
+            className={cn(
+              'mt-0.5 size-4 shrink-0',
+              notice.kind === 'ok' && 'text-ok-ink',
+              notice.kind === 'refused' && 'text-risk-ink',
+              notice.kind === 'error' && 'text-block-ink',
+            )}
+          />
+          <span>
+            <span className="font-medium">
+              {notice.kind === 'ok' ? 'Done. ' : notice.kind === 'refused' ? 'Refused. ' : 'Failed. '}
+            </span>
+            {notice.text}
+          </span>
+        </p>
       ) : null}
 
       <Card className="gap-0 overflow-hidden p-0">
         {load.status === 'loading' ? (
-          <div className="flex min-h-[220px] items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Loading
+          <div className="p-4">
+            <LoadingState rows={4} label="Reading the job queue…" />
           </div>
         ) : rows.length === 0 ? (
-          <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 px-6 text-center">
-            <CircleSlash className="size-7 text-muted-foreground/50" />
-            <p className="text-sm font-medium text-foreground">No background jobs yet</p>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Durable work appears here the moment it is queued. Nothing is simulated: an
-              empty queue means this tenant has none.
-            </p>
+          <div className="p-4">
+            <EmptyState
+              icon={Layers}
+              title="No background jobs yet"
+              body="Durable work appears here the moment it is queued, newest first. Nothing is simulated: an empty queue means this tenant has none. Upload a document above to put one in it."
+            />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+          // Eight columns will not fit a phone, and squeezing them would make every
+          // one unreadable rather than one of them scrollable. The table keeps its
+          // width and scrolls inside this box; the page body never does.
+          <div className="w-full overflow-x-auto">
+            <table className="w-full min-w-[64rem] text-left text-sm">
               <thead className="border-b border-border bg-surface-2/50">
-                <tr className="text-[0.7rem] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-4 py-2 font-medium">Job</th>
-                  <th className="px-4 py-2 font-medium">Status</th>
-                  <th className="px-4 py-2 font-medium">Stage</th>
-                  <th className="px-4 py-2 font-medium">Cost</th>
-                  <th className="px-4 py-2 font-medium">Created</th>
-                  <th className="px-4 py-2 font-medium">Detail</th>
-                  <th className="px-4 py-2 font-medium">Ingest log</th>
-                  <th className="px-4 py-2 text-right font-medium">Action</th>
+                <tr>
+                  {['Job', 'Status', 'Stage', 'Cost', 'Created', 'Detail', 'Ingest log'].map((h) => (
+                    <th key={h} scope="col" className="eyebrow px-4 py-2.5 font-medium">
+                      {h}
+                    </th>
+                  ))}
+                  <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">
+                    Action
+                  </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/70">
+              <tbody className="divide-y divide-border">
                 {rows.map((row) => (
                   <Fragment key={row.id}>
-                    <tr className="align-middle">
-                      <td className="px-4 py-2.5">
-                        <span className="font-mono text-xs text-foreground">#{row.id}</span>
+                    <tr className="align-middle transition-colors duration-[--dur-fast] hover:bg-surface-2/60">
+                      <td className="px-4 py-3">
+                        <Figure className="text-foreground">#{row.id}</Figure>
                         <span className="ml-2 text-muted-foreground">{row.job_type}</span>
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-3">
                         <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                        {row.completed_stage ?? '—'}
+                      <td className="px-4 py-3">
+                        {row.completed_stage ? (
+                          <Figure className="text-muted-foreground">{row.completed_stage}</Figure>
+                        ) : (
+                          <NotRecorded what="no stage committed" />
+                        )}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                        ${row.cost_usd.toFixed(4)}
+                      <td className="px-4 py-3">
+                        <Figure className="text-muted-foreground">
+                          ${row.cost_usd.toFixed(4)}
+                        </Figure>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                        {formatTime(row.created_at)}
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {formatTime(row.created_at) ?? <NotRecorded />}
                       </td>
-                      <td className="max-w-[22rem] truncate px-4 py-2.5 text-xs text-muted-foreground">
+                      <td className="max-w-[22rem] truncate px-4 py-3 text-xs text-muted-foreground">
                         {row.error ??
                           (row.cancelled_by ? `cancelled by ${row.cancelled_by}` : row.workflow_id)}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-3">
                         {row.document_id === null ? (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <NotRecorded what="no document" />
                         ) : (
                           <RowAction
                             icon={openJob === row.id ? ChevronDown : ChevronRight}
                             label={openJob === row.id ? 'Hide' : 'Watch'}
+                            hint={`the ingest log for job ${row.id}`}
+                            expanded={openJob === row.id}
                             busy={false}
                             onClick={() => setOpenJob(openJob === row.id ? null : row.id)}
                           />
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-right">
+                      <td className="px-4 py-3 text-right">
                         {TERMINAL.has(row.status) ? (
                           <RowAction
                             icon={RotateCcw}
                             label="Re-queue"
+                            hint={`job ${row.id}`}
                             busy={busy === row.id}
                             onClick={() => void act(row.id, 'requeue')}
                           />
@@ -283,6 +329,7 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
                           <RowAction
                             icon={XCircle}
                             label="Cancel"
+                            hint={`job ${row.id}`}
                             busy={busy === row.id}
                             onClick={() => void act(row.id, 'cancel')}
                           />
@@ -307,16 +354,26 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
   )
 }
 
-/** One row-level action button, disabled while its call is in flight. */
+/**
+ * One row-level action button, disabled while its call is in flight.
+ *
+ * `hint` is what makes a column of eleven identical "Cancel" buttons usable from a
+ * screen reader — the visible label is the same on every row, so the accessible
+ * name has to carry the row.
+ */
 function RowAction({
   icon: Icon,
   label,
+  hint,
   busy,
+  expanded,
   onClick,
 }: {
   icon: typeof RotateCcw
   label: string
+  hint: string
   busy: boolean
+  expanded?: boolean
   onClick: () => void
 }): ReactElement {
   return (
@@ -324,10 +381,16 @@ function RowAction({
       type="button"
       onClick={onClick}
       disabled={busy}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-surface-2 disabled:opacity-50"
+      aria-expanded={expanded}
+      className={`inline-flex h-9 touch-manipulation items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 disabled:opacity-50 ${FOCUS}`}
     >
-      {busy ? <Loader2 className="size-3 animate-spin" /> : <Icon className="size-3" />}
+      {busy ? (
+        <Loader2 className="size-3 animate-spin motion-reduce:animate-none" aria-hidden />
+      ) : (
+        <Icon className="size-3" aria-hidden />
+      )}
       {label}
+      <span className="sr-only"> {hint}</span>
     </button>
   )
 }
@@ -340,8 +403,8 @@ export function JobsMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
+      <div className="rounded-lg border border-dashed border-border bg-surface-2/40 p-4">
+        <LoadingState rows={4} label="Restoring the session…" />
       </div>
     )
   }
@@ -349,17 +412,20 @@ export function JobsMount(): ReactElement {
   return (
     <BackendGate>
       <div className="space-y-4">
-        <div>
-          <p className="eyebrow mb-1">Durable substrate</p>
-          <h1 className="t-hero text-foreground">Jobs</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Background work this tenant owns. Re-queueing passes admission control — the
-            in-flight cap and the budget pre-authorisation — and a refusal is shown with the
-            reason it carried, never queued out of sight. <strong>Watch</strong> opens the
-            live ingest log for a document: which stage is running, what each one produced,
-            the parse&rsquo;s own confidence in itself, and the graph as it is extracted.
-          </p>
-        </div>
+        <SectionHeader
+          as="h1"
+          eyebrow="Durable substrate"
+          title="Jobs"
+          note={
+            <>
+              Background work this tenant owns. Re-queueing passes admission control — the
+              in-flight cap and the budget pre-authorisation — and a refusal is shown with the
+              reason it carried, never queued out of sight. <strong>Watch</strong> opens the
+              live ingest log for a document: which stage is running, what each one produced,
+              the parse&rsquo;s own confidence in itself, and the graph as it is extracted.
+            </>
+          }
+        />
         {/* The pipeline before the queue. §7.10 is an aggregation over exactly the
             rows this page then lists — depth, the oldest pending job, the failure
             count, the per-stage timings the ingest already commits — so it belongs

@@ -35,7 +35,7 @@ function StatusPill({ status }: { status: Status }): ReactElement {
   if (status === 'na') {
     return (
       <Badge tone="neutral" className="uppercase">
-        <Minus className="size-3" /> n/a
+        <Minus className="size-3" aria-hidden /> n/a
       </Badge>
     )
   }
@@ -43,7 +43,7 @@ function StatusPill({ status }: { status: Status }): ReactElement {
   const tone: BadgeTone = on ? 'ok' : 'neutral'
   return (
     <Badge tone={tone} className="uppercase">
-      {on ? <Check className="size-3" /> : <Minus className="size-3" />}
+      {on ? <Check className="size-3" aria-hidden /> : <Minus className="size-3" aria-hidden />}
       {on ? 'on' : 'off'}
     </Badge>
   )
@@ -73,7 +73,7 @@ function StageRow({
             status === 'on' ? 'bg-blue-400/12 text-blue-600' : 'bg-surface-2 text-muted-foreground',
           )}
         >
-          <Icon className="size-4" />
+          <Icon className="size-4" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
           <p className={cn('text-sm font-medium', dim ? 'text-muted-foreground' : 'text-foreground')}>
@@ -149,7 +149,6 @@ export function ArsenalPanel({ obs }: ArsenalPanelProps): ReactElement {
       <CardHeader
         eyebrow="which methods actually ran"
         title="Retrieval arsenal"
-        description="Every arm, fusion, and post-filter that fired this retrieval — with real, measured counts."
         actions={
           <Badge tone="graph" className="uppercase">
             measured · this run

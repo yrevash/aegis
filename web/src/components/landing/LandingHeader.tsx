@@ -67,12 +67,15 @@ export function LandingHeader(): ReactElement {
         Skip to the main content
       </a>
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-6 px-6">
+        {/* The lockup already renders the word "Aegis", so an sr-only "Aegis home"
+            beside it made the link announce as "Aegis Aegis home". The label
+            replaces the name rather than appending to it. */}
         <Link
           href="/"
+          aria-label="Aegis home"
           className="shrink-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           <AegisLockup size="md" />
-          <span className="sr-only">Aegis home</span>
         </Link>
 
         <nav aria-label="Sections" className="hidden flex-1 items-center gap-7 md:flex">

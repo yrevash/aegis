@@ -42,7 +42,7 @@ export function ActionVerdict({
     <div className={cn('flex flex-wrap items-center gap-2', className)}>
       {proposed ? (
         <>
-          <Bot className="size-3.5 shrink-0 text-blue-700" />
+          <Bot className="size-3.5 shrink-0 text-blue-700" aria-hidden />
           <span className="eyebrow normal-case tracking-normal text-muted-foreground">Action</span>
           <span className="min-w-0 truncate font-mono text-[0.8rem] font-medium text-foreground">
             {proposed.tool}
@@ -53,13 +53,13 @@ export function ActionVerdict({
         </>
       ) : (
         <>
-          <ShieldQuestion className="size-3.5 shrink-0 text-muted-foreground" />
+          <ShieldQuestion className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="text-[0.8rem] text-muted-foreground">No action proposed</span>
         </>
       )}
       {queued && (
         <Badge variant="risk" className="ml-auto gap-1">
-          <Inbox className="size-3" /> Awaiting a human
+          <Inbox className="size-3" aria-hidden /> Awaiting a human
         </Badge>
       )}
     </div>

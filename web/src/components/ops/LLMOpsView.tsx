@@ -3,6 +3,7 @@
 import { GitPullRequestArrow } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { CapabilityMap, type Capability } from '@/components/shared'
@@ -147,11 +148,12 @@ function LLMOpsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div>
-        <p className="eyebrow mb-1">trace → eval → diagnose → release</p>
-        <h1 className="t-hero text-foreground">LLMOps</h1>
-      </div>
+      <SectionHeader
+        as="h1"
+        eyebrow="trace → eval → diagnose → release"
+        title="LLMOps"
+        note="The self-improvement loop, and the human gate in the middle of it. Every figure comes straight from the /ops accessors — nothing on this page is composed in the browser."
+      />
 
       {/* Row 1 — quality trend hero + the live loop strip. */}
       <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
@@ -161,8 +163,8 @@ function LLMOpsView(): ReactElement {
             eyebrow="closed · human-gated"
             title="Loop"
             actions={
-              <span className="grid size-8 place-items-center rounded-lg bg-blue-100/12">
-                <GitPullRequestArrow className="size-4 text-blue-800" />
+              <span className="grid size-8 place-items-center rounded-md bg-blue-50">
+                <GitPullRequestArrow className="size-4 text-blue-800" aria-hidden />
               </span>
             }
           />

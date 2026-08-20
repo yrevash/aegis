@@ -190,7 +190,7 @@ function Catalog({
           type="button"
           onClick={() => onSelect({ kind: 'table', name: table.name })}
           aria-current={active ? 'true' : undefined}
-          className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
+          className={`flex w-full touch-manipulation items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
             active
               ? 'bg-blue-50 font-medium text-foreground'
               : 'text-muted-foreground hover:bg-surface-2/60'

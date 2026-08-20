@@ -156,7 +156,10 @@ export function MobileNav({ portal }: { portal: Portal }): ReactElement {
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+            {/* `overscroll-contain` so a flick at the end of the section list
+                scrolls the drawer and stops, rather than chaining through to the
+                page underneath it. */}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4">
               <PortalNav
                 portal={portal}
                 active={activeSectionFrom(pathname)}

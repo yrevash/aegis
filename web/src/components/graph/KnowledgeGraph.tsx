@@ -57,7 +57,15 @@ interface KnowledgeGraphProps {
   state: RunState
   /** Current active-beat, so the live node pulses in the shared hue. */
   beat: Beat | null
-  /** True when no run is active — drives the idle attract-loop. */
+  /**
+   * True when no run is active.
+   *
+   * Accepted and no longer read: it drove an idle attract-loop (a breathing
+   * canvas and a scanline sweep) that DESIGN.md §6 rules out as an infinite loop
+   * confirming no state change. The prop stays on the interface because callers
+   * outside this folder pass it, and the idle state is now said in words in the
+   * caption instead of being animated.
+   */
   idle: boolean
 }
 
@@ -69,7 +77,7 @@ interface KnowledgeGraphProps {
  * active-beat hue. When no run is active the whole viz gently breathes and a
  * dormant scanline sweeps, so the screen stays alive between demos.
  */
-export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps): ReactElement {
+export function KnowledgeGraph({ base, state, beat }: KnowledgeGraphProps): ReactElement {
   const [wrapRef, size] = useElementSize<HTMLDivElement>()
   const fgRef = useRef<ForceMethods | null>(null)
   const [reduced] = useState(prefersReducedMotion)
@@ -129,7 +137,7 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
   return (
     <Card className="flex h-full flex-col overflow-hidden">
       <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Waypoints className="size-4 text-blue-600" />
+        <Waypoints className="size-4 text-blue-600" aria-hidden />
         <CardTitle>Orchestration</CardTitle>
         <InfoTip label="About Orchestration">
           Which agent handled each step, drawn over the knowledge graph the run
@@ -144,7 +152,16 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
       <OrchestrationMap state={state} beat={beat} />
 
       <div ref={wrapRef} className="relative min-h-0 flex-1">
-        <div className={idle && !reduced ? 'absolute inset-0 animate-idle-breathe' : 'absolute inset-0'}>
+        {/*
+          The resting graph used to breathe and to carry a scanline sweeping down
+          it — an "idle attract-loop". DESIGN.md §6 rules out infinite loops by
+          name: motion here confirms a state change and nothing else, and a
+          dormant graph pulsing forever confirms nothing except that the tab is
+          open. It also read as activity on a surface whose whole job is to show
+          what a run actually traversed. The idle state is already said in words
+          in the caption below.
+        */}
+        <div className="absolute inset-0">
           {size.width > 0 && (
             <ForceGraph2D
               ref={fgRef as never}
@@ -228,13 +245,6 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
             />
           )}
         </div>
-
-        {/* Idle attract-loop: a dormant scanline sweep over the resting graph. */}
-        {idle && !reduced && (
-          <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="animate-scan absolute inset-x-0 h-16 bg-gradient-to-b from-transparent via-blue-400/10 to-transparent" />
-          </div>
-        )}
 
         {/* Caption + entity-kind legend when a run has traversed, else idle hint. */}
         <div className="pointer-events-none absolute bottom-2 left-3 flex max-w-[92%] flex-col gap-1">

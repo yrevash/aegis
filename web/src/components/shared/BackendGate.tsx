@@ -19,16 +19,16 @@ export function BackendUnavailable({ detail }: { detail?: string }): ReactElemen
   return (
     <div
       role="status"
-      className="flex min-h-[420px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border bg-surface-2/40 px-6 py-10 text-center"
+      className="flex flex-col items-start gap-2 rounded-lg border border-dashed border-border bg-surface-2/40 px-5 py-8"
     >
-      <PlugZap className="size-8 text-muted-foreground/50" />
-      <div className="max-w-md">
-        <p className="text-sm font-medium text-foreground">Backend unavailable</p>
-        <p className="mt-1 text-sm text-muted-foreground">
+      <PlugZap className="size-5 text-muted-foreground" aria-hidden />
+      <div className="max-w-prose">
+        <p className="text-sm font-semibold text-foreground">Backend unavailable</p>
+        <p className="mt-1 text-pretty text-sm leading-relaxed text-muted-foreground">
           {detail ??
             'This surface renders measured data only. Start the Aegis backend and reload — nothing here is simulated while it is down.'}
         </p>
-        <p className="mt-2 font-mono text-[0.7rem] text-muted-foreground/80">
+        <p className="mt-3 border-t border-border pt-3 font-mono text-xs text-muted-foreground">
           {/* The versioned base is what every call actually uses; an empty origin
               means same-origin, and `/v1` alone would read as a path, not a target. */}
           {API_ORIGIN === '' ? `same-origin API (${API_BASE})` : API_BASE}
@@ -61,8 +61,12 @@ export function BackendGate({ children }: { children: ReactNode }): ReactElement
 
   if (status === null) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
-        Connecting…
+      <div
+        role="status"
+        aria-busy="true"
+        className="rounded-lg border border-dashed border-border bg-surface-2/40 px-5 py-8"
+      >
+        <p className="text-sm text-muted-foreground">Probing the backend…</p>
       </div>
     )
   }

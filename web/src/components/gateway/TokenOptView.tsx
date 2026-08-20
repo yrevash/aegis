@@ -4,13 +4,16 @@ import {
   ArrowRight,
   Coins,
   Cpu,
-  Loader2,
   PiggyBank,
   Route,
   Timer,
 } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -20,14 +23,22 @@ import { getModels, type ModelRow } from '@/lib/api/console'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { GatewayOptimizationResponse } from '@/lib/api/platform'
 
-/** Format a USD figure, tolerating a null/undefined (offline, unmetered) reading. */
+/**
+ * Format a USD figure, or say plainly that nothing metered it.
+ *
+ * These three helpers returned an em dash. In a cost column an em dash cannot be
+ * told apart from `$0.00`, which is the difference between "we did not measure
+ * this" and "this was free" — DESIGN.md §1 asks for the absence to be stated in
+ * the slot the figure would have occupied, and on a savings page that distinction
+ * is the whole claim.
+ */
 function usd(value: number | null | undefined): string {
-  return value == null ? '—' : `$${value.toFixed(2)}`
+  return value == null ? 'not metered' : `$${value.toFixed(2)}`
 }
 
 /** Format a 0–1 share as a whole percent, tolerating a null (unmetered) reading. */
 function pct(value: number | null | undefined): string {
-  return value == null ? '—' : `${Math.round(value * 100)}%`
+  return value == null ? 'not metered' : `${Math.round(value * 100)}%`
 }
 
 /** What one billing unit of a role costs, in the unit that role is actually billed in.
@@ -38,7 +49,7 @@ function pct(value: number | null | undefined): string {
  * dash — the price is unknown, which is a different statement from free.
  */
 function priceLabel(row: ModelRow | undefined): string {
-  if (row == null) return '—'
+  if (row == null) return 'price unknown'
   const unit =
     row.billing_unit === 'audio_minutes'
       ? '/min'
@@ -103,25 +114,19 @@ function TokenOptView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div>
-        <p className="eyebrow mb-1">role→model routing · savings vs frontier baseline</p>
-        <h1 className="t-hero text-foreground">Token optimization</h1>
-      </div>
+      <SectionHeader
+        as="h1"
+        eyebrow="role→model routing · savings vs frontier baseline"
+        title="Token optimization"
+        note="Every figure is metered from real gateway calls. With no calls yet the savings read as unmetered rather than as zero — there is no illustrative mode."
+      />
 
       {error ? (
-        <Card>
-          <CardBody>
-            <p className="py-8 text-center text-sm text-danger">{error}</p>
-          </CardBody>
-        </Card>
+        <ErrorState error={error} />
       ) : data == null || summary == null || config == null ? (
         <Card>
           <CardBody>
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading optimization…
-            </div>
+            <LoadingState rows={4} label="Reading the gateway meter…" />
           </CardBody>
         </Card>
       ) : (
@@ -131,10 +136,9 @@ function TokenOptView(): ReactElement {
             <CardHeader
               eyebrow="aegis.gateway"
               title="Savings"
-              description={`Measured against the frontier baseline — ${config.baseline_model} (the “${config.baseline_role}” role).`}
               actions={
                 <Badge tone="ok" className="gap-1.5">
-                  <Coins className="size-3" />
+                  <Coins className="size-3" aria-hidden />
                   metered
                 </Badge>
               }
@@ -167,10 +171,10 @@ function TokenOptView(): ReactElement {
                 />
               </div>
 
-              <p className="text-[0.78rem] leading-snug text-muted-foreground">
-                Metered over {summary.total_calls.toLocaleString()} calls, of which{' '}
-                {summary.small_calls.toLocaleString()} were routed to a small model.
-              </p>
+              <Receipt
+                origin={`aegis.gateway · baseline ${config.baseline_model} (the “${config.baseline_role}” role)`}
+                detail={`metered over ${summary.total_calls.toLocaleString()} calls, of which ${summary.small_calls.toLocaleString()} were routed to a small model`}
+              />
             </CardBody>
           </Card>
 
@@ -179,18 +183,17 @@ function TokenOptView(): ReactElement {
             <CardHeader
               eyebrow="aegis.gateway"
               title="Per-role usage"
-              description="Calls, tokens and cost per routing role — and whether the role sits on a small model."
             />
             <CardBody>
-              <div className="overflow-x-auto rounded-xl border border-border">
+              <div className="overflow-x-auto rounded-lg border border-border">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border text-left text-muted-foreground">
-                      <th className="px-4 py-2 font-medium">role</th>
-                      <th className="px-4 py-2 text-right font-medium">calls</th>
-                      <th className="px-4 py-2 text-right font-medium">tokens</th>
-                      <th className="px-4 py-2 text-right font-medium">cost</th>
-                      <th className="px-4 py-2 text-right font-medium">model tier</th>
+                      <th scope="col" className="eyebrow px-4 py-2.5 font-medium">role</th>
+                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">calls</th>
+                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">tokens</th>
+                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">cost</th>
+                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">model tier</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -198,15 +201,19 @@ function TokenOptView(): ReactElement {
                       const tokens = r.prompt_tokens + r.completion_tokens
                       return (
                         <tr key={role} className="border-b border-border last:border-0">
-                          <td className="px-4 py-2 font-mono text-foreground">{role}</td>
-                          <td className="tabular px-4 py-2 text-right font-mono text-foreground">
-                            {r.calls.toLocaleString()}
+                          <td className="px-4 py-2.5">
+                            <Figure className="text-foreground">{role}</Figure>
                           </td>
-                          <td className="tabular px-4 py-2 text-right font-mono text-muted-foreground">
-                            {tokens.toLocaleString()}
+                          <td className="px-4 py-2.5 text-right">
+                            <Figure className="text-foreground">{r.calls.toLocaleString()}</Figure>
                           </td>
-                          <td className="tabular px-4 py-2 text-right font-mono text-foreground">
-                            {usd(r.cost_usd)}
+                          <td className="px-4 py-2.5 text-right">
+                            <Figure className="text-muted-foreground">
+                              {tokens.toLocaleString()}
+                            </Figure>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <Figure className="text-foreground">{usd(r.cost_usd)}</Figure>
                           </td>
                           <td className="px-4 py-2 text-right">
                             <Badge tone={r.small_model ? 'ok' : 'neutral'}>
@@ -227,10 +234,9 @@ function TokenOptView(): ReactElement {
             <CardHeader
               eyebrow="aegis.gateway"
               title="Routing config"
-              description="The effective role→model map, fallback chains, and gateway limits — read-only for the operator."
               actions={
                 <Badge tone="neutral" className="gap-1.5">
-                  <Route className="size-3" />
+                  <Route className="size-3" aria-hidden />
                   read-only
                 </Badge>
               }
@@ -239,14 +245,14 @@ function TokenOptView(): ReactElement {
               {/* Role → model map */}
               <div>
                 <p className="eyebrow mb-2">role → model</p>
-                <div className="overflow-x-auto rounded-xl border border-border">
+                <div className="overflow-x-auto rounded-lg border border-border">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-muted-foreground">
-                        <th className="px-4 py-2 font-medium">role</th>
-                        <th className="px-4 py-2 font-medium">model</th>
-                        <th className="px-4 py-2 font-medium">unit cost</th>
-                        <th className="px-4 py-2 font-medium">fallback chain</th>
+                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">role</th>
+                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">model</th>
+                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">unit cost</th>
+                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">fallback chain</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -282,7 +288,9 @@ function TokenOptView(): ReactElement {
                                   ))}
                                 </span>
                               ) : (
-                                <span className="text-muted-foreground">—</span>
+                                <span className="text-xs text-muted-foreground italic">
+                                  no fallback configured
+                                </span>
                               )}
                             </td>
                           </tr>
@@ -295,29 +303,29 @@ function TokenOptView(): ReactElement {
 
               {/* Gateway limits + baseline */}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2/40 p-3.5">
+                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
                   <span className="eyebrow inline-flex items-center gap-1.5">
-                    <Timer className="size-3" /> timeout
+                    <Timer className="size-3" aria-hidden /> timeout
                   </span>
-                  <span className="t-title tabular text-[0.95rem] font-semibold text-foreground">
+                  <span className="tabular font-mono text-[0.95rem] font-semibold text-foreground">
                     {config.timeout_seconds}s
                   </span>
                 </div>
-                <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2/40 p-3.5">
+                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
                   <span className="eyebrow">max output tokens</span>
-                  <span className="t-title tabular text-[0.95rem] font-semibold text-foreground">
+                  <span className="tabular font-mono text-[0.95rem] font-semibold text-foreground">
                     {config.max_output_tokens.toLocaleString()}
                   </span>
                 </div>
-                <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2/40 p-3.5">
+                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
                   <span className="eyebrow">baseline role</span>
-                  <span className="t-title text-[0.95rem] font-semibold text-foreground">
+                  <span className="text-[0.95rem] font-semibold text-foreground">
                     {config.baseline_role}
                   </span>
                 </div>
-                <div className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2/40 p-3.5">
+                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
                   <span className="eyebrow">savings baseline model</span>
-                  <span className="t-title truncate font-mono text-[0.82rem] font-semibold text-foreground">
+                  <span className="truncate font-mono text-[0.82rem] font-semibold text-foreground">
                     {config.baseline_model}
                   </span>
                 </div>

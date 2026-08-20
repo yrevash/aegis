@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { beatFromSignal } from '@/components/console/motion'
 import { QueryBar } from '@/components/console/QueryBar'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge } from '@/components/primitives/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/primitives/card'
 import { InfoTip } from '@/components/primitives/InfoTip'
@@ -145,10 +146,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1">entities · relations</p>
-        <h1 className="t-hero text-foreground">Graph</h1>
-      </div>
+      <SectionHeader as="h1" eyebrow="entities · relations" title="Graph" />
 
       <QueryBar
         role={role}
@@ -170,7 +168,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
         {/* Entity list + kind legend. */}
         <Card className="flex min-w-0 flex-col overflow-hidden xl:col-span-1">
           <CardHeader className="flex-row items-center gap-2 space-y-0">
-            <Waypoints className="size-4 text-blue-600" />
+            <Waypoints className="size-4 text-blue-600" aria-hidden />
             <CardTitle>Entities in view</CardTitle>
             <InfoTip label="About Entities in view">
               Every typed entity node the graph is painting, with its kind and its degree — how many
@@ -252,7 +250,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
                     {nodeLabel(nodeId(e.source))}
                   </span>
                   <span className="flex shrink-0 items-center gap-1 font-mono text-[0.68rem] text-blue-600">
-                    <ArrowRight className="size-3" />
+                    <ArrowRight className="size-3" aria-hidden />
                     {e.relation}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-right font-medium text-foreground">

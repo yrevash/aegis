@@ -27,8 +27,19 @@ interface AreaChartProps<T extends object> {
 }
 
 /**
- * A single-series gradient area chart. Tremor-flavoured API (data/index/category)
- * over Recharts, which is Tremor's own charting engine.
+ * A single-series area chart. Tremor-flavoured API (data/index/category) over
+ * Recharts, which is Tremor's own charting engine.
+ *
+ * The fill was a vertical `linearGradient` fading to transparent; it is now a
+ * flat wash at a fixed opacity. Two reasons, and neither is taste. DESIGN.md §4
+ * has no gradients in the system, and more usefully a fading fill encodes a
+ * second dimension that does not exist — the area under a line means the same
+ * thing at the bottom of the plot as it does at the top. The forecast band in
+ * `HorizonChart` is drawn as a flat fill for exactly this reason, so the two now
+ * read as the same kind of mark.
+ *
+ * Nothing animates on mount: `MOTION_INTENSITY 2` spends motion on confirming a
+ * state change, and a line drawing itself in confirms nothing.
  */
 export function AreaChart<T extends object>({
   data,
@@ -39,16 +50,9 @@ export function AreaChart<T extends object>({
   height = 200,
 }: AreaChartProps<T>): ReactElement {
   const hex = chartHex(color)
-  const gradientId = `area-${String(category)}`
   return (
     <ResponsiveContainer width="100%" height={height}>
       <RechartsAreaChart data={data as never} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={hex} stopOpacity={0.45} />
-            <stop offset="100%" stopColor={hex} stopOpacity={0} />
-          </linearGradient>
-        </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis
           dataKey={index as never}
@@ -71,10 +75,11 @@ export function AreaChart<T extends object>({
           dataKey={category as never}
           stroke={hex}
           strokeWidth={2}
-          fill={`url(#${gradientId})`}
+          fill={hex}
+          fillOpacity={0.14}
           dot={false}
-          activeDot={{ r: 4, fill: hex, stroke: 'var(--background)' }}
-          isAnimationActive
+          activeDot={{ r: 5, fill: hex, stroke: 'var(--card)', strokeWidth: 2 }}
+          isAnimationActive={false}
         />
       </RechartsAreaChart>
     </ResponsiveContainer>

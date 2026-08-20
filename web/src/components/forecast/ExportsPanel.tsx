@@ -119,9 +119,9 @@ export function ExportsPanel({
               className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
             >
               {busy === row.id ? (
-                <Loader2 className="size-3.5 motion-safe:animate-spin" />
+                <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden />
               ) : (
-                <Download className="size-3.5" />
+                <Download className="size-3.5" aria-hidden />
               )}
               Download CSV
             </button>

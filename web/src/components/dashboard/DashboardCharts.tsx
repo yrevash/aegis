@@ -19,6 +19,15 @@ import { costTrendSeries, modelMixData, queryVolumeSeries } from './overview'
  * polled history), and the model-mix donut from the live `small_model_share`.
  * Before enough samples have accumulated each series shows an honest
  * "accumulating…" state rather than a fabricated constant series.
+ *
+ * **All three single-series charts are drawn in the same ramp step.** The cost
+ * trend used to be `ok` — the reserved status green — which DESIGN.md §2 forbids
+ * as a series colour: a reader who has learned that green means healthy reads a
+ * green cost line as a verdict on the cost. These are three separate charts with
+ * three titles, not three series in one, so nothing has to tell them apart by
+ * hue; they use `graph` (#1570ef), the ramp step that clears 3:1 against the card
+ * surface. The lighter step `#60a5fa` does not, which is why it is only ever used
+ * where a label sits beside it.
  */
 
 /** A tile header — short title, an ⓘ for detail, and a live/sample marker. */
@@ -35,7 +44,7 @@ function ChartHead({
 }): ReactElement {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <span className="t-title text-foreground">{title}</span>
+      <h3 className="t-title text-foreground">{title}</h3>
       <InfoTip label={`About ${title}`}>{info}</InfoTip>
       {live && (
         <span
@@ -56,7 +65,10 @@ function ChartHead({
 /** An honest placeholder while a measured series is still accumulating samples. */
 function Accumulating(): ReactElement {
   return (
-    <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">
+    <div
+      role="status"
+      className="flex h-[200px] items-center justify-center text-sm text-muted-foreground"
+    >
       Accumulating…
     </div>
   )
@@ -90,7 +102,7 @@ export function DashboardCharts({
             data={costTrend}
             index="t"
             category="cost"
-            color="ok"
+            color="graph"
             valueFormatter={(v) => `$${v.toFixed(2)}`}
             height={200}
           />
@@ -104,7 +116,10 @@ export function DashboardCharts({
           info="Share of traffic served by small models versus the frontier model — the routing decision that drives most of the savings."
         />
         {share == null ? (
-          <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">
+          <div
+            role="status"
+            className="flex h-[200px] items-center justify-center text-sm text-muted-foreground"
+          >
             Awaiting live metrics…
           </div>
         ) : (

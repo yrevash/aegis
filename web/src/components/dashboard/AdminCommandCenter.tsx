@@ -20,9 +20,11 @@ import {
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
 
 import { AreaChart } from '@/components/charts/AreaChart'
-import { BarChart } from '@/components/charts/BarChart'
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
-import type { ChartColor } from '@/components/charts/palette'
+import { RankedBars, type RankedDatum } from '@/components/charts/RankedBars'
+import { Figure } from '@/components/primitives/Figure'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -43,6 +45,8 @@ import type {
   PostureStatus,
   SecurityPostureResponse,
 } from '@/lib/api/platform'
+import { SIGNALS } from '@/config/signals'
+import { cn } from '@/lib/utils'
 import { useMetricsSeries } from '@/state/useMetrics'
 
 // ── formatting helpers ───────────────────────────────────────────────────────
@@ -80,10 +84,21 @@ function fmtTs(value: unknown): string {
   })
 }
 
+/**
+ * The budget meter's fill, by how much of the cap is gone.
+ *
+ * Every branch now names one of the three status tokens DESIGN.md §2 actually
+ * lists, and names it without a fallback. `--success` (which does exist, and
+ * carries the same `#12b76a` as `--ok-ink`) was a second spelling of one colour,
+ * and the amber branch shipped a hardcoded `#b45309` fallback that is not the
+ * value of `--risk-ink` — so if that fallback had ever been reached it would have
+ * painted an off-system hue, silently. One name per colour, no second spellings,
+ * no fallbacks that disagree with the token they stand in for.
+ */
 function meterTone(frac: number): string {
   if (frac >= 0.9) return 'var(--danger)'
-  if (frac >= 0.7) return 'var(--risk-ink, #b45309)'
-  return 'var(--success)'
+  if (frac >= 0.7) return 'var(--risk-ink)'
+  return 'var(--ok-ink)'
 }
 
 function postureTone(status: PostureStatus | string): BadgeTone {
@@ -97,13 +112,10 @@ function postureTone(status: PostureStatus | string): BadgeTone {
   }
 }
 
-/** Rotating chart palette for the distribution donuts. */
-const MIX_COLORS: ChartColor[] = ['agent', 'ml', 'graph', 'ok', 'risk', 'block']
-
 /** An honest dashed empty-state panel. */
 function Empty({ children }: { children: ReactNode }): ReactElement {
   return (
-    <p className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-8 text-center text-sm text-muted-foreground">
+    <p className="rounded-lg border border-dashed border-border bg-surface-2/40 px-4 py-8 text-center text-sm text-muted-foreground">
       {children}
     </p>
   )
@@ -184,45 +196,43 @@ function AdminCommandCenter(): ReactElement {
   )
 
   // ── model mix by real ledger spend (falls back to call count) ────────────────
-  const mix: DonutDatum[] = useMemo(() => {
+  const mix: RankedDatum[] = useMemo(() => {
     const byModel = usage?.by_model ?? []
     const withSpend = byModel.filter((m) => m.cost_usd > 0)
     const rows = withSpend.length > 0 ? withSpend : byModel.filter((m) => m.calls > 0)
     return rows
       .slice()
       .sort((a, b) => (withSpend.length ? b.cost_usd - a.cost_usd : b.calls - a.calls))
-      .map((m, i) => ({
+      .map((m) => ({
         name: m.model,
         value: Number((withSpend.length ? m.cost_usd : m.calls).toFixed(4)),
-        color: MIX_COLORS[i % MIX_COLORS.length],
       }))
   }, [usage])
   const mixIsSpend = (usage?.by_model ?? []).some((m) => m.cost_usd > 0)
 
   // ── where the spend goes (per role) — as a pie ───────────────────────────────
-  const spendByRole: DonutDatum[] = useMemo(() => {
+  const spendByRole: RankedDatum[] = useMemo(() => {
     const roles = Object.entries(summary?.by_role ?? {})
     const withCost = roles.filter(([, r]) => r.cost_usd > 0)
     const rows = withCost.length > 0 ? withCost : roles.filter(([, r]) => r.calls > 0)
     return rows
       .sort((a, b) => (withCost.length ? b[1].cost_usd - a[1].cost_usd : b[1].calls - a[1].calls))
-      .map(([role, r], i) => ({
+      .map(([role, r]) => ({
         name: role,
         value: Number((withCost.length ? r.cost_usd : r.calls).toFixed(4)),
-        color: MIX_COLORS[i % MIX_COLORS.length],
       }))
   }, [summary])
   const spendIsCost = Object.values(summary?.by_role ?? {}).some((r) => r.cost_usd > 0)
 
   // ── model routing — how roles fan out across deployments, as a pie ───────────
-  const routingMix: DonutDatum[] = useMemo(() => {
+  const routingMix: RankedDatum[] = useMemo(() => {
     const routing =
       metrics?.routing && Object.keys(metrics.routing).length ? metrics.routing : opt?.config.routing ?? {}
     const counts = new Map<string, number>()
     for (const model of Object.values(routing)) counts.set(model, (counts.get(model) ?? 0) + 1)
     return [...counts.entries()]
       .sort((a, b) => b[1] - a[1])
-      .map(([name, value], i) => ({ name, value, color: MIX_COLORS[i % MIX_COLORS.length] }))
+      .map(([name, value]) => ({ name, value }))
   }, [metrics, opt])
 
   // ── tenant + budget health (top customers by spend) ──────────────────────────
@@ -247,13 +257,32 @@ function AdminCommandCenter(): ReactElement {
     for (const e of posture?.entries ?? []) c[e.status] = (c[e.status] ?? 0) + 1
     return c
   }, [posture])
-  const securityMix: DonutDatum[] = useMemo(() => {
-    const out: DonutDatum[] = []
-    if (postureCounts.enforced) out.push({ name: 'Enforced', value: postureCounts.enforced, color: 'ok' })
-    if (postureCounts.partial) out.push({ name: 'Partial', value: postureCounts.partial, color: 'risk' })
-    if (postureCounts.not_covered) out.push({ name: 'Not covered', value: postureCounts.not_covered, color: 'block' })
-    return out
-  }, [postureCounts])
+  /**
+   * The posture roll-up, as three labelled states rather than three slices.
+   *
+   * `scripts/validate_palette.js` fails this trio as a categorical palette, and
+   * DESIGN.md §2 says that is correct and expected: amber against red separates by
+   * only **ΔE 7.0 under deuteranopia — and ΔE 10.5 for normal vision**, which is
+   * below the floor of 15, so full-colour readers cannot reliably tell them apart
+   * either. The status hues are reserved to mean a *state*, and they always ship
+   * with an icon and a word.
+   *
+   * A donut cannot honour that, because a donut's only route from a slice to its
+   * name is the colour — the very encoding that fails here. So each state is now
+   * its own row carrying its icon, its word and its count, and the hue is the
+   * third cue rather than the only one.
+   */
+  const securityMix = useMemo(
+    () =>
+      (
+        [
+          { name: 'Enforced', value: postureCounts.enforced, tone: 'ok', Icon: CheckCircle2 },
+          { name: 'Partial', value: postureCounts.partial, tone: 'risk', Icon: AlertTriangle },
+          { name: 'Not covered', value: postureCounts.not_covered, tone: 'block', Icon: XCircle },
+        ] as const
+      ).filter((row) => row.value > 0),
+    [postureCounts],
+  )
   const postureTotal = postureCounts.enforced + postureCounts.partial + postureCounts.not_covered
   const coverage = postureTotal > 0 ? postureCounts.enforced / postureTotal : null
   const topGap = (posture?.entries ?? []).find((e) => e.status !== 'enforced')
@@ -293,18 +322,16 @@ function AdminCommandCenter(): ReactElement {
   return (
     <div className="space-y-6">
       {/* Header — no explainer prose; admins know the surface. */}
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <p className="eyebrow mb-1">platform · command center</p>
-          <h1 className="t-hero text-foreground">Admin overview</h1>
-        </div>
-      </div>
+      <SectionHeader as="h1" eyebrow="platform · command center" title="Admin overview" />
 
       {loading ? (
         <Card>
           <CardBody>
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
+            <div
+              role="status"
+              className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"
+            >
+              <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
               Loading the command center…
             </div>
           </CardBody>
@@ -341,15 +368,15 @@ function AdminCommandCenter(): ReactElement {
                 title="Alerts"
                 actions={
                   <Badge tone={alerts.length > 0 ? 'block' : 'ok'} className="gap-1.5">
-                    <AlertTriangle className="size-3" />
+                    <AlertTriangle className="size-3" aria-hidden />
                     {alerts.length}
                   </Badge>
                 }
               />
               <CardBody className="pt-0">
                 {alerts.length === 0 ? (
-                  <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-6 text-sm text-muted-foreground">
-                    <CheckCircle2 className="size-4 text-ok-ink" />
+                  <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-surface-2/40 px-4 py-6 text-sm text-muted-foreground">
+                    <CheckCircle2 className="size-4 text-ok-ink" aria-hidden />
                     All clear — nothing needs attention.
                   </div>
                 ) : (
@@ -357,7 +384,7 @@ function AdminCommandCenter(): ReactElement {
                     {alerts.map((a, i) => (
                       <li
                         key={i}
-                        className="flex items-start gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5"
+                        className="flex items-start gap-2.5 rounded-lg border border-border bg-card px-3.5 py-2.5"
                       >
                         <span
                           className="mt-1.5 size-2.5 shrink-0 rounded-full"
@@ -366,8 +393,8 @@ function AdminCommandCenter(): ReactElement {
                               a.tone === 'block'
                                 ? 'var(--danger)'
                                 : a.tone === 'risk'
-                                  ? 'var(--risk-ink, #b45309)'
-                                  : 'var(--muted-foreground, #64748b)',
+                                  ? 'var(--risk-ink)'
+                                  : 'var(--muted-foreground)',
                           }}
                           aria-hidden
                         />
@@ -390,7 +417,7 @@ function AdminCommandCenter(): ReactElement {
                   href={`/app/${session?.fineRole ?? 'tenant_admin'}/governance`}
                   className="inline-flex items-center gap-1 text-[0.78rem] font-medium text-primary hover:underline"
                 >
-                  View all customers <ChevronRight className="size-3.5" />
+                  View all customers <ChevronRight className="size-3.5" aria-hidden />
                 </Link>
               }
             />
@@ -405,8 +432,8 @@ function AdminCommandCenter(): ReactElement {
                     const frac = cap != null && cap > 0 && spent != null ? Math.min(1, spent / cap) : null
                     return (
                       <li key={t.id} className="flex items-center gap-4 py-3 first:pt-0 last:pb-0">
-                        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-surface-2">
-                          <Landmark className="size-4 text-muted-foreground" />
+                        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2">
+                          <Landmark className="size-4 text-muted-foreground" aria-hidden />
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium text-foreground">{t.name}</p>
@@ -414,7 +441,9 @@ function AdminCommandCenter(): ReactElement {
                             {fmtInt(b?.calls ?? null)} calls
                           </p>
                         </div>
-                        <div className="w-40 shrink-0">
+                        {/* At 320px an icon, a truncating name and a 160px meter
+                            leave the name nothing; the meter narrows first. */}
+                        <div className="w-28 shrink-0 sm:w-40">
                           <div className="flex items-baseline justify-between gap-2">
                             <span className="tabular text-sm text-foreground">{fmtUsd(spent)}</span>
                             <span className="tabular font-mono text-[0.68rem] text-muted-foreground">
@@ -424,7 +453,7 @@ function AdminCommandCenter(): ReactElement {
                           <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
                             {frac != null ? (
                               <div
-                                className="h-full rounded-full transition-all duration-700"
+                                className="h-full rounded-full"
                                 style={{ width: `${Math.max(2, Math.round(frac * 100))}%`, background: meterTone(frac) }}
                               />
                             ) : null}
@@ -448,7 +477,7 @@ function AdminCommandCenter(): ReactElement {
                     data={trend}
                     index="bucket"
                     category="cost"
-                    color="ml"
+                    color="graph"
                     valueFormatter={(v) => fmtUsd(v)}
                     height={220}
                   />
@@ -462,13 +491,21 @@ function AdminCommandCenter(): ReactElement {
               <CardHeader title="Model mix" />
               <CardBody className="pt-0">
                 {mix.length > 0 ? (
-                  <DonutChart
-                    data={mix}
-                    centerLabel={mixIsSpend ? fmtUsd(totalSpend) : fmtInt(queries)}
-                    centerSub={mixIsSpend ? 'total spend' : 'total calls'}
-                    valueFormatter={(v) => (mixIsSpend ? fmtUsd(v) : `${fmtInt(v)} calls`)}
-                    height={220}
-                  />
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <p className="eyebrow">{mixIsSpend ? 'total spend' : 'total calls'}</p>
+                      <p className="mt-1">
+                        <Figure size="stat">
+                          {mixIsSpend ? fmtUsd(totalSpend) : fmtInt(queries)}
+                        </Figure>
+                      </p>
+                    </div>
+                    <RankedBars
+                      label={mixIsSpend ? 'Spend by model, highest first' : 'Calls by model, highest first'}
+                      data={mix}
+                      valueFormatter={(v) => (mixIsSpend ? fmtUsd(v) : `${fmtInt(v)} calls`)}
+                    />
+                  </div>
                 ) : (
                   <Empty>No model usage yet.</Empty>
                 )}
@@ -482,13 +519,23 @@ function AdminCommandCenter(): ReactElement {
               <CardHeader title="Where the spend goes" />
               <CardBody className="pt-0">
                 {spendByRole.length > 0 ? (
-                  <DonutChart
-                    data={spendByRole}
-                    centerLabel={spendIsCost ? fmtUsd(summary?.total_cost_usd ?? null) : fmtInt(summary?.total_calls ?? null)}
-                    centerSub={spendIsCost ? 'by role' : 'calls by role'}
-                    valueFormatter={(v) => (spendIsCost ? fmtUsd(v) : `${fmtInt(v)} calls`)}
-                    height={240}
-                  />
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <p className="eyebrow">{spendIsCost ? 'total, all roles' : 'total calls, all roles'}</p>
+                      <p className="mt-1">
+                        <Figure size="stat">
+                          {spendIsCost
+                            ? fmtUsd(summary?.total_cost_usd ?? null)
+                            : fmtInt(summary?.total_calls ?? null)}
+                        </Figure>
+                      </p>
+                    </div>
+                    <RankedBars
+                      label={spendIsCost ? 'Spend by role, highest first' : 'Calls by role, highest first'}
+                      data={spendByRole}
+                      valueFormatter={(v) => (spendIsCost ? fmtUsd(v) : `${fmtInt(v)} calls`)}
+                    />
+                  </div>
                 ) : (
                   <Empty>No metered calls yet.</Empty>
                 )}
@@ -499,13 +546,21 @@ function AdminCommandCenter(): ReactElement {
               <CardHeader title="Model routing" />
               <CardBody className="pt-0">
                 {routingMix.length > 0 ? (
-                  <DonutChart
-                    data={routingMix}
-                    centerLabel={String(routingMix.reduce((s, d) => s + d.value, 0))}
-                    centerSub="roles routed"
-                    valueFormatter={(v) => `${v} role${v === 1 ? '' : 's'}`}
-                    height={240}
-                  />
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <p className="eyebrow">roles routed</p>
+                      <p className="mt-1">
+                        <Figure size="stat">
+                          {String(routingMix.reduce((sum, d) => sum + d.value, 0))}
+                        </Figure>
+                      </p>
+                    </div>
+                    <RankedBars
+                      label="Roles per deployment, most first"
+                      data={routingMix}
+                      valueFormatter={(v) => `${v} role${v === 1 ? '' : 's'}`}
+                    />
+                  </div>
                 ) : (
                   <Empty>Routing table unavailable.</Empty>
                 )}
@@ -520,21 +575,31 @@ function AdminCommandCenter(): ReactElement {
                 title="Security posture"
                 actions={
                   <Badge tone={postureCounts.not_covered > 0 ? 'block' : postureCounts.partial > 0 ? 'risk' : 'ok'} className="gap-1.5">
-                    <ShieldCheck className="size-3" />
+                    <ShieldCheck className="size-3" aria-hidden />
                     {coverage != null ? `${fmtPct(coverage)} covered` : '—'}
                   </Badge>
                 }
               />
               <CardBody className="pt-0">
                 {securityMix.length > 0 ? (
-                  <div className="flex flex-col gap-3">
-                    <DonutChart
-                      data={securityMix}
-                      centerLabel={coverage != null ? fmtPct(coverage) : '—'}
-                      centerSub="enforced"
-                      valueFormatter={(v) => `${v} control${v === 1 ? '' : 's'}`}
-                      height={200}
-                    />
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <p className="eyebrow">enforced</p>
+                      <p className="mt-1">
+                        <Figure size="stat">{coverage != null ? fmtPct(coverage) : '—'}</Figure>
+                      </p>
+                    </div>
+                    <ul className="flex flex-col gap-2">
+                      {securityMix.map(({ name, value, tone, Icon }) => (
+                        <li key={name} className="flex items-center gap-2.5 text-sm">
+                          <Icon className={cn('size-4 shrink-0', SIGNALS[tone].text)} aria-hidden />
+                          <span className="min-w-0 flex-1 truncate text-foreground">{name}</span>
+                          <Figure className="shrink-0 font-medium">
+                            {value} {value === 1 ? 'control' : 'controls'}
+                          </Figure>
+                        </li>
+                      ))}
+                    </ul>
                     {topGap ? (
                       <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-2/40 px-3 py-2 text-[0.78rem]">
                         <span className="truncate text-foreground">Top gap: {topGap.name}</span>
@@ -556,25 +621,45 @@ function AdminCommandCenter(): ReactElement {
               <CardHeader
                 title="Latency"
                 actions={
-                  <Badge tone="ok" className="gap-1.5">
-                    <Activity className="size-3" />
-                    {latencyBars.length > 0 ? 'Healthy' : `${latency?.run_count ?? 0} runs`}
+                  <Badge tone="neutral" className="gap-1.5">
+                    <Activity className="size-3" aria-hidden />
+                    {fmtInt(latency?.run_count ?? null)} runs
                   </Badge>
                 }
               />
               <CardBody className="pt-0">
+                {/*
+                  Three quantiles of one distribution are three numbers, not a
+                  chart: the bars carried no comparison a reader could not make
+                  faster from the figures themselves, and they were drawn in the
+                  reserved status green, which reads as a verdict on the latency.
+                  The verdict is gone too — "Healthy" and "well within a
+                  responsive envelope" were editorial, with no threshold behind
+                  them and nothing on the response to source them to.
+                */}
                 {latencyBars.length > 0 ? (
-                  <div className="flex flex-col gap-3">
-                    <BarChart data={latencyBars} index="stage" category="ms" color="ok" height={200} />
-                    <p className="text-center text-[0.78rem] text-ok-ink">
-                      p95 {fmtMs(latency?.run_p95_ms)} · well within a responsive envelope.
-                    </p>
+                  <div className="flex flex-col gap-4">
+                    <dl className="grid grid-cols-3 gap-4">
+                      {latencyBars.map((bar) => (
+                        <div key={bar.stage}>
+                          <dt className="eyebrow">{bar.stage}</dt>
+                          <dd className="mt-1">
+                            <Figure size="stat">{fmtMs(bar.ms)}</Figure>
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <Receipt
+                      origin="GET /latency · whole-run duration, this process"
+                      detail={`${fmtInt(latency?.run_count ?? null)} runs in the window`}
+                    />
                   </div>
                 ) : (
-                  <div className="flex h-[220px] flex-col items-center justify-center gap-2 text-center">
-                    <CheckCircle2 className="size-6 text-ok-ink" />
-                    <span className="text-sm text-ok-ink">No latency issues — awaiting the first run.</span>
-                  </div>
+                  <Absence
+                    figure="Run latency, at any percentile"
+                    why="No run has completed in this process yet, so there is no distribution to take a percentile of."
+                    needed="One completed run. The window is per-process and resets when the backend restarts."
+                  />
                 )}
               </CardBody>
             </Card>
