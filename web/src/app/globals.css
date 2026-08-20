@@ -19,7 +19,8 @@
 
 /* ── Light (the only theme) ───────────────────────────────────────────────── */
 :root {
-  --radius: 0.375rem; /* 6px — deliberate, not the 12px SaaS default (DESIGN.md §4) */
+  --radius: 0.5rem; /* 8px — the surveyed card radii are 0/4/6/6/6/8/8/8/12; nothing
+                       rounds a data card past 16px, and 6px is the industry mode. */
 
   /* Motion tokens */
   --dur-fast: 120ms;
@@ -29,23 +30,52 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /* Structural neutrals — near-white base, white cards, near-black ink. */
-  --background: #f9f9fa;
-  --foreground: #101828;
+  /* ── Structural neutrals — blue-tinted, DESIGN.md v2 §1 ──────────────────
+     These carried no hue in v1: a #f9f9fa canvas under #ffffff cards, which is a
+     1.02:1 step. Nothing floated, and the product read as a wireframe.
+
+     Surveying the published tokens of Carbon, Atlassian, Fluent 2, Ant, Grafana,
+     Polaris, Geist, SLDS and Stripe, every canvas-to-card relationship sits between
+     1.03:1 and 1.14:1 — and the ones that read as *blue* get it from the neutrals
+     carrying a hue, not from a darker grey. Stripe's whole ramp does this
+     (#f8fafd, #e5edf5, #64748d, #061b31), which is why their surfaces feel blue
+     while saturated blue stays reserved for the single accent.
+
+     So: the tint is a hue shift, and it stays inside the surveyed band. */
+  --background: #eef2f8; /* canvas — blue-tinted, ~1.13:1 against white */
+  --foreground: #0f1e33; /* ink, faintly blue rather than neutral black */
 
   --surface: #ffffff;
-  --surface-2: #f2f4f7;
+  --surface-2: #f2f6fb; /* inset wells, table stripes */
   --card: #ffffff;
-  --card-foreground: #101828;
+  --card-foreground: #0f1e33;
   --popover: #ffffff;
-  --popover-foreground: #101828;
+  --popover-foreground: #0f1e33;
 
-  --muted: #f2f4f7;
-  --muted-foreground: #667085;
+  --muted: #f2f6fb;
+  --muted-foreground: #64748d; /* Stripe's neutral-500 — blue-tinted secondary ink */
 
-  --border: #e4e7ec;
-  --input: #d0d5dd;
-  --ring: #1570ef; /* --blue-600 — DESIGN.md §7, the focus ring */
+  --border: #e5edf5; /* hairline, blue-tinted (Stripe neutral-50) */
+  --input: #d4dee9;
+  --ring: #1570ef; /* --blue-600 — the focus ring */
+
+  /* ── The rail — the ONE dark surface in the product ──────────────────────
+     v1's sidebar was #ffffff on a #f9f9fa canvas: the rail was *lighter* than the
+     page, so the app had no spatial anchor. */
+  --rail: #0b1f3f;
+  --rail-hover: #12305e;
+  --rail-active: #1570ef;
+  --rail-text: #a8c0e0;
+  --rail-border: #16305a;
+
+  /* The entire sourced gradient budget. Carbon, Atlassian and Fluent ship zero
+     gradient tokens; Polaris ships exactly one — a white sheen over the bottom of a
+     solid fill. A hue-shifting button gradient has no precedent in any of them. */
+  --grad-primary-sheen: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0) 64%,
+    rgba(255, 255, 255, 0.15) 100%
+  );
 
   /* ── One hue carries meaning (DESIGN.md §2) ──────────────────────────────
      The six decorative hues that shipped through phase 7 — mint for agents,
@@ -228,15 +258,22 @@
   }
 
   /* Soft diffuse card shadow — the light system's depth cue. */
+  /* Every real shadow in the surveyed systems is TWO layers: a near-opaque
+     zero-offset contact ring that seats the card on the surface, plus a low-alpha
+     offset blur with NEGATIVE spread so the penumbra stays under the card instead of
+     smearing sideways. A lone `0 4px 12px rgba(0,0,0,.1)` is the template signature.
+     The colour is never pure black — over a tinted canvas that goes muddy — so these
+     are Stripe's blue-black shadow inks. */
   .shadow-card {
     box-shadow:
-      0 1px 2px rgba(16, 24, 40, 0.04),
-      0 8px 24px -12px rgba(16, 24, 40, 0.12);
+      0 0 0 1px rgba(0, 55, 112, 0.06),
+      0 1px 2px -1px rgba(0, 59, 137, 0.08);
   }
+  /* Hover raises a rung rather than translating the card — Fluent's shadow4 -> shadow8. */
   .shadow-hover {
     box-shadow:
-      0 2px 4px rgba(16, 24, 40, 0.05),
-      0 16px 40px -16px rgba(16, 24, 40, 0.18);
+      0 0 0 1px rgba(0, 55, 112, 0.08),
+      0 4px 8px -4px rgba(0, 59, 137, 0.1);
   }
 
   /* Type scale — display face for hero numbers and panel titles. */
@@ -304,8 +341,9 @@
   /* Deepest elevation state (dialogs / spotlight). */
   .shadow-pop {
     box-shadow:
-      0 4px 8px rgba(16, 24, 40, 0.06),
-      0 24px 60px -20px rgba(16, 24, 40, 0.22);
+      0 0 0 1px rgba(0, 55, 112, 0.08),
+      0 8px 16px -6px rgba(0, 55, 112, 0.1),
+      0 24px 32px -12px rgba(0, 59, 137, 0.06);
   }
 
   /* Trace pip pulse. */

@@ -1,0 +1,34 @@
+{
+  "cube.png": {
+    "source": "rendered",
+    "script": "web/scripts/render-3d.mjs",
+    "licence": "ours — nothing to attribute",
+    "color": "#60a5fa",
+    "px": 1024,
+    "used": "landing hero, Jobs stage block"
+  },
+  "slab.png": {
+    "source": "rendered",
+    "script": "web/scripts/render-3d.mjs",
+    "licence": "ours — nothing to attribute",
+    "color": "#60a5fa",
+    "px": 1024,
+    "used": "Jobs stage block (completed)"
+  },
+  "torus.png": {
+    "source": "rendered",
+    "script": "web/scripts/render-3d.mjs",
+    "licence": "ours — nothing to attribute",
+    "color": "#60a5fa",
+    "px": 1024,
+    "used": "landing hero accent"
+  },
+  "sphere.png": {
+    "source": "rendered",
+    "script": "web/scripts/render-3d.mjs",
+    "licence": "ours — nothing to attribute",
+    "color": "#60a5fa",
+    "px": 1024,
+    "used": "card accent"
+  }
+}
