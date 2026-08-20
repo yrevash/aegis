@@ -19,7 +19,7 @@
 
 /* ── Light (the only theme) ───────────────────────────────────────────────── */
 :root {
-  --radius: 0.75rem; /* 12px — the SnowUI/SaaS middle ground */
+  --radius: 0.375rem; /* 6px — deliberate, not the 12px SaaS default (DESIGN.md §4) */
 
   /* Motion tokens */
   --dur-fast: 120ms;
@@ -48,22 +48,39 @@
   --ring: #7dbbff;
 
   /* Signal palette — fills (soft pastels) drive tints, borders, dots, charts. */
-  --agent: #6be6d3; /* reasoning / agent trajectory   (mint)   */
-  --graph: #7dbbff; /* retrieval / knowledge graph    (blue)   */
-  --risk: #fec84b; /* risk / awaiting human approval (amber)  */
-  --block: #fda29b; /* guardrail block / danger       (rose)   */
-  --ok: #71dd8c; /* pass / healthy / efficiency    (green)  */
-  --ml: #b899eb; /* ML prediction / explanation    (purple) */
+  /* ── One hue carries meaning (DESIGN.md §2) ──────────────────────────────
+     The six decorative hues that shipped through phase 7 — mint for agents,
+     purple for ML, plus blue, amber, rose and green — meant a reader could not
+     tell which colours *meant* something and which were branding.
 
-  /* Signal inks — readable, same hue family, AA on white. */
-  --agent-ink: #0e9488;
-  --graph-ink: #1570ef;
+     The three that named a SUBJECT (agent, graph, ml) are now steps on one blue
+     ramp: they are told apart by position, label and weight first, and only then
+     by a step. The three that name a STATE (risk, block, ok) keep distinct hues,
+     because they are the reserved status set — and every one of them ships with
+     an icon AND a word, so identity is never colour alone.
+
+     The names are kept as aliases while 94 call sites are migrated; the values
+     are already the new system. */
+
+  /* Subject — one ramp, three steps */
+  --agent: #bfdbfe; /* blue-200 · reasoning / agent trajectory */
+  --graph: #60a5fa; /* blue-400 · retrieval / knowledge graph  */
+  --ml: #dbeafe; /* blue-100 · ML prediction / explanation  */
+
+  /* State — reserved, never reused as a series colour */
+  --risk: #fec84b; /* awaiting human approval */
+  --block: #fda29b; /* guardrail block         */
+  --ok: #71dd8c; /* pass / healthy          */
+
+  /* Inks */
+  --agent-ink: #175cd3; /* blue-700 */
+  --graph-ink: #1570ef; /* blue-600 — PRIMARY */
+  --ml-ink: #1e40af; /* blue-800 */
   --risk-ink: #dc6803;
   --block-ink: #d92d20;
   --ok-ink: #12b76a;
-  --ml-ink: #7a5af8;
 
-  /* Text placed on a solid signal fill (dark ink on pastel). */
+  /* Foregrounds on a tinted fill */
   --agent-foreground: #101828;
   --graph-foreground: #101828;
   --risk-foreground: #101828;
