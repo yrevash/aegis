@@ -86,3 +86,7 @@ backend/document_storage/
 document_storage/
 backend/vector_storage/
 vector_storage/
+
+# Superset instance (venv + metadata DB). Lives in the project so it survives a
+# reboot; too large and too machine-specific for git. Rebuild: scripts/superset.sh
+.superset/
