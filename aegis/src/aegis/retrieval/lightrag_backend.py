@@ -56,7 +56,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -852,6 +852,29 @@ class LightRAGBackend:
         answer, and it is documented as the weaker guarantee it is — unlike the vector,
         keyword and cache tiers, which are genuinely partitioned.
 
+        **Which LightRAG call this makes, and why it is not ``aquery``.** Tenant scoping
+        here is only possible because each recalled row arrives with its own
+        ``file_path`` — that tag is the whole of the evidence :func:`_scoped_recall`
+        has. ``aquery(only_need_context=True)`` does not carry it: in LightRAG 1.5.6 it
+        returns a **prose blob**, one prompt-shaped string in which every chunk's text
+        has already been merged, and it is typed ``str`` for exactly that reason. Handed
+        that, :func:`_to_recall` can only produce the single unattributable
+        whole-context candidate that :func:`_scoped_recall` then refuses outright — so
+        every tenant-scoped request fails, with a live and fully-populated index sitting
+        underneath it. That was the live failure: 37 correct points in Qdrant, a
+        top-scoring 0.72 cosine hit for the query, and ``RuntimeError: LightRAG returned
+        an unattributable blended context`` on the way out.
+
+        :meth:`aquery_data` is the structured sibling — same retrieval, same modes, no
+        LLM — returning ``{"status", "message", "data": {entities, relationships,
+        chunks}}`` where every element keeps its own ``file_path``. It is what makes the
+        filter below a filter rather than a refusal, and it is also where the graph arm's
+        nodes and edges come from; on the string path those were silently always empty.
+
+        ``aquery`` remains as a fallback for a LightRAG that predates ``aquery_data``.
+        It is the degraded path, not the intended one: under a tenant scope it can only
+        raise, which is the correct end for a store that cannot attribute its rows.
+
         Args:
             rag: The initialised LightRAG instance.
             query: The user query.
@@ -867,7 +890,16 @@ class LightRAGBackend:
         param = QueryParam(
             mode=mode, top_k=top_k, only_need_context=True, enable_rerank=False
         )
-        raw = await rag.aquery(query, param=param)  # type: ignore[attr-defined]
+        structured = getattr(rag, "aquery_data", None)
+        if callable(structured):
+            raw = await structured(query, param=param)
+        else:
+            logger.warning(
+                "this LightRAG exposes no aquery_data(); falling back to aquery(), "
+                "whose context carries no per-chunk file_path — a tenant-scoped recall "
+                "cannot be attributed from it and will be refused"
+            )
+            raw = await rag.aquery(query, param=param)  # type: ignore[attr-defined]
         return _scoped_recall(_to_recall(raw), scope)
 
 
@@ -1169,15 +1201,36 @@ def _scoped_recall(recall: Recall, scope: RetrievalScope) -> Recall:
 
 
 def _to_recall(raw: object) -> Recall:
-    """Normalise a LightRAG context result (string or object) into a `Recall`.
+    """Normalise whatever LightRAG returned for a context query into a `Recall`.
 
-    Recent LightRAG returns a `QueryContextResult` (`.context`, `.raw_data`); older
-    versions return a plain string. We parse candidates from the structured chunk data
-    when present and fall back to a single-candidate context otherwise.
+    Three shapes reach here, and only the first is the one production wants:
+
+    * A **mapping** — what :meth:`LightRAG.aquery_data` returns, built by
+      ``lightrag.utils.convert_to_user_format``: ``{"status", "message", "data":
+      {"entities", "relationships", "chunks", "references"}}``. Every element keeps its
+      own ``file_path``, which is what makes the recall attributable and therefore
+      scopeable. There is deliberately **no** whole-context fallback on this path: when
+      the retrieval genuinely found nothing the honest recall is empty, and manufacturing
+      a candidate out of a status message would put LightRAG's prose into the answer as
+      if it were corpus text.
+    * An **object** with ``.context``/``.raw_data`` — a ``QueryContextResult``, kept for
+      LightRAG builds that return one.
+    * A **plain string** — what ``aquery(only_need_context=True)`` returns in 1.5.6: the
+      merged, prompt-shaped blend with no per-chunk provenance left in it. It becomes one
+      unattributable candidate, which any tenant-scoped request then refuses. That is the
+      correct outcome and not a workaround: see :meth:`LightRAGBackend._context` for why
+      this path is a fallback rather than the route.
     """
-    context = getattr(raw, "context", raw if isinstance(raw, str) else "")
-    data = getattr(raw, "raw_data", None) or {}
-    payload = data.get("data", {}) if isinstance(data, dict) else {}
+    if isinstance(raw, Mapping):
+        # aquery_data's own failure shape is ``{"status": "failure", "data": {}}``,
+        # which lands here as zero candidates — an empty recall, never a fabricated one.
+        data = raw.get("data")
+        payload = data if isinstance(data, dict) else {}
+        context = ""
+    else:
+        context = getattr(raw, "context", raw if isinstance(raw, str) else "")
+        data = getattr(raw, "raw_data", None) or {}
+        payload = data.get("data", {}) if isinstance(data, dict) else {}
 
     candidates = _candidates_from_payload(payload, fallback_context=str(context))
     nodes = _nodes_from_payload(payload)

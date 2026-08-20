@@ -1,12 +1,11 @@
 'use client'
 
-import { AlertTriangle, CheckCircle2, Copy, Download, ListChecks, ScrollText, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, Copy, Download, ScrollText } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { getAudit, getTenants } from '@/lib/api/client'
 import { apiMessage, errorSentence, statusOf } from '@/lib/api/apiError'
 import { startReportDownload } from '@/lib/api/reports'
-import { BarChart } from '@/components/charts/BarChart'
 import { AuditFilterBar } from '@/components/audit/AuditFilterBar'
 import {
   auditQueryString,
@@ -17,20 +16,17 @@ import {
   type AuditQuery,
 } from '@/components/audit/query'
 import { Badge } from '@/components/ui/Badge'
-import { Card } from '@/components/ui/Card'
+import { AuditInsights } from '@/components/audit/AuditInsights'
 import { DataPanel } from '@/components/ui/DataPanel'
-import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
-import { SIGNALS, type Signal } from '@/config/signals'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import type { AuditLogRow, AuditOutcome, Tenant } from '@/lib/api/types'
 
-import { auditCounts, eventsPerHour } from './audit'
 
 /** Load state for the audit fetch. */
 type LoadState =
@@ -96,8 +92,6 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
   }, [token, search])
 
   const rows = load.status === 'ready' ? load.rows : NO_ROWS
-  const counts = useMemo(() => auditCounts(rows), [rows])
-  const perHour = useMemo(() => eventsPerHour(rows, 12), [rows])
   const empty = useMemo(() => emptyStateFor(query), [query])
 
   const dropped = useMemo(() => unexportableFilters(query), [query])
@@ -127,52 +121,22 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
   return (
     <div className="flex flex-col gap-4">
       {/*
-        The pulse, as one instrument rather than four boxes: three figures over one
-        hairline, and the shape they came from underneath at a height a person can
-        actually read. The activity chart used to be 72px tall in a fourth column,
-        which is a sparkline pretending to be a chart — its axis labels collided and
-        a spike and a lull looked the same.
+        The insight layer, which is the whole point of an audit screen. Three
+        figures and a 12-hour bar chart said *how much* happened; this says what,
+        by whom, and what was refused — six facts, a completed-vs-refused trend on
+        a window taken from the data rather than the wall clock, three ranked
+        distributions, and the server-side lens chips.
+
+        It lived unmounted for a wave: the component and its tests were finished in
+        `components/audit/`, but its mount point is this file, which belonged to a
+        different lane. Finished and invisible is not finished.
       */}
-      <Card>
-        <div className="grid gap-4 px-5 pt-5 pb-4 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border/70 md:px-6">
-          <HeaderStat label="Events" icon={ListChecks} signal="neutral" value={counts.total} sub="recorded" />
-          <HeaderStat
-            label="Blocked"
-            icon={ShieldAlert}
-            signal="block"
-            value={counts.blocked}
-            sub="guardrail / denied"
-            className="sm:pl-5"
-          />
-          <HeaderStat
-            label="Approved"
-            icon={CheckCircle2}
-            signal="ok"
-            value={counts.approved}
-            sub="human-gated"
-            className="sm:pl-5"
-          />
-        </div>
-        <div className="border-t border-border px-5 pt-4 pb-5 md:px-6">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="eyebrow">Activity</span>
-            <span className="font-mono text-[0.62rem] text-muted-foreground">
-              events per hour · last 12h
-            </span>
-          </div>
-          {load.status === 'ready' ? (
-            <BarChart data={perHour} index="hour" category="count" color="graph" height={200} />
-          ) : (
-            <div className="h-[200px]" />
-          )}
-          <Receipt
-            className="mt-3"
-            variant="inline"
-            origin="GET /audit · bucketed by hour"
-            detail="counts the rows this query loaded, and nothing outside it"
-          />
-        </div>
-      </Card>
+      <AuditInsights
+        rows={rows}
+        loading={load.status === 'loading'}
+        query={query}
+        onQuery={setQuery}
+      />
 
       {/*
         `DataPanel`, not a hand-rolled `overflow-auto` div. The trail is a 900px-wide
@@ -313,37 +277,6 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
 }
 
 /** One header figure: icon chip, count-up value, short sub-line. */
-function HeaderStat({
-  label,
-  icon: Icon,
-  signal,
-  value,
-  sub,
-  className,
-}: {
-  label: string
-  icon: typeof ListChecks
-  signal: Signal
-  value: number
-  sub: string
-  className?: string
-}): ReactElement {
-  const token = SIGNALS[signal]
-  return (
-    <div className={cn('flex flex-col gap-1.5', className)}>
-      <div className="flex items-center gap-2">
-        <span className={cn('grid size-6 shrink-0 place-items-center rounded-md', token.bg)}>
-          <Icon aria-hidden className={cn('size-3.5', token.text)} />
-        </span>
-        <span className="eyebrow">{label}</span>
-      </div>
-      <Figure size="stat" className="text-foreground">
-        {value.toLocaleString()}
-      </Figure>
-      <span className="font-mono text-[0.68rem] text-muted-foreground">{sub}</span>
-    </div>
-  )
-}
 
 /** Result marker — a coloured dot paired with its word (never colour alone). */
 function ResultDot({ result }: { result: AuditOutcome }): ReactElement {

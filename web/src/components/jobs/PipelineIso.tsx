@@ -198,13 +198,21 @@ function baseFace(i: number): string {
  * Nothing here is invented: a delta is the difference between two counts that
  * both came from `job_runs`, and it is dropped rather than accumulated so a
  * stale `+2` can never outlive the poll that produced it.
+ *
+ * `ready` is what keeps it honest. Before the first read lands every stage is
+ * zero — not because the queue is empty, but because nobody has asked yet — and
+ * comparing that placeholder against the answer reported the whole corpus as
+ * having arrived in the last four seconds. So nothing is recorded and nothing is
+ * compared until the first real read, and *that* read becomes the baseline: the
+ * first thing this can ever say is what changed after the page already knew.
  */
-function useIncrease(stages: StageLoad[]): Record<string, number> {
+function useIncrease(stages: StageLoad[], ready: boolean): Record<string, number> {
   const signature = stages.map((s) => `${s.name}:${s.through}`).join('|')
   const previous = useRef<Map<string, number> | null>(null)
   const [delta, setDelta] = useState<Record<string, number>>({})
 
   useEffect(() => {
+    if (!ready) return
     const now = new Map<string, number>()
     for (const part of signature.split('|')) {
       const [name, count] = part.split(':')
@@ -212,7 +220,7 @@ function useIncrease(stages: StageLoad[]): Record<string, number> {
     }
     const before = previous.current
     previous.current = now
-    // The first render has nothing to compare against. An initial load is not a
+    // The first read has nothing to compare against. An initial load is not a
     // change, and labelling it `+327` would be a lie about what just happened.
     if (before === null) return
 
@@ -229,7 +237,7 @@ function useIncrease(stages: StageLoad[]): Record<string, number> {
     setDelta(gained)
     const timer = setTimeout(() => setDelta({}), 4000)
     return () => clearTimeout(timer)
-  }, [signature])
+  }, [signature, ready])
 
   return delta
 }
@@ -274,7 +282,7 @@ export function PipelineIso({
   const shadowId = useId()
   const { stages, counted } = foldStages(rows)
   const peak = Math.max(1, ...stages.map((s) => s.through))
-  const increase = useIncrease(stages)
+  const increase = useIncrease(stages, !loading)
 
   const inFlight = stages.reduce((n, s) => n + s.active, 0)
   const broken = stages.reduce((n, s) => n + s.failed, 0)

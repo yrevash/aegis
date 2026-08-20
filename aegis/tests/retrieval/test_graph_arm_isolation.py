@@ -24,7 +24,6 @@ did not reach a tenant is an assertion about this path and not about a coinciden
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
 
 import pytest
 
@@ -67,59 +66,57 @@ class _RagWithTwoTenants:
     per-query metadata predicate to push a tenant into.
     """
 
-    async def aquery(self, query: str, param: object) -> object:
-        return SimpleNamespace(
-            context="",
-            raw_data={
-                "data": {
-                    "chunks": [
-                        {
-                            "id": "a1",
-                            "content": "Tenant A's own passage about refunds.",
-                            "file_path": f"t{_TENANT_A}::terms.pdf",
-                        },
-                        {
-                            "id": "b1",
-                            "content": f"Tenant B: the {_SECRET} acquisition closes soon.",
-                            "file_path": f"t{_TENANT_B}::board-pack.pdf",
-                        },
-                    ],
-                    "entities": [
-                        {
-                            "entity": "Tenant A Ltd",
-                            "entity_type": "organization",
-                            "file_path": f"t{_TENANT_A}::terms.pdf",
-                        },
-                        {
-                            "entity": _SECRET,
-                            "entity_type": "organization",
-                            "file_path": f"t{_TENANT_B}::board-pack.pdf",
-                        },
-                    ],
-                    "relationships": [
-                        {
-                            "src_id": "Tenant A Ltd",
-                            "tgt_id": _SECRET,
-                            "description": (
-                                f"{_SECRET} is being acquired for 400 million, per the "
-                                "board pack."
-                            ),
-                            "file_path": f"t{_TENANT_B}::board-pack.pdf",
-                        }
-                    ],
-                }
+    async def aquery_data(self, query: str, param: object) -> dict:
+        return {
+            "status": "success",
+            "data": {
+                "chunks": [
+                    {
+                        "id": "a1",
+                        "content": "Tenant A's own passage about refunds.",
+                        "file_path": f"t{_TENANT_A}::terms.pdf",
+                    },
+                    {
+                        "id": "b1",
+                        "content": f"Tenant B: the {_SECRET} acquisition closes soon.",
+                        "file_path": f"t{_TENANT_B}::board-pack.pdf",
+                    },
+                ],
+                "entities": [
+                    {
+                        "entity": "Tenant A Ltd",
+                        "entity_type": "organization",
+                        "file_path": f"t{_TENANT_A}::terms.pdf",
+                    },
+                    {
+                        "entity": _SECRET,
+                        "entity_type": "organization",
+                        "file_path": f"t{_TENANT_B}::board-pack.pdf",
+                    },
+                ],
+                "relationships": [
+                    {
+                        "src_id": "Tenant A Ltd",
+                        "tgt_id": _SECRET,
+                        "description": (
+                            f"{_SECRET} is being acquired for 400 million, per the "
+                            "board pack."
+                        ),
+                        "file_path": f"t{_TENANT_B}::board-pack.pdf",
+                    }
+                ],
             },
-        )
+        }
 
 
 class _RagWithUnattributedGraph(_RagWithTwoTenants):
     """The same graph, with LightRAG reporting no provenance for it at all."""
 
-    async def aquery(self, query: str, param: object) -> object:
-        raw = await super().aquery(query, param)
-        for element in raw.raw_data["data"]["entities"]:
+    async def aquery_data(self, query: str, param: object) -> dict:
+        raw = await super().aquery_data(query, param)
+        for element in raw["data"]["entities"]:
             element.pop("file_path")
-        for element in raw.raw_data["data"]["relationships"]:
+        for element in raw["data"]["relationships"]:
             element.pop("file_path")
         return raw
 
@@ -133,26 +130,24 @@ class _RagWithAnUntaggedChunk:
     path it stores.
     """
 
-    async def aquery(self, query: str, param: object) -> object:
-        return SimpleNamespace(
-            context="",
-            raw_data={
-                "data": {
-                    "chunks": [
-                        {
-                            "id": "u1",
-                            "content": f"Untagged: the {_SECRET} settlement figure.",
-                            "file_path": "board-pack.pdf",
-                        },
-                        {
-                            "id": "a1",
-                            "content": "Tenant A's own tagged passage.",
-                            "file_path": f"t{_TENANT_A}::terms.pdf",
-                        },
-                    ]
-                }
+    async def aquery_data(self, query: str, param: object) -> dict:
+        return {
+            "status": "success",
+            "data": {
+                "chunks": [
+                    {
+                        "id": "u1",
+                        "content": f"Untagged: the {_SECRET} settlement figure.",
+                        "file_path": "board-pack.pdf",
+                    },
+                    {
+                        "id": "a1",
+                        "content": "Tenant A's own tagged passage.",
+                        "file_path": f"t{_TENANT_A}::terms.pdf",
+                    },
+                ]
             },
-        )
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,32 +184,30 @@ class _RagWhoseGraphModeFails:
     mid-migration, while the vector index — a different store entirely — is fine.
     """
 
-    async def aquery(self, query: str, param: object) -> object:
+    async def aquery_data(self, query: str, param: object) -> dict:
         if getattr(param, "mode", None) == "local":
             raise RuntimeError("Neo4j is unreachable")
-        return SimpleNamespace(
-            context="",
-            raw_data={
-                "data": {
-                    "chunks": [
-                        {
-                            "id": "v1",
-                            "content": "Tenant A's own dense passage.",
-                            "file_path": f"t{_TENANT_A}::terms.pdf",
-                        }
-                    ]
-                }
+        return {
+            "status": "success",
+            "data": {
+                "chunks": [
+                    {
+                        "id": "v1",
+                        "content": "Tenant A's own dense passage.",
+                        "file_path": f"t{_TENANT_A}::terms.pdf",
+                    }
+                ]
             },
-        )
+        }
 
 
 class _RagWhoseVectorModeFails:
     """A LightRAG whose ``naive`` (dense) query raises. There is no recall without it."""
 
-    async def aquery(self, query: str, param: object) -> object:
+    async def aquery_data(self, query: str, param: object) -> dict:
         if getattr(param, "mode", None) == "naive":
             raise RuntimeError("the vector index is gone")
-        return SimpleNamespace(context="", raw_data={"data": {"chunks": []}})
+        return {"status": "success", "data": {"chunks": []}}
 
 
 async def test_a_failing_graph_arm_still_answers_from_the_vector_list(caplog) -> None:

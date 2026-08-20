@@ -124,7 +124,7 @@ export function rankTables(edges: readonly SchemaEdge[]): Map<string, number> {
  */
 
 /** One table box in the whole-schema map. */
-export const NODE_W = 182
+export const NODE_W = 204
 export const NODE_H = 46
 /** Vertical gap between boxes in a column, and horizontal gap between columns. */
 export const ROW_GAP = 12

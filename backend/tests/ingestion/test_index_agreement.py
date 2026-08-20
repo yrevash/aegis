@@ -86,7 +86,11 @@ from app.jobs.flows.contracts import StageInput
 
 from .conftest import FIXTURE
 
-pytestmark = pytest.mark.asyncio
+# No module-level ``pytest.mark.asyncio``: ``asyncio_mode = "auto"`` already runs the
+# coroutine tests, and marking the whole module put the marker on the two synchronous
+# contract tests below as well, which pytest reports as a warning on every run. A
+# suite that prints warnings it has learned to ignore is a suite whose real warnings
+# go unread.
 
 _TENANT = 1
 _USER = 11

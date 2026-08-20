@@ -29,7 +29,7 @@ const FOCUS =
 /* ── Focus-view geometry ─────────────────────────────────────────────────── */
 
 /** A neighbour box in the focused view. */
-const NEIGHBOUR_W = 200
+const NEIGHBOUR_W = 244
 const NEIGHBOUR_H = 46
 const NEIGHBOUR_GAP = 10
 /** The focused entity, which carries its whole column list. */
@@ -391,13 +391,10 @@ function TableNode({
         {table.withheldColumns.length > 0 ? (
           <Lock className="size-3 shrink-0 text-[color:var(--risk-ink)]" aria-hidden />
         ) : null}
-        {table.primaryKey.length > 0 ? (
-          <KeyRound className="size-3 shrink-0 text-blue-700" aria-hidden />
-        ) : null}
       </span>
-      <span className="truncate font-mono text-[0.62rem] leading-3 text-muted-foreground">
+      <span className="truncate font-mono text-[0.6rem] leading-3 text-muted-foreground">
         {table.tenantScoped ? 'tenant' : 'platform'} · {table.columns.length} cols ·{' '}
-        {table.rowEstimate > 0 ? `~${table.rowEstimate.toLocaleString()}` : 'no rows'}
+        {table.rowEstimate > 0 ? `~${table.rowEstimate.toLocaleString()}` : 'no estimate'}
       </span>
     </button>
   )
@@ -598,7 +595,7 @@ function FocusView({
                   textAnchor="middle"
                   className="fill-muted-foreground font-mono text-[9.5px]"
                 >
-                  {relation.column}
+                  {`${relation.column} → ${relation.references}`}
                 </text>
               </g>
             )
@@ -625,7 +622,7 @@ function FocusView({
                   textAnchor="middle"
                   className="fill-muted-foreground font-mono text-[9.5px]"
                 >
-                  {relation.references}
+                  {`${relation.column} → ${relation.references}`}
                 </text>
               </g>
             )
@@ -717,9 +714,9 @@ function NeighbourNode({
       )}
     >
       <Figure className="truncate text-xs font-medium text-foreground">{table.name}</Figure>
-      <span className="truncate font-mono text-[0.62rem] leading-3 text-muted-foreground">
+      <span className="truncate font-mono text-[0.6rem] leading-3 text-muted-foreground">
         {side} · {table.tenantScoped ? 'tenant' : 'platform'} ·{' '}
-        {table.rowEstimate > 0 ? `~${table.rowEstimate.toLocaleString()}` : 'no rows'}
+        {table.rowEstimate > 0 ? `~${table.rowEstimate.toLocaleString()}` : 'no estimate'}
       </span>
     </button>
   )

@@ -15,10 +15,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from aegis.retrieval.lightrag_backend import LightRAGBackend
+from aegis.retrieval.lightrag_backend import LightRAGBackend, _to_recall
 from aegis.retrieval.models import Chunk
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
-from aegis.retrieval.types import RetrievalScope
+from aegis.retrieval.types import TENANT_METADATA_KEY, RetrievalScope
 
 from .conftest import FakeRedis, RecordingComplete, SequenceEmbed
 
@@ -135,22 +135,42 @@ async def test_ingest_empty_is_noop_zero():
 
 
 class QueryingRag(FakeRag):
-    """A fake LightRAG that answers ``aquery`` with canned chunk rows.
+    """A fake LightRAG answering context queries the way LightRAG 1.5.6 answers them.
 
-    Mirrors the shape recent LightRAG returns for ``only_need_context=True``: a
-    ``QueryContextResult`` carrying ``.context`` plus ``.raw_data["data"]["chunks"]``,
-    each chunk with the ``file_path`` the backend wrote at ingest.
+    Both calls are modelled, because the difference between them *is* the bug this fake
+    used to hide. It previously implemented only ``aquery``, and returned a
+    ``SimpleNamespace(context=..., raw_data=...)`` from it — a shape LightRAG 1.5.6 never
+    returns. Every recall test passed against that invention while production refused
+    every tenant-scoped query, because the real ``aquery`` hands back a merged prose blob
+    with no per-chunk ``file_path`` in it and the backend can attribute nothing.
+
+    So:
+
+    * :meth:`aquery_data` returns ``convert_to_user_format``'s real mapping and is the
+      call the backend must make.
+    * :meth:`aquery` returns a plain ``str``, as the library does. Any regression to it
+      turns these tests' tenant assertions into the refusal production was suffering.
     """
 
     def __init__(self, chunks: list[dict]) -> None:
         super().__init__()
         self._chunks = chunks
 
-    async def aquery(self, query: str, param: object = None) -> object:
-        return SimpleNamespace(
-            context="blended context",
-            raw_data={"data": {"chunks": self._chunks}},
-        )
+    async def aquery_data(self, query: str, param: object = None) -> dict:
+        return {
+            "status": "success",
+            "message": "Query processed successfully",
+            "data": {
+                "entities": [],
+                "relationships": [],
+                "chunks": self._chunks,
+                "references": [],
+            },
+            "metadata": {"query_mode": getattr(param, "mode", "naive")},
+        }
+
+    async def aquery(self, query: str, param: object = None) -> str:
+        return "blended context"
 
 
 async def test_ingest_tags_the_owning_tenant_into_the_stored_file_path():
@@ -230,20 +250,133 @@ async def test_unscoped_recall_sees_only_shared_rows():
     assert [c.id for c in recall.candidates] == ["s"]
 
 
+class BlendingRag(FakeRag):
+    """A LightRAG with **no** ``aquery_data`` — prose context and nothing else.
+
+    The degraded path, and the one the backend used to take unconditionally. LightRAG
+    1.5.6's ``aquery(only_need_context=True)`` returns exactly this: one merged,
+    prompt-shaped string in which every chunk's text has been concatenated and every
+    chunk's ``file_path`` discarded.
+    """
+
+    async def aquery(self, query: str, param: object = None) -> str:
+        return "blended context"
+
+
 async def test_unattributable_blended_context_is_refused_for_a_tenant():
     """A row with no per-chunk path cannot be shown to belong to this tenant → fail loud.
 
     Dropping it silently would hide a store that cannot be scoped; serving it is the
     leak. Only the tenant-scoped case raises — an unscoped run has no boundary to cross.
     """
-    rag = QueryingRag([])  # no structured chunks → LightRAG's whole-context fallback
-    backend = _backend(rag)
+    backend = _backend(BlendingRag())
 
     with pytest.raises(RuntimeError, match="unattributable"):
         await backend.recall("q", top_k=5, scope=RetrievalScope(tenant_id=1))
 
     unscoped = await backend.recall("q", top_k=5, scope=_SCOPE)
     assert [c.id for c in unscoped.candidates] == ["context"]
+
+
+async def test_recall_reads_the_structured_context_not_the_prose_blend():
+    """The backend must ask LightRAG for data, not for prose. This is the live outage.
+
+    Both calls exist on the fake and they disagree on purpose: ``aquery_data`` returns
+    one attributable chunk, ``aquery`` returns the blend. A backend that reads the blend
+    cannot attribute a single row, so a tenant-scoped recall raises rather than answers —
+    which is precisely what production did with 37 correct, tenant-tagged points sitting
+    in Qdrant and a 0.72 cosine hit waiting for the query.
+
+    The assertion is therefore that a tenant-scoped recall *succeeds and returns the
+    row*, which is unreachable from the string path in either direction: serving the
+    blend would leak it, refusing it answers nothing.
+    """
+    rag = QueryingRag([{"id": "a", "content": "acme passage", "file_path": "t1::acme.md"}])
+    recall = await _backend(rag).recall("q", top_k=5, scope=RetrievalScope(tenant_id=1))
+
+    assert [c.id for c in recall.candidates] == ["a"]
+    assert recall.candidates[0].metadata["file_path"] == "acme.md"
+
+
+async def test_an_empty_structured_result_is_an_empty_recall_not_a_blend():
+    """Nothing found is nothing returned — never LightRAG's status prose as a passage.
+
+    ``aquery_data``'s own no-results shape is ``{"status": "failure", "data": {}}``. The
+    whole-context fallback must not fire for it: there is no context to fall back to, and
+    manufacturing a candidate would put "No relevant document chunks found." into the
+    answer as if the corpus had said it. An honest empty recall also keeps a genuinely
+    empty index distinguishable from an unscopeable one — the first is a miss, the second
+    raises.
+    """
+    rag = QueryingRag([])
+    backend = _backend(rag)
+
+    for scope in (RetrievalScope(tenant_id=1), _SCOPE):
+        recall = await backend.recall("q", top_k=5, scope=scope)
+        assert recall.candidates == []
+
+
+def test_the_parser_matches_lightrags_own_serialiser():
+    """Our payload reader is pinned against the function LightRAG builds the payload with.
+
+    ``aquery_data``'s return is ``lightrag.utils.convert_to_user_format``'s output, and
+    that function renames things on the way out — an entity's name arrives as
+    ``entity_name``, never ``entity``; a relationship's endpoints as ``src_id``/
+    ``tgt_id``. Reading those keys from a hand-written fixture proves only that the
+    fixture and the parser agree, which is the mistake that let this whole defect ship:
+    the recall tests passed for months against a fake shape LightRAG never returns.
+
+    So the fixture is generated by LightRAG itself. If it renames a key, this fails —
+    instead of the graph arm quietly going empty and the tenant filter quietly losing the
+    ``file_path`` it scopes on.
+    """
+    from lightrag.utils import convert_to_user_format
+
+    payload = convert_to_user_format(
+        [{"entity": "Acme Ltd", "type": "organization", "file_path": "t1::acme.md"}],
+        [
+            {
+                "entity1": "Acme Ltd",
+                "entity2": "Globex",
+                "description": "Acme supplies Globex.",
+                "file_path": "t1::acme.md",
+            }
+        ],
+        [{"reference_id": "1", "content": "acme passage", "file_path": "t1::acme.md"}],
+        [{"reference_id": "1", "file_path": "t1::acme.md"}],
+        "mix",
+    )
+
+    recall = _to_recall(payload)
+
+    assert [c.text for c in recall.candidates] == ["acme passage"]
+    assert recall.candidates[0].metadata["file_path"] == "acme.md"
+    assert recall.candidates[0].metadata[TENANT_METADATA_KEY] == "t1"
+    assert [n.label for n in recall.nodes] == ["Acme Ltd"]
+    assert [n.kind for n in recall.nodes] == ["organization"]
+    assert [(e.source, e.target) for e in recall.edges] == [("Acme Ltd", "Globex")]
+    assert recall.edges[0].relation == "Acme supplies Globex."
+    # And the provenance the scope filter reads, on both halves of the graph.
+    assert recall.nodes[0].owners == ("t1",)
+    assert recall.edges[0].owners == ("t1",)
+
+
+def test_the_context_query_asks_for_data_and_lightrag_still_offers_it():
+    """``aquery_data`` exists on the real class, and ``aquery`` still returns prose.
+
+    The two halves of the reason the backend calls one and not the other. A LightRAG
+    upgrade that removed ``aquery_data`` would drop every tenant-scoped recall back to
+    the refusal path, and it would do so silently — the fallback logs a warning and
+    nothing else fails until a real query runs.
+    """
+    import inspect
+
+    from lightrag import LightRAG
+
+    assert inspect.iscoroutinefunction(LightRAG.aquery_data)
+    # ``aquery`` is annotated ``str | AsyncIterator[str]``: prose either way, and no
+    # per-chunk ``file_path`` anywhere in it.
+    assert "str" in str(inspect.signature(LightRAG.aquery).return_annotation)
 
 
 async def test_ingest_report_carries_real_counts_through_pipeline():
