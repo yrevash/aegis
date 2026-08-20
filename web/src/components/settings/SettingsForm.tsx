@@ -1,10 +1,13 @@
 'use client'
 
-import { AlertTriangle, Check, Loader2, Lock, PlugZap } from 'lucide-react'
+import { AlertTriangle, Check, Loader2, Lock, PlugZap, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import {
   canWeaken,
   controlLabel,
@@ -29,6 +32,7 @@ import {
   type SettingScope,
 } from '@/lib/api/console'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { cn } from '@/lib/utils'
 
 /**
  * Every settings screen, generated from the catalogue.
@@ -39,18 +43,24 @@ import { useAuth } from '@/lib/auth/AuthContext'
  * namespaces, the control from `control`/`type`, the help text from `description`, the
  * legal values from `choices`/`minimum`/`maximum`. A key added to `SETTING_SPECS` next
  * month appears here with nothing in `web/` edited, which is the entire mechanism
- * behind "operating this platform never requires touching code".
+ * behind "operating this platform never requires touching code". Nothing below is
+ * styled per key, and nothing below may be.
  *
  * What the screen refuses to hide, because each was a real defect:
  *
  * - **A control that binds to nothing.** `control.effective === false` renders as a
  *   value and the catalogue's `inert_reason`, never as an input. `agent.mode` says so
  *   today; `agent.gate_min_risk` did not, for a phase, and an operator changed a value
- *   that reached no run.
+ *   that reached no run. The row is drawn so it cannot be mistaken for a live one: a
+ *   muted surface, a marked edge, and — where a live row puts a control — the reason,
+ *   verbatim, in a bordered block that reads as a statement rather than as a control
+ *   somebody greyed out.
  * - **A control that is not theirs.** `writable_by` excludes them ⇒ the value and the
  *   sentence saying who may change it, not a greyed-out box that posts and 403s.
  * - **Where the value came from, and whether it can be weakened.** A `tighten_only` key
- *   and an `override` key look identical until one of them refuses a write.
+ *   and an `override` key look identical until one of them refuses a write. The
+ *   deciding scope is a {@link Receipt} — the same provenance line the rest of the
+ *   console uses, so a reader learns it once.
  * - **A write that did not become the value in force.** The row re-renders from the
  *   PUT **response**, and {@link writeOutcome} says so in a sentence when the fold
  *   decided something other than what was typed.
@@ -83,7 +93,10 @@ function SettingField({
   const [outcome, setOutcome] = useState<WriteOutcome | null>(null)
   const field = fieldFor(row)
   const provenance = provenanceOf(row)
+  const inert = field.kind === 'inert'
+  const nameId = `${row.key}-name`
   const describedBy = `${row.key}-help`
+  const controlId = `${row.key}-control`
 
   const save = useCallback(
     (raw: string) => {
@@ -117,12 +130,22 @@ function SettingField({
   )
 
   return (
-    <div className="grid gap-4 py-5 first:pt-0 last:pb-0 md:grid-cols-[minmax(0,1fr)_18rem]">
+    <div
+      className={cn(
+        'grid gap-4 py-5 first:pt-0 last:pb-0 md:grid-cols-[minmax(0,1fr)_20rem]',
+        // An inert row is not a styled special case of a live row — it is drawn on a
+        // different surface, with a marked edge, so it never reads as one control
+        // among the working ones.
+        inert && 'md:-mx-6 -mx-5 border-l-2 border-risk bg-surface-2/60 px-5 md:px-6',
+      )}
+    >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-sm font-medium text-foreground">{controlLabel(row.key)}</h4>
+          <h4 id={nameId} className="text-sm font-medium text-foreground">
+            {controlLabel(row.key)}
+          </h4>
           <Badge tone={provenance.tone}>{provenance.label}</Badge>
-          {field.kind === 'inert' ? (
+          {inert ? (
             <Badge tone="risk">
               <PlugZap aria-hidden className="size-3" />
               Not wired up
@@ -136,50 +159,59 @@ function SettingField({
           ) : null}
           {canWeaken(row.control) ? null : <Badge tone="neutral">Cannot be weakened</Badge>}
         </div>
-        <p className="mt-1 font-mono text-[0.7rem] text-muted-foreground">{row.key}</p>
         <p id={describedBy} className="mt-2 max-w-prose text-[0.8rem] leading-relaxed text-muted-foreground">
           {row.control.description}
         </p>
         <p className="mt-2 max-w-prose text-[0.72rem] leading-relaxed text-muted-foreground">
-          {mergeNote(row.control)} {provenance.detail}
+          {mergeNote(row.control)}
         </p>
-        {field.kind === 'inert' ? (
-          <p className="mt-2 max-w-prose rounded-lg bg-surface-2 px-3 py-2 text-[0.72rem] leading-relaxed text-foreground">
-            {field.reason}
-          </p>
-        ) : null}
+        <Receipt
+          label="Decided by"
+          origin={`${provenance.label.toLowerCase()} · ${row.key}`}
+          detail={provenance.detail}
+          className="mt-3"
+        />
       </div>
 
       <div className="min-w-0">
-        <p className="text-[0.68rem] uppercase tracking-wide text-muted-foreground">In force</p>
-        <p className="mt-0.5 font-mono text-sm break-words text-foreground">{formatValue(row.value)}</p>
+        <p className="eyebrow">In force</p>
+        <Figure className={cn('mt-1 break-words', inert ? 'text-muted-foreground' : 'text-foreground')}>
+          {formatValue(row.value)}
+        </Figure>
         <div className="mt-2">
           <Editor
             row={row}
             field={field}
             draft={draft}
             saving={saving}
+            controlId={controlId}
+            nameId={nameId}
             describedBy={describedBy}
             onDraft={setDraft}
             onSave={save}
           />
         </div>
         {failure === null ? null : (
-          <p className="mt-2 flex items-start gap-1.5 text-[0.72rem] leading-snug text-danger">
+          <p
+            role="alert"
+            className="mt-2 flex items-start gap-1.5 text-[0.72rem] leading-snug text-danger"
+          >
             <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
             <span>{failure}</span>
           </p>
         )}
         {outcome === null ? null : (
           <p
-            className={`mt-2 flex items-start gap-1.5 text-[0.72rem] leading-snug ${
-              outcome.took ? 'text-muted-foreground' : 'text-foreground'
-            }`}
+            role="status"
+            className={cn(
+              'mt-2 flex items-start gap-1.5 text-[0.72rem] leading-snug',
+              outcome.took ? 'text-muted-foreground' : 'text-foreground',
+            )}
           >
             {outcome.took ? (
               <Check aria-hidden className="mt-0.5 size-3.5 shrink-0" />
             ) : (
-              <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+              <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-risk-ink" />
             )}
             <span>{outcome.sentence}</span>
           </p>
@@ -189,12 +221,22 @@ function SettingField({
   )
 }
 
-/** The input for one field — or the sentence that stands in for one. */
+/**
+ * The input for one field — or the statement that stands in for one.
+ *
+ * Neither refusal is an input, and that is the point of both: an inert key would accept
+ * a write that reaches nothing, and an unwritable one would post and 403. They are
+ * drawn as bordered statements rather than as disabled controls, because a disabled
+ * control invites a reader to look for the permission that would enable it, and for an
+ * inert key there is none — nothing reads the value at all.
+ */
 function Editor({
   row,
   field,
   draft,
   saving,
+  controlId,
+  nameId,
   describedBy,
   onDraft,
   onSave,
@@ -203,37 +245,48 @@ function Editor({
   field: FieldShape
   draft: string
   saving: boolean
+  controlId: string
+  nameId: string
   describedBy: string
   onDraft: (raw: string) => void
   onSave: (raw: string) => void
 }): ReactElement {
   const label = controlLabel(row.key)
 
-  // Neither of these is an input, and that is the point of both: an inert key would
-  // accept a write that reaches nothing, and an unwritable one would post and 403.
   if (field.kind === 'inert' || field.kind === 'readOnly') {
-    return <p className="text-[0.74rem] leading-snug text-muted-foreground">{field.reason}</p>
+    const Icon = field.kind === 'inert' ? PlugZap : Lock
+    return (
+      <p className="flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-[0.74rem] leading-relaxed text-foreground">
+        <Icon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <span>{field.reason}</span>
+      </p>
+    )
   }
 
   if (field.kind === 'select') {
     return (
-      <select
-        aria-label={label}
-        aria-describedby={describedBy}
-        className={INPUT}
-        value={draft}
-        disabled={saving}
-        onChange={(event) => {
-          onDraft(event.target.value)
-          onSave(event.target.value)
-        }}
-      >
-        {field.choices.map((choice) => (
-          <option key={String(choice)} value={String(choice)}>
-            {String(choice)}
-          </option>
-        ))}
-      </select>
+      <>
+        <label htmlFor={controlId} className="sr-only">
+          {label}
+        </label>
+        <select
+          id={controlId}
+          aria-describedby={describedBy}
+          className={INPUT}
+          value={draft}
+          disabled={saving}
+          onChange={(event) => {
+            onDraft(event.target.value)
+            onSave(event.target.value)
+          }}
+        >
+          {field.choices.map((choice) => (
+            <option key={String(choice)} value={String(choice)}>
+              {String(choice)}
+            </option>
+          ))}
+        </select>
+      </>
     )
   }
 
@@ -244,7 +297,7 @@ function Editor({
         type="button"
         role="switch"
         aria-checked={on}
-        aria-label={label}
+        aria-labelledby={nameId}
         aria-describedby={describedBy}
         disabled={saving}
         onClick={() => {
@@ -256,11 +309,14 @@ function Editor({
       >
         <span
           aria-hidden
-          className={`inline-flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ${
-            on ? 'bg-ok justify-end' : 'bg-surface-2 justify-start'
-          }`}
+          className={cn(
+            'inline-flex h-4 w-7 items-center rounded-full p-0.5 transition-colors',
+            // Blue, not green: on/off is not a health verdict, and the reserved status
+            // hues are not spent on a switch (DESIGN.md §2).
+            on ? 'justify-end bg-primary' : 'justify-start bg-input',
+          )}
         >
-          <span className="size-3 rounded-full bg-card shadow-card" />
+          <span className="size-3 rounded-full bg-card" />
         </span>
         {on ? 'On' : 'Off'}
       </button>
@@ -269,15 +325,18 @@ function Editor({
 
   return (
     <div className="flex items-center gap-2">
+      <label htmlFor={controlId} className="sr-only">
+        {label}
+      </label>
       <input
-        aria-label={label}
+        id={controlId}
         aria-describedby={describedBy}
         type={field.kind === 'number' ? 'number' : 'text'}
         min={field.kind === 'number' ? field.minimum : undefined}
         max={field.kind === 'number' ? field.maximum : undefined}
         step={field.kind === 'number' ? field.step : undefined}
         placeholder={field.kind === 'tags' ? 'comma separated' : undefined}
-        className={INPUT}
+        className={cn(INPUT, 'tabular font-mono')}
         value={draft}
         disabled={saving}
         onChange={(event) => onDraft(event.target.value)}
@@ -291,7 +350,12 @@ function Editor({
         onClick={() => onSave(draft)}
         className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)] disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {saving ? <Loader2 aria-label="Saving" className="size-3.5 animate-spin" /> : 'Save'}
+        {saving ? (
+          <Loader2 aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />
+        ) : (
+          'Save'
+        )}
+        <span className="sr-only">{saving ? `Saving ${label}` : `Save ${label}`}</span>
       </button>
     </div>
   )
@@ -366,43 +430,31 @@ export function SettingsForm({
   const sections = useMemo(() => (rows === null ? [] : groupSettings(rows)), [rows])
 
   if (error !== null) {
-    return (
-      <Card>
-        <CardBody>
-          <p className="py-6 text-center text-sm text-danger">{error}</p>
-        </CardBody>
-      </Card>
-    )
+    return <ErrorState error={error} />
   }
   if (rows === null) {
-    return (
-      <Card>
-        <CardBody>
-          <p className="py-6 text-center text-sm text-muted-foreground">Reading the catalogue…</p>
-        </CardBody>
-      </Card>
-    )
+    return <LoadingState rows={4} label="Reading the catalogue…" />
   }
   if (rows.length === 0) {
     return (
-      <Card>
-        <CardBody>
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Your role may read no controls in this catalogue.
-          </p>
-        </CardBody>
-      </Card>
+      <EmptyState
+        icon={SlidersHorizontal}
+        title="No controls you may read"
+        body="Every setting on this platform is declared in one catalogue, and each declares which roles may read it. Your role is on none of them. An administrator can widen that."
+      />
     )
   }
 
   return (
     <div className="space-y-5">
-      <Card>
-        <CardBody className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex flex-wrap items-center gap-2 text-sm text-foreground">
-            Changes apply to
+      <Card className="rounded-lg">
+        <CardBody className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
+            <label htmlFor="settings-scope" className="eyebrow mb-1 block">
+              Changes apply to
+            </label>
             <select
-              aria-label="Who a change applies to"
+              id="settings-scope"
               className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)]"
               value={scope}
               onChange={(event) => setScope(event.target.value as SettingScope)}
@@ -413,7 +465,7 @@ export function SettingsForm({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
           <p className="max-w-prose text-[0.74rem] leading-snug text-muted-foreground">
             {scopes
               .filter((option) => !option.available)
@@ -424,7 +476,7 @@ export function SettingsForm({
       </Card>
 
       {sections.map((section) => (
-        <Card key={section.id}>
+        <Card key={section.id} className="rounded-lg">
           <CardHeader
             title={section.title}
             eyebrow={`${section.rows.length} ${section.rows.length === 1 ? 'control' : 'controls'} · platform → tenant → you`}

@@ -1,11 +1,13 @@
 'use client'
 
-import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
-import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/primitives/button'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { errorSentence } from '@/lib/api/apiError'
 import {
   createMcpServer,
   deleteMcpServer,
@@ -61,7 +63,7 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
         setProbe(next.probe ?? null)
         setError(null)
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : String(caught))
+        setError(errorSentence(caught, 'That change did not reach the registry. Try it again.'))
       } finally {
         setBusy(null)
       }
@@ -74,7 +76,7 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
       setData(await getMcpConsole(token))
       setError(null)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
+      setError(errorSentence(caught, 'The MCP registry did not load. Check the backend is up, then retry.'))
     }
   }, [token])
 
@@ -106,35 +108,25 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
   )
 
   if (!data && !error) {
-    return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-md border border-dashed border-border bg-surface-2 text-sm text-muted-foreground">
-        <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
-        Reading the MCP registry…
-      </div>
-    )
+    return <LoadingState rows={5} label="Reading the MCP registry…" />
   }
 
   return (
     <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <p className="eyebrow">aegis · mcp</p>
-          <h2 className="t-display text-foreground">Model Context Protocol</h2>
-        </div>
-        <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
-          <RefreshCw className="mr-1 size-3" aria-hidden />
-          Reload
-        </Button>
-      </header>
+      <SectionHeader
+        as="h1"
+        eyebrow="aegis · mcp"
+        title="Model Context Protocol"
+        note="Which external servers our agents may reach, what each of their tools may do, and what this deployment offers back over the protocol."
+        right={
+          <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+            <RefreshCw className="mr-1 size-3" aria-hidden />
+            Reload
+          </Button>
+        }
+      />
 
-      {error ? (
-        <Card>
-          <CardBody className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-block-ink" aria-hidden />
-            <p className="text-sm text-foreground">{error}</p>
-          </CardBody>
-        </Card>
-      ) : null}
+      {error ? <ErrorState error={error} retry={() => void load()} /> : null}
 
       {data ? (
         <>
@@ -161,7 +153,7 @@ export function McpConsoleMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-md border border-dashed border-border bg-surface-2 text-sm text-muted-foreground">
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2 text-sm text-muted-foreground">
         Connecting…
       </div>
     )

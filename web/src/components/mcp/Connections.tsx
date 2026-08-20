@@ -10,13 +10,15 @@ import {
   Power,
   Trash2,
 } from 'lucide-react'
-import { useState, type ReactElement } from 'react'
+import { useId, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { Button } from '@/components/primitives/button'
+import { Figure } from '@/components/primitives/Figure'
 import { Input } from '@/components/primitives/input'
+import { EmptyState } from '@/components/primitives/States'
 import type { McpConsole, McpProbe, McpServerCreate, McpServerUpdate } from '@/lib/api/mcp'
 
 /**
@@ -63,6 +65,7 @@ export function Connections({
     credential: '',
   })
   const [confirming, setConfirming] = useState<string | null>(null)
+  const id = useId()
 
   const submit = () => {
     onCreate({ ...draft, serverId: draft.serverId.trim() })
@@ -70,7 +73,7 @@ export function Connections({
   }
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader title="Connections" eyebrow="External MCP servers" />
       <CardBody className="space-y-5">
         <p className="text-sm text-muted-foreground">
@@ -147,12 +150,13 @@ export function Connections({
                       </>
                     )}
                   </TD>
-                  <TD className="align-top text-right font-mono text-sm tabular-nums">
-                    <span className="text-foreground">{server.discoveredTools}</span>
-                    <span className="text-muted-foreground"> / {server.grantedTools}</span>
-                    <p className="text-[0.68rem] font-sans text-muted-foreground">
-                      found / callable
-                    </p>
+                  <TD className="align-top text-right">
+                    <Figure className="text-foreground">{server.discoveredTools}</Figure>
+                    <span className="text-muted-foreground" aria-hidden>
+                      {' / '}
+                    </span>
+                    <Figure className="text-muted-foreground">{server.grantedTools}</Figure>
+                    <p className="text-[0.68rem] text-muted-foreground">found / callable</p>
                   </TD>
                   <TD className="align-top">
                     {server.enabled ? (
@@ -182,7 +186,7 @@ export function Connections({
                         onClick={() => onTest(server.serverId)}
                       >
                         {busy === server.serverId ? (
-                          <Loader2 className="mr-1 size-3 animate-spin" aria-hidden />
+                          <Loader2 className="mr-1 size-3 animate-spin motion-reduce:animate-none" aria-hidden />
                         ) : (
                           <PlugZap className="mr-1 size-3" aria-hidden />
                         )}
@@ -201,8 +205,13 @@ export function Connections({
                       </Button>
                       {confirming === server.serverId ? (
                         <div className="flex flex-col items-end gap-1">
-                          <p className="max-w-[11rem] text-right text-[0.68rem] text-muted-foreground">
-                            Removes its tools, its grants and its credential.
+                          <p
+                            id={`${id}-remove-${server.serverId}`}
+                            className="max-w-[12rem] text-right text-[0.68rem] leading-relaxed text-block-ink"
+                          >
+                            Removing {server.label} forgets its endpoint, every tool it
+                            advertised, every grant on those tools and its credential. Nothing
+                            here can be undone from this page.
                           </p>
                           <div className="flex gap-1">
                             <Button
@@ -217,12 +226,13 @@ export function Connections({
                               type="button"
                               size="sm"
                               variant="destructive"
+                              aria-describedby={`${id}-remove-${server.serverId}`}
                               onClick={() => {
                                 setConfirming(null)
                                 onDelete(server.serverId)
                               }}
                             >
-                              Remove
+                              Remove {server.label}
                             </Button>
                           </div>
                         </div>
@@ -244,15 +254,15 @@ export function Connections({
             </TBody>
           </Table>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            No external MCP server is declared. Add one below, or set{' '}
-            <code className="font-mono">AEGIS_MCP_CLIENT_SERVERS</code> to a
-            comma-separated <code className="font-mono">id=url</code> list.
-          </p>
+          <EmptyState
+            icon={Network}
+            title="No external MCP server is declared"
+            body="Every peer whose tools an agent here may reach is listed on this table. Declare one with the form below, or set AEGIS_MCP_CLIENT_SERVERS to a comma-separated id=url list before the process starts."
+          />
         )}
 
         {probe ? (
-          <div className="rounded-md border border-border bg-surface-2 p-3">
+          <div role="status" aria-live="polite" className="rounded-lg border border-border bg-surface-2 p-3">
             {probe.reachable ? (
               <>
                 <p className="flex items-center gap-2 text-sm text-foreground">
@@ -288,9 +298,10 @@ export function Connections({
             submit()
           }}
         >
-          <label className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1" htmlFor={`${id}-server-id`}>
             <span className="text-sm font-medium text-foreground">Id</span>
             <Input
+              id={`${id}-server-id`}
               value={draft.serverId}
               onChange={(event) => setDraft({ ...draft, serverId: event.target.value })}
               placeholder="acme"
@@ -304,17 +315,19 @@ export function Connections({
               , which is what stops a peer shadowing an Aegis tool.
             </span>
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1" htmlFor={`${id}-server-label`}>
             <span className="text-sm font-medium text-foreground">Label</span>
             <Input
+              id={`${id}-server-label`}
               value={draft.label}
               onChange={(event) => setDraft({ ...draft, label: event.target.value })}
               placeholder="Acme tools"
             />
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1" htmlFor={`${id}-server-url`}>
             <span className="text-sm font-medium text-foreground">Endpoint</span>
             <Input
+              id={`${id}-server-url`}
               value={draft.url}
               onChange={(event) => setDraft({ ...draft, url: event.target.value })}
               placeholder="https://acme.example/mcp"
@@ -324,9 +337,10 @@ export function Connections({
               The peer&apos;s Streamable HTTP address.
             </span>
           </label>
-          <label className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1" htmlFor={`${id}-server-auth`}>
             <span className="text-sm font-medium text-foreground">Auth header</span>
             <Input
+              id={`${id}-server-auth`}
               value={draft.authHeader}
               onChange={(event) => setDraft({ ...draft, authHeader: event.target.value })}
               placeholder="Authorization"
@@ -336,9 +350,10 @@ export function Connections({
               for a bearer, <span className="font-mono">X-API-Key</span> for many others.
             </span>
           </label>
-          <label className="flex flex-col gap-1 md:col-span-2">
+          <label className="flex flex-col gap-1 md:col-span-2" htmlFor={`${id}-server-cred`}>
             <span className="text-sm font-medium text-foreground">Credential</span>
             <Input
+              id={`${id}-server-cred`}
               type="password"
               autoComplete="off"
               value={draft.credential}
@@ -356,7 +371,7 @@ export function Connections({
           <div className="md:col-span-2">
             <Button type="submit" disabled={busy === 'create' || !draft.serverId.trim()}>
               {busy === 'create' ? (
-                <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                <Loader2 className="mr-2 size-4 animate-spin motion-reduce:animate-none" aria-hidden />
               ) : null}
               Declare server
             </Button>

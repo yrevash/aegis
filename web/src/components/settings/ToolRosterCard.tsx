@@ -6,6 +6,9 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { refusalSentence } from '@/components/settings/settingsCatalogue'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { getToolRoster, type ToolRosterResponse } from '@/lib/api/console'
 import { useAuth } from '@/lib/auth/AuthContext'
 
@@ -55,39 +58,44 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
   }, [token, hydrated, refreshKey])
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardHeader
         title="Tools"
         eyebrow="platform ∩ persona, then the tenant's gate floor"
         actions={
           roster === null ? null : (
-            <Badge tone="agent">
+            <Badge tone="neutral" className="gap-1.5">
               <Wrench aria-hidden className="size-3" />
-              {roster.allowed_count} of {roster.total} available
+              <Figure>{roster.allowed_count}</Figure> of <Figure>{roster.total}</Figure> available
             </Badge>
           )
         }
       />
       <CardBody>
         {error !== null ? (
-          <p className="py-8 text-center text-sm text-danger">{error}</p>
+          <ErrorState error={error} />
         ) : roster === null ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">Reading the roster…</p>
+          <LoadingState rows={3} label="Reading the roster…" />
         ) : (
           <>
             <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[0.74rem] text-muted-foreground">
               <ShieldCheck aria-hidden className="size-3.5" />
-              Persona <span className="font-mono text-foreground">{roster.persona}</span> · human
-              gate at <span className="font-mono text-foreground">{roster.gate_min_risk}</span> risk
-              and above
+              Persona <Figure className="text-foreground">{roster.persona}</Figure> · human gate at{' '}
+              <Figure className="text-foreground">{roster.gate_min_risk}</Figure> risk and above
             </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
+            <div className="w-full overflow-x-auto">
+              <table className="w-full min-w-[34rem] text-left text-sm">
                 <thead>
-                  <tr className="text-[0.7rem] uppercase tracking-wide text-muted-foreground">
-                    <th className="pb-2 pr-4 font-medium">Tool</th>
-                    <th className="pb-2 pr-4 font-medium">Risk</th>
-                    <th className="pb-2 font-medium">Status</th>
+                  <tr className="border-b border-border">
+                    <th scope="col" className="eyebrow pb-2 pr-4 font-normal">
+                      Tool
+                    </th>
+                    <th scope="col" className="eyebrow pb-2 pr-4 font-normal">
+                      Risk
+                    </th>
+                    <th scope="col" className="eyebrow pb-2 font-normal">
+                      Status
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -99,7 +107,7 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
                     return (
                       <tr key={tool.name} className="border-t border-border align-top">
                         <td className="py-3 pr-4">
-                          <p className="font-mono text-[0.78rem] text-foreground">{tool.name}</p>
+                          <Figure className="text-foreground">{tool.name}</Figure>
                           <p className="mt-1 max-w-lg text-[0.74rem] leading-snug text-muted-foreground">
                             {tool.description}
                           </p>
@@ -114,6 +122,11 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
                 </tbody>
               </table>
             </div>
+            <Receipt
+              origin="GET /v1/console/tools"
+              detail="platform allowlist ∩ persona, then anything at or above the tenant's gate floor is marked for a human"
+              className="mt-4"
+            />
           </>
         )}
       </CardBody>
