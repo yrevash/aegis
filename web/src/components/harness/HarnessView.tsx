@@ -16,7 +16,6 @@ import { useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { PageHeader } from '@/components/primitives/PageHeader'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'

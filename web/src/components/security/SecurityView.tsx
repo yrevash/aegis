@@ -22,7 +22,6 @@ import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { errorSentence } from '@/lib/api/apiError'
 import { getSecurityPosture } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { cn } from '@/lib/utils'
 import { PostureMatrix } from './PostureMatrix'
 import type {
   PostureEntry,
@@ -43,9 +42,6 @@ const STATUS_META: Record<
   partial: { tone: 'risk', label: 'partial', icon: TriangleAlert },
   not_covered: { tone: 'block', label: 'not covered', icon: CircleSlash },
 }
-
-/** The three bands, in the order a reader should meet them. */
-const BANDS: PostureStatus[] = ['enforced', 'partial', 'not_covered']
 
 /** Coerce the (possibly widened) status string to a known band, defaulting honest. */
 function bandOf(status: PostureStatus | string): PostureStatus {

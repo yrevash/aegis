@@ -132,7 +132,12 @@
   --tint-blue: #eff6ff; /* --blue-50 */
 
   /* shadcn semantic aliases mapped onto the light identity. */
-  --primary: #101828; /* swappable brand hue — near-black by default */
+  /* The product's action colour. This was shadcn's near-black `#101828` default and
+   * was never revisited, so a blue call-to-action landed the reader on black
+   * buttons — five pre-auth surfaces had each patched around it locally before
+   * anyone traced it to the token. White on this measures 4.57:1, which clears AA
+   * for the button label sizes in use. */
+  --primary: #1570ef;
   --primary-foreground: #ffffff;
   --secondary: #f2f4f7;
   --secondary-foreground: #101828;
@@ -272,13 +277,25 @@
   }
 
   /* Eyebrow label — the small mono all-caps tag used across panels. */
+  /* `color` is a *default*, not a fixed value.
+   *
+   * This rule used to set `color: var(--muted-foreground)` directly. `.eyebrow`
+   * lives in `utilities` alongside every `text-*` class, so `class="eyebrow
+   * text-foreground"` was a coin toss decided by source order — and it lost.
+   * Silently: the text rendered, just in the wrong colour. It cost the nav rebuild
+   * a workaround (grey eyebrows are 3.45:1 on navy and fail AA) and shipped a real
+   * defect on the roadmap, where the *shipped* column rendered in the *unshipped*
+   * column's grey, erasing the one distinction that section exists to draw.
+   *
+   * Routing through a variable makes the default overridable the obvious way: set
+   * `--eyebrow-ink`, or let a `text-*` utility win, and neither fights the other. */
   .eyebrow {
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 0.16em;
     font-size: 0.68rem;
     font-weight: 500;
-    color: var(--muted-foreground);
+    color: var(--eyebrow-ink, var(--muted-foreground));
   }
 
   /* Soft diffuse card shadow — the light system's depth cue. */

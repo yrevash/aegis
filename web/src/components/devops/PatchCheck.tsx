@@ -3,7 +3,6 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  Loader2,
   RefreshCw,
   Search,
   ShieldCheck,

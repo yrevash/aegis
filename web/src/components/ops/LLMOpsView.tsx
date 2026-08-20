@@ -5,7 +5,6 @@ import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
-import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { CapabilityMap, type Capability } from '@/components/shared'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
