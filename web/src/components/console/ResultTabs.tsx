@@ -42,7 +42,11 @@ export function AnswerBlock({
   const settled = !state.running && state.events.length > 0
 
   return (
-    <div className="flex flex-col gap-3">
+    /* `data-answer` is the console's scroll target once a run settles. The thread used
+       to scroll to the *end* of the finished turn, which parked the reader below the
+       answer on the tail of the ranked-source list — the one thing on the turn nobody
+       asked for. See the follow-the-newest-turn effect in `ChatConsole`. */
+    <div data-answer="" className="flex scroll-mt-2 flex-col gap-3">
       {settled && <DecisionStrip state={state} />}
       <AnswerPanel state={state} />
 

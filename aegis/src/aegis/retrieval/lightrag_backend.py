@@ -76,6 +76,7 @@ from aegis.retrieval.types import (
     GraphNode,
     RetrievalOrigin,
     RetrievalScope,
+    chunk_source_id,
     scoped_graph,
     tenant_metadata_value,
 )
@@ -1021,6 +1022,16 @@ def _keyword_candidate(row: object) -> Candidate:
     rank is not on that scale, and putting it there would make the two look
     interchangeable in a sorted list.
 
+    **The id is the shared one, and that is the whole of "one passage, one source".** It
+    used to be ``str(chunks.id)`` — the row's own primary key, an integer — while the
+    dense arm's ids come out of the index under
+    :func:`~aegis.retrieval.types.chunk_source_id`. RRF merges on the id and nothing else,
+    so a passage both arms recalled fused with nothing and reached the console twice, once
+    per spelling. Building the id here through the same function the index was written
+    with is what makes the two arms agree; ``chunks.id`` stays on the candidate as
+    ``chunk_id``, because it is the join key back to the row and losing it would trade one
+    defect for another.
+
     Args:
         row: A mapping row from :data:`_KEYWORD_SQL`.
 
@@ -1030,9 +1041,10 @@ def _keyword_candidate(row: object) -> Candidate:
     """
     meta = row["meta"] if isinstance(row["meta"], dict) else {}
     return Candidate(
-        id=str(row["id"]),
+        id=chunk_source_id(int(row["tenant_id"]), meta.get("content_id") or row["id"]),
         text=str(row["content"]),
         metadata={
+            "chunk_id": int(row["id"]),
             # The chunk's own recorded source if the ingest wrote one, else the
             # document's filename. Never a synthesised path: a citation that points at
             # something invented is worse than one that points at nothing.

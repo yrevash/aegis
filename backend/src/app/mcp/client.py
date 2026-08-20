@@ -103,7 +103,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -122,6 +122,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "EXTERNAL_PREFIX",
+    "ExternalDiscoveryTimeoutError",
     "ExternalGrant",
     "ExternalServerSpec",
     "ExternalTool",
@@ -247,6 +248,22 @@ class UnknownExternalServerError(KeyError):
 
 class ExternalToolCollisionError(ValueError):
     """Raised when an external tool's qualified name is already taken by Aegis."""
+
+
+class ExternalDiscoveryTimeoutError(TimeoutError):
+    """Raised when admitting a peer's catalogue did not finish inside its budget.
+
+    Discovery's cost is not the peer's latency. Every description and every schema
+    string the peer wrote is screened on the ``TOOL_RESULT`` rail before it may reach a
+    planner's prompt, and each screening is a model call — so the wall clock scales with
+    the size of the catalogue, and a peer that answers ``tools/list`` in 200 ms can
+    still take minutes to admit. The budget exists so the console's "test connection"
+    always has an answer; this error carries the sentence that says which half ran out.
+
+    Nothing is recorded when it is raised: :meth:`ExternalToolRegistry.discover`
+    replaces a peer's tools in one step at the end, so a peer's previously admitted
+    tools are left exactly as they were rather than half-withdrawn.
+    """
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -418,6 +435,35 @@ async def _default_screen(text: str, tool_name: str) -> GuardResult:
     return await check_tool_result(text, tool_name=tool_name)
 
 
+class _BoundedScreen:
+    """The rail with a ceiling on how many screenings run at once, and a tally.
+
+    Discovery screens every string a peer wrote, and each screening is a model call.
+    They are independent, so they are started together rather than queued behind one
+    another — but "together" without a ceiling means one button press can become a
+    hundred simultaneous calls at whatever the catalogue's size happens to be. The
+    semaphore is that ceiling.
+
+    The tally is for the refusal sentence: when the budget runs out, "17 of 28
+    screenings came back" says which half of the work was slow, and an operator can act
+    on that. It is not a metric anything reads twice.
+    """
+
+    def __init__(self, screen: ScreenFn, limit: int) -> None:
+        self._screen = screen
+        self._sem = asyncio.Semaphore(max(1, int(limit)))
+        self.started = 0
+        self.completed = 0
+
+    async def __call__(self, text: str, tool_name: str) -> GuardResult:
+        """Screen one string, waiting for a slot first."""
+        async with self._sem:
+            self.started += 1
+            result = await self._screen(text, tool_name)
+            self.completed += 1
+            return result
+
+
 #: What a blocked external payload is replaced with. Deliberately the same shape as
 #: :data:`aegis.agent.rails._WITHHELD`: the caller is told a result existed and was
 #: withheld, and is told not to act on it — never handed the payload, and never handed
@@ -441,6 +487,13 @@ class ExternalToolRegistry:
     client_factory: ClientFactory | None = None
     screen: ScreenFn | None = None
     call_timeout_seconds: float = 30.0
+    #: The ceiling on one :meth:`discover`, screening included. See
+    #: :class:`ExternalDiscoveryTimeoutError` for why it is not the same clock as
+    #: ``call_timeout_seconds``: that one bounds a peer's answer, this one bounds our
+    #: own governance of it.
+    discovery_timeout_seconds: float = 60.0
+    #: How many rail screenings :meth:`discover` may have in flight at once.
+    discovery_concurrency: int = 16
     _servers: dict[str, ExternalServerSpec] = field(default_factory=dict)
     _tools: dict[str, ExternalTool] = field(default_factory=dict)
     _grants: dict[str, ExternalGrant] = field(default_factory=dict)
@@ -660,6 +713,16 @@ class ExternalToolRegistry:
         merging: a tool the peer has withdrawn must disappear from the payload, and a
         merge would keep offering it.
 
+        **Bounded, and concurrent, because the screening is the cost.** The peer's
+        ``tools/list`` is one call; admitting what it answered is one rail screening per
+        description and per schema string, and each of those is a model call. Run one
+        after another that is the *sum* of every latency — measured at 329 seconds for a
+        four-tool peer — with nothing overhead to show for it, since the strings are
+        independent and their verdicts do not feed each other. They are screened
+        together under :attr:`discovery_concurrency`, and the whole admission sits
+        inside :attr:`discovery_timeout_seconds` so a slow rail cannot hold a caller
+        open indefinitely.
+
         Args:
             server_id: A declared server.
 
@@ -668,13 +731,24 @@ class ExternalToolRegistry:
 
         Raises:
             UnknownExternalServerError: When the id is not declared.
+            ExternalToolCollisionError: When an advertised name would shadow an Aegis
+                tool. Raised before any screening, so a collision is answered at once.
+            ExternalDiscoveryTimeoutError: When the peer did not answer inside
+                :attr:`call_timeout_seconds`, or admission did not finish inside
+                :attr:`discovery_timeout_seconds`. Nothing is recorded either way.
         """
         spec = self.server(server_id)
-        async with self._client(spec) as connected:
-            listed = await connected.list_tools()
+        try:
+            async with asyncio.timeout(self.call_timeout_seconds):
+                async with self._client(spec) as connected:
+                    listed = await connected.list_tools()
+        except TimeoutError:
+            raise ExternalDiscoveryTimeoutError(
+                f"{server_id!r} did not answer tools/list within "
+                f"{self.call_timeout_seconds:g}s. Nothing was changed."
+            ) from None
 
-        screen = self.screen or _default_screen
-        recorded: dict[str, ExternalTool] = {}
+        candidates: list[tuple[str, str, Any]] = []
         for tool in getattr(listed, "tools", []) or []:
             remote_name = str(getattr(tool, "name", "") or "")
             if not _REMOTE_NAME_RE.match(remote_name):
@@ -691,36 +765,69 @@ class ExternalToolRegistry:
                     f"{qualified!r}, which is already a registered Aegis tool. Refusing "
                     "to shadow it — rename the server id."
                 )
-            description = str(getattr(tool, "description", "") or "")
-            verdict = await screen(description, qualified)
-            if verdict.verdict is GuardVerdict.BLOCK:
-                logger.error(
-                    "MCP client: the TOOL_RESULT rail BLOCKED the description of %r "
-                    "(layer=%s): %s — the tool is not admitted",
-                    qualified,
-                    verdict.layer,
-                    verdict.reason,
-                )
-                continue
-            raw_schema = dict(getattr(tool, "input_schema", None) or {"type": "object"})
-            schema = await _screen_schema(raw_schema, qualified, screen)
-            if schema is None:
-                continue
-            recorded[qualified] = ExternalTool(
-                qualified_name=qualified,
-                server_id=server_id,
-                remote_name=remote_name,
-                # The rail's own text: a REDACT verdict means the redacted description
-                # is what may be shown, and passing the original through would mean the
-                # redaction did not happen.
-                description=str(verdict.text if verdict.text is not None else description),
-                input_schema=schema,
-            )
+            candidates.append((qualified, remote_name, tool))
 
+        screen = _BoundedScreen(self.screen or _default_screen, self.discovery_concurrency)
+        try:
+            async with asyncio.timeout(self.discovery_timeout_seconds):
+                admitted = await asyncio.gather(
+                    *(
+                        self._admit(server_id, qualified, remote_name, tool, screen)
+                        for qualified, remote_name, tool in candidates
+                    )
+                )
+        except TimeoutError:
+            raise ExternalDiscoveryTimeoutError(
+                f"{server_id!r} answered and advertised {len(candidates)} tool(s), but "
+                "screening their descriptions and argument schemas on the TOOL_RESULT "
+                f"rail did not finish within {self.discovery_timeout_seconds:g}s "
+                f"({screen.completed} of {screen.started} screenings came back). "
+                "Nothing was recorded, so whatever was already admitted for this peer "
+                "is unchanged."
+            ) from None
+
+        recorded = {tool.qualified_name: tool for tool in admitted if tool is not None}
         for name in [n for n, t in self._tools.items() if t.server_id == server_id]:
             del self._tools[name]
         self._tools.update(recorded)
         return [recorded[key] for key in sorted(recorded)]
+
+    async def _admit(
+        self,
+        server_id: str,
+        qualified: str,
+        remote_name: str,
+        tool: Any,  # noqa: ANN401 - SDK Tool
+        screen: ScreenFn,
+    ) -> ExternalTool | None:
+        """Screen one advertised tool, returning it only if every rail let it through."""
+        description = str(getattr(tool, "description", "") or "")
+        raw_schema = dict(getattr(tool, "input_schema", None) or {"type": "object"})
+        verdict, schema = await asyncio.gather(
+            screen(description, qualified),
+            _screen_schema(raw_schema, qualified, screen),
+        )
+        if verdict.verdict is GuardVerdict.BLOCK:
+            logger.error(
+                "MCP client: the TOOL_RESULT rail BLOCKED the description of %r "
+                "(layer=%s): %s — the tool is not admitted",
+                qualified,
+                verdict.layer,
+                verdict.reason,
+            )
+            return None
+        if schema is None:
+            return None
+        return ExternalTool(
+            qualified_name=qualified,
+            server_id=server_id,
+            remote_name=remote_name,
+            # The rail's own text: a REDACT verdict means the redacted description
+            # is what may be shown, and passing the original through would mean the
+            # redaction did not happen.
+            description=str(verdict.text if verdict.text is not None else description),
+            input_schema=schema,
+        )
 
     # ── visibility ───────────────────────────────────────────────────────────
 
@@ -988,16 +1095,6 @@ class ExternalToolRegistry:
         return ToolActionResult(ok=False, changed=False, summary=summary)
 
 
-class _SchemaBlocked(Exception):
-    """Internal signal: the rail blocked one prose field inside a peer's schema."""
-
-    def __init__(self, reason: str, layer: str) -> None:
-        """Carry the rail's own reason and layer up to the one place that logs them."""
-        super().__init__(reason)
-        self.reason = reason
-        self.layer = layer
-
-
 #: Schema keys whose value is **prose the model reads**, and which can therefore be
 #: rewritten with the rail's redacted text without changing what the tool means. Every
 #: other string in a schema (a property name, an ``enum`` member, a ``pattern``, a
@@ -1027,6 +1124,47 @@ def _schema_contract_text(node: Any) -> list[str]:  # noqa: ANN401 - arbitrary p
     elif isinstance(node, str):
         out.append(node)
     return out
+
+
+def _schema_prose_text(node: Any) -> list[str]:  # noqa: ANN401 - arbitrary peer JSON
+    """Return every rewritable prose string in ``node``, in traversal order.
+
+    The order is the contract between this function and :func:`_rewrite_prose`: the
+    first walk collects the strings to screen, the second puts the rail's verdicts back
+    where they came from. Both walk a dict in insertion order and a list in index order,
+    so the *n*-th string collected is the *n*-th slot written.
+    """
+    out: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _SCHEMA_PROSE_KEYS and isinstance(value, str):
+                out.append(value)
+            else:
+                out.extend(_schema_prose_text(value))
+    elif isinstance(node, list):
+        for item in node:
+            out.extend(_schema_prose_text(item))
+    return out
+
+
+def _rewrite_prose(node: Any, replacements: Iterator[str]) -> Any:  # noqa: ANN401
+    """Rebuild ``node`` with each prose string replaced by the next screened one.
+
+    The mirror of :func:`_schema_prose_text` — same traversal, same order — so a REDACT
+    verdict lands on the field it was given, and nothing outside
+    :data:`_SCHEMA_PROSE_KEYS` is touched.
+    """
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key in _SCHEMA_PROSE_KEYS and isinstance(value, str):
+                out[key] = next(replacements)
+            else:
+                out[key] = _rewrite_prose(value, replacements)
+        return out
+    if isinstance(node, list):
+        return [_rewrite_prose(item, replacements) for item in node]
+    return node
 
 
 async def _screen_schema(
@@ -1060,45 +1198,44 @@ async def _screen_schema(
         case the tool is not admitted at all, exactly as for a blocked description.
     """
     contract = "\n".join(_schema_contract_text(schema))
+    prose = _schema_prose_text(schema)
+    # One round trip for the whole schema rather than one per string in it. The
+    # contract and every prose field are independent inputs to the same rail, and
+    # screening them in sequence only added up their latencies — see
+    # :meth:`ExternalToolRegistry.discover`. Order is gather's, which is the order the
+    # jobs were built in, which is the order :func:`_rewrite_prose` walks.
+    jobs: list[Awaitable[GuardResult]] = []
     if contract.strip():
-        verdict = await screen(contract, qualified_name)
-        if verdict.verdict is GuardVerdict.BLOCK:
+        jobs.append(screen(contract, qualified_name))
+    jobs.extend(screen(text, qualified_name) for text in prose)
+    verdicts = list(await asyncio.gather(*jobs))
+
+    if contract.strip():
+        contract_verdict = verdicts.pop(0)
+        if contract_verdict.verdict is GuardVerdict.BLOCK:
             logger.error(
                 "MCP client: the TOOL_RESULT rail BLOCKED the argument schema of %r "
                 "(layer=%s): %s — the tool is not admitted",
+                qualified_name,
+                contract_verdict.layer,
+                contract_verdict.reason,
+            )
+            return None
+
+    rewritten: list[str] = []
+    for original, verdict in zip(prose, verdicts, strict=True):
+        if verdict.verdict is GuardVerdict.BLOCK:
+            logger.error(
+                "MCP client: the TOOL_RESULT rail BLOCKED a description inside the "
+                "argument schema of %r (layer=%s): %s — the tool is not admitted",
                 qualified_name,
                 verdict.layer,
                 verdict.reason,
             )
             return None
+        rewritten.append(str(verdict.text if verdict.text is not None else original))
 
-    async def _walk(node: Any) -> Any:  # noqa: ANN401 - arbitrary peer JSON
-        if isinstance(node, dict):
-            out: dict[str, Any] = {}
-            for key, value in node.items():
-                if key in _SCHEMA_PROSE_KEYS and isinstance(value, str):
-                    result = await screen(value, qualified_name)
-                    if result.verdict is GuardVerdict.BLOCK:
-                        raise _SchemaBlocked(str(result.reason), str(result.layer or ""))
-                    out[key] = str(result.text if result.text is not None else value)
-                else:
-                    out[key] = await _walk(value)
-            return out
-        if isinstance(node, list):
-            return [await _walk(item) for item in node]
-        return node
-
-    try:
-        return dict(await _walk(schema))
-    except _SchemaBlocked as blocked:
-        logger.error(
-            "MCP client: the TOOL_RESULT rail BLOCKED a description inside the "
-            "argument schema of %r (layer=%s): %s — the tool is not admitted",
-            qualified_name,
-            blocked.layer,
-            blocked.reason,
-        )
-        return None
+    return dict(_rewrite_prose(schema, iter(rewritten)))
 
 
 def _payload_text(result: Any) -> str:  # noqa: ANN401 - SDK CallToolResult
@@ -1179,10 +1316,17 @@ def get_registry() -> ExternalToolRegistry:
     if _registry is None:
         from app.config import get_settings  # noqa: PLC0415 - avoid an import cycle
 
+        settings = get_settings()
         _registry = ExternalToolRegistry(
             call_timeout_seconds=float(
-                getattr(get_settings(), "mcp_client_timeout_seconds", 30.0)
-            )
+                getattr(settings, "mcp_client_timeout_seconds", 30.0)
+            ),
+            discovery_timeout_seconds=float(
+                getattr(settings, "mcp_discovery_timeout_seconds", 60.0)
+            ),
+            discovery_concurrency=int(
+                getattr(settings, "mcp_discovery_concurrency", 16)
+            ),
         )
         for entry in _configured_servers():
             try:

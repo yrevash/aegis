@@ -113,7 +113,7 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
   const measured = state.nodeLedger.length > 0
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="@container/trace flex flex-col gap-3">
       <Decisions state={state} />
 
       <GuardrailReveal guardrails={state.guardrails} />
@@ -141,7 +141,9 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
         </Card>
       )}
 
-      <div className="grid gap-3 lg:grid-cols-2">
+      {/* Container, not `lg:` — this pair sits inside the thread column, and a viewport
+          breakpoint firing at a 1024px *window* put two 270px panels side by side. */}
+      <div className="grid gap-3 @[52rem]/trace:grid-cols-2">
         <div className="h-[380px] min-w-0">
           <Suspense
             fallback={

@@ -608,7 +608,7 @@ async def memory_correct_fact(
             # filter of ``None`` means platform authority, so the row's own tenant is
             # the scope the correction is written under (``get_fact``'s tenant clause is
             # NULL-symmetric, and ``None`` there would mean "the null-tenant scope").
-            scope = _authorize_row_subject(auth, row.subject_id, "Unknown fact.")
+            scope = await _authorize_row_subject(auth, row.subject_id, "Unknown fact.")
             subject = row.subject_id
             tenant_id = scope if scope is not None else row.tenant_id
             await set_tenant_scope(session, tenant_id)

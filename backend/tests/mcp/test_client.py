@@ -22,6 +22,8 @@ The claims, and the mutation that breaks each one:
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Annotated
 
 import pytest
@@ -46,6 +48,7 @@ from app.adapter.tools import (  # noqa: E402
 from app.api.schemas import RiskLevel  # noqa: E402
 from app.mcp.client import (  # noqa: E402
     EXTERNAL_PREFIX,
+    ExternalDiscoveryTimeoutError,
     ExternalServerSpec,
     ExternalToolCollisionError,
     ExternalToolRegistry,
@@ -701,3 +704,146 @@ async def test_a_clean_schema_survives_screening_intact():
     tools = await registry.discover("acme")
     assert [t.qualified_name for t in tools] == ["mcp__acme__search"]
     assert "q" in tools[0].input_schema.get("properties", {})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Discovery is bounded, and it is not a queue
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class CataloguePeer:
+    """A peer with several described, described-argument tools — a normal catalogue.
+
+    The point of more than one tool is the arithmetic: admitting a peer costs one rail
+    screening per description and per schema string, so the *shape* of the work is a
+    fan-out, and a fan-out run as a queue costs the sum of its parts.
+    """
+
+    def __init__(self) -> None:
+        self.server = MCPServer("catalogue-peer")
+
+        @self.server.tool(description="Search the acme corpus.")
+        def search(q: Annotated[str, Field(description="What to look for.")]) -> str:  # noqa: ANN202
+            return "found"
+
+        @self.server.tool(description="Open one acme record.")
+        def open_record(  # noqa: ANN202
+            record_id: Annotated[str, Field(description="The record's id.")],
+        ) -> str:
+            return "opened"
+
+        @self.server.tool(description="Summarise an acme record.")
+        def summarise(  # noqa: ANN202
+            record_id: Annotated[str, Field(description="The record's id.")],
+        ) -> str:
+            return "summarised"
+
+    def factory(self, _spec: ExternalServerSpec, _credential: str | None):  # noqa: ANN201
+        return Client(self.server)
+
+
+class SlowRail:
+    """A ``TOOL_RESULT`` rail with the real one's defining property: it takes time.
+
+    The real rail is an LLM classification — seconds each, measured between 2 and 40 on
+    this deployment. A fake that returns instantly cannot fail the way the real one
+    does, so this one sleeps and records how many screenings were ever in flight at
+    once, which is the number the concurrency claim is actually about.
+    """
+
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+        self.calls = 0
+        self.in_flight = 0
+        self.peak = 0
+
+    async def __call__(self, text: str, _tool: str) -> GuardResult:
+        self.calls += 1
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            await asyncio.sleep(self.delay)
+        finally:
+            self.in_flight -= 1
+        return GuardResult(verdict=GuardVerdict.PASS, reason="clean", text=text)
+
+
+def _catalogue_registry(rail: SlowRail, **kwargs) -> ExternalToolRegistry:  # noqa: ANN003
+    peer = CataloguePeer()
+    registry = ExternalToolRegistry(client_factory=peer.factory, screen=rail, **kwargs)
+    registry.register_server(ExternalServerSpec(server_id="acme", label="Acme tools"))
+    return registry
+
+
+async def test_discovery_screens_a_peers_strings_together_not_one_at_a_time():
+    """A peer's strings are independent inputs, so admitting them is a fan-out.
+
+    This is the defect behind "Test hangs forever": against this deployment's own MCP
+    server, four tools meant twenty-eight rail screenings run one after another, 329
+    seconds of wall clock, and an HTTP response that never landed.
+
+    MUTATION: put :meth:`~app.mcp.client.ExternalToolRegistry.discover` back on a
+    ``for`` loop with ``await`` in it (or make ``_screen_schema`` walk the schema field
+    by field again) and this fails twice over — ``peak`` drops to 1 and the elapsed time
+    becomes the sum of every screening.
+    """
+    rail = SlowRail(delay=0.05)
+    registry = _catalogue_registry(rail)
+
+    started = time.monotonic()
+    tools = await registry.discover("acme")
+    elapsed = time.monotonic() - started
+
+    assert len(tools) == 3, "the peer's catalogue was not admitted"
+    assert rail.calls >= 9, f"only {rail.calls} strings were screened; the fan-out shrank"
+    assert rail.peak > 1, "screenings ran one at a time — the queue is back"
+    serial = rail.calls * rail.delay
+    assert elapsed < serial / 2, (
+        f"discovery took {elapsed:.2f}s of a {serial:.2f}s serial budget — it is queueing"
+    )
+
+
+async def test_screening_concurrency_has_a_ceiling():
+    """Together, but not unboundedly: one button press is not a hundred model calls."""
+    rail = SlowRail(delay=0.05)
+    registry = _catalogue_registry(rail, discovery_concurrency=2)
+    await registry.discover("acme")
+    assert rail.peak <= 2, f"{rail.peak} screenings ran at once against a ceiling of 2"
+
+
+async def test_discovery_refuses_by_the_clock_and_says_what_ran_out():
+    """Test must always answer. A rail that never returns is answered, not waited on.
+
+    MUTATION: remove the ``asyncio.timeout`` around the gather in ``discover`` and this
+    hangs — which is exactly the bug, reproduced against a real peer.
+    """
+    rail = SlowRail(delay=30.0)
+    registry = _catalogue_registry(rail, discovery_timeout_seconds=0.2)
+
+    started = time.monotonic()
+    with pytest.raises(ExternalDiscoveryTimeoutError) as caught:
+        await registry.discover("acme")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"the refusal itself took {elapsed:.1f}s"
+    message = str(caught.value)
+    assert "'acme'" in message, message
+    assert "0.2s" in message, message
+    assert "3 tool(s)" in message, message
+    assert "screenings came back" in message, message
+    assert registry.tools() == [], "a half-screened catalogue was recorded"
+
+
+async def test_a_discovery_that_runs_out_of_time_leaves_the_last_good_one_alone():
+    """A refusal must not withdraw tools that were already admitted and are still fine."""
+    fast = SlowRail(delay=0.0)
+    registry = _catalogue_registry(fast)
+    admitted = [tool.qualified_name for tool in await registry.discover("acme")]
+    assert admitted, "nothing was admitted to begin with"
+
+    registry.screen = SlowRail(delay=30.0)
+    registry.discovery_timeout_seconds = 0.2
+    with pytest.raises(ExternalDiscoveryTimeoutError):
+        await registry.discover("acme")
+
+    assert [tool.qualified_name for tool in registry.tools()] == admitted

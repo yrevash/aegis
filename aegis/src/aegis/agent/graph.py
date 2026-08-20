@@ -828,8 +828,21 @@ def build_agent(
             )
         nodes = [n.model_dump() for n in result.graph_delta.nodes]
         edges = [e.model_dump() for e in result.graph_delta.edges]
+        # ``file_path`` is the document a citation points at, and it is carried here
+        # because the console had no way to name one. Retrieval has had it all along —
+        # every arm writes it into ``Candidate.metadata`` (the dense arm parses it back
+        # off the tenant-tagged path, the lexical arm reads the chunk's own source, else
+        # the document's filename) — but the wire event carried only id/label/score, so
+        # a run grounded in a real PDF rendered as three opaque hashes. ``None`` when the
+        # source genuinely carries no path: a chunk whose provenance was never recorded
+        # renders with no provenance, rather than with a filename we picked for it.
         scored = [
-            {"id": s.id, "label": _snippet(s.text), "score": s.score}
+            {
+                "id": s.id,
+                "label": _snippet(s.text),
+                "score": s.score,
+                "file_path": s.metadata.get("file_path"),
+            }
             for s in result.sources
         ]
         # Wide-recall pool size (N recalled), then the reranked, scored survivors

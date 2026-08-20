@@ -97,7 +97,7 @@ function StageRow({
   return (
     <li
       className={cn(
-        'flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1',
+        '@container/stage flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1',
         lane && 'ml-3 border-l-2 border-blue-100 pl-3',
         stage.running && 'bg-blue-50',
         stage.blocked && 'bg-block/10',
@@ -135,7 +135,7 @@ function StageRow({
         {guard && <ShieldCheck aria-hidden className="size-3.5 shrink-0 text-block-ink" />}
         <span
           className={cn(
-            'min-w-0 shrink truncate text-[0.82rem] sm:w-[11rem] sm:shrink-0',
+            'min-w-0 shrink truncate text-[0.82rem] @[26rem]/stage:w-[11rem] @[26rem]/stage:shrink-0',
             stage.running ? 'font-medium text-foreground' : 'text-muted-foreground',
           )}
           title={stage.node}
@@ -143,7 +143,7 @@ function StageRow({
           {stage.label}
         </span>
 
-        <div className="hidden h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2 sm:block">
+        <div className="hidden h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2 @[26rem]/stage:block">
           <div
             className={cn(
               'relative h-full rounded-full transition-[width] duration-[var(--dur-fast)] ease-linear',
@@ -163,7 +163,7 @@ function StageRow({
         {/* A fixed slot, empty on a non-LLM node, so every bar track ends at the same
             x and the column of durations reads as a column. A model name that reserved
             width only on the rows that had one left the chart ragged. */}
-        <span className="hidden w-[8.5rem] shrink-0 truncate text-right font-mono text-[0.66rem] text-muted-foreground/80 lg:inline-block">
+        <span className="hidden w-[8.5rem] shrink-0 truncate text-right font-mono text-[0.66rem] text-muted-foreground/80 @[44rem]/stage:inline-block">
           {stage.model ?? ''}
         </span>
         <Figure
@@ -174,8 +174,12 @@ function StageRow({
         </Figure>
       </div>
 
-      {/* Below `sm` the label needs the whole line, so the bar takes its own. */}
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2 sm:hidden">
+      {/* In a narrow column the label needs the whole line, so the bar takes its own.
+          This was `sm:hidden` — a **viewport** breakpoint, which fires at 640px of
+          browser however wide the column it is measuring happens to be. That is the
+          class of bug that has now cost this screen three separate defects, so the
+          query is on the row's own container. */}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2 @[26rem]/stage:hidden">
         <div
           className={cn('h-full rounded-full', stage.running ? 'bg-blue-600' : 'bg-blue-400')}
           style={{ width: `${width}%` }}

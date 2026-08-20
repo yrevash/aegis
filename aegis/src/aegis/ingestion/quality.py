@@ -44,6 +44,14 @@ A real document has some: a lead-in before a list, a line ending in a footnote m
 a paragraph broken across a page. So the rate is scored against a floor drawn above what
 correct parses actually measure rather than against zero.
 
+The population this is measured over is prose, and *which blocks are prose is a fact
+about the document*, not a constant. Headings, captions and table Markdown are excluded
+always; list items are excluded only where the document writes them as entries rather
+than sentences, which :func:`lists_are_unpunctuated` reads off the items themselves. That
+distinction is not a refinement — without it the signal reports a document's house style
+instead of its parse, and scored a **0.000** on a parse whose reading order agrees with
+the raw text layer at tau=0.999. See that function for the measurement on both sides.
+
 **3. The heading histogram — for the FLAT case only.** Everything at level 1 across a
 long, structured document means the heading hierarchy is not running, which is a real
 failure mode if :mod:`aegis.ingestion.convert`'s configuration is ever regressed
@@ -117,6 +125,7 @@ __all__ = [
     "assess_parse",
     "fragment_rate",
     "headings_are_flat",
+    "lists_are_unpunctuated",
     "ordering_agreement",
 ]
 
@@ -171,6 +180,21 @@ _FLAT_HEADING_SCORE = 0.5
 #: Prose blocks shorter than this are not scored for fragmentation. A four-word block is
 #: a label, an axis title or a stray line, and it has no clause to end in the middle of.
 _MIN_FRAGMENT_WORDS = 10
+
+#: Scored list items a document needs before :func:`lists_are_unpunctuated` will read a
+#: style off them. Four unpunctuated entries are a coincidence; they are not a convention,
+#: and dropping a document's whole list population on that evidence would be the same
+#: over-reading in the other direction.
+_MIN_STYLED_LIST_ITEMS = 5
+
+#: The share of a document's scored list items that must end in terminal punctuation for
+#: its lists to count as prose. At or above this the list is written in sentences and an
+#: unpunctuated item is genuine fragment evidence; below it the list is a set of entries
+#: and none of them are. Measured on the six real fixtures the two populations do not come
+#: close to this line from either side — the five prose-list documents sit at 74–94%, and
+#: the one glossary document at 16% — so the exact value is not load-bearing and no
+#: fixture is near enough to flip on a small change to it.
+_PUNCTUATED_LIST_SHARE = 0.5
 
 #: What a completed clause ends with, after any closing quote or bracket is peeled off.
 _TERMINAL = frozenset(".!?:;…")
@@ -377,6 +401,84 @@ def _ends_mid_clause(text: str) -> bool:
     return not stripped or stripped[-1] not in _TERMINAL
 
 
+def _substantial_prose(blocks: Iterable[ParsedBlock]) -> list[ParsedBlock]:
+    """Return the blocks long enough, and prose enough, to carry fragment evidence.
+
+    Args:
+        blocks: The parsed blocks.
+
+    Returns:
+        The :attr:`~aegis.ingestion.blocks.BlockKind.TEXT` and
+        :attr:`~aegis.ingestion.blocks.BlockKind.LIST_ITEM` blocks of at least
+        :data:`_MIN_FRAGMENT_WORDS` words, in document order.
+    """
+    return [
+        block
+        for block in blocks
+        if block.kind in {BlockKind.TEXT, BlockKind.LIST_ITEM}
+        and len(block.text.split()) >= _MIN_FRAGMENT_WORDS
+    ]
+
+
+def lists_are_unpunctuated(blocks: Iterable[ParsedBlock]) -> bool:
+    """Whether this document's list items are unpunctuated *by convention*.
+
+    A list item is not one kind of thing. In a regulation it is a sentence — "(a) The
+    mechanism shall be funded in a manner..." — and it ends in a full stop like any other
+    sentence, so an unpunctuated one is real evidence that a paragraph was cut. In a
+    glossary, a taxonomy or a statistics breakdown it is an *entry*: "Submitted via: How
+    the complaint was submitted to the CFPB", "Managing the loan or lease ( Billing, late
+    fees, damage or loss)". Those are complete, and they never end in a full stop,
+    because entries in a list do not.
+
+    Counting the second kind as fragments does not measure the parse — it measures the
+    document's house style. Measured on ``docling==2.120.3``: 31 of the 37 scored list
+    items in ``cfpb-consumer-complaint-database-breakdown-2013.pdf`` end without terminal
+    punctuation, which put :func:`fragment_rate` at **0.660** and, through
+    :data:`FRAGMENT_CEILING`, put :attr:`ParseQuality.confidence` at **0.000** — on a
+    document whose reading order agrees with the raw PDFium layer at **tau=0.999 over 453
+    anchors across all 10 pages**. That is as good a parse as this corpus contains, and
+    the gate called it worthless. A score of 0.000 on a good parse is worse than no score,
+    because it is what teaches an operator to stop reading the column.
+
+    So the style is **read off the document itself** rather than assumed. Where most
+    items are punctuated the list is prose, and every item stays in the population; where
+    most are not, the list is a set of entries and carries no fragment evidence, so the
+    rate is measured over running text alone.
+
+    **What this deliberately does not do is move a calibration constant.** Measured over
+    all six real fixtures, every document whose lists read as prose keeps a *byte-for-byte
+    identical* fragment rate — 0.094, 0.221, 0.204, 0.275, 0.233 — so :data:`FRAGMENT_FLOOR`
+    and :data:`FRAGMENT_CEILING` still sit exactly where they were measured to belong.
+    Only the glossary document moves, 0.660 → 0.000.
+
+    **And it does not disable the signal.** With every prose block of those same six
+    fixtures deliberately severed at an interior word — the cut this signal exists to
+    catch — the rate still rises to 0.375, 0.412, 0.500, 0.529, 0.545 and 0.546, every one
+    of them past :data:`FRAGMENT_FLOOR` and the first of them still scoring 0.64, under
+    :data:`LOW_CONFIDENCE`. The glossary document included: severed, it flags.
+
+    Args:
+        blocks: The parsed blocks.
+
+    Returns:
+        ``True`` when the document has enough list items to have a style
+        (:data:`_MIN_STYLED_LIST_ITEMS`) and fewer than :data:`_PUNCTUATED_LIST_SHARE` of
+        them end in terminal punctuation. ``False`` for a document whose lists read as
+        sentences, and for one with too few items to tell — too few is not evidence, and
+        the safe default is to keep scoring them.
+    """
+    items = [
+        block
+        for block in _substantial_prose(blocks)
+        if block.kind is BlockKind.LIST_ITEM
+    ]
+    if len(items) < _MIN_STYLED_LIST_ITEMS:
+        return False
+    punctuated = sum(1 for block in items if not _ends_mid_clause(block.text))
+    return punctuated / len(items) < _PUNCTUATED_LIST_SHARE
+
+
 def fragment_rate(blocks: Iterable[ParsedBlock]) -> tuple[float, int]:
     """Return the share of substantial prose blocks that end mid-clause.
 
@@ -386,6 +488,13 @@ def fragment_rate(blocks: Iterable[ParsedBlock]) -> tuple[float, int]:
     a full stop by nature and would drown the signal in blocks that are not fragments at
     all.
 
+    List items are the same problem one level down, and only sometimes: they end without
+    a full stop by nature in a glossary or a taxonomy, and *not* in a regulation, where
+    each one is a sentence. Which of the two this document writes is read off the document
+    by :func:`lists_are_unpunctuated`, and an unpunctuated-by-convention list is dropped
+    from the population rather than counted as 31 fragments. See that function for the
+    measurement, and for why no calibration constant had to move.
+
     Args:
         blocks: The parsed blocks.
 
@@ -394,12 +503,9 @@ def fragment_rate(blocks: Iterable[ParsedBlock]) -> tuple[float, int]:
         ``(0.0, 0)`` when nothing qualifies, because "no prose" is not evidence of
         fragmentation.
     """
-    prose = [
-        block
-        for block in blocks
-        if block.kind in {BlockKind.TEXT, BlockKind.LIST_ITEM}
-        and len(block.text.split()) >= _MIN_FRAGMENT_WORDS
-    ]
+    prose = _substantial_prose(blocks)
+    if lists_are_unpunctuated(prose):
+        prose = [block for block in prose if block.kind is not BlockKind.LIST_ITEM]
     if not prose:
         return 0.0, 0
     fragments = sum(1 for block in prose if _ends_mid_clause(block.text))
@@ -445,6 +551,7 @@ def assess_parse(document: ParsedDocument, page_text: Sequence[str]) -> ParseQua
     """
     ordering, pages, anchors = ordering_agreement(document, page_text)
     rate, scored = fragment_rate(document.blocks)
+    entry_lists = lists_are_unpunctuated(document.blocks)
     histogram = document.heading_histogram
     flat = headings_are_flat(histogram, page_count=document.page_count)
 
@@ -479,6 +586,16 @@ def assess_parse(document: ParsedDocument, page_text: Sequence[str]) -> ParseQua
         scores.append(fragments)
         reasons.append(
             f"{rate:.0%} of {scored} prose block(s) end mid-clause"
+            + (
+                # Said out loud, because a rate measured over a smaller population than
+                # the reader expects is exactly the kind of quiet narrowing this module
+                # exists to refuse. It names what was dropped and why.
+                "; this document's list items are unpunctuated by convention, so they "
+                "are entries rather than sentences and carry no fragment evidence — "
+                "the rate is over running text alone"
+                if entry_lists
+                else ""
+            )
             + ("" if fragments == 1.0 else " — paragraphs are being cut, not read")
         )
     else:

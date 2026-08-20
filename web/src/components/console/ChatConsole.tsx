@@ -1,8 +1,8 @@
 'use client'
 
-import { BookOpen, ShieldAlert, ShieldCheck, Workflow } from 'lucide-react'
+import { BookOpen, Brain, ShieldAlert, ShieldCheck, Workflow } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
 import { ApprovalCard } from '@/components/approval/ApprovalCard'
 import { SkillsDrawer } from '@/components/skills/SkillsDrawer'
@@ -11,11 +11,13 @@ import { AegisLockup } from '@/components/brand/AegisLockup'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { TrustBar } from '@/components/layout/TrustBar'
-import { getGraph } from '@/lib/api/client'
+import { useAsync } from '@/components/memory/useAsync'
+import { getGraph, getMemoryFacts } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import { getPersona, personasForRole } from '@/config/personas'
 import { useMetrics } from '@/state/useMetrics'
+import type { MemoryFactsResponse } from '@/lib/api/memory'
 import type { ApprovalDecision, GraphResponse, MetricsResponse } from '@/lib/api/types'
 import type { Role } from '@/lib/stream'
 import type { RunState } from '@/state/runReducer'
@@ -28,8 +30,11 @@ import { AssistantBot } from './AssistantBot'
 import { Composer } from './Composer'
 import { attachmentVerdict, type TurnAttachment } from './composerAttachment'
 import { FlowCanvas } from './FlowCanvas'
-import { MemoryRail } from './MemoryRail'
+import { MemoryRail, memoryAccessOf } from './MemoryRail'
 import { memorySubjectOf } from './memorySubject'
+import { RunPreview } from './RunPreview'
+import { digestFacts } from './factDigest'
+import { memoryAvailable } from './memoryCards'
 import { beatFromSignal } from './motion'
 import { AnswerBlock, ResultTabs, type ResultTabId } from './ResultTabs'
 import { RunStages } from './RunStages'
@@ -43,6 +48,10 @@ import { useChatThread } from './useChatThread'
 
 const EMPTY_GRAPH: GraphResponse = { nodes: [], edges: [] }
 
+/** Where the memory rail's open/closed choice is remembered for this browser. */
+const RAIL_PREF_KEY = 'aegis.console.memoryRail'
+
+
 /**
  * A question, as the person wrote it — set as the turn's own heading.
  *
@@ -54,7 +63,7 @@ const EMPTY_GRAPH: GraphResponse = { nodes: [], edges: [] }
 function Question({ text, meta }: { text: string; meta: string }): ReactElement {
   return (
     <div className="flex flex-col gap-1">
-      <h2 className="font-display text-lg leading-snug font-semibold tracking-tight text-balance text-foreground sm:text-xl">
+      <h2 className="font-display text-lg leading-snug font-semibold tracking-tight text-balance text-foreground @[40rem]/turn:text-xl">
         {text}
       </h2>
       <span className="font-mono text-[0.68rem] text-muted-foreground">{meta}</span>
@@ -172,8 +181,6 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
 
       {turn.attachment !== null && <AttachmentChip attachment={turn.attachment} />}
 
-      {running && <TrustBar state={run} beat={beat} idle={false} />}
-
       <StreamBanners state={run} />
 
       {run.error !== null && (
@@ -186,6 +193,11 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
           It is the first thing that has anything to say: the input rail takes three
           seconds before a single agent exists, and this is what fills them. */}
       <RunStages state={run} />
+
+      {/* Under the spine, not above it. The spine is what is actually happening; the
+          trust stack is a summary of what the run will have proved by the end, and it
+          was sitting between the question and the only live thing on the screen. */}
+      {running && <TrustBar state={run} beat={beat} idle={false} />}
 
       {/* Again a container query: the activity rail only earns a column when the turn
           itself is wide, which at 1440px with both rails out it is not. */}
@@ -254,12 +266,43 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
 }
 
 /**
- * The idle console — the wordmark, one field, and the four axes of a turn beneath it.
+ * The idle console — one field, the seed questions, and the path the answer will take.
  *
- * No placeholder cards, no sample results, no invented domain copy: an empty console has
- * nothing measured to show, and drawing something would be the only untrue thing on the
- * screen. What it carries is the one action that fills it, and the adapter's own seed
- * questions, which are real configuration rather than a fabricated example.
+ * ## The complaint this rebuild answers
+ *
+ * The owner's verdict on the shipped console was *"going so far down, full memory being
+ * seen"*. Both halves were this block's fault, and neither was about this block's own
+ * content.
+ *
+ * The console was a three-column **grid** whose row height is the tallest column, and
+ * the tallest column was the memory rail rendering every fact it held as its own
+ * expanded card. That made the grid row 2,000px on a subject with a dozen facts. This
+ * block, sitting in the middle column with `justify-center`, then centred itself against
+ * that 2,000px — so an idle console with nothing on it put its own composer a thousand
+ * pixels down, under a screen of white, beside a rail that ran off the bottom of the
+ * document. The "vast empty void" and the "going so far down" were one bug wearing two
+ * faces.
+ *
+ * The fix is structural and lives in {@link ChatConsole}: the console is a **fixed-height
+ * frame** now, each column scrolls inside it, and the document does not scroll at all at
+ * `lg` and up. Centring is correct again because it centres against the viewport rather
+ * than against whatever the rail happened to fetch.
+ *
+ * ## What is on screen, and why each thing survived
+ *
+ * - **The composer**, at hero size, the only thing with a shadow and the only thing with
+ *   a filled button. It is the screen's whole job.
+ * - **The lockup and one line**, because a console with no thread needs to say what it
+ *   is.
+ * - **The adapter's own seed questions** — real configuration, not fabricated examples,
+ *   and the fastest way for someone watching to see a real run.
+ * - **{@link RunPreview}** — the four beats and twelve named rails a question passes
+ *   through. It carries no figures at all, because nothing has been measured yet, and it
+ *   is the same spine {@link RunStages} fills in the moment a question is sent.
+ *
+ * Everything else — memory, activity, stages, lanes, trace — is absent until there is a
+ * run to talk about, or one click away behind the header. No placeholder cards, no
+ * sample results, no invented domain copy.
  */
 function IdleConsole({
   children,
@@ -276,34 +319,107 @@ function IdleConsole({
       initial={reduced ? false : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduced ? 0 : 0.28, ease: [0.16, 1, 0.3, 1] }}
-      className="flex min-w-0 flex-1 flex-col items-center justify-center gap-6 px-2 py-10 sm:py-16"
+      className="flex min-w-0 flex-1 flex-col items-center justify-center gap-5 px-2 py-6"
     >
-      <div className="flex flex-col items-center gap-2 text-center">
-        <AegisLockup size="lg" />
-        <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-          Ask one question. Every step it takes is named, sourced and priced as it happens.
-        </p>
+      <div className="flex w-full max-w-2xl flex-col items-center gap-6">
+        <div className="flex flex-col items-center gap-1.5 text-center">
+          <AegisLockup size="lg" />
+          <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
+            Ask one question. Every step it takes is named, sourced and priced as it
+            happens.
+          </p>
+        </div>
+
+        <div className="w-full">{children}</div>
+
+        {/* The seed chips sit under the composer's own left edge rather than centred.
+            Three questions of three different lengths, centred, read as a ragged stack;
+            aligned to the box they read as suggestions for it. */}
+        {samples.length > 0 && (
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5">
+            <span className="eyebrow mr-1">Try</span>
+            {samples.map((sample) => (
+              <button
+                key={sample}
+                type="button"
+                onClick={() => onPick(sample)}
+                className="max-w-full min-w-0 truncate rounded-full border border-border bg-surface/60 px-3 py-1 text-left font-mono text-[0.7rem] text-muted-foreground outline-none transition-colors hover:border-blue-200 hover:text-blue-700 focus-visible:ring-2 focus-visible:ring-ring"
+                title={sample}
+              >
+                {sample}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="w-full max-w-3xl">{children}</div>
-
-      {samples.length > 0 && (
-        <div className="flex w-full max-w-3xl min-w-0 flex-wrap items-center justify-center gap-1.5">
-          <span className="eyebrow mr-1">Try</span>
-          {samples.map((sample) => (
-            <button
-              key={sample}
-              type="button"
-              onClick={() => onPick(sample)}
-              className="max-w-full min-w-0 truncate rounded-full border border-border bg-surface/60 px-3 py-1 text-left font-mono text-[0.7rem] text-muted-foreground outline-none transition-colors hover:border-blue-200 hover:text-blue-700 focus-visible:ring-2 focus-visible:ring-ring"
-              title={sample}
-            >
-              {sample}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* The one thing an empty console can say that is true. Held to the composer's
+          own width so the two read as one block rather than as a page of panels. */}
+      <div className="mt-2 w-full max-w-2xl border-t border-border pt-4">
+        <RunPreview />
+      </div>
     </motion.div>
+  )
+}
+
+/**
+ * The memory toggle — a chip that states what the agent holds, and opens the rail.
+ *
+ * ## Why the rail is closed by default now
+ *
+ * It was open, and it was the tallest thing on an idle console. The rail is *context*:
+ * it is what the agent knows about you, which is worth a glance and is never the reason
+ * anybody opened this screen. A screen whose one job is to take a question should not
+ * spend a third of its width and all of its height on a list of facts nobody asked to
+ * read.
+ *
+ * So the rail opens on a click, and the chip is what makes that acceptable: it carries
+ * the count, so the record is *stated* even while it is closed, and while a run is in
+ * flight it carries what that run actually pulled out of memory instead. The choice is
+ * remembered for the browser, so somebody who wants it open never has to open it twice.
+ *
+ * Both figures are the wire's — `is_valid` rows from `GET /memory/facts`, and
+ * `recalled_fact_count` from the run's own `memory` event. When neither has answered
+ * yet the chip states no number at all rather than a zero.
+ */
+function MemoryChip({
+  open,
+  count,
+  recalled,
+  onToggle,
+}: {
+  open: boolean
+  /** Current facts the store holds, or null while the read is in flight or refused. */
+  count: number | null
+  /** Facts the newest run recalled, or null when memory did not run. */
+  recalled: number | null
+  onToggle: () => void
+}): ReactElement {
+  const figure = recalled ?? count
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      data-memory-toggle=""
+      title={
+        recalled !== null
+          ? 'What this run recalled, and everything the agent has kept about you'
+          : 'What the agent has kept about you'
+      }
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[0.78rem] font-medium outline-none transition-colors duration-[var(--dur-fast)] focus-visible:ring-2 focus-visible:ring-ring',
+        open
+          ? 'border-blue-200 bg-blue-50 text-blue-700'
+          : 'border-border bg-surface/70 text-muted-foreground hover:border-blue-200 hover:text-blue-700',
+      )}
+    >
+      <Brain aria-hidden className="size-3.5" />
+      {recalled !== null ? 'Recalled' : 'What I know'}
+      {figure !== null && (
+        <span className="tabular font-mono text-[0.72rem]">{figure}</span>
+      )}
+    </button>
   )
 }
 
@@ -412,8 +528,35 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   // Bumped every time a run settles. The budget line re-reads on it rather than on a
   // timer, because a settled run is the only thing that can have moved the figure.
   const [budgetKey, setBudgetKey] = useState(0)
+  // Whether the memory rail is on screen. Closed by default — see {@link MemoryChip} —
+  // and remembered for the browser, so opening it is a decision somebody makes once.
+  const [railOpen, setRailOpen] = useState(false)
   const threadEndRef = useRef<HTMLDivElement>(null)
   const threadRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setRailOpen(window.localStorage.getItem(RAIL_PREF_KEY) === 'open')
+  }, [])
+
+  const rememberRail = (open: boolean): void => {
+    try {
+      window.localStorage.setItem(RAIL_PREF_KEY, open ? 'open' : 'closed')
+    } catch {
+      // A browser with storage denied still gets the toggle; it just forgets it.
+    }
+  }
+
+  const toggleRail = useCallback((): void => {
+    setRailOpen((was) => {
+      rememberRail(!was)
+      return !was
+    })
+  }, [])
+
+  const closeRail = useCallback((): void => {
+    rememberRail(false)
+    setRailOpen(false)
+  }, [])
 
   const wasRunning = useRef(false)
   useEffect(() => {
@@ -463,15 +606,22 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   // answer and its tabs are the thing to be looking at.
   useEffect(() => {
     if (view !== 'run') return
-    if (chat.running) {
-      const turns = threadRef.current?.querySelectorAll('[data-turn]')
-      const newest = turns?.[turns.length - 1]
-      if (newest !== undefined) {
-        newest.scrollIntoView({ block: 'start' })
-        return
-      }
+    const turns = threadRef.current?.querySelectorAll('[data-turn]')
+    const newest = turns?.[turns.length - 1]
+    if (newest === undefined) {
+      threadEndRef.current?.scrollIntoView({ block: 'end' })
+      return
     }
-    threadEndRef.current?.scrollIntoView({ block: 'end' })
+    if (chat.running) {
+      newest.scrollIntoView({ block: 'start' })
+      return
+    }
+    // Settled: the answer, not the end of the turn. Scrolling to the end landed the
+    // reader on the tail of "Every ranked source", several screens below the thing they
+    // asked for. The answer block marks itself with `data-answer` for exactly this.
+    const answer = newest.querySelector('[data-answer]')
+    if (answer !== null) answer.scrollIntoView({ block: 'start' })
+    else newest.scrollIntoView({ block: 'start' })
   }, [turnCount, chat.running, view])
 
   const send = (question: string, attachment: TurnAttachment | null = null): void => {
@@ -516,10 +666,63 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
   // The subject `/memory/*` is keyed on — read from the bearer's own claim, so the rail
   // asks for the one record this sign-in is allowed to see.
   const memorySubject = memorySubjectOf(auth)
+
+  // The rail's read of the durable facts, owned here rather than inside the rail.
+  //
+  // The header chip states the count while the rail is **closed**, so the read has to
+  // outlive the rail's mount. It is still one request answering one question: it is the
+  // digest's content, the probe that decides whether any memory card is offered, and
+  // the chip's figure.
+  const facts = useAsync<MemoryFactsResponse>(
+    () =>
+      memorySubject === null
+        ? Promise.reject(new Error('This sign-in owns no memory subject.'))
+        : getMemoryFacts(token, memorySubject, true),
+    [token, memorySubject],
+  )
+  const factCount =
+    facts.state.status === 'ready' ? digestFacts(facts.state.data.rows).current : null
+  // The chip follows the rail's own rule: a reading that is refused, or a bearer with no
+  // memory subject at all, withdraws the offer rather than opening a panel to say so. A
+  // 500 or a dropped connection does not — that reading is absent right now, not absent
+  // for this person. The demo `client` sign-in is the refused case, and it used to get a
+  // chip whose only content was an apology.
+  const memoryOffered = memoryAvailable(memoryAccessOf(memorySubject, facts.state))
+
   // The Flow tab draws the newest run — the live one while a turn streams, the last one
   // once it has settled. Never an invented empty graph state: `FlowCanvas` handles a
   // run that has not started by drawing the topology with nothing lit.
   const newest: RunState | null = chat.live?.run ?? current?.turns.at(-1)?.run ?? null
+  // What the newest run pulled out of memory. Null means recall did not run — every
+  // turn without a `session_id` — and the chip says nothing rather than zero.
+  const turnRecall = newest?.memory ?? null
+
+  // Between `lg` and `xl` the rail is an overlay, and an overlay that covers the Send
+  // button has to be dismissible the way every other overlay on this screen is. Above
+  // `xl` it is a real column and Escape closing a column would be a surprise, so the
+  // listeners are attached only in the band where it actually floats.
+  const railRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!(railOpen && view !== 'flow')) return
+    if (!window.matchMedia('(min-width: 64rem) and (max-width: 79.98rem)').matches) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closeRail()
+    }
+    const onDown = (event: MouseEvent): void => {
+      if (!(event.target instanceof Element)) return
+      if (railRef.current?.contains(event.target) === true) return
+      // The chip owns the toggle; letting this fire on it would close and reopen in one
+      // click and the rail would look stuck.
+      if (event.target.closest('[data-memory-toggle]') !== null) return
+      closeRail()
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onDown)
+    }
+  }, [railOpen, view, closeRail])
 
   const composer = (
     <Composer
@@ -536,10 +739,38 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
     />
   )
 
+  const railShown = railOpen && view !== 'flow' && memoryOffered
+
   return (
-    <div className="grid min-h-[70vh] gap-4 lg:grid-cols-[13rem_minmax(0,1fr)] xl:grid-cols-[13rem_minmax(0,1fr)_21rem]">
+    /*
+     * The console is a **frame**, not a document.
+     *
+     * It used to be `grid min-h-[70vh]` in normal document flow, and a CSS grid row is
+     * as tall as its tallest column. The tallest column was the memory rail, rendering
+     * every fact the store held as its own expanded card — so a subject with a dozen
+     * facts made the *row* two thousand pixels tall, the idle console scrolled for
+     * several viewports with no run on it, and the composer, centred inside that row,
+     * sat a thousand pixels down beneath a screen of white. One structure, both of the
+     * owner's complaints.
+     *
+     * From `lg` up the console is therefore given exactly the height it has — the
+     * viewport, less the topbar and the shell's own padding — and each column scrolls
+     * inside it. The document does not scroll at all. That is categorical: no number of
+     * facts, chat sessions, stage rows or answer paragraphs can grow the page again,
+     * because the page is not what grows. Below `lg` there are no columns to contain and
+     * it stays in document flow, which is the right behaviour on a phone.
+     *
+     * `8rem` is `h-16` of sticky topbar plus `py-8` twice, from the portal layout.
+     */
+    <div
+      className={cn(
+        'relative flex flex-col gap-4',
+        'lg:grid lg:h-[calc(100dvh-8rem)] lg:grid-cols-[13rem_minmax(0,1fr)] lg:overflow-hidden',
+        railShown && 'xl:grid-cols-[13rem_minmax(0,1fr)_20rem]',
+      )}
+    >
       {/* The rail is a sidebar from lg up, and a compact picker below it. */}
-      <aside className="hidden lg:block">
+      <aside className="hidden lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden">
         <SessionRail
           sessions={chat.thread.sessions}
           activeId={chat.thread.activeSessionId}
@@ -548,7 +779,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
         />
       </aside>
 
-      <div className={cn('flex min-w-0 flex-col gap-3', view === 'flow' && 'xl:col-span-2')}>
+      <div className="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:overflow-hidden">
         <div className="flex items-center gap-2 lg:hidden">
           <label htmlFor="chat-picker" className="sr-only">
             Chat
@@ -570,37 +801,49 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
           </Button>
         </div>
 
+        {/* One header row, in both states, so the console has a chrome that does not
+            move when the first question is sent. Idle has nothing to switch between,
+            so the tabs appear with the thread rather than sitting there disabled. */}
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {!idle && <ViewTabs view={view} onView={setView} />}
+          {!idle && view === 'flow' && (
+            <span className="flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
+              <Workflow aria-hidden className="size-3.5" />
+              The compiled graph, read from the running backend
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {view !== 'flow' && memoryOffered && (
+              <MemoryChip
+                open={railOpen}
+                count={factCount}
+                recalled={turnRecall?.recalled_fact_count ?? null}
+                onToggle={toggleRail}
+              />
+            )}
+            <SkillsButton onOpen={openSkills} />
+          </div>
+        </div>
+
         {idle ? (
-          <>
-            <div className="flex items-center justify-end">
-              <SkillsButton onOpen={openSkills} />
-            </div>
+          <div className="flex min-h-0 flex-1 flex-col lg:overflow-y-auto">
             <IdleConsole samples={samples} onPick={send}>
               {composer}
             </IdleConsole>
-          </>
+          </div>
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-2">
-              <ViewTabs view={view} onView={setView} />
-              {view === 'flow' && (
-                <span className="flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
-                  <Workflow aria-hidden className="size-3.5" />
-                  The compiled graph, read from the running backend
-                </span>
-              )}
-              <div className="ml-auto">
-                <SkillsButton onOpen={openSkills} />
-              </div>
-            </div>
-
+            {/* The thread scrolls **inside** the frame. That also fixes the turn
+                heading: `scrollIntoView` used to park the question under the sticky
+                topbar, because the scroller was the document and the topbar was over
+                it. Here the scroller is this box and its top edge is visible. */}
             <div
               ref={threadRef}
               role="tabpanel"
               id="console-panel-run"
               aria-labelledby="console-tab-run"
               hidden={view !== 'run'}
-              className="flex min-h-0 flex-1 flex-col gap-6"
+              className="flex min-h-0 flex-1 flex-col gap-6 lg:overflow-y-auto lg:pt-0.5 lg:pr-1"
             >
               {current?.restored.map((turn) => (
                 <RestoredTurnView key={`restored-${turn.turnIndex}`} turn={turn} />
@@ -614,7 +857,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
                   onSaveAsSkill={saveAsSkill}
                 />
               ))}
-              <div ref={threadEndRef} className="scroll-mb-48" />
+              <div ref={threadEndRef} className="scroll-mb-8" />
             </div>
 
             {/* Mounted only while it is the selected view, and that is load-bearing
@@ -640,7 +883,11 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
               </div>
             )}
 
-            <div className="sticky bottom-0 bg-background/95 pt-2 pb-1 backdrop-blur">
+            {/* The composer is the frame's footer now, not a sticky bar floating over
+                the thread on a translucent blur. DESIGN.md §1 rules out backdrop-blur
+                on content, and the blur was also what let the assistant's face sit on
+                top of the activity log while a run streamed. */}
+            <div className="shrink-0 border-t border-border bg-background pt-2 pb-1">
               <div className="px-1 pb-1">
                 <AssistantBot running={chat.running} />
               </div>
@@ -650,12 +897,36 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
         )}
       </div>
 
-      {/* What the agent has learned, beside the conversation that taught it. The Flow
-          tab is the one view that wants the width back: a fourteen-layer graph in a
-          third of the page is a graph nobody can read. */}
-      {view !== 'flow' && (
-        <div className="min-w-0 lg:col-span-2 xl:col-span-1">
-          <MemoryRail token={token} subject={memorySubject} />
+      {/*
+        What the agent has learned — context beside the conversation, never the
+        conversation itself.
+
+        Three widths, three behaviours. Below `lg` it stacks under the thread in
+        document flow. At `lg` there is no room for a third column without squeezing
+        the thread to nothing, so it is an overlay panel on the right of the frame.
+        From `xl` it is a real grid column. The Flow tab takes the width back either
+        way: a fourteen-layer graph in two thirds of the page is a graph nobody can
+        read.
+      */}
+      {railShown && (
+        <div
+          ref={railRef}
+          className={cn(
+            'min-w-0 xl:overflow-y-auto',
+            // `lg:max-xl:` rather than `lg:` overridden by `xl:` — one range, one set of
+            // rules, so nothing depends on which utility the stylesheet emits last.
+            'lg:max-xl:absolute lg:max-xl:inset-y-0 lg:max-xl:right-0 lg:max-xl:z-20',
+            'lg:max-xl:w-[20rem] lg:max-xl:overflow-y-auto lg:max-xl:rounded-lg',
+            'lg:max-xl:border lg:max-xl:border-border lg:max-xl:bg-card lg:max-xl:p-3 lg:max-xl:shadow-pop',
+          )}
+        >
+          <MemoryRail
+            token={token}
+            subject={memorySubject}
+            facts={facts.state}
+            turnRecall={turnRecall}
+            onClose={closeRail}
+          />
         </div>
       )}
 

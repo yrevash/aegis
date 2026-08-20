@@ -51,7 +51,7 @@ from aegis.retrieval.chunk_index import (
     audit_chunk_index,
     publish_chunk_points,
 )
-from aegis.retrieval.types import tenant_metadata_value
+from aegis.retrieval.types import chunk_source_id, tenant_metadata_value
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -205,7 +205,10 @@ async def chunk_points(
             source = meta.get("source") or record["filename"]
             points.append(
                 ChunkPoint(
-                    key=f"{owner}:{meta.get('content_id') or record['id']}",
+                    key=chunk_source_id(
+                        int(record["tenant_id"]),
+                        meta.get("content_id") or record["id"],
+                    ),
                     content=record["content"],
                     file_path=f"{owner}{_TENANT_TAG_SEP}{source}",
                     full_doc_id=str(record["document_id"]),

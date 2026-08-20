@@ -68,10 +68,16 @@ export function BudgetLine({
     >
       <CircleDollarSign aria-hidden className="size-3.5 shrink-0" />
       <span className={cn('truncate', line.measured && 'tabular font-mono')}>{line.text}</span>
+      {/* Always drawn. It used to be `sm:block`, a viewport breakpoint inside a composer
+          that is never as wide as the window. Swapping it for a *container* query
+          collapsed the whole line instead: `container-type: inline-size` carries
+          `contain: inline-size`, and this paragraph is a flex item that sizes to its
+          content, so containing it sized it to nothing. A 64px meter that always shows is
+          the honest fix. */}
       {line.meterable && (
         <span
           aria-hidden
-          className="hidden h-1 w-16 shrink-0 overflow-hidden rounded-full bg-surface-2 sm:block"
+          className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-surface-2"
         >
           <span
             className="block h-full rounded-full bg-blue-200"

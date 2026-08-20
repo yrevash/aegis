@@ -29,6 +29,7 @@ __all__ = [
     "TenantScope",
     "UnresolvedTenantScopeError",
     "UntenantedPrincipalError",
+    "chunk_source_id",
     "principal_tenant_scope",
     "scoped_graph",
     "tenant_collection_name",
@@ -491,3 +492,45 @@ def scoped_graph(
         and edge.target in kept_ids
     ]
     return (kept_nodes, kept_edges)
+
+
+def chunk_source_id(tenant_id: int, content_id: object) -> str:
+    """Return the canonical retrieval id for one stored chunk.
+
+    **One passage must be one source.** RRF
+    (:func:`~aegis.retrieval.fusion.reciprocal_rank_fusion`) merges the recall arms by
+    ``Candidate.id`` and by nothing else, so two arms that recall the same passage under
+    two different ids do not fuse — they survive as two entries with the same text, the
+    same score and two different ids, and the console shows the same citation twice.
+    That is measured, not theorised: a live ``POST /v1/query`` returned six
+    ``scored_sources`` that were three passages, each once as ``t1:<content_id>`` (the
+    dense arm, whose ids come from the index this function's callers wrote) and once as
+    ``"42"`` (the lexical arm, whose ids came straight off ``chunks.id``).
+
+    The id is content-addressed and tenant-prefixed, and both halves earn their place.
+    Content-addressing makes re-publishing unchanged text an overwrite of one key rather
+    than a second copy; the tenant prefix stops two tenants who uploaded the same public
+    filing from colliding in a store whose ids are global.
+
+    Every writer of a chunk id and every reader that must line up with them calls this,
+    so the format lives in exactly one place. The three that used to spell it out
+    themselves are :func:`app.ingestion.stages.index_stage`,
+    :mod:`app.ingestion.vector_index` and
+    :func:`aegis.retrieval.lightrag_backend._keyword_candidate` — the last of which did
+    not spell it out at all, which is what the duplicate citations were.
+
+    Args:
+        tenant_id: The owning tenant. ``chunks.tenant_id`` is ``NOT NULL`` (see
+            :class:`aegis.jobs.models.Chunk`), so a chunk always has one; this takes the
+            raw id rather than the token so no caller has to decide what a missing owner
+            would mean.
+        content_id: The chunk's content hash — ``chunks.meta["content_id"]``, which is
+            :meth:`aegis.retrieval.chunker.ChunkPiece.indexed_id`. Callers pass the row's
+            own primary key as a fallback for a legacy row whose meta predates it; that
+            is honest but *not* interchangeable, so a corpus mixing the two will show the
+            duplicate again for exactly those rows and no others.
+
+    Returns:
+        ``"t<tenant_id>:<content_id>"``.
+    """
+    return f"{tenant_metadata_value(tenant_id)}:{content_id}"

@@ -221,6 +221,14 @@ class ScoredSource(BaseModel):
     id: str = Field(description="Source/chunk identifier.")
     label: str = Field(description="Short snippet of the source text (for display).")
     score: float = Field(description="Rerank relevance score (higher is better).")
+    file_path: str | None = Field(
+        default=None,
+        description=(
+            "The source document this passage came from, e.g. 'quarterly-report.pdf'. "
+            "``None`` when the chunk carries no recorded provenance — a stated absence, "
+            "never a filename chosen on the passage's behalf."
+        ),
+    )
 
 
 class RetrievalStep(_BaseEvent):

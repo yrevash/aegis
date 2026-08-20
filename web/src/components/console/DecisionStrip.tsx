@@ -135,8 +135,14 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
   const hasVerdict = toolCalls.length > 0 || state.approvalQueued !== null
 
   return (
-    <section aria-label="Decision" className="rounded-lg border border-border bg-card">
-      <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+    <section
+      aria-label="Decision"
+      className="@container/decision rounded-lg border border-border bg-card"
+    >
+      {/* Container, not viewport: the strip sits in the thread column, which is about
+          560px at 1440 with the rails out — `sm:grid-cols-3` fired at a 640px window and
+          split it into three 180px cells regardless. */}
+      <div className="grid grid-cols-1 divide-y divide-border @[30rem]/decision:grid-cols-3 @[30rem]/decision:divide-x @[30rem]/decision:divide-y-0">
         <Cell
           label="Guardrails"
           info="Injection, PII and schema checks, on the request and on the answer."

@@ -436,6 +436,23 @@ class Settings(BaseSettings):
     mcp_client_timeout_seconds: float = Field(
         default=30.0, validation_alias="AEGIS_MCP_CLIENT_TIMEOUT_SECONDS"
     )
+    # How long ADMITTING one peer's catalogue may take. Discovery is not one call: every
+    # description and every schema string the peer wrote is screened on the TOOL_RESULT
+    # rail, and each screening is an LLM classification, so the cost scales with the
+    # size of the catalogue rather than with the peer's latency. Measured against this
+    # deployment's own MCP server: four tools, twenty-eight screenings, 329 seconds run
+    # one after another. Without a ceiling the console's "test connection" button has no
+    # bounded answer, which is the one thing it exists to give.
+    mcp_discovery_timeout_seconds: float = Field(
+        default=60.0, validation_alias="AEGIS_MCP_DISCOVERY_TIMEOUT_SECONDS"
+    )
+    # How many rail screenings discovery may have in flight at once. They are
+    # independent classifications of independent strings, so running them one at a time
+    # bought nothing and cost the sum of every latency; the ceiling is here so a large
+    # catalogue cannot turn one button press into a hundred simultaneous model calls.
+    mcp_discovery_concurrency: int = Field(
+        default=16, validation_alias="AEGIS_MCP_DISCOVERY_CONCURRENCY"
+    )
     # Where Aegis serves its OWN MCP endpoint, for the admin console's client (§10.7).
     # Empty by default and deliberately not derived from a guessed path: the server half
     # (§10.4) decides where it mounts, and a console that assumed ``/v1/mcp`` would show

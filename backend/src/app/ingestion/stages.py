@@ -70,7 +70,11 @@ from aegis.retrieval.chunker import DocumentContext, SectionChunk, chunk_section
 from aegis.retrieval.graph_extract import Extractor, build_extractor
 from aegis.retrieval.models import Chunk as RetrievalChunk
 from aegis.retrieval.protocols import CompleteFn, EmbedFn
-from aegis.retrieval.types import TENANT_METADATA_KEY, tenant_metadata_value
+from aegis.retrieval.types import (
+    TENANT_METADATA_KEY,
+    chunk_source_id,
+    tenant_metadata_value,
+)
 from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.exceptions import ApplicationError
@@ -1004,7 +1008,7 @@ async def index_stage(
     vectors = await _document_vectors(session, document_id)
     published = [
         RetrievalChunk(
-            id=f"{owner_token}:{meta.get('content_id') or chunk_id}",
+            id=chunk_source_id(owner, meta.get("content_id") or chunk_id),
             doc_id=str(document_id),
             ordinal=int(meta.get("ordinal", 0)),
             text=content,

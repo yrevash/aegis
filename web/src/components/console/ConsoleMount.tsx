@@ -3,7 +3,6 @@
 import dynamic from 'next/dynamic'
 import type { ReactElement } from 'react'
 
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import type { Role } from '@/lib/stream'
 
@@ -26,13 +25,15 @@ const ChatConsole = dynamic(
 /**
  * Client entry for the Console section — gated on a reachable backend, so the
  * first `getGraph` / `getMetrics` calls only fire once one is known to answer.
+ *
+ * No `TooltipProvider` here. One is mounted at the app root in `auth/Providers`, and a
+ * second provider around one screen is a nested Radix context that buys nothing and can
+ * only ever disagree with the root's `delayDuration`.
  */
 export function ConsoleMount({ role }: { role: Role }): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
-        <ChatConsole role={role} />
-      </TooltipProvider>
+      <ChatConsole role={role} />
     </BackendGate>
   )
 }

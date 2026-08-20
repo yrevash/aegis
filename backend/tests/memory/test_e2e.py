@@ -13,8 +13,10 @@ turn 1
 
 2. **Read/admin API** (ASGI ``client`` + seeded DB, from ``tests/conftest.py``): the
    ``/memory/facts`` and ``/memory/writes`` surfaces return seeded rows; a subject may
-   only read its own memory (cross-subject is 403, cross-tenant admin reads are empty);
-   unauthenticated access is rejected; and ``/memory/forget`` hard-erases + audits.
+   only read its own memory (cross-subject is 403, and so is a tenant admin naming
+   another tenant's subject — the read path answers the same sentence the write path
+   does); unauthenticated access is rejected; and ``/memory/forget`` hard-erases +
+   audits.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from sqlalchemy import func, select
 
 from app.adapter.memory_spec import FACT_EXTRACTION_PROMPT
 from app.core.security import MEMBER, PLATFORM_ADMIN, TENANT_ADMIN, create_access_token
-from app.data import AuditLog, Tenant, get_sessionmaker
+from app.data import AuditLog, Tenant, User, get_sessionmaker
 from app.memory.config import MemoryConfig
 from app.memory.consolidate import enqueue_consolidation, sweep_pending
 from app.memory.stores import (
@@ -259,10 +261,21 @@ async def _seed_memory() -> None:
     key, and now that ``/memory/forget``'s audit row is attributed to the acting tenant
     (audit C, C4) the insert needs the tenant to exist, exactly as it does in production
     where a JWT's tenant comes from the ``users`` table.
+
+    The two ``users`` rows are real for the same reason, one layer up. A memory subject
+    is ``memory_subject_for(user_id)`` — it *is* a user, and in a live deployment there
+    is no ``user:N`` that no user row backs (checked against this deployment's database:
+    every ``memory_fact.subject_id`` matches a row in ``users``). Both scoping paths now
+    resolve who a subject belongs to through that table, so a fixture that invented a
+    subject out of thin air would be testing a shape production never produces.
     """
     async with get_sessionmaker()() as s:
         await pgsupport.seed(
-            s, Tenant(id=1, name="Memory tenant A"), Tenant(id=2, name="Memory tenant B")
+            s,
+            Tenant(id=1, name="Memory tenant A"),
+            Tenant(id=2, name="Memory tenant B"),
+            User(id=11, username="memory-subject-a", tenant_id=1),
+            User(id=22, username="memory-subject-b", tenant_id=2),
         )
         s.add_all(
             [
@@ -355,13 +368,42 @@ async def test_subject_isolation_and_scoping(client, db):
     )
     assert forbidden.status_code == 403
 
-    # A tenant-admin of tenant 2 reading subject A (tenant 1) gets an EMPTY result —
-    # the app-level tenant filter isolates cross-tenant reads (never subject A's data).
+    # A tenant-admin of tenant 2 naming subject A (tenant 1) is REFUSED, in the same
+    # words the write path uses. It used to answer 200 with an empty list: no row ever
+    # crossed — the tenant predicate saw to that — but "there is nothing here" is not
+    # the true sentence when the true sentence is "you may not ask", and a security
+    # surface must not say the reassuring one. The membership check that answers this
+    # is the very function ``routes_memory`` selects a write target from.
+    #
+    # MUTATION: put ``_authorize_subject``'s admin branch back to returning
+    # ``_scope_tenant(auth, None)`` without checking membership and this fails with
+    # 200 — the exact asymmetry that was reported.
     cross = await client.get(
         "/memory/facts?subject=user:11", headers=_headers(TENANT_ADMIN, tenant_id=2)
     )
-    assert cross.status_code == 200
-    assert cross.json()["rows"] == []
+    assert cross.status_code == 403, cross.text
+    assert "your own tenant's people" in cross.json()["detail"]
+
+    # …and it is the same refusal a WRITE gets, which is the whole point of the fix.
+    write = await client.post(
+        "/memory/facts",
+        headers=_headers(TENANT_ADMIN, tenant_id=2),
+        json={
+            "text": "a probe that must not land",
+            "subject": "user:11",
+            "predicate": "demo-probe",
+            "object": "x",
+        },
+    )
+    assert write.status_code == 403, write.text
+
+    # The legitimate reach is untouched: a tenant admin still reads its OWN tenant's
+    # people, which is the case a blunter fix would have taken away.
+    inside = await client.get(
+        "/memory/facts?subject=user:22", headers=_headers(TENANT_ADMIN, tenant_id=2)
+    )
+    assert inside.status_code == 200, inside.text
+    assert {r["object"] for r in inside.json()["rows"]} == {"enterprise"}
 
     # A platform-admin may read any subject.
     admin = await client.get(

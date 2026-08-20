@@ -24,6 +24,7 @@ ramp, so the illustrations belong to the product rather than sitting beside it:
 
     #547cef -> #1570ef   --blue-600   (Storyset primary, "amico"/"pana" sets)
     #5585f1 -> #1570ef   --blue-600   (Storyset primary, "rafiki" set)
+    #4a80f9 -> #1570ef   --blue-600   (Storyset primary, "bro"/"cuate" sets)
     #6880c8 -> #175cd3   --blue-700
     #4262c7 -> #0b3b8f   --blue-900
     #7d9bf5 -> #60a5fa   --blue-400
@@ -64,6 +65,16 @@ something Aegis really does does not belong on the page.
 | `FAQs-rafiki.svg` | asking a question | console idle, help |
 | `Company-rafiki.svg` | an organisation | tenants / governance |
 | `Mobile testing-rafiki.svg` | trying it out | simulation / harness / evals |
+| `Flying phoenix-*.svg` (3) | the mark itself | **landing hero / brand** — Aegis is a phoenix |
+| `Risk management-*.svg` (3) | weighing an exposure | **risk** screen |
+| `Saving money-bro.svg`, `Savings-pana.svg` | money kept back | **savings** screen |
+| `Cyborg-amico.svg`, `Cyborg-bro.svg` | a machine agent | agents / console |
+| `Preferences-cuate.svg`, `Preferences-pana.svg` | choosing settings | settings |
+| `Vault-bro.svg` | something sealed | security / secrets |
+| `Server-bro.svg` | the stack | devops stack / health |
+| `Business analytics-bro.svg` | reading the numbers | analytics |
+| `Online document-rafiki.svg` | a document on file | documents / corpus |
+| `Oops! 404 Error with a broken robot-cuate.svg` | wrong address, on brand | 404 — better than the plain 404 scene |
 | `Charity-amico.svg`, `messy bun-*.svg` | — | unused; nothing they depict is true here |
 
 **Use a scene only where it describes something the product really does.** An

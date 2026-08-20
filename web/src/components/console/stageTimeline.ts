@@ -62,8 +62,14 @@ interface NodeBrief {
   chain?: readonly string[]
 }
 
-/** The input rail's layer chain, in `_screen_input` order. */
-const INPUT_CHAIN = [
+/**
+ * The input rail's layer chain, in `_screen_input` order.
+ *
+ * Exported because the idle console draws the same chain before a run exists — the
+ * path a question is about to take is the one thing an empty console can say that is
+ * true. See `RunPreview`.
+ */
+export const INPUT_CHAIN = [
   'schema',
   'denylist',
   'PII',
@@ -73,7 +79,7 @@ const INPUT_CHAIN = [
 ] as const
 
 /** The output rail's layer chain, in `check_output` order. */
-const OUTPUT_CHAIN = [
+export const OUTPUT_CHAIN = [
   'schema',
   'content filter',
   'denylist',

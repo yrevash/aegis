@@ -421,3 +421,41 @@ async def test_removing_a_connection_forgets_the_row_too(
     await load_servers()
     with pytest.raises(UnknownExternalServerError):
         get_registry().server("delta")
+
+
+async def test_the_test_button_answers_even_when_the_rail_never_does(
+    client, db, admin_headers, peer_registry
+):
+    """A control that spins forever is worse than one that fails, so this one fails.
+
+    The reproduced defect: ``POST /mcp/servers/{id}/test`` against this deployment's own
+    MCP server handshook in 0.2 s, listed its tools, and then never returned, because
+    admitting those tools meant twenty-eight sequential ``TOOL_RESULT`` screenings —
+    329 seconds — inside an unbounded ``discover``. The peer here is reachable and its
+    ``tools/list`` answers at once; it is the rail that hangs.
+
+    MUTATION: drop the ``ExternalDiscoveryTimeoutError`` handler from ``test_server``
+    and this fails with a 500; drop the budget inside ``discover`` and it hangs, which
+    is the bug itself.
+    """
+    import asyncio
+    import time
+
+    async def _never(text: str, _tool: str) -> GuardResult:  # noqa: ARG001
+        await asyncio.sleep(30.0)
+        raise AssertionError("unreachable")
+
+    peer_registry.screen = _never
+    peer_registry.discovery_timeout_seconds = 0.2
+
+    started = time.monotonic()
+    resp = await client.post("/mcp/servers/acme/test", headers=admin_headers)
+    elapsed = time.monotonic() - started
+
+    assert resp.status_code == 200, resp.text
+    assert elapsed < 10.0, f"the test button took {elapsed:.1f}s to answer"
+    probe = resp.json()["probe"]
+    assert probe["reachable"] is False, "a catalogue nothing admitted got a green tick"
+    assert "answered the handshake as 'acme-peer'" in probe["detail"], probe["detail"]
+    assert "TOOL_RESULT" in probe["detail"], probe["detail"]
+    assert "0.2s" in probe["detail"], probe["detail"]

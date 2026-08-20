@@ -139,7 +139,7 @@ export function Composer({
     <form
       onSubmit={submit}
       className={cn(
-        'bg-card focus-within:border-ring',
+        '@container/composer bg-card focus-within:border-ring',
         hero
           ? 'rounded-2xl border border-border p-3 shadow-card transition-shadow duration-[var(--dur-base)] focus-within:shadow-hover'
           : 'rounded-lg border border-border p-2.5',
@@ -222,7 +222,10 @@ export function Composer({
         )}
       >
         <BudgetLine token={token} refreshKey={budgetKey} />
-        <p className="hidden text-[0.72rem] text-muted-foreground sm:block">
+        {/* A container query, not `sm:`. The docked composer lives in a column that is
+            about 560px wide at 1440, and a viewport breakpoint that fires at 640px of
+            *browser* has no idea about that. */}
+        <p className="hidden text-[0.72rem] text-muted-foreground @[26rem]/composer:block">
           Enter sends · Shift + Enter adds a line
         </p>
       </div>

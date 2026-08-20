@@ -72,6 +72,7 @@ says so honestly: when the deployment has not configured one, the response carri
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -84,6 +85,7 @@ from app.api.routes import AuthContext, require_platform_admin
 from app.api.schemas import RiskLevel
 from app.config import get_settings
 from app.mcp.client import (
+    ExternalDiscoveryTimeoutError,
     ExternalServerSpec,
     ExternalToolCollisionError,
     UnknownExternalServerError,
@@ -840,6 +842,21 @@ async def test_server(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail=str(exc)
             ) from exc
+        except ExternalDiscoveryTimeoutError as exc:
+            # The handshake succeeded and the peer listed its tools; what ran out of
+            # time is *our* screening of them. That is still a test that did not pass,
+            # so it is reported as one — with the sentence that says which half was
+            # slow, rather than a green tick over a catalogue nothing admitted. The
+            # button's contract is that it always answers.
+            logger.warning("MCP client: discovery of %r timed out: %s", server_id, exc)
+            result = replace(
+                result,
+                reachable=False,
+                detail=(
+                    f"The peer answered the handshake as {result.server_name!r} over "
+                    f"protocol {result.protocol_version}, but {exc}"
+                ),
+            )
     return await _console(
         probe=MCPProbe(
             server_id=result.server_id,

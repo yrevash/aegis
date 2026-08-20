@@ -2398,25 +2398,48 @@ def _own_subject(auth: AuthContext) -> str | None:
     return memory_subject_for(auth.user_id, auth.persona)
 
 
-def _authorize_subject(auth: AuthContext, subject: str) -> int | None:
+async def _authorize_subject(auth: AuthContext, subject: str) -> int | None:
     """Authorise access to ``subject`` and return the tenant filter to apply.
 
     A plain user may only touch their own subject (``user:<id>``); an admin may touch
-    any subject within their tenant scope (a tenant-admin is pinned to its own tenant, a
-    platform-admin may reach any). The returned tenant id is ANDed into every query as
-    the belt-and-suspenders isolator over app-level ``subject_id`` scoping.
+    any subject **its tenant scope actually contains** — a tenant admin its own tenant's
+    people, a platform admin anybody's. The returned tenant id is ANDed into every query
+    as the belt-and-suspenders isolator over app-level ``subject_id`` scoping.
 
     The tenant half comes from :func:`_require_scope`, not from ``auth.tenant_id``: a
     tenant-less non-admin used to return ``None`` here, and ``None`` is the value every
     memory handler reads as "add no tenant predicate". Subject scoping alone was then
     the only thing between that principal and another tenant's rows.
 
+    **Membership, not scope — and the same membership the write path checks.** The admin
+    branch used to resolve a tenant filter and let the tenant predicate do the rest, so
+    a tenant admin naming another tenant's subject was answered 200 with an empty list
+    while the write path (``routes_memory._resolve_subject``) answered 403. No row
+    crossed either way, so this was never a leak; it was the surface saying "there is
+    nothing here" when it meant "you may not ask". The two are different sentences and
+    only one of them was true. The set is built by
+    :func:`~app.api.routes_memory._manageable` — the *same function* the write path
+    selects from, deliberately, so read and write authority cannot drift apart again.
+
     Raises:
-        HTTPException: 403 when a non-admin targets a subject other than its own, or
-            when the principal resolves to no tenant authority.
+        HTTPException: 403 when a non-admin targets a subject other than its own, when
+            an admin targets a subject outside its own scope, or when the principal
+            resolves to no tenant authority.
     """
     if auth.role is Role.ADMIN:
-        return _scope_tenant(auth, None)
+        from app.api.routes_memory import _manageable  # noqa: PLC0415 - import cycle
+
+        scope = _scope_tenant(auth, None)
+        for target in await _manageable(auth):
+            if target.subject == subject:
+                return scope
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "You may only access memory for yourself or, as an administrator, for "
+                "your own tenant's people."
+            ),
+        )
     own = _own_subject(auth)
     if own is None or subject != own:
         raise HTTPException(
@@ -2426,7 +2449,9 @@ def _authorize_subject(auth: AuthContext, subject: str) -> int | None:
     return tenant_filter(_require_scope(auth))
 
 
-def _authorize_row_subject(auth: AuthContext, subject: str, detail: str) -> int | None:
+async def _authorize_row_subject(
+    auth: AuthContext, subject: str, detail: str
+) -> int | None:
     """Authorise a subject reached by **row id**, answering 404 instead of 403.
 
     ``/memory/sessions/{id}/messages`` and ``DELETE /memory/facts/{id}`` look their row
@@ -2450,9 +2475,9 @@ def _authorize_row_subject(auth: AuthContext, subject: str, detail: str) -> int 
             caller resolves to no authority of its own.
     """
     try:
-        return _authorize_subject(auth, subject)
+        return await _authorize_subject(auth, subject)
     except HTTPException:
-        _authorize_subject(auth, _own_subject(auth) or "")
+        await _authorize_subject(auth, _own_subject(auth) or "")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=detail
         ) from None
@@ -2469,7 +2494,7 @@ async def memory_facts(
     Subject-scoped: a user reads only its own subject; an admin any subject in its
     tenant. Degrades to an empty list when the store is unavailable (lite/off mode).
     """
-    tenant_id = _authorize_subject(auth, subject)
+    tenant_id = await _authorize_subject(auth, subject)
     try:
         from sqlalchemy import select
 
@@ -2525,7 +2550,7 @@ async def memory_profile(
     auth: AuthContext = Depends(require_auth),
 ) -> MemoryProfileResponse:
     """Return the subject's structured profile ("human block") JSON, or an empty one."""
-    tenant_id = _authorize_subject(auth, subject)
+    tenant_id = await _authorize_subject(auth, subject)
     try:
         from sqlalchemy import select
 
@@ -2554,7 +2579,7 @@ async def memory_sessions(
     auth: AuthContext = Depends(require_auth),
 ) -> MemorySessionsResponse:
     """Return the subject's conversation threads (id, turn count, summary, last active)."""
-    tenant_id = _authorize_subject(auth, subject)
+    tenant_id = await _authorize_subject(auth, subject)
     try:
         from sqlalchemy import select
 
@@ -2620,11 +2645,11 @@ async def memory_session_messages(
             ).scalars().first()
             if sess is None:
                 # Nothing to leak; authorise the caller's own subject scope and 404.
-                _authorize_subject(auth, _own_subject(auth) or "")
+                await _authorize_subject(auth, _own_subject(auth) or "")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Unknown session."
                 )
-            tenant_id = _authorize_row_subject(auth, sess.subject_id, "Unknown session.")
+            tenant_id = await _authorize_row_subject(auth, sess.subject_id, "Unknown session.")
             await set_tenant_scope(session, tenant_id)
             stmt = select(MemoryMessage).where(
                 MemoryMessage.session_id == session_id,
@@ -2667,7 +2692,7 @@ async def memory_writes(
     auth: AuthContext = Depends(require_auth),
 ) -> MemoryWritesResponse:
     """Return the subject's fact-write changelog (the "why the agent believes X" trail)."""
-    tenant_id = _authorize_subject(auth, subject)
+    tenant_id = await _authorize_subject(auth, subject)
     try:
         from sqlalchemy import select
 
@@ -2717,7 +2742,7 @@ async def memory_recall_debug(
     working-memory block, and its token size — no per-run storage. Embeds the query when
     the gateway is reachable (real similarity), else falls back to recency-only recall.
     """
-    tenant_id = _authorize_subject(auth, subject)
+    tenant_id = await _authorize_subject(auth, subject)
     try:
         from app.data.session import get_sessionmaker, set_tenant_scope
         from app.memory.config import MemoryConfig
@@ -2826,7 +2851,7 @@ async def memory_forget(
     503 is returned when the store is unreachable — an erasure must never be faked.
     """
     await _require_seat(auth, "seat.can_edit_memory")
-    tenant_id = _authorize_subject(auth, subject)
+    tenant_id = await _authorize_subject(auth, subject)
     try:
         from sqlalchemy import delete
 
@@ -2909,11 +2934,11 @@ async def memory_delete_fact(
                 )
             ).scalars().first()
             if fact is None:
-                _authorize_subject(auth, _own_subject(auth) or "")
+                await _authorize_subject(auth, _own_subject(auth) or "")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Unknown fact."
                 )
-            tenant_id = _authorize_row_subject(auth, fact.subject_id, "Unknown fact.")
+            tenant_id = await _authorize_row_subject(auth, fact.subject_id, "Unknown fact.")
             await set_tenant_scope(session, tenant_id)
             subject = fact.subject_id
             stmt = delete(MemoryFact).where(MemoryFact.id == fact_id)
