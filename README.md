@@ -193,14 +193,14 @@ fails if any document disagrees with it.
 ## Repository layout
 
 ```
-aegis/          # the importable core — 18 packages, 723 tests
-backend/        # FastAPI composition root — 51 endpoints, 593 tests
+aegis/          # the importable core — 30 packages, 2268 tests
+backend/        # FastAPI composition root — 121 endpoints, 1174 tests
   src/app/
     api/        # routes + Pydantic contracts + SSE event schema
     agent/      # LangGraph orchestration
     adapter/    # the domain seam
     platform/   # role-portal read surfaces
-web/            # Next.js console — landing page + four role portals
+web/            # Next.js console — landing page + five role portals
 docs/           # learn path, teaching course, ADRs, module reference, threat model
 scripts/        # bootstrap · preflight · start  (.sh and .ps1)
 ```
@@ -208,8 +208,10 @@ scripts/        # bootstrap · preflight · start  (.sh and .ps1)
 ## Verification
 
 ```bash
-cd backend && .venv/bin/python -m pytest -q      # 593 passed
-cd web && npx tsc --noEmit && npx next build     # clean
+cd aegis   && PYTHONPATH=src ../backend/.venv/bin/python -m pytest -q   # 2268 passed
+cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q # 1174 passed
+cd web     && npx tsc --noEmit && npx next lint --dir src && npm test   # 158 passed
+cd web     && npx next build                                           # 65/65 pages
 ```
 
 ## Documentation

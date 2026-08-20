@@ -116,6 +116,7 @@ SPEND = Board(
     metrics=(Metric(aggregate="SUM", column="cost_usd", label="spend"),),
     groupby=("model",),
     embedded_uuid="dash-uuid",
+    dashboard_id=42,
     time_column="ts",
 )
 
