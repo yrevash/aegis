@@ -3,22 +3,24 @@
 import {
   CircleCheck,
   CircleSlash,
-  Coins,
-  Loader2,
   Lock,
-  ShieldAlert,
-  ShieldCheck,
   TriangleAlert,
+  type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
-import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
+import { errorSentence } from '@/lib/api/apiError'
 import { getSecurityPosture } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { cn } from '@/lib/utils'
 import type {
   PostureEntry,
   PostureSignals,
@@ -32,12 +34,15 @@ import type {
  */
 const STATUS_META: Record<
   PostureStatus,
-  { tone: BadgeTone; label: string; icon: typeof CircleCheck }
+  { tone: BadgeTone; label: string; icon: LucideIcon }
 > = {
   enforced: { tone: 'ok', label: 'enforced', icon: CircleCheck },
   partial: { tone: 'risk', label: 'partial', icon: TriangleAlert },
   not_covered: { tone: 'block', label: 'not covered', icon: CircleSlash },
 }
+
+/** The three bands, in the order a reader should meet them. */
+const BANDS: PostureStatus[] = ['enforced', 'partial', 'not_covered']
 
 /** Coerce the (possibly widened) status string to a known band, defaulting honest. */
 function bandOf(status: PostureStatus | string): PostureStatus {
@@ -52,7 +57,7 @@ function StatusPill({ status }: { status: PostureStatus | string }): ReactElemen
   const Icon = meta.icon
   return (
     <Badge tone={meta.tone} className="gap-1.5">
-      <Icon className="size-3" />
+      <Icon className="size-3" aria-hidden />
       {meta.label}
     </Badge>
   )
@@ -64,20 +69,22 @@ function PostureRow({ entry }: { entry: PostureEntry }): ReactElement {
     <TR className="align-top">
       <TD className="whitespace-nowrap">
         <div className="flex flex-col gap-0.5">
-          <span className="font-mono text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground">
+          <Figure className="font-semibold tracking-wide text-muted-foreground uppercase">
             {entry.threat_id}
-          </span>
+          </Figure>
           <span className="text-sm font-medium text-foreground">{entry.name}</span>
         </div>
       </TD>
       <TD>
         <div className="flex max-w-xl flex-col gap-1">
           <span className="text-sm font-medium text-foreground">{entry.control}</span>
-          <span className="font-mono text-[0.7rem] text-muted-foreground">
-            {entry.module} · {entry.mechanism}
-          </span>
+          <Figure className="text-muted-foreground">
+            {`${entry.module} · ${entry.mechanism}`}
+          </Figure>
           {entry.detail ? (
-            <span className="text-[0.72rem] leading-snug text-muted-foreground">{entry.detail}</span>
+            <span className="text-[0.72rem] leading-relaxed text-muted-foreground">
+              {entry.detail}
+            </span>
           ) : null}
         </div>
       </TD>
@@ -96,13 +103,58 @@ function tally(entries: PostureEntry[]): Record<PostureStatus, number> {
 }
 
 /**
+ * The three band counts, as one band rather than as five tiles.
+ *
+ * It used to be five `StatCard`s — three counts and two wiring facts — each setting its
+ * figure at display size. DESIGN.md §3 allows one display figure per screen and calls a
+ * second one a hierarchy failure rather than emphasis; five of them, two of which held
+ * the word "available" instead of a number, made the summary the loudest thing on a
+ * page whose subject is the table underneath it. The counts are counts now, and the two
+ * wiring facts went to the wiring-signal grid, which is what they are.
+ */
+function Tally({ counts }: { counts: Record<PostureStatus, number> }): ReactElement {
+  return (
+    <Card className="rounded-lg">
+      <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-3 sm:divide-x sm:divide-border">
+        {BANDS.map((band, index) => {
+          const meta = STATUS_META[band]
+          const Icon = meta.icon
+          return (
+            <div key={band} className={cn('flex flex-col gap-1.5', index > 0 && 'sm:pl-5')}>
+              <span className="flex items-center gap-1.5">
+                <Icon
+                  aria-hidden
+                  className={cn(
+                    'size-3.5 shrink-0',
+                    band === 'enforced'
+                      ? 'text-ok-ink'
+                      : band === 'partial'
+                        ? 'text-risk-ink'
+                        : 'text-block-ink',
+                  )}
+                />
+                <span className="eyebrow">{meta.label}</span>
+              </span>
+              <Figure size="stat" className="text-foreground">
+                {counts[band]}
+              </Figure>
+              <span className="text-[0.72rem] text-muted-foreground">
+                {counts[band] === 1 ? 'threat' : 'threats'}
+              </span>
+            </div>
+          )
+        })}
+      </CardBody>
+    </Card>
+  )
+}
+
+/**
  * Security posture — the `aegis.security` read-surface. Every OWASP-Agentic
  * threat is mapped to the concrete Aegis control holding it down, with an honest
- * status derived from real wiring signals: enforced (green), partial (amber —
- * never dressed as green) or not covered (red). Summary tiles count the bands
- * and surface a couple of key introspected signals (NeMo availability, the
- * budget chokepoint), so a viewer sees exactly where the defense is complete and
- * where it is only half-wired.
+ * status derived from real wiring signals: enforced, partial (amber — never
+ * dressed as green) or not covered. Every band ships with an icon and a word, so
+ * the verdict never rests on hue alone.
  */
 function SecurityView(): ReactElement {
   // Read the live session token. `AuthProvider` restores the persisted session in
@@ -126,8 +178,15 @@ function SecurityView(): ReactElement {
           setError(null)
         }
       })
-      .catch(() => {
-        if (alive) setError('Could not load the security posture. Is the backend running?')
+      .catch((failure: unknown) => {
+        if (alive) {
+          setError(
+            errorSentence(
+              failure,
+              'The security posture did not load. Check the backend is reachable, then retry.',
+            ),
+          )
+        }
       })
     return () => {
       alive = false
@@ -138,72 +197,35 @@ function SecurityView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      {/* Section header */}
-      <div>
-        <p className="eyebrow mb-1">OWASP-Agentic · posture</p>
-        <h1 className="t-hero text-foreground">Security</h1>
-      </div>
+      <SectionHeader
+        as="h1"
+        eyebrow="OWASP-Agentic · posture"
+        title="Security"
+        note="One row per threat, the Aegis control holding it down, and a status derived from what is actually wired — not from a claim."
+      />
 
       {error ? (
-        <Card>
-          <CardBody>
-            <p className="py-8 text-center text-sm text-danger">{error}</p>
-          </CardBody>
-        </Card>
+        <ErrorState error={error} />
       ) : data == null || counts == null ? (
-        <Card>
-          <CardBody>
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading security posture…
-            </div>
-          </CardBody>
-        </Card>
+        <LoadingState rows={6} label="Reading the security posture…" />
       ) : (
         <>
-          {/* ── Summary tiles ─────────────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <StatCard label="Enforced" value={String(counts.enforced)} icon={ShieldCheck} tone="ok" />
-            <StatCard label="Partial" value={String(counts.partial)} icon={TriangleAlert} tone="risk" />
-            <StatCard
-              label="Not covered"
-              value={String(counts.not_covered)}
-              icon={ShieldAlert}
-              tone="block"
-            />
-            <StatCard
-              label="NeMo guardrails"
-              value={data.signals.nemo_available ? 'available' : 'off'}
-              icon={ShieldCheck}
-              tone={data.signals.nemo_available ? 'ok' : 'neutral'}
-            />
-            <StatCard
-              label="Budget enforcement"
-              value={
-                data.signals.budget_hook_wired && !data.signals.budget_fail_open ? 'fail-closed' : 'open'
-              }
-              icon={Coins}
-              tone={
-                data.signals.budget_hook_wired && !data.signals.budget_fail_open ? 'ok' : 'risk'
-              }
-            />
-          </div>
+          <Tally counts={counts} />
 
-          {/* ── Posture table ─────────────────────────────────────────────────── */}
-          <Card>
+          <Card className="rounded-lg">
             <CardHeader
               eyebrow="aegis.security · /security/posture"
               title="Threat → control posture"
-              description="One row per OWASP-Agentic threat, its Aegis control (module · mechanism), and a status derived from real wiring signals."
               actions={
                 <Badge tone="neutral" className="gap-1.5">
-                  <Lock className="size-3" />
-                  {data.entries.length} threats · mode {data.signals.mode}
+                  <Lock className="size-3" aria-hidden />
+                  <Figure>{data.entries.length}</Figure> threats · mode{' '}
+                  <Figure>{data.signals.mode}</Figure>
                 </Badge>
               }
             />
-            <CardBody className="pt-0">
-              <div className="overflow-hidden rounded-xl border border-border">
+            <CardBody className="space-y-3 pt-0">
+              <div className="overflow-hidden rounded-lg border border-border">
                 <Table>
                   <THead>
                     <TH className="text-left">Threat</TH>
@@ -217,16 +239,15 @@ function SecurityView(): ReactElement {
                   </TBody>
                 </Table>
               </div>
+              <Receipt
+                origin="GET /security/posture"
+                detail="each status is derived from an introspected wiring signal below, never from a declaration in this file"
+              />
             </CardBody>
           </Card>
 
-          {/* ── Wiring signals ────────────────────────────────────────────────── */}
-          <Card>
-            <CardHeader
-              eyebrow="aegis.security · signals"
-              title="Wiring signals"
-              description="The introspected facts the statuses above derive from — the honest provenance of each verdict."
-            />
+          <Card className="rounded-lg">
+            <CardHeader eyebrow="aegis.security · signals" title="Wiring signals" />
             <CardBody className="pt-0">
               <SignalGrid signals={data.signals} />
             </CardBody>
@@ -242,7 +263,13 @@ function signalTone(good: boolean): BadgeTone {
   return good ? 'ok' : 'risk'
 }
 
-/** The introspected posture signals, rendered as a compact fact grid. */
+/**
+ * The introspected posture signals, rendered as a compact fact grid.
+ *
+ * `nemo guardrails` and `budget enforcement` live here rather than in the summary band:
+ * both are facts about how this deployment is wired, which is exactly what this grid
+ * holds, and neither is a number that belongs on a stat tile.
+ */
 function SignalGrid({ signals }: { signals: PostureSignals }): ReactElement {
   const facts: Array<{ label: string; value: string; tone: BadgeTone }> = [
     { label: 'pii engine', value: signals.pii_engine, tone: signalTone(!!signals.pii_engine) },
@@ -257,6 +284,17 @@ function SignalGrid({ signals }: { signals: PostureSignals }): ReactElement {
       value: signals.jwt_dev_secret ? `dev secret · ${signals.jwt_algorithm}` : signals.jwt_algorithm,
       tone: signalTone(!signals.jwt_dev_secret),
     },
+    {
+      label: 'nemo guardrails',
+      value: signals.nemo_available ? 'available' : 'not installed',
+      tone: signals.nemo_available ? 'ok' : 'neutral',
+    },
+    {
+      label: 'budget enforcement',
+      value:
+        signals.budget_hook_wired && !signals.budget_fail_open ? 'fail-closed' : 'fail-open',
+      tone: signalTone(signals.budget_hook_wired && !signals.budget_fail_open),
+    },
     { label: 'gate min risk', value: signals.gate_min_risk, tone: 'neutral' },
     { label: 'max plan iterations', value: String(signals.max_plan_iterations), tone: 'neutral' },
     { label: 'hazard categories', value: String(signals.hazard_categories), tone: 'neutral' },
@@ -267,19 +305,21 @@ function SignalGrid({ signals }: { signals: PostureSignals }): ReactElement {
     },
   ]
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {facts.map((f) => (
         <div
           key={f.label}
-          className="flex flex-col gap-1.5 rounded-xl border border-border bg-surface-2/40 p-3.5"
+          className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface-2/40 p-3.5"
         >
-          <span className="eyebrow">{f.label}</span>
-          <Badge tone={f.tone} className="w-fit font-mono">
-            {f.value}
-          </Badge>
+          <dt className="eyebrow">{f.label}</dt>
+          <dd>
+            <Badge tone={f.tone} className="w-fit font-mono">
+              {f.value}
+            </Badge>
+          </dd>
         </div>
       ))}
-    </div>
+    </dl>
   )
 }
 

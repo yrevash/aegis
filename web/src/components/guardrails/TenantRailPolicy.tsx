@@ -12,7 +12,12 @@ import {
 import { useAuth } from '@/lib/auth/AuthContext'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
+import { errorSentence } from '@/lib/api/apiError'
 import {
   addedMembers,
   controlName,
@@ -41,40 +46,42 @@ function ControlRow({ row }: { row: GuardrailControl }): ReactElement {
   const provenance = provenanceOf(row)
   const added = addedMembers(row)
   return (
-    <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+    <div className="rounded-lg border border-border bg-surface-2/40 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="font-medium text-foreground">{name}</span>
-          <InfoTip label={`About ${name}`}>
-            {row.control.description}
-          </InfoTip>
+          <InfoTip label={`About ${name}`}>{row.control.description}</InfoTip>
         </div>
         <Badge tone={provenance.mine ? 'ok' : 'neutral'} className="uppercase">
           {provenance.label}
         </Badge>
       </div>
-      <p className="mt-2 text-sm text-foreground">
-        <span className="text-muted-foreground">In force: </span>
-        <span className="font-mono text-[0.78rem]">{formatValue(row.value, type)}</span>
-      </p>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Platform floor:{' '}
-        <span className="font-mono text-[0.78rem]">
-          {formatValue(row.platform_value, type)}
-        </span>
+      <dl className="mt-2 grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">In force</dt>
+        <dd className="min-w-0">
+          <Figure className="break-words text-foreground">{formatValue(row.value, type)}</Figure>
+        </dd>
+        <dt className="text-muted-foreground">Platform floor</dt>
+        <dd className="min-w-0">
+          <Figure className="break-words text-muted-foreground">
+            {formatValue(row.platform_value, type)}
+          </Figure>
+        </dd>
         {added.length > 0 ? (
           <>
-            {' · you added: '}
-            <span className="font-mono text-[0.78rem] text-foreground">
-              {added.join(', ')}
-            </span>
+            <dt className="text-muted-foreground">You added</dt>
+            <dd className="min-w-0">
+              <Figure className="break-words text-foreground">{added.join(', ')}</Figure>
+            </dd>
           </>
         ) : null}
-      </p>
-      <p className="mt-1.5 font-mono text-[0.68rem] text-muted-foreground">
-        {row.key} · {row.control.merge}
-        {row.writable ? '' : ' · read-only for your role'}
-      </p>
+      </dl>
+      <Receipt
+        label="Merge rule"
+        origin={`${row.key} · ${row.control.merge}`}
+        detail={row.writable ? null : 'read-only for your role'}
+        className="mt-3 pt-2"
+      />
     </div>
   )
 }
@@ -82,20 +89,19 @@ function ControlRow({ row }: { row: GuardrailControl }): ReactElement {
 /** One rail, as the pipeline describes itself. */
 function RailRow({ rail }: { rail: GuardrailRail }): ReactElement {
   return (
-    <div className="grid gap-2 border-b border-border py-3 last:border-b-0 sm:grid-cols-[13rem_1fr_6rem]">
+    <div className="grid gap-2 border-b border-border py-3 last:border-b-0 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_6rem]">
       <div className="min-w-0">
         <p className="font-medium text-foreground">{rail.name}</p>
-        <p className="font-mono text-[0.68rem] text-muted-foreground">
-          {rail.stage}
-          {rail.threshold ? ` · ${rail.threshold}` : ''}
-          {rail.model_backed ? ' · model-backed' : ''}
-        </p>
+        <Figure className="text-muted-foreground">
+          {`${rail.stage}${rail.threshold ? ` · ${rail.threshold}` : ''}${rail.model_backed ? ' · model-backed' : ''}`}
+        </Figure>
       </div>
-      <p className="text-sm text-muted-foreground">
+      <p className="text-sm leading-relaxed text-muted-foreground">
         {rail.screens}
         {rail.settings.length > 0 ? (
-          <span className="mt-0.5 block font-mono text-[0.68rem]">
-            you control: {rail.settings.join(', ')}
+          <span className="mt-0.5 block">
+            <span className="eyebrow mr-1.5">you control</span>
+            <Figure>{rail.settings.join(', ')}</Figure>
           </span>
         ) : null}
       </p>
@@ -136,7 +142,11 @@ export function TenantRailPolicy(): ReactElement {
       .catch((e: unknown) => {
         // The server's own sentence, kept: a 503 here says the settings store is
         // unreadable, which is a different fact from "there is no policy".
-        if (alive) setError(e instanceof Error ? e.message : 'The rail policy is unavailable.')
+        if (alive) {
+          setError(
+            errorSentence(e, 'The rail policy could not be read. Check the backend is up.'),
+          )
+        }
       })
       .finally(() => {
         if (alive) setLoading(false)
@@ -147,34 +157,34 @@ export function TenantRailPolicy(): ReactElement {
   }, [token, hydrated])
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardBody>
-        <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-ok/12">
-            <ShieldCheck className="size-5 text-ok-ink" />
-          </span>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h3 className="t-title text-foreground">Your rail policy</h3>
-            <InfoTip label="About your rail policy">
-              What the rails enforce for your tenant right now, read off the same folded
-              policy a question meets. Your tenant may tighten any of these and can never
-              go below the platform floor — the resolver takes the stricter value, so a
-              weaker one loses by arithmetic rather than by a check.
-            </InfoTip>
-          </div>
-          {policy ? (
-            <Badge tone={policy.model_layer_wired ? 'ok' : 'risk'} className="uppercase">
-              {policy.model_layer_wired ? 'model layers wired' : 'deterministic only'}
-            </Badge>
-          ) : null}
-        </div>
+        <SectionHeader
+          as="h2"
+          eyebrow="your tenant · in force"
+          title="Your rail policy"
+          right={
+            <>
+              <InfoTip label="About your rail policy">
+                What the rails enforce for your tenant right now, read off the same folded
+                policy a question meets. Your tenant may tighten any of these and can never
+                go below the platform floor — the resolver takes the stricter value, so a
+                weaker one loses by arithmetic rather than by a check.
+              </InfoTip>
+              {policy ? (
+                <Badge tone={policy.model_layer_wired ? 'ok' : 'risk'} className="gap-1 uppercase">
+                  <ShieldCheck className="size-3" aria-hidden />
+                  {policy.model_layer_wired ? 'model layers wired' : 'deterministic only'}
+                </Badge>
+              ) : null}
+            </>
+          }
+        />
 
         {loading ? (
-          <p className="mt-4 text-sm text-muted-foreground">Resolving your rails…</p>
+          <LoadingState rows={4} label="Resolving your rails…" className="mt-4" />
         ) : error ? (
-          <div className="mt-4 rounded-lg border border-dashed border-border bg-surface-2/30 px-3 py-4 text-center text-xs text-muted-foreground">
-            {error}
-          </div>
+          <ErrorState error={error} className="mt-4" />
         ) : !policy ? null : (
           <>
             {!policy.resolved ? (

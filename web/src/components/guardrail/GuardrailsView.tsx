@@ -3,7 +3,6 @@
 import {
   ArrowDown,
   Ban,
-  Cpu,
   Crosshair,
   Eraser,
   FileCode2,
@@ -27,7 +26,11 @@ import type {
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { MiniMeter } from '@/components/memory/MiniMeter'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Receipt } from '@/components/primitives/Receipt'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, LoadingState } from '@/components/primitives/States'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { TenantRailPolicy } from '@/components/guardrails/TenantRailPolicy'
@@ -207,18 +210,18 @@ function RailCard({
   const status = posture ? statusBadge(posture.status) : null
 
   return (
-    <div className="relative rounded-xl border border-border bg-surface-2/40 p-4">
+    <div className="relative rounded-lg border border-border bg-surface-2/40 p-4">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-card">
-          <Icon className="size-5 text-muted-foreground" />
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-card">
+          <Icon className="size-5 text-muted-foreground" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-[0.62rem] tabular-nums text-muted-foreground">
+            <Figure className="text-muted-foreground">
               {String(index + 1).padStart(2, '0')}
-            </span>
-            <h4 className="t-title text-foreground">{spec.name}</h4>
-            <code className="font-mono text-[0.68rem] text-muted-foreground">{spec.layer}</code>
+            </Figure>
+            <h4 className="text-base font-semibold text-foreground">{spec.name}</h4>
+            <Figure className="text-muted-foreground">{spec.layer}</Figure>
             {status ? (
               <Badge tone={status.tone} className="ml-auto uppercase">
                 {status.label}
@@ -230,11 +233,11 @@ function RailCard({
             )}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-            <span className="flex items-center gap-1.5 font-mono text-[0.72rem] text-muted-foreground">
-              {spec.fn}
+            <span className="flex items-center gap-1.5">
+              <Figure className="text-muted-foreground">{spec.fn}</Figure>
               <InfoTip label={`What the ${spec.name} rail checks`}>{spec.detail}</InfoTip>
             </span>
-            <Badge tone="graph">{spec.owasp}</Badge>
+            <Badge tone="neutral">{spec.owasp}</Badge>
             <Badge tone={sem.tone} className="uppercase">
               <SemIcon className="size-3" />
               {spec.semantics}
@@ -260,8 +263,7 @@ function RailStack({
 }): ReactElement {
   return (
     <div>
-      <p className="eyebrow mb-1">{eyebrow}</p>
-      <h3 className="t-title mb-3 text-foreground">{title}</h3>
+      <SectionHeader as="h3" eyebrow={eyebrow} title={title} className="mb-3" />
       <ol className="space-y-2">
         {rails.map((spec, i) => (
           <li key={spec.id}>
@@ -286,14 +288,13 @@ function EngineIndicator({
 }): ReactElement {
   const nemoAvailable = signals?.nemo_available ?? false
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardBody>
-        <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-blue-200/12">
-            <Cpu className="size-5 text-blue-700" />
-          </span>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <h3 className="t-title text-foreground">Guardrail engine</h3>
+        <SectionHeader
+          as="h2"
+          eyebrow="one rail set · two front doors"
+          title="Guardrail engine"
+          right={
             <InfoTip label="About the guardrail engine">
               One rail set, two front doors — the fast programmatic pipeline the agent graph calls,
               and the declarative NeMo Colang policy a reviewer reads. The tile below reads the
@@ -301,32 +302,32 @@ function EngineIndicator({
               switch (<code className="font-mono">guardrails_engine</code>) is a server setting not
               surfaced in posture, so the programmatic default is shown as active.
             </InfoTip>
-          </div>
-        </div>
+          }
+        />
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+          <div className="rounded-lg border border-border bg-surface-2/40 p-4">
             <div className="flex items-center justify-between">
               <span className="font-medium text-foreground">Programmatic pipeline</span>
               <Badge tone="ok" className="uppercase">
                 active
               </Badge>
             </div>
-            <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[0.72rem] text-muted-foreground">
-              guardrails.pipeline
+            <p className="mt-1.5 flex items-center gap-1.5">
+              <Figure className="text-muted-foreground">guardrails.pipeline</Figure>
               <InfoTip label="About the programmatic pipeline">
                 The default engine — it runs the rails in-process on every request.
               </InfoTip>
             </p>
           </div>
-          <div className="rounded-xl border border-border bg-surface-2/40 p-4">
+          <div className="rounded-lg border border-border bg-surface-2/40 p-4">
             <div className="flex items-center justify-between">
               <span className="font-medium text-foreground">NeMo Colang</span>
-              <Badge tone={nemoAvailable ? 'graph' : 'neutral'} className="uppercase">
+              <Badge tone={nemoAvailable ? 'ok' : 'neutral'} className="uppercase">
                 {nemoAvailable ? 'available' : 'not installed'}
               </Badge>
             </div>
-            <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[0.72rem] text-muted-foreground">
-              guardrails_engine
+            <p className="mt-1.5 flex items-center gap-1.5">
+              <Figure className="text-muted-foreground">guardrails_engine</Figure>
               <InfoTip label="About the NeMo Colang engine">
                 Colang flows delegate to the same <code className="font-mono">check_input</code> /{' '}
                 <code className="font-mono">check_output</code>; the engine is selected with the{' '}
@@ -355,42 +356,49 @@ function RedteamTeaser({
   const overall = report?.overall
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardBody>
-        <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-block/12">
-            <Crosshair className="size-5 text-block-ink" />
-          </span>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h3 className="t-title text-foreground">Red-team block-rate</h3>
+        <SectionHeader
+          as="h2"
+          eyebrow="deterministic offline battery"
+          title="Red-team block-rate"
+          right={
             <InfoTip label="About the red-team block-rate">
               A teaser from the deterministic offline attack battery — the full report is the
               Red-team dashboard. Leaked attacks are model-layer cases that need the live classifier.
             </InfoTip>
-          </div>
-        </div>
+          }
+        />
 
         {loading ? (
-          <p className="mt-4 text-sm text-muted-foreground">Running the offline battery…</p>
+          <LoadingState rows={4} label="Running the offline battery…" className="mt-4" />
         ) : !report || !overall ? (
-          <div className="mt-4 rounded-lg border border-dashed border-border bg-surface-2/30 px-3 py-4 text-center text-xs text-muted-foreground">
-            Red-team battery unavailable — the full report lives on the Red-team dashboard.
-          </div>
+          <EmptyState
+            icon={Crosshair}
+            title="No battery result to show"
+            body="The offline attack battery did not answer for this session. The full report, with every attack and the rail that caught it, lives on the Red-team dashboard."
+            className="mt-4"
+          />
         ) : (
           <>
-            <div className="mt-4 flex items-end gap-4">
+            <div className="mt-4 flex flex-wrap items-end gap-4">
               <div>
-                <span className="tabular-nums text-3xl font-semibold text-foreground">
-                  {Math.round(overall.blockRate * 100)}%
-                </span>
+                <Figure size="stat" className="text-foreground">
+                  {`${Math.round(overall.blockRate * 100)}%`}
+                </Figure>
                 <p className="eyebrow mt-0.5">overall</p>
               </div>
-              <div className="pb-1 text-sm text-muted-foreground">
-                {overall.attacksBlocked}/{overall.attacksTotal} attacks blocked ·{' '}
-                {Math.round(overall.falsePositiveRate * 100)}% false-positive on{' '}
-                {overall.controlsTotal} benign controls
+              <div className="pb-1 text-sm leading-relaxed text-muted-foreground">
+                <Figure>{`${overall.attacksBlocked}/${overall.attacksTotal}`}</Figure> attacks
+                blocked · <Figure>{`${Math.round(overall.falsePositiveRate * 100)}%`}</Figure>{' '}
+                false-positive on <Figure>{overall.controlsTotal}</Figure> benign controls
               </div>
-              <Badge tone={report.passed ? 'ok' : 'block'} className="mb-1 ml-auto uppercase">
+              <Badge tone={report.passed ? 'ok' : 'block'} className="mb-1 gap-1 uppercase sm:ml-auto">
+                {report.passed ? (
+                  <ShieldCheck className="size-3" aria-hidden />
+                ) : (
+                  <Ban className="size-3" aria-hidden />
+                )}
                 {report.passed ? 'gate passed' : 'gate failed'}
               </Badge>
             </div>
@@ -406,17 +414,21 @@ function RedteamTeaser({
                     hex={c.blockRate >= 0.75 ? 'var(--ok)' : 'var(--block)'}
                     height={8}
                   />
-                  <span className="text-right font-mono text-[0.72rem] tabular-nums text-muted-foreground">
-                    {Math.round(c.blockRate * 100)}%
+                  <span className="text-right">
+                    <Figure className="text-muted-foreground">
+                      {`${Math.round(c.blockRate * 100)}%`}
+                    </Figure>
                   </span>
                 </div>
               ))}
             </div>
 
-            <p className="mt-4 font-mono text-[0.68rem] text-muted-foreground">
-              gate ≥ {Math.round(report.thresholds.minBlockRate * 100)}% block · ≤{' '}
-              {Math.round(report.thresholds.maxFalsePositiveRate * 100)}% false-positive
-            </p>
+            <Receipt
+              label="Gate"
+              origin={`≥ ${Math.round(report.thresholds.minBlockRate * 100)}% block · ≤ ${Math.round(report.thresholds.maxFalsePositiveRate * 100)}% false-positive`}
+              detail="the deterministic battery, run offline against this build"
+              className="mt-4"
+            />
           </>
         )}
       </CardBody>
@@ -477,17 +489,19 @@ function GuardrailsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1">rails · verdicts</p>
-        <h1 className="t-hero text-foreground">Guardrails</h1>
-      </div>
+      <SectionHeader
+        as="h1"
+        eyebrow="rails · verdicts"
+        title="Guardrails"
+        note="The defence-in-depth pipeline, in the order it runs: what each rail checks, the OWASP row it answers, and the verdict it is allowed to reach."
+      />
 
       <EngineIndicator signals={posture?.signals ?? null} />
 
       <TenantRailPolicy />
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
+        <Card className="rounded-lg">
           <CardBody>
             <RailStack
               title="Input rails"
@@ -497,7 +511,7 @@ function GuardrailsView(): ReactElement {
             />
           </CardBody>
         </Card>
-        <Card>
+        <Card className="rounded-lg">
           <CardBody>
             <RailStack
               title="Output rails"

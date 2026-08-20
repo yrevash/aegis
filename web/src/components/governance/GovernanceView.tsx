@@ -1,9 +1,9 @@
 'use client'
 
 import {
+  AlertTriangle,
   Coins,
   Landmark,
-  Loader2,
   PhoneCall,
   ScrollText,
   ShieldCheck,
@@ -13,13 +13,17 @@ import {
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { BackendGate } from '@/components/shared/BackendGate'
-import { Badge, type BadgeTone } from '@/components/ui/Badge'
+import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
+import { Figure } from '@/components/primitives/Figure'
+import { SectionHeader } from '@/components/primitives/SectionHeader'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
+import { errorSentence } from '@/lib/api/apiError'
 import { getGovernanceDashboard } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { adminScopeCaption, isPlatformAdmin } from '@/lib/auth/tier'
+import { adminScopeCaption } from '@/lib/auth/tier'
 import type { BudgetStatusRow, GovernanceDashboardResponse } from '@/lib/api/platform'
 
 // ── formatting helpers ───────────────────────────────────────────────────────
@@ -48,27 +52,20 @@ function fmtTs(value: unknown): string {
   })
 }
 
-/** Meter fill colour by utilisation band — green under 70 %, amber, then red. */
-function meterTone(frac: number): string {
-  if (frac >= 0.9) return 'var(--danger)'
-  if (frac >= 0.7) return 'var(--risk-ink, #b45309)'
-  return 'var(--success)'
-}
-
-/** RBAC role → an honest badge tone across the four Aegis portals. */
-function roleTone(role: string): BadgeTone {
-  switch (role) {
-    case 'admin':
-      return 'ml'
-    case 'ai_team':
-      return 'agent'
-    case 'devops':
-      return 'graph'
-    case 'client':
-      return 'neutral'
-    default:
-      return 'neutral'
-  }
+/**
+ * The utilisation band a spend bar is in, as a fill colour *and* a word.
+ *
+ * The bar used to be green / amber / red and nothing else, which is colour carrying a
+ * verdict on its own — and amber and red are the pair the palette validator fails on
+ * CVD separation, so the two bands that matter were the two a reader might not be able
+ * to tell apart. Under the first threshold the fill is the one blue that carries
+ * magnitude everywhere else in the console; at 70% and at 90% it takes a reserved
+ * status hue *and* the row prints the word beside the figure.
+ */
+function band(frac: number): { fill: string; word: string | null; ink: string } {
+  if (frac >= 0.9) return { fill: 'var(--danger)', word: 'at cap', ink: 'text-block-ink' }
+  if (frac >= 0.7) return { fill: 'var(--risk-ink)', word: 'near cap', ink: 'text-risk-ink' }
+  return { fill: 'var(--blue-600)', word: null, ink: 'text-muted-foreground' }
 }
 
 // ── tenant + budget row ──────────────────────────────────────────────────────
@@ -77,7 +74,8 @@ function roleTone(role: string): BadgeTone {
  * One tenant joined to its budget row (matched by `budget.tenant_id`). The
  * spend-vs-limit bar is driven by the ledger-derived `cost_usd_used` against the
  * budget's `usd_cap` — real figures the accessor computes from the ledger, never
- * fabricated.
+ * fabricated. A tenant with no cap gets a stated absence rather than an empty
+ * track, because an empty track and a full-but-uncapped one look the same.
  */
 function TenantRow({
   name,
@@ -94,34 +92,57 @@ function TenantRow({
   const tokens = budget?.tokens_used ?? null
   const calls = budget?.calls ?? null
   const frac = cap != null && cap > 0 && spent != null ? Math.min(1, spent / cap) : null
+  const meter = frac == null ? null : band(frac)
+  const pct = frac == null ? null : Math.round(frac * 100)
 
   return (
     <TR className="align-top">
       <TD className="whitespace-nowrap">
         <div className="flex flex-col gap-0.5">
           <span className="text-sm font-medium text-foreground">{name}</span>
-          <span className="font-mono text-[0.7rem] text-muted-foreground">tenant #{tenantId}</span>
+          <Figure className="text-muted-foreground">{`tenant #${tenantId}`}</Figure>
         </div>
       </TD>
-      <TD className="min-w-[9rem]">
+      <TD className="min-w-[11rem]">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="tabular text-sm text-foreground">{fmtUsd(spent)}</span>
-          <span className="tabular font-mono text-[0.7rem] text-muted-foreground">
-            / {cap != null ? fmtUsd(cap) : 'no cap'}
-          </span>
+          <Figure className="text-foreground">{fmtUsd(spent)}</Figure>
+          <Figure className="text-muted-foreground">
+            {cap != null ? `/ ${fmtUsd(cap)}` : '/ no cap'}
+          </Figure>
         </div>
-        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-          {frac != null ? (
+        {frac != null && meter != null && pct != null ? (
+          <>
             <div
-              className="h-full rounded-full transition-all duration-700"
-              style={{ width: `${Math.max(2, Math.round(frac * 100))}%`, background: meterTone(frac) }}
-            />
-          ) : null}
-        </div>
+              className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2"
+              role="img"
+              aria-label={`${pct}% of the cap spent`}
+            >
+              <div
+                className="h-full rounded-full transition-[width] duration-200 motion-reduce:transition-none"
+                style={{ width: `${Math.max(2, pct)}%`, background: meter.fill }}
+              />
+            </div>
+            <p className={`mt-1 flex items-center gap-1 text-[0.68rem] ${meter.ink}`}>
+              {meter.word ? <AlertTriangle aria-hidden className="size-3 shrink-0" /> : null}
+              <Figure>{`${pct}%`}</Figure>
+              <span>{meter.word ?? 'of cap'}</span>
+            </p>
+          </>
+        ) : (
+          <p className="mt-1.5 text-[0.68rem] leading-snug text-muted-foreground">
+            No USD cap is set for this tenant, so there is no proportion to draw.
+          </p>
+        )}
       </TD>
-      <TD className="tabular whitespace-nowrap text-right text-sm text-foreground">{fmtUsd(remaining)}</TD>
-      <TD className="tabular whitespace-nowrap text-right text-sm text-foreground">{fmtInt(tokens)}</TD>
-      <TD className="tabular whitespace-nowrap text-right text-sm text-foreground">{fmtInt(calls)}</TD>
+      <TD className="whitespace-nowrap text-right">
+        <Figure className="text-foreground">{fmtUsd(remaining)}</Figure>
+      </TD>
+      <TD className="whitespace-nowrap text-right">
+        <Figure className="text-foreground">{fmtInt(tokens)}</Figure>
+      </TD>
+      <TD className="whitespace-nowrap text-right">
+        <Figure className="text-foreground">{fmtInt(calls)}</Figure>
+      </TD>
     </TR>
   )
 }
@@ -136,6 +157,11 @@ function TenantRow({
  * roles, and the read-only recent-audit tail. In lite mode (stores off) the
  * accessor returns an empty snapshot and the panels read an honest empty state
  * rather than fake zeros.
+ *
+ * A **portal role is not a status**, so it is no longer painted like one. Four
+ * roles used to take four different badge tones, which is a colour that means
+ * nothing sitting next to the reserved hues that mean a great deal — the exact
+ * thing DESIGN.md §2 is about. The role is told apart by its word.
  */
 function GovernanceView(): ReactElement {
   // Live session token — `/governance/dashboard` is admin-only, so a constant
@@ -158,8 +184,15 @@ function GovernanceView(): ReactElement {
           setError(null)
         }
       })
-      .catch(() => {
-        if (alive) setError('Could not load the governance dashboard. Is the backend running?')
+      .catch((failure: unknown) => {
+        if (alive) {
+          setError(
+            errorSentence(
+              failure,
+              'The governance dashboard did not load. Check the backend is reachable, then retry.',
+            ),
+          )
+        }
       })
     return () => {
       alive = false
@@ -179,70 +212,81 @@ function GovernanceView(): ReactElement {
   const users = data?.users ?? []
   const audit = data?.recent_audit ?? []
   const usage = data?.usage ?? null
+  const window = data?.window ?? null
+  const source = `aegis.governance · /governance/dashboard${window ? ` · ${window}` : ''}`
 
   return (
     <div className="space-y-6">
-      {/* Section header — the scope caption is driven by the session's fine tier
-          (`fine_role`), because the backend pins a tenant admin to its own tenant:
-          captioning both tiers the same would show one tenant's rows as the
-          platform's. */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="eyebrow mb-1">tenants · budgets</p>
-          <h1 className="t-hero text-foreground">Governance</h1>
-        </div>
-        <Badge tone={isPlatformAdmin(session) ? 'ml' : 'neutral'} className="gap-1.5">
-          <ShieldCheck className="size-3" />
-          {adminScopeCaption(session)}
-        </Badge>
-      </div>
+      {/* The scope caption is driven by the session's fine tier (`fine_role`),
+          because the backend pins a tenant admin to its own tenant: captioning both
+          tiers the same would show one tenant's rows as the platform's. */}
+      <SectionHeader
+        as="h1"
+        eyebrow="tenants · budgets"
+        title="Governance"
+        note="Every tenant, what it may spend, what it has spent, and who inside it holds which portal."
+        right={
+          <Badge tone="neutral" className="gap-1.5">
+            <ShieldCheck className="size-3" aria-hidden />
+            {adminScopeCaption(session)}
+          </Badge>
+        }
+      />
 
       {error ? (
-        <Card>
-          <CardBody>
-            <p className="py-8 text-center text-sm text-danger">{error}</p>
-          </CardBody>
-        </Card>
+        <ErrorState error={error} />
       ) : data == null ? (
-        <Card>
-          <CardBody>
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading governance dashboard…
-            </div>
-          </CardBody>
-        </Card>
+        <LoadingState rows={6} label="Reading the governance dashboard…" />
       ) : (
         <>
           {/* ── Usage summary tiles ───────────────────────────────────────────── */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <StatCard label="Calls" value={fmtInt(usage?.calls ?? 0)} icon={PhoneCall} tone="agent" />
-            <StatCard label="Tokens" value={fmtInt(usage?.total_tokens ?? 0)} icon={Sigma} tone="ml" />
-            <StatCard label="Cost" value={fmtUsd(usage?.total_cost_usd ?? 0)} icon={Coins} tone="ok" />
+            <StatCard
+              label="Calls"
+              value={fmtInt(usage?.calls ?? 0)}
+              icon={PhoneCall}
+              source={source}
+              className="rounded-lg"
+            />
+            <StatCard
+              label="Tokens"
+              value={fmtInt(usage?.total_tokens ?? 0)}
+              icon={Sigma}
+              source={source}
+              className="rounded-lg"
+            />
+            <StatCard
+              label="Cost"
+              value={fmtUsd(usage?.total_cost_usd ?? 0)}
+              icon={Coins}
+              source={`${source} · summed from the usage ledger`}
+              className="rounded-lg"
+            />
           </div>
 
           {/* ── Tenants + budgets ─────────────────────────────────────────────── */}
-          <Card>
+          <Card className="rounded-lg">
             <CardHeader
               eyebrow="aegis.governance · /governance/dashboard"
               title="Tenants & budgets"
-              description="Each tenant with its budget cap, ledger-derived spend, remaining headroom, tokens and calls. The bar is spend vs the USD cap."
               actions={
                 <Badge tone="neutral" className="gap-1.5">
-                  <Landmark className="size-3" />
-                  {tenants.length} {tenants.length === 1 ? 'tenant' : 'tenants'}
-                  {data.window ? ` · ${data.window}` : ''}
+                  <Landmark className="size-3" aria-hidden />
+                  <Figure>{tenants.length}</Figure>{' '}
+                  {tenants.length === 1 ? 'tenant' : 'tenants'}
+                  {window ? ` · ${window}` : ''}
                 </Badge>
               }
             />
             <CardBody className="pt-0">
               {tenants.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-8 text-center text-sm text-muted-foreground">
-                  No tenant data (stores off) — the governance stores are not running, so the
-                  accessor returned an empty snapshot.
-                </p>
+                <EmptyState
+                  icon={Landmark}
+                  title="No tenant data"
+                  body="The governance stores are not running, so the accessor returned an empty snapshot. This is lite mode, not an empty platform."
+                />
               ) : (
-                <div className="overflow-hidden rounded-xl border border-border">
+                <div className="overflow-hidden rounded-lg border border-border">
                   <Table>
                     <THead>
                       <TH className="text-left">Tenant</TH>
@@ -268,25 +312,26 @@ function GovernanceView(): ReactElement {
           </Card>
 
           {/* ── Users + roles ─────────────────────────────────────────────────── */}
-          <Card>
+          <Card className="rounded-lg">
             <CardHeader
               eyebrow="aegis.governance · RBAC"
               title="Users & roles"
-              description="Members in scope and the portal role granting each one their access."
               actions={
                 <Badge tone="neutral" className="gap-1.5">
-                  <Users className="size-3" />
-                  {users.length} {users.length === 1 ? 'user' : 'users'}
+                  <Users className="size-3" aria-hidden />
+                  <Figure>{users.length}</Figure> {users.length === 1 ? 'user' : 'users'}
                 </Badge>
               }
             />
             <CardBody className="pt-0">
               {users.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-8 text-center text-sm text-muted-foreground">
-                  No users (stores off).
-                </p>
+                <EmptyState
+                  icon={Users}
+                  title="No users in scope"
+                  body="The governance stores are not running, so no roster could be read."
+                />
               ) : (
-                <div className="overflow-hidden rounded-xl border border-border">
+                <div className="overflow-hidden rounded-lg border border-border">
                   <Table>
                     <THead>
                       <TH className="text-left">User</TH>
@@ -298,12 +343,12 @@ function GovernanceView(): ReactElement {
                         <TR key={u.id}>
                           <TD className="text-sm font-medium text-foreground">{u.username}</TD>
                           <TD>
-                            <Badge tone={roleTone(u.role)} className="font-mono">
+                            <Badge tone="neutral" className="font-mono">
                               {u.role}
                             </Badge>
                           </TD>
-                          <TD className="tabular whitespace-nowrap text-right font-mono text-[0.72rem] text-muted-foreground">
-                            #{u.id}
+                          <TD className="whitespace-nowrap text-right">
+                            <Figure className="text-muted-foreground">{`#${u.id}`}</Figure>
                           </TD>
                         </TR>
                       ))}
@@ -315,25 +360,26 @@ function GovernanceView(): ReactElement {
           </Card>
 
           {/* ── Audit tail ────────────────────────────────────────────────────── */}
-          <Card>
+          <Card className="rounded-lg">
             <CardHeader
               eyebrow="aegis.governance · audit"
               title="Recent audit tail"
-              description="The most recent governance audit rows — actor, action and time. Read-only."
               actions={
                 <Badge tone="neutral" className="gap-1.5">
-                  <ScrollText className="size-3" />
-                  {audit.length} {audit.length === 1 ? 'entry' : 'entries'}
+                  <ScrollText className="size-3" aria-hidden />
+                  <Figure>{audit.length}</Figure> {audit.length === 1 ? 'entry' : 'entries'}
                 </Badge>
               }
             />
             <CardBody className="pt-0">
               {audit.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-border bg-surface-2/40 px-4 py-8 text-center text-sm text-muted-foreground">
-                  No audit entries (stores off).
-                </p>
+                <EmptyState
+                  icon={ScrollText}
+                  title="No audit entries"
+                  body="The governance stores are not running. The full trail, when they are, lives on the Audit page."
+                />
               ) : (
-                <div className="overflow-hidden rounded-xl border border-border">
+                <div className="overflow-hidden rounded-lg border border-border">
                   <Table>
                     <THead>
                       <TH className="text-left">Actor</TH>
@@ -349,14 +395,14 @@ function GovernanceView(): ReactElement {
                         const key = (r.id as number | string | undefined) ?? i
                         return (
                           <TR key={key}>
-                            <TD className="text-sm font-medium text-foreground">{String(actor)}</TD>
-                            <TD>
-                              <span className="font-mono text-[0.78rem] text-foreground">
-                                {String(action)}
-                              </span>
+                            <TD className="text-sm font-medium text-foreground">
+                              {String(actor)}
                             </TD>
-                            <TD className="tabular whitespace-nowrap text-right font-mono text-[0.72rem] text-muted-foreground">
-                              {fmtTs(ts)}
+                            <TD>
+                              <Figure className="text-foreground">{String(action)}</Figure>
+                            </TD>
+                            <TD className="whitespace-nowrap text-right">
+                              <Figure className="text-muted-foreground">{fmtTs(ts)}</Figure>
                             </TD>
                           </TR>
                         )
