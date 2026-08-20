@@ -132,6 +132,23 @@ class AgentSkill(AegisBase):
     #: model may still load it, it simply gets no keyword hint.
     triggers: Mapped[Any] = mapped_column(JsonB, default=list)
 
+    #: Which agent this skill belongs to, or ``NULL`` for "Aegis generally".
+    #:
+    #: The third targeting axis, and the one the other two could not express. ``scope``
+    #: says *who* a skill reaches (platform / tenant / user) and ``triggers`` says *when*
+    #: an agent reaches for it; neither can say *which agent it is for* — so a skill
+    #: written for the research lane was offered to every lane and to the main persona
+    #: besides. NULL is the default and means exactly what it meant before this column
+    #: existed: in force for every agent this caller's scope puts it in force for.
+    #:
+    #: Deliberately a plain string with no foreign key and no enum. The roster is a
+    #: **domain adapter's** (``app.adapter.roster``), not this package's, so the
+    #: vocabulary is the deployment's to define; validating it against the live roster
+    #: is the API layer's job, where the adapter is in scope, and it is done there by
+    #: name so a typo is refused rather than stored. A column that named the four
+    #: current lanes in a CHECK constraint would have made a domain swap a migration.
+    agent_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+
     is_safety: Mapped[bool] = mapped_column(default=False)
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -190,6 +190,16 @@ SubAgentRosterFn = Callable[[], "Sequence[SubAgentSpec]"]
 #: binds :func:`aegis.ops.registry.get_cached_active` here; the seam exists because
 #: ``aegis.ops`` pulls SQLAlchemy and ``aegis.agent`` must stay import-light.
 ActivePromptFn = Callable[[str], "tuple[str, dict[str, Any], int] | None"]
+
+#: Tier-1 skill cards resolved **for one named agent**: ``(agent_id) -> [card, …]``.
+#: Bound host-side to ``aegis.skills.store.resolve_skills`` under the caller's own
+#: tenant/user scope. It exists because the run's working-memory block is assembled once
+#: and shared by every lane, so it can only ever carry the *main* lane's answer to
+#: "which skills are in force" — and a skill assigned to the research lane would then be
+#: offered to all four lanes and to the main persona besides, which is the opposite of
+#: assigning it. ``None`` ⇒ a lane inherits the shared block unchanged, which is exactly
+#: today's behaviour and stays correct while nothing is assigned to anybody.
+SkillCardsFn = Callable[[str], "Awaitable[list[str]]"]
 TenantFn = Callable[[], int | None]
 
 
@@ -528,3 +538,9 @@ class AgentDeps:
     #: ``SubAgentSpec.system_prompt`` is the floor, exactly as the main prompt behaves:
     #: a registry outage degrades to the shipped prompt, never to none.
     active_prompt: ActivePromptFn | None = None
+    #: Per-lane skill cards (§10.2 tier 1, per agent). See :data:`SkillCardsFn`. A lane
+    #: that has this seam replaces the shared block's skills section with its own
+    #: resolved set; a lane without it inherits the shared one. Best-effort in both
+    #: directions: a raise or a timeout leaves the inherited block in place rather than
+    #: failing the lane, because a skills outage must not be why an agent does not run.
+    skill_cards_for: SkillCardsFn | None = None

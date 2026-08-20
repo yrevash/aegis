@@ -61,6 +61,7 @@ from aegis.skills import (
     set_active,
     write_skill,
 )
+from aegis.skills.store import MAIN_AGENT_ID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -69,6 +70,7 @@ from app.api.routes import AuthContext, _safe_audit, _scope_tenant, require_auth
 from app.data.session import get_sessionmaker, set_tenant_scope
 
 __all__ = [
+    "SkillAgent",
     "SkillRow",
     "SkillWriteRequest",
     "SkillsResponse",
@@ -79,6 +81,82 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 skills_router = APIRouter()
+
+
+class SkillAgent(BaseModel):
+    """One agent a skill may be assigned to, as the console picker should offer it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    agent_id: str = Field(
+        alias="agentId", description="The id a write puts in ``agent``."
+    )
+    label: str = Field(description="Human-facing name.")
+    is_main: bool = Field(
+        alias="isMain",
+        description="Whether this is the main persona rather than a fan-out lane.",
+    )
+
+
+def agent_targets() -> list[SkillAgent]:
+    """Return the agents a skill may be assigned to, read from the **live** roster.
+
+    The main persona plus every sub-agent the domain adapter declares
+    (:func:`app.adapter.roster.sub_agent_roster`). Read at call time rather than frozen
+    into a constant: the roster is the domain's, a deployment that swaps its domain
+    swaps the lanes, and a hard-coded list here would go on offering the four names this
+    repository happens to ship with.
+
+    A roster that cannot be read leaves the main persona, which always exists — an
+    assignment picker that offered nothing would read as "this deployment has no
+    agents", which is never true.
+    """
+    targets = [SkillAgent(agent_id=MAIN_AGENT_ID, label="Main assistant", is_main=True)]
+    try:
+        from app.adapter.roster import sub_agent_roster
+
+        for spec in sub_agent_roster():
+            agent_id = str(getattr(spec, "agent_id", "") or "").strip()
+            if not agent_id or agent_id == MAIN_AGENT_ID:
+                continue
+            targets.append(
+                SkillAgent(
+                    agent_id=agent_id,
+                    label=str(getattr(spec, "label", "") or agent_id),
+                    is_main=False,
+                )
+            )
+    except Exception:  # noqa: BLE001 - a roster outage must not make authoring impossible
+        logger.warning("Sub-agent roster unavailable; only the main agent is assignable",
+                       exc_info=True)
+    return targets
+
+
+def _agent_of(raw: str | None) -> str | None:
+    """Validate an assignment target against the live roster, or refuse it **by name**.
+
+    ``None`` and ``""`` both mean unassigned, which is the default and reaches every
+    agent. Anything else must be an id the roster answers to: a field that silently
+    accepted a typo would produce a skill that looks assigned on the screen and is in
+    force for nobody, which is worse than having no field at all.
+
+    Raises:
+        HTTPException: 422 naming the value and listing the ids that would have worked.
+    """
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    known = agent_targets()
+    if any(target.agent_id == value for target in known):
+        return value
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=(
+            f"{value!r} is not an agent in this deployment's roster. Assign the skill "
+            "to one of: " + ", ".join(t.agent_id for t in known) + " — or leave 'agent' "
+            "out entirely for a skill that belongs to Aegis generally."
+        ),
+    )
 
 
 class SkillRow(BaseModel):
@@ -98,6 +176,13 @@ class SkillRow(BaseModel):
         alias="isSafety",
         description="A platform safety skill: no other layer may rebind its name.",
     )
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "The agent this skill was assigned to, or null for every agent. One of the "
+            "ids GET /skills reports under 'agents'."
+        ),
+    )
     updated_by: str | None = Field(default=None, alias="updatedBy")
 
     model_config = ConfigDict(populate_by_name=True)
@@ -110,6 +195,14 @@ class SkillsResponse(BaseModel):
     scopes: list[str] = Field(
         default_factory=list,
         description="The layers this caller may author at, strongest first.",
+    )
+    agents: list[SkillAgent] = Field(
+        default_factory=list,
+        description=(
+            "The agents a skill may be assigned to, read from the live roster. A "
+            "console picker must be built from this rather than from a hard-coded "
+            "list: a deployment that swaps its domain swaps these."
+        ),
     )
 
 
@@ -132,6 +225,14 @@ class SkillWriteRequest(BaseModel):
     )
     enable: bool = Field(
         default=True, description="Put it in force at this layer as part of the same write."
+    )
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "Assign this skill to ONE agent from the live roster, or leave it out (the "
+            "default) for a skill that belongs to Aegis generally and reaches every "
+            "agent. An id nothing in the roster answers to is a 422 that names it."
+        ),
     )
 
 
@@ -232,6 +333,7 @@ def _row(skill: Any, *, in_force: bool) -> SkillRow:  # noqa: ANN401 - aegis Age
         triggers=triggers,
         in_force=in_force,
         is_safety=bool(skill.is_safety),
+        agent=getattr(skill, "agent_id", None),
         updated_by=skill.updated_by,
     )
 
@@ -321,6 +423,10 @@ async def author_skill(
     except SkillFormatError as exc:
         raise _refusal(exc) from exc
     tenant_id, user_id = _target(auth, scope)
+    # Checked against the roster before anything is opened: an unknown agent is the
+    # author's typo, and it costs nothing to say so before a session, a rail run and a
+    # write have happened.
+    agent_id = _agent_of(req.agent)
 
     seen: list[Any] = []
 
@@ -345,6 +451,7 @@ async def author_skill(
                 updated_by=auth.username,
                 is_safety=req.is_safety,
                 enable=req.enable,
+                agent_id=agent_id,
             )
             projected = _row(row, in_force=req.enable)
             await session.commit()
@@ -373,6 +480,7 @@ async def author_skill(
             "scope": scope.value,
             "enabled": req.enable,
             "is_safety": req.is_safety,
+            "agent": agent_id,
         },
         tenant_id=tenant_id,
     )

@@ -98,9 +98,36 @@ async def test_retrieve_emits_candidates_and_reranked(make_deps):
         e for e in events if e.type == "retrieval" and e.status == "candidates"
     )
     # num_candidates is the honest WIDE-RECALL pool (N), not the survivor count.
-    # The fake recalls 5 and reranks down to 1, so the funnel must show 5 → 1.
+    # The fake recalls 5 and reranks down to 2, so the funnel must show 5 → 2.
     assert candidates.num_candidates == 5
     assert candidates.num_candidates >= len(reranked.scored_sources)
+
+
+@pytest.mark.asyncio
+async def test_the_locked_wire_schema_carries_a_source_s_document(make_deps):
+    """The seam that would have swallowed the fix in silence.
+
+    ``app.agent.events.stamp`` validates every built dict against the locked
+    ``StreamEvent`` union, and ``ScoredSource`` does **not** forbid extra keys — so a
+    graph that started emitting ``file_path`` while the model still declared only
+    ``{id, label, score}`` would have had the field dropped by Pydantic, with no error
+    anywhere and an unchanged, passing test in ``aegis``. Asserting it on the *validated*
+    model rather than on the dict is what makes this a test of the wire.
+    """
+    events = await _run(make_deps(propose_tool=False), query="what is the policy?")
+
+    done = next(e for e in events if e.type == "retrieval" and e.status == "done")
+    by_id = {s.id: s for s in done.scored_sources}
+
+    assert by_id["kb-1"].file_path == "escalation-policy.pdf"
+    assert by_id["kb-2"].file_path is None, (
+        "a source with no recorded provenance must serialise as an absence, not as a "
+        "filename chosen on its behalf"
+    )
+    # And it survives serialisation, which is what actually reaches the browser.
+    assert done.model_dump(mode="json")["scored_sources"][0]["file_path"] == (
+        "escalation-policy.pdf"
+    )
 
 
 @pytest.mark.asyncio

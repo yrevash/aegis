@@ -74,7 +74,10 @@ async def test_agent_run_emits_nested_span_tree(memory_provider, make_deps):
     assert guard_in[semconv.GUARDRAIL_VERDICT] == "pass"
     retrieve_attrs = dict(by_name["node.retrieve"].attributes)
     assert retrieve_attrs[semconv.RETRIEVAL_CANDIDATE_COUNT] == 5
-    assert retrieve_attrs[semconv.RETRIEVAL_RESULT_COUNT] == 1
+    # Two: the shared fake returns one source carrying provenance metadata and one
+    # carrying none, because both are shapes the real pipeline produces and the wire
+    # has to render each honestly. This is the recall funnel's K, so it tracks the fake.
+    assert retrieve_attrs[semconv.RETRIEVAL_RESULT_COUNT] == 2
 
     tool_spans = [s for s in spans if kind[s.name] == semconv.SpanKind.TOOL.value]
     assert len(tool_spans) == 1

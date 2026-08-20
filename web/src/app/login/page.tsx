@@ -58,18 +58,30 @@ import { homePathFor } from '@/lib/portal'
  * An unseeded backend answers 503 and says to run the seed — there is no fallback
  * login table behind these names.
  *
- * Five, not four: `northwind.admin` is the seed's tenant administrator, and until
- * §7.2 there was no way to reach that portal from this screen at all — the un-tenanted
- * `admin` account is the *platform* operator, and the two are different jobs with
- * different screens. Which portal each lands in is decided by the backend's
- * `fine_role`, never by this list.
+ * **Tenant-bound accounts, not the un-tenanted ones.** This list used to offer `ai`
+ * and `client` — seed rows with `tenant_id = NULL`. They log in, but every
+ * tenant-scoped screen is then correctly empty, because there is no tenant to scope
+ * to. The client overview showed a dash for "Your spend" while `northwind.client`
+ * had **2,653** ledger rows sitting behind it, and that read as broken software
+ * rather than as the wrong account.
+ *
+ * **Both tenants are offered on purpose.** Signing in as Northwind's client and
+ * then Vertex's client shows two genuinely different sets of figures from one
+ * database, which is the platform's central claim and is not demonstrable from a
+ * single account. The un-tenanted `admin` stays — it is the *platform* operator,
+ * a different job from a tenant administrator, with different screens.
+ *
+ * Which portal each lands in is decided by the backend's `fine_role`, never by this
+ * list.
  */
 const QUICK_IN: { label: string; scope: string; username: string }[] = [
-  { label: 'Platform admin', scope: 'operates Aegis itself', username: 'admin' },
-  { label: 'Tenant admin', scope: 'administers one tenant', username: 'northwind.admin' },
-  { label: 'AI team', scope: 'builds and tunes the agent', username: 'ai' },
-  { label: 'DevOps', scope: 'runs the stack', username: 'devops' },
-  { label: 'Client', scope: 'the tenant end-user', username: 'client' },
+  { label: 'Platform admin', scope: 'operates Aegis itself · every tenant', username: 'admin' },
+  { label: 'Northwind · tenant admin', scope: 'administers tenant 1', username: 'northwind.admin' },
+  { label: 'Northwind · client', scope: 'end-user, tenant 1', username: 'northwind.client' },
+  { label: 'Northwind · AI team', scope: 'builds and tunes the agent', username: 'northwind.analyst' },
+  { label: 'Vertex · tenant admin', scope: 'administers tenant 2', username: 'vertex.admin' },
+  { label: 'Vertex · client', scope: 'end-user, tenant 2 — different data', username: 'vertex.client' },
+  { label: 'DevOps', scope: 'runs the stack · platform-wide', username: 'devops' },
 ]
 
 /**

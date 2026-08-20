@@ -455,6 +455,7 @@ class AgentDeps(_AegisAgentDeps):
             record_audit=_default_record_audit,
             embed_query=_default_embed_query,
             active_prompt=_default_active_prompt,
+            skill_cards_for=_default_skill_cards_for,
         )
 
 
@@ -683,6 +684,45 @@ async def _default_embed_query(query: str) -> list[float] | None:
         logger.warning("agent: query embed for recall failed; recall→recency", exc_info=True)
         return None
     return vecs[0] if vecs else None
+
+
+async def _default_skill_cards_for(agent_id: str) -> list[str]:
+    """Return the tier-1 skill cards in force for ONE agent, in this caller's scope.
+
+    Satisfies ``AgentDeps.skill_cards_for``. The run assembles its working-memory block
+    once and every fan-out lane is handed the same string, so that block can only carry
+    the *main* lane's skills; a skill assigned to the research agent would otherwise be
+    advertised to all four lanes and to the main persona besides — which is the opposite
+    of assigning it to one.
+
+    The tenant and the user come from the request's governance context, exactly as they
+    do for ``load_skill``: the lane supplies which agent is asking, never who is asking.
+
+    Best-effort: an unreachable skills store returns no cards, and the lane then keeps
+    the block the run gave it. A skills outage must not be why an agent does not run.
+    """
+    from aegis.skills.store import resolve_skills
+
+    from app.config import get_settings
+    from app.data.session import get_sessionmaker, set_tenant_scope
+
+    if not get_settings().stores_enabled:
+        return []
+    tenant_id = _current_tenant_id()
+    user_id = _current_user_id()
+    try:
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, tenant_id)
+            resolved = await resolve_skills(
+                session, tenant_id=tenant_id, user_id=user_id, agent_id=agent_id
+            )
+            await session.rollback()
+    except Exception:  # noqa: BLE001 - a skills outage must not fail a lane
+        logger.warning(
+            "agent: per-agent skills read failed for lane %r", agent_id, exc_info=True
+        )
+        return []
+    return [skill.card() for skill in resolved]
 
 
 async def _default_record_audit(**kwargs: Any) -> None:  # noqa: ANN401 - audit payload

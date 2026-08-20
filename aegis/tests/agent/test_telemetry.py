@@ -93,6 +93,50 @@ async def test_retrieve_emits_candidates_and_reranked(make_deps):
 
 
 @pytest.mark.asyncio
+async def test_a_scored_source_carries_the_document_it_came_from(make_deps):
+    """A citation the console can name, which is the whole point of showing one.
+
+    ``scored_sources`` carried ``{id, label, score}`` and nothing else, so a run grounded
+    in a real PDF reached the browser as opaque hashes — verified live: a tenant-1 query
+    returned 20 candidates whose ``file_path`` was ``transformer-single-column.pdf``
+    every one, and not one of those paths crossed the wire.
+
+    Asserted on **both** retrieval events that carry sources. They are built from one
+    list, but they are emitted by two separate ``writer`` calls, and a change that
+    enriched only the ``done`` frame would leave the panel that reads ``reranked``
+    exactly as blind as before.
+    """
+    events = await _run(make_deps(propose_tool=False), query="what is the policy?")
+
+    for status in ("reranked", "done"):
+        frame = next(
+            e for e in events if e["type"] == "retrieval" and e["status"] == status
+        )
+        by_id = {s["id"]: s for s in frame["scored_sources"]}
+        assert by_id["kb-1"]["file_path"] == "escalation-policy.pdf", (
+            f"the {status!r} frame dropped the source's document"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_source_with_no_recorded_path_reports_an_absence(make_deps):
+    """``None``, never a filename chosen on the passage's behalf.
+
+    A chunk whose provenance was never recorded is a real shape — the dense arm's
+    ``_untag_file_path`` returns ``None`` for a path carrying no owner tag — and a
+    console that showed a made-up document for it would be worse than one that showed
+    nothing. This is the assertion that fails if the field is ever defaulted.
+    """
+    events = await _run(make_deps(propose_tool=False), query="what is the policy?")
+
+    done = next(e for e in events if e["type"] == "retrieval" and e["status"] == "done")
+    by_id = {s["id"]: s for s in done["scored_sources"]}
+
+    assert "file_path" in by_id["kb-2"], "the key must be present to be honestly empty"
+    assert by_id["kb-2"]["file_path"] is None
+
+
+@pytest.mark.asyncio
 async def test_high_risk_action_gates_on_tool_risk_alone(make_deps):
     """The gate is the tool's declared risk tier and nothing else.
 

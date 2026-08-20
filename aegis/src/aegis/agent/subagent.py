@@ -49,6 +49,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -63,15 +64,35 @@ from .rails import screen_tool_result
 from .retry import call_with_retry
 
 __all__ = [
+    "MAIN_AGENT_ID",
     "SubAgentResult",
     "SubAgentSpec",
     "SubAgentStatus",
     "agent_node_id",
+    "current_agent_id",
     "resolve_system_prompt",
     "run_subagent",
 ]
 
 logger = logging.getLogger(__name__)
+
+#: The agent id a run is on when no fan-out lane has claimed it: the main persona.
+#: The same string as :data:`aegis.skills.store.MAIN_AGENT_ID`, restated because
+#: importing that module would pull SQLAlchemy into :mod:`aegis.agent`, which is
+#: deliberately import-light. ``test_the_main_agent_id_is_one_string`` asserts the two
+#: agree, so the copy cannot drift.
+MAIN_AGENT_ID = "main"
+
+#: Which lane is executing, for the seams too narrow to carry it as an argument.
+_CURRENT_AGENT: ContextVar[str] = ContextVar(
+    "aegis_current_agent_id", default=MAIN_AGENT_ID
+)
+
+
+def current_agent_id() -> str:
+    """Return the agent id of the lane on this task, or ``main`` outside a fan-out."""
+    return _CURRENT_AGENT.get()
+
 
 #: Splits a sub-agent's reasoning text into sentence-sized ``reasoning`` events, exactly
 #: as the main planner's plan text is chunked, so a lane reads the same as the main lane.
@@ -331,6 +352,13 @@ async def run_subagent(
             the orchestrator's existing handler ends the run cleanly as ``blocked``.
     """
     result = SubAgentResult(agent_id=spec.agent_id, role=spec.role, label=spec.label)
+    # Whose lane this is, for anything downstream that has to resolve per-agent state
+    # and is reached through a seam too narrow to carry an argument — ``load_skill``
+    # being the case that exists. Set here rather than in ``_loop`` so it covers the
+    # tool dispatch as well as the prompt, and reset in a ``finally`` so a lane's
+    # identity cannot outlive it. Each gathered lane runs in its own context copy, so
+    # siblings never see each other's value.
+    token = _CURRENT_AGENT.set(spec.agent_id)
     # The lane is a unit of work, so it reports itself as one: a node_started /
     # node_finished pair through the lane's own writer. That pair is what carries this
     # agent's model, tokens, cost and duration on the WIRE, which is what lets
@@ -346,6 +374,7 @@ async def run_subagent(
                               context=context, working_memory=working_memory,
                               trace_id=trace_id, retry=retry, result=result)
     finally:
+        _CURRENT_AGENT.reset(token)
         writer(
             events.node_finished(
                 node,
@@ -499,8 +528,9 @@ async def _loop(
     definitions = allowed_tool_definitions(spec, deps, persona)
     allowed = {_tool_name(d) for d in definitions}
     base_prompt, result.prompt_version = resolve_system_prompt(spec, deps)
+    lane_memory = await _lane_working_memory(spec, deps, working_memory)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(spec, base_prompt, working_memory)},
+        {"role": "system", "content": _system_prompt(spec, base_prompt, lane_memory)},
         {"role": "user", "content": _user_prompt(task, context)},
     ]
 
@@ -706,6 +736,79 @@ def _system_prompt(spec: SubAgentSpec, base_prompt: str, working_memory: str) ->
         "executed by you."
     )
     return "\n\n".join(parts)
+
+
+#: The header the run's working-memory block puts its tier-1 skill cards under
+#: (:mod:`aegis.memory.working`). Restated rather than imported because importing it
+#: would pull SQLAlchemy into :mod:`aegis.agent`, which is deliberately import-light;
+#: :func:`test_the_skills_header_is_the_one_the_assembler_writes` asserts the two are
+#: the same string, so the copy cannot drift silently.
+SKILLS_HEADER_PREFIX = "## Skills available"
+
+
+def _strip_skills_section(block: str) -> str:
+    """Return ``block`` without its skills section.
+
+    The run assembles ONE working-memory block and hands it to every lane, so the
+    section under :data:`SKILLS_HEADER_PREFIX` is the *main* lane's answer to "which
+    skills are in force". A lane that has its own answer must not carry the main lane's
+    as well, or a skill assigned to one agent would be advertised to all of them.
+
+    Only that section is removed: everything from its header down to the next ``##``
+    heading, or to the end. Every other tier the assembler wrote — profile, facts,
+    summary, episodic, raw — is left byte for byte where it was.
+    """
+    lines = block.splitlines()
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        if line.startswith(SKILLS_HEADER_PREFIX):
+            skipping = True
+            continue
+        if skipping:
+            if line.startswith("## "):
+                skipping = False
+            else:
+                continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+async def _lane_working_memory(
+    spec: SubAgentSpec, deps: AgentDeps, working_memory: str
+) -> str:
+    """Return the memory block for THIS lane: the shared one, with its own skills.
+
+    Best-effort by construction. Without the ``deps.skill_cards_for`` seam — and after
+    any failure of it — the lane inherits the shared block untouched, which is what
+    every lane did before skills could be assigned to an agent and is still right while
+    nothing is assigned. A skills outage is never why a lane does not run.
+    """
+    reader = deps.skill_cards_for
+    if reader is None:
+        return working_memory
+    try:
+        cards = [str(card).strip() for card in await reader(spec.agent_id) if str(card).strip()]
+    except Exception:  # noqa: BLE001 - a skills read must never be why a lane dies
+        logger.warning(
+            "Per-agent skills read failed for lane %s; using the run's own block",
+            spec.agent_id,
+            exc_info=True,
+        )
+        return working_memory
+    stripped = _strip_skills_section(working_memory)
+    if not cards:
+        return stripped
+    section = "\n".join([_lane_skills_header(), *cards])
+    return f"{stripped}\n\n{section}".strip()
+
+
+def _lane_skills_header() -> str:
+    """The lane's own tier-1 header — the assembler's sentence, for the same reason."""
+    return (
+        f"{SKILLS_HEADER_PREFIX} — call the load_skill tool with a name to read one "
+        "in full"
+    )
 
 
 def _user_prompt(task: str, context: str) -> str:

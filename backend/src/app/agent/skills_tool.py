@@ -115,6 +115,7 @@ async def run_load_skill(args: dict[str, Any]) -> _Outcome:
         exception: the graph turns an exception into "Tool error: …" and the model
         learns nothing it can act on.
     """
+    from aegis.agent.subagent import current_agent_id
     from aegis.skills.store import SkillNotFoundError, load_skill
 
     from app.agent.deps import _current_tenant_id, _current_user_id
@@ -126,11 +127,16 @@ async def run_load_skill(args: dict[str, Any]) -> _Outcome:
 
     tenant_id = _current_tenant_id()
     user_id = _current_user_id()
+    # Which lane is asking, read the same way the tenant is: from the context this call
+    # is running in, never from ``args``. A skill assigned to another agent is not in
+    # force here, so tier 2 refuses exactly what tier 1 never offered — one answer to
+    # "is this skill mine", not two.
+    agent_id = current_agent_id()
     try:
         async with get_sessionmaker()() as session:
             await set_tenant_scope(session, tenant_id)
             skill = await load_skill(
-                session, name, tenant_id=tenant_id, user_id=user_id
+                session, name, tenant_id=tenant_id, user_id=user_id, agent_id=agent_id
             )
             await session.rollback()
     except SkillNotFoundError as exc:

@@ -53,6 +53,7 @@ from aegis.skills.document import SkillDocument
 from aegis.skills.models import AgentSkill, SkillScope
 
 __all__ = [
+    "MAIN_AGENT_ID",
     "SKILLS_ENABLED_KEY",
     "InputRail",
     "ResolvedSkill",
@@ -130,6 +131,7 @@ class ResolvedSkill:
         scope: Which layer's row won the name (``platform`` / ``tenant`` / ``user``).
         is_safety: Whether this is a platform safety skill, i.e. one whose name no
             other layer may rebind.
+        agent_id: The agent this skill was assigned to, or ``None`` for every agent.
     """
 
     name: str
@@ -138,6 +140,7 @@ class ResolvedSkill:
     triggers: tuple[str, ...]
     scope: str
     is_safety: bool
+    agent_id: str | None = None
 
     def card(self) -> str:
         """Return the one-line tier-1 card the system prompt carries.
@@ -148,6 +151,26 @@ class ResolvedSkill:
         layer decided a value.
         """
         return f"- {self.name} ({self.scope}): {self.description}"
+
+
+#: The lane a run is on when nothing says otherwise: the main persona, the one agent
+#: every deployment has. It is the default of :func:`resolve_skills`'s ``agent_id``, so
+#: every existing caller keeps asking the question it was already asking — "what is in
+#: force for the main lane?" — and a fan-out lane is the caller that passes something
+#: else. Named here rather than in the adapter because it is not a domain fact: a
+#: deployment can rewrite its whole sub-agent roster and still have a main lane.
+MAIN_AGENT_ID = "main"
+
+
+def _for_agent(row_agent_id: str | None, agent_id: str) -> bool:
+    """Return whether a row assigned to ``row_agent_id`` is in force for ``agent_id``.
+
+    ``NULL`` means unassigned — the skill belongs to Aegis generally and reaches every
+    agent, which is what every row meant before the column existed. Anything else
+    reaches that one agent and no other. There is no partial match and no prefix rule:
+    a skill either names your lane or it is not yours.
+    """
+    return row_agent_id is None or str(row_agent_id) == agent_id
 
 
 def _rows_stmt(names: tuple[str, ...], *, tenant_id: int | None, user_id: int | None):  # noqa: ANN202
@@ -200,8 +223,9 @@ async def resolve_skills(
     user_id: int | None = None,
     query: str = "",
     limit: int | None = None,
+    agent_id: str = MAIN_AGENT_ID,
 ) -> list[ResolvedSkill]:
-    """Return the skills in force for this caller, most relevant first.
+    """Return the skills in force for this caller **on this agent**, most relevant first.
 
     Args:
         session: The async session. On PostgreSQL the caller is expected to have bound
@@ -214,6 +238,11 @@ async def resolve_skills(
             trigger that silently withholds a skill is indistinguishable in the trace
             from a skill that does not exist.
         limit: Cap on the number of cards returned. ``None`` for all of them.
+        agent_id: Which agent is asking. A row assigned to another agent is dropped
+            here — the one place skills are selected for a run, so there is no second
+            path that could disagree with it. An **unassigned** row is in force for
+            every agent, which is what every row was before the column existed:
+            leaving this argument alone reproduces the old behaviour exactly.
 
     Returns:
         The resolved skills. Empty when the tenant has enabled none, which is the
@@ -238,6 +267,12 @@ async def resolve_skills(
             # while a tenant's list still names it — and it is silently absent rather
             # than raising into a hot path.
             continue
+        if not _for_agent(getattr(row, "agent_id", None), agent_id):
+            # Enabled, visible, and addressed to a different agent. Dropped here rather
+            # than at the prompt, so a lane never carries a card it cannot act on and
+            # ``load_skill`` cannot reach a body by naming it either — tier 1 and tier 2
+            # answer from this one function.
+            continue
         resolved.append(
             ResolvedSkill(
                 name=row.name,
@@ -246,6 +281,7 @@ async def resolve_skills(
                 triggers=tuple(row.triggers or ()),
                 scope=str(row.scope.value if hasattr(row.scope, "value") else row.scope),
                 is_safety=bool(row.is_safety),
+                agent_id=getattr(row, "agent_id", None),
             )
         )
     resolved.sort(key=lambda s: (not _triggered(s, query), not s.is_safety, s.name))
@@ -264,6 +300,7 @@ async def load_skill(
     *,
     tenant_id: int | None = None,
     user_id: int | None = None,
+    agent_id: str = MAIN_AGENT_ID,
 ) -> ResolvedSkill:
     """Return one skill's full body — tier 2, reached only by a real tool call.
 
@@ -276,6 +313,9 @@ async def load_skill(
         name: The skill to load.
         tenant_id: The caller's tenant.
         user_id: The caller's user id.
+        agent_id: Which agent is asking. A skill assigned to another agent is not in
+            force here, so naming it loads nothing — the refusal a caller gets is the
+            same one it gets for a skill nobody authored.
 
     Returns:
         The resolved skill, body included.
@@ -283,7 +323,9 @@ async def load_skill(
     Raises:
         SkillNotFoundError: If no skill of that name is in force for this caller.
     """
-    for skill in await resolve_skills(session, tenant_id=tenant_id, user_id=user_id):
+    for skill in await resolve_skills(
+        session, tenant_id=tenant_id, user_id=user_id, agent_id=agent_id
+    ):
         if skill.name == name:
             return skill
     raise SkillNotFoundError(
@@ -402,6 +444,7 @@ async def write_skill(
     updated_by: str | None = None,
     is_safety: bool = False,
     enable: bool = True,
+    agent_id: str | None = None,
 ) -> AgentSkill:
     """Author one skill at one scope, screening it **before** a row exists.
 
@@ -427,6 +470,10 @@ async def write_skill(
         is_safety: Platform-only. A safety skill's name cannot be rebound.
         enable: Whether to put the skill in force by adding its name to
             ``skills.enabled`` at this scope, in the same transaction.
+        agent_id: The agent this skill belongs to, or ``None`` for every agent. Stored
+            as given: the roster it must be a member of belongs to the domain adapter,
+            so the *name* is validated one layer up (``app.api.routes_skills``) where
+            the live roster is in scope. This function will not invent a default.
 
     Returns:
         The inserted or updated :class:`~aegis.skills.models.AgentSkill`.
@@ -472,6 +519,7 @@ async def write_skill(
             body=body,
             triggers=list(document.triggers),
             is_safety=is_safety,
+            agent_id=agent_id,
             updated_by=updated_by or actor_role,
         )
         session.add(row)
@@ -480,6 +528,7 @@ async def write_skill(
         row.body = body
         row.triggers = list(document.triggers)
         row.is_safety = is_safety
+        row.agent_id = agent_id
         row.updated_by = updated_by or actor_role
         row.updated_at = datetime.now(UTC)
     await session.flush()
