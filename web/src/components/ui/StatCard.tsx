@@ -69,7 +69,7 @@ export function StatCard({
             className={cn(
               'tabular flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-xs font-medium',
               delta.direction === 'up'
-                ? 'bg-ok/20 text-[color:var(--success)]'
+                ? 'bg-ok/20 text-[color:var(--ok-ink)]'
                 : 'bg-block/25 text-[color:var(--danger)]',
             )}
           >

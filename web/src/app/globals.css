@@ -86,7 +86,10 @@
   --ok-foreground: #101828;
 
   /* Semantic delta colours (KPI ▲/▼ chips). */
-  --success: #12b76a;
+  /* `--success` is the same ink as `--ok-ink` and was a second spelling of one
+     colour — two names for one value drift the moment somebody changes one. It is
+     an alias now, and call sites name `--ok-ink`. */
+  --success: var(--ok-ink);
   --danger: #f04438;
 
   /* Soft KPI card tint — one, on the ramp. The purple twin is deleted. */

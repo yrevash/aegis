@@ -96,27 +96,50 @@ export function signalForRisk(risk: RiskLevel): Signal {
  * instead of a hashed near-collision. Unknown kinds fall back to a deterministic
  * hash, keeping the viz legible for any adapter's custom types.
  */
-export const KIND_COLORS: Record<string, string> = {
-  organization: '#1570ef', // blue
-  person: '#7a5af8', // violet
-  product: '#0e9488', // teal
-  policy: '#dc6803', // amber
-  procedure: '#12b76a', // green
-  issue: '#d92d20', // rose
-  system: '#4b56c9', // indigo
-  category: '#0891b2', // cyan
-  location: '#db2777', // magenta
-  event: '#ea580c', // orange
-}
+/**
+ * Entity kinds are told apart by their **label**, not by a hue.
+ *
+ * This was a ten-hue rainbow — violet, teal, amber, green, rose, indigo, cyan,
+ * magenta, orange — and it spent all three of the reserved status colours
+ * (`#dc6803`, `#12b76a`, `#d92d20`) on entity kinds, which DESIGN.md §2 forbids:
+ * a status hue reused as a series colour means a reader can no longer tell which
+ * colours carry state.
+ *
+ * It also could not have worked. `scripts/validate_palette.js` fails every
+ * ten-hue set on this surface, and DESIGN.md is explicit that a ninth series is
+ * never a generated hue. The canvas already draws `n.label` under every node, so
+ * identity was being carried twice — once legibly, once by a colour nobody can
+ * hold ten of in their head.
+ *
+ * What is left encodes something a reader can actually use: two steps on the one
+ * blue ramp, so kinds group, with the label carrying which kind. The pair is
+ * validated — `node scripts/validate_palette.js "#1570ef,#60a5fa"` → ALL CHECKS
+ * PASS, ΔE 15.2 deutan — and the contrast relief the validator asks for is the
+ * node label itself.
+ */
+const KIND_RAMP = ['#1570ef', '#60a5fa'] as const
 
-const KIND_PALETTE = ['#1570ef', '#0e9488', '#7a5af8', '#dc6803', '#12b76a', '#d92d20']
+/** Kinds the shipped adapters emit, grouped rather than individually hued. */
+export const KIND_COLORS: Record<string, string> = {
+  organization: KIND_RAMP[0],
+  person: KIND_RAMP[1],
+  product: KIND_RAMP[0],
+  policy: KIND_RAMP[1],
+  procedure: KIND_RAMP[0],
+  issue: KIND_RAMP[1],
+  system: KIND_RAMP[0],
+  category: KIND_RAMP[1],
+  location: KIND_RAMP[0],
+  event: KIND_RAMP[1],
+}
 
 export function colorForKind(kind: string): string {
   const known = KIND_COLORS[kind.toLowerCase()]
   if (known) return known
+  // An adapter's own kind still groups deterministically, on the same two steps.
   let hash = 0
   for (let i = 0; i < kind.length; i += 1) {
     hash = (hash * 31 + kind.charCodeAt(i)) >>> 0
   }
-  return KIND_PALETTE[hash % KIND_PALETTE.length]
+  return KIND_RAMP[hash % KIND_RAMP.length]
 }

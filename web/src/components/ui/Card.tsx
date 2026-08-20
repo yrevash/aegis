@@ -46,12 +46,20 @@ export function Card({
  * "What the dependency table does not measure" became "What the dependency…" in
  * a narrow column, and the clipped half was the half that carried the meaning.
  * It wraps and balances instead, which costs a line and loses nothing.
+ *
+ * **The heading level is a prop, defaulting to `h2`.** It was hardcoded `h3`, so
+ * every page that put a card under its `h1` announced `h1 -> h3` and skipped a
+ * level — a screen-reader user navigating by heading hears a gap where a section
+ * should be. Two redesign lanes reported it and neither could fix it from their
+ * own directory. A card nested inside a section that already has an `h2` passes
+ * `as="h3"`; the default is the common case, not the deepest one.
  */
 export function CardHeader({
   title,
   eyebrow,
   actions,
   className,
+  as: Heading = 'h2',
 }: {
   title: ReactNode
   eyebrow?: ReactNode
@@ -59,12 +67,14 @@ export function CardHeader({
   description?: ReactNode
   actions?: ReactNode
   className?: string
+  /** The heading level this card's title occupies. Defaults to `h2`. */
+  as?: 'h2' | 'h3' | 'h4'
 }) {
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-5 pt-5 md:px-6 md:pt-6', className)}>
       <div className="min-w-0">
         {eyebrow ? <p className="eyebrow mb-1">{eyebrow}</p> : null}
-        <h3 className="text-pretty text-base leading-6 font-semibold text-foreground">{title}</h3>
+        <Heading className="text-pretty text-base leading-6 font-semibold text-foreground">{title}</Heading>
       </div>
       {actions ? <div className="shrink-0">{actions}</div> : null}
     </div>

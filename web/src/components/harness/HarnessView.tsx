@@ -345,7 +345,7 @@ function TracePanel({ trace }: { trace: RunTrace | null }): ReactElement {
                   </Badge>
                   <span className="text-muted-foreground">·</span>
                   {trace.gate.resolved ? (
-                    <span className="inline-flex items-center gap-1 text-[color:var(--success)]">
+                    <span className="inline-flex items-center gap-1 text-[color:var(--ok-ink)]">
                       <CircleCheck className="size-3.5" aria-hidden /> resolved
                     </span>
                   ) : (
