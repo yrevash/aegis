@@ -32,3 +32,6 @@ next-env.d.ts
 .vscode/*
 !.vscode/extensions.json
 .idea
+
+# Per-process build outputs (see next.config.mjs, AEGIS_DIST_DIR)
+.next-*
