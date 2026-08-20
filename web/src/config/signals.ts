@@ -48,10 +48,10 @@ interface SignalToken {
  */
 export const SIGNALS: Record<Signal, SignalToken> = {
   agent: { text: 'text-blue-700', border: 'border-blue-200', bg: 'bg-blue-200/40', hex: '#175cd3', label: 'Reasoning' },
-  graph: { text: 'text-blue-600', border: 'border-blue-400', bg: 'bg-blue-400/12', hex: '#1570ef', label: 'Retrieval' },
-  risk: { text: 'text-risk-ink', border: 'border-risk', bg: 'bg-risk/15', hex: '#dc6803', label: 'Human gate' },
-  block: { text: 'text-block-ink', border: 'border-block', bg: 'bg-block/15', hex: '#d92d20', label: 'Guardrail' },
-  ok: { text: 'text-ok-ink', border: 'border-ok', bg: 'bg-ok/15', hex: '#12b76a', label: 'Healthy' },
+  graph: { text: 'text-blue-700', border: 'border-blue-400', bg: 'bg-blue-400/12', hex: '#1570ef', label: 'Retrieval' },
+  risk: { text: 'text-risk-ink', border: 'border-risk', bg: 'bg-risk/15', hex: '#b54708', label: 'Human gate' },
+  block: { text: 'text-block-ink', border: 'border-block', bg: 'bg-block/15', hex: '#b42318', label: 'Guardrail' },
+  ok: { text: 'text-ok-ink', border: 'border-ok', bg: 'bg-ok/15', hex: '#067647', label: 'Healthy' },
   ml: { text: 'text-blue-800', border: 'border-blue-100', bg: 'bg-blue-100/60', hex: '#1e40af', label: 'ML' },
   neutral: { text: 'text-muted-foreground', border: 'border-border', bg: 'bg-surface-2', hex: '#667085', label: 'System' },
 }

@@ -93,9 +93,22 @@ mode. Generous rounding is the marketing-page dialect. Buttons and inputs 6px; c
 --blue-600 #1570ef   --blue-700 #175cd3   --blue-800 #1e40af   --blue-900 #0b3b8f
 ```
 
-`--blue-600` is primary, at ~4.9:1 on white — in the same band as Carbon `#0f62fe` (5.00:1),
-Atlassian `#1868DB` (5.20:1) and Fluent `#0f6cbd` (5.38:1). For comparison, Ant's `#1677ff` is
-**4.10:1 and fails AA for text** — do not drift toward it.
+`--blue-600` is primary, at **4.57:1 on white** — the low end of the band that holds Carbon
+`#0f62fe` (5.00:1), Atlassian `#1868DB` (5.20:1) and Fluent `#0f6cbd` (5.38:1). For comparison,
+Ant's `#1677ff` is **4.10:1 and fails AA for text** — do not drift toward it.
+
+**`--blue-600` is a fill, border and ring step — not a body-text step.** It clears AA on a white
+card by 0.07, and on the `--background` canvas `#eef2f8` it measures **4.07:1 and fails**. The
+same holds for any tinted wash: on `bg-blue-400/12` it is 4.12:1. So small text in blue uses
+**`--blue-700`** (5.99:1 on white, 5.33:1 on canvas). Blue-600 remains correct for a 2px focus
+ring, a chart mark and a filled button, all of which are non-text and answer to 3:1.
+
+**Status ink is one step deeper than status fill.** `--risk`/`--block`/`--ok` are *fill* weights;
+`--risk-ink`/`--block-ink`/`--ok-ink` are the 700 steps that sit on them. Setting a status word in
+its own fill hue is the failure this rule exists for — it shipped once, with `--ok-ink` at
+**2.42:1** on `bg-ok/15`, a green word on a green wash that still read as deliberate. Badge tones
+are measured by `web/tests/design/badgeContrast.test.mjs`, which recomputes from the token values
+rather than pinning hexes, so a re-tune is free and a regression is not.
 
 **Gradient, corrected.** Carbon, Atlassian and Fluent ship **zero** gradient tokens. Grafana ships
 two, brand-only, never on data. Polaris ships exactly one, and it is the model:

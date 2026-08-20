@@ -104,9 +104,15 @@
   --block: #fda29b; /* guardrail block         */
   --ok: #71dd8c; /* pass / healthy          */
 
-  --risk-ink: #dc6803;
-  --block-ink: #d92d20;
-  --ok-ink: #12b76a;
+  /* The *ink* steps are one stop deeper than the fill's own 600 step, because a
+   * status badge sets 12px text on a 15%-tinted fill and AA wants 4.5:1 there.
+   * Measured on the composited fill: the old 600 steps scored risk 3.27:1,
+   * block 4.39:1 and ok **2.42:1** — all failing, ok badly. These 700 steps are
+   * the next stop on the same scales, so hue identity is unchanged, and they
+   * measure 5.08:1, 5.98:1 and 5.26:1 on the fill (5.43, 6.57, 5.69 on white). */
+  --risk-ink: #b54708;
+  --block-ink: #b42318;
+  --ok-ink: #067647;
 
   /* Ink on a tinted status fill. The decorative subject `*-foreground` set is
      deleted (DESIGN.md §2); these three survive because a filled status control

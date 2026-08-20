@@ -93,9 +93,22 @@ mode. Generous rounding is the marketing-page dialect. Buttons and inputs 6px; c
 --blue-600 #1570ef   --blue-700 #175cd3   --blue-800 #1e40af   --blue-900 #0b3b8f
 ```
 
-`--blue-600` is primary, at ~4.9:1 on white — in the same band as Carbon `#0f62fe` (5.00:1),
-Atlassian `#1868DB` (5.20:1) and Fluent `#0f6cbd` (5.38:1). For comparison, Ant's `#1677ff` is
-**4.10:1 and fails AA for text** — do not drift toward it.
+`--blue-600` is primary, at **4.57:1 on white** — the low end of the band that holds Carbon
+`#0f62fe` (5.00:1), Atlassian `#1868DB` (5.20:1) and Fluent `#0f6cbd` (5.38:1). For comparison,
+Ant's `#1677ff` is **4.10:1 and fails AA for text** — do not drift toward it.
+
+**`--blue-600` is a fill, border and ring step — not a body-text step.** It clears AA on a white
+card by 0.07, and on the `--background` canvas `#eef2f8` it measures **4.07:1 and fails**. The
+same holds for any tinted wash: on `bg-blue-400/12` it is 4.12:1. So small text in blue uses
+**`--blue-700`** (5.99:1 on white, 5.33:1 on canvas). Blue-600 remains correct for a 2px focus
+ring, a chart mark and a filled button, all of which are non-text and answer to 3:1.
+
+**Status ink is one step deeper than status fill.** `--risk`/`--block`/`--ok` are *fill* weights;
+`--risk-ink`/`--block-ink`/`--ok-ink` are the 700 steps that sit on them. Setting a status word in
+its own fill hue is the failure this rule exists for — it shipped once, with `--ok-ink` at
+**2.42:1** on `bg-ok/15`, a green word on a green wash that still read as deliberate. Badge tones
+are measured by `web/tests/design/badgeContrast.test.mjs`, which recomputes from the token values
+rather than pinning hexes, so a re-tune is free and a regression is not.
 
 **Gradient, corrected.** Carbon, Atlassian and Fluent ship **zero** gradient tokens. Grafana ships
 two, brand-only, never on data. Polaris ships exactly one, and it is the model:
@@ -237,6 +250,63 @@ and raises error rates — **but Tractinsky & Meyer (n≈242) found people prefe
 was deciding and 2.5D when the goal was to impress.** That is exactly this product's split. Our
 graph is 17 nodes, so performance is a non-issue either way; the question is only whether that
 surface is for reading or for impressing.
+
+### The asset pipeline — and the rule that has no exceptions
+
+**A 3D accent is a real rendered image committed to this repo. It is never approximated.**
+
+That is a hard rule because the temptation is obvious and cheap: a `linear-gradient` on a
+`rounded-xl` div looks *vaguely* like a matte cube at a glance, costs nothing, and is a lie. So:
+
+> **NO WORKAROUNDS ON ASSETS.** If a screen calls for a 3D object, download or render the real
+> asset, commit it, and import it. Do **not** substitute a CSS gradient, a coloured `div`, a
+> border-radius trick, an emoji, an icon-font glyph, or a `TODO` placeholder. Do **not** ship a
+> grey box "until the asset arrives". If the asset does not exist yet, **make it** — the recipe is
+> above and the render script is below. An approximation that ships is an approximation that
+> stays.
+
+Two supported lanes, both producing the same thing — a transparent PNG/AVIF in `web/public/3d/`:
+
+**Lane A — Spline (art-directed, human-driven).**
+[spline.design](https://spline.design/) free tier, exporting PNG. Start from a community scene —
+[#shapes](https://community.spline.design/tag/shapes), [#abstract](https://community.spline.design/tag/abstract),
+[#free](https://community.spline.design/tag/free), largely CC0 and remixable — recolour to
+`--blue-600` / `--blue-400`, export at 2×, transparent. Never ship Spline's **runtime**: 544 kB
+gzip and a documented 17.9 s of CPU. Spline is an authoring tool here, not a dependency.
+
+**Lane B — headless render (repeatable, exact, automatable).**
+`scripts/render-3d.mjs` drives Playwright + three.js over the §7 recipe and writes a transparent
+PNG, then encodes AVIF/WebP. This is the lane that guarantees an object in *our* exact blue at any
+size, with nothing to attribute and no browser session. Prefer it for anything systematic (the
+Jobs stage blocks, repeated card accents); prefer Spline when a shape needs art direction.
+
+**Ready-made, when the shape already exists.** [3dicons.co/explore](https://3dicons.co/explore) is
+CC0 with no attribution and matches the reference style; the Figma files
+[150+ abstract PNG shapes](https://www.figma.com/community/file/1386646157709565001/free-150-3d-render-abstract-png-shapes)
+and [40+ shapes/blobs/objects](https://www.figma.com/community/file/1483726223390076498/40-free-3d-assets-shapes-blobs-and-objects)
+are free. Downloading one of these **is** compliant with the rule — importing a real asset is the
+point; rendering it yourself is only required when none fits.
+
+**Every asset is recorded.** `web/public/3d/manifest.json` carries, per file: the source (Spline
+scene URL, 3dicons id, or `rendered`), the licence tag, the dimensions, and what it is used for.
+An asset with no manifest entry fails review — not for legal reasons, but because an unattributed
+binary in a repo is a thing nobody can regenerate.
+
+### Figma as the measuring instrument
+
+The systems in §1–§3 publish free, inspectable Figma libraries. Use them to *measure*, not to copy:
+[Carbon v11](https://www.figma.com/community/file/1157761560874207208/v11-carbon-design-system) ·
+[Fluent 2 Web](https://www.figma.com/community/file/836828295772957889/microsoft-fluent-2-web) ·
+[Ant Design](https://www.figma.com/community/file/831698976089873405/ant-design-open-source) ·
+[Atlassian](https://www.figma.com/@atlassian).
+
+For composition reference on the floating-card language:
+[SaaS Dashboard Free UI Kit](https://www.figma.com/community/file/1445485924387000759/saas-dashboard-free-ui-kit)
+(tokens + components) and
+[Glass SaaS Dashboard](https://www.figma.com/community/file/1633077830104049751/glass-saas-dashboard-free-figma-ui-kit-design-system).
+
+**These inform spacing, anatomy and density. They do not become our identity** — the tokens in
+§1–§3 are the identity, and they are already sourced.
 
 ### Rules that hold wherever 3D appears
 
