@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
 from aegis.governance.schema import SchemaDriftError
@@ -31,10 +31,12 @@ from app.api.routes_db import mount as _mount_db
 from app.api.routes_guardrails import mount as _mount_guardrails
 from app.api.routes_health import mount as _mount_health
 from app.api.routes_llmops import mount as _mount_llmops
+from app.api.routes_mcp import mount as _mount_mcp
 from app.api.routes_memory import mount as _mount_memory
 from app.api.routes_pipelines import mount as _mount_pipelines
 from app.api.routes_redteam import mount as _mount_redteam
 from app.api.routes_reports import mount as _mount_reports
+from app.api.routes_skills import mount as _mount_skills
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,6 +98,18 @@ _mount_db(router)
 # verified against the code before a byte of it goes out. Same shape and the same
 # idempotent mount; it reads no database and dials nothing.
 _mount_pipelines(router)
+
+# The MCP control plane (§10.6/10.7) — the declared external tool servers, the tools
+# discovered on them, and the tier each is gated at. Same shape and the same idempotent
+# mount. It dials nothing until a platform admin presses discover: declaring a peer says
+# where to look, and reaching one is an explicit act.
+_mount_mcp(router)
+
+# The skills control plane (§10.1-10.3) — authoring a SKILL.md at the platform, tenant
+# or user layer, and putting it in force. Same shape and the same idempotent mount. It
+# opens no connection until a request asks it to, and the input rail it screens an
+# authored body with is the platform's already-bound one.
+_mount_skills(router)
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +431,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - the registry cache is best-effort at startup
             logger.warning("Prompt registry cache refresh skipped.", exc_info=True)
 
+    # Hydrate the external MCP connections an operator declared through the console
+    # (§10.6). Without this they would exist only until the process that created them
+    # stopped, which is not a connection anybody can rely on. Best-effort and gated on
+    # the real stores: an unreachable database means the deployment falls back to the
+    # peers named in ``AEGIS_MCP_CLIENT_SERVERS`` and nothing else — fewer peers, never
+    # a peer nobody declared. Hydrating a connection reaches no third party: discovery
+    # and admission are separate, explicit acts.
+    if settings.stores_enabled:
+        try:
+            from app.api.routes_mcp import load_servers
+
+            logger.info("MCP connections hydrated: %d external server(s).", await load_servers())
+        except Exception:  # noqa: BLE001 - a peer list is never worth failing a boot
+            logger.warning("MCP connection hydration skipped.", exc_info=True)
+
     # ── The one way up (§8.3) ────────────────────────────────────────────────
     # One call replaces the ten ordered ``configure_*`` reaches this composition root
     # used to make — the vector-store pair that lived here, and the three that fired as
@@ -541,10 +570,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - the ML signal is best-effort, never gating
             logger.warning("ML spine warm-up skipped.", exc_info=True)
 
+    # The MCP front door (§10.4). The SDK's Streamable HTTP app owns a lifespan — the
+    # ``StreamableHTTPSessionManager`` task group every MCP session's dispatch loop runs
+    # in — and a mounted ASGI app never receives lifespan events from its host, so it is
+    # entered here. Without this the mount would accept a POST and then hang on a task
+    # group that was never started. The exit stack (rather than an ``async with`` around
+    # this whole function) keeps the change to three lines in a lifespan several other
+    # lanes edit.
+    exits = AsyncExitStack()
+    mcp_mount = getattr(app.state, "mcp_mount", None)
+    if mcp_mount is not None:
+        await exits.enter_async_context(mcp_mount.running())
+
     warm_task = asyncio.create_task(_warm_ml())
     try:
         yield
     finally:
+        await exits.aclose()
         warm_task.cancel()
         if (
             sweeper_task is not None
@@ -649,6 +691,25 @@ def create_app() -> FastAPI:
     versioned, infra = _split_infra_probes(router)
     app.include_router(versioned, prefix=API_PREFIX)
     app.include_router(infra)
+    # §10.4 — the MCP front door, served over Streamable HTTP at ``/mcp/mcp``. It is a
+    # MOUNT rather than a FastAPI route because the ``mcp`` SDK hands us a complete ASGI
+    # application: the transport, the bearer-auth middleware chain, the session manager
+    # and its lifespan. Re-hosting that inside a route would mean re-implementing the
+    # parts we deliberately adopted. It carries no allowlist entry in
+    # ``tests/api/test_route_coverage.py`` because it is not a portal route at all —
+    # it is a protocol endpoint whose only clients speak MCP.
+    #
+    # Same auth, same tokens, same governance as ``/v1``: see ``app.mcp.server``.
+    try:
+        from app.mcp.server import MCP_MOUNT, McpTransportMount
+    except ImportError:  # pragma: no cover - the mcp SDK is an optional dependency
+        logger.warning("MCP server not mounted: the `mcp` SDK is not installed.")
+    else:
+        # The mount is a restartable *slot*, not the transport itself: the SDK's session
+        # manager may only be run once, and this lifespan is entered more than once (by
+        # the suite, and by any host that restarts). See ``McpTransportMount``.
+        app.state.mcp_mount = McpTransportMount()
+        app.mount(MCP_MOUNT, app.state.mcp_mount)
     # The served document, with the ``StreamEvent`` union published into it (§8.8).
     # ``backend/openapi.json`` is a committed snapshot of exactly this.
     app.openapi = lambda: build_openapi(app)  # type: ignore[method-assign]
