@@ -1029,12 +1029,14 @@ function WaitingGate({
           )}
 
           {/*
-            `mt-auto` is not tidiness. The two columns are grid siblings, so the taller
-            one — the rail, once the server has a refusal to state — sets the row height
-            and the evidence column used to end a hundred pixels above the card's floor.
-            Anchoring the provenance line to the bottom closes the card on both sides.
+            Deliberately *not* `mt-auto`. The rail is the taller column once the server
+            has a refusal to state, and pinning this line to the card's floor to square
+            the two bottom edges only moves the slack into the middle of the evidence —
+            a hole between the rationale and its provenance reads as something failed to
+            render, where trailing space under a finished column reads as a finished
+            column.
           */}
-          <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
             <GateReceipt approvalId={row.id} view={view} variant="inline" />
             <span className="text-[0.68rem] text-muted-foreground">
               run <Figure className="break-all">{row.run_id}</Figure>

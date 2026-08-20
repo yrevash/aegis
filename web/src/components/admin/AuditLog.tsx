@@ -372,7 +372,10 @@ function TraceChip({ traceId }: { traceId: string | null }): ReactElement {
     <button
       type="button"
       onClick={copy}
-      className="group inline-flex touch-manipulation items-center gap-1 rounded-lg border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-600 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      // `--blue-700`, not `--blue-600`: this is 11px text on a tinted wash, where
+      // blue-600 measures 4.12:1 and fails AA (DESIGN.md §2). The 600 step is a fill,
+      // a border and a focus ring — never a small-text step.
+      className="group inline-flex touch-manipulation items-center gap-1 rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-700 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       title="Copy trace id"
     >
       {traceId}
