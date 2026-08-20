@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { SceneState } from '@/components/illustration/Scene'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -88,11 +89,17 @@ function LatencyEmpty({ data }: { data: LatencyResponse }): ReactElement {
   return (
     <Card>
       <CardBody className="space-y-4">
-        <Absence
-          figure="Every percentile on this page"
-          why="The latency window is per-process and resets on restart, and no run has completed in this one yet."
-          needed="Run a query. Percentiles appear here as soon as the first run finishes — there is no seeded window."
-        />
+        {/* A screen that correctly says "nothing measured yet" reads as broken unless
+            something says the emptiness is deliberate. The scene does that; the
+            `Absence` under it is still what carries the fact, and still what a screen
+            reader gets. */}
+        <SceneState name="empty" size="md">
+          <Absence
+            figure="Every percentile on this page"
+            why="The latency window is per-process and resets on restart, and no run has completed in this one yet."
+            needed="Run a query. Percentiles appear here as soon as the first run finishes — there is no seeded window."
+          />
+        </SceneState>
         <Receipt
           origin={data.source}
           detail={

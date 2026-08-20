@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/primitives/button'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { SceneState } from '@/components/illustration/Scene'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { RailVerdict } from '@/components/voice/RailVerdict'
 import { TranscriptPanel } from '@/components/voice/TranscriptPanel'
@@ -229,11 +230,13 @@ function VoiceView(): ReactElement {
       {result === null ? (
         <Card>
           <CardBody>
-            <p className="text-sm text-muted-foreground">
-              No transcription yet. Record a clip or upload a file — the transcript, its
-              segments and the rail verdict on it appear here. Nothing is measured or shown
-              until a recording has actually been transcribed.
-            </p>
+            <SceneState name="empty" size="md">
+              <p className="text-sm text-muted-foreground">
+                No transcription yet. Record a clip or upload a file — the transcript, its
+                segments and the rail verdict on it appear here. Nothing is measured or
+                shown until a recording has actually been transcribed.
+              </p>
+            </SceneState>
           </CardBody>
         </Card>
       ) : (

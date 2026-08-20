@@ -64,10 +64,15 @@ const SCENE = {
     alt: 'A person standing beside a large screen showing a closed padlock inside a shield.',
     ratio: 0.667,
   },
-  /** A window with nothing in it — the shape of an address that serves nothing. */
-  nothing: {
-    src: '/illustrations/No data-rafiki.svg',
-    alt: 'A person facing a browser window that holds a single empty document labelled no data.',
+  /**
+   * A wrong address. Not `No data-rafiki`, which was the first choice and is a
+   * different message: `No data` means *nothing has been recorded yet*, which is
+   * an empty state, and telling a lost visitor that would answer a question they
+   * did not ask.
+   */
+  wrongAddress: {
+    src: '/illustrations/404 Error-rafiki.svg',
+    alt: 'A rocket flying past the numerals 404, with an astronaut adrift on a tether beside them.',
     ratio: 1,
   },
 } as const

@@ -45,6 +45,14 @@ export type SceneName =
   | 'growth'
   /** Somebody with a question, before they ask it. */
   | 'curious'
+  /** A chart with nothing to draw yet. */
+  | 'noChart'
+  /** Money over a horizon, before there is history to project from. */
+  | 'noHistory'
+  /** A report or dashboard with nothing on it yet. */
+  | 'noReport'
+  /** A run being exercised against a scenario. */
+  | 'exercising'
 
 const SCENE: Record<SceneName, string> = {
   empty: '/illustrations/No data-rafiki.svg',
@@ -55,6 +63,10 @@ const SCENE: Record<SceneName, string> = {
   testing: '/illustrations/software tester-amico.svg',
   growth: '/illustrations/Business growth-amico.svg',
   curious: '/illustrations/Curious-rafiki.svg',
+  noChart: '/illustrations/Visual data-rafiki.svg',
+  noHistory: '/illustrations/Investment data-rafiki.svg',
+  noReport: '/illustrations/Presentation-rafiki.svg',
+  exercising: '/illustrations/Mobile testing-rafiki.svg',
 }
 
 /** Rendered width in px. `sm` suits a panel body, `md` a whole screen's empty state. */

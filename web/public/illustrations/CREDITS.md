@@ -70,3 +70,42 @@ something Aegis really does does not belong on the page.
 illustration that decorates a screen it has nothing to do with reads as stock art,
 which is worse than no illustration. Two of these are marked unused for exactly
 that reason rather than forced onto a page.
+
+## Where they are used on the pre-auth pages
+
+The three surfaces a visitor meets before a portal — the landing page, sign-in and
+the 404 — share one voice and one scene component
+(`web/src/components/landing/LandingScene.tsx`), which gives each scene a real
+`alt` because these are editorial images with no adjacent sentence describing
+them. The console's own screens keep `components/illustration/Scene`, whose
+scenes are `aria-hidden` because they always sit beside text saying the same thing.
+
+| surface | scene | why it is true there |
+|---|---|---|
+| landing — fan-out | `forming team leadership-amico.svg` | a team on one task, which is what a fan-out is |
+| landing — the human gate | `Consent-rafiki.svg` | a consent form being signed; the gate's sentence is a record |
+| login | `Security-pana.svg` | a locked screen, which is what a sign-in form is for |
+| 404 | `404 Error-rafiki.svg` | wrong address, and the code is drawn into the artwork |
+
+**Three were rejected on sight, and the reasons are the rule working.**
+
+* `401 Error Unauthorized-rafiki.svg` for the landing page's tenant-isolation
+  section. Aegis does not answer a cross-tenant question with a 401 — it answers
+  with a run that says it cannot source anything — and the artwork draws "401" at
+  200 points. That section ships with no picture instead.
+* `No data-rafiki.svg` for the 404. It means *nothing has been recorded yet*,
+  which is an empty state; telling someone who mistyped a URL that there is no
+  data answers a question they did not ask.
+* `people using robots-amico.svg` for the sign-in panel. Rendered, it is a family
+  on a sofa with a robot vacuum — a consumer smart-home scene, and not one frame
+  of what this product does.
+
+**And one page ships with none.** `web/src/app/error.tsx` — nothing in the set
+depicts a screen that stopped rendering, and a picture chosen for the mood of a
+page is the definition of stock art. It carries the failure's own digest instead.
+
+**They only work on a light ground.** Every file carries its own near-white
+background plate, so on `--rail` navy a scene reads as a pale rectangle pasted
+onto the panel rather than as a drawing. Measured, not assumed — it is why the
+sign-in page's left panel is the blue-tinted canvas rather than the navy it was
+first drafted as, and why the landing page's one navy surface carries no scene.

@@ -128,6 +128,26 @@ distinguished by label, not hue.
 **Never a rainbow, never a dual axis, never a cycled hue.** Run
 `node scripts/validate_palette.js "<hex,hex,…>"` — do not eyeball CVD.
 
+**Three categorical series is the ceiling, not four.** This is measured, and it corrects guidance
+that was repeated to several implementers before anyone ran the validator on it:
+
+```
+#60a5fa,#1570ef,#175cd3,#0b3b8f   [FAIL] normal-vision floor
+                                  #175cd3 ↔ #1570ef  ΔE 6.4 — below 15
+#60a5fa,#1570ef,#1e40af           [PASS] CVD 14.1 · [PASS] normal 15.2
+```
+
+`--blue-600` and `--blue-700` are **adjacent ramp steps**. They are correct as two shades of one
+thing and wrong as two different things: a reader with full colour vision cannot reliably tell
+them apart side by side, which no amount of legend fixes. One hue simply does not contain four
+separable categories — that is the price of the one-ramp rule, and the right answer is to stop
+adding series, not to reach for a fifth hue.
+
+So: **a fourth category folds into a named `Other (n)`**, or the chart becomes small multiples.
+The four-step set remains correct for **ordinal** use — donut slices, a sequential scale — where
+`--ordinal` reports ALL CHECKS PASS, because ordinal steps are read by position and not by
+identity.
+
 **Radial gauges — one value, never a row of them.** The reference kit leans on them, and they are
 defensible for exactly one job: a single value whose position inside a bounded range is the point
 (a tenant at 73% of its spend cap). They are the wrong choice the moment you need to compare

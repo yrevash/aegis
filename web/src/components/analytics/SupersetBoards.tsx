@@ -304,7 +304,10 @@ function MeasurePlot({
           hex: rampHex(i, rows.length),
         }))}
         centerLabel={formatValue(total)}
-        centerSub={measure}
+        // "total", not the measure's name: the caption above the chart already names
+        // the measure, and a 20-character key set inside a 62%-radius hole overruns
+        // the ring it is meant to sit in.
+        centerSub="total"
         valueFormatter={formatValue}
         height={height}
       />

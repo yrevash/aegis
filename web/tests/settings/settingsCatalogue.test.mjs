@@ -20,6 +20,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import {
+  firstSentence,
   canWeaken,
   controlLabel,
   fieldFor,
@@ -314,4 +315,24 @@ test('a caller is only offered the layers their token can reach', () => {
   for (const option of writableScopes('client', 3, 9)) {
     if (!option.available) assert.ok(option.reason.length > 0, `${option.id} needs a reason`)
   }
+})
+
+/*
+  The refusal that stands in for a control is truncated at a sentence, not at a width.
+
+  A `line-clamp` was doing this and produced "Nothing reads this yet. The run's width
+  comes from…" on the page — a clause cut mid-thought, which a reader takes for a bug
+  rather than for a summary. The full text is still one hover away, so the only claim
+  here is that what lands on the page is a complete sentence.
+*/
+test('firstSentence cuts at a sentence boundary, never mid-clause', () => {
+  assert.equal(
+    firstSentence("Nothing reads this yet. The run's width comes from agent.max_plan_iterations."),
+    'Nothing reads this yet.',
+  )
+  // Already one sentence, with or without a full stop: returned whole.
+  assert.equal(firstSentence('Only a platform admin may change this.'), 'Only a platform admin may change this.')
+  assert.equal(firstSentence('  Read only  '), 'Read only')
+  // A decimal is not a sentence boundary — the period has no space after it.
+  assert.equal(firstSentence('The floor is 0.5 today. It was 0.9.'), 'The floor is 0.5 today.')
 })

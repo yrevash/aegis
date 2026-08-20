@@ -8,12 +8,14 @@ import { LandingScene } from '@/components/landing/LandingScene'
  * The 404. Previously Next's own unstyled default, which a jury could reach by
  * mistyping one path.
  *
- * **The scene and the sentence have to agree.** `No data-rafiki` draws the words
- * "NO DATA" into a browser window, and a picture whose baked text argues with the
- * heading beside it is worse than no picture — so the heading is *"Nothing is
- * served at this address"* rather than the usual "page not found". Both then say
- * the same thing, which is also the true one: there is no route here, so there is
- * nothing to render.
+ * **The scene names the code, so the words do not have to.** `404 Error-rafiki`
+ * draws the numerals into the artwork, so the eyebrow says what went wrong
+ * (*wrong address*), the picture says which code that is, and the heading says
+ * the consequence. Three different facts rather than the same one three times.
+ *
+ * `No data-rafiki` was the first choice and is the wrong message: it means
+ * *nothing has been recorded yet*, which is an empty state. Telling someone who
+ * mistyped a URL that there is no data answers a question they did not ask.
  *
  * The copy is direction, not mood. DESIGN.md's rule for a failure surface is that
  * it says what happened and how to get out of it, in the interface's voice — so
@@ -38,10 +40,10 @@ export default function NotFound(): ReactElement {
         className="flex flex-1 items-center justify-center px-6 pb-16 sm:px-10"
       >
         <div className="grid max-w-4xl gap-x-14 gap-y-8 sm:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] sm:items-center">
-          <LandingScene name="nothing" width={320} className="mx-auto sm:mx-0" />
+          <LandingScene name="wrongAddress" width={340} className="mx-auto sm:mx-0" />
 
           <div className="min-w-0">
-            <p className="eyebrow mb-3">404</p>
+            <p className="eyebrow mb-3">Wrong address</p>
             <h1 className="font-display text-[1.75rem] leading-9 font-semibold tracking-[-0.02em] text-balance text-foreground sm:text-[2rem] sm:leading-10">
               Nothing is served at this address.
             </h1>
