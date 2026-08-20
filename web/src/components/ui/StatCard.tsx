@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 
 import { Figure } from '@/components/primitives/Figure'
+import { MiniTrend } from '@/components/shared/MiniTrend'
 import { Receipt } from '@/components/primitives/Receipt'
 import { SIGNALS, type Signal } from '@/config/signals'
 import { cn } from '@/lib/utils'
@@ -24,6 +25,7 @@ export function StatCard({
   icon: Icon,
   tone = 'neutral',
   delta,
+  trend,
   source,
   className,
 }: {
@@ -33,6 +35,14 @@ export function StatCard({
   icon?: LucideIcon
   tone?: Signal
   delta?: { value: string; direction: 'up' | 'down' }
+  /**
+   * Chronological values, oldest → newest, drawn as a sparkline beneath the
+   * figure. A KPI is a single sample; the shape it came from is the context a
+   * reader needs to know whether that sample is news. Omit it when the figure
+   * has no history — {@link MiniTrend} draws a quiet baseline below two finite
+   * points rather than inventing a curve, but an absent series should be absent.
+   */
+  trend?: number[] | { value: number }[]
   /** Where the figure came from. Omit only when the figure has no origin. */
   source?: string
   className?: string
@@ -68,9 +78,13 @@ export function StatCard({
           <span
             className={cn(
               'tabular flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-xs font-medium',
+              // Both chips wear the *ink* step, not the fill step. `--danger`
+              // `#f04438` is a fill-weight red and measured **2.94:1** on its own
+              // `bg-block/25` wash — the same defect the badge tones carried, in a
+              // chip that reports a number moving the wrong way.
               delta.direction === 'up'
                 ? 'bg-ok/20 text-[color:var(--ok-ink)]'
-                : 'bg-block/25 text-[color:var(--danger)]',
+                : 'bg-block/25 text-[color:var(--block-ink)]',
             )}
           >
             <span aria-hidden>{delta.direction === 'up' ? '▲' : '▼'}</span>
@@ -79,7 +93,12 @@ export function StatCard({
           </span>
         ) : null}
       </div>
-      {source == null ? null : <Receipt origin={source} className="mt-4" />}
+      {trend == null ? null : (
+        <div className="mt-4 -mx-1" aria-hidden>
+          <MiniTrend data={trend} color={tone} height={36} />
+        </div>
+      )}
+      {source == null ? null : <Receipt origin={source} className={cn(trend == null ? 'mt-4' : 'mt-3')} />}
     </div>
   )
 }
