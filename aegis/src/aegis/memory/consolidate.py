@@ -1006,6 +1006,24 @@ async def sweep_pending(
     # once here rather than inside the loop's ``try``, where an ImportError would be
     # swallowed as a per-job failure and read as "consolidation is broken".
     from aegis.governance.context import governed  # noqa: PLC0415 - see above
+    from aegis.governance.rls import set_tenant_scope  # noqa: PLC0415 - see above
+
+    # **This sweeper's authority spans every tenant, and it has to say so.**
+    #
+    # The queue read below is deliberately cross-tenant: one sweeper drains the
+    # pending consolidation jobs for the whole platform. But it bound no scope, so
+    # `install_scope_auditor` logged it as an UNSCOPED READ on every sweep — and the
+    # consequence is worse than the warning suggests. Under `RLS_FAIL_CLOSED=true`,
+    # which is the production posture, an unbound session is not "sees everything";
+    # it is "sees nothing", because the closed predicate has no scope to match. The
+    # sweep would find zero PENDING jobs, process zero, report success, and memory
+    # consolidation would silently stop for every tenant at once.
+    #
+    # `set_tenant_scope(session, None)` is not "clear the scope" — per its own
+    # contract it is the platform assertion, written to a second GUC precisely so
+    # that "a caller whose authority spans every tenant" and "nobody bound a scope"
+    # stop being spelled identically. That distinction is what this call buys.
+    await set_tenant_scope(session, None)
 
     stmt = (
         select(MemoryConsolidationJob)

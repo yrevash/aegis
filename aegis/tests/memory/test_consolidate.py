@@ -596,3 +596,63 @@ async def test_profile_batch_merge_is_confidence_ordered(db):
         ).scalar_one()
         # List position would have left "free" (0.60); confidence ordering keeps "gold".
         assert prof.data["tier"] == "gold"
+
+
+async def test_the_sweep_declares_platform_scope_before_reading_the_queue(db, monkeypatch):
+    """The cross-tenant queue read binds the platform scope, and binds it *first*.
+
+    This sweeper drains every tenant's pending jobs from one loop, so its queue read
+    is deliberately cross-tenant. It bound no scope at all, which the scope auditor
+    logged as an UNSCOPED READ on every sweep — and the real consequence is the
+    opposite of what "unscoped" suggests. Under ``RLS_FAIL_CLOSED=true``, the
+    production posture, an unbound session matches the *closed* predicate and reads
+    **zero** rows. The sweep would find no PENDING jobs, process none, return 0, and
+    report success, while memory consolidation was silently dead for every tenant.
+
+    That failure is invisible to the rest of this file, because these tests run on
+    SQLite where :func:`set_tenant_scope` is a no-op — every assertion here passes
+    with the binding removed. So the claim under test is the *call*, not its effect:
+    the platform assertion is made, and it is made before the queue is read.
+    """
+    calls: list[int | None] = []
+    order: list[str] = []
+
+    import aegis.governance.rls as rls_module
+
+    real_scope = rls_module.set_tenant_scope
+
+    async def spy(session, tenant_id):
+        calls.append(tenant_id)
+        order.append("scope")
+        return await real_scope(session, tenant_id)
+
+    monkeypatch.setattr(rls_module, "set_tenant_scope", spy)
+
+    async with db() as s:
+        cfg = MemoryConfig()
+        await enqueue_consolidation(s, subject_id="user:11", session_id="sess-11")
+
+        real_execute = s.execute
+
+        async def watched_execute(stmt, *a, **kw):
+            if "memory_consolidation_job" in str(stmt).lower() and "select" in str(stmt).lower()[:12]:
+                order.append("queue-read")
+            return await real_execute(stmt, *a, **kw)
+
+        monkeypatch.setattr(s, "execute", watched_execute)
+
+        await sweep_pending(
+            s,
+            config=cfg,
+            complete=FakeComplete(extractions=[{"facts": []}], decisions=[]),
+            embed=FakeEmbed(),
+            limit=10,
+        )
+
+    assert None in calls, (
+        "the sweep never asserted the platform scope; under RLS_FAIL_CLOSED it would "
+        f"read zero PENDING jobs and silently stop. Scopes bound: {calls!r}"
+    )
+    assert order and order[0] == "scope", (
+        f"the platform scope must be bound before the queue is read, got {order[:3]!r}"
+    )
