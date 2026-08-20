@@ -75,6 +75,7 @@ import aegis.ops.models  # noqa: F401 - registration side-effect only
 # template would carry a partitioned table that rejects every write.
 import aegis.runs.models  # noqa: F401 - registration side-effect only
 import aegis.settings.models  # noqa: F401 - registration side-effect only
+import aegis.skills.models  # noqa: F401 - registration side-effect only
 from aegis.data import AegisBase
 from aegis.governance.rls import bootstrap_rls
 

@@ -840,6 +840,7 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     # merely about the table existing.
     import aegis.runs.models  # noqa: F401,PLC0415 - registration side-effect only
     import aegis.settings.models  # noqa: F401,PLC0415 - registration side-effect only
+    import aegis.skills.models  # noqa: F401,PLC0415 - registration side-effect only
     from aegis.data import AegisBase  # noqa: PLC0415 - local to avoid an import-time dep
 
     import app.memory.stores  # noqa: F401,PLC0415 - registration side-effect only

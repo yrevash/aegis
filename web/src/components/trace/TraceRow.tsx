@@ -2,6 +2,8 @@
 
 import type { CSSProperties, ReactElement } from 'react'
 
+import { loadedSkillName } from '@/components/skills/loadedSkill'
+import { SkillActivationChip } from '@/components/skills/SkillActivationChip'
 import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
 import type { StreamEvent } from '@/lib/stream'
@@ -15,6 +17,10 @@ import { describeEvent } from './describeEvent'
  */
 export function TraceRow({ event, last }: { event: StreamEvent; last: boolean }): ReactElement {
   const { signal, icon: Icon, title, detail } = describeEvent(event)
+  // §10.3: a skill load is an ordinary tool call, so it arrives here like any other —
+  // the chip is the annotation that says which skill, without adding a second row for
+  // an event the trace is already showing.
+  const skill = loadedSkillName(event as { type?: string; tool?: string; args?: unknown })
   const token = SIGNALS[signal]
   // Only the freshly-mounted newest row fires the beat (keyed by remount).
   const beatStyle = last ? ({ '--beat': token.hex } as CSSProperties) : undefined
@@ -45,6 +51,11 @@ export function TraceRow({ event, last }: { event: StreamEvent; last: boolean })
             #{event.seq}
           </span>
         </div>
+        {skill !== null && (
+          <p className="mt-1">
+            <SkillActivationChip name={skill} />
+          </p>
+        )}
         {detail && (
           <p className="mt-0.5 line-clamp-2 font-mono text-[0.72rem] leading-relaxed break-words text-muted-foreground">
             {detail}

@@ -1454,6 +1454,188 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/console": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * External MCP servers, their tools, and the tier each is gated at
+         * @description Return the whole MCP control plane in one response.
+         *
+         *     Args:
+         *         auth: The authenticated platform admin.
+         *
+         *     Returns:
+         *         The console aggregate.
+         */
+        get: operations["mcp_console_v1_mcp_console_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Declare an external MCP server
+         * @description Declare a peer. Declaring discovers nothing and grants nothing.
+         *
+         *     Args:
+         *         body: The connection. Its ``credential`` is held in this process and never
+         *             written to the database or returned.
+         *         auth: The authenticated platform admin.
+         *
+         *     Returns:
+         *         The console aggregate, after the write.
+         *
+         *     Raises:
+         *         HTTPException: 400 when the id is unusable as a namespace, 409 when it is
+         *             already declared. Re-pointing an existing id is refused rather than
+         *             accepted, because it would silently re-aim every grant written against
+         *             that namespace at a different peer.
+         */
+        post: operations["create_server_v1_mcp_servers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/servers/{server_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Edit a connection, including enabling or disabling it
+         * @description Edit a peer. Disabling it removes its tools from every agent's payload.
+         *
+         *     Args:
+         *         body: The fields to change; ``null`` leaves one alone.
+         *         server_id: The declared peer.
+         *         auth: The authenticated platform admin.
+         *
+         *     Returns:
+         *         The console aggregate, after the write.
+         *
+         *     Raises:
+         *         HTTPException: 404 when the server is not declared.
+         */
+        put: operations["update_server_v1_mcp_servers__server_id__put"];
+        post?: never;
+        /**
+         * Forget a connection, with its tools, grants and credential
+         * @description Remove a peer entirely.
+         *
+         *     Args:
+         *         server_id: The declared peer.
+         *         auth: The authenticated platform admin.
+         *
+         *     Returns:
+         *         The console aggregate, after the removal.
+         *
+         *     Raises:
+         *         HTTPException: 404 when the server is not declared.
+         */
+        delete: operations["delete_server_v1_mcp_servers__server_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/servers/{server_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test the connection and re-read the peer's tool list
+         * @description Connect to ``server_id``, report what it said, and refresh its tools.
+         *
+         *     The probe half never raises: an unreachable peer answers with ``reachable: false``
+         *     and its own sentence, because "why not" is the useful half of a test button.
+         *     Discovery only runs when the probe succeeded, and it *replaces* that peer's tools
+         *     rather than merging, so a tool the peer has withdrawn stops being offered. Grants
+         *     over a withdrawn tool are left in place but authorise nothing —
+         *     :meth:`~app.mcp.client.ExternalToolRegistry.is_allowed` requires a currently visible
+         *     tool — so re-adding it upstream cannot silently re-arm an old decision.
+         *
+         *     Args:
+         *         server_id: The declared peer.
+         *         auth: The authenticated platform admin.
+         *
+         *     Returns:
+         *         The console aggregate with ``probe`` set.
+         *
+         *     Raises:
+         *         HTTPException: 404 when the server is not declared; 409 when a tool it
+         *             advertises would collide with a registered Aegis tool.
+         */
+        post: operations["test_server_v1_mcp_servers__server_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/tools/{tool_name}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Admit an external tool for personas, at a risk tier
+         * @description Admit, re-scope or revoke one external tool, and record the decision.
+         *
+         *     The audit row carries the tier **before** and **after**, the persona sets before and
+         *     after, the actor and the reason. Lowering a gate is the action a post-incident
+         *     review reads first, and "it is HIGH now" is not an answer to "who lowered it, when,
+         *     and what did they say".
+         *
+         *     Args:
+         *         body: The personas admitted, the tier, and why.
+         *         tool_name: The qualified name — it must be in the external namespace and must
+         *             already have been discovered.
+         *         auth: The authenticated platform admin.
+         *
+         *     Returns:
+         *         The console aggregate, after the write.
+         *
+         *     Raises:
+         *         HTTPException: 400 when the name is not an external one or names a persona the
+         *             adapter does not define; 404 when no declared server advertises it.
+         */
+        put: operations["write_grant_v1_mcp_tools__tool_name__grant_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/me/budget": {
         parameters: {
             query?: never;
@@ -2793,6 +2975,101 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Authored Skills
+         * @description Return every skill this caller can see, and whether each is currently in force.
+         *
+         *     Two reads, deliberately: :func:`aegis.skills.store.list_skills` is what *exists* and
+         *     :func:`aegis.skills.store.resolve_skills` is what is *live*. A management screen that
+         *     could only show the second could never show a skill somebody had switched off, and
+         *     one that could only show the first would be a list of rows with no relationship to
+         *     any run.
+         *
+         *     Raises:
+         *         HTTPException: 503 when the skills store is unreachable.
+         */
+        get: operations["list_authored_skills_v1_skills_get"];
+        put?: never;
+        /**
+         * Author Skill
+         * @description Author one skill from a ``SKILL.md``, screening it **before** a row exists.
+         *
+         *     The rail is the platform's bound ``check_input`` — the same one ``POST /query`` runs
+         *     on a live question and the same one a memory write runs before storage. A BLOCK is a
+         *     422 with the rail's own reason and nothing is written; a REDACT stores the redacted
+         *     text and reports what was masked.
+         *
+         *     Raises:
+         *         HTTPException: 403 when the layer is beyond this caller's reach, 409 when the
+         *             name is taken at that layer, 422 for a malformed document or one the rail
+         *             refused, 503 when the store is unreachable.
+         */
+        post: operations["author_skill_v1_skills_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{scope}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Skill
+         * @description Delete one authored skill and take its name out of force, in one transaction.
+         *
+         *     Raises:
+         *         HTTPException: 403 when the layer is beyond this caller's reach, 404 for an
+         *             unknown skill, 503 when the store is unreachable.
+         */
+        delete: operations["remove_skill_v1_skills__scope___name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{scope}/{name}/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Skill Active
+         * @description Put one skill in force at a layer, or take it out.
+         *
+         *     Writing ``skills.enabled`` at *your own* layer is the only thing this does, which is
+         *     why a tenant admin cannot switch off a platform safety skill with it: the effective
+         *     set is a union, and a union has no way to express a removal from a layer above.
+         *
+         *     Raises:
+         *         HTTPException: 403 when the layer is beyond this caller's reach, 404 for an
+         *             unknown skill, 503 when the store is unreachable.
+         */
+        put: operations["set_skill_active_v1_skills__scope___name__active_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/stack": {
         parameters: {
             query?: never;
@@ -3244,6 +3521,28 @@ export interface components {
              * @description Honest underlying tech, e.g. 'LiteLLM'.
              */
             tech: string;
+        };
+        /**
+         * AegisToolRow
+         * @description One of Aegis's own tools — shown, never editable here.
+         */
+        AegisToolRow: {
+            /**
+             * Declaredin
+             * @description The module the tier is declared in, so the reader can go and check.
+             */
+            declaredIn: string;
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /**
+             * Personas
+             * @description Persona ids the adapter allowlist admits.
+             */
+            personas: string[];
+            /** @description Declared on the ToolSpec, in code. */
+            risk: components["schemas"]["RiskLevel"];
         };
         /**
          * AgentStatus
@@ -5143,6 +5442,34 @@ export interface components {
             window: string;
         };
         /**
+         * GrantWrite
+         * @description A platform admin's decision about one external tool.
+         *
+         *     ``extra="forbid"``: a body carrying a field this model does not know is a 422, not
+         *     a silent drop. That is the rule the four §8.8 incidents were caused by breaking,
+         *     and it matters most on the one write in the product that can move an action out of
+         *     the human gate — a misspelled ``risk`` must not answer 200 and leave HIGH in place
+         *     while the operator believes they lowered it.
+         */
+        GrantWrite: {
+            /**
+             * Personas
+             * @description Persona ids admitted. An empty list revokes the grant.
+             */
+            personas?: string[];
+            /**
+             * Reason
+             * @description Why — shown in the console beside the tier.
+             * @default
+             */
+            reason: string;
+            /**
+             * @description The tier the call gates at. Lowering it is a deliberate decision.
+             * @default high
+             */
+            risk: components["schemas"]["RiskLevel"];
+        };
+        /**
          * GraphEdge
          * @description A directed, labelled edge between two graph nodes.
          */
@@ -5757,6 +6084,197 @@ export interface components {
              * @description The caller's user id — the JWT's `sub` claim, and the id the /memory/* subject `user:<id>` is authorised against. None only when no users row backs the principal; never a statement about its tenant.
              */
             user_id?: number | null;
+        };
+        /**
+         * MCPConsole
+         * @description Everything the admin MCP console renders, in one response.
+         */
+        MCPConsole: {
+            /** Aegistools */
+            aegisTools: components["schemas"]["AegisToolRow"][];
+            /** Decisions */
+            decisions: components["schemas"]["MCPDecision"][];
+            /** @description The tier at or above which a call stops at the human gate. */
+            gateRisk: components["schemas"]["RiskLevel"];
+            /**
+             * Personas
+             * @description The persona ids a grant may name — read from the adapter allowlist.
+             */
+            personas: string[];
+            /** @description Set only on a test-connection response. */
+            probe?: components["schemas"]["MCPProbe"] | null;
+            /**
+             * Selfendpoint
+             * @description Aegis's own MCP endpoint for the console's client, or null when this deployment has not configured one.
+             */
+            selfEndpoint: string | null;
+            /** Servers */
+            servers: components["schemas"]["MCPServerRow"][];
+            /** Tools */
+            tools: components["schemas"]["MCPToolRow"][];
+        };
+        /**
+         * MCPDecision
+         * @description One recorded tier decision — the before, the after, the actor and the reason.
+         */
+        MCPDecision: {
+            /**
+             * Actor
+             * @description Who decided.
+             */
+            actor: string;
+            /**
+             * At
+             * @description ISO 8601 UTC timestamp.
+             */
+            at: string;
+            /** Personasafter */
+            personasAfter: string[];
+            /** Personasbefore */
+            personasBefore: string[];
+            /** Reason */
+            reason: string;
+            /** Riskafter */
+            riskAfter: string;
+            /** Riskbefore */
+            riskBefore: string;
+            /**
+             * Tool
+             * @description The tool whose tier was decided.
+             */
+            tool: string;
+        };
+        /**
+         * MCPProbe
+         * @description What a peer answered when the console tested the connection.
+         */
+        MCPProbe: {
+            /**
+             * Detail
+             * @description The peer's own failure sentence, or ''.
+             */
+            detail: string;
+            /** Protocolversion */
+            protocolVersion: string;
+            /** Reachable */
+            reachable: boolean;
+            /** Serverid */
+            serverId: string;
+            /** Servername */
+            serverName: string;
+            /**
+             * Tools
+             * @description Remote tool names, in the peer's own namespace.
+             */
+            tools: string[];
+        };
+        /**
+         * MCPServerRow
+         * @description One declared external MCP server, as the console shows it.
+         *
+         *     There is deliberately no credential field. Not "omitted from the response" — the
+         *     model has no place to put one, so no future edit can start returning it by
+         *     accident.
+         */
+        MCPServerRow: {
+            /**
+             * Authheader
+             * @description The header this peer's credential is sent in.
+             */
+            authHeader: string;
+            /**
+             * Credentialfingerprint
+             * @description Twelve hex characters of SHA-256, or ''. Never the credential.
+             */
+            credentialFingerprint: string;
+            /**
+             * Credentialsetby
+             * @description Who last set the credential, when it was set through the console.
+             */
+            credentialSetBy?: string | null;
+            /**
+             * Discoveredtools
+             * @description Tools currently discovered on this peer.
+             */
+            discoveredTools: number;
+            /**
+             * Enabled
+             * @description False means its tools leave the agent's payload entirely.
+             */
+            enabled: boolean;
+            /**
+             * Grantedtools
+             * @description Of those, how many any persona may call.
+             */
+            grantedTools: number;
+            /**
+             * Hascredential
+             * @description Whether a credential is available to this process for this peer.
+             */
+            hasCredential: boolean;
+            /**
+             * Label
+             * @description Human-facing name.
+             */
+            label: string;
+            /**
+             * Serverid
+             * @description The Aegis-side id, which is the tool namespace.
+             */
+            serverId: string;
+            /**
+             * Url
+             * @description The peer's Streamable HTTP endpoint ('' if in-process).
+             */
+            url: string;
+        };
+        /**
+         * MCPToolRow
+         * @description One external tool, its tier, and who may call it.
+         */
+        MCPToolRow: {
+            /**
+             * Callablenow
+             * @description False when the owning server is disabled — the tool is not offered.
+             */
+            callableNow: boolean;
+            /**
+             * Description
+             * @description The peer's description, after the TOOL_RESULT rail screened it.
+             */
+            description: string;
+            /**
+             * Name
+             * @description The qualified Aegis-side name, e.g. mcp__acme__search.
+             */
+            name: string;
+            /**
+             * Personas
+             * @description Persona ids admitted. Empty means nobody.
+             */
+            personas: string[];
+            /**
+             * Reason
+             * @description Why the tier was set as it is; '' when never set.
+             */
+            reason: string;
+            /**
+             * Remotename
+             * @description The name the peer knows it by (what goes on the wire).
+             */
+            remoteName: string;
+            /** @description The tier this call gates at. HIGH unless a platform admin lowered it. */
+            risk: components["schemas"]["RiskLevel"];
+            /**
+             * Riskisdefault
+             * @description True when the tier is the untouched HIGH default, not a decision.
+             */
+            riskIsDefault: boolean;
+            /**
+             * Serverid
+             * @description The peer it lives on.
+             */
+            serverId: string;
         };
         /**
          * MLExplainRequest
@@ -8759,6 +9277,65 @@ export interface components {
             value: number;
         };
         /**
+         * ServerCreate
+         * @description A new external MCP connection.
+         */
+        ServerCreate: {
+            /**
+             * Authheader
+             * @description The header the credential is sent in.
+             * @default Authorization
+             */
+            authHeader: string;
+            /**
+             * Credential
+             * @description The peer's secret. Held in the serving process only — never written to Aegis's database and never returned by any route.
+             * @default
+             */
+            credential: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Label
+             * @description Human-facing name.
+             * @default
+             */
+            label: string;
+            /**
+             * Serverid
+             * @description Lowercase letters, digits and hyphens. Becomes the tool namespace.
+             */
+            serverId: string;
+            /**
+             * Url
+             * @description The peer's Streamable HTTP endpoint.
+             * @default
+             */
+            url: string;
+        };
+        /**
+         * ServerUpdate
+         * @description An edit to an existing connection. Every field is optional; null leaves it alone.
+         */
+        ServerUpdate: {
+            /** Authheader */
+            authHeader?: string | null;
+            /**
+             * Credential
+             * @description A new secret, or '' to forget the one this process holds.
+             */
+            credential?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Label */
+            label?: string | null;
+            /** Url */
+            url?: string | null;
+        };
+        /**
          * SettingRow
          * @description One resolved control: its effective value, and **which scope decided it**.
          *
@@ -8868,6 +9445,104 @@ export interface components {
              * @description Human-readable input value; the level name for categoricals.
              */
             value_label?: string | null;
+        };
+        /**
+         * SkillRow
+         * @description One authored skill, with the layer it lives at and whether it is live.
+         */
+        SkillRow: {
+            /** Description */
+            description: string;
+            /**
+             * Document
+             * @description The whole skill, as a SKILL.md document.
+             */
+            document: string;
+            /**
+             * Inforce
+             * @description Whether this skill resolves for a run right now — the resolver's answer.
+             */
+            inForce: boolean;
+            /**
+             * Issafety
+             * @description A platform safety skill: no other layer may rebind its name.
+             * @default false
+             */
+            isSafety: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Scope
+             * @description platform | tenant | user — the layer it was authored at.
+             */
+            scope: string;
+            /** Triggers */
+            triggers?: string[];
+            /** Updatedby */
+            updatedBy?: string | null;
+        };
+        /**
+         * SkillWriteRequest
+         * @description Body for ``POST /skills``.
+         *
+         *     Carries **no tenant and no user**: both are the server's to decide from the sealed
+         *     scope, and a body that could name either is §7.16 row 12 waiting to happen.
+         *     ``extra='forbid'`` makes a stray field a 422 rather than a silently ignored one.
+         */
+        SkillWriteRequest: {
+            /**
+             * Document
+             * @description The whole SKILL.md, frontmatter included.
+             */
+            document: string;
+            /**
+             * Enable
+             * @description Put it in force at this layer as part of the same write.
+             * @default true
+             */
+            enable: boolean;
+            /**
+             * Issafety
+             * @description Platform only. Refused at any other layer, by the table as well as here.
+             * @default false
+             */
+            isSafety: boolean;
+            /**
+             * Scope
+             * @description platform | tenant | user.
+             * @default user
+             */
+            scope: string;
+        };
+        /**
+         * SkillWriteResponse
+         * @description What the author gets back: the row, and what the rail did to it on the way in.
+         */
+        SkillWriteResponse: {
+            /**
+             * Redactions
+             * @description PII kinds the rail masked before storage. Stored redacted, not raw.
+             */
+            redactions?: string[];
+            row: components["schemas"]["SkillRow"];
+            /**
+             * Verdict
+             * @description pass | flag | redact — the input rail's verdict.
+             */
+            verdict: string;
+        };
+        /**
+         * SkillsResponse
+         * @description Body for ``GET /skills``.
+         */
+        SkillsResponse: {
+            /** Rows */
+            rows?: components["schemas"]["SkillRow"][];
+            /**
+             * Scopes
+             * @description The layers this caller may author at, strongest first.
+             */
+            scopes?: string[];
         };
         /**
          * StackComponent
@@ -11136,6 +11811,195 @@ export interface operations {
             };
         };
     };
+    mcp_console_v1_mcp_console_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConsole"];
+                };
+            };
+        };
+    };
+    create_server_v1_mcp_servers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConsole"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_server_v1_mcp_servers__server_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A declared external MCP server id. */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConsole"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_server_v1_mcp_servers__server_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A declared external MCP server id. */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConsole"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_server_v1_mcp_servers__server_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A declared external MCP server id. */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConsole"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_grant_v1_mcp_tools__tool_name__grant_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The qualified external tool name. */
+                tool_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConsole"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     my_budget_v1_me_budget_get: {
         parameters: {
             query?: never;
@@ -12738,6 +13602,123 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingRow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_authored_skills_v1_skills_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResponse"];
+                };
+            };
+        };
+    };
+    author_skill_v1_skills_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillWriteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_skill_v1_skills__scope___name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_skill_active_v1_skills__scope___name__active_put: {
+        parameters: {
+            query?: {
+                active?: boolean;
+            };
+            header?: never;
+            path: {
+                scope: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillRow"];
                 };
             };
             /** @description Validation Error */

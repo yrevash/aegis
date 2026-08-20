@@ -33,7 +33,13 @@ from aegis.retrieval.spotlight import spotlight, spotlight_system_instruction
 
 _PROFILE_HEADER = "## Known profile"
 _FACTS_HEADER = "## Durable facts"
-_SKILLS_HEADER = "## Applicable skills"
+#: Tier 1 of progressive disclosure (§10.2). The header is an instruction, not a
+#: label: the block below it carries only names and descriptions, so without the
+#: sentence telling the model how to get a body it would read a menu with no way to
+#: order from it and answer from the description alone.
+_SKILLS_HEADER = (
+    "## Skills available — call the load_skill tool with a name to read one in full"
+)
 _SUMMARY_HEADER = "## Conversation summary so far"
 _EPISODIC_HEADER = "## Relevant earlier context (reference data)"
 _RAW_HEADER = "## Recent conversation"
@@ -208,7 +214,7 @@ def build_working_text(
     # 2. Skills.
     running += _fill(
         sections["skills"],
-        [(f"skill:{name}", f"### {name}\n{text.strip()}", None) for name, text in bundle.skills],
+        [(f"skill:{name}", card.strip(), None) for name, card in bundle.skills],
         tier_cap_tokens=cap_tokens("skills"),
         budget=budget,
         running_tokens=running,
@@ -329,6 +335,7 @@ async def assemble_working_memory(
     query_vec: list[float] | None,
     config: MemoryConfig,
     tenant_id: int | None = None,
+    user_id: int | None = None,
     spec: MemorySpec | None = None,
 ) -> AssembledMemory:
     """Recall + assemble the working-memory block for one turn (the graph's entry point).
@@ -341,11 +348,12 @@ async def assemble_working_memory(
         session: Async DB session.
         subject_id: Memory subject (app-level isolation key).
         session_id: Current conversation thread.
-        persona: Active persona (gates skills).
+        persona: Active persona (gates profile rendering).
         query: The user query (budget input; not injected here).
         query_vec: Recall-comparable query embedding, or ``None``.
         config: Recall + budget parameters.
         tenant_id: Optional tenant scope.
+        user_id: The caller's user id — the **user** layer of skill resolution.
         spec: The domain :class:`~aegis.memory.spec.MemorySpec`; defaults to the configured
             process-wide spec when ``None``.
 
@@ -361,6 +369,7 @@ async def assemble_working_memory(
         query_vec=query_vec,
         config=config,
         tenant_id=tenant_id,
+        user_id=user_id,
         spec=spec,
     )
     raw_turns = await load_raw_window(

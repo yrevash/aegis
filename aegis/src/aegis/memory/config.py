@@ -56,7 +56,11 @@ class MemoryConfig:
         n_fact: Semantic-fact recall kept.
         k_epi: Episodic recall fan-out (retrieved).
         n_epi: Episodic recall kept.
-        n_skill: Procedural skills selected per turn.
+        n_skill: Skill **cards** offered per turn (§10.2 tier 1). Was 2, when the
+            value was a budget on whole Markdown bodies pasted into the prompt; a
+            card is one line, so the same context costs roughly a twentieth of it
+            and the useful number is the size of a catalogue a model can choose
+            from rather than the number of documents that fit.
         consolidation_every_n: Consolidate episodic→semantic every N turns (background).
         tau_extract: Minimum extractor confidence to admit a candidate fact.
         dedup_cos: Cosine at/above which a same-predicate candidate is a NOOP (no LLM).
@@ -87,7 +91,7 @@ class MemoryConfig:
     n_fact: int = 6
     k_epi: int = 20
     n_epi: int = 4
-    n_skill: int = 2
+    n_skill: int = 12
     consolidation_every_n: int = 4
     tau_extract: float = 0.55
     dedup_cos: float = 0.97

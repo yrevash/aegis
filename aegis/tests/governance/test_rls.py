@@ -219,6 +219,8 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         "runs",
         # aegis.settings.models
         "settings",
+        # aegis.skills.models
+        "agent_skills",
         # host-owned
         "approvals",
         "chat_messages",

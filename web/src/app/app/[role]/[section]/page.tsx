@@ -21,6 +21,7 @@ import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
 import { JobsMount } from '@/components/jobs/JobsView'
 import { HarnessMount } from '@/components/harness/HarnessView'
 import { LatencyMount } from '@/components/latency/LatencyView'
+import { McpConsoleMount } from '@/components/mcp/McpConsoleView'
 import { MLOpsMount } from '@/components/ml/MLOpsView'
 import { MemoryControlMount } from '@/components/memoryctl/MemoryControlView'
 import { LLMOpsMount } from '@/components/ops/LLMOpsView'
@@ -78,6 +79,7 @@ export default async function SectionPage({
   if (section === 'guardrails') return <GuardrailsMount />
   if (section === 'security') return <SecurityMount />
   if (section === 'database') return <DatabaseMount />
+  if (section === 'mcp') return <McpConsoleMount />
   if (section === 'redteam') return <RedteamMount />
   if (section === 'latency') return <LatencyMount />
   if (section === 'governance') return <GovernanceMount />

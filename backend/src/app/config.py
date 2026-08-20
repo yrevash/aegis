@@ -415,6 +415,34 @@ class Settings(BaseSettings):
         default=5_000_000.0, validation_alias="AEGIS_DB_CONSOLE_MAX_PLAN_COST"
     )
 
+    # ── The MCP client: external tool servers (§10.6) ────────────────────────
+    # A comma-separated ``id=url`` list of external MCP servers this deployment may
+    # look at — e.g. ``acme=https://acme.example/mcp,docs=https://docs.example/mcp``.
+    # Empty by default: an Aegis that reaches an external tool server nobody declared
+    # is the side door the whole task exists to close.
+    #
+    # Declaring a peer grants **nothing**. It says where to look for tools; admitting
+    # one is a separate, explicit platform-admin act through ``app.api.routes_mcp``,
+    # and an admitted tool is HIGH risk — the human gate — until the same admin lowers
+    # the tier for a named tool. There is deliberately no settings-catalogue key for
+    # any of it: which third party's code an agent may reach is a platform decision,
+    # not a tenant-writable one.
+    mcp_client_servers: str = Field(
+        default="", validation_alias="AEGIS_MCP_CLIENT_SERVERS"
+    )
+    # How long one external tool call may take before it is abandoned. An external peer
+    # is on somebody else's network and its latency is not ours to promise; without a
+    # ceiling a hung peer holds an agent turn open indefinitely.
+    mcp_client_timeout_seconds: float = Field(
+        default=30.0, validation_alias="AEGIS_MCP_CLIENT_TIMEOUT_SECONDS"
+    )
+    # Where Aegis serves its OWN MCP endpoint, for the admin console's client (§10.7).
+    # Empty by default and deliberately not derived from a guessed path: the server half
+    # (§10.4) decides where it mounts, and a console that assumed ``/v1/mcp`` would show
+    # a live-looking address for a server that is not there. Empty means the console
+    # renders a stated absence, which is the honest thing for a figure with no source.
+    mcp_server_url: str = Field(default="", validation_alias="AEGIS_MCP_SERVER_URL")
+
     # ── Postgres connection pools (§9.4) ─────────────────────────────────────
     # These were **entirely unconfigured**, which meant SQLAlchemy's defaults —
     # ``pool_size=5, max_overflow=10, pool_timeout=30`` — across two engines plus
@@ -484,9 +512,33 @@ class Settings(BaseSettings):
     # that the platform keeps working while the gaps are collected.
     rls_scope_audit_strict: bool = Field(default=False)
 
+    # ── The MCP front door (§10.4) ───────────────────────────────────────────
+    # The MCP server is a SECOND front door to the same data, so its host allowlist is
+    # deployment configuration rather than a default that quietly accepts anything. The
+    # value feeds the SDK's DNS-rebinding guard: a request whose ``Host`` header is not
+    # on this list is refused before the transport, which is what stops a browser on an
+    # attacker's page from talking to a localhost MCP server. ``testserver`` is httpx's
+    # ASGI default host and is what the in-process transport tests dial.
+    mcp_allowed_hosts: str = Field(
+        default="127.0.0.1:*,localhost:*,[::1]:*,testserver",
+        validation_alias="AEGIS_MCP_ALLOWED_HOSTS",
+    )
+    # The public origin this deployment is reached at. Aegis mints its own access tokens
+    # (``POST /v1/auth/login``) rather than federating to an authorization server, so the
+    # issuer and the protected resource are the same URL; it is published in the OAuth
+    # protected-resource metadata the SDK serves beside the transport.
+    mcp_issuer_url: str = Field(
+        default="http://localhost:8000", validation_alias="AEGIS_MCP_ISSUER_URL"
+    )
+
     # ── App ──────────────────────────────────────────────────────────────────
     app_env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
+
+    @property
+    def mcp_allowed_host_list(self) -> list[str]:
+        """:attr:`mcp_allowed_hosts` as a list, empties dropped."""
+        return [h.strip() for h in self.mcp_allowed_hosts.split(",") if h.strip()]
 
     @property
     def stores_enabled(self) -> bool:

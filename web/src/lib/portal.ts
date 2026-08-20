@@ -317,6 +317,15 @@ export const SECTIONS: Record<string, Section> = {
     tooltip: 'Aegis Governance — append-only audit trail · Postgres (RLS), with trace links to Aegis Trace',
     group: 'Governance',
   },
+  mcp: {
+    id: 'mcp',
+    label: 'MCP',
+    icon: Network,
+    hint: 'external tool servers',
+    tooltip:
+      'Aegis MCP — the external Model Context Protocol servers this platform may reach, the tools discovered on each, and the risk tier every one of them is gated at: an external tool is HIGH risk and stops at the human gate until a platform admin lowers it for a named tool, a disabled server\'s tools leave the agent\'s payload entirely, and whatever a peer returns passes the TOOL_RESULT rail before it reaches a prompt · Model Context Protocol',
+    group: 'Governance',
+  },
   database: {
     id: 'database',
     label: 'Database',
@@ -400,7 +409,7 @@ export const SECTIONS: Record<string, Section> = {
  * tenant with a clause the browser cannot reach.
  */
 export const ROLE_SECTIONS: Record<Portal, string[]> = {
-  platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'database', 'console', 'settings'],
+  platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'database', 'mcp', 'console', 'settings'],
   tenant_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'cache', 'latency', 'audit', 'settings'],

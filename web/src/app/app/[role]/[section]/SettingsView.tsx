@@ -5,6 +5,7 @@ import { useCallback, useState, type ReactElement } from 'react'
 import { SettingsForm } from '@/components/settings/SettingsForm'
 import { ToolRosterCard } from '@/components/settings/ToolRosterCard'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { SkillsPanel } from '@/components/skills/SkillsPanel'
 
 /**
  * Settings — the per-tenant control plane, and the one screen that says *who decided*.
@@ -14,6 +15,13 @@ import { BackendGate } from '@/components/shared/BackendGate'
  * `aegis.settings.spec.SETTING_SPECS` appears here with nothing in `web/` edited. That
  * is the mechanism behind "operating this platform never requires touching code" — the
  * first bespoke settings form is the moment the claim stops being true.
+ *
+ * Skills sit on this screen for the same reason the roster does: which skills are in
+ * force is the value of one catalogue key (`skills.enabled`, resolved
+ * `platform ∪ tenant ∪ user`), so a skill is a per-tenant control like every other one
+ * — and it is the control this screen exists for that a *person* can write, not only an
+ * administrator. Every role's portal reaches this section, which is what makes "the
+ * user has autonomy over how the agent works for them" reachable rather than asserted.
  *
  * The tool roster sits under it because it is a **projection of those same settings**:
  * the gate floor it prints is `agent.gate_min_risk`, resolved. It re-reads on every
@@ -32,6 +40,7 @@ function SettingsView(): ReactElement {
       </div>
 
       <SettingsForm onWritten={bump} />
+      <SkillsPanel />
       <ToolRosterCard refreshKey={written} />
     </div>
   )

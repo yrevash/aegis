@@ -153,10 +153,36 @@ async def test_subject_isolation_rls_off(db):
     assert all(c.payload.subject_id == "user:B" for c in bundle.facts)
 
 
-async def test_skills_selected_for_closure_query(db):
+async def test_recall_offers_skill_cards_and_never_a_body(db):
+    """§10.2 tier 1, at the host's recall seam: names and descriptions only.
+
+    This test used to assert the opposite — that ``bundle.skills`` carried the whole
+    Markdown file, read off ``SKILLS_DIR``. That is the mechanism §10.2 replaced, and
+    the assertion is inverted rather than deleted because the regression worth catching
+    is a body finding its way back into the recall bundle: it would work, it would
+    answer correctly, and progressive disclosure would be gone with nothing in the
+    trace to say so.
+    """
+    from aegis.governance.rls import set_tenant_scope
+    from aegis.guardrails import Guardrails
+    from aegis.skills import SkillScope, parse_skill_md, write_skill
+
     cfg = MemoryConfig()
+    body = "Confirm the request id before acting, then propose the change."
     async with db() as s:
         s.add(MemorySession(id="sess-1", subject_id="user:1"))
+        await set_tenant_scope(s, None)
+        await write_skill(
+            s,
+            parse_skill_md(
+                "---\nname: closing_requests\n"
+                "description: How to close a request cleanly.\n"
+                "triggers: [close]\n---\n\n" + body + "\n"
+            ),
+            screen=Guardrails().check_input,
+            scope=SkillScope.PLATFORM,
+            actor_role="platform_admin",
+        )
         await s.commit()
 
     async with db() as s:
@@ -169,9 +195,10 @@ async def test_skills_selected_for_closure_query(db):
             query_vec=None,
             config=cfg,
         )
-    names = [name for name, _ in bundle.skills]
-    assert "closing_requests" in names
-    assert all(text.strip() for _, text in bundle.skills)  # bodies actually read
+    cards = dict(bundle.skills)
+    assert "closing_requests" in cards
+    assert "How to close a request cleanly." in cards["closing_requests"]
+    assert body not in cards["closing_requests"], "the body reached the prompt again"
 
 
 async def test_recall_bumps_access_count_durably(db):

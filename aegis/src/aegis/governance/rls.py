@@ -224,6 +224,12 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     # :data:`_PLATFORM_BASELINE_TABLES` as well: a NULL-tenant row here is the platform
     # baseline every tenant is entitled to *read*, and none may write.
     "settings",
+    # aegis.skills.models — the authored skills store (§10.1). Also a platform
+    # baseline, and for the same reason ``settings`` is one: the platform's SAFETY
+    # skills are NULL-tenant rows, and a bound tenant scope that could not read them
+    # would resolve a skill set with the safety floor missing while looking perfectly
+    # healthy. The write half stays unwidened, so no tenant can forge a platform skill.
+    "agent_skills",
     # host-owned (app.data.models) — the durable agent approvals inbox, and the
     # console's chat transcript. ``chat_messages`` carries its own ``tenant_id`` rather
     # than reaching one through ``chat_sessions``, for the reason spelled out on
@@ -251,7 +257,7 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
 #: request can read the baseline row and is refused when it tries to write one — without
 #: the explicit check, Postgres would reuse the widened ``USING`` clause for writes and
 #: any tenant could forge a platform default by inserting a NULL-tenant row.
-_PLATFORM_BASELINE_TABLES: frozenset[str] = frozenset({"settings"})
+_PLATFORM_BASELINE_TABLES: frozenset[str] = frozenset({"agent_skills", "settings"})
 
 #: A relation name this module is willing to interpolate into DDL. Names reach the DDL
 #: builders from :data:`_TENANT_SCOPED_TABLES` and from the live catalog, never from a

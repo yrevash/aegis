@@ -144,8 +144,10 @@ guardrails = [
 websearch = [
     "aegis[websearch]",
 ]
-# The MCP tool-server facade (app/mcp): exposes the adapter tool registry over a
-# real Model Context Protocol stdio server, preserving allowlist/audit/risk gates.
+# The MCP server (app/mcp): exposes the adapter tool registry and Aegis's own
+# tenant-scoped reads over a real Model Context Protocol **Streamable HTTP** server,
+# mounted at ``/mcp`` — preserving allowlist/audit/risk gates and enforcing the
+# platform's RBAC and tenant scope per call (§10.4/10.5).
 # The code targets the 2.x API (``FastMCP`` handlers); 1.x is NOT compatible, hence
 # the floor, and <3 guards against an unreviewed next major.
 mcp = [

@@ -309,6 +309,45 @@
         "title": "AegisModuleRow",
         "type": "object"
       },
+      "AegisToolRow": {
+        "description": "One of Aegis's own tools — shown, never editable here.",
+        "properties": {
+          "declaredIn": {
+            "description": "The module the tier is declared in, so the reader can go and check.",
+            "title": "Declaredin",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "personas": {
+            "description": "Persona ids the adapter allowlist admits.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Personas",
+            "type": "array"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/RiskLevel",
+            "description": "Declared on the ToolSpec, in code."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "risk",
+          "personas",
+          "declaredIn"
+        ],
+        "title": "AegisToolRow",
+        "type": "object"
+      },
       "AgentStatus": {
         "description": "One sub-agent's lifecycle beat in a concurrent fan-out (additive).\n\nEmitted by each lane of the multi-agent team through its own scoped writer, so a\nfan-out produces interleaved beats from every agent running at once. ``timeout`` is\na **designed** terminal state, not an error: the run degrades gracefully, names the\nomitted agent in the ``synthesis`` event, and finishes.",
         "properties": {
@@ -3498,6 +3537,33 @@
         "title": "GovernanceDashboard",
         "type": "object"
       },
+      "GrantWrite": {
+        "additionalProperties": false,
+        "description": "A platform admin's decision about one external tool.\n\n``extra=\"forbid\"``: a body carrying a field this model does not know is a 422, not\na silent drop. That is the rule the four §8.8 incidents were caused by breaking,\nand it matters most on the one write in the product that can move an action out of\nthe human gate — a misspelled ``risk`` must not answer 200 and leave HIGH in place\nwhile the operator believes they lowered it.",
+        "properties": {
+          "personas": {
+            "description": "Persona ids admitted. An empty list revokes the grant.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Personas",
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "description": "Why — shown in the console beside the tier.",
+            "title": "Reason",
+            "type": "string"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/RiskLevel",
+            "default": "high",
+            "description": "The tier the call gates at. Lowering it is a deliberate decision."
+          }
+        },
+        "title": "GrantWrite",
+        "type": "object"
+      },
       "GraphEdge": {
         "description": "A directed, labelled edge between two graph nodes.",
         "properties": {
@@ -4694,6 +4760,327 @@
           "token"
         ],
         "title": "LoginResponse",
+        "type": "object"
+      },
+      "MCPConsole": {
+        "description": "Everything the admin MCP console renders, in one response.",
+        "properties": {
+          "aegisTools": {
+            "items": {
+              "$ref": "#/components/schemas/AegisToolRow"
+            },
+            "title": "Aegistools",
+            "type": "array"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/MCPDecision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "gateRisk": {
+            "$ref": "#/components/schemas/RiskLevel",
+            "description": "The tier at or above which a call stops at the human gate."
+          },
+          "personas": {
+            "description": "The persona ids a grant may name — read from the adapter allowlist.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Personas",
+            "type": "array"
+          },
+          "probe": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MCPProbe"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set only on a test-connection response."
+          },
+          "selfEndpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Aegis's own MCP endpoint for the console's client, or null when this deployment has not configured one.",
+            "title": "Selfendpoint"
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/MCPServerRow"
+            },
+            "title": "Servers",
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/MCPToolRow"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "servers",
+          "tools",
+          "aegisTools",
+          "decisions",
+          "personas",
+          "gateRisk",
+          "selfEndpoint"
+        ],
+        "title": "MCPConsole",
+        "type": "object"
+      },
+      "MCPDecision": {
+        "description": "One recorded tier decision — the before, the after, the actor and the reason.",
+        "properties": {
+          "actor": {
+            "description": "Who decided.",
+            "title": "Actor",
+            "type": "string"
+          },
+          "at": {
+            "description": "ISO 8601 UTC timestamp.",
+            "title": "At",
+            "type": "string"
+          },
+          "personasAfter": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Personasafter",
+            "type": "array"
+          },
+          "personasBefore": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Personasbefore",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "riskAfter": {
+            "title": "Riskafter",
+            "type": "string"
+          },
+          "riskBefore": {
+            "title": "Riskbefore",
+            "type": "string"
+          },
+          "tool": {
+            "description": "The tool whose tier was decided.",
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "actor",
+          "tool",
+          "riskBefore",
+          "riskAfter",
+          "personasBefore",
+          "personasAfter",
+          "reason"
+        ],
+        "title": "MCPDecision",
+        "type": "object"
+      },
+      "MCPProbe": {
+        "description": "What a peer answered when the console tested the connection.",
+        "properties": {
+          "detail": {
+            "description": "The peer's own failure sentence, or ''.",
+            "title": "Detail",
+            "type": "string"
+          },
+          "protocolVersion": {
+            "title": "Protocolversion",
+            "type": "string"
+          },
+          "reachable": {
+            "title": "Reachable",
+            "type": "boolean"
+          },
+          "serverId": {
+            "title": "Serverid",
+            "type": "string"
+          },
+          "serverName": {
+            "title": "Servername",
+            "type": "string"
+          },
+          "tools": {
+            "description": "Remote tool names, in the peer's own namespace.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "serverId",
+          "reachable",
+          "serverName",
+          "protocolVersion",
+          "tools",
+          "detail"
+        ],
+        "title": "MCPProbe",
+        "type": "object"
+      },
+      "MCPServerRow": {
+        "description": "One declared external MCP server, as the console shows it.\n\nThere is deliberately no credential field. Not \"omitted from the response\" — the\nmodel has no place to put one, so no future edit can start returning it by\naccident.",
+        "properties": {
+          "authHeader": {
+            "description": "The header this peer's credential is sent in.",
+            "title": "Authheader",
+            "type": "string"
+          },
+          "credentialFingerprint": {
+            "description": "Twelve hex characters of SHA-256, or ''. Never the credential.",
+            "title": "Credentialfingerprint",
+            "type": "string"
+          },
+          "credentialSetBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who last set the credential, when it was set through the console.",
+            "title": "Credentialsetby"
+          },
+          "discoveredTools": {
+            "description": "Tools currently discovered on this peer.",
+            "title": "Discoveredtools",
+            "type": "integer"
+          },
+          "enabled": {
+            "description": "False means its tools leave the agent's payload entirely.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "grantedTools": {
+            "description": "Of those, how many any persona may call.",
+            "title": "Grantedtools",
+            "type": "integer"
+          },
+          "hasCredential": {
+            "description": "Whether a credential is available to this process for this peer.",
+            "title": "Hascredential",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "Human-facing name.",
+            "title": "Label",
+            "type": "string"
+          },
+          "serverId": {
+            "description": "The Aegis-side id, which is the tool namespace.",
+            "title": "Serverid",
+            "type": "string"
+          },
+          "url": {
+            "description": "The peer's Streamable HTTP endpoint ('' if in-process).",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId",
+          "label",
+          "url",
+          "authHeader",
+          "enabled",
+          "hasCredential",
+          "credentialFingerprint",
+          "discoveredTools",
+          "grantedTools"
+        ],
+        "title": "MCPServerRow",
+        "type": "object"
+      },
+      "MCPToolRow": {
+        "description": "One external tool, its tier, and who may call it.",
+        "properties": {
+          "callableNow": {
+            "description": "False when the owning server is disabled — the tool is not offered.",
+            "title": "Callablenow",
+            "type": "boolean"
+          },
+          "description": {
+            "description": "The peer's description, after the TOOL_RESULT rail screened it.",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "description": "The qualified Aegis-side name, e.g. mcp__acme__search.",
+            "title": "Name",
+            "type": "string"
+          },
+          "personas": {
+            "description": "Persona ids admitted. Empty means nobody.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Personas",
+            "type": "array"
+          },
+          "reason": {
+            "description": "Why the tier was set as it is; '' when never set.",
+            "title": "Reason",
+            "type": "string"
+          },
+          "remoteName": {
+            "description": "The name the peer knows it by (what goes on the wire).",
+            "title": "Remotename",
+            "type": "string"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/RiskLevel",
+            "description": "The tier this call gates at. HIGH unless a platform admin lowered it."
+          },
+          "riskIsDefault": {
+            "description": "True when the tier is the untouched HIGH default, not a decision.",
+            "title": "Riskisdefault",
+            "type": "boolean"
+          },
+          "serverId": {
+            "description": "The peer it lives on.",
+            "title": "Serverid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "serverId",
+          "remoteName",
+          "description",
+          "risk",
+          "riskIsDefault",
+          "personas",
+          "reason",
+          "callableNow"
+        ],
+        "title": "MCPToolRow",
         "type": "object"
       },
       "MLExplainRequest": {
@@ -9905,6 +10292,115 @@
         "title": "SeriesPoint",
         "type": "object"
       },
+      "ServerCreate": {
+        "additionalProperties": false,
+        "description": "A new external MCP connection.",
+        "properties": {
+          "authHeader": {
+            "default": "Authorization",
+            "description": "The header the credential is sent in.",
+            "title": "Authheader",
+            "type": "string"
+          },
+          "credential": {
+            "default": "",
+            "description": "The peer's secret. Held in the serving process only — never written to Aegis's database and never returned by any route.",
+            "title": "Credential",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "label": {
+            "default": "",
+            "description": "Human-facing name.",
+            "title": "Label",
+            "type": "string"
+          },
+          "serverId": {
+            "description": "Lowercase letters, digits and hyphens. Becomes the tool namespace.",
+            "title": "Serverid",
+            "type": "string"
+          },
+          "url": {
+            "default": "",
+            "description": "The peer's Streamable HTTP endpoint.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId"
+        ],
+        "title": "ServerCreate",
+        "type": "object"
+      },
+      "ServerUpdate": {
+        "additionalProperties": false,
+        "description": "An edit to an existing connection. Every field is optional; null leaves it alone.",
+        "properties": {
+          "authHeader": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authheader"
+          },
+          "credential": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A new secret, or '' to forget the one this process holds.",
+            "title": "Credential"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "ServerUpdate",
+        "type": "object"
+      },
       "SettingRow": {
         "description": "One resolved control: its effective value, and **which scope decided it**.\n\n``source`` is the reason this endpoint exists. A control that renders a value\nwithout saying whether it is the platform's default, the tenant's choice or the\nperson's own is a control nobody can reason about — \"Team (your setting)\" and \"Team\n(your tenant's default)\" look identical on screen and mean opposite things the\nmoment somebody wants to change one.\n\n``control`` is :func:`aegis.settings.spec.setting_controls`' own descriptor,\nforwarded verbatim rather than re-typed field by field: the catalogue already\ndeclares the type, the default, the choices, the bounds and the help text, and a\nsecond projection here is the drift this whole package is built to prevent.\n\n**``control.effective`` is not decoration.** ``False`` means nothing in the system\nreads this key yet, and ``control.inert_reason`` says what would change that. Six\nkeys once saved, wrote an audit row and badged themselves \"Your setting\" while\nchanging nothing whatsoever; five now bind — ``agent.model`` most recently, against\nthe platform's allowed-deployment set (§7.16 row 6), whose ``control.choices`` are a\nprojection of the very set the server validates a write against — and the one that\nstill does not (``agent.mode``) says so here. A screen that renders an\n``effective=False`` control as though a write to it took effect re-creates the\ndefect on the client side of a wire that is now telling the truth.",
         "properties": {
@@ -10038,6 +10534,150 @@
           "contribution"
         ],
         "title": "ShapFeature",
+        "type": "object"
+      },
+      "SkillRow": {
+        "description": "One authored skill, with the layer it lives at and whether it is live.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "document": {
+            "description": "The whole skill, as a SKILL.md document.",
+            "title": "Document",
+            "type": "string"
+          },
+          "inForce": {
+            "description": "Whether this skill resolves for a run right now — the resolver's answer.",
+            "title": "Inforce",
+            "type": "boolean"
+          },
+          "isSafety": {
+            "default": false,
+            "description": "A platform safety skill: no other layer may rebind its name.",
+            "title": "Issafety",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "scope": {
+            "description": "platform | tenant | user — the layer it was authored at.",
+            "title": "Scope",
+            "type": "string"
+          },
+          "triggers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Triggers",
+            "type": "array"
+          },
+          "updatedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedby"
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "description",
+          "document",
+          "inForce"
+        ],
+        "title": "SkillRow",
+        "type": "object"
+      },
+      "SkillWriteRequest": {
+        "additionalProperties": false,
+        "description": "Body for ``POST /skills``.\n\nCarries **no tenant and no user**: both are the server's to decide from the sealed\nscope, and a body that could name either is §7.16 row 12 waiting to happen.\n``extra='forbid'`` makes a stray field a 422 rather than a silently ignored one.",
+        "properties": {
+          "document": {
+            "description": "The whole SKILL.md, frontmatter included.",
+            "title": "Document",
+            "type": "string"
+          },
+          "enable": {
+            "default": true,
+            "description": "Put it in force at this layer as part of the same write.",
+            "title": "Enable",
+            "type": "boolean"
+          },
+          "isSafety": {
+            "default": false,
+            "description": "Platform only. Refused at any other layer, by the table as well as here.",
+            "title": "Issafety",
+            "type": "boolean"
+          },
+          "scope": {
+            "default": "user",
+            "description": "platform | tenant | user.",
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document"
+        ],
+        "title": "SkillWriteRequest",
+        "type": "object"
+      },
+      "SkillWriteResponse": {
+        "description": "What the author gets back: the row, and what the rail did to it on the way in.",
+        "properties": {
+          "redactions": {
+            "description": "PII kinds the rail masked before storage. Stored redacted, not raw.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Redactions",
+            "type": "array"
+          },
+          "row": {
+            "$ref": "#/components/schemas/SkillRow"
+          },
+          "verdict": {
+            "description": "pass | flag | redact — the input rail's verdict.",
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "verdict"
+        ],
+        "title": "SkillWriteResponse",
+        "type": "object"
+      },
+      "SkillsResponse": {
+        "description": "Body for ``GET /skills``.",
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/SkillRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "scopes": {
+            "description": "The layers this caller may author at, strongest first.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "title": "SkillsResponse",
         "type": "object"
       },
       "StackComponent": {
@@ -13873,6 +14513,298 @@
         ]
       }
     },
+    "/v1/mcp/console": {
+      "get": {
+        "description": "Return the whole MCP control plane in one response.\n\nArgs:\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate.",
+        "operationId": "mcp_console_v1_mcp_console_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConsole"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "External MCP servers, their tools, and the tier each is gated at",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/v1/mcp/servers": {
+      "post": {
+        "description": "Declare a peer. Declaring discovers nothing and grants nothing.\n\nArgs:\n    body: The connection. Its ``credential`` is held in this process and never\n        written to the database or returned.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the write.\n\nRaises:\n    HTTPException: 400 when the id is unusable as a namespace, 409 when it is\n        already declared. Re-pointing an existing id is refused rather than\n        accepted, because it would silently re-aim every grant written against\n        that namespace at a different peer.",
+        "operationId": "create_server_v1_mcp_servers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConsole"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Declare an external MCP server",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/v1/mcp/servers/{server_id}": {
+      "delete": {
+        "description": "Remove a peer entirely.\n\nArgs:\n    server_id: The declared peer.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the removal.\n\nRaises:\n    HTTPException: 404 when the server is not declared.",
+        "operationId": "delete_server_v1_mcp_servers__server_id__delete",
+        "parameters": [
+          {
+            "description": "A declared external MCP server id.",
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "description": "A declared external MCP server id.",
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConsole"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Forget a connection, with its tools, grants and credential",
+        "tags": [
+          "mcp"
+        ]
+      },
+      "put": {
+        "description": "Edit a peer. Disabling it removes its tools from every agent's payload.\n\nArgs:\n    body: The fields to change; ``null`` leaves one alone.\n    server_id: The declared peer.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the write.\n\nRaises:\n    HTTPException: 404 when the server is not declared.",
+        "operationId": "update_server_v1_mcp_servers__server_id__put",
+        "parameters": [
+          {
+            "description": "A declared external MCP server id.",
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "description": "A declared external MCP server id.",
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConsole"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit a connection, including enabling or disabling it",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/v1/mcp/servers/{server_id}/test": {
+      "post": {
+        "description": "Connect to ``server_id``, report what it said, and refresh its tools.\n\nThe probe half never raises: an unreachable peer answers with ``reachable: false``\nand its own sentence, because \"why not\" is the useful half of a test button.\nDiscovery only runs when the probe succeeded, and it *replaces* that peer's tools\nrather than merging, so a tool the peer has withdrawn stops being offered. Grants\nover a withdrawn tool are left in place but authorise nothing —\n:meth:`~app.mcp.client.ExternalToolRegistry.is_allowed` requires a currently visible\ntool — so re-adding it upstream cannot silently re-arm an old decision.\n\nArgs:\n    server_id: The declared peer.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate with ``probe`` set.\n\nRaises:\n    HTTPException: 404 when the server is not declared; 409 when a tool it\n        advertises would collide with a registered Aegis tool.",
+        "operationId": "test_server_v1_mcp_servers__server_id__test_post",
+        "parameters": [
+          {
+            "description": "A declared external MCP server id.",
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "description": "A declared external MCP server id.",
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConsole"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Test the connection and re-read the peer's tool list",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
+    "/v1/mcp/tools/{tool_name}/grant": {
+      "put": {
+        "description": "Admit, re-scope or revoke one external tool, and record the decision.\n\nThe audit row carries the tier **before** and **after**, the persona sets before and\nafter, the actor and the reason. Lowering a gate is the action a post-incident\nreview reads first, and \"it is HIGH now\" is not an answer to \"who lowered it, when,\nand what did they say\".\n\nArgs:\n    body: The personas admitted, the tier, and why.\n    tool_name: The qualified name — it must be in the external namespace and must\n        already have been discovered.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the write.\n\nRaises:\n    HTTPException: 400 when the name is not an external one or names a persona the\n        adapter does not define; 404 when no declared server advertises it.",
+        "operationId": "write_grant_v1_mcp_tools__tool_name__grant_put",
+        "parameters": [
+          {
+            "description": "The qualified external tool name.",
+            "in": "path",
+            "name": "tool_name",
+            "required": true,
+            "schema": {
+              "description": "The qualified external tool name.",
+              "title": "Tool Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConsole"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admit an external tool for personas, at a risk tier",
+        "tags": [
+          "mcp"
+        ]
+      }
+    },
     "/v1/me/budget": {
       "get": {
         "description": "Return the caller's **own** effective caps and live spend.\n\nThis is the only budget read a ``client``-role user can make: ``/admin/budgets`` and\n``/governance/dashboard`` are both behind ``require_tenant_admin``, so until this\nendpoint existed the role the product exists for could not see what it was allowed\nto spend — while the enforcer refused its runs on exactly that number.\n\nThe rows come from :func:`aegis.governance.dashboard.budget_status`, whose ledger\nsummation *is* the one :func:`aegis.governance.enforce_governance` runs. The\nheadline picks the **user** cap when one exists and falls back to the tenant's,\nwhich is the same nearest-binding order the enforcer applies.",
@@ -16451,6 +17383,195 @@
         "summary": "Put Setting",
         "tags": [
           "console"
+        ]
+      }
+    },
+    "/v1/skills": {
+      "get": {
+        "description": "Return every skill this caller can see, and whether each is currently in force.\n\nTwo reads, deliberately: :func:`aegis.skills.store.list_skills` is what *exists* and\n:func:`aegis.skills.store.resolve_skills` is what is *live*. A management screen that\ncould only show the second could never show a skill somebody had switched off, and\none that could only show the first would be a list of rows with no relationship to\nany run.\n\nRaises:\n    HTTPException: 503 when the skills store is unreachable.",
+        "operationId": "list_authored_skills_v1_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Authored Skills",
+        "tags": [
+          "skills"
+        ]
+      },
+      "post": {
+        "description": "Author one skill from a ``SKILL.md``, screening it **before** a row exists.\n\nThe rail is the platform's bound ``check_input`` — the same one ``POST /query`` runs\non a live question and the same one a memory write runs before storage. A BLOCK is a\n422 with the rail's own reason and nothing is written; a REDACT stores the redacted\ntext and reports what was masked.\n\nRaises:\n    HTTPException: 403 when the layer is beyond this caller's reach, 409 when the\n        name is taken at that layer, 422 for a malformed document or one the rail\n        refused, 503 when the store is unreachable.",
+        "operationId": "author_skill_v1_skills_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillWriteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Author Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/{scope}/{name}": {
+      "delete": {
+        "description": "Delete one authored skill and take its name out of force, in one transaction.\n\nRaises:\n    HTTPException: 403 when the layer is beyond this caller's reach, 404 for an\n        unknown skill, 503 when the store is unreachable.",
+        "operationId": "remove_skill_v1_skills__scope___name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Remove Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/{scope}/{name}/active": {
+      "put": {
+        "description": "Put one skill in force at a layer, or take it out.\n\nWriting ``skills.enabled`` at *your own* layer is the only thing this does, which is\nwhy a tenant admin cannot switch off a platform safety skill with it: the effective\nset is a union, and a union has no way to express a removal from a layer above.\n\nRaises:\n    HTTPException: 403 when the layer is beyond this caller's reach, 404 for an\n        unknown skill, 503 when the store is unreachable.",
+        "operationId": "set_skill_active_v1_skills__scope___name__active_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "active",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Skill Active",
+        "tags": [
+          "skills"
         ]
       }
     },
