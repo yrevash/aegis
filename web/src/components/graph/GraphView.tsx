@@ -170,7 +170,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
         {/* Entity list + kind legend. */}
         <Card className="flex min-w-0 flex-col overflow-hidden xl:col-span-1">
           <CardHeader className="flex-row items-center gap-2 space-y-0">
-            <Waypoints className="size-4 text-graph-ink" />
+            <Waypoints className="size-4 text-blue-600" />
             <CardTitle>Entities in view</CardTitle>
             <InfoTip label="About Entities in view">
               Every typed entity node the graph is painting, with its kind and its degree — how many
@@ -251,7 +251,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
                   <span className="min-w-0 flex-1 truncate font-medium text-foreground">
                     {nodeLabel(nodeId(e.source))}
                   </span>
-                  <span className="flex shrink-0 items-center gap-1 font-mono text-[0.68rem] text-graph-ink">
+                  <span className="flex shrink-0 items-center gap-1 font-mono text-[0.68rem] text-blue-600">
                     <ArrowRight className="size-3" />
                     {e.relation}
                   </span>

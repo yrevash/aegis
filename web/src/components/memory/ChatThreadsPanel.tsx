@@ -88,8 +88,8 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
       <PanelHeader
         icon={MessagesSquare}
         title="Chats"
-        tint="bg-agent/12"
-        ink="text-agent-ink"
+        tint="bg-blue-200/12"
+        ink="text-blue-700"
         info="Your own console conversations. A chat's id is also its memory_session id, so the transcript here and the recall on this page describe the same thread. Turns are written by the run that produced them and cannot be edited."
         right={
           sessions != null ? (

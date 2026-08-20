@@ -74,7 +74,7 @@ export function BudgetLine({
           className="hidden h-1 w-16 shrink-0 overflow-hidden rounded-full bg-surface-2 sm:block"
         >
           <span
-            className="block h-full rounded-full bg-agent"
+            className="block h-full rounded-full bg-blue-200"
             style={{ width: `${Math.round(line.ratio * 100)}%` }}
           />
         </span>

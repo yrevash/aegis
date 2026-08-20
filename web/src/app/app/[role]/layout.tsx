@@ -37,7 +37,7 @@ export default async function PortalLayout({
         {/* Off-screen until focused, then a real, visible, clickable control. */}
         <a
           href={`#${MAIN_ID}`}
-          className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:border focus:border-border focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-card focus:outline-none focus:ring-[3px] focus:ring-ring/50"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:border focus:border-border focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-pop focus:outline-none focus:ring-2 focus:ring-ring"
         >
           Skip to the main content
         </a>

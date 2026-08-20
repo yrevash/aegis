@@ -141,7 +141,7 @@ export function FactManager({
           rows={3}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Prefers email over phone for anything non-urgent."
-          className="w-full resize-y rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40"
+          className="w-full resize-y rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
         />
         <div className="flex flex-wrap items-center gap-2">
           <Input
@@ -207,7 +207,7 @@ export function FactManager({
                     maxLength={MAX_CHARS}
                     rows={2}
                     onChange={(e) => setEditText(e.target.value)}
-                    className="w-full resize-y rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                    className="w-full resize-y rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
                   />
                   <div className="flex items-center gap-2">
                     <Button

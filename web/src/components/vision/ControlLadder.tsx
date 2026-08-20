@@ -27,7 +27,7 @@ const OUTCOME: Record<
 > = {
   passed: { label: 'passed', icon: Check, dot: 'bg-ok', ink: 'text-ok-ink' },
   blocked: { label: 'blocked', icon: Ban, dot: 'bg-block', ink: 'text-block-ink' },
-  redacted: { label: 'redacted', icon: Eraser, dot: 'bg-ml', ink: 'text-ml-ink' },
+  redacted: { label: 'redacted', icon: Eraser, dot: 'bg-blue-100', ink: 'text-blue-800' },
   not_run: {
     label: 'did not run',
     icon: CircleSlash,
@@ -73,8 +73,9 @@ export function ControlLadder({
             ) : null}
             <span
               className={cn(
-                'relative z-10 mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-white',
+                'relative z-10 mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full',
                 chrome.dot,
+                chrome.ink,
               )}
             >
               <Icon className="size-3.5" />

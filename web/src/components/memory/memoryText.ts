@@ -124,7 +124,7 @@ export const RECALL_DIMENSIONS: RecallDimension[] = [
     key: 'match',
     label: 'Match',
     hint: 'How closely this fits the question (vector similarity).',
-    hex: 'var(--graph-ink)',
+    hex: 'var(--blue-600)',
   },
   {
     key: 'fresh',
@@ -136,7 +136,7 @@ export const RECALL_DIMENSIONS: RecallDimension[] = [
     key: 'weight',
     label: 'Weight',
     hint: 'How important the memory is judged to be (importance).',
-    hex: 'var(--ml-ink)',
+    hex: 'var(--blue-800)',
   },
 ]
 

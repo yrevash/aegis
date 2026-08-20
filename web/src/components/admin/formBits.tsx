@@ -109,8 +109,8 @@ export function SelectField({
         aria-invalid={problem != null}
         aria-describedby={problem != null ? `${id}-problem` : hint != null ? `${id}-hint` : undefined}
         className={cn(
-          'h-9 w-full rounded-lg border border-input bg-surface px-2.5 text-sm text-foreground shadow-xs transition-colors outline-none',
-          'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40',
+          'h-9 w-full rounded-lg border border-input bg-surface px-2.5 text-sm text-foreground transition-colors outline-none',
+          'focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
         )}
         {...select}

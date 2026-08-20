@@ -24,11 +24,11 @@ function FactDetail({ fact }: { fact: MemoryFactRow }): ReactElement {
   return (
     <div className="animate-reveal border-t border-border/60 px-3 py-2.5">
       <p className="font-mono text-[0.64rem] leading-relaxed text-muted-foreground">
-        <span className="text-graph-ink">{fact.subject}</span>
+        <span className="text-blue-600">{fact.subject}</span>
         {' · '}
-        <span className="text-agent-ink">{fact.predicate}</span>
+        <span className="text-blue-700">{fact.predicate}</span>
         {' · '}
-        <span className="text-ml-ink">{fact.object}</span>
+        <span className="text-blue-800">{fact.object}</span>
       </p>
       <p className="tabular mt-1.5 font-mono text-[0.6rem] text-muted-foreground">
         <span className="eyebrow mr-1.5 text-[0.54rem]">Valid</span>
@@ -111,8 +111,8 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
       <PanelHeader
         icon={Network}
         title="What we know"
-        tint="bg-graph/12"
-        ink="text-graph-ink"
+        tint="bg-blue-400/12"
+        ink="text-blue-600"
         info="The facts the agent believes about this subject, each scored by confidence. Superseded facts are kept as belief history."
         right={
           <>
@@ -126,7 +126,7 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
                 type="checkbox"
                 checked={showSuperseded}
                 onChange={(e) => setShowSuperseded(e.target.checked)}
-                className="size-3 accent-[var(--graph-ink)]"
+                className="size-3 accent-[var(--blue-600)]"
               />
               superseded
             </label>

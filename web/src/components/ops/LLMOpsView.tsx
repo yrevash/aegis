@@ -161,8 +161,8 @@ function LLMOpsView(): ReactElement {
             eyebrow="closed · human-gated"
             title="Loop"
             actions={
-              <span className="grid size-8 place-items-center rounded-lg bg-ml/12">
-                <GitPullRequestArrow className="size-4 text-ml-ink" />
+              <span className="grid size-8 place-items-center rounded-lg bg-blue-100/12">
+                <GitPullRequestArrow className="size-4 text-blue-800" />
               </span>
             }
           />

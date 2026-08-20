@@ -142,8 +142,8 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
           aria-expanded={open}
           className="flex flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <span className="grid size-6 place-items-center rounded-md bg-agent/12">
-            <ScanSearch className="size-3.5 text-agent-ink" />
+          <span className="grid size-6 place-items-center rounded-md bg-blue-200/12">
+            <ScanSearch className="size-3.5 text-blue-700" />
           </span>
           <span className="t-title text-foreground">Why did it recall this?</span>
         </button>
@@ -175,7 +175,7 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder="Ask what the agent would recall…"
-                className="h-9 w-full rounded-md border border-input bg-surface pr-3 pl-9 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="h-9 w-full rounded-md border border-input bg-surface pr-3 pl-9 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
             <Button type="submit" className="shrink-0" disabled={recallQuery(draft) === null}>
@@ -200,14 +200,14 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                 <RecallGroup
                   title="Facts"
                   icon={Network}
-                  dotClass="bg-graph"
+                  dotClass="bg-blue-400"
                   count={data.recalled_fact_count}
                   items={data.facts}
                 />
                 <RecallGroup
                   title="Sessions"
                   icon={MessagesSquare}
-                  dotClass="bg-agent"
+                  dotClass="bg-blue-200"
                   count={data.recalled_message_count}
                   items={data.episodic}
                 />
@@ -217,7 +217,7 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                   captioned block with the context budget on its own header rule. */}
               <figure className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface-2/40">
                 <figcaption className="flex items-center gap-2 border-b border-border/70 bg-surface-2/70 px-3 py-1.5">
-                  <Terminal className="size-3.5 shrink-0 text-ml-ink" />
+                  <Terminal className="size-3.5 shrink-0 text-blue-800" />
                   <span className="t-label text-foreground">What the agent sees</span>
                   <InfoTip label="About context">
                     The block of memory text assembled and handed to the model for this question.
@@ -225,7 +225,7 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                   <span className="ml-auto flex shrink-0 items-center gap-2">
                     <MiniMeter
                       value={usedPct / 100}
-                      hex={usedPct > 90 ? 'var(--risk)' : 'var(--ml)'}
+                      hex={usedPct > 90 ? 'var(--risk)' : 'var(--blue-100)'}
                       height={4}
                       className="w-12"
                     />

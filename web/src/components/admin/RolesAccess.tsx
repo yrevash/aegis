@@ -146,7 +146,7 @@ export function RolesAccess({
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <KeyRound className="size-4 text-agent" />
+        <KeyRound className="size-4 text-blue-700" />
         <CardTitle>Roles &amp; Access</CardTitle>
         <Badge variant="secondary">RBAC</Badge>
         {/* `GET /admin/users` is tenant-scoped server-side (`_scope_tenant`), so a
@@ -318,11 +318,11 @@ function chipDot(role: Role): string {
     case 'risk':
       return 'bg-risk'
     case 'ml':
-      return 'bg-ml'
+      return 'bg-blue-100'
     case 'agent':
-      return 'bg-agent'
+      return 'bg-blue-200'
     case 'graph':
-      return 'bg-graph'
+      return 'bg-blue-400'
     default:
       return 'bg-muted-foreground'
   }

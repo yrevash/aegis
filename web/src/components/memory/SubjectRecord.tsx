@@ -116,8 +116,8 @@ export function SubjectPanels({
               <PanelHeader
                 icon={MessagesSquare}
                 title="Sessions"
-                tint="bg-agent/12"
-                ink="text-agent-ink"
+                tint="bg-blue-200/12"
+                ink="text-blue-700"
                 info="Past conversations with this subject, each with a running summary. Expand a row for its transcript."
               />
               {sessions.state.status === 'loading' && <LoadingRow label="Loading sessions…" />}

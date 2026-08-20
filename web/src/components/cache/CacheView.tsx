@@ -62,7 +62,7 @@ function HitRateMeter({ value }: { value: number | null }): ReactElement {
         aria-label={`Hit rate ${pct.toFixed(1)} percent`}
       >
         <div
-          className="h-full rounded-full bg-graph transition-[width] duration-500 motion-reduce:transition-none"
+          className="h-full rounded-full bg-blue-400 transition-[width] duration-500 motion-reduce:transition-none"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -212,7 +212,7 @@ function CacheView(): ReactElement {
         <button
           type="button"
           onClick={() => void load()}
-          className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground shadow-card transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)]"
+          className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)]"
         >
           <RefreshCw
             className={

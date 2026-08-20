@@ -53,7 +53,7 @@ export function ShapWaterfall({
         <span className="eyebrow flex items-center gap-1.5">
           <span
             className="inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: 'var(--ml-ink)' }}
+            style={{ background: 'var(--blue-800)' }}
           />
           SHAP · why this prediction
         </span>
@@ -116,7 +116,7 @@ export function ShapWaterfall({
         </div>
         <span
           className="tabular font-mono text-[1.1rem] font-bold tracking-tight"
-          style={{ color: 'var(--ml-ink)' }}
+          style={{ color: 'var(--blue-800)' }}
         >
           {fmt(prediction, unit)}
         </span>

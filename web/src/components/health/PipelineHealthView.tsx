@@ -151,7 +151,7 @@ function StageBar({ value, max }: { value: number; max: number }): ReactElement 
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2">
       <div
-        className="h-full rounded-full bg-graph transition-[width] duration-500 motion-reduce:transition-none"
+        className="h-full rounded-full bg-blue-400 transition-[width] duration-500 motion-reduce:transition-none"
         style={{ width: `${pct}%` }}
       />
     </div>

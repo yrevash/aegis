@@ -21,10 +21,10 @@ const STAGES = [
 
 const DOT: Record<string, string> = {
   block: 'bg-block',
-  graph: 'bg-graph',
-  ml: 'bg-ml',
+  graph: 'bg-blue-400',
+  ml: 'bg-blue-100',
   risk: 'bg-risk',
-  agent: 'bg-agent',
+  agent: 'bg-blue-200',
   ok: 'bg-ok',
 }
 

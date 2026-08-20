@@ -107,7 +107,7 @@ function RunPanel({
             <select
               value={selected}
               onChange={(event) => onSelect(event.target.value)}
-              className="rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--agent)]"
+              className="rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--blue-200)]"
             >
               {suites.map((row) => (
                 <option key={row.id} value={row.id}>
@@ -121,7 +121,7 @@ function RunPanel({
             <select
               value={mode}
               onChange={(event) => onMode(event.target.value as RedteamMode)}
-              className="rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--agent)]"
+              className="rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--blue-200)]"
             >
               <option value="offline">Offline — deterministic signatures only</option>
               <option value="live">Live — drives the model layers, spends budget</option>
@@ -170,7 +170,7 @@ function RunPanel({
             onClick={onRun}
             disabled={running || !mayRun}
             title={mayRun ? undefined : (refusal ?? undefined)}
-            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-block px-4 py-2.5 text-sm font-medium text-white shadow-card transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--block)] disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none"
+            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-block-ink px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ring)] disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none"
           >
             {running ? (
               <>
@@ -579,7 +579,7 @@ function RedteamView(): ReactElement {
                       <button
                         type="button"
                         onClick={() => open(row.runId)}
-                        className="rounded-sm font-mono text-[0.72rem] text-foreground underline decoration-border underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--agent)]"
+                        className="rounded-sm font-mono text-[0.72rem] text-foreground underline decoration-border underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--blue-200)]"
                       >
                         {row.runId}
                       </button>

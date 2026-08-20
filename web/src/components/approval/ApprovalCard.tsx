@@ -52,7 +52,9 @@ export function ApprovalCard({
     <Card
       className={cn(
         'border-risk/50 bg-risk/[0.04]',
-        !resolved && 'shadow-[0_0_28px_-8px_var(--risk)]',
+        // An unresolved gate is emphasised by weight, not by a coloured glow: a
+        // 28px risk-hued shadow is the one thing on the page that looks lit.
+        !resolved && 'border-2 border-risk',
       )}
     >
       <CardHeader className="flex-row items-center gap-2 space-y-0">

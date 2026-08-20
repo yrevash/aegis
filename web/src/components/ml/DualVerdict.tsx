@@ -42,7 +42,7 @@ export function ActionVerdict({
     <div className={cn('flex flex-wrap items-center gap-2', className)}>
       {proposed ? (
         <>
-          <Bot className="size-3.5 shrink-0 text-agent-ink" />
+          <Bot className="size-3.5 shrink-0 text-blue-700" />
           <span className="eyebrow normal-case tracking-normal text-muted-foreground">Action</span>
           <span className="min-w-0 truncate font-mono text-[0.8rem] font-medium text-foreground">
             {proposed.tool}

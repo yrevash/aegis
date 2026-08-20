@@ -70,7 +70,7 @@ export function BacktestPanel({ result }: { result: ForecastResult }): ReactElem
                   style={
                     c.selected
                       ? {
-                          background: 'color-mix(in srgb, var(--ml) 10%, transparent)',
+                          background: 'color-mix(in srgb, var(--blue-100) 10%, transparent)',
                         }
                       : undefined
                   }

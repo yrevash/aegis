@@ -1,9 +1,16 @@
 /**
  * The signal taxonomy — the design's central idea made into data.
  *
- * Each trust subsystem the jury must read owns one hue, reused everywhere it
- * appears (trace panel, graph, KPIs, trust bar). Keeping the mapping here means
- * a single source of truth for colour semantics across the whole console.
+ * Each trust subsystem the jury must read owns a consistent treatment, reused
+ * everywhere it appears (trace panel, graph, KPIs, trust bar). Keeping the
+ * mapping here means one source of truth for the whole console.
+ *
+ * The three **subject** signals (agent, graph, ml) are no longer three hues: they
+ * are three steps on the one blue ramp, and DESIGN.md §2 is explicit that a
+ * reader tells them apart by position, label and weight first. The three
+ * **state** signals (risk, block, ok) keep distinct hues because they are the
+ * reserved status set — and each one ships with an icon and a word, so identity
+ * is never colour alone.
  */
 
 import type { RiskLevel, StreamEventType } from '@/lib/stream'
@@ -23,7 +30,9 @@ interface SignalToken {
   bg: string
   /**
    * Raw hex for canvas/SVG contexts that cannot use Tailwind classes. This is
-   * the *ink* tone (mirrors `--<signal>-ink`) so marks read on a white surface.
+   * the *ink* tone, so a mark reads on a white surface. For a chart series use
+   * `chartHex` instead — a sequential ramp needs separation this map does not
+   * have, because two subjects are deliberately near-identical here.
    */
   hex: string
   /** Human label. */
@@ -31,17 +40,19 @@ interface SignalToken {
 }
 
 /**
- * The full signal → token map. Colours mirror the CSS variables in
- * `index.css`: `border`/`bg` use the soft fill hue (`--<signal>`), while
- * `text`/`hex` use the readable ink tone (`--<signal>-ink`).
+ * The full signal → token map. `border`/`bg` carry the soft step, `text`/`hex`
+ * the readable ink, and every value here is a token that exists in
+ * `app/globals.css` — the teal `#0e9488` and violet `#7a5af8` that sat in `hex`
+ * were the last two survivors of the six-hue theme, painting every canvas and
+ * SVG mark off-system while the class names beside them had already gone blue.
  */
 export const SIGNALS: Record<Signal, SignalToken> = {
-  agent: { text: 'text-agent-ink', border: 'border-agent', bg: 'bg-agent/12', hex: '#0e9488', label: 'Reasoning' },
-  graph: { text: 'text-graph-ink', border: 'border-graph', bg: 'bg-graph/12', hex: '#1570ef', label: 'Retrieval' },
+  agent: { text: 'text-blue-700', border: 'border-blue-200', bg: 'bg-blue-200/40', hex: '#175cd3', label: 'Reasoning' },
+  graph: { text: 'text-blue-600', border: 'border-blue-400', bg: 'bg-blue-400/12', hex: '#1570ef', label: 'Retrieval' },
   risk: { text: 'text-risk-ink', border: 'border-risk', bg: 'bg-risk/15', hex: '#dc6803', label: 'Human gate' },
   block: { text: 'text-block-ink', border: 'border-block', bg: 'bg-block/15', hex: '#d92d20', label: 'Guardrail' },
   ok: { text: 'text-ok-ink', border: 'border-ok', bg: 'bg-ok/15', hex: '#12b76a', label: 'Healthy' },
-  ml: { text: 'text-ml-ink', border: 'border-ml', bg: 'bg-ml/12', hex: '#7a5af8', label: 'ML' },
+  ml: { text: 'text-blue-800', border: 'border-blue-100', bg: 'bg-blue-100/60', hex: '#1e40af', label: 'ML' },
   neutral: { text: 'text-muted-foreground', border: 'border-border', bg: 'bg-surface-2', hex: '#667085', label: 'System' },
 }
 

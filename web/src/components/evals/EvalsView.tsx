@@ -81,7 +81,7 @@ function MetricCard({ m }: { m: EvalMetricConfig }): ReactElement {
   return (
     <div
       className={cn(
-        'rounded-2xl border bg-card p-5 shadow-card transition-shadow hover:shadow-hover md:p-6',
+        'rounded-2xl border bg-card p-5 transition-shadow md:p-6',
         pass ? 'border-ok/40' : 'border-block/50',
       )}
     >

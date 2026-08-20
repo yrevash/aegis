@@ -70,12 +70,12 @@ interface TrustBarProps {
 /** Renders the trust pipeline, lighting stages as the run completes them. */
 export function TrustBar({ state, beat = null, idle = false }: TrustBarProps): ReactElement {
   return (
-    <div className="relative flex flex-wrap items-center gap-x-2 gap-y-2 overflow-hidden rounded-xl border border-border bg-card px-3 py-2.5 shadow-card">
+    <div className="relative flex flex-wrap items-center gap-x-2 gap-y-2 overflow-hidden rounded-xl border border-border bg-card px-3 py-2.5">
       {/* Idle attract-loop: a slow shimmer sweep across the dormant bar. */}
       {idle && (
         <span
           aria-hidden
-          className="animate-trust-shimmer pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-graph/10 to-transparent"
+          className="animate-trust-shimmer pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-blue-400/10 to-transparent"
         />
       )}
       <span className="eyebrow mr-1">Trust stack</span>

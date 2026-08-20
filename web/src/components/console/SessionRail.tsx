@@ -51,7 +51,7 @@ export function SessionRail({
                 aria-current={active ? 'true' : undefined}
                 className={cn(
                   'w-full truncate rounded-md px-2.5 py-2 text-left text-[0.8rem] transition-colors',
-                  'outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                  'outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   active
                     ? 'bg-surface-2 font-medium text-foreground'
                     : 'text-muted-foreground hover:bg-surface-2/60 hover:text-foreground',

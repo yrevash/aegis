@@ -186,7 +186,7 @@ export function PromptControl(): ReactElement {
                 readOnly={!editable}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={8}
-                className="w-full rounded-xl border border-border bg-card px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+                className="w-full rounded-xl border border-border bg-card px-3 py-2 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
               />
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button
@@ -259,7 +259,7 @@ export function PromptControl(): ReactElement {
                   value={lookupId}
                   placeholder="Paste a run id"
                   onChange={(e) => setLookupId(e.target.value)}
-                  className="h-9 min-w-0 flex-1 rounded-md border border-border bg-card px-3 font-mono text-sm text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="h-9 min-w-0 flex-1 rounded-md border border-border bg-card px-3 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
                 <Button
                   variant="outline"

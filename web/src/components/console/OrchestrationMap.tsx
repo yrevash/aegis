@@ -60,7 +60,7 @@ export function OrchestrationMap({ state, beat }: OrchestrationMapProps): ReactE
   return (
     <div className="border-b border-border px-4 pt-3 pb-2">
       <div className="mb-1 flex items-center gap-2">
-        <Route className="size-3.5 text-agent-ink" />
+        <Route className="size-3.5 text-blue-700" />
         <span className="eyebrow">Orchestration</span>
         <BranchTag branch={flow.branch} denied={flow.denied} />
       </div>

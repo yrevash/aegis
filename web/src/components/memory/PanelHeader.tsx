@@ -8,9 +8,9 @@ interface PanelHeaderProps {
   icon: LucideIcon
   /** 1–3 word title (§1.3) — no sentences, no jargon. */
   title: string
-  /** Tint class for the icon chip background, e.g. "bg-graph/12". */
+  /** Tint class for the icon chip background, e.g. "bg-blue-400/12". */
   tint?: string
-  /** Ink class for the icon, e.g. "text-graph-ink". */
+  /** Ink class for the icon, e.g. "text-blue-600". */
   ink?: string
   /** Relocated prose / honest tech, surfaced via the ⓘ tooltip (§1.2). */
   info?: ReactNode

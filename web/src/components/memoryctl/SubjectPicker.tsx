@@ -64,12 +64,12 @@ export function SubjectPicker({
                 'flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 active
-                  ? 'border-agent/40 bg-agent/10'
+                  ? 'border-blue-200/40 bg-blue-200/10'
                   : 'border-border bg-card hover:bg-surface-2/60',
               )}
             >
               {row.is_self ? (
-                <User className="size-4 shrink-0 text-agent-ink" aria-hidden />
+                <User className="size-4 shrink-0 text-blue-700" aria-hidden />
               ) : (
                 <Users className="size-4 shrink-0 text-muted-foreground" aria-hidden />
               )}

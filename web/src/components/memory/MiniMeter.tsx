@@ -17,7 +17,7 @@ interface MiniMeterProps {
  * confidence and the recall sub-scores. Kept free of recharts so it renders in
  * SSR/tests and stays visually quiet inside dense rows.
  */
-export function MiniMeter({ value, hex = 'var(--ml)', height = 6, className }: MiniMeterProps): ReactElement {
+export function MiniMeter({ value, hex = 'var(--blue-100)', height = 6, className }: MiniMeterProps): ReactElement {
   const pct = Math.max(0, Math.min(100, Math.round((Number.isFinite(value) ? value : 0) * 100)))
   return (
     <div

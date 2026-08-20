@@ -124,7 +124,7 @@ export function Composer({
   return (
     <form
       onSubmit={submit}
-      className="rounded-2xl border border-border bg-card p-2.5 shadow-card focus-within:border-ring"
+      className="rounded-2xl border border-border bg-card p-2.5 focus-within:border-ring"
     >
       <div className="flex flex-wrap items-center gap-2 pb-2">
         {personas.length > 1 && (
@@ -136,7 +136,7 @@ export function Composer({
               id="composer-persona"
               value={persona?.id}
               onChange={(event) => onPersonaChange(event.target.value)}
-              className="h-8 rounded-md border border-input bg-surface/60 px-2 text-[0.78rem] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+              className="h-8 rounded-md border border-input bg-surface/60 px-2 text-[0.78rem] outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
               {personas.map((p) => (
                 <option key={p.id} value={p.id}>

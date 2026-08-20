@@ -29,14 +29,14 @@ export function AgentTracePanel({ state }: { state: RunState }): ReactElement {
   return (
     <Card className="flex h-full flex-col">
       <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Activity className="size-4 text-agent-ink" />
+        <Activity className="size-4 text-blue-700" />
         <CardTitle>Activity</CardTitle>
         <InfoTip label="About Activity">
           The agent&rsquo;s step-by-step run log, streamed live as each step lands.
         </InfoTip>
         {streaming && (
           <Badge variant="agent" className="ml-auto">
-            <span className="animate-pip mr-1 size-1.5 rounded-full bg-agent" /> live
+            <span className="animate-pip mr-1 size-1.5 rounded-full bg-blue-200" /> live
           </Badge>
         )}
         {!streaming && state.events.length > 0 && (

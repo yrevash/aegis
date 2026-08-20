@@ -32,7 +32,7 @@ function NodeP95Bars({ nodes }: { nodes: NodeLatency[] }): ReactElement {
         <span className="eyebrow flex items-center gap-1.5">
           <span
             className="inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: 'var(--graph-ink)' }}
+            style={{ background: 'var(--blue-600)' }}
           />
           p95 latency · per node
         </span>
@@ -54,7 +54,7 @@ function NodeP95Bars({ nodes }: { nodes: NodeLatency[] }): ReactElement {
                 style={{
                   left: 0,
                   width: `${Math.max((n.p95_ms / maxP95) * 100, 1.5)}%`,
-                  background: 'var(--graph-ink)',
+                  background: 'var(--blue-600)',
                 }}
               />
             </div>

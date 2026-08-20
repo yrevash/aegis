@@ -158,7 +158,7 @@ function ScopePicker({
         onChange={(event) => onChange(event.target.value === '' ? null : Number(event.target.value))}
         disabled={disabled}
         aria-label="Tenant scope for every read on this page"
-        className="h-9 rounded-lg border border-input bg-surface px-3 text-sm text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+        className="h-9 rounded-lg border border-input bg-surface px-3 text-sm text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <option value="">Every tenant</option>
         {overview.tenants.map((tenant) => (
@@ -194,7 +194,7 @@ function Catalog({
           type="button"
           onClick={() => onSelect({ kind: 'table', name: table.name })}
           aria-current={active ? 'true' : undefined}
-          className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 ${
+          className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
             active ? 'bg-surface-2 text-foreground' : 'text-muted-foreground hover:bg-surface-2/60'
           }`}
         >
@@ -413,7 +413,7 @@ function Result({
           </div>
         )}
         <details className="mt-3">
-          <summary className="cursor-pointer text-[0.72rem] text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40">
+          <summary className="cursor-pointer text-[0.72rem] text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
             The statement the server built
           </summary>
           <pre className="mt-2 overflow-x-auto rounded-xl bg-surface-2 px-3 py-2 font-mono text-[0.7rem] leading-relaxed text-foreground">

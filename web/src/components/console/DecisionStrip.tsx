@@ -101,7 +101,7 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
           label="Sources"
           index={1}
           phaseKey={phaseKey}
-          tone="text-graph-ink"
+          tone="text-blue-600"
           info="Documents recalled, reranked, and used to ground the answer."
         >
           {sources > 0 ? <CountUp value={sources} /> : dash}

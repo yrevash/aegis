@@ -103,7 +103,7 @@ export function RetentionPanel({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <Timer className="size-4 text-agent-ink" aria-hidden />
+        <Timer className="size-4 text-blue-700" aria-hidden />
         <h3 className="t-title text-foreground">How long this is kept</h3>
       </div>
 

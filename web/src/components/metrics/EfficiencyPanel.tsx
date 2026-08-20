@@ -76,7 +76,7 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
             label="Small-model share"
             value={metrics ? `${Math.round(metrics.small_model_share * 100)}%` : '—'}
             meter={metrics?.small_model_share}
-            meterColor="var(--agent)"
+            meterColor="var(--blue-200)"
           />
           <Stat
             icon={Coins}
@@ -88,7 +88,7 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
             label="Quality score"
             value={metrics?.quality_score != null ? metrics.quality_score.toFixed(2) : '—'}
             meter={metrics?.quality_score ?? undefined}
-            meterColor="var(--ml)"
+            meterColor="var(--blue-100)"
           />
         </div>
 
@@ -106,7 +106,7 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-md border border-border/70 bg-surface/50 py-2">
-              <p className="tabular font-display text-base font-semibold text-agent-ink">
+              <p className="tabular font-display text-base font-semibold text-blue-700">
                 {runTokens ?? (state.phase === 'streaming' ? '···' : '—')}
               </p>
               <p className="eyebrow mt-0.5">tokens</p>

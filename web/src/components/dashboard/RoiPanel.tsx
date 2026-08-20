@@ -5,7 +5,6 @@ import type { ReactElement } from 'react'
 
 import { CountUp } from '@/components/shared/CountUp'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { cn } from '@/lib/utils'
 import type { MetricsResponse } from '@/lib/api/types'
 
 import {
@@ -27,13 +26,12 @@ interface ProjectionProps {
   value: number | null
   format: (n: number) => string
   sub: string
-  tint: 'blue' | 'purple'
 }
 
 /** A soft-tinted "cost at scale" projection tile with a count-up figure. */
-function Projection({ label, value, format, sub, tint }: ProjectionProps): ReactElement {
+function Projection({ label, value, format, sub }: ProjectionProps): ReactElement {
   return (
-    <div className={cn('rounded-lg p-3.5', tint === 'blue' ? 'bg-tint-blue' : 'bg-tint-purple')}>
+    <div className="rounded-lg border border-border bg-tint-blue p-3.5">
       <p className="eyebrow">{label}</p>
       {value == null ? (
         <p className="tabular font-display mt-1.5 text-2xl leading-none font-semibold text-muted-foreground">
@@ -84,7 +82,7 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
       {/* Cost at scale — projected from the measured per-1k rate. */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
-          <TrendingDown className="size-3.5 text-graph-ink" />
+          <TrendingDown className="size-3.5 text-blue-600" />
           <span className="eyebrow">Cost at scale</span>
           <InfoTip label="About cost at scale">
             {`$/1M is measured (cost-per-1k × 1,000). $/month assumes ~${formatCountCompact(a.monthlyVolume)} queries/month; baseline savings use the real frontier-model cost.`}
@@ -96,14 +94,12 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
             value={perMillion}
             format={formatUsdCompact}
             sub={savedPerMillion != null ? `saves ${formatUsdCompact(savedPerMillion)} vs baseline` : 'awaiting metrics'}
-            tint="blue"
           />
           <Projection
             label="$ / month"
             value={perMonth}
             format={formatUsdCompact}
             sub={savedPerMonth != null ? `saves ${formatUsdCompact(savedPerMonth)} / month` : 'awaiting metrics'}
-            tint="purple"
           />
         </div>
       </div>
@@ -111,7 +107,7 @@ export function RoiPanel({ metrics }: { metrics: MetricsResponse | null }): Reac
       {/* Manual vs agent — real unit cost against a sample labour rate. */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
-          <Users className="size-3.5 text-ml-ink" />
+          <Users className="size-3.5 text-blue-800" />
           <span className="eyebrow">Manual vs agent · per case</span>
           <InfoTip label="About manual vs agent">
             {savedPerCase != null && unitCost != null

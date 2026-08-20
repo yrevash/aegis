@@ -141,7 +141,7 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
 
       <Card>
         <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-          <ScrollText className="size-4 text-agent" />
+          <ScrollText className="size-4 text-blue-700" />
           <CardTitle>Audit trail</CardTitle>
           <div className="ml-1 flex items-center gap-1">
             <Badge variant="secondary">append-only</Badge>
@@ -245,7 +245,7 @@ export function AuditLog({ token, tenants = [] }: AuditLogProps): ReactElement {
                       <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-muted-foreground">
                         {r.actor ?? '—'}
                       </td>
-                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-agent-ink">
+                      <td className="py-2.5 font-mono text-[0.72rem] whitespace-nowrap text-blue-700">
                         {r.model ?? '—'}
                       </td>
                       <td className="py-2.5 whitespace-nowrap">
@@ -327,7 +327,7 @@ function TraceChip({ traceId }: { traceId: string | null }): ReactElement {
     <button
       type="button"
       onClick={copy}
-      className="group inline-flex items-center gap-1 rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.68rem] text-graph-ink transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group inline-flex items-center gap-1 rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-600 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       title="Copy trace id"
     >
       {traceId}

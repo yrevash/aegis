@@ -57,7 +57,7 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <Layers className="size-4 text-agent" />
+        <Layers className="size-4 text-blue-700" />
         <CardTitle>Tech Stack &amp; Versions</CardTitle>
         <Badge variant="secondary">SBOM</Badge>
         <InfoTip label="Why this matters">
@@ -146,7 +146,7 @@ function StackRow({ component }: { component: StackComponent }): ReactElement {
           className={cn(
             'inline-block rounded border px-1.5 py-0.5 font-mono text-[0.7rem]',
             version.known
-              ? 'border-graph/40 bg-graph/10 text-graph-ink'
+              ? 'border-blue-400/40 bg-blue-400/10 text-blue-600'
               : 'border-border/70 bg-surface-2/50 text-muted-foreground italic',
           )}
         >

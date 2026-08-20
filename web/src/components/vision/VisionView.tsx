@@ -108,7 +108,7 @@ function VisionView(): ReactElement {
               type="button"
               onClick={clear}
               disabled={running}
-              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5 text-sm font-medium text-muted-foreground shadow-card transition-opacity hover:opacity-90 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5 text-sm font-medium text-muted-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               <Trash2 className="size-4" /> Clear
             </button>
@@ -117,7 +117,7 @@ function VisionView(): ReactElement {
             type="button"
             onClick={run}
             disabled={running || image == null}
-            className="inline-flex items-center gap-2 rounded-xl bg-agent px-4 py-2.5 text-sm font-medium text-white shadow-card transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {running ? (
               <>
@@ -213,7 +213,7 @@ function VisionView(): ReactElement {
                 onChange={(e) => setQuestion(e.target.value)}
                 rows={3}
                 placeholder="Describe this image."
-                className="w-full resize-y rounded-xl border border-border bg-surface-2/40 px-3.5 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-agent"
+                className="w-full resize-y rounded-xl border border-border bg-surface-2/40 px-3.5 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-blue-200"
               />
               <p className="text-[0.72rem] leading-snug text-muted-foreground">
                 Text rendered inside an image is read by a vision model as if it had been typed.

@@ -357,7 +357,7 @@ function AdminCommandCenter(): ReactElement {
                     {alerts.map((a, i) => (
                       <li
                         key={i}
-                        className="flex items-start gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5 shadow-card"
+                        className="flex items-start gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5"
                       >
                         <span
                           className="mt-1.5 size-2.5 shrink-0 rounded-full"

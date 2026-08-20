@@ -88,7 +88,7 @@ export function AssistantBot({ running }: { running: boolean }): ReactElement {
     >
       {/* Antenna, with the one accent on the surface. */}
       <path d="M20 11V6.5" />
-      <circle cx="20" cy="4.4" r="1.9" fill="var(--agent)" />
+      <circle cx="20" cy="4.4" r="1.9" fill="var(--blue-200)" />
 
       {/* Ears — two side tabs. */}
       <rect x="4.6" y="18" width="3.4" height="6" rx="1.5" />

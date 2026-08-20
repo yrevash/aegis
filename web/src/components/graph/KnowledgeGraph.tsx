@@ -129,7 +129,7 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
   return (
     <Card className="flex h-full flex-col overflow-hidden">
       <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Waypoints className="size-4 text-graph-ink" />
+        <Waypoints className="size-4 text-blue-600" />
         <CardTitle>Orchestration</CardTitle>
         <InfoTip label="About Orchestration">
           Which agent handled each step, drawn over the knowledge graph the run
@@ -232,7 +232,7 @@ export function KnowledgeGraph({ base, state, beat, idle }: KnowledgeGraphProps)
         {/* Idle attract-loop: a dormant scanline sweep over the resting graph. */}
         {idle && !reduced && (
           <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="animate-scan absolute inset-x-0 h-16 bg-gradient-to-b from-transparent via-graph/10 to-transparent" />
+            <div className="animate-scan absolute inset-x-0 h-16 bg-gradient-to-b from-transparent via-blue-400/10 to-transparent" />
           </div>
         )}
 

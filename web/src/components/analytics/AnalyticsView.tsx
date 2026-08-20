@@ -169,8 +169,8 @@ function AnalyticsView(): ReactElement {
                 aria-pressed={entry.id === board.id}
                 className={
                   entry.id === board.id
-                    ? 'rounded-full border border-graph bg-graph/12 px-3 py-1.5 text-sm text-graph-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-graph'
-                    : 'rounded-full border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-graph'
+                    ? 'rounded-full border border-blue-400 bg-blue-400/12 px-3 py-1.5 text-sm text-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
+                    : 'rounded-full border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
                 }
               >
                 {entry.title}
@@ -186,7 +186,7 @@ function AnalyticsView(): ReactElement {
               id="analytics-window"
               value={window_}
               onChange={(event) => setWindow(event.target.value)}
-              className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-graph"
+              className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
             >
               {Object.entries(windows).map(([key, label]) => (
                 <option key={key} value={key}>
@@ -312,8 +312,8 @@ function ModeButton({
       aria-pressed={active}
       className={
         active
-          ? 'flex items-center gap-2 rounded-md bg-surface-2 px-3 py-1.5 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-graph'
-          : 'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-graph'
+          ? 'flex items-center gap-2 rounded-md bg-surface-2 px-3 py-1.5 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
+          : 'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400'
       }
     >
       {icon}

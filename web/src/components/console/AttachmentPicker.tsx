@@ -115,7 +115,7 @@ export function AttachmentPicker({
             <button
               type="button"
               onClick={onClear}
-              className="rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X aria-hidden className="size-4" />
               <span className="sr-only">Remove the image</span>

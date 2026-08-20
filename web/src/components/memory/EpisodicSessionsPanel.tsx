@@ -18,9 +18,9 @@ function roleTint(role: string): string {
     case 'user':
       return 'text-foreground'
     case 'tool':
-      return 'text-graph-ink'
+      return 'text-blue-600'
     case 'assistant':
-      return 'text-agent-ink'
+      return 'text-blue-700'
     default:
       return 'text-muted-foreground'
   }
@@ -59,8 +59,8 @@ function SessionRow({ token, session }: { token: string | null; session: MemoryS
         aria-expanded={open}
         className="flex w-full items-start gap-2.5 rounded-lg px-3.5 py-2.5 text-left transition-colors hover:bg-surface-2/50"
       >
-        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-agent/12">
-          <MessagesSquare className="size-3.5 text-agent-ink" />
+        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-blue-200/12">
+          <MessagesSquare className="size-3.5 text-blue-700" />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">

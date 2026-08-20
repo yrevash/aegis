@@ -48,8 +48,8 @@ export function StructuredProfilePanel({ state }: Props): ReactElement {
       <PanelHeader
         icon={IdCard}
         title="Profile"
-        tint="bg-ml/12"
-        ink="text-ml-ink"
+        tint="bg-blue-100/12"
+        ink="text-blue-800"
         info="A stable, consolidated record of what the agent knows about this subject, distilled from its facts and past sessions."
         right={
           state.status === 'ready' ? (

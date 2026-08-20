@@ -28,7 +28,7 @@ interface WaveformProps {
  */
 export function Waveform({
   values,
-  hex = 'var(--agent)',
+  hex = 'var(--blue-200)',
   height = 72,
   marks = [],
   className,

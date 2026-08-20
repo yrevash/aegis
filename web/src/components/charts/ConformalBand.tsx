@@ -52,7 +52,7 @@ export function ConformalBand({
         <div className="flex items-baseline gap-2">
           <span
             className="tabular font-mono text-[1.2rem] font-bold tracking-tight"
-            style={{ color: 'var(--ml-ink)' }}
+            style={{ color: 'var(--blue-800)' }}
           >
             {String(prediction)}
           </span>
@@ -80,7 +80,7 @@ export function ConformalBand({
       <div className="flex items-baseline gap-2">
         <span
           className="tabular font-mono text-[1.35rem] font-bold leading-none tracking-tight"
-          style={{ color: 'var(--ml-ink)' }}
+          style={{ color: 'var(--blue-800)' }}
         >
           {formatValue(point, unit)}
         </span>
@@ -99,13 +99,13 @@ export function ConformalBand({
           style={{
             left: `${loPct}%`,
             width: `${Math.max(hiPct - loPct, 1)}%`,
-            background: 'var(--ml)',
-            border: '1px solid var(--ml-ink)',
+            background: 'var(--blue-100)',
+            border: '1px solid var(--blue-800)',
           }}
         />
         <div
           className="absolute top-1/2 h-6 w-[2.5px] -translate-y-1/2 rounded-full"
-          style={{ left: `calc(${pointPct}% - 1.25px)`, background: 'var(--ml-ink)' }}
+          style={{ left: `calc(${pointPct}% - 1.25px)`, background: 'var(--blue-800)' }}
         />
       </div>
 
@@ -146,14 +146,14 @@ function BandHeader({ coverage }: { coverage: string | null }): ReactElement {
       <span className="eyebrow flex items-center gap-1.5">
         <span
           className="inline-block h-1.5 w-1.5 rounded-full"
-          style={{ background: 'var(--ml-ink)' }}
+          style={{ background: 'var(--blue-800)' }}
         />
         conformal · calibrated confidence
       </span>
       {coverage && (
         <span
           className="tabular font-mono text-[0.66rem] font-semibold"
-          style={{ color: 'var(--ml-ink)' }}
+          style={{ color: 'var(--blue-800)' }}
         >
           {coverage} coverage
         </span>

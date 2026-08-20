@@ -70,7 +70,7 @@ function StageRow({
         <span
           className={cn(
             'flex size-8 shrink-0 items-center justify-center rounded-lg',
-            status === 'on' ? 'bg-graph/12 text-graph-ink' : 'bg-surface-2 text-muted-foreground',
+            status === 'on' ? 'bg-blue-400/12 text-blue-600' : 'bg-surface-2 text-muted-foreground',
           )}
         >
           <Icon className="size-4" />
@@ -112,7 +112,7 @@ function ArmChip({
         fired ? 'border-border bg-surface-2/50' : 'border-dashed border-border bg-transparent',
       )}
     >
-      <Icon className={cn('size-4 shrink-0', fired ? 'text-graph-ink' : 'text-muted-foreground/60')} />
+      <Icon className={cn('size-4 shrink-0', fired ? 'text-blue-600' : 'text-muted-foreground/60')} />
       <div className="min-w-0">
         <p className={cn('truncate text-xs font-medium', fired ? 'text-foreground' : 'text-muted-foreground')}>
           {ORIGIN_LABEL[origin]}
@@ -208,7 +208,7 @@ export function ArsenalPanel({ obs }: ArsenalPanelProps): ReactElement {
                 {rr.top_scores.map((s, i) => (
                   <span
                     key={i}
-                    className="tabular-nums rounded-md bg-graph/12 px-1.5 py-0.5 font-mono text-[0.68rem] text-graph-ink"
+                    className="tabular-nums rounded-md bg-blue-400/12 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-600"
                   >
                     {s.toFixed(2)}
                   </span>

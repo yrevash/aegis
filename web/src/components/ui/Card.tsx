@@ -2,9 +2,12 @@ import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 /**
- * Card — TailAdmin's rounded-2xl white panel, restyled to our tokens (surface +
- * hairline border + soft diffuse shadow-card, not TailAdmin's default). The
- * building block for every panel across the portals.
+ * Card — a white panel on a hairline border.
+ *
+ * The soft diffuse shadow it used to carry is gone: DESIGN.md §4 keeps one
+ * shadow token for genuinely floating layers — a popover, a dialog — and a
+ * border everywhere else, because a page of shadowed rectangles reads as generic
+ * SaaS chrome and says nothing about what sits above what.
  */
 export function Card({
   children,
@@ -16,7 +19,7 @@ export function Card({
   return (
     <div
       className={cn(
-        'rounded-2xl border border-border bg-card text-card-foreground shadow-card',
+        'rounded-2xl border border-border bg-card text-card-foreground',
         className,
       )}
     >

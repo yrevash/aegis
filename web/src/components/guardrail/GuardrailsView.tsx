@@ -289,8 +289,8 @@ function EngineIndicator({
     <Card>
       <CardBody>
         <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-agent/12">
-            <Cpu className="size-5 text-agent-ink" />
+          <span className="flex size-9 items-center justify-center rounded-xl bg-blue-200/12">
+            <Cpu className="size-5 text-blue-700" />
           </span>
           <div className="flex min-w-0 items-center gap-1.5">
             <h3 className="t-title text-foreground">Guardrail engine</h3>

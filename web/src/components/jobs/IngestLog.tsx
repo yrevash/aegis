@@ -244,7 +244,7 @@ function StageStrip({ stages }: { stages: IngestStage[] }): ReactElement {
  */
 function StateIcon({ state }: { state: StageState }): ReactElement {
   if (state === 'completed') return <CheckCircle2 className="size-4 text-ok" />
-  if (state === 'running') return <Loader2 className="size-4 animate-spin text-agent" />
+  if (state === 'running') return <Loader2 className="size-4 animate-spin text-blue-700" />
   if (state === 'failed') return <XCircle className="size-4 text-block" />
   return <Circle className="size-4 text-muted-foreground/50" />
 }
@@ -320,7 +320,7 @@ function ParsePanel({ progress }: { progress: IngestProgress }): ReactElement {
                     h{level}
                   </span>
                   <span
-                    className="h-2 rounded-sm bg-graph/50"
+                    className="h-2 rounded-sm bg-blue-400/50"
                     style={{ width: `${Math.max(4, (count / peak) * 100)}%` }}
                   />
                   <span className="font-mono text-[0.7rem] text-muted-foreground">
@@ -384,7 +384,7 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
                     <span className="font-mono text-[0.65rem] text-muted-foreground">
                       {entity.kind}
                     </span>
-                    <span className="font-mono text-[0.65rem] text-graph-ink">
+                    <span className="font-mono text-[0.65rem] text-blue-600">
                       ×{entity.mentions}
                     </span>
                   </span>

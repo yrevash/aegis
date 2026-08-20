@@ -90,7 +90,7 @@ export function ModuleGrid() {
                       <h3 className="truncate text-sm font-semibold tracking-tight text-foreground">
                         {m.name.replace(/^Aegis /, '')}
                       </h3>
-                      <p className="truncate font-mono text-[0.66rem] text-graph-ink">
+                      <p className="truncate font-mono text-[0.66rem] text-blue-600">
                         {m.tech}
                       </p>
                     </div>

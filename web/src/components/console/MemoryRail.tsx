@@ -68,7 +68,7 @@ function RailCard({
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X aria-hidden className="size-3.5" />
           <span className="sr-only">Close {title}</span>
@@ -77,7 +77,7 @@ function RailCard({
       {bare ? (
         children
       ) : (
-        <div className="rounded-xl border border-border bg-card px-4 py-3.5 shadow-card">
+        <div className="rounded-xl border border-border bg-card px-4 py-3.5">
           {children}
         </div>
       )}
@@ -196,14 +196,14 @@ function AddMenu({
         type="button"
         onClick={() => setShowing((was) => !was)}
         aria-expanded={showing}
-        className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.72rem] font-medium text-foreground outline-none transition-colors hover:bg-surface-2 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.72rem] font-medium text-foreground outline-none transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
       >
         <Plus aria-hidden className="size-3.5" />
         Add a card
       </button>
 
       {showing && (
-        <div className="absolute right-0 z-20 mt-1.5 w-72 max-w-[80vw] rounded-xl border border-border bg-card p-1.5 shadow-card">
+        <div className="absolute right-0 z-20 mt-1.5 w-72 max-w-[80vw] rounded-xl border border-border bg-card p-1.5 shadow-pop">
           <ul className="flex flex-col gap-0.5">
             {closed.map((card) => {
               const evicted = cardToEvict(open, card.id)
@@ -217,7 +217,7 @@ function AddMenu({
                       onAdd(card.id)
                       setShowing(false)
                     }}
-                    className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-surface-2 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                     <span className="min-w-0">

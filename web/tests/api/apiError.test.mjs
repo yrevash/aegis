@@ -26,6 +26,7 @@ import test, { afterEach, beforeEach } from 'node:test'
 import {
   ApiError,
   apiMessage,
+  errorSentence,
   isAuthFailure,
   isExpiredSession,
   statusOf,
@@ -169,4 +170,19 @@ test('withholding is decided on the caller, not on the weather', () => {
   assert.equal(isExpiredSession(refused), false, 'a 403 is not a dead bearer')
   assert.equal(isExpiredSession(expired), true)
   assert.equal(statusOf(offline), 0, 'a request that never landed carries no status')
+})
+
+test('every rendered failure is a sentence, and the server writes it when it can', () => {
+  // The server's own refusal beats anything the console could have guessed.
+  const refused = new ApiError(403, 'POST', '/admin/users', 'A tenant-admin may only create users in its own tenant.')
+  assert.equal(
+    errorSentence(refused, 'Failed to load users'),
+    'A tenant-admin may only create users in its own tenant.',
+  )
+
+  // And the fallback is only ever reached by something that carries no words —
+  // the `catch (e) { e instanceof Error ? e.message : "Failed to load" }` case,
+  // which is where a bare "something went wrong" used to get in.
+  assert.equal(errorSentence({ nope: true }, 'The seat could not be changed.'), 'The seat could not be changed.')
+  assert.equal(errorSentence(new Error('   ')), 'That request did not go through. Try it again.')
 })

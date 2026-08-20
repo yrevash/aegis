@@ -53,7 +53,7 @@ export function NodeGantt({ nodes }: NodeGanttProps): ReactElement {
                   style={{
                     left: `${bar.offsetPct}%`,
                     width: `${Math.max(bar.widthPct, 1.5)}%`,
-                    background: spent ? 'var(--graph-ink)' : 'var(--muted-foreground)',
+                    background: spent ? 'var(--blue-600)' : 'var(--muted-foreground)',
                     opacity: spent ? 1 : 0.45,
                   }}
                 />
@@ -64,7 +64,7 @@ export function NodeGantt({ nodes }: NodeGanttProps): ReactElement {
               </span>
               <span
                 className="tabular w-20 text-right font-mono text-[0.72rem]"
-                style={{ color: spent ? 'var(--graph-ink)' : 'var(--muted-foreground)' }}
+                style={{ color: spent ? 'var(--blue-600)' : 'var(--muted-foreground)' }}
               >
                 {bar.cost}
               </span>
@@ -81,7 +81,7 @@ export function NodeGantt({ nodes }: NodeGanttProps): ReactElement {
         </span>
         <span
           className="tabular w-20 text-right font-mono text-[0.78rem] font-bold"
-          style={{ color: 'var(--graph-ink)' }}
+          style={{ color: 'var(--blue-600)' }}
         >
           {formatCost(gantt.totalCost)}
         </span>
@@ -96,7 +96,7 @@ function Header(): ReactElement {
       <span className="eyebrow flex items-center gap-1.5">
         <span
           className="inline-block h-1.5 w-1.5 rounded-full"
-          style={{ background: 'var(--graph-ink)' }}
+          style={{ background: 'var(--blue-600)' }}
         />
         glass-box · per-node cost &amp; latency
       </span>

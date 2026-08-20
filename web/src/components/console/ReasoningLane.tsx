@@ -29,14 +29,14 @@ export function ReasoningLane({ state }: { state: RunState }): ReactElement | nu
   const thinking = state.phase === 'streaming' && state.answer.length === 0
 
   return (
-    <Card className="border-agent/40 bg-agent/[0.04]">
+    <Card className="border-blue-200/40 bg-blue-200/[0.04]">
       <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <BrainCircuit className="size-4 text-agent-ink" />
-        <CardTitle className="text-agent-ink">Reasoning</CardTitle>
+        <BrainCircuit className="size-4 text-blue-700" />
+        <CardTitle className="text-blue-700">Reasoning</CardTitle>
         <Badge variant="agent" className="ml-auto">
           {thinking ? (
             <>
-              <span className="animate-pip mr-1 size-1.5 rounded-full bg-agent" /> thinking
+              <span className="animate-pip mr-1 size-1.5 rounded-full bg-blue-200" /> thinking
             </>
           ) : (
             'reasoning'
@@ -50,7 +50,7 @@ export function ReasoningLane({ state }: { state: RunState }): ReactElement | nu
         >
           {state.reasoning}
           {thinking && (
-            <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 animate-pulse bg-agent-ink" />
+            <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 animate-pulse bg-blue-700" />
           )}
         </p>
       </CardContent>

@@ -55,7 +55,7 @@ function AnswerTab({ state, onSeeSources }: { state: RunState; onSeeSources: () 
             <button
               type="button"
               onClick={onSeeSources}
-              className="ml-auto rounded-md px-2 py-1 text-[0.74rem] font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="ml-auto rounded-md px-2 py-1 text-[0.74rem] font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
             >
               See all sources
             </button>
@@ -109,7 +109,7 @@ export function ResultTabs({ state, graph, metrics, beat }: ResultTabsProps): Re
               onClick={() => setTab(entry.id)}
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                'outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                'outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 selected
                   ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:bg-surface-2 hover:text-foreground',

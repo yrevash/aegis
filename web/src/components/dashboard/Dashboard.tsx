@@ -54,8 +54,8 @@ function QualityTile({ quality }: { quality: number | null }): ReactElement {
     <BentoTile span={4} reveal index={2}>
       <div className="flex h-full flex-col gap-2">
         <div className="flex items-center gap-2">
-          <span className="grid size-6 shrink-0 place-items-center rounded-md bg-ml/12">
-            <Target className="size-3.5 text-ml-ink" />
+          <span className="grid size-6 shrink-0 place-items-center rounded-md bg-blue-100/12">
+            <Target className="size-3.5 text-blue-800" />
           </span>
           <span className="eyebrow">Quality</span>
           <InfoTip label="About Quality">
@@ -146,7 +146,7 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
             info="Cumulative USD saved versus running every query on the frontier model — measured live from GET /metrics. The tally comes from small-model routing; cache hits bypass it, so this is the conservative figure."
           />
         ) : (
-          <Card className="col-span-12 flex min-h-[200px] items-center justify-center p-6 shadow-pop lg:col-span-8 lg:row-span-2">
+          <Card className="col-span-12 flex min-h-[200px] items-center justify-center p-6 lg:col-span-8 lg:row-span-2">
             <span className="text-sm text-muted-foreground">Awaiting live metrics…</span>
           </Card>
         )}
@@ -221,7 +221,7 @@ export function Dashboard({ role, token }: { role: Role; token: string | null })
         {isAdmin && metrics && (
           <Expander summary="Model routing">
             <div className="flex items-center gap-2 pb-3">
-              <Route className="size-3.5 text-agent-ink" />
+              <Route className="size-3.5 text-blue-700" />
               <span className="eyebrow">Role → deployment</span>
               <InfoTip label="About model routing">
                 How heterogeneous routing sends cheap work to small models — the

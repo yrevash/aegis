@@ -34,7 +34,7 @@ function ToolChip({ tool }: { tool: LaneTool }): ReactElement {
       className={cn(
         'flex min-w-0 items-baseline gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.7rem]',
         pending
-          ? 'border-agent/40 bg-agent/[0.06] text-agent-ink'
+          ? 'border-blue-200/40 bg-blue-200/[0.06] text-blue-700'
           : tool.ok
             ? 'border-border bg-surface-2/50 text-muted-foreground'
             : 'border-block/50 bg-block/10 text-block-ink',
@@ -76,7 +76,7 @@ function LaneCard({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span
           aria-hidden

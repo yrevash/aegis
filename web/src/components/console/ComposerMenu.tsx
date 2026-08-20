@@ -69,7 +69,7 @@ export function ComposerMenu({
         className={cn(
           'inline-flex h-8 max-w-[14rem] items-center gap-1.5 rounded-md border border-input bg-surface/60 px-2',
           'text-[0.78rem] text-foreground outline-none transition-colors',
-          'hover:bg-surface-2 focus-visible:ring-[3px] focus-visible:ring-ring/40',
+          'hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring/40',
           'disabled:cursor-not-allowed disabled:opacity-60',
         )}
       >
@@ -83,7 +83,7 @@ export function ComposerMenu({
         <div
           id={panelId}
           className={cn(
-            'absolute bottom-full z-30 mb-1.5 w-[22rem] max-w-[85vw] rounded-xl border border-border bg-card p-3 shadow-card',
+            'absolute bottom-full z-30 mb-1.5 w-[22rem] max-w-[85vw] rounded-xl border border-border bg-card p-3 shadow-pop',
             align === 'right' ? 'right-0' : 'left-0',
           )}
         >

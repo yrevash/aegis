@@ -163,3 +163,34 @@ function sentence(raw: string): string | null {
   if (text === '') return null
   return /[.!?]$/.test(text) ? text : `${text}.`
 }
+
+/**
+ * The sentence to put on the screen for anything at all that was caught.
+ *
+ * `catch (e) { setError(e instanceof Error ? e.message : 'Failed to load stack') }`
+ * appears more than twenty times across the console, and every one of those
+ * fallbacks is a different string — "Failed to load seats", "Is the backend
+ * running?", "Patch check failed". They are the shape DESIGN.md §7 forbids: a
+ * console's own guess, standing in front of whatever the server actually said.
+ *
+ * This narrows anything to the one sentence a reader should see. The server's
+ * own words win whenever they exist, because {@link ApiError} has already put
+ * them in `message`; the fallback is only for the cases that are not errors at
+ * all — a rejected promise carrying a string, or an object with nothing in it.
+ *
+ * @param error - Whatever was caught.
+ * @param fallback - The sentence for a failure carrying no words of its own.
+ *   Name what did not happen and what to do; never "something went wrong".
+ * @returns One sentence, always non-empty.
+ */
+export function errorSentence(
+  error: unknown,
+  fallback = 'That request did not go through. Try it again.',
+): string {
+  if (error instanceof Error) {
+    const message = error.message.trim()
+    if (message !== '') return message
+  }
+  if (typeof error === 'string' && error.trim() !== '') return error.trim()
+  return fallback
+}

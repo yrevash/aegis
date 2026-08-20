@@ -81,7 +81,7 @@ export function EvalTrend({ rows, loading, error }: Props): ReactElement {
           <span className="eyebrow flex items-center gap-1.5">
             <span
               className="animate-pip size-1.5 rounded-full"
-              style={{ background: 'var(--agent-ink)', ['--pip-color' as string]: 'var(--agent-ink)' }}
+              style={{ background: 'var(--blue-700)', ['--pip-color' as string]: 'var(--blue-700)' }}
             />
             live
           </span>

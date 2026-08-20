@@ -205,7 +205,7 @@ function VoiceView(): ReactElement {
 
           <Waveform
             values={recording ? recorder.levels : peaks}
-            hex={recording ? 'var(--block)' : 'var(--agent)'}
+            hex={recording ? 'var(--block)' : 'var(--blue-200)'}
             label={recording ? 'Live microphone level' : 'Recorded waveform'}
           />
 

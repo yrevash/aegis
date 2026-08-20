@@ -83,7 +83,7 @@ export function TranscriptPanel({
                     {seg.confidence == null ? (
                       <span className="text-muted-foreground">not reported</span>
                     ) : (
-                      <span className="text-ml-ink">{Math.round(seg.confidence * 100)}%</span>
+                      <span className="text-blue-800">{Math.round(seg.confidence * 100)}%</span>
                     )}
                   </td>
                 </tr>

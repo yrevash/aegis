@@ -27,7 +27,7 @@ export function AnswerPanel({ state }: { state: RunState }): ReactElement {
   return (
     <Card>
       <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <MessageSquareText className="size-4 text-agent-ink" />
+        <MessageSquareText className="size-4 text-blue-700" />
         <CardTitle>Answer</CardTitle>
         {outputGuard && (
           <Badge variant={outputGuard.verdict === 'pass' ? 'ok' : 'block'} className="ml-auto">
@@ -56,7 +56,7 @@ export function AnswerPanel({ state }: { state: RunState }): ReactElement {
           <p className="text-[0.9rem] leading-relaxed text-foreground">
             {state.answer}
             {streaming && (
-              <span className="ml-0.5 inline-block h-4 w-2 translate-y-0.5 animate-pulse bg-agent-ink" />
+              <span className="ml-0.5 inline-block h-4 w-2 translate-y-0.5 animate-pulse bg-blue-700" />
             )}
           </p>
         )}

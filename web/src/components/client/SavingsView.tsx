@@ -236,7 +236,7 @@ function BaselineSplit({
         role="img"
         aria-label={`Actual spend is ${actualPct.toFixed(0)}% of the frontier baseline; ${savedPct.toFixed(0)}% saved.`}
       >
-        <span className="h-full bg-ml/70" style={{ width: `${actualPct}%` }} />
+        <span className="h-full bg-blue-100/70" style={{ width: `${actualPct}%` }} />
         <span className="h-full bg-ok" style={{ width: `${savedPct}%` }} />
       </div>
       <div className="mt-2 flex items-center gap-4 text-[0.72rem] text-muted-foreground">

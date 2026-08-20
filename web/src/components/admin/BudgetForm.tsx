@@ -114,7 +114,7 @@ export function BudgetForm({
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <Wallet className="size-4 text-ml" aria-hidden />
+        <Wallet className="size-4 text-blue-800" aria-hidden />
         <CardTitle>Set a budget</CardTitle>
         <Badge variant="outline">{tier === 'platform' ? 'tenants and users' : 'your users'}</Badge>
       </CardHeader>

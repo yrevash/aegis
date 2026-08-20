@@ -14,7 +14,7 @@ import { SAMPLE_BODIES, formatAgo } from './opsShared'
 const STATUS_STYLE: Record<string, { tone: BadgeTone; dot: string }> = {
   active: { tone: 'ok', dot: 'bg-ok' },
   staged: { tone: 'risk', dot: 'bg-risk' },
-  draft: { tone: 'graph', dot: 'bg-graph' },
+  draft: { tone: 'graph', dot: 'bg-blue-400' },
   archived: { tone: 'neutral', dot: 'bg-border' },
 }
 
@@ -228,8 +228,8 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
             {/* Timeline */}
             <div>
               <div className="mb-3 flex items-center gap-2">
-                <span className="grid size-7 place-items-center rounded-lg bg-graph/12">
-                  <GitBranch className="size-4 text-graph-ink" />
+                <span className="grid size-7 place-items-center rounded-lg bg-blue-400/12">
+                  <GitBranch className="size-4 text-blue-600" />
                 </span>
                 <h4 className="t-label text-foreground">Versions</h4>
                 <span className="eyebrow ml-auto text-[0.56rem]">tap two to diff</span>
@@ -253,8 +253,8 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
             {/* Diff */}
             <div>
               <div className="mb-3 flex items-center gap-2">
-                <span className="grid size-7 place-items-center rounded-lg bg-ml/12">
-                  <FileDiff className="size-4 text-ml-ink" />
+                <span className="grid size-7 place-items-center rounded-lg bg-blue-100/12">
+                  <FileDiff className="size-4 text-blue-800" />
                 </span>
                 <h4 className="t-label text-foreground">Diff</h4>
                 {baseSide && targetSide && (

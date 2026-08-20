@@ -42,7 +42,7 @@ export function QueryBar({
           <select
             value={persona?.id}
             onChange={(e) => onPersonaChange(e.target.value)}
-            className="h-9 rounded-md border border-input bg-surface/60 px-2.5 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+            className="h-9 rounded-md border border-input bg-surface/60 px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             aria-label="Persona"
           >
             {personas.map((p) => (
@@ -78,7 +78,7 @@ export function QueryBar({
             type="button"
             disabled={running}
             onClick={() => setQuery(q)}
-            className="max-w-full truncate rounded-md border border-border/70 bg-surface/40 px-2.5 py-1 text-left font-mono text-[0.7rem] text-muted-foreground transition-colors hover:border-agent/40 hover:text-agent-ink disabled:opacity-50"
+            className="max-w-full truncate rounded-md border border-border/70 bg-surface/40 px-2.5 py-1 text-left font-mono text-[0.7rem] text-muted-foreground transition-colors hover:border-blue-200/40 hover:text-blue-700 disabled:opacity-50"
             title={q}
           >
             {q}

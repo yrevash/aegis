@@ -24,7 +24,7 @@ interface BentoTileProps {
   span?: BentoSpan
   /** Row span (hero tiles span 2). Default 1. */
   rows?: 1 | 2
-  /** Hero styling: roomier padding, `shadow-pop`, display type context. */
+  /** Hero styling: roomier padding and display type context. */
   hero?: boolean
   /** Adds hover-lift + focus ring (for tiles that navigate / expand). */
   interactive?: boolean
@@ -69,9 +69,9 @@ export function BentoTile({
     <Card
       className={cn(
         'h-full',
-        hero ? 'p-6 shadow-pop' : 'p-5',
+        hero ? 'p-6' : 'p-5',
         interactive &&
-          'cursor-pointer transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:shadow-hover focus-visible:-translate-y-0.5 focus-visible:shadow-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'cursor-pointer transition-transform duration-200 ease-out hover:-translate-y-0.5 focus-visible:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         className,
       )}
       tabIndex={interactive ? 0 : undefined}

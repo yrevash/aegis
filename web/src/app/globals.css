@@ -1,20 +1,20 @@
 @import 'tailwindcss';
 
 /*
- * Aegis Console — light dashboard design system (Next.js port)
+ * Aegis Console — the design system in DESIGN.md, as Tailwind v4 tokens.
  * -----------------------------------------------------------------------------
- * Ported verbatim in spirit from frontend/src/index.css: a clean enterprise light
- * system — white cards on a near-white base, generous whitespace, Inter type,
- * oversized near-black metric numbers, and a soft pastel palette reserved for the
- * trust taxonomy and charts. LIGHT THEME ONLY (no dark identity in this build).
+ * A clean enterprise light system: white cards on a near-white base, hairline
+ * borders rather than shadows, Inter for interface and JetBrains Mono for every
+ * numeral. LIGHT THEME ONLY — enforced by `tests/design/lightThemeOnly.test.mjs`.
  *
- * The one deliberate idea survives: colour is the taxonomy of trust. Each
- * subsystem the jury reads at a glance owns a signal hue, split into a soft
- * *fill* (--agent, for tints/borders/dots/charts) and a readable *ink*
- * (--agent-ink, for text on white). Restraint everywhere else.
+ * One hue carries meaning. The blue ramp below is the whole identity scale;
+ * risk / block / ok are the reserved status set and are the only other hues in
+ * the system. Subjects (a reasoning lane, a retrieval panel, an ML verdict) are
+ * told apart by position, label and weight first, and only then by a step on the
+ * ramp — which is why the subject-named colour aliases no longer exist.
  *
  * Tailwind v4 (CSS-first). Tokens are CSS variables exposed as utility colours
- * via @theme inline. Restyled from TailAdmin's default brand-blue to OUR tokens.
+ * via @theme inline.
  */
 
 /* ── Light (the only theme) ───────────────────────────────────────────────── */
@@ -45,56 +45,52 @@
 
   --border: #e4e7ec;
   --input: #d0d5dd;
-  --ring: #7dbbff;
+  --ring: #1570ef; /* --blue-600 — DESIGN.md §7, the focus ring */
 
-  /* Signal palette — fills (soft pastels) drive tints, borders, dots, charts. */
   /* ── One hue carries meaning (DESIGN.md §2) ──────────────────────────────
      The six decorative hues that shipped through phase 7 — mint for agents,
      purple for ML, plus blue, amber, rose and green — meant a reader could not
      tell which colours *meant* something and which were branding.
 
-     The three that named a SUBJECT (agent, graph, ml) are now steps on one blue
-     ramp: they are told apart by position, label and weight first, and only then
-     by a step. The three that name a STATE (risk, block, ok) keep distinct hues,
-     because they are the reserved status set — and every one of them ships with
-     an icon AND a word, so identity is never colour alone.
+     The three aliases that named a SUBJECT were retired: their values had
+     already become blue, so they are now named for what they are — steps on one
+     ramp. Subjects are told apart by position, label and weight first, and only
+     then by a step. The three that name a STATE (risk, block, ok) keep distinct
+     hues, because they are the reserved status set — and every one of them ships
+     with an icon AND a word, so identity is never colour alone. */
 
-     The names are kept as aliases while 94 call sites are migrated; the values
-     are already the new system. */
+  /* Blue ramp — identity, magnitude, emphasis. The only hue with a scale. */
+  --blue-50: #eff6ff; /* wash / selected row                       */
+  --blue-100: #dbeafe; /* fill behind a value                       */
+  --blue-200: #bfdbfe; /* chart step 1                              */
+  --blue-400: #60a5fa; /* chart step 2                              */
+  --blue-600: #1570ef; /* PRIMARY — actions, focus ring, active nav */
+  --blue-700: #175cd3; /* hover / pressed                           */
+  --blue-800: #1e40af; /* deep ink on a light fill                  */
+  --blue-900: #0b3b8f; /* chart step 4, deep emphasis               */
 
-  /* Subject — one ramp, three steps */
-  --agent: #bfdbfe; /* blue-200 · reasoning / agent trajectory */
-  --graph: #60a5fa; /* blue-400 · retrieval / knowledge graph  */
-  --ml: #dbeafe; /* blue-100 · ML prediction / explanation  */
-
-  /* State — reserved, never reused as a series colour */
+  /* State — reserved, never reused as a series colour. Always icon + word. */
   --risk: #fec84b; /* awaiting human approval */
   --block: #fda29b; /* guardrail block         */
   --ok: #71dd8c; /* pass / healthy          */
 
-  /* Inks */
-  --agent-ink: #175cd3; /* blue-700 */
-  --graph-ink: #1570ef; /* blue-600 — PRIMARY */
-  --ml-ink: #1e40af; /* blue-800 */
   --risk-ink: #dc6803;
   --block-ink: #d92d20;
   --ok-ink: #12b76a;
 
-  /* Foregrounds on a tinted fill */
-  --agent-foreground: #101828;
-  --graph-foreground: #101828;
+  /* Ink on a tinted status fill. The decorative subject `*-foreground` set is
+     deleted (DESIGN.md §2); these three survive because a filled status control
+     genuinely needs a foreground. */
   --risk-foreground: #101828;
   --block-foreground: #101828;
   --ok-foreground: #101828;
-  --ml-foreground: #101828;
 
   /* Semantic delta colours (KPI ▲/▼ chips). */
   --success: #12b76a;
   --danger: #f04438;
 
-  /* Soft KPI card tints (SnowUI). */
-  --tint-blue: #e6f1fd;
-  --tint-purple: #edeefc;
+  /* Soft KPI card tint — one, on the ramp. The purple twin is deleted. */
+  --tint-blue: #eff6ff; /* --blue-50 */
 
   /* shadcn semantic aliases mapped onto the light identity. */
   --primary: #101828; /* swappable brand hue — near-black by default */
@@ -106,12 +102,13 @@
   --destructive: #f04438;
   --destructive-foreground: #ffffff;
 
-  /* Chart series — near-black primary line + pastel secondaries. */
-  --chart-1: #101828;
-  --chart-2: #7dbbff;
-  --chart-3: #6be6d3;
-  --chart-4: #b899eb;
-  --chart-5: #71dd8c;
+  /* Chart series — sequential, one hue, light → dark (DESIGN.md §2). Never a
+     rainbow, never a cycled hue. */
+  --chart-1: #bfdbfe; /* --blue-200 */
+  --chart-2: #60a5fa; /* --blue-400 */
+  --chart-3: #1570ef; /* --blue-600 */
+  --chart-4: #175cd3; /* --blue-700 */
+  --chart-5: #0b3b8f; /* --blue-900 */
 }
 
 @theme inline {
@@ -151,14 +148,21 @@
   --color-success: var(--success);
   --color-danger: var(--danger);
   --color-tint-blue: var(--tint-blue);
-  --color-tint-purple: var(--tint-purple);
 
-  --color-agent: var(--agent);
-  --color-agent-ink: var(--agent-ink);
-  --color-agent-foreground: var(--agent-foreground);
-  --color-graph: var(--graph);
-  --color-graph-ink: var(--graph-ink);
-  --color-graph-foreground: var(--graph-foreground);
+  /* Close the blue namespace before reopening it: Tailwind ships its own
+     blue-300/500/950, and a half-overridden scale is how an off-system hue gets
+     in. Only the DESIGN.md ramp exists; `tests/design/oneRamp.test.mjs` fails on
+     a utility that names a step outside it. */
+  --color-blue-*: initial;
+  --color-blue-50: var(--blue-50);
+  --color-blue-100: var(--blue-100);
+  --color-blue-200: var(--blue-200);
+  --color-blue-400: var(--blue-400);
+  --color-blue-600: var(--blue-600);
+  --color-blue-700: var(--blue-700);
+  --color-blue-800: var(--blue-800);
+  --color-blue-900: var(--blue-900);
+
   --color-risk: var(--risk);
   --color-risk-ink: var(--risk-ink);
   --color-risk-foreground: var(--risk-foreground);
@@ -168,9 +172,6 @@
   --color-ok: var(--ok);
   --color-ok-ink: var(--ok-ink);
   --color-ok-foreground: var(--ok-foreground);
-  --color-ml: var(--ml);
-  --color-ml-ink: var(--ml-ink);
-  --color-ml-foreground: var(--ml-foreground);
 
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
@@ -193,11 +194,6 @@
     color: var(--foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
-    /* Calm light surface — two barely-there pastel washes. */
-    background-image:
-      radial-gradient(60rem 40rem at 100% -10%, rgba(125, 187, 255, 0.1), transparent 60%),
-      radial-gradient(52rem 40rem at -10% 110%, rgba(184, 153, 235, 0.08), transparent 60%);
-    background-attachment: fixed;
   }
 
   ::-webkit-scrollbar {
@@ -312,7 +308,7 @@
   /* Trace pip pulse. */
   @keyframes pip-pulse {
     0% {
-      box-shadow: 0 0 0 0 var(--pip-color, var(--agent));
+      box-shadow: 0 0 0 0 var(--pip-color, var(--blue-600));
       opacity: 1;
     }
     70% {
@@ -359,7 +355,7 @@
    * Consumers set `--beat` to the signal hex and re-key on `seq` to re-fire. */
   @keyframes active-beat {
     0% {
-      box-shadow: 0 0 0 0 var(--beat, var(--agent));
+      box-shadow: 0 0 0 0 var(--beat, var(--blue-600));
     }
     70% {
       box-shadow: 0 0 0 6px transparent;

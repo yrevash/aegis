@@ -90,7 +90,7 @@ export function SourcesTab({ state }: { state: RunState }): ReactElement {
 
       <Card>
         <CardHeader className="flex-row items-center gap-2 space-y-0">
-          <FileText aria-hidden className="size-4 text-graph-ink" />
+          <FileText aria-hidden className="size-4 text-blue-600" />
           <CardTitle>Every ranked source</CardTitle>
           <Badge variant="secondary" className="ml-auto">
             {sources.length}

@@ -143,7 +143,7 @@ function Row({ move, ceiling }: { move: RiskMovement; ceiling: number }): ReactE
           reads the named control and a plain sentence; the code pointer underneath is
           auditor provenance, set small and monospaced so it reads as a citation. */}
       <div className="flex min-w-0 flex-col gap-1 md:col-span-4">
-        <p className="flex items-center gap-1.5 text-[0.82rem] font-medium text-agent-ink">
+        <p className="flex items-center gap-1.5 text-[0.82rem] font-medium text-blue-700">
           <ShieldCheck className="size-3.5 shrink-0" aria-hidden />
           {risk.control_name}
         </p>

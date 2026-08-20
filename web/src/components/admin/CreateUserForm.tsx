@@ -96,7 +96,7 @@ export function CreateUserForm({
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <UserPlus className="size-4 text-agent" aria-hidden />
+        <UserPlus className="size-4 text-blue-700" aria-hidden />
         <CardTitle>Create a user</CardTitle>
         <Badge variant="outline">
           {tier === 'platform'

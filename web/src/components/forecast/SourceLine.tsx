@@ -1,13 +1,14 @@
-'use client'
-
 import type { ReactElement } from 'react'
 
+import { Receipt } from '@/components/primitives/Receipt'
+
 /**
- * The `Source:` footer under a panel — what these numbers came from, in one line.
+ * The `Source:` footer under a forecast panel.
  *
- * Small, mono and always present. A panel without one is a panel a reader has to
- * guess about, and on this page the guess a reader makes is the wrong one: the two
- * panels are two models, and only their sources say so.
+ * Kept as a named wrapper because the two panels on this page mean two different
+ * models and only their sources say so — but the treatment itself is no longer
+ * private to this folder. It is {@link Receipt}, the one provenance element the
+ * whole console shares (DESIGN.md §1).
  */
 export function SourceLine({
   source,
@@ -18,10 +19,5 @@ export function SourceLine({
   /** Measured detail this particular render can add — never a claim, always a fact. */
   detail?: string | null
 }): ReactElement {
-  return (
-    <p className="tabular border-t border-border pt-3 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
-      <span className="text-foreground">{source}</span>
-      {detail ? <span> · {detail}</span> : null}
-    </p>
-  )
+  return <Receipt origin={source} detail={detail} />
 }

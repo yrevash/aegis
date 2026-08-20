@@ -165,7 +165,7 @@ function TurnView({ turn, graph, metrics }: TurnViewProps): ReactElement {
         ) : (
           activityCount > 0 && (
             <details className="rounded-lg border border-border bg-surface-2/30 px-3 py-2">
-              <summary className="cursor-pointer text-[0.78rem] font-medium text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+              <summary className="cursor-pointer text-[0.78rem] font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 Activity · {activityCount}
               </summary>
               <div className="pt-2">
@@ -219,7 +219,7 @@ function EmptyState({
               key={sample}
               type="button"
               onClick={() => onPick(sample)}
-              className="max-w-full min-w-0 truncate rounded-md border border-border bg-surface/60 px-2.5 py-1 text-left font-mono text-[0.7rem] text-muted-foreground outline-none transition-colors hover:border-agent/50 hover:text-agent-ink focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="max-w-full min-w-0 truncate rounded-md border border-border bg-surface/60 px-2.5 py-1 text-left font-mono text-[0.7rem] text-muted-foreground outline-none transition-colors hover:border-blue-200/50 hover:text-blue-700 focus-visible:ring-2 focus-visible:ring-ring"
               title={sample}
             >
               {sample}
@@ -336,7 +336,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
             id="chat-picker"
             value={chat.thread.activeSessionId}
             onChange={(event) => chat.selectChat(event.target.value)}
-            className="h-9 min-w-0 flex-1 rounded-md border border-input bg-surface/60 px-2.5 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+            className="h-9 min-w-0 flex-1 rounded-md border border-input bg-surface/60 px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           >
             {chat.thread.sessions.map((s) => (
               <option key={s.id} value={s.id}>

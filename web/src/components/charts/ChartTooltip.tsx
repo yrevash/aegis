@@ -26,7 +26,7 @@ export function ChartTooltip({
 }: ChartTooltipProps): ReactElement | null {
   if (!active || !payload || payload.length === 0) return null
   return (
-    <div className="rounded-md border border-border bg-popover/95 px-3 py-2 shadow-lg backdrop-blur">
+    <div className="rounded-md border border-border bg-popover px-3 py-2 shadow-pop">
       {label !== undefined && (
         <p className="mb-1 font-mono text-[0.68rem] tracking-wide text-muted-foreground uppercase">
           {label}

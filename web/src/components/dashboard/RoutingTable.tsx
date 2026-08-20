@@ -15,7 +15,7 @@ export function RoutingTable({ routing }: { routing: Record<string, string> }): 
   return (
     <Card>
       <CardHeader className="flex-row items-center gap-2 space-y-0">
-        <Route className="size-4 text-agent" />
+        <Route className="size-4 text-blue-700" />
         <CardTitle>Model routing</CardTitle>
       </CardHeader>
       <CardContent>
@@ -30,7 +30,7 @@ export function RoutingTable({ routing }: { routing: Record<string, string> }): 
             {rows.map(([role, model]) => (
               <tr key={role} className="border-b border-border/40 last:border-0">
                 <td className="py-2 font-medium text-foreground capitalize">{role}</td>
-                <td className="py-2 text-right font-mono text-[0.78rem] text-agent-ink">{model}</td>
+                <td className="py-2 text-right font-mono text-[0.78rem] text-blue-700">{model}</td>
               </tr>
             ))}
           </tbody>

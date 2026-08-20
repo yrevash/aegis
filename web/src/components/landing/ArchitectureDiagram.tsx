@@ -27,7 +27,7 @@ const ARCHITECTURE = `flowchart TB
     L3 -->|"async drivers"| L4
     AD -.->|"the only seam that<br/>changes per domain"| L2
 
-    classDef seam stroke:#0e9488,color:#0e9488,stroke-dasharray:4 3;
+    classDef seam stroke:#1570ef,color:#1570ef,stroke-dasharray:4 3;
     class AD seam;
 `
 

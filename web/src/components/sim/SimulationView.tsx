@@ -97,16 +97,16 @@ function Lane({
       <div
         className={cn(
           'flex items-center gap-2.5 rounded-xl border p-3',
-          accent === 'agent' ? 'border-agent/40 bg-agent/[0.06]' : 'border-graph/40 bg-graph/[0.06]',
+          accent === 'agent' ? 'border-blue-200/40 bg-blue-200/[0.06]' : 'border-blue-400/40 bg-blue-400/[0.06]',
         )}
       >
         <span
           className={cn(
             'grid size-8 place-items-center rounded-lg',
-            accent === 'agent' ? 'bg-agent/15' : 'bg-graph/15',
+            accent === 'agent' ? 'bg-blue-200/15' : 'bg-blue-400/15',
           )}
         >
-          <Icon className={cn('size-4', accent === 'agent' ? 'text-agent-ink' : 'text-graph-ink')} />
+          <Icon className={cn('size-4', accent === 'agent' ? 'text-blue-700' : 'text-blue-600')} />
         </span>
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">

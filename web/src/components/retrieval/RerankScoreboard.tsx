@@ -48,7 +48,7 @@ export function RerankScoreboard({
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center gap-2 space-y-0">
-        <ListFilter className="size-4 text-graph-ink" />
+        <ListFilter className="size-4 text-blue-600" />
         <CardTitle>Sources</CardTitle>
         <InfoTip label="About Sources">
           Hybrid search then rerank — vector, graph, and keyword candidates fused
@@ -84,12 +84,12 @@ export function RerankScoreboard({
                     <span className="block truncate text-[0.76rem] text-foreground">{s.label}</span>
                     <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
                       <div
-                        className="h-full rounded-full bg-graph"
+                        className="h-full rounded-full bg-blue-400"
                         style={{ width: `${Math.max(2, s.relative * 100)}%` }}
                       />
                     </div>
                   </div>
-                  <span className="tabular font-mono text-[0.72rem] text-graph-ink">
+                  <span className="tabular font-mono text-[0.72rem] text-blue-600">
                     {s.score.toFixed(2)}
                   </span>
                 </li>
@@ -116,7 +116,7 @@ function FunnelStage({
   tone?: 'neutral' | 'graph' | 'ok'
 }): ReactElement {
   const toneClass =
-    tone === 'graph' ? 'text-graph-ink' : tone === 'ok' ? 'text-ok-ink' : 'text-foreground'
+    tone === 'graph' ? 'text-blue-600' : tone === 'ok' ? 'text-ok-ink' : 'text-foreground'
   return (
     <span className="inline-flex items-baseline gap-1">
       <span className={`tabular text-sm font-semibold ${toneClass}`}>{value}</span>

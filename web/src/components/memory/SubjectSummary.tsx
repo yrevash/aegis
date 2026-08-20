@@ -47,8 +47,8 @@ export function SubjectSummary({
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex items-start gap-2">
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-agent/12">
-          <Brain className="size-4 text-agent-ink" />
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-blue-200/12">
+          <Brain className="size-4 text-blue-700" />
         </span>
         <div className="min-w-0">
           <div className="flex items-center gap-2">

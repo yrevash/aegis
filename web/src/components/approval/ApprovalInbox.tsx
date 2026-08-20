@@ -231,7 +231,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
               id="approvals-window"
               value={lookback}
               onChange={(event) => setLookback(event.target.value)}
-              className="h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {WINDOWS.map((option) => (
                 <option key={option.id} value={option.id}>
@@ -250,7 +250,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
                 id="approvals-tenant"
                 value={tenant}
                 onChange={(event) => setTenant(event.target.value)}
-                className="h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="h-8 rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="all">Every tenant</option>
                 {knownTenants.map((id) => (
