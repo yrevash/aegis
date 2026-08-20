@@ -1,6 +1,12 @@
 # INSTALL.md — Setup & Run Guide
 
-> **Setting up the hackathon machine?** Follow [`docs/install/`](docs/install/) instead — a
+> **Setting up a machine for v2?** Follow
+> [`docs/dev_new_docs_v2/install/`](docs/dev_new_docs_v2/install/) — it covers Qdrant,
+> Superset, the demo seeders and the document corpus, none of which existed when the
+> older guide was written. Following the older one alone leaves a platform that boots
+> and shows nothing.
+>
+> **Setting up the hackathon machine (v1 path)?** Follow [`docs/install/`](docs/install/) instead — a
 > four-step runbook with the exact commands, the checks after each one, and the three
 > measurements Phase 3 still needs from that box. This file remains the general reference.
 

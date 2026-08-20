@@ -34,6 +34,7 @@ from aegis.skills import (
     set_active,
     write_skill,
 )
+from aegis.skills.store import MAIN_AGENT_ID
 
 from .._seed import ensure_tenants, ensure_users
 
@@ -89,11 +90,13 @@ async def _author(db, document, *, scope, role, rail, tenant_id=None, user_id=No
         return row.name
 
 
-async def _resolved(db, *, tenant_id=None, user_id=None):  # noqa: ANN001
+async def _resolved(db, *, tenant_id=None, user_id=None, agent_id=MAIN_AGENT_ID):  # noqa: ANN001
     """Resolve the skills in force for one caller, with the scope bound."""
     async with db() as session:
         await set_tenant_scope(session, tenant_id)
-        return await resolve_skills(session, tenant_id=tenant_id, user_id=user_id)
+        return await resolve_skills(
+            session, tenant_id=tenant_id, user_id=user_id, agent_id=agent_id
+        )
 
 
 # ── 10.1 · resolution ─────────────────────────────────────────────────────────
@@ -268,3 +271,108 @@ async def test_an_injection_hidden_in_the_description_is_refused_too(db, rail):
         await _author(db, document, scope=SkillScope.USER, role=Role.CLIENT.value,
                       rail=rail, tenant_id=_TENANT, user_id=_USER)
     assert refused.value.field == "description"
+
+
+# ── the third targeting axis · which AGENT a skill belongs to ─────────────────
+
+
+async def test_an_unassigned_skill_reaches_every_agent(db, rail):
+    """The default, and it must be the old behaviour byte for byte.
+
+    ``agent_id`` is an addition, not a migration: a skill authored without one is in
+    force for the main persona and for every fan-out lane, which is what every skill
+    written before the column existed still means.
+    """
+    await _author(
+        db,
+        _doc("house_style", "The platform's baseline tone.", "Be brief."),
+        scope=SkillScope.PLATFORM,
+        role=PLATFORM_ADMIN,
+        rail=rail,
+    )
+    for agent in (MAIN_AGENT_ID, "research", "data", "a-lane-nobody-declared"):
+        names = {s.name for s in await _resolved(db, tenant_id=_TENANT, agent_id=agent)}
+        assert "house_style" in names, f"an unassigned skill went missing for {agent!r}"
+
+
+async def test_an_assigned_skill_reaches_that_agent_and_nobody_else(db, rail):
+    """The whole point of the field, driven both ways round.
+
+    MUTATION: delete the ``_for_agent`` check in
+    :func:`~aegis.skills.store.resolve_skills` and the second half fails — the research
+    lane's skill is offered to the main persona and to every other lane, which is the
+    state the field was added to end.
+    """
+    await _author(
+        db,
+        _doc("citation_rules", "How the research lane cites a source.", "Cite the URL."),
+        scope=SkillScope.PLATFORM,
+        role=PLATFORM_ADMIN,
+        rail=rail,
+        agent_id="research",
+    )
+    await _author(
+        db,
+        _doc("house_style", "The platform's baseline tone.", "Be brief."),
+        scope=SkillScope.PLATFORM,
+        role=PLATFORM_ADMIN,
+        rail=rail,
+    )
+
+    research = {s.name for s in await _resolved(db, tenant_id=_TENANT, agent_id="research")}
+    assert research == {"citation_rules", "house_style"}, research
+
+    for other in (MAIN_AGENT_ID, "knowledge", "data", "policy"):
+        names = {s.name for s in await _resolved(db, tenant_id=_TENANT, agent_id=other)}
+        assert names == {"house_style"}, f"{other!r} was offered another agent's skill"
+
+
+async def test_a_skill_assigned_elsewhere_cannot_be_loaded_by_naming_it(db, rail):
+    """Tier 2 refuses exactly what tier 1 never offered — one answer, not two.
+
+    A card the main persona never saw must not become a body it can fetch by guessing
+    the name: ``load_skill`` resolves through the same function, so the agent filter is
+    not something the prompt layer can be talked out of.
+    """
+    await _author(
+        db,
+        _doc("citation_rules", "How the research lane cites a source.", "Cite the URL."),
+        scope=SkillScope.PLATFORM,
+        role=PLATFORM_ADMIN,
+        rail=rail,
+        agent_id="research",
+    )
+    async with db() as session:
+        await set_tenant_scope(session, _TENANT)
+        loaded = await load_skill(
+            session, "citation_rules", tenant_id=_TENANT, agent_id="research"
+        )
+        assert loaded.body.strip() == "Cite the URL."
+        assert loaded.agent_id == "research"
+
+        with pytest.raises(SkillNotFoundError):
+            await load_skill(
+                session, "citation_rules", tenant_id=_TENANT, agent_id=MAIN_AGENT_ID
+            )
+
+
+async def test_reassigning_a_skill_moves_it_rather_than_copying_it(db, rail):
+    """A re-author with a different agent is an edit of the one row, not a second one."""
+    document = _doc("lane_note", "A note for one lane.", "Keep it short.")
+    await _author(db, document, scope=SkillScope.PLATFORM, role=PLATFORM_ADMIN,
+                  rail=rail, agent_id="research")
+    await _author(db, document, scope=SkillScope.PLATFORM, role=PLATFORM_ADMIN,
+                  rail=rail, agent_id="policy")
+
+    async with db() as session:
+        await set_tenant_scope(session, None)
+        count = await session.scalar(
+            select(func.count()).select_from(AgentSkill).where(
+                AgentSkill.name == "lane_note"
+            )
+        )
+    assert count == 1, "re-assigning a skill left a second row behind"
+    assert {s.name for s in await _resolved(db, tenant_id=_TENANT, agent_id="policy")} == {
+        "lane_note"
+    }
+    assert await _resolved(db, tenant_id=_TENANT, agent_id="research") == []

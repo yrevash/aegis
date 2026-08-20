@@ -227,3 +227,90 @@ async def test_load_skill_returns_the_body_and_refuses_a_name_that_is_not_in_for
     assert _BENIGN_BODY in loaded.summary
     assert missing.ok is False
     assert missing.summary.startswith("No skill named 'not_a_skill'")
+
+
+# ── the third targeting axis: which agent a skill belongs to ─────────────────
+
+
+async def test_a_skill_can_be_assigned_to_an_agent_and_comes_back_saying_so(client, db):
+    """The owner's request, end to end: author it for one agent, read it back assigned.
+
+    Scope says *who* a skill reaches and the document's ``triggers`` say *when* an agent
+    reaches for it. Neither could say *which agent it is for*, so a skill written for
+    the research lane was offered to every lane and to the main persona besides.
+
+    MUTATION: stop passing ``agent_id`` through to ``write_skill`` and this fails on the
+    read-back — the write answers 201 and the assignment is not in the row, which is the
+    failure mode a status code alone would have hidden.
+    """
+    await _seed()
+    resp = await client.post(
+        "/skills",
+        json={
+            "document": _doc("citation_rules", "Cite the URL you used."),
+            "scope": "tenant",
+            "agent": "research",
+        },
+        headers=_headers("tenant_admin", **A_ADMIN),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["row"]["agent"] == "research"
+
+    listed = await client.get("/skills", headers=_headers("tenant_admin", **A_ADMIN))
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    row = next(r for r in body["rows"] if r["name"] == "citation_rules")
+    assert row["agent"] == "research"
+    # In force means in force — for the agent it was assigned to. Reporting it dormant
+    # because the MAIN persona does not carry it would be a screen disagreeing with the
+    # prompt about the same row.
+    assert row["inForce"] is True
+
+    # The picker the console needs, from the live roster rather than a hard-coded list.
+    ids = [a["agentId"] for a in body["agents"]]
+    assert ids[0] == "main"
+    assert {"research", "knowledge", "data", "policy"} <= set(ids)
+    assert body["agents"][0]["isMain"] is True
+
+
+async def test_an_unassigned_skill_stays_unassigned(client, db):
+    """The default is an addition, not a migration: no ``agent`` means every agent."""
+    await _seed()
+    resp = await client.post(
+        "/skills",
+        json={"document": _doc("house_style", _BENIGN_BODY), "scope": "user"},
+        headers=_headers("client", **A_USER),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["row"]["agent"] is None
+
+    listed = await client.get("/skills", headers=_headers("client", **A_USER))
+    row = next(r for r in listed.json()["rows"] if r["name"] == "house_style")
+    assert row["agent"] is None
+    assert row["inForce"] is True
+
+
+async def test_an_agent_nothing_answers_to_is_refused_by_name(client, db):
+    """A field that silently accepts a typo is worse than no field at all.
+
+    ``reserach`` is the mistake this refusal exists for: without it the row is written,
+    the screen shows it assigned, and it is in force for nobody.
+
+    MUTATION: return ``value`` from ``_agent_of`` without checking the roster and this
+    fails with a 201 and a row in the table.
+    """
+    await _seed()
+    resp = await client.post(
+        "/skills",
+        json={
+            "document": _doc("citation_rules", _BENIGN_BODY),
+            "scope": "tenant",
+            "agent": "reserach",
+        },
+        headers=_headers("tenant_admin", **A_ADMIN),
+    )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "'reserach'" in detail, detail
+    assert "research" in detail, "the refusal did not say what would have worked"
+    assert await _skills() == [], "a skill assigned to nobody was written anyway"

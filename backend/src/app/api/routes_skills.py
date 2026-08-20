@@ -86,7 +86,7 @@ skills_router = APIRouter()
 class SkillAgent(BaseModel):
     """One agent a skill may be assigned to, as the console picker should offer it."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     agent_id: str = Field(
         alias="agentId", description="The id a write puts in ``agent``."
@@ -371,12 +371,25 @@ async def list_authored_skills(auth: AuthContext = Depends(require_auth)) -> Ski
             rows = await list_skills(
                 session, tenant_id=tenant_id, user_id=auth.user_id
             )
-            live = {
-                s.name
-                for s in await resolve_skills(
-                    session, tenant_id=tenant_id, user_id=auth.user_id
-                )
+            # "In force" is asked once per agent that any row names, and unioned. A
+            # skill assigned to the research lane IS in force — for that lane — and
+            # resolving only as the main persona would have reported it dormant while
+            # the research agent was carrying it. Which agent it is in force FOR is the
+            # row's own ``agent`` field, right beside this flag.
+            agents = {MAIN_AGENT_ID} | {
+                str(row.agent_id) for row in rows if getattr(row, "agent_id", None)
             }
+            live: set[str] = set()
+            for agent_id in sorted(agents):
+                live |= {
+                    s.name
+                    for s in await resolve_skills(
+                        session,
+                        tenant_id=tenant_id,
+                        user_id=auth.user_id,
+                        agent_id=agent_id,
+                    )
+                }
             # Projected **inside** the session: ``rollback`` expires every attribute on
             # a loaded row, so reading one after it is a DetachedInstanceError rather
             # than a stale value — which is the better failure, and still a failure.
@@ -391,7 +404,9 @@ async def list_authored_skills(auth: AuthContext = Depends(require_auth)) -> Ski
                 "is returned rather than a list that might be wrong about what is live."
             ),
         ) from exc
-    return SkillsResponse(rows=projected, scopes=_authorable(auth))
+    return SkillsResponse(
+        rows=projected, scopes=_authorable(auth), agents=agent_targets()
+    )
 
 
 @skills_router.post(

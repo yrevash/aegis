@@ -1,3 +1,8 @@
+> **This is the v1 runbook.** It predates Qdrant, Superset, the demo seeders and the
+> document corpus. For a v2 machine follow
+> [`../dev_new_docs_v2/install/`](../dev_new_docs_v2/install/) instead; this remains
+> accurate for Postgres and the base services.
+
 # Install — the hackathon machine
 
 Follow these in order on the Windows box. Each file is a runbook you work through top to
