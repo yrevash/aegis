@@ -3,9 +3,10 @@ import type { ReactElement } from 'react'
 
 import { cn } from '@/lib/utils'
 
-import { receiptText } from './receiptText'
+import { InfoTip } from './InfoTip'
+import { receiptText, splitDetail } from './receiptText'
 
-export { receiptText, type ReceiptText } from './receiptText'
+export { receiptText, splitDetail, type ReceiptText } from './receiptText'
 
 interface ReceiptProps {
   /**
@@ -50,7 +51,8 @@ export function Receipt({
   variant = 'block',
   className,
 }: ReceiptProps): ReactElement {
-  const text = receiptText(label, origin, detail)
+  const { inline: inlineDetail, tip: tipDetail } = splitDetail(detail)
+  const text = receiptText(label, origin, inlineDetail)
   return (
     <p
       data-slot="receipt"
@@ -62,6 +64,14 @@ export function Receipt({
     >
       <span className="text-foreground">{text.label}:</span>{' '}
       <span translate="no">{text.body}</span>
+      {tipDetail ? (
+        <>
+          {' '}
+          <InfoTip label={`What ${text.label.toLowerCase()} means here`} className="align-text-bottom">
+            {tipDetail}
+          </InfoTip>
+        </>
+      ) : null}
     </p>
   )
 }

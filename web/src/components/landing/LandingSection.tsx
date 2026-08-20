@@ -9,64 +9,70 @@ interface LandingSectionProps {
   eyebrow: string
   /** The section's claim, in sentence case. */
   title: string
+  /** One or two sentences under the claim, at a readable measure. */
+  lead?: ReactNode
   /**
-   * One line that qualifies the claim, set beside it rather than beneath. Most
-   * sections have one; it is what fills the right half of the header band and
-   * stops five sections in a row from being the same centred stack.
+   * Which ground the section sits on. Alternating them is what tells the
+   * sections apart now that they no longer share a ruled header band.
    */
-  note?: ReactNode
-  /** A tighter measure for a section that is mostly one artefact. */
-  width?: 'wide' | 'narrow'
+  tone?: 'canvas' | 'surface'
   children: ReactNode
   className?: string
 }
 
 /**
- * One section of the public page: a header band, then the artefact.
+ * One section of the public page: a stacked head, then the artefact.
  *
- * Every section on this page used to open with a centred eyebrow over a centred
- * `text-3xl` heading, five times, which is the "repetitive equal sections"
- * failure DESIGN.md §8 names outright — by the third one a reader has stopped
- * reading headings, and the two sections that carry *live data* look exactly
- * like the two that carry static copy.
+ * **The ruled two-column header band is gone.** Every section used to open with
+ * an eyebrow and a heading on the left, a qualifying note on the right, and a
+ * hairline under both — five times in a row. It reads as an editorial page for
+ * about one section and as a template for the other four, and it is the exact
+ * silhouette DESIGN.md §9 calls "repetitive equal-thirds sections": by the third
+ * one a reader has stopped reading headings, and the sections carrying *live
+ * data* look identical to the ones carrying static copy.
  *
- * So the header is one asymmetric band instead: the claim on the left at the
- * width of a headline, its qualifier on the right at the width of a caption,
- * split by a hairline. It reads as an editorial page rather than a deck, and it
- * gives the sections a shared rhythm without giving them the same silhouette.
+ * So the head is a single stacked column at a readable measure, and the sections
+ * are told apart by what they sit on and what they hold — the navy chain, a white
+ * band with a scene in it, a dense grid on the canvas — rather than by a
+ * repeated rule. `scroll-mt-16` clears the sticky header so an anchor never lands
+ * with its own heading hidden behind the bar.
  */
+/**
+ * The section heading, one step under `.t-hero`.
+ *
+ * Space Grotesk, because the display face is what carries this page's voice and
+ * Inter carries the console's. `globals.css` stops at `.t-title` (18px), which is
+ * a card title — a landing section heading has no utility to inherit, and adding
+ * one to the global sheet for a single page would put a marketing type step in
+ * front of every product screen.
+ */
+const SECTION_TITLE =
+  'font-display text-[1.75rem] leading-9 font-semibold tracking-[-0.02em] sm:text-[2.125rem] sm:leading-[1.15]'
+
 export function LandingSection({
   id,
   eyebrow,
   title,
-  note,
-  width = 'wide',
+  lead,
+  tone = 'canvas',
   children,
   className,
 }: LandingSectionProps): ReactElement {
-  // `scroll-mt-16` clears the 64px sticky header: without it every anchor in the
-  // nav landed with its own heading hidden behind the bar.
   return (
-    <section id={id} className={cn('scroll-mt-16 border-b border-border', className)}>
-      <div
-        className={cn(
-          'mx-auto px-6 py-16 sm:py-20',
-          width === 'narrow' ? 'max-w-4xl' : 'max-w-6xl',
-        )}
-      >
-        <div className="mb-10 grid gap-x-12 gap-y-4 border-b border-border pb-8 lg:grid-cols-[minmax(0,7fr)_minmax(0,4fr)] lg:items-end">
-          <div className="min-w-0">
-            <p className="eyebrow mb-3">{eyebrow}</p>
-            <h2 className="text-balance text-[1.75rem] leading-8 font-semibold tracking-[-0.02em] text-foreground sm:text-[2rem] sm:leading-10">
-              {title}
-            </h2>
-          </div>
-          {note == null ? null : (
-            <p className="max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground lg:pb-1">
-              {note}
+    <section
+      id={id}
+      className={cn('scroll-mt-16', tone === 'surface' ? 'bg-surface' : 'bg-background', className)}
+    >
+      <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
+        <header className="mb-10 max-w-[58ch]">
+          <p className="eyebrow mb-3">{eyebrow}</p>
+          <h2 className={cn(SECTION_TITLE, 'text-balance text-foreground')}>{title}</h2>
+          {lead == null ? null : (
+            <p className="mt-4 text-pretty text-[1.0625rem] leading-relaxed text-muted-foreground">
+              {lead}
             </p>
           )}
-        </div>
+        </header>
         {children}
       </div>
     </section>

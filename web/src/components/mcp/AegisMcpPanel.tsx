@@ -103,7 +103,10 @@ export function AegisMcpPanel({
   if (!endpoint) {
     return (
       <Card className="rounded-lg">
-        <CardHeader title="Aegis as an MCP server" eyebrow="the other direction · what this deployment offers" />
+        <CardHeader
+          title="Inbound — what Aegis offers over the protocol"
+          eyebrow="the other direction · this deployment as a server"
+        />
         <CardBody>
           <EmptyState
             icon={Plug}
@@ -118,8 +121,8 @@ export function AegisMcpPanel({
   return (
     <Card className="rounded-lg">
       <CardHeader
-        title="Aegis as an MCP server"
-        eyebrow="the other direction · what this deployment offers"
+        title="Inbound — what Aegis offers over the protocol"
+        eyebrow="the other direction · this deployment as a server"
         actions={
           <span className="flex items-center gap-2">
           <InfoTip label="What this panel proves">

@@ -15,12 +15,12 @@ import {
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { QueryBar } from '@/components/console/QueryBar'
 import { cn } from '@/lib/utils'
@@ -485,7 +485,7 @@ function HarnessView({ role }: { role: Role }): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader as="h1" eyebrow="graph · view + tweak" title="Harness" />
+      <PageHeader eyebrow="graph · view + tweak" title="Harness" />
 
       {/* Config (view + tweak) */}
       {error ? (
@@ -534,9 +534,7 @@ function HarnessView({ role }: { role: Role }): ReactElement {
 export function HarnessMount({ role }: { role: Role }): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
         <HarnessView role={role} />
-      </TooltipProvider>
     </BackendGate>
   )
 }

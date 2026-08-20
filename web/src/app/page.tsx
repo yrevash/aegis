@@ -1,33 +1,40 @@
 import type { Metadata } from 'next'
 
-import { ArchitectureDiagram } from '@/components/landing/ArchitectureDiagram'
+import { GovernanceSection } from '@/components/landing/GovernanceSection'
 import { Hero } from '@/components/landing/Hero'
 import { LandingFooter } from '@/components/landing/LandingFooter'
 import { LandingHeader } from '@/components/landing/LandingHeader'
-import { MetricsStrip } from '@/components/landing/MetricsStrip'
-import { ModuleGrid } from '@/components/landing/ModuleGrid'
+import { LivePlatform } from '@/components/landing/LivePlatform'
 import { Roadmap } from '@/components/landing/Roadmap'
-import { TrustStack } from '@/components/landing/TrustStack'
+import { RunChain } from '@/components/landing/RunChain'
+import { TeamSection } from '@/components/landing/TeamSection'
 
 export const metadata: Metadata = {
-  title: 'Aegis — bounded-autonomy AI, made watchable',
+  title: 'Aegis — autonomy you can audit',
   description:
-    'A domain-agnostic enterprise agentic-AI platform. Every autonomous action is ' +
-    'uncertainty-bounded, explainable, guarded, human-approved and fully traced.',
+    'A domain-agnostic, multi-tenant enterprise agentic-AI platform. A team of agents ' +
+    'answers, guardrails run both ways, a person signs for consequential writes, and ' +
+    'every figure carries its origin.',
 }
 
 /**
  * The public landing page.
  *
- * Previously this route redirected straight to `/login`, so the first thing any
- * visitor saw was a sign-in form. It is now the product's front door; the login
- * page is unchanged and still lives at `/login`, reached from the header CTA.
+ * **The spine is one run.** The hero states the claim and says which endpoint the
+ * page is reading; the chain of custody draws that run end to end and is the one
+ * thing the page spends its boldness on; the three sections after it take the
+ * parts the picture cannot carry — who chose the width, what stops a write, what
+ * the backend said just now — and the last one names what is not built.
  *
- * Two sections read live data — {@link ModuleGrid} from `/platform/capabilities`
- * and {@link MetricsStrip} from `/platform/public-metrics`, both public
- * endpoints. Each renders nothing rather than inventing content when the backend
- * is unreachable, so the page degrades to its substantiated claims instead of
- * advertising capabilities it cannot show.
+ * Two things were removed rather than restyled. The Mermaid architecture diagram
+ * went because a four-box flowchart was competing with the chain for the reader's
+ * one diagram, and losing; its claim survives as a sentence in
+ * {@link LivePlatform}. The six-checkpoint "trust stack" went because the chain
+ * shows the same six checkpoints in the order a run meets them, and a page should
+ * not make its central argument twice.
+ *
+ * Everything that reads a live endpoint renders nothing rather than inventing
+ * content when the backend is unreachable — including the hero, which says so.
  */
 export default function Home() {
   return (
@@ -35,10 +42,10 @@ export default function Home() {
       <LandingHeader />
       <main id="main" tabIndex={-1}>
         <Hero />
-        <ModuleGrid />
-        <ArchitectureDiagram />
-        <TrustStack />
-        <MetricsStrip />
+        <RunChain />
+        <TeamSection />
+        <GovernanceSection />
+        <LivePlatform />
         <Roadmap />
       </main>
       <LandingFooter />

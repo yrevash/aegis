@@ -8,8 +8,9 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
-import { BarChart } from '@/components/charts/BarChart'
-import { RankedBars } from '@/components/charts/RankedBars'
+import { AreaChart } from '@/components/charts/AreaChart'
+import { DonutChart } from '@/components/charts/DonutChart'
+import { rampHex } from '@/components/charts/palette'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
@@ -25,16 +26,18 @@ import {
 } from '@/lib/api/analytics'
 
 import {
+  boardForm,
   chartAvailable,
   chartRows,
   countedRows,
   embedAvailable,
   formatValue,
   groupByDimension,
-  seriesColor,
+  measureForm,
   type AnalyticsState,
   type ChartRow,
 } from './analyticsBoard'
+import { CategoryBars, TrendLines } from './BoardCharts'
 import { SupersetEmbed } from './SupersetEmbed'
 
 /** What one board is doing right now. Exhaustive — there is no fourth state. */
@@ -74,10 +77,23 @@ export function SupersetBoards({
   boards: AnalyticsBoard[]
   windows: Record<string, string>
 }): ReactElement {
-  const chartBoards = useMemo(() => boards.filter(chartAvailable), [boards])
   const dashboards = useMemo(
     () => boards.filter((board) => embedAvailable(board, status)),
     [boards, status],
+  )
+  /*
+    A board that opens as an embedded dashboard is **not** also a card in the gallery.
+
+    `operations` and `tenant-insights` each declare a `chart` fallback over
+    `runs_total by status`, which is the same query `runs-by-outcome` already draws —
+    so with both rendered the page printed 903 / 32 / 20 / 1 three times, which is the
+    clearest possible sign that a layout was generated rather than composed. The
+    fallback still exists and still runs: it is what the gallery shows when the embed
+    is unavailable, which is exactly the case `embedAvailable` decides.
+  */
+  const chartBoards = useMemo(
+    () => boards.filter((board) => chartAvailable(board) && !dashboards.includes(board)),
+    [boards, dashboards],
   )
 
   const [window_, setWindow] = useState<string>(
@@ -85,6 +101,9 @@ export function SupersetBoards({
   )
   const [embedded, setEmbedded] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, BoardResult>>({})
+  // The embed is the hero, so one is open from the start rather than behind a click
+  // nobody makes during a demo. The first dashboard the caller's role may see.
+  const hero = dashboards.find((board) => board.id === embedded) ?? dashboards[0] ?? null
 
   const loadAll = useCallback(
     (chosen: string, alive: () => boolean) => {
@@ -120,7 +139,6 @@ export function SupersetBoards({
   }, [loadAll, window_])
 
   const drawn = chartBoards.filter((board) => results[board.id]?.state === 'ready').length
-  const embeddedBoard = boards.find((board) => board.id === embedded) ?? null
   const groups = useMemo(() => groupByDimension(chartBoards), [chartBoards])
 
   return (
@@ -163,18 +181,12 @@ export function SupersetBoards({
             <Figure className="text-foreground">{drawn}</Figure> of {chartBoards.length} drawn
           </span>
 
-          {dashboards.length > 0 ? (
+          {dashboards.length > 1 ? (
             <div className="ml-auto flex flex-wrap items-center gap-1 rounded-lg border border-border p-1">
-              <ModeButton
-                active={embedded === null}
-                onClick={() => setEmbedded(null)}
-                icon={<BarChart3 className="size-4" aria-hidden />}
-                label={`Aegis charts · ${chartBoards.length}`}
-              />
               {dashboards.map((board) => (
                 <ModeButton
                   key={board.id}
-                  active={embedded === board.id}
+                  active={hero?.id === board.id}
                   onClick={() => setEmbedded(board.id)}
                   icon={<LayoutDashboard className="size-4" aria-hidden />}
                   label={board.title}
@@ -184,17 +196,32 @@ export function SupersetBoards({
           ) : null}
         </div>
 
-        {embeddedBoard !== null ? (
-          <div className="space-y-3">
-            <SupersetEmbed boardId={embeddedBoard.id} title={embeddedBoard.title} />
+        {/* The embed is the hero and the gallery sits under it, rather than the two
+            being alternatives behind a toggle. Superset drawing its own dashboard is
+            the point of the integration; the Aegis-drawn cards are the depth around
+            it, and they keep working when the iframe does not. */}
+        {hero !== null ? (
+          <section className="space-y-3">
+            <h3 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border pb-1.5">
+              <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                <LayoutDashboard className="size-4 text-muted-foreground" aria-hidden />
+                {hero.title}
+                <InfoTip label={`About ${hero.title}`}>{hero.summary}</InfoTip>
+              </span>
+              <span className="text-xs text-muted-foreground">
+                drawn by Superset itself, inside this page
+              </span>
+            </h3>
+            <SupersetEmbed boardId={hero.id} title={hero.title} />
             <Receipt
               origin={`embedded Superset dashboard · ${status?.baseUrl || 'not reported'}`}
               detail="drawn by Superset under a short-lived guest token whose signed RLS clause the browser cannot edit"
             />
-          </div>
-        ) : (
-          <>
-            {groups.map((group) => (
+          </section>
+        ) : null}
+
+        <>
+          {groups.map((group) => (
               <section key={group.dimension || 'tail'} className="space-y-3">
                 <h3 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border pb-1.5">
                   <span className="text-sm font-semibold text-foreground">
@@ -211,7 +238,7 @@ export function SupersetBoards({
                     query each
                   </span>
                 </h3>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   {group.boards.map((board) => (
                     <BoardCard
                       key={board.id}
@@ -223,24 +250,128 @@ export function SupersetBoards({
                 </div>
               </section>
             ))}
-            <Receipt
-              origin={`Apache Superset · ${status?.baseUrl || 'not reported'}`}
-              detail={`${chartBoards.length} boards, each a query this server compiled — scoped by a WHERE clause no request body can move`}
-            />
-          </>
-        )}
+          <Receipt
+            origin={`Apache Superset · ${status?.baseUrl || 'not reported'}`}
+            detail={`${chartBoards.length} boards, each a query this server compiled — scoped by a WHERE clause no request body can move`}
+          />
+        </>
       </CardBody>
     </Card>
   )
 }
 
 /**
- * One board, drawn small.
+ * One measure drawn on its own, with the mark its own shape asks for.
  *
- * The card plots the board's **first** measure, named in its own caption, because a
- * gallery cell is not big enough to tell two series apart honestly and a second axis is
- * forbidden outright (DESIGN.md §2). Every other measure the board returned is in the
- * disclosure underneath, with the rows, so nothing is dropped — it is deferred.
+ * Used directly for a single-measure board and, one per panel, for the small multiples
+ * a board gets when its measures cannot honestly share an axis. Routing both through
+ * the same function is what stops a multiples panel silently defaulting to a bar when
+ * the same data alone would have been a donut.
+ */
+function MeasurePlot({
+  rows,
+  measure,
+  dimension,
+  height,
+}: {
+  rows: readonly ChartRow[]
+  measure: string
+  dimension: string
+  height: number
+}): ReactElement {
+  const form = measureForm(rows, measure)
+
+  if (form.kind === 'trend') {
+    return (
+      <AreaChart
+        data={rows as ChartRow[]}
+        index="label"
+        category={measure}
+        color="graph"
+        valueFormatter={formatValue}
+        height={height}
+      />
+    )
+  }
+  if (form.kind === 'donut') {
+    const total = rows.reduce((sum, row) => sum + (Number(row[measure]) || 0), 0)
+    return (
+      <DonutChart
+        data={rows.map((row, i) => ({
+          name: row.label,
+          value: Number(row[measure]) || 0,
+          color: 'graph' as const,
+          hex: rampHex(i, rows.length),
+        }))}
+        centerLabel={formatValue(total)}
+        centerSub={measure}
+        valueFormatter={formatValue}
+        height={height}
+      />
+    )
+  }
+  if (form.kind === 'figure') {
+    return <SingleFigures rows={rows} series={[measure]} dimension={dimension} />
+  }
+  return (
+    <CategoryBars
+      rows={rows}
+      series={[measure]}
+      valueFormatter={formatValue}
+      height={height}
+    />
+  )
+}
+
+/**
+ * A board that returned one row — a number, not a chart.
+ *
+ * A bar chart of a single bar has an axis and still says nothing: there is no
+ * comparison to make and no shape to read. The console already has one treatment for a
+ * measured value, so this is that: the numeral in the mono face, its measure named
+ * above it, and the category it belongs to beside it.
+ */
+function SingleFigures({
+  rows,
+  series,
+  dimension,
+}: {
+  rows: readonly ChartRow[]
+  series: readonly string[]
+  dimension: string
+}): ReactElement {
+  const row = rows[0]
+  return (
+    <div className="flex flex-wrap items-end gap-x-6 gap-y-3 py-2">
+      {series.map((measure) => (
+        <p key={measure} className="flex min-w-0 flex-col">
+          <span className="text-[0.68rem] text-muted-foreground">{measure}</span>
+          <Figure size="stat" className="text-foreground">
+            {formatValue(Number(row[measure]))}
+          </Figure>
+        </p>
+      ))}
+      <p className="flex min-w-0 flex-col">
+        <span className="text-[0.68rem] text-muted-foreground">{dimension}</span>
+        <Figure className="truncate text-foreground">{row.label}</Figure>
+      </p>
+    </div>
+  )
+}
+
+/**
+ * One board, drawn small — with the mark its rows deserve.
+ *
+ * Every board on this page used to render as the same label-beside-a-filled-track list,
+ * whatever its shape: seven date-grouped boards lost their time axis, every second
+ * measure was hidden behind a disclosure, and the page read as one component repeated
+ * twenty times. {@link boardForm} chooses the mark off the rows now — a trend gets an
+ * axis, a part-to-whole gets a circle, a ranked comparison gets a bar chart with a
+ * quantitative axis, measures that cannot share a scale get small multiples rather than
+ * the second axis DESIGN.md §2 forbids, and a single row gets a figure.
+ *
+ * Nothing is dropped by the choice: every measure and every row is still in the
+ * disclosure underneath, which is also the accessible read of any chart above it.
  */
 function BoardCard({
   board,
@@ -254,21 +385,11 @@ function BoardCard({
   const data = result.state === 'ready' ? result.data : null
   const rows: ChartRow[] = data ? chartRows(data) : []
   const counted = data ? countedRows(data) : { drawn: 0, dropped: 0 }
-  const primary = board.series[0] ?? ''
-  /*
-    Which mark this board's x column deserves.
-
-    Every categorical board — `model`, `status`, `action` — draws long identifiers, and
-    a vertical bar chart of fourteen 50-character model ids overlaps into a smear at any
-    width. Aligned lengths with the label beside each bar is the right mark when identity
-    comes from a name. A board whose x really is time keeps the bar chart, because the
-    order of the categories is then the meaning. Time is detected from the values rather
-    than the column name, so `bucket` and `day` behave the same.
-  */
-  const temporal = rows.length > 1 && rows.every((row) => !Number.isNaN(Date.parse(row.label)))
+  const dimension = data?.x || board.x || 'category'
+  const form = boardForm(rows, board.series)
 
   return (
-    <article className="flex min-h-[19rem] min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
+    <article className="flex min-h-[21rem] min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
       <header className="flex items-start justify-between gap-2">
         <h3 className="flex min-w-0 items-center gap-1 text-sm font-semibold text-foreground">
           <span className="min-w-0 text-pretty">{board.title}</span>
@@ -295,35 +416,60 @@ function BoardCard({
         </p>
       ) : (
         <>
-          <figure className="space-y-1.5">
-            <figcaption className="text-[0.68rem] text-muted-foreground">
-              {primary} by {data?.x ?? 'category'}
-            </figcaption>
-            {temporal ? (
-              <BarChart
-                data={rows}
-                index="label"
-                category={primary}
-                color={seriesColor(board, primary)}
-                valueFormatter={formatValue}
-                height={180}
-              />
-            ) : (
-              <RankedBars
-                label={`${primary} by ${data?.x ?? 'category'}, highest first`}
-                data={rows.map((row) => ({ name: row.label, value: Number(row[primary]) }))}
-                valueFormatter={formatValue}
-                color={seriesColor(board, primary)}
-                maxRows={6}
-              />
-            )}
-          </figure>
+          {form.kind === 'multiples' ? (
+            // Measures that cannot share an axis get one panel each, and each panel is
+            // drawn by the same rule it would get on its own — never all bars by
+            // default. Two panels fit a gallery cell honestly; the rest are in the table.
+            <div className="flex flex-col gap-3">
+              {form.series.slice(0, 2).map((measure) => (
+                <figure key={measure} className="space-y-1">
+                  <figcaption className="text-[0.68rem] text-muted-foreground">
+                    {measure} by {dimension}
+                  </figcaption>
+                  <MeasurePlot
+                    rows={rows}
+                    measure={measure}
+                    dimension={dimension}
+                    height={116}
+                  />
+                </figure>
+              ))}
+            </div>
+          ) : (
+            <figure className="space-y-1.5">
+              <figcaption className="text-[0.68rem] text-muted-foreground">
+                {form.series.join(' and ')} by {dimension}
+              </figcaption>
+              {form.kind === 'trend' && form.series.length > 1 ? (
+                <TrendLines
+                  rows={rows}
+                  series={form.series}
+                  valueFormatter={formatValue}
+                  height={184}
+                />
+              ) : form.kind === 'bars' && form.series.length > 1 ? (
+                <CategoryBars
+                  rows={rows}
+                  series={form.series}
+                  valueFormatter={formatValue}
+                  height={184}
+                />
+              ) : (
+                <MeasurePlot
+                  rows={rows}
+                  measure={form.series[0]}
+                  dimension={dimension}
+                  height={184}
+                />
+              )}
+            </figure>
+          )}
 
           <details className="group mt-auto rounded-md border border-border">
             <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-foreground select-none">
               <Table2 className="size-3.5 text-muted-foreground" aria-hidden />
-              {board.series.length > 1
-                ? `${board.series.length - 1} more measure${board.series.length > 2 ? 's' : ''}, and the rows`
+              {board.series.length > form.series.length
+                ? `${board.series.length - form.series.length} more measure${board.series.length - form.series.length > 1 ? 's' : ''}, and the rows`
                 : 'The rows behind the chart'}
               <span className="tabular ml-auto font-mono text-[0.68rem] text-muted-foreground">
                 {counted.dropped > 0 ? `${counted.dropped} without an x value` : windowLabel}

@@ -15,7 +15,7 @@ import { API_BASE, API_ORIGIN } from '@/lib/api/config'
  */
 export function LandingFooter(): ReactElement {
   return (
-    <footer className="bg-background">
+    <footer className="border-t border-border bg-background">
       <div className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-14 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <AegisLockup size="md" />
@@ -37,8 +37,8 @@ export function LandingFooter(): ReactElement {
                 </Link>
               </li>
               <li>
-                <a href="#architecture" className={LINK}>
-                  How it works
+                <a href="#run" className={LINK}>
+                  Follow one run
                 </a>
               </li>
             </ul>

@@ -29,9 +29,9 @@ import { MiniMeter } from '@/components/memory/MiniMeter'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { EmptyState, LoadingState } from '@/components/primitives/States'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { TenantRailPolicy } from '@/components/guardrails/TenantRailPolicy'
 
@@ -489,11 +489,15 @@ function GuardrailsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
+      <PageHeader
         eyebrow="rails · verdicts"
         title="Guardrails"
-        note="The defence-in-depth pipeline, in the order it runs: what each rail checks, the OWASP row it answers, and the verdict it is allowed to reach."
+        actions={
+          <InfoTip label="How to read the rail stack">
+            The defence-in-depth pipeline, in the order it runs: what each rail checks,
+            the OWASP row it answers, and the verdict it is allowed to reach.
+          </InfoTip>
+        }
       />
 
       <EngineIndicator signals={posture?.signals ?? null} />
@@ -532,9 +536,7 @@ function GuardrailsView(): ReactElement {
 export function GuardrailsMount(): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
         <GuardrailsView />
-      </TooltipProvider>
     </BackendGate>
   )
 }

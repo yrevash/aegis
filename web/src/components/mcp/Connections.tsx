@@ -126,8 +126,8 @@ export function Connections({
   return (
     <Card>
       <CardHeader
-        title="Peers — the external servers Aegis may reach"
-        eyebrow="step 1 and 2 · declare, then test"
+        title="Outbound — the external servers Aegis may reach"
+        eyebrow="steps 1 and 2 · declare a peer, then test it"
         actions={
           <Button
             type="button"
@@ -147,7 +147,10 @@ export function Connections({
       />
       <CardBody className="space-y-4">
         {data.servers.length > 0 ? (
-          <ul className="grid gap-3 xl:grid-cols-2">
+          // One column from `xl` up, where the page itself puts this panel in a
+          // half-width column. A media query reads the viewport, not the container,
+          // so a second peer column there is two 200px cards of ellipses.
+          <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
             {data.servers.map((server) => (
               <PeerCard
                 key={server.serverId}
@@ -170,13 +173,13 @@ export function Connections({
           <EmptyState
             icon={Network}
             title="No external MCP server is declared"
-            body="Every peer whose tools an agent here may reach is listed on this panel. Declare one above, or set AEGIS_MCP_CLIENT_SERVERS to a comma-separated id=url list before the process starts."
+            body="Declare one above, or set AEGIS_MCP_CLIENT_SERVERS to a comma-separated id=url list before the process starts."
           />
         )}
 
         {declaring ? (
           <form
-            className="grid gap-3 border-t border-border pt-4 md:grid-cols-2"
+            className="grid gap-3 border-t border-border pt-4 md:grid-cols-2 xl:grid-cols-1"
             onSubmit={(event) => {
               event.preventDefault()
               submit()
@@ -251,7 +254,7 @@ export function Connections({
             <Field
               htmlFor={`${id}-server-cred`}
               label="Credential"
-              className="md:col-span-2"
+              className="md:col-span-2 xl:col-span-1"
               tip={
                 <>
                   Held by the serving process and nowhere else. Aegis never writes a third
@@ -271,7 +274,7 @@ export function Connections({
                 placeholder="paste the peer’s secret…"
               />
             </Field>
-            <div className="md:col-span-2">
+            <div className="md:col-span-2 xl:col-span-1">
               <Button type="submit" disabled={busy === 'create' || !draft.serverId.trim()}>
                 {busy === 'create' ? (
                   <Loader2 className="mr-2 size-4 animate-spin motion-reduce:animate-none" aria-hidden />
@@ -382,7 +385,7 @@ function PeerCard({
       </p>
 
       {/* The three facts about a peer that are not its address. */}
-      <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-border bg-border">
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border">
         <Fact
           label="tools found"
           value={String(server.discoveredTools)}
@@ -393,7 +396,10 @@ function PeerCard({
           value={String(server.grantedTools)}
           tip="How many of those a persona has been admitted to. Everything else is discovered and inert — an agent is never offered it."
         />
+        {/* Its own row: the namespace is the longest value on the card and the one a
+            reader most often wants to read in full rather than as an ellipsis. */}
         <Fact
+          className="col-span-2"
           label="namespace"
           value={`mcp__${server.serverId}__`}
           mono
@@ -528,14 +534,16 @@ function Fact({
   value,
   tip,
   mono,
+  className,
 }: {
   label: string
   value: string
   tip: string
   mono?: boolean
+  className?: string
 }): ReactElement {
   return (
-    <div className="min-w-0 bg-card px-2.5 py-2">
+    <div className={cn('min-w-0 bg-card px-2.5 py-2', className)}>
       <dt className="flex items-center gap-1 text-[0.68rem] text-muted-foreground">
         {label}
         <InfoTip label={`About ${label}`}>{tip}</InfoTip>

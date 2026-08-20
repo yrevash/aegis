@@ -8,7 +8,6 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { SIGNALS } from '@/config/signals'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -193,7 +192,13 @@ function ReductionHero({
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-x-10 gap-y-4">
         <div className="flex items-end gap-3">
-          <span className="tabular font-display text-5xl leading-none font-semibold text-foreground">
+          {/*
+            28px, not 48px. DESIGN.md §3: no published enterprise system in the survey
+            puts a KPI numeral above 32px, and Atlassian — the only one with a dedicated
+            metric ramp — caps its largest at 28. `text-5xl` was the marketing dialect
+            on a governance figure.
+          */}
+          <span className="tabular font-display text-[1.75rem] leading-8 font-semibold tracking-[-0.01em] text-foreground">
             {Math.round(totals.removedPct)}%
           </span>
           <span className="t-body mb-1 max-w-[20rem] text-muted-foreground">
@@ -315,7 +320,6 @@ export function RiskMount(): ReactElement {
 
   return (
     <BackendGate>
-      <TooltipProvider>
         <div className="space-y-4">
           <PageHeader
             eyebrow="OWASP-Agentic"
@@ -323,7 +327,6 @@ export function RiskMount(): ReactElement {
           />
           <RiskMap token={session?.token ?? null} />
         </div>
-      </TooltipProvider>
     </BackendGate>
   )
 }

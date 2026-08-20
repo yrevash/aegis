@@ -3,8 +3,9 @@
 import { GitPullRequestArrow } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { CapabilityMap, type Capability } from '@/components/shared'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -148,11 +149,16 @@ function LLMOpsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
+      <PageHeader
         eyebrow="trace → eval → diagnose → release"
         title="LLMOps"
-        note="The self-improvement loop, and the human gate in the middle of it. Every figure comes straight from the /ops accessors — nothing on this page is composed in the browser."
+        actions={
+          <InfoTip label="What this loop is">
+            The self-improvement loop, and the human gate in the middle of it. Every
+            figure comes straight from the /ops accessors — nothing on this page is
+            composed in the browser.
+          </InfoTip>
+        }
       />
 
       {/* Row 1 — quality trend hero + the live loop strip. */}
@@ -206,9 +212,7 @@ function LLMOpsView(): ReactElement {
 export function LLMOpsMount(): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
         <LLMOpsView />
-      </TooltipProvider>
     </BackendGate>
   )
 }

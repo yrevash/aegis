@@ -21,7 +21,6 @@ import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Input } from '@/components/primitives/input'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
-import { EmptyState } from '@/components/primitives/States'
 import type { McpConsole, McpGrantWrite, McpRisk, McpToolRow } from '@/lib/api/mcp'
 import { cn } from '@/lib/utils'
 
@@ -457,10 +456,13 @@ export function ToolGovernance({
               needed="Declare a server above, then press Test on it."
             />
           ) : (
-            <EmptyState
-              icon={Network}
-              title="No external tool discovered yet"
-              body="Reading a peer’s tool list opens a connection to a third party, so it happens when you ask for it and not when this page loads. Test a connection above, and everything it advertises lands here at high risk, callable by nobody."
+            // Compressed to one line, not an icon and three sentences: this panel is
+            // one of several on the page that can be empty at once, and a column of
+            // tall illustrated blanks is what made the screen unreadable.
+            <Absence
+              figure="External tools"
+              why="no peer has been tested in this process, and a tool list is read on Test rather than on page load"
+              needed="Press Test on a peer. Everything it advertises lands here at HIGH, callable by nobody."
             />
           )
         ) : (
@@ -569,10 +571,10 @@ export function ToolGovernance({
               needed="The actor, the change and the reason land here and in the audit trail the first time one is."
             />
           ) : (
-            <EmptyState
-              icon={ShieldCheck}
-              title="No tier has been decided here"
-              body="Every tool is at the default this deployment gave it. The first time somebody lowers one, the change, the actor and the reason land in this list and in the audit trail."
+            <Absence
+              figure="Tier decisions"
+              why="every tool is still at the tier this deployment gave it"
+              needed="The actor, the change and the reason land here and in the audit trail the first time one is lowered."
             />
           )
         ) : (

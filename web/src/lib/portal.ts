@@ -34,6 +34,7 @@ import {
   Cpu,
   Database,
   DatabaseZap,
+  FileStack,
   GitCompareArrows,
   Gauge,
   Gavel,
@@ -161,6 +162,14 @@ export const SECTIONS: Record<string, Section> = {
     hint: 'RAGAS · DeepEval',
     tooltip:
       'Aegis Evals — the offline regression gate: deterministic RAGAS/DeepEval-pattern metrics scored with no LLM',
+  },
+  documents: {
+    id: 'documents',
+    icon: FileStack,
+    label: 'Documents',
+    hint: 'corpus · ingest',
+    tooltip:
+      'Aegis Corpus — what the agent can ground an answer in, and the one place to add more: upload a document, watch its six ingest stages commit, and see which of your own documents are searchable. Every row is your tenant\'s and no other\'s.',
   },
   memory: {
     id: 'memory',
@@ -410,10 +419,10 @@ export const SECTIONS: Record<string, Section> = {
  */
 export const ROLE_SECTIONS: Record<Portal, string[]> = {
   platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'database', 'mcp', 'console', 'settings'],
-  tenant_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
+  tenant_admin: ['dashboard', 'analytics', 'documents', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'cache', 'latency', 'audit', 'settings'],
-  client: ['console', 'dashboard', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'memory', 'simulation', 'settings'],
+  client: ['console', 'dashboard', 'documents', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'memory', 'simulation', 'settings'],
 }
 
 /**

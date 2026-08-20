@@ -141,17 +141,23 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
         <>
           <HowMcpWorks data={data} />
           <McpPosture data={data} />
-          <Connections
-            data={data}
-            busy={busy}
-            probe={probe}
-            onCreate={onCreate}
-            onUpdate={onUpdate}
-            onDelete={onDelete}
-            onTest={onTest}
-          />
+          {/* The protocol runs both ways, and the page used to bury the second
+              direction at the bottom under six other cards. Side by side, the pair is
+              the model: on the left the servers this deployment may call, on the right
+              what it answers to a caller of its own. */}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Connections
+              data={data}
+              busy={busy}
+              probe={probe}
+              onCreate={onCreate}
+              onUpdate={onUpdate}
+              onDelete={onDelete}
+              onTest={onTest}
+            />
+            <AegisMcpPanel endpoint={data.selfEndpoint} token={token} />
+          </div>
           <ToolGovernance data={data} busy={busy} onWrite={onWrite} />
-          <AegisMcpPanel endpoint={data.selfEndpoint} token={token} />
         </>
       ) : null}
     </div>

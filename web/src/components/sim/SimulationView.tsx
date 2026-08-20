@@ -14,7 +14,6 @@ import { Button } from '@/components/primitives/button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
@@ -340,7 +339,6 @@ export function SimulationView(): ReactElement {
 export function SimulationMount(): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
         <div className="space-y-4">
           <PageHeader
             eyebrow="RBAC scope"
@@ -348,7 +346,6 @@ export function SimulationMount(): ReactElement {
           />
           <SimulationView />
         </div>
-      </TooltipProvider>
     </BackendGate>
   )
 }

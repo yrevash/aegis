@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { Receipt } from '@/components/primitives/Receipt'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
@@ -154,11 +155,7 @@ function EvalsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
-        eyebrow="retrieval quality · offline regression gate"
-        title="Evals"
-      />
+      <PageHeader eyebrow="retrieval quality · offline regression gate" title="Evals" />
 
       {report.error ? (
         <Card>

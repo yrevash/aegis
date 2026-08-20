@@ -3,6 +3,7 @@
 import { ShieldCheck } from 'lucide-react'
 import type { CSSProperties, ReactElement } from 'react'
 
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge } from '@/components/ui/Badge'
 import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
@@ -140,15 +141,23 @@ function Row({ move, ceiling }: { move: RiskMovement; ceiling: number }): ReactE
       </div>
 
       {/* The control that did the moving. Two audiences, in priority order: the client
-          reads the named control and a plain sentence; the code pointer underneath is
-          auditor provenance, set small and monospaced so it reads as a citation. */}
-      <div className="flex min-w-0 flex-col gap-1 md:col-span-4">
+          reads the named control; the code pointer beside it is auditor provenance, set
+          small and monospaced so it reads as a citation.
+
+          The mitigation sentence used to sit between them at reading size, once per
+          risk — nine paragraphs down one screen, which is the wall DESIGN.md §9 names.
+          It explains a *mechanism*, and §4 is explicit that a mechanism belongs in an
+          InfoTip. Nothing is lost: it is one hover from the control it describes, and
+          the control's own name and reference still read at a glance. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 md:col-span-4">
         <p className="flex items-center gap-1.5 text-[0.82rem] font-medium text-blue-700">
           <ShieldCheck className="size-3.5 shrink-0" aria-hidden />
           {risk.control_name}
+          <InfoTip label={`How ${risk.control_name} holds ${risk.title} down`}>
+            {risk.mitigation}
+          </InfoTip>
         </p>
-        <p className="t-body max-w-[92ch] text-foreground/90">{risk.mitigation}</p>
-        <p className="truncate font-mono text-[0.68rem] text-muted-foreground">
+        <p className="min-w-0 truncate font-mono text-[0.68rem] text-muted-foreground">
           {risk.control_ref}
         </p>
       </div>

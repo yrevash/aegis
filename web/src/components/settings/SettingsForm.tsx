@@ -28,6 +28,7 @@ import {
   controlLabel,
   draftOf,
   fieldFor,
+  firstSentence,
   formatValue,
   groupSettings,
   mergeNote,
@@ -320,13 +321,14 @@ function Editor({
   if (field.kind === 'inert' || field.kind === 'readOnly') {
     const Icon = field.kind === 'inert' ? PlugZap : Lock
     return (
-      // Two lines, then a tip. The refusal is the server's own sentence and is never
+      // One sentence, then a tip. The refusal is the server's own wording and is never
       // paraphrased, but four of them stacked down a category turned a control panel
-      // into a page of apologies — so the first clause is on the page and the rest is
-      // one layer down, in the tip beside it.
+      // into a page of apologies — so the first *whole sentence* is on the page and
+      // the rest is one layer down, in the tip beside it. A `line-clamp` was doing
+      // this and cut mid-clause, which reads as a fault rather than as a summary.
       <p className="flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-[0.74rem] leading-relaxed text-foreground">
         <Icon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-        <span className="line-clamp-2 min-w-0">{field.reason}</span>
+        <span className="min-w-0">{firstSentence(field.reason)}</span>
         <InfoTip
           className="mt-0.5 shrink-0"
           label={field.kind === 'inert' ? 'Why this control does nothing' : 'Why this is read only'}

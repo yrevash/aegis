@@ -19,7 +19,6 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/primitives/button'
 import { PageHeader } from '@/components/primitives/PageHeader'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { RailVerdict } from '@/components/voice/RailVerdict'
 import { TranscriptPanel } from '@/components/voice/TranscriptPanel'
@@ -307,9 +306,7 @@ function VoiceView(): ReactElement {
 export function VoiceMount(): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
         <VoiceView />
-      </TooltipProvider>
     </BackendGate>
   )
 }

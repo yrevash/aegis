@@ -128,6 +128,150 @@ export function chartAvailable(board: AnalyticsBoard): boolean {
   return board.kinds.includes('chart')
 }
 
+// ── which mark a board deserves ─────────────────────────────────────────────
+
+/**
+ * Whether a board's x axis is time.
+ *
+ * Read off the **values**, not the column name, so `day`, `bucket` and `started_at`
+ * behave the same and a categorical column that happens to be called `date` does not
+ * get an axis it has not earned. One row is not a series, so it is never temporal.
+ */
+export function isTemporal(rows: readonly ChartRow[]): boolean {
+  return rows.length > 1 && rows.every((row) => !Number.isNaN(Date.parse(row.label)))
+}
+
+/**
+ * Whether a measure's parts sum to a whole — the question a donut silently asserts.
+ *
+ * A donut says *these are the pieces of one thing*. Counts are; averages, rates and
+ * shares are not: `AVG(latency)` across four outcomes has no total, and drawing it as
+ * four slices of a circle claims one. The catalogue's metric names carry the answer
+ * (`avg_latency_ms`, `block_rate_avg`, `avg_decision_seconds_m`), which is why they are
+ * read here rather than guessed from the numbers — three values that happen to sum to
+ * something are not evidence that the sum means anything.
+ *
+ * Wrong in only one direction on purpose: an unrecognised name is treated as additive
+ * only when nothing in it announces otherwise, and every non-additive metric this
+ * catalogue defines announces itself.
+ */
+export function additiveMeasure(name: string): boolean {
+  return !/(^|_)(avg|mean|median|rate|share|pct|percent|ratio|p50|p95|p99)(_|$)|latency|_ms(_|$)/i.test(
+    name,
+  )
+}
+
+/**
+ * Whether several measures can honestly share one axis.
+ *
+ * DESIGN.md §2 forbids a dual axis outright, so the alternative to a shared axis is
+ * **two charts**, not two scales. A shared axis is only honest when the measures are
+ * within reach of each other: `block_rate_avg` (0.82) beside `redteam_runs_total` (9)
+ * draws the rate as a line on the floor, which is a chart that hides its own data.
+ *
+ * The threshold is 25× — wide enough that `runs_total` (903) and `blocks_total` (32)
+ * still share an axis, where the small series is legible at ~3.5% of the tall one, and
+ * narrow enough that a rate beside a count does not.
+ */
+export function comparableScale(rows: readonly ChartRow[], series: readonly string[]): boolean {
+  // A count and a mean are not the same *unit*, whatever their magnitudes: putting
+  // `gates_total` and `avg_decision_seconds_m` on one axis invites the reader to
+  // compare a number of approvals against a number of seconds. Units first, then size.
+  const additive = series.map(additiveMeasure)
+  if (additive.some((one) => one !== additive[0])) return false
+
+  const peaks = series.map((key) =>
+    rows.reduce((max, row) => Math.max(max, Math.abs(Number(row[key]) || 0)), 0),
+  )
+  const tallest = Math.max(...peaks)
+  const shortest = Math.min(...peaks)
+  if (tallest === 0) return true // nothing to hide behind anything else
+  if (shortest === 0) return false // one series would be invisible against the other
+  return tallest / shortest <= 25
+}
+
+/** The mark a board is drawn with, chosen from the rows rather than from its id. */
+export type BoardForm =
+  /** A trend over a time axis: one measure as an area, several as lines. */
+  | { kind: 'trend'; series: string[] }
+  /** Part-to-whole: a few additive categories that really do sum to something. */
+  | { kind: 'donut'; series: string[] }
+  /** A category bar chart with a quantitative axis — one measure or several, grouped. */
+  | { kind: 'bars'; series: string[] }
+  /** Measures that cannot share an axis: one small chart each, form chosen per measure. */
+  | { kind: 'multiples'; series: string[] }
+  /** One row of data. A number with its label, never a chart of a single bar. */
+  | { kind: 'figure'; series: string[] }
+
+/** Above this many categories a circle is unreadable and a bar chart is right. */
+const DONUT_MAX = 6
+
+/**
+ * Which mark this board's rows deserve.
+ *
+ * The gallery used to draw **every** board as the same label-and-progress-bar list,
+ * which threw away the time axis on seven boards, buried every second measure behind a
+ * disclosure, and made a page of twenty cards read as one component repeated twenty
+ * times. Two verdicts on that screen said the same thing, so the rule now is: **a
+ * quantitative axis or a circle, never a filled track with the number printed beside
+ * it.** Form follows the data's job, and the job is readable off the rows:
+ *
+ * | shape | mark | why |
+ * |---|---|---|
+ * | one row | a figure | a single value has no shape; one bar is a chart pretending |
+ * | time axis, one measure | area | the axis carries the meaning |
+ * | time axis, several measures, one unit | lines | compared at every bucket, never stacked — `blocks_total` is a *subset* of `runs_total`, and a stack would add it to itself |
+ * | categories, one additive measure, ≤6 | donut | a part-to-whole story reads instantly as one |
+ * | categories, one measure, >6 or non-additive | bar chart | a real axis a value can be read off |
+ * | categories, several measures, one unit and scale | grouped bars | the pair is the question |
+ * | measures that cannot share a scale | small multiples | rather than a forbidden second axis |
+ *
+ * @param rows - The board's drawable rows, from {@link chartRows}.
+ * @param series - The board's declared measures, in catalogue order.
+ */
+export function boardForm(rows: readonly ChartRow[], series: readonly string[]): BoardForm {
+  const measures = series.length > 0 ? [...series] : ['value']
+
+  // One row is a number, not a shape. A "chart" of a single bar is the same defect as
+  // a progress bar wearing an axis, and a figure is what the rest of the console uses
+  // for one measured value.
+  if (rows.length <= 1) return { kind: 'figure', series: measures }
+
+  if (isTemporal(rows)) {
+    if (measures.length === 1) return { kind: 'trend', series: measures }
+    return comparableScale(rows, measures)
+      ? { kind: 'trend', series: measures }
+      : { kind: 'multiples', series: measures }
+  }
+
+  if (measures.length > 1) {
+    return comparableScale(rows, measures)
+      ? { kind: 'bars', series: measures }
+      : { kind: 'multiples', series: measures }
+  }
+
+  // A donut also has to be *drawable*: a slice worth 0 is invisible, so a measure with
+  // an empty category renders as a circle that silently omits it. `blocks_total by
+  // status` is the live case — 32 blocked and three zeros — and as a donut it reads as
+  // "everything was blocked". Bars show a zero as a zero.
+  const drawable = rows.every((row) => Number(row[measures[0]]) > 0)
+  if (rows.length <= DONUT_MAX && drawable && additiveMeasure(measures[0])) {
+    return { kind: 'donut', series: measures }
+  }
+  return { kind: 'bars', series: measures }
+}
+
+/**
+ * The mark for **one** measure of a board — the rule {@link boardForm} applies when a
+ * card has to draw several measures that cannot share an axis.
+ *
+ * Exported so small multiples pick each panel's form by the same rule the whole card
+ * would have used, rather than defaulting every panel to a bar.
+ */
+export function measureForm(rows: readonly ChartRow[], measure: string): BoardForm {
+  return boardForm(rows, [measure])
+}
+
 /** One heading on the gallery: a dimension, and every board broken down by it. */
 export interface BoardGroup {
   /** The x column the boards share, verbatim from the server. Empty for the tail. */
@@ -171,7 +315,12 @@ export function groupByDimension(boards: readonly AnalyticsBoard[]): BoardGroup[
     .sort((a, b) => b.boards.length - a.boards.length || a.dimension.localeCompare(b.dimension))
 
   const shared = named.filter((group) => group.boards.length > 1)
-  const alone = named.filter((group) => group.boards.length === 1).flatMap((g) => g.boards)
+  // The tail has no shared dimension to order it by, so it keeps the catalogue's own
+  // order — the same promise every other section makes about its contents.
+  const lonely = new Set(
+    named.filter((group) => group.boards.length === 1).map((group) => group.boards[0].id),
+  )
+  const alone = boards.filter((board) => lonely.has(board.id))
   return alone.length > 0 ? [...shared, { dimension: '', boards: alone }] : shared
 }
 

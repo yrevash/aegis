@@ -7,6 +7,7 @@ import { ConformalBand } from '@/components/charts/ConformalBand'
 import { ShapWaterfall } from '@/components/charts/ShapWaterfall'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Figure } from '@/components/primitives/Figure'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -146,7 +147,7 @@ function MLOpsView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader as="h1" eyebrow="SHAP · conformal · XGBoost + MAPIE" title="MLOps" />
+      <PageHeader eyebrow="SHAP · conformal · XGBoost + MAPIE" title="MLOps" />
 
       {/* ── Model card ─────────────────────────────────────────────────────────── */}
       <Card>

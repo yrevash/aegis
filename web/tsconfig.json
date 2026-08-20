@@ -36,12 +36,13 @@
     ".next-lane3-dev/types/**/*.ts",
     ".next-lane3/types/**/*.ts",
     ".next-lane4-dev/types/**/*.ts",
+    ".next-lane4/types/**/*.ts",
     ".next-lane5-dev/types/**/*.ts",
     ".next-lane6dev/types/**/*.ts",
     ".next-verify/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-lane4/types/**/*.ts"
+    ".next-lane7/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

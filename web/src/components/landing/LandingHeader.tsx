@@ -33,10 +33,10 @@ import { homePathFor } from '@/lib/portal'
  */
 
 const NAV = [
-  { href: '#modules', label: 'Modules' },
-  { href: '#architecture', label: 'Architecture' },
-  { href: '#trust', label: 'Trust' },
-  { href: '#roadmap', label: 'Roadmap' },
+  { href: '#run', label: 'One run' },
+  { href: '#agents', label: 'Fan-out' },
+  { href: '#governance', label: 'What stops it' },
+  { href: '#live', label: 'Read live' },
 ]
 
 export function LandingHeader(): ReactElement {
@@ -93,7 +93,7 @@ export function LandingHeader(): ReactElement {
         <div className="ml-auto flex items-center gap-2 md:ml-0">
           <Link
             href={signedIn ? homePathFor(session.fineRole) : '/login'}
-            className="inline-flex h-10 touch-manipulation items-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground outline-none transition-colors duration-[--dur-fast] hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="inline-flex h-10 touch-manipulation items-center rounded-lg bg-blue-600 px-4 text-sm font-medium text-white outline-none transition-colors duration-[--dur-fast] hover:bg-blue-700 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             {signedIn ? 'Enter console' : 'Login'}
           </Link>

@@ -7,8 +7,8 @@ import { ArsenalPanel } from '@/components/retrieval/ArsenalPanel'
 import { ProvenanceDonut } from '@/components/retrieval/ProvenanceDonut'
 import { RerankScoreboard } from '@/components/retrieval/RerankScoreboard'
 import { QueryBar } from '@/components/console/QueryBar'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { personasForRole } from '@/config/personas'
 import type { Provenance, Role, ScoredSource } from '@/lib/stream'
@@ -83,7 +83,7 @@ function RagView({ role }: { role: Role }): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader as="h1" eyebrow="hybrid · rerank" title="RAG" />
+      <PageHeader eyebrow="hybrid · rerank" title="RAG" />
 
       <QueryBar
         role={role}
@@ -127,9 +127,7 @@ function RagView({ role }: { role: Role }): ReactElement {
 export function RagMount({ role }: { role: Role }): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
         <RagView role={role} />
-      </TooltipProvider>
     </BackendGate>
   )
 }

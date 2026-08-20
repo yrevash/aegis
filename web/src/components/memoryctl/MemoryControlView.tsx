@@ -6,7 +6,6 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Card, CardBody } from '@/components/ui/Card'
 import { PageHeader } from '@/components/primitives/PageHeader'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { ChatThreadsPanel } from '@/components/memory/ChatThreadsPanel'
 import { ErrorRow, LoadingRow } from '@/components/memory/StateRow'
 import { SubjectPanels } from '@/components/memory/SubjectRecord'
@@ -15,6 +14,7 @@ import { getMemorySubjects } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
 
 import { FactManager } from './FactManager'
+import { ScopeLadder } from './ScopeLadder'
 import { RetentionPanel } from './RetentionPanel'
 import { SubjectPicker } from './SubjectPicker'
 
@@ -78,16 +78,30 @@ function MemoryControl({ token }: { token: string | null }): ReactElement {
       <div className="grid items-start gap-6 lg:grid-cols-5">
         <Card className="lg:col-span-2">
           <CardBody>
-            <div className="flex flex-col gap-3">
-              <h2 className="t-title text-foreground">
-                {canManageOthers ? 'Whose memory' : 'Your record'}
-              </h2>
-              {subjects.state.status === 'loading' && <LoadingRow label="Loading subjects…" />}
-              {subjects.state.status === 'error' && (
-                <ErrorRow message={subjects.state.message} />
-              )}
-              {subjects.state.status === 'ready' && (
-                <SubjectPicker rows={rows} selected={selected} onSelect={setSelected} />
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-3">
+                <h2 className="t-title text-foreground">
+                  {canManageOthers ? 'Whose memory' : 'Your record'}
+                </h2>
+                {subjects.state.status === 'loading' && <LoadingRow label="Loading subjects…" />}
+                {subjects.state.status === 'error' && (
+                  <ErrorRow message={subjects.state.message} />
+                )}
+                {subjects.state.status === 'ready' && (
+                  <SubjectPicker rows={rows} selected={selected} onSelect={setSelected} />
+                )}
+              </div>
+              {/*
+                The reach ladder, under the picker rather than on its own screen: the
+                question "who else can see this?" is asked while looking at the record,
+                and every rung is a field off the same response the picker renders.
+              */}
+              {subjects.state.status === 'ready' && selected !== null && (
+                <ScopeLadder
+                  rows={rows}
+                  selected={selected}
+                  canManageOthers={canManageOthers}
+                />
               )}
             </div>
           </CardBody>
@@ -165,9 +179,7 @@ export function MemoryControlMount(): ReactElement {
 
   return (
     <BackendGate>
-      <TooltipProvider>
         <MemoryControl token={session?.token ?? null} />
-      </TooltipProvider>
     </BackendGate>
   )
 }

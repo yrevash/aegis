@@ -6,6 +6,7 @@ import { RolesAccessMount } from '@/components/admin/RolesAccess'
 import { CacheMount } from '@/components/cache/CacheView'
 import { RiskMount } from '@/components/client/RiskMap'
 import { DatabaseMount } from '@/components/db/DatabaseView'
+import { DocumentsMount } from '@/components/documents/DocumentsView'
 import { SavingsMount } from '@/components/client/SavingsView'
 import { ConsoleMount } from '@/components/console/ConsoleMount'
 import { AdminDashboardMount } from '@/components/dashboard/AdminCommandCenter'
@@ -70,6 +71,7 @@ export default async function SectionPage({
   if (section === 'llmops') return <LLMOpsMount />
   if (section === 'evals') return <EvalsMount />
   if (section === 'forecast') return <ForecastMount role={role} />
+  if (section === 'documents') return <DocumentsMount />
   if (section === 'memory') return <MemoryControlMount />
   if (section === 'rag') return <RagMount role={role} />
   if (section === 'graph') return <GraphMount role={role} />

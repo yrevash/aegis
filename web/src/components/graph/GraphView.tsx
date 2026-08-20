@@ -6,12 +6,12 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { beatFromSignal } from '@/components/console/motion'
 import { QueryBar } from '@/components/console/QueryBar'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { ScrollArea } from '@/components/primitives/scroll-area'
-import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { colorForKind } from '@/config/signals'
@@ -144,7 +144,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader as="h1" eyebrow="entities · relations" title="Graph" />
+      <PageHeader eyebrow="entities · relations" title="Graph" />
 
       <QueryBar
         role={role}
@@ -280,9 +280,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
 export function GraphMount({ role }: { role: Role }): ReactElement {
   return (
     <BackendGate>
-      <TooltipProvider>
         <GraphView role={role} />
-      </TooltipProvider>
     </BackendGate>
   )
 }

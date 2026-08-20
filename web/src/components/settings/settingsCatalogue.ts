@@ -192,6 +192,24 @@ export function inertReason(control: SettingControl): string {
 }
 
 /**
+ * The first whole sentence of a refusal, for the line that stands in for a control.
+ *
+ * A CSS `line-clamp` was doing this job and cut mid-clause — *“Nothing reads this yet.
+ * The run’s width comes from…”* — which reads as a bug rather than as a summary. A
+ * sentence boundary is the only truncation that is still a sentence. The full text stays
+ * one layer down, in the tip beside it, and in the DOM for a screen reader.
+ *
+ * @param reason - The refusal, in full.
+ * @returns Its first sentence, or the whole thing when it is already one.
+ */
+export function firstSentence(reason: string): string {
+  const text = reason.trim()
+  const end = text.search(/[.!?](\s|$)/)
+  if (end === -1 || end === text.length - 1) return text
+  return text.slice(0, end + 1)
+}
+
+/**
  * What to draw for one row: an input, or a value with a reason.
  *
  * The order of the two refusals is the whole rule. `effective: false` is checked

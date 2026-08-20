@@ -22,6 +22,7 @@ import {
   chartRows,
   countedRows,
   embedAvailable,
+  groupByDimension,
   seriesColor,
 } from '../../src/components/analytics/analyticsBoard.ts'
 
@@ -38,6 +39,11 @@ function statusOf(overrides) {
     boards: 2,
     ...overrides,
   }
+}
+
+/** One board carrying only the fields these functions read. */
+function boardOf(overrides) {
+  return { ...BOARD, ...overrides }
 }
 
 const BOARD = {
@@ -114,4 +120,57 @@ test('the embed needs the board, the flag and a reachable Superset — all three
   assert.equal(embedAvailable(BOARD, statusOf({ reachable: false })), false)
   assert.equal(embedAvailable({ ...BOARD, kinds: ['chart'] }, statusOf()), false)
   assert.equal(embedAvailable(BOARD, null), false)
+})
+
+/*
+  The gallery's sections.
+
+  Two claims worth pinning, because both fail silently rather than loudly. A dimension
+  carrying one board must not become a heading of its own — five such headings in a
+  three-column grid is a page that is mostly white space and reads as broken. And the
+  order must be a *function of the catalogue*, not of the rows: a section order that
+  depended on which query answered first would rearrange itself under the reader's
+  cursor as each board landed.
+*/
+test('groupByDimension folds every singleton into one trailing group', () => {
+  const boards = [
+    boardOf({ id: 'a', x: 'day' }),
+    boardOf({ id: 'b', x: 'model' }),
+    boardOf({ id: 'c', x: 'day' }),
+    boardOf({ id: 'd', x: 'suite' }),
+    boardOf({ id: 'e', x: 'day' }),
+    boardOf({ id: 'f', x: 'model' }),
+    boardOf({ id: 'g', x: 'mode' }),
+  ]
+  const groups = groupByDimension(boards)
+
+  assert.deepEqual(
+    groups.map((group) => [group.dimension, group.boards.map((b) => b.id)]),
+    [
+      ['day', ['a', 'c', 'e']],
+      ['model', ['b', 'f']],
+      ['', ['d', 'g']],
+    ],
+  )
+  // Nothing is dropped: every board is in exactly one section.
+  assert.equal(
+    groups.reduce((n, group) => n + group.boards.length, 0),
+    boards.length,
+  )
+})
+
+test('groupByDimension emits no tail when every dimension is shared', () => {
+  const groups = groupByDimension([
+    boardOf({ id: 'a', x: 'day' }),
+    boardOf({ id: 'b', x: 'day' }),
+  ])
+  assert.deepEqual(groups.map((group) => group.dimension), ['day'])
+})
+
+test('groupByDimension keeps the catalogue order inside a section', () => {
+  const groups = groupByDimension([
+    boardOf({ id: 'second', x: 'day' }),
+    boardOf({ id: 'first', x: 'day' }),
+  ])
+  assert.deepEqual(groups[0].boards.map((b) => b.id), ['second', 'first'])
 })

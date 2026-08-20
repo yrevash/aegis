@@ -18,6 +18,7 @@ import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
+import { SceneState } from '@/components/illustration/Scene'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -641,11 +642,17 @@ function RedteamView(): ReactElement {
         actions={<History className="size-4 text-muted-foreground" aria-hidden />}
       >
           {history.length === 0 ? (
-            <EmptyState
-              icon={History}
-              title="No run of this battery has been stored yet"
-              body="Every battery you run is written to the platform's own record and appears here, newest first, so a block rate can be read as a trend rather than a snapshot."
-            />
+            /* An honest empty state, which this product produces a great many of by
+               design. The scene is Storyset's "No data" — it depicts nothing recorded
+               yet, which is exactly what this is, and it sits above words that say the
+               same thing so it is never the only thing saying it. */
+            <SceneState name="empty" size="md">
+              <EmptyState
+                icon={History}
+                title="No run of this battery has been stored yet"
+                body="Every battery you run is written to the platform's own record and appears here, newest first, so a block rate can be read as a trend rather than a snapshot."
+              />
+            </SceneState>
           ) : (
             <Table className="min-w-[720px]">
               <THead>

@@ -12,6 +12,8 @@ import { useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { Receipt } from '@/components/primitives/Receipt'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -114,11 +116,16 @@ function TokenOptView(): ReactElement {
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        as="h1"
+      <PageHeader
         eyebrow="role→model routing · savings vs frontier baseline"
         title="Token optimization"
-        note="Every figure is metered from real gateway calls. With no calls yet the savings read as unmetered rather than as zero — there is no illustrative mode."
+        actions={
+          <InfoTip label="Where these figures come from">
+            Every figure is metered from real gateway calls. With no calls yet the
+            savings read as unmetered rather than as zero — there is no illustrative
+            mode.
+          </InfoTip>
+        }
       />
 
       {error ? (
