@@ -64,10 +64,20 @@ export function DataPanel({
           <div className="flex flex-wrap items-center gap-2 [&>*]:min-w-0">{toolbar}</div>
         ) : null}
         <div
-          // `min-w-0` is what stops a wide child from widening the flex parent —
-          // a flex item's default `min-width: auto` resolves to its content, so
-          // `overflow-x-auto` alone silently does nothing here.
-          className="-mx-5 min-w-0 overflow-x-auto overscroll-x-contain px-5 md:-mx-6 md:px-6"
+          // Two properties here are load-bearing and neither is obvious.
+          //
+          // `min-w-0` stops a wide child from widening the flex parent: a flex
+          // item's default `min-width: auto` resolves to its content, so
+          // `overflow-x-auto` alone silently does nothing.
+          //
+          // `relative` stops the *document* from growing to the clipped content's
+          // height. A `static` scroll container still contributes its overflow to
+          // the nearest positioned ancestor's scroll extent, so the panel scrolled
+          // correctly at its own `maxHeight` while the page underneath it grew to
+          // the full table — Jobs measured **10,948px tall with ~9,000px empty**,
+          // and 2,232px with this one word added. Establishing a containing block
+          // is what keeps the overflow inside the box that owns it.
+          className="relative -mx-5 min-w-0 overflow-x-auto overscroll-x-contain px-5 md:-mx-6 md:px-6"
           style={scrolls ? { maxHeight, overflowY: 'auto' } : undefined}
           // A scrollable region must be reachable and announced; without these a
           // keyboard user cannot reach the rows that are off-screen.
