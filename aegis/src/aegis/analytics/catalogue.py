@@ -175,6 +175,18 @@ def _parse_board(entry: Mapping[str, Any], index: int) -> Board:
             "URL, /tablemodelview/edit/<id> — for each board."
         )
 
+    dashboard_id = entry.get("dashboardId")
+    if dashboard_id is not None and (
+        not isinstance(dashboard_id, int) or isinstance(dashboard_id, bool)
+    ):
+        raise CatalogueError(f"board {where}: dashboardId must be an integer")
+    if dashboard_id is not None and dashboard_id <= 0:
+        raise CatalogueError(
+            f"board {where}: dashboardId is {dashboard_id}, which is a placeholder. "
+            "Paste the number from the dashboard's own URL, /superset/dashboard/<id>/ — "
+            "this is the numeric id, NOT the embeddedUuid beside it."
+        )
+
     board = Board(
         id=board_id,
         title=_require_str(entry, "title", where=where),
@@ -187,6 +199,7 @@ def _parse_board(entry: Mapping[str, Any], index: int) -> Board:
         groupby=_columns(entry, "groupby", where),
         row_limit=int(entry.get("rowLimit", 500)),
         embedded_uuid=str(entry.get("embeddedUuid", "")),
+        dashboard_id=dashboard_id,
         default_window=window,
         time_column=str(time_column),
     )
@@ -206,6 +219,16 @@ def _parse_board(entry: Mapping[str, Any], index: int) -> Board:
         raise CatalogueError(
             f"board {where}: declares kind 'chart' but names no datasourceId, so the "
             "server-side data path has nothing to query."
+        )
+    if "chart" in kinds and board.dashboard_id is None:
+        raise CatalogueError(
+            f"board {where}: declares kind 'chart' but names no dashboardId. This is a "
+            "second, separate thing from embeddedUuid, and both are required: the UUID "
+            "mints the guest token, the numeric id authorises the query it makes. "
+            "Superset grants a guest access to a dataset only when the chart-data "
+            "request carries form_data.dashboardId resolving to a dashboard the token "
+            "names, so a board without it answers 403 with a perfectly valid token in "
+            "hand. It is the number in the dashboard's own URL."
         )
     if board.row_limit <= 0 or board.row_limit > 10_000:
         raise CatalogueError(

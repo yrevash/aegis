@@ -11,7 +11,7 @@
       "tenant_admin",
       "client"
     ],
-    "datasourceId": 0,
+    "datasourceId": 2,
     "datasourceType": "table",
     "groupby": [
       "model"
@@ -22,7 +22,8 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "dashboardId": 1
   },
   {
     "id": "token-volume",
@@ -35,7 +36,7 @@
       "platform_admin",
       "tenant_admin"
     ],
-    "datasourceId": 0,
+    "datasourceId": 2,
     "groupby": [
       "model"
     ],
@@ -46,7 +47,9 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 200,
-    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "datasourceType": "table",
+    "dashboardId": 1
   },
   {
     "id": "runs-by-outcome",
@@ -59,7 +62,7 @@
       "platform_admin",
       "tenant_admin"
     ],
-    "datasourceId": 0,
+    "datasourceId": 3,
     "groupby": [
       "status"
     ],
@@ -70,7 +73,9 @@
     "timeColumn": "day",
     "defaultWindow": "last_7_days",
     "rowLimit": 200,
-    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "datasourceType": "table",
+    "dashboardId": 1
   },
   {
     "id": "human-gates",
@@ -84,7 +89,7 @@
       "tenant_admin",
       "client"
     ],
-    "datasourceId": 0,
+    "datasourceId": 1,
     "groupby": [
       "risk"
     ],
@@ -94,7 +99,9 @@
     "timeColumn": "day",
     "defaultWindow": "last_30_days",
     "rowLimit": 100,
-    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "datasourceType": "table",
+    "dashboardId": 1
   },
   {
     "id": "operations",
@@ -107,7 +114,7 @@
     "audience": [
       "platform_admin"
     ],
-    "datasourceId": 0,
+    "datasourceId": 3,
     "groupby": [
       "status"
     ],
@@ -116,6 +123,8 @@
     ],
     "timeColumn": "day",
     "defaultWindow": "last_7_days",
-    "embeddedUuid": "PASTE-THE-UUID-FROM-POST-/api/v1/dashboard/<id>/embedded"
+    "embeddedUuid": "78354696-9add-4383-995c-1ca33bb83908",
+    "datasourceType": "table",
+    "dashboardId": 1
   }
 ]

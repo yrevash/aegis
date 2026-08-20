@@ -108,13 +108,22 @@ def chart_data_payload(
         query["granularity"] = board.time_column
         query["time_range"] = resolve_window(window, board)
 
-    return {
+    payload: dict[str, Any] = {
         "datasource": {"id": board.datasource_id, "type": board.datasource_type},
         "queries": [query],
         "force": False,
         "result_format": "json",
         "result_type": "full",
     }
+    if board.dashboard_id is not None:
+        # **This is an authorisation field, not a hint.** Superset's
+        # ``raise_for_access`` lets a guest read a dataset only when the request body
+        # carries ``form_data.dashboardId`` *and* that row resolves by
+        # ``Dashboard.id == dashboard_id``. Naming the dashboard in the guest token is
+        # necessary and not sufficient: without this key every board answered
+        # 403 DATASOURCE_SECURITY_ACCESS_ERROR while holding a token that named it.
+        payload["form_data"] = {"dashboardId": board.dashboard_id}
+    return payload
 
 
 def rows_from_chart_data(body: Any) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...]]:  # noqa: ANN401

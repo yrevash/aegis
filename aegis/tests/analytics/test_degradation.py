@@ -134,6 +134,7 @@ _GOOD = [
         "groupby": ["model"],
         "timeColumn": "ts",
         "embeddedUuid": "dash-uuid",
+        "dashboardId": 42,
     }
 ]
 

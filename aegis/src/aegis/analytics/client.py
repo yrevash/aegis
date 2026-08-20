@@ -69,6 +69,10 @@ LOGIN_PATH = "/api/v1/security/login"
 CSRF_PATH = "/api/v1/security/csrf_token/"
 GUEST_TOKEN_PATH = "/api/v1/security/guest_token/"
 CHART_DATA_PATH = "/api/v1/chart/data"
+
+#: The header a guest token must arrive in. Superset's ``GUEST_TOKEN_HEADER_NAME``
+#: defaults to this; a deployment that changes it must change this too.
+GUEST_TOKEN_HEADER = "X-GuestToken"
 HEALTH_PATH = "/health"
 
 #: How long before a service token's nominal expiry it is refreshed. Superset's access
@@ -120,12 +124,24 @@ class SupersetClient:
         *,
         json: Any = None,  # noqa: ANN401 - an arbitrary JSON body
         token: str = "",
+        guest_token: str = "",
         csrf: str = "",
     ) -> HttpResponse:
-        """Issue one request, turning every transport failure into a named error."""
+        """Issue one request, turning every transport failure into a named error.
+
+        ``token`` is the **service** JWT and rides ``Authorization: Bearer``.
+        ``guest_token`` is not a Bearer token and must not be sent as one: Superset
+        validates a guest token against ``GUEST_TOKEN_JWT_SECRET``, and only when it
+        arrives in ``GUEST_TOKEN_HEADER_NAME``. Sent as ``Authorization``, FAB's JWT
+        manager tries to verify it as a service token against ``SECRET_KEY`` and
+        answers **422 "Signature verification failed"** — which reads like a rotated
+        secret and is really a token in the wrong header.
+        """
         headers = {"Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if guest_token:
+            headers[GUEST_TOKEN_HEADER] = guest_token
         if csrf:
             headers["X-CSRFToken"] = csrf
         url = self._config.url(path)
@@ -343,7 +359,7 @@ class SupersetClient:
         )
         token = await self.guest_token(board, scope)
         response = await self._request(
-            "POST", CHART_DATA_PATH, token=token, csrf=self._csrf_token, json=payload
+            "POST", CHART_DATA_PATH, guest_token=token, csrf=self._csrf_token, json=payload
         )
         if response.status_code >= 400:
             raise SupersetRejectedError(

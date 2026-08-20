@@ -290,6 +290,13 @@ class Board:
             it is the ``resources[].id`` of the guest token, and a guest token is the
             credential **both** paths authenticate with. Passing a numeric id here
             mints a token that silently authorises nothing.
+        dashboard_id: The **numeric** id of that same dashboard, which is a second,
+            separate thing Superset needs. :attr:`embedded_uuid` gets the guest token
+            minted; this gets the chart-data call *authorised*. Superset's
+            ``raise_for_access`` grants a guest access to a dataset only when the
+            request carries ``form_data.dashboardId`` and that row resolves by
+            ``Dashboard.id == dashboard_id``. Without it every board answered
+            **403 DATASOURCE_SECURITY_ACCESS_ERROR** with a valid token in hand.
         default_window: Which of :data:`WINDOWS` this board opens on.
         time_column: The temporal column the window filters, when the board has one.
     """
@@ -305,6 +312,7 @@ class Board:
     groupby: tuple[str, ...] = ()
     row_limit: int = 500
     embedded_uuid: str = ""
+    dashboard_id: int | None = None
     default_window: TimeWindow = "last_30_days"
     time_column: str = ""
 
@@ -315,11 +323,20 @@ class Board:
         derives a guest token's *datasource* access from the dashboards named in its
         ``resources``, so a token granting no dashboard has access to no dataset and the
         chart-data call it authenticates would be refused. One rule, no special case.
+
+        A ``chart`` board additionally needs :attr:`dashboard_id`. The token names the
+        dashboard by UUID; the *authorisation* check resolves it by numeric id off the
+        request body, and a board that cannot supply one is a board whose every query
+        returns 403 — better withheld from the catalogue than served as a failure.
         """
         if not self.embedded_uuid:
             return False
         if kind == "chart":
-            return "chart" in self.kinds and self.datasource_id is not None
+            return (
+                "chart" in self.kinds
+                and self.datasource_id is not None
+                and self.dashboard_id is not None
+            )
         return "dashboard" in self.kinds
 
     def visible_to(self, fine_role: str) -> bool:

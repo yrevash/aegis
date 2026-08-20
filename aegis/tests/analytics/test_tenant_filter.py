@@ -37,6 +37,7 @@ def _board(**kw) -> Board:
         groupby=("model",),
         time_column="ts",
         embedded_uuid="dash-uuid",
+        dashboard_id=42,
         **kw,
     )
 
@@ -158,6 +159,7 @@ def test_a_dashboard_only_board_has_no_server_side_query():
         kinds=frozenset({"dashboard"}),
         audience=frozenset({"platform_admin"}),
         embedded_uuid="abc",
+        dashboard_id=42,
     )
     with pytest.raises(ValueError, match="no server-side data path"):
         chart_data_payload(board, 4)

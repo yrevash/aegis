@@ -569,7 +569,6 @@ UNREACHABLE_BY_DESIGN: dict[tuple[str, str], str] = {
     # cannot rot in that direction: leaving them would fail
     # :func:`test_allowlist_is_neither_stale_nor_wrong` as loudly as omitting a real
     # one fails the reachability test.
-    ("GET", "/admin/usage"): "superseded in the UI by the GET /governance/dashboard aggregate",
     # The two right-to-erasure writes that sat here — POST `/memory/forget` and DELETE
     # `/memory/facts/{id}` — are gone because §7.5 built the confirmation flow their
     # entries were waiting on: `components/memoryctl` names the row counts each one will

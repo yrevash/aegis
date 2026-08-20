@@ -77,6 +77,9 @@ class FakeSuperset:
     def bearer(self, path: str) -> str:
         return self.call(path)["headers"].get("Authorization", "")
 
+    def header(self, path: str, name: str) -> str:
+        return self.call(path)["headers"].get(name, "")
+
 
 CONFIG = SupersetConfig(
     base_url="http://localhost:8088",
@@ -96,6 +99,7 @@ BOARD = Board(
     metrics=(Metric(aggregate="SUM", column="cost_usd"),),
     groupby=("model",),
     embedded_uuid="1a2b3c4d-embed-uuid",
+    dashboard_id=42,
     time_column="ts",
 )
 
@@ -129,14 +133,44 @@ def _wired(**overrides) -> tuple[SupersetClient, FakeSuperset]:
 
 async def test_the_data_request_is_authenticated_with_the_guest_token():
     """The service JWT owns every tenant's rows. Only the guest token, which carries the
-    RLS clause, may authenticate a request that reads any of them."""
+    RLS clause, may authenticate a request that reads any of them.
+
+    **And it travels in its own header.** This assertion used to read
+    ``bearer(CHART_DATA_PATH) == f"Bearer {GUEST_JWT}"`` — it asserted the bug. Superset
+    validates a guest token against ``GUEST_TOKEN_JWT_SECRET`` and only when it arrives
+    in ``GUEST_TOKEN_HEADER_NAME``; sent as ``Authorization``, FAB's JWT manager tries
+    to verify it as a *service* token against ``SECRET_KEY`` and answers
+    **422 "Signature verification failed"**. Every board was dead against a real
+    Superset while this suite was green, because the fake never verified anything —
+    which is the failure mode of a fake that answers 200 to whatever it is sent.
+    """
     client, fake = _wired()
     await client.board_data(BOARD, 3)
 
-    assert fake.bearer(CHART_DATA_PATH) == f"Bearer {GUEST_JWT}"
-    assert SERVICE_JWT not in fake.bearer(CHART_DATA_PATH)
+    assert fake.header(CHART_DATA_PATH, "X-GuestToken") == GUEST_JWT
+    # Not as a Bearer token, and never the service token, on the data path.
+    assert fake.bearer(CHART_DATA_PATH) == ""
+    assert SERVICE_JWT not in str(fake.call(CHART_DATA_PATH)["headers"])
     # The service token is used for exactly one thing: minting the guest token.
     assert fake.bearer(GUEST_TOKEN_PATH) == f"Bearer {SERVICE_JWT}"
+
+
+async def test_the_data_request_names_the_dashboard_that_authorises_it():
+    """Naming the dashboard in the guest token is necessary and **not sufficient**.
+
+    Superset's ``raise_for_access`` grants a guest access to a dataset only when the
+    chart-data body carries ``form_data.dashboardId`` resolving to a real dashboard.
+    Without it the call answers 403 DATASOURCE_SECURITY_ACCESS_ERROR while holding a
+    token that names that very dashboard — an authorisation failure that reads like a
+    permissions misconfiguration.
+    """
+    client, fake = _wired()
+    await client.board_data(BOARD, 3)
+
+    body = fake.body_of(CHART_DATA_PATH)
+    assert body["form_data"]["dashboardId"] == 42
+    # The token names the same dashboard, by UUID. Two identifiers, both required.
+    assert fake.body_of(GUEST_TOKEN_PATH)["resources"][0]["id"] == "1a2b3c4d-embed-uuid"
 
 
 async def test_the_guest_token_request_carries_the_tenants_rls_clause():
