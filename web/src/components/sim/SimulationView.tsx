@@ -5,15 +5,21 @@ import type { ReactElement, ReactNode } from 'react'
 import { useState } from 'react'
 
 import { ApprovalCard } from '@/components/approval/ApprovalCard'
+import { NodeGantt } from '@/components/charts/NodeGantt'
+import { RankedBars } from '@/components/charts/RankedBars'
 import { AnswerPanel } from '@/components/console/AnswerPanel'
 import { formatUsd } from '@/components/dashboard/roi'
+import { Scene } from '@/components/illustration/Scene'
 import { CapabilityMap, ComparisonCard, CountUp, RevealOnScroll, type Capability } from '@/components/shared'
 import { AgentTracePanel } from '@/components/trace/AgentTracePanel'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
+import { Figure } from '@/components/primitives/Figure'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
@@ -31,6 +37,22 @@ import { gateStatus, isSettled, toolMark, type Mark } from './simLogic'
  * seed time, so a literal id would name a request that does not exist.
  */
 const SIM_QUERY = 'Close out my oldest open request and record why it was closed'
+
+/**
+ * Counts, durations and reranker scores through module-level `Intl`, never a
+ * per-row `toLocaleString()` — an unqualified one resolves to the *runtime's*
+ * locale, which is the server's during SSR and the browser's after hydration.
+ */
+const COUNT = new Intl.NumberFormat('en-US')
+const SCORE = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 3,
+  maximumFractionDigits: 3,
+})
+
+/** Wall-clock milliseconds a lane's finished nodes reported, summed. */
+function nodeMs(state: RunState): number {
+  return state.nodeLedger.reduce((sum, node) => sum + node.duration_ms, 0)
+}
 
 /** A comparison cell: a small ✓ / ✗ / ● / — marker paired with a short label. */
 const MARK: Record<Mark, { tone: string; render: (key: string) => ReactNode }> = {
@@ -64,6 +86,18 @@ function CostCell({ state }: { state: RunState }): ReactElement {
   return <span className="font-mono text-[0.82rem] text-muted-foreground">{state.running ? '···' : '—'}</span>
 }
 
+/** Summed node time for a lane, or the reason there is not one yet. */
+function NodeTimeCell({ state }: { state: RunState }): ReactElement {
+  if (state.nodeLedger.length === 0) {
+    return <span className="font-mono text-[0.82rem] text-muted-foreground">{state.running ? '···' : '—'}</span>
+  }
+  return (
+    <Figure className="text-[0.82rem] font-medium" unit="ms">
+      {COUNT.format(Math.round(nodeMs(state)))}
+    </Figure>
+  )
+}
+
 interface LaneProps {
   title: string
   subtitle: string
@@ -77,6 +111,31 @@ interface LaneProps {
   /** Rendered when this lane pauses at the human gate. */
   onDecision?: (decision: ApprovalDecision) => void
   decided?: boolean
+}
+
+/** The role chip that heads a lane, and heads its column in the two chart cards. */
+function LaneChip({
+  title,
+  roleId,
+  icon: Icon,
+  accent,
+}: Pick<LaneProps, 'title' | 'roleId' | 'accent'> & { icon: typeof UserCog }): ReactElement {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span
+        className={cn(
+          'grid size-6 shrink-0 place-items-center rounded-md',
+          accent === 'agent' ? 'bg-blue-200/15' : 'bg-blue-400/15',
+        )}
+      >
+        <Icon aria-hidden className={cn('size-3.5', accent === 'agent' ? 'text-blue-700' : 'text-blue-600')} />
+      </span>
+      <span className="t-label min-w-0 truncate text-foreground">{title}</span>
+      <code className="hidden font-mono text-[0.66rem] text-muted-foreground sm:inline" translate="no">
+        {roleId}
+      </code>
+    </span>
+  )
 }
 
 /** One role's live trajectory — trace, gate (if any) and streamed answer. */
@@ -93,7 +152,7 @@ function Lane({
   decided,
 }: LaneProps): ReactElement {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <div
         className={cn(
           'flex items-center gap-2.5 rounded-lg border p-3',
@@ -106,7 +165,7 @@ function Lane({
             accent === 'agent' ? 'bg-blue-200/15' : 'bg-blue-400/15',
           )}
         >
-          <Icon className={cn('size-4', accent === 'agent' ? 'text-blue-700' : 'text-blue-600')} />
+          <Icon aria-hidden className={cn('size-4', accent === 'agent' ? 'text-blue-700' : 'text-blue-600')} />
         </span>
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
@@ -118,7 +177,7 @@ function Lane({
           <p className="truncate text-[0.72rem] text-muted-foreground">{subtitle}</p>
         </div>
         <Badge tone={accent === 'agent' ? 'agent' : 'graph'} className="ml-auto">
-          <ScopeIcon className="size-3" /> {scopeLabel}
+          <ScopeIcon aria-hidden className="size-3" /> {scopeLabel}
         </Badge>
       </div>
 
@@ -126,7 +185,13 @@ function Lane({
         <ApprovalCard approval={state.approval} onDecision={onDecision} resolved={decided} />
       )}
 
-      <div className="h-[380px]">
+      {/*
+        Was `h-[380px]`, and the two lanes together put 760px of empty box on
+        screen before a run existed. The panel now mounts only once a run has
+        started, and its scroll window is viewport-relative so a short laptop
+        does not lose the answer below it.
+      */}
+      <div className="h-[min(26rem,60vh)]">
         <AgentTracePanel state={state} />
       </div>
 
@@ -141,7 +206,25 @@ function Lane({
  * **operations lead** (full retrieval → human gate → can act) and a **client**
  * (own-account retrieval, status changes not permitted). Each lane owns its own
  * `useRunStream`, so the divergence is real — two live trajectories, not a
- * scripted split-screen. The comparison leads; the two lanes prove it.
+ * scripted split-screen.
+ *
+ * ## Why nothing below the control card renders before a run
+ *
+ * Everything on this screen is *derived from a run*: the comparison rows, the
+ * governance-control statuses, the node ledger, the trace log, the answer. Before
+ * a run they are all placeholders, and this screen used to draw every one of them
+ * — two fixed-height empty trace panels, two empty answer cards and a comparison
+ * table of em-dashes. That is the largest dead space in the portal, and the fix is
+ * not a shorter box: it is to render the pre-run state as one composed card and
+ * mount the rest when there is something in it.
+ *
+ * ## Why the two chart cards are small multiples and not one grouped chart
+ *
+ * Both lanes emit structurally identical series, which makes ops-vs-client a
+ * genuine A/B no other screen can offer — but `NodeGantt` and `RankedBars` each
+ * scale to their own data, so the two halves are compared by the figures printed
+ * on every row, not by bar length across the gutter. The `InfoTip` on each card
+ * says so rather than letting a reader assume a shared axis.
  */
 export function SimulationView(): ReactElement {
   // Live session token so the two run streams carry `Authorization`. Both runs
@@ -178,10 +261,22 @@ export function SimulationView(): ReactElement {
   const ops = opsLead.state
   const cli = client.state
   const started = ops.events.length > 0 || cli.events.length > 0
+  // The window between the click and the first event: the run is real, so the
+  // lanes mount and stream into view rather than appearing all at once.
+  const active = started || running
   // Both runs settled → reveal the "differs" highlight on the rows that diverge.
   const settled = isSettled(ops, cli)
   const opsTool = toolMark(ops)
   const cliTool = toolMark(cli)
+
+  const ledgered = ops.nodeLedger.length > 0 || cli.nodeLedger.length > 0
+  const ranked = ops.retrievalScores.length > 0 || cli.retrievalScores.length > 0
+
+  /** The two lanes, in the order both small-multiple cards draw them. */
+  const columns = [
+    { lane: ops, title: 'Operations lead', roleId: 'operations_lead', icon: UserCog, accent: 'agent' as const },
+    { lane: cli, title: 'Client', roleId: 'client', icon: UserRound, accent: 'graph' as const },
+  ]
 
   // The governance controls that produce the divergence — honest tech one line down.
   const controls: Capability[] = [
@@ -208,12 +303,12 @@ export function SimulationView(): ReactElement {
       label: 'Retrieval scope',
       a: (
         <Cell mark="allow">
-          Full account history{ops.candidates > 0 ? ` · ${ops.candidates} sources` : ''}
+          Full account history{ops.candidates > 0 ? ` · ${COUNT.format(ops.candidates)} sources` : ''}
         </Cell>
       ),
       b: (
         <Cell mark="allow">
-          Own account only{cli.candidates > 0 ? ` · ${cli.candidates} sources` : ''}
+          Own account only{cli.candidates > 0 ? ` · ${COUNT.format(cli.candidates)} sources` : ''}
         </Cell>
       ),
       diff: settled,
@@ -234,12 +329,18 @@ export function SimulationView(): ReactElement {
       b: <Cell mark="none">Not reached</Cell>,
       diff: settled,
     },
-    {
-      label: 'Run cost',
-      a: <CostCell state={ops} />,
-      b: <CostCell state={cli} />,
-    },
+    { label: 'Node time', a: <NodeTimeCell state={ops} />, b: <NodeTimeCell state={cli} /> },
+    { label: 'Run cost', a: <CostCell state={ops} />, b: <CostCell state={cli} /> },
   ]
+
+  const queryChip = (
+    <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 p-2.5">
+      <span className="eyebrow mt-0.5 shrink-0">question</span>
+      <p className="min-w-0 font-mono text-[0.72rem] leading-relaxed break-words text-foreground">
+        {SIM_QUERY}
+      </p>
+    </div>
+  )
 
   return (
     <div className="flex flex-col gap-4">
@@ -258,79 +359,187 @@ export function SimulationView(): ReactElement {
           actions={
             <div className="flex flex-wrap gap-2">
               <Button onClick={runBoth} disabled={running}>
-                <Play className="size-4" /> Run demo
+                <Play aria-hidden className="size-4" /> Run demo
               </Button>
-              <Button variant="outline" onClick={resetBoth} disabled={running || !started}>
-                <RotateCcw className="size-4" /> Reset
+              <Button variant="outline" onClick={resetBoth} disabled={running || !active}>
+                <RotateCcw aria-hidden className="size-4" /> Reset
               </Button>
             </div>
           }
         />
-        <CardBody className="space-y-3">
-          <p className="t-body text-muted-foreground">
-            Same question, two roles — see what each is allowed to do. The operations lead may call
-            update_request_status behind the human gate; the client is scoped to their own account
-            and may only add a case note.
+        <CardBody className="@container/hero">
+          {active ? (
+            <div className="space-y-3">
+              {queryChip}
+              <CapabilityMap items={controls} layout="grid" />
+            </div>
+          ) : (
+            <div className="grid items-center gap-6 @[34rem]/hero:grid-cols-[auto_minmax(0,1fr)]">
+              <Scene name="exercising" size="md" className="mx-auto shrink-0" />
+              <div className="min-w-0 space-y-3">
+                <p className="t-body text-pretty text-muted-foreground">
+                  Same question, two roles — see what each is allowed to do.
+                </p>
+                {queryChip}
+              </div>
+            </div>
+          )}
+          <p className="sr-only" role="status">
+            {running ? 'Both runs are streaming.' : settled ? 'Both runs have settled.' : ''}
           </p>
-          <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 p-2.5">
-            <span className="eyebrow mt-0.5 shrink-0">question</span>
-            <p className="font-mono text-[0.72rem] leading-relaxed text-foreground">{SIM_QUERY}</p>
-          </div>
         </CardBody>
       </Card>
 
-      <RevealOnScroll>
-        <ComparisonCard
-          title="What each role is allowed to do"
-          columns={['Operations lead', 'Client']}
-          rows={comparisonRows}
-        />
-      </RevealOnScroll>
+      {active && (
+        <>
+          <RevealOnScroll>
+            <ComparisonCard
+              title="What each role is allowed to do"
+              columns={['Operations lead', 'Client']}
+              rows={comparisonRows}
+            />
+          </RevealOnScroll>
 
-      <RevealOnScroll delayMs={40}>
-        <Card>
-          <CardHeader
-            title={
-              <span className="flex items-center gap-1.5">
-                Controls at work
-                <InfoTip label="Governance controls">
-                  The four governance checks that decide the outcome — active as the runs progress.
-                </InfoTip>
-              </span>
-            }
-          />
-          <CardBody>
-            <CapabilityMap items={controls} layout="grid" />
-          </CardBody>
-        </Card>
-      </RevealOnScroll>
+          {ledgered && (
+            <RevealOnScroll delayMs={40}>
+              <DataPanel
+                className="min-w-0"
+                eyebrow="glass-box · per lane"
+                // A string title, so `DataPanel` can name its own scroll region:
+                // the two timelines are wide, and the part a 390px viewport pushes
+                // off to the right has to be reachable and announced.
+                title="Where each run spent its time"
+                actions={
+                  <InfoTip label="How to read these two timelines">
+                    Each lane is scaled to its own run, so compare the milliseconds and the cost
+                    printed on every row rather than bar length across the two halves.
+                  </InfoTip>
+                }
+                maxHeight={520}
+                footer={
+                  <Receipt
+                    origin="node_finished · live run stream"
+                    detail={`${COUNT.format(ops.nodeLedger.length)} + ${COUNT.format(
+                      cli.nodeLedger.length,
+                    )} nodes`}
+                  />
+                }
+              >
+                <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+                  {columns.map((col) => (
+                    <div key={col.roleId} className="flex min-w-[22rem] flex-col gap-2.5">
+                      <h3>
+                        <LaneChip
+                          title={col.title}
+                          roleId={col.roleId}
+                          icon={col.icon}
+                          accent={col.accent}
+                        />
+                      </h3>
+                      {col.lane.nodeLedger.length > 0 ? (
+                        <NodeGantt nodes={col.lane.nodeLedger} />
+                      ) : (
+                        <Absence
+                          figure="Per-node cost and latency"
+                          why="No node has finished in this lane yet."
+                          needed="A completed graph node."
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </DataPanel>
+            </RevealOnScroll>
+          )}
 
-      <RevealOnScroll delayMs={80}>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Lane
-            title="Operations lead"
-            subtitle="Handles the case end-to-end"
-            roleId="operations_lead"
-            icon={UserCog}
-            accent="agent"
-            scopeIcon={ShieldCheck}
-            scopeLabel="Full access"
-            state={ops}
-            onDecision={handleDecision}
-            decided={decided}
-          />
-          <Lane
-            title="Client"
-            subtitle="Sees only their own account"
-            roleId="client"
-            icon={UserRound}
-            accent="graph"
-            scopeIcon={Shield}
-            scopeLabel="Own records"
-            state={cli}
-          />
-        </div>
-      </RevealOnScroll>
+          {ranked && (
+            <RevealOnScroll delayMs={60}>
+              <Card className="min-w-0">
+                <CardHeader
+                  eyebrow="per-role retrieval"
+                  title={
+                    <span className="flex items-center gap-1.5">
+                      What each role was allowed to rank
+                      <InfoTip label="How to read these two lists">
+                        Reranker relevance for the sources each role could reach; the two lists are
+                        scaled separately because they are drawn from different documents.
+                      </InfoTip>
+                    </span>
+                  }
+                />
+                <CardBody>
+                  <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+                    {columns.map((col) => (
+                      <div key={col.roleId} className="flex min-w-0 flex-col gap-2.5">
+                        <h3>
+                          <LaneChip
+                            title={col.title}
+                            roleId={col.roleId}
+                            icon={col.icon}
+                            accent={col.accent}
+                          />
+                        </h3>
+                        {col.lane.retrievalScores.length > 0 ? (
+                          <RankedBars
+                            data={col.lane.retrievalScores.map((s) => ({
+                              name: s.label,
+                              value: s.score,
+                            }))}
+                            valueFormatter={(v) => SCORE.format(v)}
+                            color={col.accent}
+                            tail="omit"
+                            label={`Sources ranked for ${col.title}`}
+                          />
+                        ) : (
+                          <Absence
+                            figure="Ranked sources"
+                            why="This lane's retrieval returned no scored source."
+                            needed="A rerank step that reaches at least one document this role may read."
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <Receipt
+                    className="mt-4"
+                    origin="retrieval · scored_sources"
+                    detail={`${COUNT.format(ops.retrievalScores.length)} + ${COUNT.format(
+                      cli.retrievalScores.length,
+                    )} sources ranked`}
+                  />
+                </CardBody>
+              </Card>
+            </RevealOnScroll>
+          )}
+
+          <RevealOnScroll delayMs={80}>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Lane
+                title="Operations lead"
+                subtitle="Handles the case end-to-end"
+                roleId="operations_lead"
+                icon={UserCog}
+                accent="agent"
+                scopeIcon={ShieldCheck}
+                scopeLabel="Full access"
+                state={ops}
+                onDecision={handleDecision}
+                decided={decided}
+              />
+              <Lane
+                title="Client"
+                subtitle="Sees only their own account"
+                roleId="client"
+                icon={UserRound}
+                accent="graph"
+                scopeIcon={Shield}
+                scopeLabel="Own records"
+                state={cli}
+              />
+            </div>
+          </RevealOnScroll>
+        </>
+      )}
     </div>
   )
 }

@@ -35,7 +35,7 @@ export function RailVerdict({
 }): ReactElement {
   const blocked = result.verdict === 'block'
   return (
-    <div className="space-y-4">
+    <div className="@container min-w-0 space-y-4">
       <div className="flex items-center gap-3">
         <span
           className={`flex size-9 items-center justify-center rounded-lg ${
@@ -43,9 +43,9 @@ export function RailVerdict({
           }`}
         >
           {blocked ? (
-            <ShieldAlert className="size-5 text-block-ink" />
+            <ShieldAlert className="size-5 text-block-ink" aria-hidden />
           ) : (
-            <ShieldCheck className="size-5 text-ok-ink" />
+            <ShieldCheck className="size-5 text-ok-ink" aria-hidden />
           )}
         </span>
         <div className="min-w-0 flex-1">
@@ -71,13 +71,13 @@ export function RailVerdict({
         ))}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid min-w-0 gap-4 @md:grid-cols-2 [&>*]:min-w-0">
         <div>
           <p className="eyebrow mb-1.5">controls run</p>
           <ul className="space-y-1">
             {result.controls_run.map((c) => (
               <li key={c} className="flex gap-1.5 text-xs text-foreground">
-                <Check className="mt-0.5 size-3.5 shrink-0 text-ok-ink" />
+                <Check className="mt-0.5 size-3.5 shrink-0 text-ok-ink" aria-hidden />
                 <span>{c}</span>
               </li>
             ))}
@@ -91,7 +91,7 @@ export function RailVerdict({
             <ul className="space-y-1">
               {result.controls_skipped.map((c) => (
                 <li key={c} className="flex gap-1.5 text-xs text-muted-foreground">
-                  <X className="mt-0.5 size-3.5 shrink-0 text-block-ink" />
+                  <X className="mt-0.5 size-3.5 shrink-0 text-block-ink" aria-hidden />
                   <span>{c}</span>
                 </li>
               ))}
@@ -108,16 +108,13 @@ export function RailVerdict({
         }`}
       >
         {result.agent_input == null ? (
-          <>
-            The rails refused this transcript, so there is no agent input. Nothing from this
-            recording can be sent to the agent.
-          </>
+          <>The rails refused this transcript, so there is no agent input.</>
         ) : result.agent_input === result.transcript ? (
           <>The rails cleared the transcript unchanged; it is what the agent would receive.</>
         ) : (
           <>
             The agent would receive the rails&apos; rewritten text, not the raw transcript:{' '}
-            <span className="font-mono text-foreground">{result.agent_input}</span>
+            <span className="font-mono break-words text-foreground">{result.agent_input}</span>
           </>
         )}
       </div>

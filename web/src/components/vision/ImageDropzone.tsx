@@ -101,7 +101,7 @@ export function ImageDropzone({
         disabled && 'opacity-60',
       )}
     >
-      <ImageUp className="size-7 text-muted-foreground" />
+      <ImageUp className="size-7 text-muted-foreground" aria-hidden />
       <div>
         <p className="text-sm font-medium text-foreground">Drop an image here</p>
         <p className="mt-1 text-[0.72rem] text-muted-foreground">PNG, JPEG, WebP or GIF</p>
@@ -110,7 +110,7 @@ export function ImageDropzone({
         type="button"
         disabled={disabled}
         onClick={() => inputRef.current?.click()}
-        className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+        className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
       >
         Browse files
       </button>

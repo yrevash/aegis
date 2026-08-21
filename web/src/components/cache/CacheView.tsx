@@ -3,6 +3,8 @@
 import { CircleSlash, DatabaseZap, RefreshCw, Trash2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { SceneState } from '@/components/illustration/Scene'
+import { Button } from '@/components/primitives/button'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
@@ -11,6 +13,7 @@ import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { StatCard } from '@/components/ui/StatCard'
 import {
   getCacheStats,
@@ -23,9 +26,33 @@ import { useAuth } from '@/lib/auth/AuthContext'
 /** How often the counters are re-read, so a hit lands on the screen while you watch. */
 const POLL_MS = 5000
 
+/**
+ * Counts, rates and the read-at clock through module-level `Intl`.
+ *
+ * A per-row `toLocaleString()` with no locale resolves to the *runtime's* — the
+ * server's during SSR, the browser's after hydration — so a figure formatted that
+ * way can differ between the two renders of the same markup. It also rebuilds a
+ * formatter per call, on a page that re-renders every five seconds.
+ */
+const COUNT = new Intl.NumberFormat('en-US')
+const PERCENT_1 = new Intl.NumberFormat('en-US', {
+  style: 'percent',
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+})
+const PERCENT_0 = new Intl.NumberFormat('en-US', {
+  style: 'percent',
+  maximumFractionDigits: 0,
+})
+const TIME = new Intl.DateTimeFormat('en-US', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
 /** Render a count with thousands separators. */
 function count(n: number): string {
-  return n.toLocaleString()
+  return COUNT.format(n)
 }
 
 /**
@@ -100,26 +127,27 @@ function HitRateMeter({
         <CircleSlash className="size-3.5 shrink-0" aria-hidden />
         No hit rate yet
         <InfoTip label="Why there is no hit rate">
-          No lookup has reached this cache in this process, so it has no hit rate to report. An
-          empty track next to “0.0%” would be a measurement this process has not made.
+          No lookup has reached this cache in this process, so an empty track beside “0.0%” would
+          be a measurement nobody has made.
         </InfoTip>
       </p>
     )
   }
-  const pct = Math.max(0, Math.min(1, value)) * 100
+  const clamped = Math.max(0, Math.min(1, value))
+  const pct = clamped * 100
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3">
         <span className="eyebrow">hit rate</span>
         <span className="flex items-baseline gap-2">
-          <Figure size="stat" className="text-foreground">{`${pct.toFixed(1)}%`}</Figure>
+          <Figure size="stat" className="text-foreground">{PERCENT_1.format(clamped)}</Figure>
           <Figure className="text-muted-foreground">{`of ${count(lookups)}`}</Figure>
         </span>
       </div>
       <div
         className="mt-1.5 h-1.5 w-full overflow-hidden rounded-sm bg-surface-2"
         role="img"
-        aria-label={`Hit rate ${pct.toFixed(1)} percent`}
+        aria-label={`Hit rate ${PERCENT_1.format(clamped)}`}
       >
         <div
           className="h-full rounded-sm bg-blue-600 transition-[width] duration-[--dur-slow] motion-reduce:transition-none"
@@ -133,12 +161,12 @@ function HitRateMeter({
 /** One cache's card: what it is, what the live instance was built as, what it did. */
 function CacheCard({ row }: { row: CacheRow }): ReactElement {
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader
-        eyebrow={row.key}
+        eyebrow={<span className="block truncate" title={row.key}>{row.key}</span>}
         title={
-          <span className="flex items-center gap-1.5">
-            {row.name}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 break-words">{row.name}</span>
             {/* What the cache holds was a paragraph on every card; it is the
                 mechanism, so DESIGN.md §4 puts it one layer down. */}
             <InfoTip label={`What ${row.name} holds`}>{row.holds}</InfoTip>
@@ -295,16 +323,11 @@ function CacheView(): ReactElement {
         actions={
           <>
           <InfoTip label="Where these counters come from">
-            Every counter here is incremented on the exact branch that decided hit or miss, inside
-            the cache itself. A cache nobody built, and a cache nobody has read, each say so rather
-            than reporting a zero. The totals are sums of counts, never an average of rates — the
-            exact-hash tiers and the cosine tiers do not decide the same event.
+            Every counter is incremented inside the cache itself, on the branch that decided hit or
+            miss; the totals are sums of counts, never an average of rates, because the exact-hash
+            tiers and the cosine tiers do not decide the same event.
           </InfoTip>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="inline-flex h-11 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors duration-[--dur-fast] hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-          >
+          <Button variant="outline" onClick={() => void load()}>
             <RefreshCw
               aria-hidden
               className={
@@ -312,10 +335,13 @@ function CacheView(): ReactElement {
               }
             />
             Refresh
-            <span className="sr-only" role="status">
-              {refreshing ? 'Re-reading the cache counters' : ''}
-            </span>
-          </button>
+          </Button>
+          {/* The busy announcement is a region of its own: a live region nested
+              inside the control that triggers it is re-announced as part of the
+              button's own accessible name. */}
+          <span className="sr-only" role="status" aria-live="polite">
+            {refreshing ? 'Re-reading the cache counters' : ''}
+          </span>
           </>
         }
       />
@@ -330,6 +356,21 @@ function CacheView(): ReactElement {
         <Card>
           <CardBody>
             <LoadingState rows={4} label="Reading the cache counters…" />
+          </CardBody>
+        </Card>
+      ) : rows.length === 0 ? (
+        // A total "summed over 0 of 0 caches" is the same zero-fill `sumReported`
+        // exists to refuse, one level up: four tiles reading 0 would assert that
+        // nothing was looked up, when what happened is that nothing was enumerated.
+        <Card>
+          <CardBody>
+            <SceneState name="stores" size="md">
+              <Absence
+                figure="Every cache counter on this page"
+                why="The platform enumerated no cache in this process, so there is nothing to sum."
+                needed="A registered cache instance — the counters are read off the objects themselves."
+              />
+            </SceneState>
           </CardBody>
         </Card>
       ) : (
@@ -381,28 +422,32 @@ function CacheView(): ReactElement {
 
           <Receipt
             origin={data.source}
-            detail={`${data.caveat} Read at ${new Date(
-              data.generated_at,
-            ).toLocaleTimeString()}, and again every ${POLL_MS / 1000} seconds.`}
+            detail={`${data.caveat} Read at ${TIME.format(
+              new Date(data.generated_at),
+            )}, and again every ${POLL_MS / 1000} seconds.`}
           />
 
-          <Card>
-            <CardHeader
-              eyebrow="which tier is earning its keep"
-              title="Traffic and hit rate, side by side"
-              actions={
-                <InfoTip label="How to read this">
-                  Each row is one cache. The track&apos;s length is that cache&apos;s share of all
-                  lookups this process has made, so a tier nothing asks stays visibly short; the
-                  filled part is the share of its own lookups that hit. A cache with no lookups
-                  draws no track — there is nothing measured to draw.
-                </InfoTip>
-              }
-            />
-            <CardBody>
-              <CacheTrafficBars rows={rows} totalLookups={lookups.total} />
-            </CardBody>
-          </Card>
+          {/*
+            A `DataPanel` rather than a `CardBody`: the three-track row is wide by
+            construction, and inside a plain body a 390px viewport squeezed the bar
+            itself down to a few pixels between the name and the figures. Here the
+            row keeps its measurable width and the *panel* scrolls, which is also
+            what makes the off-screen part reachable from a keyboard.
+          */}
+          <DataPanel
+            className="min-w-0"
+            eyebrow="which tier is earning its keep"
+            title="Traffic and hit rate, side by side"
+            maxHeight={480}
+            actions={
+              <InfoTip label="How to read this">
+                Track length is that cache&apos;s share of all lookups this process has made; the
+                filled part is the share of its own lookups that hit.
+              </InfoTip>
+            }
+          >
+            <CacheTrafficBars rows={rows} totalLookups={lookups.total} />
+          </DataPanel>
 
           <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {rows.map((row) => (
@@ -455,18 +500,21 @@ function CacheTrafficBars({
 }): ReactElement {
   if (rows.length === 0 || totalLookups <= 0) {
     return (
-      <Absence
-        figure="Lookup traffic per cache"
-        why="No lookup has reached any cache in this process yet, so there are no shares to compare."
-        needed="Run a query. The counters increment on the branch that decides hit or miss."
-      />
+      <SceneState name="stores" size="md">
+        <Absence
+          figure="Lookup traffic per cache"
+          why="No lookup has reached any cache in this process yet, so there are no shares to compare."
+          needed="Run a query — the counters increment on the branch that decides hit or miss."
+        />
+      </SceneState>
     )
   }
   return (
-    <ul className="flex flex-col gap-3">
+    <ul className="flex min-w-[30rem] flex-col gap-3">
       {rows.map((row) => {
         const share = (row.lookups / totalLookups) * 100
-        const hitPct = row.lookups > 0 ? (row.hits / row.lookups) * 100 : 0
+        const hitRatio = row.lookups > 0 ? row.hits / row.lookups : 0
+        const hitPct = hitRatio * 100
         return (
           <li key={row.key} className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-3">
             <span className="min-w-0 truncate text-[0.8125rem] text-foreground">{row.name}</span>
@@ -480,7 +528,9 @@ function CacheTrafficBars({
                   className="absolute inset-y-0 left-0 overflow-hidden rounded-sm bg-blue-200"
                   style={{ width: `${Math.max(share, 1.5)}%` }}
                   role="img"
-                  aria-label={`${row.name}: ${row.lookups} lookups, ${hitPct.toFixed(0)} percent of them hits`}
+                  aria-label={`${row.name}: ${count(row.lookups)} lookups, ${PERCENT_0.format(
+                    hitRatio,
+                  )} of them hits`}
                 >
                   <span
                     className="block h-full rounded-sm bg-blue-600"
@@ -494,7 +544,9 @@ function CacheTrafficBars({
               {row.hit_rate === null ? (
                 <span className="text-[0.68rem] text-muted-foreground italic">no rate</span>
               ) : (
-                <Figure className="font-semibold text-foreground">{`${(row.hit_rate * 100).toFixed(0)}%`}</Figure>
+                <Figure className="font-semibold text-foreground">
+                  {PERCENT_0.format(row.hit_rate)}
+                </Figure>
               )}
             </span>
           </li>

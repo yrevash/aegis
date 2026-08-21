@@ -2,7 +2,12 @@
 
 import type { ReactElement } from 'react'
 
+import { Receipt } from '@/components/primitives/Receipt'
 import type { VisionImageFacts, VisionPIIRegion } from '@/lib/api/types'
+
+/** Built once — see the note on the same constants in `VisionView`. */
+const COUNT = new Intl.NumberFormat('en-US')
+const SCORE = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 0 })
 
 /**
  * The uploaded image with every detected-PII region drawn over it.
@@ -50,26 +55,22 @@ export function PIIOverlay({
               >
                 <span className="absolute -top-0.5 left-0 -translate-y-full whitespace-nowrap rounded-sm bg-[color:var(--danger)] px-1 py-px font-mono text-[0.6rem] font-medium text-white">
                   {r.entity_type}
-                  {r.score != null ? ` ${(r.score * 100).toFixed(0)}%` : ''}
+                  {r.score != null ? ` ${SCORE.format(r.score)}` : ''}
                 </span>
               </div>
             ))
           : null}
       </div>
-      {regions.length === 0 ? (
-        <p className="text-[0.72rem] text-muted-foreground">No PII regions to draw.</p>
-      ) : !scalable ? (
-        <p className="text-[0.72rem] text-muted-foreground">
-          {regions.length} region{regions.length === 1 ? '' : 's'} detected, but the backend
-          reported no image dimensions to scale them against — not drawn rather than drawn in the
-          wrong place.
-        </p>
+      {regions.length === 0 ? null : !scalable ? (
+        <Receipt
+          origin={`${COUNT.format(regions.length)} region${regions.length === 1 ? '' : 's'} · not drawn`}
+          detail="The backend reported no image dimensions to scale the boxes against, and a box in the wrong place is worse than no box."
+        />
       ) : (
-        <p className="text-[0.72rem] text-muted-foreground">
-          {regions.length} detected region{regions.length === 1 ? '' : 's'}, painted out before the
-          image was sent to the model. Entity kinds only — the recognised values never leave the
-          backend.
-        </p>
+        <Receipt
+          origin={`analysis.pii_regions · ${COUNT.format(regions.length)} painted out before the model saw the image`}
+          detail="Entity kinds only — the recognised values never leave the backend."
+        />
       )}
     </div>
   )
