@@ -53,6 +53,28 @@ export type SceneName =
   | 'noReport'
   /** A run being exercised against a scenario. */
   | 'exercising'
+  /** A prompt's version history — the branching lifecycle, draft to active. */
+  | 'versions'
+  /** Documents pulled in and turned into an answer. */
+  | 'retrieval'
+  /** Scores laid out as a grid — metric against case. */
+  | 'matrix'
+  /** Work graded item by item against an expected answer. */
+  | 'grading'
+  /** What the agent has learned about a subject, and the scope it sits in. */
+  | 'subjects'
+  /** The stores underneath — racks, not abstractions. */
+  | 'stores'
+  /** A fault being diagnosed. */
+  | 'diagnose'
+  /** The knobs an engineer tunes on the running graph. */
+  | 'tuning'
+  /** A machine answering in a thread. */
+  | 'assistant'
+  /** Data held behind a lock. */
+  | 'sealed'
+  /** Spend being routed and held down. */
+  | 'cost'
 
 const SCENE: Record<SceneName, string> = {
   empty: '/illustrations/No data-rafiki.svg',
@@ -67,6 +89,17 @@ const SCENE: Record<SceneName, string> = {
   noHistory: '/illustrations/Investment data-rafiki.svg',
   noReport: '/illustrations/Presentation-rafiki.svg',
   exercising: '/illustrations/Mobile testing-rafiki.svg',
+  versions: '/illustrations/Version control-rafiki.svg',
+  retrieval: '/illustrations/Data extraction-rafiki.svg',
+  matrix: '/illustrations/Cohort analysis-rafiki.svg',
+  grading: '/illustrations/Online test-rafiki.svg',
+  subjects: '/illustrations/Segmentation-rafiki.svg',
+  stores: '/illustrations/Server-rafiki.svg',
+  diagnose: '/illustrations/Computer troubleshooting-rafiki.svg',
+  tuning: '/illustrations/Programming-rafiki.svg',
+  assistant: '/illustrations/Chat bot-rafiki.svg',
+  sealed: '/illustrations/Secure data-rafiki.svg',
+  cost: '/illustrations/Manage money-rafiki.svg',
 }
 
 /** Rendered width in px. `sm` suits a panel body, `md` a whole screen's empty state. */

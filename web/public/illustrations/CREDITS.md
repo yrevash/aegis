@@ -20,19 +20,38 @@ public deployment and assume it is settled — it is settled *for a demo*.
 ## Recolouring
 
 Each file has been recoloured from Storyset's own accent family onto the Aegis blue
-ramp, so the illustrations belong to the product rather than sitting beside it:
+ramp, so the illustrations belong to the product rather than sitting beside it.
+
+**The mapping lives in `scripts/recolour-illustrations.mjs`, not in this table.** This
+table used to *be* the mapping, and that is precisely how it went wrong: batch one was
+recoloured by hand and the substitutions written down afterwards, so when batch two
+arrived carrying `#407bff` — Storyset's *current* export default, which appears nowhere
+below — following the documented mapping would have recoloured nothing and shipped
+Storyset-blue artwork beside Aegis-blue artwork. A mapping that cannot be re-run is a
+mapping nobody can verify.
 
     #547cef -> #1570ef   --blue-600   (Storyset primary, "amico"/"pana" sets)
     #5585f1 -> #1570ef   --blue-600   (Storyset primary, "rafiki" set)
     #4a80f9 -> #1570ef   --blue-600   (Storyset primary, "bro"/"cuate" sets)
+    #407bff -> #1570ef   --blue-600   (Storyset primary, current export default)
+    #407bf6 -> #1570ef   --blue-600   (a rounding variant inside the same files)
     #6880c8 -> #175cd3   --blue-700
     #4262c7 -> #0b3b8f   --blue-900
     #7d9bf5 -> #60a5fa   --blue-400
     #92a9f7 -> #bfdbfe   --blue-200
 
-Only that accent family was touched. The greys, the line work and the figures' own
-tones are untouched — those are the drawing, not the brand, and repainting them
-would flatten scenes that were composed with them.
+The script is idempotent — a file already on the ramp contains none of the source hexes
+— so re-running it over the whole directory is safe and is how a new batch is brought in:
+
+    node scripts/recolour-illustrations.mjs web/public/illustrations
+
+Only that accent family is touched. The greys, the line work and the figures' own skin
+and clothing tones are untouched — those are the drawing, not the brand, and repainting
+them would flatten scenes that were composed with them.
+
+**Judge a scene by rendering it, never by its filename.** `rsvg-convert -w 300 x.svg -o
+x.png` and look at it. Two scenes in the second batch read as perfect fits by name and
+were rejected on sight once rendered — see the rejection list at the end of this file.
 
 ## The scenes, and what each is actually about
 
@@ -77,6 +96,34 @@ something Aegis really does does not belong on the page.
 | `Oops! 404 Error with a broken robot-cuate.svg` | wrong address, on brand | 404 — better than the plain 404 scene |
 | `Charity-amico.svg`, `messy bun-*.svg` | — | unused; nothing they depict is true here |
 
+### Batch two — brought in for the `ai_team` portal
+
+Twenty-one more, each rendered and looked at before it was accepted. The `ai_team`
+portal is where an engineer tunes the agent, so these lean toward the mechanisms that
+portal actually operates: versions, retrieval, grading, rails and the stores.
+
+| file | subject | where it belongs |
+|---|---|---|
+| `Version control-rafiki.svg` | a branching commit graph on a screen | **llmops** — the prompt-version lifecycle is literally this shape |
+| `Data extraction-rafiki.svg` | documents pulled into a monitor, charts out | **rag / retrieval** |
+| `Data extraction-amico.svg` | the same subject, second composition | retrieval, alternate |
+| `Cohort analysis-rafiki.svg` | a magnifier over a shaded matrix | **evals** — the metric × case grid, drawn |
+| `Online test-rafiki.svg` | a graded test form, item by item | **evals / harness** — per-case results |
+| `Segmentation-rafiki.svg` | a population split into segments | **memory** — subjects and their scoping |
+| `Server-rafiki.svg` | server racks, someone reading them | **cache / stores** |
+| `Cloud hosting-rafiki.svg` | hosted infrastructure | cache / stores, alternate |
+| `Operating system-rafiki.svg` | the machine underneath | devops stack |
+| `Computer troubleshooting-rafiki.svg` | diagnosing a fault | **llmops** — the diagnose step |
+| `Programming-rafiki.svg`, `Programmer-rafiki.svg` | writing the thing that runs | **harness** — the knobs an engineer tunes |
+| `Chat bot-rafiki.svg` | a machine answering in a thread | **voice / agent** |
+| `Secure data-rafiki.svg` | data behind a lock | **guardrails** |
+| `Security-rafiki.svg`, `Security On-rafiki.svg` | the rails, two compositions | guardrails, alternates |
+| `Devices-rafiki.svg` | input from several devices | vision / media |
+| `Manage money-rafiki.svg` | spend being controlled | **tokenopt** — routing and cost |
+| `Business analytics-rafiki.svg` | reading the numbers | analytics, alternate |
+| `Report-rafiki.svg` | a produced report | reports |
+| `In progress-rafiki.svg` | work still running | a queued / running state |
+
 **Use a scene only where it describes something the product really does.** An
 illustration that decorates a screen it has nothing to do with reads as stock art,
 which is worse than no illustration. Two of these are marked unused for exactly
@@ -110,6 +157,22 @@ scenes are `aria-hidden` because they always sit beside text saying the same thi
 * `people using robots-amico.svg` for the sign-in panel. Rendered, it is a family
   on a sofa with a robot vacuum — a consumer smart-home scene, and not one frame
   of what this product does.
+
+**Batch two added two more rejections, both of which pass the filename test and fail
+the render test** — which is the whole argument for rendering before choosing:
+
+* `Visionary technology-rafiki.svg` for the **vision** screen. The filename is a
+  perfect match and the artwork is a person holding a telescope beside a lightbulb:
+  it is "visionary" in the sense of *having ideas*, not vision in the sense of a
+  model reading an image. A pun is not a depiction.
+* `Live collaboration-rafiki.svg` for the **simulation** screen. Two people shaking
+  hands across two laptops. Simulation runs one question as two roles to show that
+  they are permitted *different* things; a handshake asserts agreement, which is the
+  opposite of the point the screen exists to make.
+
+Also left out of batch two as untrue here: `Marketing-rafiki`, `Marketing consulting-rafiki`,
+`SEO-rafiki`, `Super thank you-rafiki`, `Anxiety-rafiki`, `At the office-rafiki`,
+`Digital transformation-rafiki`, `Partnership-rafiki`.
 
 **And one page ships with none.** `web/src/app/error.tsx` — nothing in the set
 depicts a screen that stopped rendering, and a picture chosen for the mood of a
