@@ -104,7 +104,7 @@ export function StackedArea({
   return (
     <div className="flex flex-col gap-3">
       <ResponsiveContainer width="100%" height={height}>
-        <RechartsAreaChart data={data as never} margin={{ top: 8, right: 22, left: -12, bottom: 0 }}>
+        <RechartsAreaChart data={data as never} margin={{ top: 8, right: 22, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey={index}

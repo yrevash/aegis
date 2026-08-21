@@ -1,9 +1,12 @@
 'use client'
 
-import { Activity, Gauge, Hash, Timer, TrendingUp } from 'lucide-react'
+import { Activity, Gauge as GaugeIcon, Hash, Timer, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
+import { rampHex } from '@/components/charts/palette'
 import { Figure } from '@/components/primitives/Figure'
+import { Gauge } from '@/components/primitives/Gauge'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { SceneState } from '@/components/illustration/Scene'
@@ -38,6 +41,146 @@ function Ms({ value, className }: { value: number | null | undefined; className?
   const text = fmtMs(value)
   if (text === null) return <span className="text-xs text-muted-foreground italic">no reading</span>
   return <Figure className={className}>{text}</Figure>
+}
+
+/**
+ * How much of the rolling window is filled — the one bounded ratio on this page.
+ *
+ * DESIGN.md §2 allows a radial gauge for exactly this job: *one* value whose
+ * position inside a bounded range is the point. `run_count` against
+ * `window_capacity` is that value, and until now the two halves sat in different
+ * places — the count on a tile, the capacity buried in a receipt — so nobody
+ * could see that a "p95" was computed over four samples in a 200-slot buffer.
+ *
+ * A capacity the server did not report is an absence, never a denominator of 100.
+ */
+function WindowFill({ data }: { data: LatencyResponse }): ReactElement {
+  const capacity = data.window_capacity
+  const full = capacity != null && capacity > 0 && data.run_count >= capacity
+
+  return (
+    <Card className="flex min-w-0 flex-col">
+      <CardHeader eyebrow="rolling window" title="Window fill" />
+      <CardBody className="flex min-w-0 flex-1 flex-col items-center gap-3">
+        {capacity == null || capacity <= 0 ? (
+          <Absence
+            className="w-full text-left"
+            figure="Window fill"
+            why="This process did not report a window capacity, so the runs recorded have no denominator."
+            needed="a capacity on GET /latency — the ratio is that count over that capacity"
+          />
+        ) : (
+          <>
+            <Gauge
+              value={data.run_count / capacity}
+              label="of the window filled"
+              color="graph"
+              size={148}
+            />
+            <p className="text-center text-xs text-muted-foreground">
+              <Figure className="text-foreground">{data.run_count}</Figure> of{' '}
+              <Figure className="text-foreground">{capacity}</Figure> slots
+              {full ? ' · full, so the oldest samples are being dropped' : ''}
+            </p>
+          </>
+        )}
+        <Receipt
+          className="mt-auto w-full"
+          origin={data.source}
+          detail="a per-process rolling buffer that resets on restart"
+        />
+      </CardBody>
+    </Card>
+  )
+}
+
+/**
+ * Where the run's time actually goes — `total_ms` per node, as a composition.
+ *
+ * `total_ms` was a table column and nothing else, which makes "which node owns
+ * the run's wall clock?" a subtraction the reader has to perform across six rows.
+ * A percentile answers a different question: a node can have the worst p95 and
+ * still be a rounding error in the total, because it ran twice.
+ *
+ * Four slices is the ordinal ramp's measured ceiling, so a fifth node folds into
+ * a named `others` band rather than reaching for a fifth colour.
+ */
+function TimeComposition({ nodes, source }: { nodes: NodeLatency[]; source: string }): ReactElement {
+  const timed = nodes
+    .filter((n): n is NodeLatency & { total_ms: number } => n.total_ms != null && n.total_ms > 0)
+    .sort((a, b) => b.total_ms - a.total_ms)
+  const total = timed.reduce((sum, n) => sum + n.total_ms, 0)
+
+  const folded =
+    timed.length <= 4
+      ? timed.map((n) => ({ name: n.node, value: n.total_ms }))
+      : [
+          ...timed.slice(0, 3).map((n) => ({ name: n.node, value: n.total_ms })),
+          {
+            name: `${timed.length - 3} others`,
+            value: timed.slice(3).reduce((sum, n) => sum + n.total_ms, 0),
+          },
+        ]
+  const slices: DonutDatum[] = folded.map((d, i) => ({
+    name: d.name,
+    value: d.value,
+    color: 'graph',
+    hex: rampHex(i, folded.length),
+  }))
+
+  const leader = timed[0] ?? null
+
+  return (
+    <Card className="flex min-w-0 flex-col">
+      <CardHeader
+        eyebrow="aegis · /latency"
+        title="Where the time goes"
+        actions={
+          <Badge tone="neutral" className="font-mono">
+            {timed.length} timed
+          </Badge>
+        }
+      />
+      <CardBody className="flex min-w-0 flex-1 flex-col gap-3">
+        {timed.length === 0 ? (
+          <Absence
+            className="text-left"
+            figure="Share of run time by node"
+            why="No node in this window reported a total, so there is nothing to divide up."
+            needed="a completed run — each node writes its own cumulative total"
+          />
+        ) : timed.length < 2 ? (
+          /* One node holds all of it. A donut of a single 100% slice is a circle,
+             so this states the count instead of drawing one. */
+          <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <Figure size="stat" className="text-foreground">
+              {fmtMs(total) ?? 'no reading'}
+            </Figure>
+            <span>all of it in</span>
+            <Figure className="min-w-0 truncate text-foreground">{leader?.node}</Figure>
+            <span>— one timed node, so there is no split to draw.</span>
+          </p>
+        ) : (
+          <DonutChart
+            data={slices}
+            centerLabel={fmtMs(total) ?? '—'}
+            centerSub="total"
+            valueFormatter={(v) => fmtMs(v) ?? '—'}
+            height={188}
+          />
+        )}
+        <Receipt
+          className="mt-auto"
+          origin={`${source} · per_node.total_ms`}
+          detail={
+            leader == null
+              ? 'no node reported a total'
+              : `${leader.node} owns the largest share of the window's wall clock`
+          }
+        />
+      </CardBody>
+    </Card>
+  )
 }
 
 /** The full per-node table: node, count, p50, p95, max, total — all tabular-mono. */
@@ -114,11 +257,20 @@ function LatencyEmpty({ data }: { data: LatencyResponse }): ReactElement {
 }
 
 /**
- * Latency — the `aegis` `/latency` read-surface. Per-run p50/p95/max summary
- * tiles plus a per-node breakdown (count · p50 · p95 · max · total) with a p95
- * bar visual, all drawn from real samples in a per-process rolling window. When
- * no runs have been recorded the view renders an honest empty state (never fake
- * zeros).
+ * Latency — the `aegis` `/latency` read-surface, drawn from real samples in a
+ * per-process rolling window.
+ *
+ * Three marks, and each answers a different question off the same payload: the
+ * {@link WindowFill} gauge is `run_count` inside `window_capacity` — how much of
+ * this reading is even a sample; {@link NodeRangeBars} is the p50 → p95 span,
+ * which node's tail will produce the timeout; and {@link TimeComposition} is
+ * `total_ms` by node, which node owns the wall clock. The last two disagree
+ * often, and that disagreement is the point.
+ *
+ * **There is no time-series here and none is drawn.** The payload carries no
+ * timestamp of any kind — it is a rolling window of aggregates — so every mark on
+ * this page is a snapshot composition or comparison. When no runs have been
+ * recorded the view renders an honest empty state, never fake zeros.
  */
 function LatencyView(): ReactElement {
   // Live session token — a constant `null` would 401 on a reload and, being
@@ -159,9 +311,8 @@ function LatencyView(): ReactElement {
         title="Latency"
         actions={
           <InfoTip label="What window these timings come from">
-            Real samples from a per-process rolling window. The window resets on restart, so these
-            are the timings of this process and no other — which is why an empty window says so
-            rather than reporting zeros.
+            Real samples from a per-process rolling window that resets on restart, so these are
+            this process&rsquo;s timings and no other&rsquo;s.
           </InfoTip>
         }
       />
@@ -179,11 +330,11 @@ function LatencyView(): ReactElement {
       ) : (
         <>
           {/* ── Run-latency summary tiles ─────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5 [&>*]:min-w-0">
             <StatCard
               label="Run p50"
               value={fmtMs(data.run_p50_ms) ?? 'no reading'}
-              icon={Gauge}
+              icon={GaugeIcon}
               tone="graph"
             />
             <StatCard
@@ -206,44 +357,78 @@ function LatencyView(): ReactElement {
             />
           </div>
 
-          {/* ── Per-node latency spans ────────────────────────────────────── */}
-          <Card>
-            <CardHeader
+          {/*
+            Two short cards paired in one row rather than two full-width bands.
+            `items-start` so the span card — which is only as tall as its node
+            count, and with two or three nodes that is short — does not stretch to
+            match the gauge beside it and turn into a strip of whitespace.
+          */}
+          <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[15rem_minmax(0,1fr)] [&>*]:min-w-0">
+            <WindowFill data={data} />
+
+            {/* ── Per-node latency spans ──────────────────────────────────── */}
+            <Card className="flex min-w-0 flex-col">
+              <CardHeader
+                eyebrow="aegis · /latency"
+                title="How wide each node's tail is"
+                actions={
+                  <Badge tone="neutral" className="font-mono">
+                    {data.per_node.length} nodes
+                  </Badge>
+                }
+              />
+              <CardBody className="flex min-w-0 flex-1 flex-col gap-3">
+                {data.per_node.length === 0 ? (
+                  <Absence
+                    className="text-left"
+                    figure="Per-node percentiles"
+                    why="Runs were recorded but no node reported a timing in this window."
+                    needed="a run that reaches at least one instrumented node"
+                  />
+                ) : (
+                  <NodeRangeBars nodes={data.per_node} />
+                )}
+                <Receipt
+                  className="mt-auto"
+                  origin={`${data.source} · per_node p50 · p95 · max`}
+                  detail={
+                    data.slowest_node == null
+                      ? 'no node was named slowest'
+                      : `slowest node ${data.slowest_node}`
+                  }
+                />
+              </CardBody>
+            </Card>
+          </div>
+
+          {/* ── Composition and the full table ────────────────────────────────── */}
+          <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[22rem_minmax(0,1fr)] [&>*]:min-w-0">
+            <TimeComposition nodes={data.per_node} source={data.source} />
+
+            <DataPanel
               eyebrow="aegis · /latency"
-              title="Where each node's time goes"
+              title="Per-node breakdown"
+              maxHeight={480}
               actions={
                 <Badge tone="neutral" className="font-mono">
-                  {data.source}
+                  {data.per_node.length} nodes
                 </Badge>
               }
-            />
-            <CardBody>
-              <NodeRangeBars nodes={data.per_node} />
-            </CardBody>
-          </Card>
-
-          {/* ── Per-node table ────────────────────────────────────────────────── */}
-          <DataPanel
-            eyebrow="aegis · /latency"
-            title="Per-node breakdown"
-            maxHeight={480}
-            actions={
-              <Badge tone="neutral">
-                <Figure>{data.per_node.length}</Figure> nodes
-              </Badge>
-            }
-          >
-            <NodeTable nodes={data.per_node} />
-          </DataPanel>
-
-          <Receipt
-            origin={data.source}
-            detail={`${
-              data.window_capacity === null
-                ? 'window capacity not reported'
-                : `window capacity ${data.window_capacity}`
-            } · a per-process rolling buffer that resets on restart`}
-          />
+              footer={
+                <Receipt
+                  className="border-none pt-0"
+                  origin={data.source}
+                  detail={
+                    data.window_capacity === null
+                      ? 'window capacity not reported'
+                      : `window capacity ${data.window_capacity}`
+                  }
+                />
+              }
+            >
+              <NodeTable nodes={data.per_node} />
+            </DataPanel>
+          </div>
         </>
       )}
     </div>

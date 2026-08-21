@@ -49,7 +49,7 @@ export function BarChart<T extends object>({
   const hex = chartHex(color)
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <RechartsBarChart data={data as never} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+      <RechartsBarChart data={data as never} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis
           dataKey={index as never}

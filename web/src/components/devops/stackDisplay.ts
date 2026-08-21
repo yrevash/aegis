@@ -73,6 +73,46 @@ export function summarizeStack(components: StackComponent[]): StackSummary {
   }
 }
 
+/** One Aegis module and how many inventoried components stand it up. */
+export interface ModuleCount {
+  name: string
+  value: number
+}
+
+/** The module roll-up: named modules with their counts, and the unattributed rest. */
+export interface ModuleBreakdown {
+  /** One row per distinct `aegis_module`, descending by count then by name. */
+  modules: ModuleCount[]
+  /** Components that declare no module — shared infrastructure, counted not hidden. */
+  sharedInfra: number
+}
+
+/**
+ * Count components per branded Aegis module.
+ *
+ * `aegis_module` was previously read once, put through `new Set(...).size`, and
+ * thrown away — so the screen could say "9 modules powered" and could not say
+ * which, or that one module accounts for a third of the inventory. This keeps the
+ * distribution, and counts the null rows rather than dropping them silently: a
+ * reader who adds the bars up must be able to reach the total.
+ */
+export function moduleCounts(components: StackComponent[]): ModuleBreakdown {
+  const tally = new Map<string, number>()
+  let sharedInfra = 0
+  for (const component of components) {
+    const name = component.aegis_module?.trim()
+    if (name == null || name === '') {
+      sharedInfra += 1
+      continue
+    }
+    tally.set(name, (tally.get(name) ?? 0) + 1)
+  }
+  const modules = [...tally.entries()]
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name))
+  return { modules, sharedInfra }
+}
+
 /** A version rendered honestly: real pins render as-is, absent ones as n-a. */
 export interface VersionLabel {
   text: string
@@ -146,6 +186,10 @@ export type PatchPosture = 'action-needed' | 'unverified' | 'current'
 /** Derive the posture from the summary + whether the registry was reachable. */
 export function patchPosture(summary: PatchSummary, online: boolean): PatchPosture {
   if (!online) return 'unverified'
+  // Nothing checked is not "up to date". With no packages the three counters are all
+  // zero, so every guard below falls through and an empty check reported `current` —
+  // the strongest claim this function can make, on the strength of no evidence at all.
+  if (summary.total === 0) return 'unverified'
   if (summary.outdated > 0) return 'action-needed'
   if (summary.unknown > 0) return 'unverified'
   return 'current'

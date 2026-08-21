@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleSlash,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -19,8 +20,9 @@ import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
-import { Receipt } from '@/components/primitives/Receipt'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
+import { Scene, SceneState } from '@/components/illustration/Scene'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
@@ -49,6 +51,14 @@ import {
  *
  * Counting / ordering / the offline posture rule live in the recharts-free
  * `stackDisplay` module (unit-tested); this file fetches and renders.
+ *
+ * **The offline path is a stated absence, not a grey chart.** `PatchResult.status`
+ * only becomes `current`/`outdated` after a real registry answer, so an offline
+ * check makes every row `unknown` — and the freshness split was rendering that as
+ * one flat neutral strip above a table of "registry did not answer". A chart with
+ * no information in it reads as breakage, which is the opposite of what this
+ * screen is for, so the split is replaced by an {@link Absence} in the slot it
+ * would have occupied.
  */
 
 type LoadState =
@@ -56,6 +66,23 @@ type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; data: PatchCheckResponse }
+
+/**
+ * Module-level formatters (DESIGN.md §3 / §4). Building an `Intl` instance per
+ * render is the expensive half of formatting, and a per-call `toLocaleString`
+ * also drifts: two timestamps on one screen must not disagree about their shape.
+ */
+const COUNT = new Intl.NumberFormat('en-US')
+const STAMP = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
+/** An ISO scalar rendered in the one timestamp shape, or stated as unparseable. */
+function stamp(iso: string): string {
+  const at = new Date(iso)
+  return Number.isNaN(at.getTime()) ? 'unparseable timestamp' : STAMP.format(at)
+}
 
 const STATUS_TONE: Record<PatchStatus, string> = {
   current: 'text-ok-ink',
@@ -123,6 +150,39 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
 
   const online = load.data.online
 
+  if (summary.total === 0) {
+    /*
+      A check that returned nothing gets one card, not the verdict apparatus.
+      Rendered through the normal path it read "up to date · verified against the
+      registry" over an empty bar and three zeroes — a clean bill of health for a
+      stack nobody looked at, which is the exact claim this screen exists to
+      refuse. `patchPosture` still resolves an empty online summary to `current`;
+      that is a latent honesty gap in `stackDisplay`, and it is reported rather
+      than changed here because this pass is presentation only.
+    */
+    return (
+      <Card>
+        <CardBody className="flex flex-col gap-5">
+          <div className="flex items-center">
+            <Button size="sm" className="ml-auto" onClick={() => run()}>
+              <RefreshCw className="size-3.5" aria-hidden />
+              Re-check
+            </Button>
+          </div>
+          <SceneState name="empty" size="md">
+            <Absence
+              className="text-left"
+              figure="Package freshness"
+              why="The check ran and returned no packages."
+              needed="At least one resolvable dependency pin in the running process."
+            />
+          </SceneState>
+          <Receipt label="Checked" origin={stamp(load.data.checked_at)} />
+        </CardBody>
+      </Card>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {/* The verdict, and the freshness split that reconciles it. */}
@@ -134,29 +194,28 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
                 <AlertTriangle className="size-3 shrink-0" aria-hidden />
               ) : posture === 'current' ? (
                 <CheckCircle2 className="size-3 shrink-0" aria-hidden />
+              ) : online ? (
+                <CircleSlash className="size-3 shrink-0" aria-hidden />
               ) : (
                 <WifiOff className="size-3 shrink-0" aria-hidden />
               )}
               {POSTURE_LABEL[posture]}
             </Badge>
-            <span
-              className={cn(
-                'inline-flex items-center gap-1.5 text-[0.8125rem]',
-                online ? 'text-ok-ink' : 'text-risk-ink',
-              )}
-            >
-              {online ? (
+            {/*
+              Only the reachable case gets a sentence here. When the registry did
+              not answer, the stated absence below says so in the slot the split
+              would have occupied — saying it twice is the text bomb this pass
+              exists to remove.
+            */}
+            {online && (
+              <span className="inline-flex items-center gap-1.5 text-[0.8125rem] text-ok-ink">
                 <CheckCircle2 className="size-3.5 shrink-0" aria-hidden />
-              ) : (
-                <WifiOff className="size-3.5 shrink-0" aria-hidden />
-              )}
-              {online ? 'Verified against the registry' : 'Registry unreachable — nothing below is confirmed'}
-            </span>
+                Verified against the registry
+              </span>
+            )}
             <InfoTip label="Why an offline check is never “current”">
-              Outdated dependencies are the most common source of known-CVE exposure, so this
-              compares each installed pin against the latest published release. A patch claim
-              nobody could verify is worse than none — when the registry does not answer, the
-              posture stays “unverified” and never resolves to up to date.{' '}
+              A patch claim nobody could verify is worse than none, so when the registry does not
+              answer the posture stays “unverified” and never resolves to up to date.{' '}
               {load.data.note}
             </InfoTip>
             <Button
@@ -170,7 +229,25 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
             </Button>
           </div>
 
-          <FreshnessBar summary={summary} online={online} />
+          {online ? (
+            <FreshnessBar summary={summary} />
+          ) : (
+            /*
+              The defect this replaces: offline, every row is `unknown` by
+              construction (the API only emits current/outdated after a real
+              registry answer), so the bar rendered as one flat grey strip with
+              three zeroes beside it — a chart of nothing, on the one screen whose
+              subject is honesty about staleness. It is a stated absence instead.
+            */
+            <div className="grid min-w-0 items-center gap-5 sm:grid-cols-[auto_minmax(0,1fr)]">
+              <Scene name="diagnose" size="sm" className="mx-auto" />
+              <Absence
+                figure="Freshness split"
+                why={`The registry did not answer, so none of the ${COUNT.format(summary.total)} packages below could be compared with a published release.`}
+                needed="One reachable registry call — re-check once egress is restored."
+              />
+            </div>
+          )}
         </CardBody>
       </Card>
 
@@ -200,7 +277,7 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
         footer={
           <Receipt
             label="Checked"
-            origin={new Date(load.data.checked_at).toLocaleString()}
+            origin={stamp(load.data.checked_at)}
             detail={online ? 'against the package registry' : 'registry unreachable — statuses are unverified'}
             className="w-full border-t-0 pt-0"
           />
@@ -218,6 +295,8 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
             {rows.map((r) => (
               <PatchRow key={r.name} result={r} />
             ))}
+            {/* Reachable only as a filter miss now — an empty check never gets
+                this far, and it used to announce itself as `No packages match ""`. */}
             {rows.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">
@@ -240,16 +319,12 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
  * the division themselves to know whether "4 outdated" was a rounding error or a
  * third of the stack. Status hues carry it here because this *is* the reserved
  * status set (DESIGN.md §2), and every band ships with its icon and its word.
- * When the registry did not answer, the whole bar goes neutral: an unverified
- * check has no green to give.
+ *
+ * It only ever renders for a check that reached the registry. The offline case
+ * used to render this same bar with every band forced neutral — which is a chart
+ * with no information in it — and the caller states an {@link Absence} there now.
  */
-function FreshnessBar({
-  summary,
-  online,
-}: {
-  summary: PatchSummary
-  online: boolean
-}): ReactElement {
+function FreshnessBar({ summary }: { summary: PatchSummary }): ReactElement {
   const bands = [
     { key: 'outdated', label: 'update available', count: summary.outdated, fill: 'bg-block', ink: 'text-block-ink', Icon: AlertTriangle },
     { key: 'unknown', label: 'unverified', count: summary.unknown, fill: 'bg-surface-2', ink: 'text-muted-foreground', Icon: WifiOff },
@@ -269,11 +344,7 @@ function FreshnessBar({
           b.count === 0 ? null : (
             <span
               key={b.key}
-              className={cn(
-                'h-full first:rounded-l-full last:rounded-r-full',
-                // An unverified check has no verified band to colour.
-                online || b.key === 'outdated' ? b.fill : 'bg-surface-2 ring-1 ring-inset ring-border',
-              )}
+              className={cn('h-full first:rounded-l-full last:rounded-r-full', b.fill)}
               style={{ width: `${(b.count / total) * 100}%` }}
             />
           ),

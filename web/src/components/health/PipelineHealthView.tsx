@@ -189,11 +189,9 @@ function ComponentPanel({ data }: { data: PlatformHealthResponse }): ReactElemen
       >
         <Table className="min-w-[560px]">
           <THead>
-            <TR>
-              <TH>Component</TH>
-              <TH>What answered</TH>
-              <TH className="text-right">Status</TH>
-            </TR>
+            <TH>Component</TH>
+            <TH>What answered</TH>
+            <TH className="text-right">Status</TH>
           </THead>
           <TBody>
             {data.components.map((row) => (
@@ -319,11 +317,9 @@ function PipelinePanel({
             ) : (
               <Table>
                 <THead>
-                  <TR>
-                    <TH>Kind</TH>
-                    <TH>Status</TH>
-                    <TH className="text-right">Jobs</TH>
-                  </TR>
+                  <TH>Kind</TH>
+                  <TH>Status</TH>
+                  <TH className="text-right">Jobs</TH>
                 </THead>
                 <TBody>
                   {data.depth.map((row) => (
@@ -393,11 +389,9 @@ function PipelinePanel({
         >
           <Table className="min-w-[560px]">
               <THead>
-                <TR>
-                  <TH>Kind</TH>
-                  <TH>Reason</TH>
-                  <TH className="text-right">Finished</TH>
-                </TR>
+                <TH>Kind</TH>
+                <TH>Reason</TH>
+                <TH className="text-right">Finished</TH>
               </THead>
               <TBody>
                 {data.recent_failures.map((row, index) => (

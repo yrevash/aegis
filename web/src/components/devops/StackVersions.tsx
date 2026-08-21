@@ -8,11 +8,13 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { DataPanel } from '@/components/ui/DataPanel'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
+import { RankedBars } from '@/components/charts/RankedBars'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
-import { Receipt } from '@/components/primitives/Receipt'
-import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
+import { SceneState } from '@/components/illustration/Scene'
 import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -20,7 +22,7 @@ import { cn } from '@/lib/utils'
 import type { StackComponent, StackResponse } from '@/lib/api/types'
 
 import { StackLayers } from './StackLayers'
-import { groupByCategory, summarizeStack, versionLabel } from './stackDisplay'
+import { groupByCategory, moduleCounts, summarizeStack, versionLabel } from './stackDisplay'
 
 /**
  * DevOps — Tech Stack & Versions (Aegis SBOM).
@@ -40,6 +42,18 @@ import { groupByCategory, summarizeStack, versionLabel } from './stackDisplay'
  * the layer split, which was previously only inferable by counting rows, is the
  * {@link StackLayers} bar.
  *
+ * **The visual pass.** `aegis_module` was read once, reduced to `new Set(...).size`
+ * and discarded, so the screen could say "9 modules powered" and not which — it is
+ * a {@link RankedBars} beside the layer split now, with the components that declare
+ * no module counted in the receipt rather than dropped. The bespoke "No components
+ * reported" box is a scene over a stated {@link Absence}, and the second of two
+ * tooltips that said the same thing is gone.
+ *
+ * **No category donut.** `StackLayers` already draws the `category` composition as
+ * an ordered bar with counts and shares in its legend, and layers are ordered —
+ * runtime under backend under frontend under infra — which a donut discards. Two
+ * marks of one field is the duplication this pass removes elsewhere.
+ *
  * All grouping / counting lives in the recharts-free `stackDisplay` module so it
  * can be unit-tested; this file only fetches and renders.
  */
@@ -48,6 +62,22 @@ type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; data: StackResponse }
+
+/**
+ * Module-level formatters (DESIGN.md §3 / §4) — one shape for every count and
+ * every timestamp on the screen, built once rather than per render.
+ */
+const COUNT = new Intl.NumberFormat('en-US')
+const STAMP = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
+/** An ISO scalar in the one timestamp shape, or stated as unparseable. */
+function stamp(iso: string): string {
+  const at = new Date(iso)
+  return Number.isNaN(at.getTime()) ? 'unparseable timestamp' : STAMP.format(at)
+}
 
 export function StackVersions({ token }: { token: string | null }): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
@@ -69,6 +99,13 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
   const summary = load.status === 'ready' ? summarizeStack(load.data.components) : null
   const groups = useMemo(
     () => (load.status === 'ready' ? groupByCategory(load.data.components) : []),
+    [load],
+  )
+  const modules = useMemo(
+    () =>
+      load.status === 'ready'
+        ? moduleCounts(load.data.components)
+        : { modules: [], sharedInfra: 0 },
     [load],
   )
 
@@ -96,11 +133,16 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
     return (
       <Card>
         <CardBody>
-          <EmptyState
-            icon={Boxes}
-            title="No components reported"
-            body="This is a live inventory of what the running process resolved. An empty one means the backend answered, and had nothing to declare."
-          />
+          {/* "A prompt's version history" is the nearest true picture of an SBOM
+              with nothing in it — the shape of the thing, before the pins. */}
+          <SceneState name="versions" size="md">
+            <Absence
+              className="text-left"
+              figure="The resolved inventory"
+              why="The backend answered and declared no components."
+              needed="A running process that can resolve at least one distribution pin."
+            />
+          </SceneState>
         </CardBody>
       </Card>
     )
@@ -108,26 +150,81 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
 
   return (
     <div className="flex flex-col gap-4">
-      {/* The shape of the stack: three counts and the layer split, in one card. */}
-      <Card>
-        <CardBody className="flex flex-col gap-5">
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Stat label="Components" value={summary.total} />
-            <Stat
-              label="Versions resolved"
-              value={`${summary.withVersion}/${summary.total}`}
-              hint={summary.unknownVersion > 0 ? `${summary.unknownVersion} unresolved` : 'all resolved'}
-              tone={summary.unknownVersion > 0 ? 'warn' : 'ok'}
-            />
-            <Stat label="Layers" value={summary.categories} />
-            <Stat
-              label="Modules powered"
-              value={new Set(
-                load.data.components.map((c) => c.aegis_module).filter(Boolean),
-              ).size}
-            />
+      {/*
+        One panel, two panes, rather than two cards in a row.
+
+        The counts and the layer split are a short band — a 215px card — and the
+        module ranking is a 470px one. Side by side as separate cards that left a
+        260px hole of canvas under the shorter one, and stretching the shorter one
+        to match just moves the hole inside a card, which is the worse of the two.
+        A single card with a rule between the panes has neither: the left pane's
+        slack reads as the margin of a sidebar, and the ranking sets the height of
+        a panel rather than of a card standing next to a gap.
+      */}
+      <Card className="min-w-0">
+        <CardBody className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] lg:gap-10">
+          {/* Top-aligned, deliberately. Distributing this pane's two blocks to the
+              top and bottom of the panel puts the slack *between* them, and a
+              share bar floating in the middle of a card reads as a layout bug
+              rather than as a pane with room left in it. */}
+          <div className="flex min-w-0 flex-col gap-5">
+            <div className="grid grid-cols-3 gap-4">
+              <Stat label="Components" value={COUNT.format(summary.total)} />
+              <Stat
+                label="Versions resolved"
+                value={`${COUNT.format(summary.withVersion)}/${COUNT.format(summary.total)}`}
+                hint={
+                  summary.unknownVersion > 0
+                    ? `${COUNT.format(summary.unknownVersion)} unresolved`
+                    : 'all resolved'
+                }
+                tone={summary.unknownVersion > 0 ? 'warn' : 'ok'}
+              />
+              <Stat label="Layers" value={COUNT.format(summary.categories)} />
+            </div>
+            <StackLayers groups={groups} total={summary.total} />
           </div>
-          <StackLayers groups={groups} total={summary.total} />
+
+          <section className="flex min-w-0 flex-col gap-4 border-t border-border pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-10">
+            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <div className="min-w-0">
+                <p className="eyebrow mb-1">components[].aegis_module</p>
+                {/* `h2`, matching every other panel title on the page — this pane
+                    is a sibling of the DataPanel below, not a child of it. */}
+                <h2 className="text-base leading-6 font-semibold text-pretty text-foreground">
+                  What each module stands on
+                </h2>
+              </div>
+              <Badge tone="neutral" className="shrink-0 gap-1.5">
+                <Boxes className="size-3 shrink-0" aria-hidden />
+                <Figure>{COUNT.format(modules.modules.length)}</Figure>
+              </Badge>
+            </div>
+
+            {modules.modules.length === 0 ? (
+              <SceneState name="noChart" size="sm">
+                <Absence
+                  className="text-left"
+                  figure="Components per module"
+                  why="No inventoried component declares an Aegis module."
+                  needed="An aegis_module on at least one component."
+                />
+              </SceneState>
+            ) : (
+              <RankedBars
+                label="Inventoried components per Aegis module"
+                data={modules.modules}
+                valueFormatter={(v) => COUNT.format(v)}
+                color="graph"
+                maxRows={6}
+              />
+            )}
+            <Receipt
+              className="mt-auto"
+              origin="components[].aegis_module"
+              detail={`${COUNT.format(modules.sharedInfra)} of ${COUNT.format(summary.total)} declare none — shared infra`}
+            />
+          </section>
         </CardBody>
       </Card>
 
@@ -136,22 +233,15 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
         title="The resolved inventory"
         maxHeight={620}
         actions={
-          <div className="flex items-center gap-2">
-            <Badge tone="neutral" className="gap-1.5">
-              <Layers className="size-3 shrink-0" aria-hidden />
-              <Figure>{summary.total}</Figure>
-            </Badge>
-            <InfoTip label="What this inventory is">
-              DevOps needs the real installed versions, not a hand-maintained list. Every row is
-              what the running process resolved, so this answers “what exactly is in production?”
-              and shows unpinned or aged components rather than hiding them.
-            </InfoTip>
-          </div>
+          <Badge tone="neutral" className="gap-1.5">
+            <Layers className="size-3 shrink-0" aria-hidden />
+            <Figure>{COUNT.format(summary.total)}</Figure>
+          </Badge>
         }
         footer={
           <Receipt
             label="Inventoried"
-            origin={new Date(load.data.generated_at).toLocaleString()}
+            origin={stamp(load.data.generated_at)}
             detail="resolved pins from the running process, not a maintained list"
             className="w-full border-t-0 pt-0"
           />
@@ -299,10 +389,16 @@ export function StackMount(): ReactElement {
           eyebrow="SBOM"
           title="Tech stack and versions"
           actions={
+            /*
+              There were two tooltips on this screen — "What this inventory is" in
+              the table header and this one — and both amounted to "these are the
+              real installed versions, not a hand-maintained list". The other is
+              deleted; this is the one sentence that survives.
+            */
             <InfoTip label="How this list is built">
-              Every runtime, library and service the agent runs on, at the version this process
-              actually resolved. A component whose version cannot be determined is shown as
-              unresolved rather than papered over.
+              Every runtime, library and service the agent runs on at the version this process
+              actually resolved, with anything it could not determine shown as unresolved rather
+              than papered over.
             </InfoTip>
           }
         />

@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CircleCheck,
   CircleX,
+  EyeOff,
   History,
   Loader2,
   Play,
@@ -13,10 +14,11 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { RankedBars } from '@/components/charts/RankedBars'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
-import { Receipt } from '@/components/primitives/Receipt'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { SceneState } from '@/components/illustration/Scene'
 import { BackendGate } from '@/components/shared/BackendGate'
@@ -31,6 +33,7 @@ import {
   getRedteamSuites,
   redteamMessage,
   startRedteamRun,
+  type RedteamCategoryRollup,
   type RedteamMode,
   type RedteamProbe,
   type RedteamRun,
@@ -39,6 +42,7 @@ import {
 } from '@/lib/api/redteam'
 import { useAuth } from '@/lib/auth/AuthContext'
 
+import { BlockRateTrend } from './BlockRateTrend'
 import {
   compareRuns,
   headline,
@@ -49,6 +53,19 @@ import {
   usd,
   verdictNote,
 } from './redteamReport'
+
+/**
+ * Timestamps on this screen, in the reader's own locale — **one** formatter, not
+ * one `toLocaleString` per history row.
+ */
+const STAMP = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+
+/** A run's start time, or the words for its absence. Never a fabricated stamp. */
+function stamp(iso: string | null): string {
+  if (iso == null) return 'no start time recorded'
+  const at = new Date(iso)
+  return Number.isNaN(at.getTime()) ? 'no start time recorded' : STAMP.format(at)
+}
 
 /** The one focus treatment on this screen: the ring token, at 2px, always visible. */
 const FOCUS =
@@ -164,19 +181,31 @@ function RunPanel({
         ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
+          {/* The estimate was a paragraph restating three figures it already
+              printed. It is the three figures (DESIGN.md §9). */}
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
             {estimate && estimate.modelCalls > 0 ? (
               <>
-                Estimated cost before you start:{' '}
-                <Figure className="font-medium text-foreground">{usd(estimate.costUsd)}</Figure>, up
-                to {estimate.modelCalls} calls to{' '}
-                <Figure className="text-foreground">{estimate.model}</Figure>, charged to the
-                tenant&apos;s budget.
+                <Badge tone="risk" className="gap-1.5 font-mono">
+                  <AlertTriangle className="size-3 shrink-0" aria-hidden />
+                  {usd(estimate.costUsd)} est.
+                </Badge>
+                <Badge tone="neutral" className="min-w-0 font-mono">
+                  <span className="truncate">
+                    ≤{estimate.modelCalls} calls · {estimate.model}
+                  </span>
+                </Badge>
+                <InfoTip label="Who pays for a live run">
+                  Charged to this tenant&rsquo;s budget at the usage ledger&rsquo;s own unit cost.
+                </InfoTip>
               </>
             ) : (
-              <>Offline runs cost nothing: no model is called, and the ledger is untouched.</>
+              <Badge tone="ok" className="gap-1.5">
+                <CircleCheck className="size-3 shrink-0" aria-hidden />
+                no model called · ledger untouched
+              </Badge>
             )}
-          </p>
+          </span>
           <button
             type="button"
             onClick={onRun}
@@ -211,57 +240,153 @@ function RunPanel({
 }
 
 /**
- * One attack category's block rate, as a bar and as a verdict in words.
+ * Block rate per attack category, ranked against the floor.
  *
- * The percentage used to be tinted `--ok` or `--block` and nothing else said which
- * it was — colour carrying the whole verdict, which DESIGN.md §2 rules out and
- * which fails outright for a red/green-confusable reader on the one screen where
- * pass and fail are the entire content. The word and the icon carry it now; the
- * tint is the third cue.
+ * This was `CategoryBar` — one hand-rolled progress track per category, which is
+ * the progress-bar-as-chart the owner has rejected twice: no axis, no ordering,
+ * and the tint carrying the verdict. `RankedBars` sorts by magnitude and prints
+ * every value beside its own bar, so the answer to "which category is weakest"
+ * is the bottom row rather than a colour comparison.
+ *
+ * The floor does not disappear with the tracks. It is stated once in the header
+ * and the categories that fall under it are **named** in one line, with an icon
+ * and a word — never hue alone (DESIGN.md §2).
  */
-function CategoryBar({
-  name,
-  blocked,
-  total,
-  rate,
+function CategoryBlockRates({
+  categories,
   floor,
 }: {
-  name: string
-  blocked: number
-  total: number
-  rate: number
+  categories: RedteamCategoryRollup[]
   floor: number
 }): ReactElement {
-  const good = rate >= floor
+  const attacks = categories.filter((row) => row.category !== 'benign_control')
+  const below = attacks.filter((row) => row.blockRate < floor)
+  const blockedTotal = attacks.reduce((sum, row) => sum + row.blocked, 0)
+  const probeTotal = attacks.reduce((sum, row) => sum + row.total, 0)
+
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="text-sm font-medium text-foreground capitalize">{name}</span>
-        <span className="flex items-center gap-2.5">
-          <span className="text-xs text-muted-foreground">
-            <Figure>{`${blocked}/${total}`}</Figure> blocked
-          </span>
-          <Badge tone={good ? 'ok' : 'block'} className="gap-1.5">
-            {good ? (
-              <CircleCheck className="size-3 shrink-0" aria-hidden />
-            ) : (
-              <CircleX className="size-3 shrink-0" aria-hidden />
-            )}
-            {pct(rate)} {good ? 'clears the floor' : 'below the floor'}
+    <Card className="flex min-w-0 flex-col">
+      <CardHeader
+        eyebrow="by category"
+        title="Block rate per attack category"
+        actions={
+          <Badge tone="neutral" className="font-mono">
+            floor {pct(floor)}
           </Badge>
-        </span>
-      </div>
-      <div
-        role="img"
-        aria-label={`${name}: ${pct(rate)} blocked, ${good ? 'at or above' : 'below'} the ${pct(floor)} floor`}
-        className="h-1.5 overflow-hidden rounded-sm bg-surface-2"
-      >
-        <div
-          className={good ? 'h-full rounded-sm bg-blue-600' : 'h-full rounded-sm bg-block-ink'}
-          style={{ width: `${Math.max(rate * 100, 1.5)}%` }}
+        }
+      />
+      <CardBody className="flex min-w-0 flex-1 flex-col gap-3">
+        {attacks.length === 0 ? (
+          <Absence
+            className="text-left"
+            figure="Block rate per category"
+            why="This battery ran no attack probes, only benign controls."
+          />
+        ) : (
+          <>
+            <RankedBars
+              data={attacks.map((row) => ({ name: label(row.category), value: row.blockRate }))}
+              valueFormatter={pct}
+              maxRows={attacks.length}
+              tail="omit"
+              label="Block rate by attack category, highest first"
+            />
+            <p className="flex flex-wrap items-center gap-2">
+              <Badge tone={below.length === 0 ? 'ok' : 'block'} className="gap-1.5">
+                {below.length === 0 ? (
+                  <CircleCheck className="size-3 shrink-0" aria-hidden />
+                ) : (
+                  <CircleX className="size-3 shrink-0" aria-hidden />
+                )}
+                {below.length === 0
+                  ? `all ${attacks.length} clear the floor`
+                  : `${below.length} below the floor`}
+              </Badge>
+              {below.length === 0 ? null : (
+                <span className="min-w-0 text-xs break-words text-muted-foreground capitalize">
+                  {below.map((row) => label(row.category)).join(' · ')}
+                </span>
+              )}
+            </p>
+          </>
+        )}
+        <Receipt
+          className="mt-auto"
+          origin="report.categories · blocked ÷ total per category"
+          detail={`${blockedTotal} of ${probeTotal} attack probes blocked`}
         />
-      </div>
-    </div>
+      </CardBody>
+    </Card>
+  )
+}
+
+/**
+ * **Which rail actually caught how much** — `report.rails`, drawn.
+ *
+ * It was `rails.map(r => `${r.layer} ${r.blocks}`).join(' · ')`: a real
+ * distribution flattened into a run-on string in a card's action slot, where the
+ * one question it answers — is the whole defence resting on a single rail? — is
+ * the hardest thing to read off it.
+ */
+function RailBlocks({ rails }: { rails: { layer: string; blocks: number }[] }): ReactElement {
+  const firing = rails.filter((rail) => rail.blocks > 0)
+  const total = rails.reduce((sum, rail) => sum + rail.blocks, 0)
+
+  return (
+    <Card className="flex min-w-0 flex-col">
+      <CardHeader
+        eyebrow="by rail"
+        title="Which rail stopped it"
+        actions={
+          <Badge tone="neutral" className="font-mono">
+            {firing.length}/{rails.length} fired
+          </Badge>
+        }
+      />
+      <CardBody className="flex min-w-0 flex-1 flex-col gap-3">
+        {total === 0 ? (
+          <Absence
+            className="text-left"
+            figure="Blocks per rail"
+            why="No rail returned a block in this run, so there is no distribution to draw."
+            needed="a run in which at least one rail fires"
+          />
+        ) : (
+          <RankedBars
+            data={rails.map((rail) => ({ name: label(rail.layer), value: rail.blocks }))}
+            valueFormatter={(v) => String(v)}
+            maxRows={rails.length}
+            tail="omit"
+            label="Attacks blocked per rail, most active first"
+            color="agent"
+          />
+        )}
+        <Receipt
+          className="mt-auto"
+          origin="report.rails · the rail that returned each block"
+          detail={`${total} blocks across ${rails.length} rails`}
+        />
+      </CardBody>
+    </Card>
+  )
+}
+
+/** A probe table with the shared four columns — blocked, unchecked and leaked share it. */
+function ProbeTable({ probes }: { probes: RedteamProbe[] }): ReactElement {
+  return (
+    <Table className="min-w-[720px]">
+      <THead>
+        <TH className="w-24">Probe</TH>
+        <TH>Attack</TH>
+        <TH className="w-36">Rail</TH>
+        <TH className="w-[38%]">Verdict</TH>
+      </THead>
+      <TBody>
+        {probes.map((probe) => (
+          <ProbeRow key={probe.id} probe={probe} />
+        ))}
+      </TBody>
+    </Table>
   )
 }
 
@@ -277,6 +402,17 @@ function CategoryBar({
  * 100% blocked is either lying or testing nothing, and "0 refused without being
  * examined" is the fact that tells those two apart. Hiding it left the reassuring
  * reading unopposed.
+ *
+ * **What is drawn.** {@link BlockRateTrend} is the one genuine time-series in these
+ * three portals — `history[].startedAt × blockRate`, against the stored floor — and
+ * the page leads with it, because 82% blocked means nothing without last time.
+ * {@link CategoryBlockRates} and {@link RailBlocks} are the two distributions the
+ * report already carried and never drew: block rate by attack category against the
+ * floor, and blocks per rail, which is the only mark that answers whether the whole
+ * defence is resting on one screen. `report.unchecked` and
+ * `report.falsePositiveDetail` are typed, were rendered nowhere, and now have their
+ * own panels — shown only when they have rows, because their zero case is already a
+ * tile above.
  */
 function RedteamView(): ReactElement {
   const { session, hydrated } = useAuth()
@@ -367,9 +503,8 @@ function RedteamView(): ReactElement {
         title="Red-team"
         actions={
           <InfoTip label="Where these verdicts come from">
-            Every verdict on this page is what the rail returned for that exact string.
-            Nothing here is composed in the browser, and a probe with no deterministic
-            signature is reported as a leak on an offline run rather than hidden.
+            Every verdict is what the rail returned for that exact string; nothing here is
+            composed in the browser.
           </InfoTip>
         }
       />
@@ -396,10 +531,19 @@ function RedteamView(): ReactElement {
         />
       )}
 
+      {/*
+        ── Block rate over runs ──────────────────────────────────────────────
+        The one real time-series in these three portals, and the page leads with
+        it: a block rate read against last time is the only way 82% means
+        anything. The stored runs are the source; the table at the foot is the
+        same rows, itemised.
+      */}
+      {history.length === 0 ? null : <BlockRateTrend history={history} />}
+
       {run_ && report ? (
         <>
           {/* ── What happened to the attacks ─────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 [&>*]:min-w-0">
             <StatCard
               label="Attacks blocked"
               value={`${run_.attacksBlocked}/${run_.attacksTotal}`}
@@ -438,7 +582,7 @@ function RedteamView(): ReactElement {
           </div>
 
           {/* ── How that scores ──────────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 [&>*]:min-w-0">
             <StatCard
               label="Block rate"
               value={pct(run_.blockRate)}
@@ -464,7 +608,9 @@ function RedteamView(): ReactElement {
           */}
           <Card>
             <CardBody className="space-y-3">
-              <p className="text-pretty text-sm leading-relaxed text-foreground">
+              {/* The one region a run changes asynchronously, so it is the one that
+                  announces. */}
+              <p aria-live="polite" className="text-pretty text-sm leading-relaxed text-foreground">
                 {headline(run_)}. <span className="text-muted-foreground">{verdictNote(run_)}</span>
               </p>
               <div className="flex flex-wrap items-center gap-2">
@@ -472,9 +618,9 @@ function RedteamView(): ReactElement {
                 <InfoTip label={`What a ${run_.mode} run measures`}>
                   {run_.mode === 'live'
                     ? run_.tenantId == null
-                      ? 'Live run against the platform’s own rails: the model-backed injection, content-safety and topical layers ran. There is no tenant to bill, so these calls are not in the usage ledger and the cost above is the estimate, not a charge.'
-                      : 'Live run: the model-backed injection, content-safety and topical layers ran, and the calls are in this tenant’s usage ledger.'
-                    : 'Offline run: no model was called, so this measures the deterministic signatures alone — not the whole stack.'}
+                      ? 'The model-backed layers ran against the platform’s own rails, and with no tenant to bill the cost stays an estimate.'
+                      : 'The model-backed layers ran, and the calls are in this tenant’s usage ledger.'
+                    : 'No model was called, so this measures the deterministic signatures alone — not the whole stack.'}
                 </InfoTip>
                 {comparison ? (
                   <>
@@ -502,12 +648,16 @@ function RedteamView(): ReactElement {
               <Receipt
                 label="Run"
                 origin={`${run_.suite} · ${run_.runId}`}
-                detail={`started by ${run_.initiatedBy}${
-                  run_.startedAt ? ` on ${new Date(run_.startedAt).toLocaleString()}` : ''
-                }`}
+                detail={`started by ${run_.initiatedBy} · ${stamp(run_.startedAt)}`}
               />
             </CardBody>
           </Card>
+
+          {/* ── The two distributions this report actually carries ───────────── */}
+          <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-2 [&>*]:min-w-0">
+            <CategoryBlockRates categories={report.categories} floor={run_.minBlockRate} />
+            <RailBlocks rails={report.rails} />
+          </div>
 
           {/* ── What the rails stopped ───────────────────────────────────────── */}
           <DataPanel
@@ -515,31 +665,22 @@ function RedteamView(): ReactElement {
             title="Attacks the rails stopped"
             maxHeight={520}
             actions={
-              <span className="text-xs text-muted-foreground">
-                {report.rails.map((rail) => `${rail.layer} ${rail.blocks}`).join(' · ')}
-              </span>
+              <Badge tone="ok" className="gap-1.5">
+                <ShieldCheck className="size-3 shrink-0" aria-hidden />
+                {report.blocked.length} of {run_.attacksTotal}
+              </Badge>
             }
           >
             {report.blocked.length === 0 ? (
-              <EmptyState
-                icon={ShieldAlert}
-                title="Nothing was blocked"
-                body="Every probe in this battery reached the model. On an offline run that is expected for probes with no deterministic signature; on a live run it is a finding."
-              />
+              <SceneState name="redteam" size="md">
+                <Absence
+                  className="text-left"
+                  figure="Attacks the rails stopped"
+                  why="Every probe reached the model — expected offline for probes with no deterministic signature, a finding on a live run."
+                />
+              </SceneState>
             ) : (
-              <Table className="min-w-[720px]">
-                <THead>
-                  <TH className="w-24">Probe</TH>
-                  <TH>Attack</TH>
-                  <TH className="w-36">Rail</TH>
-                  <TH className="w-[38%]">Verdict</TH>
-                </THead>
-                <TBody>
-                  {report.blocked.map((probe) => (
-                    <ProbeRow key={probe.id} probe={probe} />
-                  ))}
-                </TBody>
-              </Table>
+              <ProbeTable probes={report.blocked} />
             )}
           </DataPanel>
 
@@ -560,11 +701,17 @@ function RedteamView(): ReactElement {
             }
           >
             {report.leaked.length === 0 ? (
-                <EmptyState
-                  icon={ShieldCheck}
-                  title="Every attack in this battery was stopped"
-                  body="Read that against the two figures above before calling it coverage: a battery whose attacks were refused without examination, or one whose benign controls were also blocked, produces the same clean row."
-                />
+                /* The one place on this screen where the picture is the point: a
+                   battery that got through nothing. `sealed` is data held behind a
+                   lock, which is what this state is, and the sentence beside it is
+                   still what a screen reader gets. */
+                <SceneState name="sealed" size="md">
+                  <EmptyState
+                    className="items-center border-none text-center"
+                    title="Every attack in this battery was stopped"
+                    body="Coverage only if the two figures above hold: nothing refused unexamined, no benign control blocked."
+                  />
+                </SceneState>
               ) : (
                 <>
                   {leaks && leaks.unexpected.length > 0 ? (
@@ -613,33 +760,72 @@ function RedteamView(): ReactElement {
               )}
           </DataPanel>
 
-          {/* ── Per category ─────────────────────────────────────────────────── */}
-          <Card>
-            <CardHeader eyebrow="by category" title="Block rate per attack category" />
-            <CardBody className="flex flex-col gap-4">
-              {report.categories
-                .filter((row) => row.category !== 'benign_control')
-                .map((row) => (
-                  <CategoryBar
-                    key={row.category}
-                    name={label(row.category)}
-                    blocked={row.blocked}
-                    total={row.total}
-                    rate={row.blockRate}
-                    floor={run_.minBlockRate}
-                  />
-                ))}
-            </CardBody>
-          </Card>
+          {/*
+            `report.unchecked` and `report.falsePositiveDetail` are in the type and
+            were rendered nowhere: the counts were on the tiles above with no way to
+            reach the probes behind them. Each panel appears only when it has rows —
+            the zero case is already stated, on a tile, in words.
+          */}
+          {report.unchecked.length === 0 ? null : (
+            <DataPanel
+              eyebrow="unchecked"
+              title="Refused without being examined"
+              maxHeight={420}
+              actions={
+                <Badge tone="block" className="gap-1.5">
+                  <EyeOff className="size-3 shrink-0" aria-hidden />
+                  {report.unchecked.length} of {run_.attacksTotal}
+                </Badge>
+              }
+            >
+              <ProbeTable probes={report.unchecked} />
+            </DataPanel>
+          )}
+
+          {report.falsePositiveDetail.length === 0 ? null : (
+            <DataPanel
+              eyebrow="false positives"
+              title="Benign controls the rails blocked"
+              maxHeight={420}
+              actions={
+                <Badge tone="block" className="gap-1.5">
+                  <AlertTriangle className="size-3 shrink-0" aria-hidden />
+                  {report.falsePositiveDetail.length} of {run_.controlsTotal}
+                </Badge>
+              }
+            >
+              <ProbeTable probes={report.falsePositiveDetail} />
+            </DataPanel>
+          )}
         </>
-      ) : null}
+      ) : loading ? null : (
+        /* With no run, this page was ~70% empty panels. One scene, one stated
+           absence, and the history panel below it — nothing else. */
+        <Card>
+          <CardBody>
+            <SceneState name="redteam" size="lg">
+              <Absence
+                className="text-left"
+                figure="Every figure on this page"
+                why="No battery has been run in this scope, so there is no stored report to read."
+                needed="run a battery above — its report is written to the platform's own record and opens here"
+              />
+            </SceneState>
+          </CardBody>
+        </Card>
+      )}
 
       {/* ── History ────────────────────────────────────────────────────────── */}
       <DataPanel
         eyebrow="history"
         title="Previous runs"
         maxHeight={420}
-        actions={<History className="size-4 text-muted-foreground" aria-hidden />}
+        actions={
+          <Badge tone="neutral" className="gap-1.5 font-mono">
+            <History className="size-3 shrink-0" aria-hidden />
+            {history.length} stored
+          </Badge>
+        }
       >
           {history.length === 0 ? (
             /* An honest empty state, which this product produces a great many of by
@@ -647,10 +833,11 @@ function RedteamView(): ReactElement {
                yet, which is exactly what this is, and it sits above words that say the
                same thing so it is never the only thing saying it. */
             <SceneState name="empty" size="md">
-              <EmptyState
-                icon={History}
-                title="No run of this battery has been stored yet"
-                body="Every battery you run is written to the platform's own record and appears here, newest first, so a block rate can be read as a trend rather than a snapshot."
+              <Absence
+                className="text-left"
+                figure="Block rate over runs"
+                why="No run of this battery has been stored in this scope yet."
+                needed="run a battery — every run is stored, and the second one is what makes a block rate a trend rather than a snapshot"
               />
             </SceneState>
           ) : (
@@ -676,10 +863,7 @@ function RedteamView(): ReactElement {
                         <span className="sr-only">, open this run</span>
                       </button>
                       <p className="text-xs text-muted-foreground">
-                        {row.startedAt
-                          ? new Date(row.startedAt).toLocaleString()
-                          : 'no start time recorded'}{' '}
-                        · {row.initiatedBy}
+                        {stamp(row.startedAt)} · {row.initiatedBy}
                       </p>
                     </TD>
                     <TD className="text-sm">{row.suite}</TD>

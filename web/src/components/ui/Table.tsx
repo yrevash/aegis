@@ -16,6 +16,15 @@ export function Table({ children, className }: { children: ReactNode; className?
   )
 }
 
+/**
+ * The header row. **Takes `TH` children directly — never wrap them in a `TR`.**
+ *
+ * This emits its own `<tr>`, so `<THead><TR>…</TR></THead>` renders a `<tr>` inside a
+ * `<tr>`: invalid HTML, and React reports it as a hydration error at every viewport.
+ * `health/PipelineHealthView.tsx` did exactly that in three tables and logged the error
+ * on every `devops/stack` load; every other caller in the codebase already passes `TH`
+ * directly, so the shape is right and the note is here to keep it that way.
+ */
 export function THead({ children }: { children: ReactNode }) {
   return (
     <thead className="border-b border-border">

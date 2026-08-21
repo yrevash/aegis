@@ -129,7 +129,7 @@ function MetricPanel({ series, margin }: { series: Series; margin: number | null
       )}
       <div className="mt-1 min-w-0">
         <ResponsiveContainer width="100%" height={132}>
-          <LineChart data={series.points} margin={{ top: 6, right: 6, left: -22, bottom: 0 }}>
+          <LineChart data={series.points} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis
               dataKey="t"
