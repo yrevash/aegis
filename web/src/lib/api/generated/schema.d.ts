@@ -9115,6 +9115,12 @@ export interface components {
          */
         ScoredSource: {
             /**
+             * File Path
+             * @description The source document this passage came from, e.g. 'quarterly-report.pdf'. ``None`` when the chunk carries no recorded provenance — a stated absence, never a filename chosen on the passage's behalf.
+             * @default null
+             */
+            file_path: string | null;
+            /**
              * Id
              * @description Source/chunk identifier.
              */
@@ -9447,10 +9453,36 @@ export interface components {
             value_label?: string | null;
         };
         /**
+         * SkillAgent
+         * @description One agent a skill may be assigned to, as the console picker should offer it.
+         */
+        SkillAgent: {
+            /**
+             * Agentid
+             * @description The id a write puts in ``agent``.
+             */
+            agentId: string;
+            /**
+             * Ismain
+             * @description Whether this is the main persona rather than a fan-out lane.
+             */
+            isMain: boolean;
+            /**
+             * Label
+             * @description Human-facing name.
+             */
+            label: string;
+        };
+        /**
          * SkillRow
          * @description One authored skill, with the layer it lives at and whether it is live.
          */
         SkillRow: {
+            /**
+             * Agent
+             * @description The agent this skill was assigned to, or null for every agent. One of the ids GET /skills reports under 'agents'.
+             */
+            agent?: string | null;
             /** Description */
             description: string;
             /**
@@ -9490,6 +9522,11 @@ export interface components {
          *     ``extra='forbid'`` makes a stray field a 422 rather than a silently ignored one.
          */
         SkillWriteRequest: {
+            /**
+             * Agent
+             * @description Assign this skill to ONE agent from the live roster, or leave it out (the default) for a skill that belongs to Aegis generally and reaches every agent. An id nothing in the roster answers to is a 422 that names it.
+             */
+            agent?: string | null;
             /**
              * Document
              * @description The whole SKILL.md, frontmatter included.
@@ -9536,6 +9573,11 @@ export interface components {
          * @description Body for ``GET /skills``.
          */
         SkillsResponse: {
+            /**
+             * Agents
+             * @description The agents a skill may be assigned to, read from the live roster. A console picker must be built from this rather than from a hard-coded list: a deployment that swaps its domain swaps these.
+             */
+            agents?: components["schemas"]["SkillAgent"][];
             /** Rows */
             rows?: components["schemas"]["SkillRow"][];
             /**
