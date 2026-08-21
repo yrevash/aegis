@@ -3,6 +3,7 @@ import type { ReactElement } from 'react'
 
 import { cn } from '@/lib/utils'
 
+import { LandingScene } from './LandingScene'
 import { LandingSection } from './LandingSection'
 
 /**
@@ -55,31 +56,35 @@ export function Roadmap(): ReactElement {
       title="What runs today, and what does not."
       lead="Nothing in the right-hand column is on any screen in the console. It is here so the left-hand column can be read as a complete list rather than a flattering selection."
     >
-      <div className="grid gap-x-14 gap-y-10 sm:grid-cols-2">
-        <div>
-          <h3 className={cn(COLUMN_HEAD, 'mb-3 text-foreground')}>Running today</h3>
-          <ul className="divide-y divide-border border-t border-border">
-            {RUNNING.map((item) => (
-              <li key={item} className="flex items-start gap-2.5 py-3 text-sm text-foreground">
-                <Check aria-hidden className="mt-0.5 size-4 shrink-0 text-ok-ink" strokeWidth={2.5} />
-                <span className="text-pretty">{item}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+      <div className="grid gap-x-14 gap-y-10 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)] lg:items-start">
+        <LandingScene name="running" width={280} className="mx-auto lg:mx-0" />
 
-        <div>
-          <h3 className={cn(COLUMN_HEAD, 'mb-3 text-muted-foreground')}>Not built yet</h3>
-          <ul className="divide-y divide-border border-t border-border">
-            {NEXT.map((item) => (
-              <li
-                key={item}
-                className="py-3 pl-[1.625rem] text-sm text-pretty text-muted-foreground"
-              >
-                {item}
-              </li>
-            ))}
-          </ul>
+        <div className="grid gap-x-14 gap-y-10 sm:grid-cols-2">
+          <div>
+            <h3 className={cn(COLUMN_HEAD, 'mb-3 text-foreground')}>Running today</h3>
+            <ul className="divide-y divide-border border-t border-border">
+              {RUNNING.map((item) => (
+                <li key={item} className="flex items-start gap-2.5 py-3 text-sm text-foreground">
+                  <Check aria-hidden className="mt-0.5 size-4 shrink-0 text-ok-ink" strokeWidth={2.5} />
+                  <span className="text-pretty">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <h3 className={cn(COLUMN_HEAD, 'mb-3 text-muted-foreground')}>Not built yet</h3>
+            <ul className="divide-y divide-border border-t border-border">
+              {NEXT.map((item) => (
+                <li
+                  key={item}
+                  className="py-3 pl-[1.625rem] text-sm text-pretty text-muted-foreground"
+                >
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       </div>
     </LandingSection>

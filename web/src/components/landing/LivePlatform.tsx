@@ -7,6 +7,7 @@ import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { getPublicMetrics } from '@/lib/api/client'
 import type { PublicMetricsResponse } from '@/lib/api/types'
 
+import { LandingScene } from './LandingScene'
 import { LandingSection } from './LandingSection'
 import { useCapabilities } from './useCapabilities'
 
@@ -55,34 +56,38 @@ export function LivePlatform(): ReactElement {
       lead="The two blocks below are fetched from public endpoints when the page loads. There is no demo mode behind them: with nothing to read, they render nothing rather than something plausible."
     >
       {manifest.state === 'up' ? (
-        <div>
-          <h3 className="font-display text-lg leading-6 font-semibold text-foreground">
-            {manifest.data.module_count} modules, each paired with what it actually runs on
-          </h3>
-          <p className="mt-2 max-w-[62ch] text-pretty text-sm leading-relaxed text-muted-foreground">
-            Branding, never hiding. This list is the platform&rsquo;s own capability
-            manifest, so it cannot drift from what is installed — and the count above is
-            read from it rather than typed here.
-          </p>
+        <div className="grid gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)] lg:items-start">
+          <LandingScene name="liveData" width={280} className="mx-auto lg:mx-0" />
 
-          <ul className="mt-6 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-            {manifest.data.modules.map((module) => (
-              <li key={module.name} className="min-w-0 bg-surface px-5 py-4">
-                <h4 className="truncate text-sm font-semibold tracking-[-0.01em] text-foreground">
-                  {module.name.replace(/^Aegis /, '')}
-                </h4>
-                <p className="tabular truncate font-mono text-[0.7rem] text-blue-700">
-                  {module.tech}
-                </p>
-              </li>
-            ))}
-          </ul>
+          <div className="min-w-0">
+            <h3 className="font-display text-lg leading-6 font-semibold text-foreground">
+              {manifest.data.module_count} modules, each paired with what it actually runs on
+            </h3>
+            <p className="mt-2 max-w-[62ch] text-pretty text-sm leading-relaxed text-muted-foreground">
+              Branding, never hiding. This list is the platform&rsquo;s own capability
+              manifest, so it cannot drift from what is installed — and the count above is
+              read from it rather than typed here.
+            </p>
 
-          <Receipt
-            origin="GET /platform/capabilities"
-            detail="public, unauthenticated"
-            className="mt-5"
-          />
+            <ul className="mt-6 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
+              {manifest.data.modules.map((module) => (
+                <li key={module.name} className="min-w-0 bg-surface px-5 py-4">
+                  <h4 className="truncate text-sm font-semibold tracking-[-0.01em] text-foreground">
+                    {module.name.replace(/^Aegis /, '')}
+                  </h4>
+                  <p className="tabular truncate font-mono text-[0.7rem] text-blue-700">
+                    {module.tech}
+                  </p>
+                </li>
+              ))}
+            </ul>
+
+            <Receipt
+              origin="GET /platform/capabilities"
+              detail="public, unauthenticated"
+              className="mt-5"
+            />
+          </div>
         </div>
       ) : manifest.state === 'down' ? (
         <Absence

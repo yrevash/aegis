@@ -75,6 +75,24 @@ const SCENE = {
     alt: 'A rocket flying past the numerals 404, with an astronaut adrift on a tether beside them.',
     ratio: 1,
   },
+  /**
+   * A person reading real charts on a large screen — what `LivePlatform` actually
+   * is: two blocks fetched from public endpoints, on load, not a fixture.
+   */
+  liveData: {
+    src: '/illustrations/Visual data-rafiki.svg',
+    alt: 'A person reaching toward a wall of panels — a pie chart, a bar chart, a line graph and rows of tabular data.',
+    ratio: 1,
+  },
+  /**
+   * A server rack — the literal shape of "running today": installed stores, a
+   * process actually up, not a diagram of intent.
+   */
+  running: {
+    src: '/illustrations/Server-bro.svg',
+    alt: 'A rack of server units wired to routers and cloud icons, with three laptops uploading beneath it.',
+    ratio: 1,
+  },
 } as const
 
 export type SceneKey = keyof typeof SCENE
