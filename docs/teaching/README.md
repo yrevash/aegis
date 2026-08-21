@@ -1,18 +1,11 @@
 # Learning Aegis, module by module
 
-> **STATUS: the module files are not written yet.** The previous course — three
-> files per module plus HTML twins, 103 files — was removed on 2026-08-21 because
-> it had drifted (it still described Chroma, deleted days earlier) and because the
-> shape was wrong: a reader had to open three files to learn one module.
->
-> This index is the contract for the rewrite. **Every link below is currently
-> dead.** Until the files exist, the accurate sources are
-> [`../module/MODULE_REFERENCE.md`](../module/MODULE_REFERENCE.md) for the contract
-> and map, [`../module/PIPELINES.md`](../module/PIPELINES.md) for the stages
-> (generated from `aegis.pipelines.spec`, so it cannot drift), and
-> [`../security/`](../security/) for the threat model.
->
-> The old course is recoverable from git history if any of it is wanted back.
+> All 29 files are written and verified against the running source
+> (2026-08-21). The previous course — three files per module plus HTML
+> twins, 103 files — was removed the same day because it had drifted (it
+> still described Chroma, deleted days earlier) and because the shape was
+> wrong: a reader had to open three files to learn one module. It is
+> recoverable from git history if any of it is wanted back.
 
 One file per module. Each is a **parent file** — everything about that module in
 one place, written for someone who has never seen it before and read end to end.
