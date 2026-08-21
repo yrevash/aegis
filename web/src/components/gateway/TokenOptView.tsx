@@ -1,24 +1,25 @@
 'use client'
 
-import {
-  ArrowRight,
-  Coins,
-  Cpu,
-  PiggyBank,
-  Route,
-  Timer,
-} from 'lucide-react'
+import { ArrowRight, Coins, PiggyBank, Route, Timer } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { BarChart } from '@/components/charts/BarChart'
+import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
+import { RankedBars } from '@/components/charts/RankedBars'
+import { rampHex } from '@/components/charts/palette'
+import { SceneState } from '@/components/illustration/Scene'
 import { Figure } from '@/components/primitives/Figure'
-import { Receipt } from '@/components/primitives/Receipt'
+import { Gauge } from '@/components/primitives/Gauge'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { StatCard } from '@/components/ui/StatCard'
+import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { getGatewayOptimization } from '@/lib/api/client'
 import { getModels, type ModelRow } from '@/lib/api/console'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -35,11 +36,6 @@ import type { GatewayOptimizationResponse } from '@/lib/api/platform'
  */
 function usd(value: number | null | undefined): string {
   return value == null ? 'not metered' : `$${value.toFixed(2)}`
-}
-
-/** Format a 0–1 share as a whole percent, tolerating a null (unmetered) reading. */
-function pct(value: number | null | undefined): string {
-  return value == null ? 'not metered' : `${Math.round(value * 100)}%`
 }
 
 /** What one billing unit of a role costs, in the unit that role is actually billed in.
@@ -62,14 +58,19 @@ function priceLabel(row: ModelRow | undefined): string {
   return `$${row.input_cost_usd.toFixed(4)}${unit}${out}`
 }
 
+/** A chart card that has nothing to draw because nothing was metered. */
+function NotMetered({ figure }: { figure: string }): ReactElement {
+  return <Absence figure={figure} why="No gateway call has been metered yet." />
+}
+
 /**
- * Token-optimization — the `aegis` gateway savings surface. It leads with the
- * measured savings vs the frontier baseline (cost saved + small-model share),
- * then a per-role usage breakdown, then the read-only routing table the operator
- * runs on (role→model map, fallback chains, timeout, baseline model).
+ * Token-optimization — the `aegis` gateway savings surface.
  *
- * Every figure is metered from real gateway calls. With no calls yet the savings
- * read `$0` / `—`, which is the truthful answer — there is no illustrative mode.
+ * There is no timestamp anywhere in `GET /gateway/optimization`, so nothing here
+ * is a trend: the marks are one bounded value (small-model share), one comparison
+ * (spend against the frontier baseline) and two compositions (spend and volume by
+ * role, prompt against completion tokens). Every figure is metered from real
+ * calls; with no calls the charts state their absence rather than drawing zeros.
  */
 function TokenOptView(): ReactElement {
   // Live session token — a constant `null` would 401 on a reload and, being
@@ -113,16 +114,28 @@ function TokenOptView(): ReactElement {
   const config = data?.config
   const roleRows = summary ? Object.entries(summary.by_role) : []
 
+  // Nothing has been metered until a call has been. A bar chart of zeros reads as
+  // "measured, and it was zero", which is a different claim from "not measured".
+  const metered = (summary?.total_calls ?? 0) > 0
+
+  const promptTokens = roleRows.reduce((sum, [, r]) => sum + r.prompt_tokens, 0)
+  const completionTokens = roleRows.reduce((sum, [, r]) => sum + r.completion_tokens, 0)
+  const tokenSplit: DonutDatum[] = [
+    { name: 'prompt', value: promptTokens },
+    { name: 'completion', value: completionTokens },
+  ]
+    .sort((a, b) => b.value - a.value)
+    .map((d, i) => ({ ...d, color: 'graph' as const, hex: rampHex(i, 2) }))
+
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="role→model routing · savings vs frontier baseline"
         title="Token optimization"
         actions={
           <InfoTip label="Where these figures come from">
-            Every figure is metered from real gateway calls. With no calls yet the
-            savings read as unmetered rather than as zero — there is no illustrative
-            mode.
+            Every figure is metered from real gateway calls; with none, the savings read as
+            unmetered rather than as zero.
           </InfoTip>
         }
       />
@@ -137,8 +150,8 @@ function TokenOptView(): ReactElement {
         </Card>
       ) : (
         <>
-          {/* ── Savings hero ──────────────────────────────────────────────────── */}
-          <Card>
+          {/* ── Savings hero — one bounded value, three measured totals ───────── */}
+          <Card className="min-w-0">
             <CardHeader
               eyebrow="aegis.gateway"
               title="Savings"
@@ -149,191 +162,302 @@ function TokenOptView(): ReactElement {
                 </Badge>
               }
             />
-            <CardBody className="space-y-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <StatCard
-                  label="Cost saved"
-                  value={usd(summary.cost_saved_usd)}
-                  icon={PiggyBank}
-                  tone="ok"
-                />
-                <StatCard
-                  label="Small-model share"
-                  value={pct(summary.small_model_share)}
-                  icon={Cpu}
-                  tone="agent"
-                />
-                <StatCard
-                  label="Actual cost"
-                  value={usd(summary.total_cost_usd)}
-                  icon={Coins}
-                  tone="neutral"
-                />
-                <StatCard
-                  label="Baseline cost"
-                  value={usd(summary.baseline_cost_usd)}
-                  icon={Coins}
-                  tone="block"
-                />
+            <CardBody className="@container space-y-4">
+              <div className="grid min-w-0 gap-5 @lg:grid-cols-[auto_minmax(0,1fr)] @lg:items-center">
+                {/* `small_model_share` is `number | null`. A null is not a zero — a
+                    gauge at 0% would assert that every call went to the frontier. */}
+                {summary.small_model_share == null ? (
+                  <Absence
+                    className="max-w-xs"
+                    figure="Small-model share"
+                    why="No call has been routed yet."
+                  />
+                ) : (
+                  <Gauge
+                    value={summary.small_model_share}
+                    label="small-model share"
+                    color="agent"
+                    size={148}
+                    className="mx-auto"
+                  />
+                )}
+                <div className="grid min-w-0 gap-4 @sm:grid-cols-3">
+                  <StatCard
+                    label="Cost saved"
+                    value={usd(summary.cost_saved_usd)}
+                    icon={PiggyBank}
+                    tone="ok"
+                  />
+                  <StatCard
+                    label="Actual cost"
+                    value={usd(summary.total_cost_usd)}
+                    icon={Coins}
+                    tone="neutral"
+                  />
+                  <StatCard
+                    label="Baseline cost"
+                    value={usd(summary.baseline_cost_usd)}
+                    icon={Coins}
+                    tone="block"
+                  />
+                </div>
               </div>
 
               <Receipt
                 origin={`aegis.gateway · baseline ${config.baseline_model} (the “${config.baseline_role}” role)`}
-                detail={`metered over ${summary.total_calls.toLocaleString()} calls, of which ${summary.small_calls.toLocaleString()} were routed to a small model`}
+                detail={`${summary.total_calls.toLocaleString()} calls, ${summary.small_calls.toLocaleString()} on a small model`}
               />
             </CardBody>
           </Card>
 
+          {/* ── The composition marks ─────────────────────────────────────────── */}
+          <div className="grid min-w-0 gap-6 lg:grid-cols-2">
+            <Card className="flex min-w-0 flex-col">
+              <CardHeader as="h3" eyebrow="summary" title="Spend against the baseline" />
+              <CardBody className="flex min-h-0 flex-1 flex-col gap-4">
+                {!metered ? (
+                  <NotMetered figure="Spend against the baseline" />
+                ) : (
+                  <div className="min-w-0">
+                    <BarChart
+                      data={[
+                        { scenario: 'baseline', usd: summary.baseline_cost_usd },
+                        { scenario: 'actual', usd: summary.total_cost_usd },
+                        { scenario: 'saved', usd: summary.cost_saved_usd },
+                      ]}
+                      index="scenario"
+                      category="usd"
+                      color="graph"
+                      height={220}
+                      valueFormatter={(v) => `$${v.toFixed(2)}`}
+                    />
+                  </div>
+                )}
+                <Receipt
+                  className="mt-auto"
+                  origin={`summary.baseline_cost_usd · every call repriced at ${config.baseline_model}`}
+                />
+              </CardBody>
+            </Card>
+
+            <Card className="flex min-w-0 flex-col">
+              <CardHeader as="h3" eyebrow="summary.by_role" title="Prompt against completion" />
+              <CardBody className="flex min-h-0 flex-1 flex-col gap-4">
+                {!metered || promptTokens + completionTokens === 0 ? (
+                  <NotMetered figure="Token split" />
+                ) : (
+                  <div className="min-w-0">
+                    <DonutChart
+                      data={tokenSplit}
+                      height={200}
+                      centerLabel={(promptTokens + completionTokens).toLocaleString()}
+                      centerSub="tokens"
+                      valueFormatter={(v) => v.toLocaleString()}
+                    />
+                  </div>
+                )}
+                <Receipt
+                  className="mt-auto"
+                  origin="summary.by_role[].prompt_tokens + completion_tokens"
+                />
+              </CardBody>
+            </Card>
+
+            <Card className="flex min-w-0 flex-col">
+              <CardHeader as="h3" eyebrow="summary.by_role" title="Cost by role" />
+              <CardBody className="flex min-h-0 flex-1 flex-col gap-4">
+                {!metered ? (
+                  <NotMetered figure="Cost by role" />
+                ) : (
+                  <RankedBars
+                    label="Metered cost by role"
+                    data={roleRows.map(([role, r]) => ({ name: role, value: r.cost_usd }))}
+                    valueFormatter={(v) => `$${v.toFixed(2)}`}
+                    color="graph"
+                    maxRows={6}
+                  />
+                )}
+                <Receipt className="mt-auto" origin="summary.by_role[].cost_usd" />
+              </CardBody>
+            </Card>
+
+            <Card className="flex min-w-0 flex-col">
+              <CardHeader as="h3" eyebrow="summary.by_role" title="Calls by role" />
+              <CardBody className="flex min-h-0 flex-1 flex-col gap-4">
+                {!metered ? (
+                  <NotMetered figure="Calls by role" />
+                ) : (
+                  <RankedBars
+                    label="Metered calls by role"
+                    data={roleRows.map(([role, r]) => ({ name: role, value: r.calls }))}
+                    valueFormatter={(v) => v.toLocaleString()}
+                    color="ml"
+                    maxRows={6}
+                  />
+                )}
+                <Receipt className="mt-auto" origin="summary.by_role[].calls" />
+              </CardBody>
+            </Card>
+          </div>
+
           {/* ── Per-role breakdown ────────────────────────────────────────────── */}
-          <Card>
-            <CardHeader
-              eyebrow="aegis.gateway"
-              title="Per-role usage"
-            />
-            <CardBody>
-              <div className="overflow-x-auto rounded-lg border border-border">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-muted-foreground">
-                      <th scope="col" className="eyebrow px-4 py-2.5 font-medium">role</th>
-                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">calls</th>
-                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">tokens</th>
-                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">cost</th>
-                      <th scope="col" className="eyebrow px-4 py-2.5 text-right font-medium">model tier</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {roleRows.map(([role, r]) => {
-                      const tokens = r.prompt_tokens + r.completion_tokens
-                      return (
-                        <tr key={role} className="border-b border-border last:border-0">
-                          <td className="px-4 py-2.5">
-                            <Figure className="text-foreground">{role}</Figure>
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Figure className="text-foreground">{r.calls.toLocaleString()}</Figure>
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Figure className="text-muted-foreground">
-                              {tokens.toLocaleString()}
-                            </Figure>
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Figure className="text-foreground">{usd(r.cost_usd)}</Figure>
-                          </td>
-                          <td className="px-4 py-2 text-right">
-                            <Badge tone={r.small_model ? 'ok' : 'neutral'}>
-                              {r.small_model ? 'small' : 'frontier'}
-                            </Badge>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </CardBody>
-          </Card>
+          <DataPanel
+            eyebrow="aegis.gateway"
+            title="Per-role usage"
+            maxHeight={420}
+            actions={
+              <Badge tone="neutral" className="font-mono">
+                {roleRows.length} roles
+              </Badge>
+            }
+          >
+            {roleRows.length === 0 ? (
+              /* "Spend being routed and held down" — there is nothing to hold down
+                 yet, and the words below say so. */
+              <SceneState name="cost" size="md">
+                <Absence
+                  className="text-left"
+                  figure="Per-role usage"
+                  why="No gateway call has been metered yet."
+                />
+              </SceneState>
+            ) : (
+              <Table className="min-w-[640px]">
+                <THead>
+                  <TH>role</TH>
+                  <TH className="text-right">calls</TH>
+                  <TH className="text-right">tokens</TH>
+                  <TH className="text-right">cost</TH>
+                  <TH className="text-right">model tier</TH>
+                </THead>
+                <TBody>
+                  {roleRows.map(([role, r]) => (
+                    <TR key={role}>
+                      <TD>
+                        <Figure className="break-words text-foreground">{role}</Figure>
+                      </TD>
+                      <TD className="text-right">
+                        <Figure className="text-foreground">{r.calls.toLocaleString()}</Figure>
+                      </TD>
+                      <TD className="text-right">
+                        <Figure className="text-muted-foreground">
+                          {(r.prompt_tokens + r.completion_tokens).toLocaleString()}
+                        </Figure>
+                      </TD>
+                      <TD className="text-right">
+                        <Figure className="text-foreground">{usd(r.cost_usd)}</Figure>
+                      </TD>
+                      <TD className="text-right">
+                        <Badge tone={r.small_model ? 'ok' : 'neutral'}>
+                          {r.small_model ? 'small' : 'frontier'}
+                        </Badge>
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            )}
+          </DataPanel>
 
           {/* ── Routing config ────────────────────────────────────────────────── */}
-          <Card>
-            <CardHeader
-              eyebrow="aegis.gateway"
-              title="Routing config"
-              actions={
-                <Badge tone="neutral" className="gap-1.5">
-                  <Route className="size-3" aria-hidden />
-                  read-only
-                </Badge>
-              }
-            />
-            <CardBody className="space-y-5">
-              {/* Role → model map */}
-              <div>
-                <p className="eyebrow mb-2">role → model</p>
-                <div className="overflow-x-auto rounded-lg border border-border">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border text-left text-muted-foreground">
-                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">role</th>
-                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">model</th>
-                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">unit cost</th>
-                        <th scope="col" className="eyebrow px-4 py-2.5 font-medium">fallback chain</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(config.routing).map(([role, model]) => {
-                        const chain = config.fallbacks[role] ?? []
-                        const isBaseline = role === config.baseline_role
-                        return (
-                          <tr key={role} className="border-b border-border last:border-0">
-                            <td className="px-4 py-2 font-mono text-foreground">
-                              <span className="inline-flex items-center gap-1.5">
-                                {role}
-                                {isBaseline ? (
-                                  <Badge tone="block">baseline</Badge>
+          <DataPanel
+            eyebrow="aegis.gateway"
+            title="Role → model"
+            maxHeight={420}
+            actions={
+              <Badge tone="neutral" className="gap-1.5">
+                <Route className="size-3" aria-hidden />
+                read-only
+              </Badge>
+            }
+          >
+            <Table className="min-w-[720px]">
+              <THead>
+                <TH>role</TH>
+                <TH>model</TH>
+                <TH>unit cost</TH>
+                <TH>fallback chain</TH>
+              </THead>
+              <TBody>
+                {Object.entries(config.routing).map(([role, model]) => {
+                  const chain = config.fallbacks[role] ?? []
+                  return (
+                    <TR key={role} className="align-top">
+                      <TD>
+                        <span className="inline-flex flex-wrap items-center gap-1.5">
+                          <Figure className="break-words text-foreground">{role}</Figure>
+                          {role === config.baseline_role ? (
+                            <Badge tone="block">baseline</Badge>
+                          ) : null}
+                        </span>
+                      </TD>
+                      <TD>
+                        <Figure className="break-words text-muted-foreground">{model}</Figure>
+                      </TD>
+                      <TD>
+                        <Figure className="break-words text-muted-foreground">
+                          {priceLabel(priced.get(role))}
+                        </Figure>
+                      </TD>
+                      <TD>
+                        {chain.length > 0 ? (
+                          <span className="flex min-w-0 flex-wrap items-center gap-1">
+                            {chain.map((step, i) => (
+                              <span key={step} className="inline-flex items-center gap-1">
+                                {i > 0 ? (
+                                  <ArrowRight
+                                    className="size-3 text-muted-foreground/60"
+                                    aria-hidden
+                                  />
                                 ) : null}
+                                <span
+                                  translate="no"
+                                  className="rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-[0.72rem] break-words text-foreground"
+                                >
+                                  {step}
+                                </span>
                               </span>
-                            </td>
-                            <td className="px-4 py-2 font-mono text-muted-foreground">{model}</td>
-                            <td className="px-4 py-2 font-mono text-[0.72rem] text-muted-foreground">
-                              {priceLabel(priced.get(role))}
-                            </td>
-                            <td className="px-4 py-2">
-                              {chain.length > 0 ? (
-                                <span className="flex flex-wrap items-center gap-1 font-mono text-[0.72rem] text-muted-foreground">
-                                  {chain.map((step, i) => (
-                                    <span key={step} className="inline-flex items-center gap-1">
-                                      {i > 0 ? (
-                                        <ArrowRight className="size-3 text-muted-foreground/60" />
-                                      ) : null}
-                                      <span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-foreground">
-                                        {step}
-                                      </span>
-                                    </span>
-                                  ))}
-                                </span>
-                              ) : (
-                                <span className="text-xs text-muted-foreground italic">
-                                  no fallback configured
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                            ))}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic">
+                            no fallback configured
+                          </span>
+                        )}
+                      </TD>
+                    </TR>
+                  )
+                })}
+              </TBody>
+            </Table>
+          </DataPanel>
 
-              {/* Gateway limits + baseline */}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
+          {/* ── Gateway limits ────────────────────────────────────────────────── */}
+          <Card className="min-w-0">
+            <CardHeader as="h3" eyebrow="aegis.gateway" title="Gateway limits" />
+            <CardBody className="@container">
+              <div className="grid min-w-0 gap-3 @sm:grid-cols-2 @3xl:grid-cols-4">
+                <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
                   <span className="eyebrow inline-flex items-center gap-1.5">
                     <Timer className="size-3" aria-hidden /> timeout
                   </span>
-                  <span className="tabular font-mono text-[0.95rem] font-semibold text-foreground">
-                    {config.timeout_seconds}s
-                  </span>
+                  <Figure className="break-words text-foreground">
+                    {`${config.timeout_seconds}s`}
+                  </Figure>
                 </div>
-                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
+                <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
                   <span className="eyebrow">max output tokens</span>
-                  <span className="tabular font-mono text-[0.95rem] font-semibold text-foreground">
+                  <Figure className="break-words text-foreground">
                     {config.max_output_tokens.toLocaleString()}
-                  </span>
+                  </Figure>
                 </div>
-                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
+                <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
                   <span className="eyebrow">baseline role</span>
-                  <span className="text-[0.95rem] font-semibold text-foreground">
-                    {config.baseline_role}
-                  </span>
+                  <Figure className="break-words text-foreground">{config.baseline_role}</Figure>
                 </div>
-                <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
-                  <span className="eyebrow">savings baseline model</span>
-                  <span className="truncate font-mono text-[0.82rem] font-semibold text-foreground">
-                    {config.baseline_model}
-                  </span>
+                <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
+                  <span className="eyebrow">baseline model</span>
+                  <Figure className="break-words text-foreground">{config.baseline_model}</Figure>
                 </div>
               </div>
             </CardBody>

@@ -1,11 +1,11 @@
 'use client'
 
-import { Building2, Eye, Globe2, Lock, type LucideIcon } from 'lucide-react'
+import { Building2, Globe2, Lock, type LucideIcon } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { Absence } from '@/components/primitives/Receipt'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { Badge } from '@/components/ui/Badge'
 import type { MemorySubjectRow } from '@/lib/api/memory'
 
@@ -136,11 +136,8 @@ export function ScopeLadder({
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="t-title text-foreground">Who can reach this record</h3>
         <InfoTip label="What is scoped, and what is not">
-          A memory is private to one person by construction — recall filters both the
-          subject and the tenant on every arm, and there is no shared memory bucket to
-          write into. What widens with rank is the reach over those records, and the
-          server builds that reach from a sealed tenant scope rather than from anything
-          the browser sends.
+          Recall filters subject and tenant on every arm — what widens with rank is the reach
+          over those records, never the records themselves.
         </InfoTip>
       </div>
 
@@ -186,7 +183,7 @@ export function ScopeLadder({
             <div className="mt-2">
               <Absence
                 figure="The other people in this tenant"
-                why="This sign-in manages one subject — its own — so the list it was served holds exactly one row. That is the isolation working, not a gap in the data."
+                why="This sign-in manages one subject, so it was served exactly one row — the isolation working, not a gap."
               />
             </div>
           )}
@@ -204,10 +201,8 @@ export function ScopeLadder({
         />
       </ul>
 
-      <p className="flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
-        <Eye className="size-3 shrink-0" aria-hidden />
-        Source: GET /memory/subjects — the set the server builds from its own tenant scope
-      </p>
+      {/* The one receipt treatment, not a sixth hand-rolled `Source:` line. */}
+      <Receipt origin="GET /memory/subjects" detail="built from the server's own tenant scope" />
     </div>
   )
 }

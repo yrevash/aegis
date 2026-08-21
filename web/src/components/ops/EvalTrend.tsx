@@ -1,11 +1,12 @@
 'use client'
 
-import { Loader2 } from 'lucide-react'
-import { useMemo, useState, type ReactElement } from 'react'
+import { CircleCheck, CircleX } from 'lucide-react'
+import { useMemo, type ReactElement } from 'react'
 import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,179 +14,234 @@ import {
 } from 'recharts'
 
 import { ChartTooltip } from '@/components/charts/ChartTooltip'
-import { CountUp } from '@/components/shared'
+import { chartHex } from '@/components/charts/palette'
+import { SceneState } from '@/components/illustration/Scene'
+import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
+import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
-import { SIGNALS, type Signal } from '@/config/signals'
-import { cn } from '@/lib/utils'
 import type { OpsEvalRow } from '@/lib/api/ops'
+import type { OpsParamsResponse } from '@/lib/api/platform'
 
-/** The four eval metric families, each mapped to a trust hue. */
-const METRICS: { key: string; label: string; signal: Signal }[] = [
-  { key: 'answer', label: 'Answer', signal: 'agent' },
-  { key: 'retrieval', label: 'Retrieval', signal: 'graph' },
-  { key: 'tool', label: 'Tool', signal: 'ml' },
-  { key: 'guardrail', label: 'Guardrail', signal: 'ok' },
+/**
+ * The x-axis tick label, in the reader's own locale — one formatter for the whole
+ * screen rather than a fresh `Intl` instance per row of a 200-row payload.
+ */
+const TICK_FORMAT = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+
+/** The metric families the harness scores, in the order the loop reads them. */
+const KNOWN: { key: string; label: string }[] = [
+  { key: 'answer', label: 'Answer' },
+  { key: 'retrieval', label: 'Retrieval' },
+  { key: 'tool', label: 'Tool' },
+  { key: 'guardrail', label: 'Guardrail' },
 ]
 
-interface Point {
-  t: string
-  sort: number
-  [metric: string]: number | string
+/** One metric family's own series — the unit of a small multiple. */
+interface Series {
+  key: string
+  label: string
+  points: { t: string; sort: number; score: number }[]
+  passed: number
 }
 
-/** Pivot the flat eval rows into one point per timestamp with a key per metric. */
-function pivot(rows: OpsEvalRow[]): Point[] {
-  const byTs = new Map<string, Point>()
-  for (const r of rows) {
-    if (!r.ts) continue
-    const sort = new Date(r.ts).getTime()
-    const label = new Date(r.ts).toLocaleDateString([], { month: 'short', day: 'numeric' })
-    const point = byTs.get(r.ts) ?? { t: label, sort }
-    point[r.metric] = r.score
-    byTs.set(r.ts, point)
+/**
+ * Split the flat eval rows into one series per metric family.
+ *
+ * The four families used to be four lines on one axis. Two things were wrong with
+ * that and neither is taste. `guardrail` was drawn in `--ok`, and DESIGN.md §2
+ * reserves the status hues so that a green mark always means a verdict — a green
+ * *series* spends that. And the other three resolved to adjacent steps of one blue
+ * ramp, which measures ΔE 6.4 against a floor of 15: two of those lines are one
+ * line to anyone reading the chart rather than the legend. One hue does not hold
+ * four categories, so this is the other answer DESIGN.md gives — small multiples.
+ *
+ * They also compare better this way. Answer relevancy and tool correctness are
+ * different measurements that happen to share a 0–1 range; putting them on one
+ * axis invites a comparison that means nothing.
+ */
+function seriesByMetric(rows: OpsEvalRow[]): Series[] {
+  const grouped = new Map<string, Series>()
+  for (const row of rows) {
+    if (row.ts == null) continue
+    const existing =
+      grouped.get(row.metric) ??
+      ({
+        key: row.metric,
+        label: KNOWN.find((m) => m.key === row.metric)?.label ?? row.metric,
+        points: [],
+        passed: 0,
+      } satisfies Series)
+    existing.points.push({
+      t: TICK_FORMAT.format(new Date(row.ts)),
+      sort: new Date(row.ts).getTime(),
+      score: row.score,
+    })
+    if (row.passed) existing.passed += 1
+    grouped.set(row.metric, existing)
   }
-  return [...byTs.values()].sort((a, b) => a.sort - b.sort)
+  const order = new Map(KNOWN.map((m, i) => [m.key, i]))
+  return [...grouped.values()]
+    .map((s) => ({ ...s, points: [...s.points].sort((a, b) => a.sort - b.sort) }))
+    .sort(
+      (a, b) =>
+        (order.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
+          (order.get(b.key) ?? Number.MAX_SAFE_INTEGER) || a.key.localeCompare(b.key),
+    )
 }
 
-/** The latest score for a metric over the window, or null. */
-function latestScore(data: Point[], key: string): number | null {
-  for (let i = data.length - 1; i >= 0; i -= 1) {
-    const v = data[i][key]
-    if (typeof v === 'number') return v
-  }
-  return null
+/**
+ * One metric family, drawn on its own axis.
+ *
+ * The dashed rule is the bar the next draft has to clear: the gate promotes only
+ * when a draft beats the live prompt by `eval_margin`, and the live prompt's score
+ * is the most recent point on this line. Both numbers are measured — nothing about
+ * the line is inferred.
+ */
+function MetricPanel({ series, margin }: { series: Series; margin: number | null }): ReactElement {
+  const latest = series.points[series.points.length - 1]?.score ?? null
+  const bar = latest != null && margin != null ? Math.min(1, latest + margin) : null
+  const low = series.points.reduce((m, p) => Math.min(m, p.score), 1)
+  const floor = Math.max(0, Math.min(low, bar ?? 1) - 0.05)
+  const total = series.points.length
+  const clean = series.passed === total
+
+  return (
+    <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-card p-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <span className="eyebrow">{series.label}</span>
+        <Badge tone={clean ? 'ok' : 'block'} className="gap-1.5">
+          {clean ? (
+            <CircleCheck className="size-3 shrink-0" aria-hidden />
+          ) : (
+            <CircleX className="size-3 shrink-0" aria-hidden />
+          )}
+          {series.passed}/{total} passed
+        </Badge>
+      </div>
+      <Figure size="stat" className="text-foreground">
+        {latest == null ? 'not scored' : latest.toFixed(3)}
+      </Figure>
+      {bar == null ? null : (
+        <span className="eyebrow">bar to clear {bar.toFixed(3)}</span>
+      )}
+      <div className="mt-1 min-w-0">
+        <ResponsiveContainer width="100%" height={132}>
+          <LineChart data={series.points} margin={{ top: 6, right: 6, left: -22, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis
+              dataKey="t"
+              tick={{ fill: 'var(--muted-foreground)', fontSize: 10, fontFamily: 'var(--font-mono)' }}
+              axisLine={false}
+              tickLine={false}
+              minTickGap={16}
+            />
+            <YAxis
+              domain={[floor, 1]}
+              tick={{ fill: 'var(--muted-foreground)', fontSize: 10, fontFamily: 'var(--font-mono)' }}
+              axisLine={false}
+              tickLine={false}
+              width={44}
+              tickFormatter={(v: number) => v.toFixed(2)}
+            />
+            <Tooltip
+              cursor={{ stroke: 'var(--border)' }}
+              content={<ChartTooltip valueFormatter={(v) => v.toFixed(3)} />}
+            />
+            {bar == null ? null : (
+              <ReferenceLine
+                y={bar}
+                stroke="var(--muted-foreground)"
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+              />
+            )}
+            <Line
+              type="monotone"
+              dataKey="score"
+              name={series.label}
+              stroke={chartHex('graph')}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4, stroke: 'var(--card)', strokeWidth: 2 }}
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
 }
 
 interface Props {
   rows: OpsEvalRow[]
   loading: boolean
   error: string | null
+  /** The gate's tunable knobs; `eval_margin` is the bar drawn on each panel. */
+  params: OpsParamsResponse | null
 }
 
 /**
- * The **Quality trend** hero — answer / retrieval / tool / guardrail scores over
- * time (`GET /ops/evals`). The four tiles read the latest score per family
- * (click to toggle its line); the multi-line chart is the signal the loop
- * watches to decide when to propose a new prompt.
+ * The **Quality trend** hero — the one real time-series in this portal
+ * (`OpsEvalRow.score` by `ts`), drawn as one small multiple per metric family.
  */
-export function EvalTrend({ rows, loading, error }: Props): ReactElement {
-  const [hidden, setHidden] = useState<Set<string>>(new Set())
-  const data = useMemo(() => pivot(rows), [rows])
+export function EvalTrend({ rows, loading, error, params }: Props): ReactElement {
+  const series = useMemo(() => seriesByMetric(rows), [rows])
+  const margin = params?.eval_margin ?? null
+  const plotted = series.reduce((sum, s) => sum + s.points.length, 0)
 
   return (
-    <Card>
+    <Card className="flex min-w-0 flex-col">
       <CardHeader
         eyebrow="GET /ops/evals"
         title="Quality trend"
         actions={
-          <span className="eyebrow flex items-center gap-1.5">
-            <span
-              className="animate-pip size-1.5 rounded-full"
-              style={{ background: 'var(--blue-700)', ['--pip-color' as string]: 'var(--blue-700)' }}
-            />
-            live
-          </span>
+          <div className="flex items-center gap-2">
+            <Badge tone="neutral" className="font-mono">
+              {plotted} scores · {series.length} metrics
+            </Badge>
+            <InfoTip label="What the dashed rule is">
+              The bar a draft must clear to auto-ship: the live prompt&rsquo;s latest score plus
+              the gate&rsquo;s eval margin.
+            </InfoTip>
+          </div>
         }
       />
-      <CardBody className="space-y-4">
+      <CardBody className="@container flex min-h-0 flex-1 flex-col gap-4">
         {error ? (
-          <p className="py-10 text-center text-sm text-danger">{error}</p>
+          <ErrorState error={error} />
         ) : loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading quality history…
-          </div>
+          <LoadingState rows={4} label="Loading quality history…" />
+        ) : series.length === 0 ? (
+          /* "A chart with nothing to draw yet" — which is exactly the state. */
+          <SceneState name="noChart" size="md">
+            <Absence
+              className="text-left"
+              figure="Quality trend"
+              why={
+                rows.length === 0
+                  ? 'The harness has not graded a run yet.'
+                  : 'The stored scores carry no timestamp, so they cannot be placed on a series.'
+              }
+              needed="A graded run — every score it writes lands here."
+            />
+          </SceneState>
         ) : (
-          <>
-            {/* Latest score per metric — click to toggle its line. */}
-            <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-              {METRICS.map((m) => {
-                const score = latestScore(data, m.key)
-                const off = hidden.has(m.key)
-                const token = SIGNALS[m.signal]
-                return (
-                  <button
-                    key={m.key}
-                    type="button"
-                    aria-pressed={!off}
-                    onClick={() =>
-                      setHidden((prev) => {
-                        const next = new Set(prev)
-                        if (next.has(m.key)) next.delete(m.key)
-                        else next.add(m.key)
-                        return next
-                      })
-                    }
-                    className={cn(
-                      'rounded-lg border p-3 text-left transition-[background-color,border-color] duration-[--dur-fast] motion-reduce:transition-none',
-                      off ? 'border-border/60 bg-surface-2/30 opacity-55' : 'border-border bg-card',
-                    )}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <span className="size-2 rounded-full" style={{ background: token.hex }} />
-                      <span className="eyebrow text-[0.58rem]">{m.label}</span>
-                    </div>
-                    {score != null ? (
-                      <CountUp
-                        value={score}
-                        format={(n) => n.toFixed(3)}
-                        className="tabular mt-1 block font-mono text-xl leading-7 font-semibold tracking-[-0.01em] text-foreground"
-                      />
-                    ) : (
-                      <p className="mt-1 text-[0.8125rem] leading-7 text-muted-foreground italic">
-                        not scored
-                      </p>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-
-            {data.length === 0 ? (
-              <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
-                No scores yet — they appear here once the harness grades a run.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <ResponsiveContainer width="100%" height={280} minWidth={320}>
-                  <LineChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                    <XAxis
-                      dataKey="t"
-                      tick={{ fill: 'var(--muted-foreground)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      domain={[0.5, 1]}
-                      tick={{ fill: 'var(--muted-foreground)', fontSize: 11, fontFamily: 'var(--font-mono)' }}
-                      axisLine={false}
-                      tickLine={false}
-                      width={40}
-                    />
-                    <Tooltip
-                      cursor={{ stroke: 'var(--border)' }}
-                      content={<ChartTooltip valueFormatter={(v) => v.toFixed(3)} />}
-                    />
-                    {METRICS.filter((m) => !hidden.has(m.key)).map((m) => (
-                      <Line
-                        key={m.key}
-                        type="monotone"
-                        dataKey={m.key}
-                        name={m.label}
-                        stroke={SIGNALS[m.signal].hex}
-                        strokeWidth={2}
-                        dot={false}
-                        activeDot={{ r: 4, stroke: 'var(--background)' }}
-                        isAnimationActive
-                        animationDuration={700}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </>
+          <div className="grid min-w-0 gap-3 @md:grid-cols-2">
+            {series.map((s) => (
+              <MetricPanel key={s.key} series={s} margin={margin} />
+            ))}
+          </div>
         )}
+        <Receipt
+          className="mt-auto"
+          origin="ops.evals · score by ts"
+          detail={
+            margin == null ? 'eval margin not read' : `bar = latest + eval_margin ${margin.toFixed(3)}`
+          }
+        />
       </CardBody>
     </Card>
   )

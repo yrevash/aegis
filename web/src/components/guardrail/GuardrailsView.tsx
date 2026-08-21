@@ -3,7 +3,7 @@
 import {
   ArrowDown,
   Ban,
-  Crosshair,
+  CircleSlash,
   Eraser,
   FileCode2,
   Filter,
@@ -14,7 +14,7 @@ import {
   Target,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
 import { getSecurityPosture, runRedteam } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -23,17 +23,24 @@ import type {
   RedteamReportResponse,
   SecurityPostureResponse,
 } from '@/lib/api/platform'
+import { BarChart } from '@/components/charts/BarChart'
+import { RankedBars } from '@/components/charts/RankedBars'
+import { SceneState } from '@/components/illustration/Scene'
 import { Badge } from '@/components/ui/Badge'
-import { Card, CardBody } from '@/components/ui/Card'
-import { MiniMeter } from '@/components/memory/MiniMeter'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { DataPanel } from '@/components/ui/DataPanel'
+import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { Figure } from '@/components/primitives/Figure'
+import { Gauge } from '@/components/primitives/Gauge'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { Receipt } from '@/components/primitives/Receipt'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
-import { EmptyState, LoadingState } from '@/components/primitives/States'
+import { LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { TenantRailPolicy } from '@/components/guardrails/TenantRailPolicy'
+import { SIGNALS } from '@/config/signals'
+import { cn } from '@/lib/utils'
 
 /**
  * One rail in the defense-in-depth pipeline. Every field here is honest,
@@ -92,7 +99,7 @@ const INPUT_RAILS: RailSpec[] = [
     icon: ShieldAlert,
     fn: 'deterministic_injection → classify_injection',
     detail:
-      'A deterministic signature backstop runs before the classifier, and the rail is fail-closed: an unavailable classifier is treated as injection.',
+      'Fail-closed: a deterministic signature backstop runs first, and an unavailable classifier counts as injection.',
     owasp: 'LLM01 · prompt injection / jailbreak',
     semantics: 'block',
     postureThreatId: 'LLM01',
@@ -193,6 +200,64 @@ function statusBadge(status: string): { tone: 'ok' | 'risk' | 'neutral'; label: 
   return { tone: 'neutral', label: status }
 }
 
+/**
+ * The three coverage states a posture row can be in, each with the icon **and**
+ * the word DESIGN.md §2 requires — `--ok` and `--risk` fail CVD separation
+ * against each other by design, so the label is what actually tells them apart.
+ */
+const COVERAGE: { key: string; label: string; icon: LucideIcon; tone: 'ok' | 'risk' | 'neutral' }[] =
+  [
+    { key: 'enforced', label: 'enforced', icon: ShieldCheck, tone: 'ok' },
+    { key: 'partial', label: 'partial', icon: ShieldAlert, tone: 'risk' },
+    { key: 'not_covered', label: 'not covered', icon: CircleSlash, tone: 'neutral' },
+  ]
+
+/** Shorter axis labels for the rail layers a red-team verdict can name. */
+const LAYER_AXIS_LABEL: Record<string, string> = {
+  content_safety: 'content',
+  injection_unavailable: 'inj · n/a',
+}
+
+/**
+ * How many attacks each rail actually caught — the one distribution in this
+ * payload that nothing rendered.
+ *
+ * `layer` is the rail that stamped the verdict, so a `null` is not missing data:
+ * it is an attack that reached the end of the pipeline with no rail firing. That
+ * bar is named `none` and counted, because dropping it would turn a chart about
+ * coverage into a chart about successes.
+ *
+ * Benign controls are excluded — a control blocked by a rail is a false positive,
+ * which is a different measurement and has its own figure on the hero.
+ */
+function layerDistribution(
+  report: RedteamReportResponse | null,
+): { layer: string; attacks: number }[] {
+  if (report == null || !Array.isArray(report.attacks)) return []
+  const counts = new Map<string, number>()
+  for (const attack of report.attacks) {
+    if (attack.category === 'benign_control') continue
+    const key =
+      attack.layer == null ? 'none' : (LAYER_AXIS_LABEL[attack.layer] ?? attack.layer)
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([layer, attacks]) => ({ layer, attacks }))
+    .sort((a, b) => b.attacks - a.attacks)
+}
+
+/** One measured figure beside the gauge — label above, value 4px below (§3). */
+function HeroFigure({ label, value }: { label: string; value: string }): ReactElement {
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 p-3.5">
+      <p className="eyebrow">{label}</p>
+      <Figure size="stat" className="mt-1 block break-words text-foreground">
+        {value}
+      </Figure>
+    </div>
+  )
+}
+
 /** One rail card in the stepped stack. */
 function RailCard({
   spec,
@@ -220,7 +285,7 @@ function RailCard({
             <Figure className="text-muted-foreground">
               {String(index + 1).padStart(2, '0')}
             </Figure>
-            <h4 className="text-base font-semibold text-foreground">{spec.name}</h4>
+            <h4 className="min-w-0 text-base font-semibold text-foreground">{spec.name}</h4>
             <Figure className="text-muted-foreground">{spec.layer}</Figure>
             {status ? (
               <Badge tone={status.tone} className="ml-auto uppercase">
@@ -233,13 +298,13 @@ function RailCard({
             )}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-            <span className="flex items-center gap-1.5">
-              <Figure className="text-muted-foreground">{spec.fn}</Figure>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Figure className="min-w-0 break-words text-muted-foreground">{spec.fn}</Figure>
               <InfoTip label={`What the ${spec.name} rail checks`}>{spec.detail}</InfoTip>
             </span>
             <Badge tone="neutral">{spec.owasp}</Badge>
             <Badge tone={sem.tone} className="uppercase">
-              <SemIcon className="size-3" />
+              <SemIcon className="size-3 shrink-0" aria-hidden />
               {spec.semantics}
             </Badge>
           </div>
@@ -296,42 +361,37 @@ function EngineIndicator({
           title="Guardrail engine"
           right={
             <InfoTip label="About the guardrail engine">
-              One rail set, two front doors — the fast programmatic pipeline the agent graph calls,
-              and the declarative NeMo Colang policy a reviewer reads. The tile below reads the
-              posture <code className="font-mono">nemo_available</code> signal; the active-engine
-              switch (<code className="font-mono">guardrails_engine</code>) is a server setting not
-              surfaced in posture, so the programmatic default is shown as active.
+              One rail set, two front doors; the active-engine switch is a server setting
+              posture does not surface, so the programmatic default is shown as active.
             </InfoTip>
           }
         />
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-lg border border-border bg-surface-2/40 p-4">
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-foreground">Programmatic pipeline</span>
+        <div className="mt-4 grid gap-3 @container sm:grid-cols-2">
+          <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="min-w-0 font-medium text-foreground">Programmatic pipeline</span>
               <Badge tone="ok" className="uppercase">
                 active
               </Badge>
             </div>
-            <p className="mt-1.5 flex items-center gap-1.5">
-              <Figure className="text-muted-foreground">guardrails.pipeline</Figure>
-              <InfoTip label="About the programmatic pipeline">
-                The default engine — it runs the rails in-process on every request.
-              </InfoTip>
-            </p>
+            <Figure className="mt-1.5 block break-words text-muted-foreground">
+              guardrails.pipeline
+            </Figure>
           </div>
-          <div className="rounded-lg border border-border bg-surface-2/40 p-4">
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-foreground">NeMo Colang</span>
+          <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="min-w-0 font-medium text-foreground">NeMo Colang</span>
               <Badge tone={nemoAvailable ? 'ok' : 'neutral'} className="uppercase">
                 {nemoAvailable ? 'available' : 'not installed'}
               </Badge>
             </div>
             <p className="mt-1.5 flex items-center gap-1.5">
-              <Figure className="text-muted-foreground">guardrails_engine</Figure>
+              <Figure className="min-w-0 break-words text-muted-foreground">
+                guardrails_engine
+              </Figure>
               <InfoTip label="About the NeMo Colang engine">
                 Colang flows delegate to the same <code className="font-mono">check_input</code> /{' '}
-                <code className="font-mono">check_output</code>; the engine is selected with the{' '}
-                <code className="font-mono">guardrails_engine</code> setting.
+                <code className="font-mono">check_output</code>.
               </InfoTip>
             </p>
           </div>
@@ -341,109 +401,371 @@ function EngineIndicator({
   )
 }
 
-/** Red-team teaser — compact block-rate summary; the full report is its own dashboard. */
-function RedteamTeaser({
+/**
+ * The red-team hero — one gauge and four measured figures.
+ *
+ * `overall.blockRate` is a single value whose position inside a bounded range is
+ * the whole point, which is the one job DESIGN.md §2 keeps a radial gauge for —
+ * and it is one gauge, not a row of them. The floor it is judged against is
+ * printed beside it rather than drawn on the arc: a target marker on a 148px ring
+ * is a marker nobody can read off.
+ */
+function RedteamHero({
   report,
   loading,
 }: {
   report: RedteamReportResponse | null
   loading: boolean
 }): ReactElement {
-  // Attack categories only (drop the benign-control row, which measures false positives).
-  const attackCategories = (report?.categories ?? []).filter(
-    (c) => c.category !== 'benign_control',
-  )
-  const overall = report?.overall
+  const overall = report?.overall ?? null
 
   return (
     <Card className="rounded-lg">
-      <CardBody>
-        <SectionHeader
-          as="h2"
-          eyebrow="deterministic offline battery"
-          title="Red-team block-rate"
-          right={
-            <InfoTip label="About the red-team block-rate">
-              A teaser from the deterministic offline attack battery — the full report is the
-              Red-team dashboard. Leaked attacks are model-layer cases that need the live classifier.
-            </InfoTip>
-          }
-        />
-
-        {loading ? (
-          <LoadingState rows={4} label="Running the offline battery…" className="mt-4" />
-        ) : !report || !overall ? (
-          <EmptyState
-            icon={Crosshair}
-            title="No battery result to show"
-            body="The offline attack battery did not answer for this session. The full report, with every attack and the rail that caught it, lives on the Red-team dashboard."
-            className="mt-4"
-          />
-        ) : (
-          <>
-            <div className="mt-4 flex flex-wrap items-end gap-4">
-              <div>
-                <Figure size="stat" className="text-foreground">
-                  {`${Math.round(overall.blockRate * 100)}%`}
-                </Figure>
-                <p className="eyebrow mt-0.5">overall</p>
-              </div>
-              <div className="pb-1 text-sm leading-relaxed text-muted-foreground">
-                <Figure>{`${overall.attacksBlocked}/${overall.attacksTotal}`}</Figure> attacks
-                blocked · <Figure>{`${Math.round(overall.falsePositiveRate * 100)}%`}</Figure>{' '}
-                false-positive on <Figure>{overall.controlsTotal}</Figure> benign controls
-              </div>
-              <Badge tone={report.passed ? 'ok' : 'block'} className="mb-1 gap-1 uppercase sm:ml-auto">
+      <CardHeader
+        eyebrow="POST /redteam/run · deterministic offline battery"
+        title="Red-team block rate"
+        actions={
+          <div className="flex items-center gap-2">
+            {report ? (
+              <Badge tone={report.passed ? 'ok' : 'block'} className="gap-1.5 uppercase">
                 {report.passed ? (
-                  <ShieldCheck className="size-3" aria-hidden />
+                  <ShieldCheck className="size-3 shrink-0" aria-hidden />
                 ) : (
-                  <Ban className="size-3" aria-hidden />
+                  <Ban className="size-3 shrink-0" aria-hidden />
                 )}
                 {report.passed ? 'gate passed' : 'gate failed'}
               </Badge>
-            </div>
-
-            <div className="mt-4 space-y-2.5">
-              {attackCategories.map((c) => (
-                <div key={c.category} className="grid grid-cols-[10rem_1fr_3rem] items-center gap-3">
-                  <span className="truncate text-sm text-foreground">
-                    {c.category.replace(/_/g, ' ')}
-                  </span>
-                  <MiniMeter
-                    value={c.blockRate}
-                    hex={c.blockRate >= 0.75 ? 'var(--ok)' : 'var(--block)'}
-                    height={8}
-                  />
-                  <span className="text-right">
-                    <Figure className="text-muted-foreground">
-                      {`${Math.round(c.blockRate * 100)}%`}
-                    </Figure>
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <Receipt
-              label="Gate"
-              origin={`≥ ${Math.round(report.thresholds.minBlockRate * 100)}% block · ≤ ${Math.round(report.thresholds.maxFalsePositiveRate * 100)}% false-positive`}
-              detail="the deterministic battery, run offline against this build"
-              className="mt-4"
+            ) : null}
+            <InfoTip label="About the red-team block-rate">
+              A leaked attack is a model-layer case the offline battery cannot judge without
+              the live classifier.
+            </InfoTip>
+          </div>
+        }
+      />
+      <CardBody className="@container space-y-4">
+        {loading ? (
+          <LoadingState rows={4} label="Running the offline battery…" />
+        ) : report == null || overall == null ? (
+          /* The scene depicts evidence gathered against an adversary, which is
+             exactly what did not arrive. It sits above words that say the same
+             thing, so it is never the only thing saying it (DESIGN.md §7). */
+          <SceneState name="redteam" size="md">
+            <Absence
+              className="text-left"
+              figure="Block rate"
+              why="The offline battery did not answer this session."
+              needed="Run it from the Red-team dashboard."
             />
-          </>
+          </SceneState>
+        ) : (
+          <div className="grid min-w-0 gap-5 @md:grid-cols-[auto_minmax(0,1fr)] @md:items-center">
+            <Gauge
+              value={overall.blockRate}
+              label="block rate"
+              color="agent"
+              size={148}
+              className="mx-auto"
+            />
+            <div className="grid min-w-0 gap-3 @sm:grid-cols-2 @3xl:grid-cols-4">
+              <HeroFigure
+                label="blocked"
+                value={`${overall.attacksBlocked}/${overall.attacksTotal}`}
+              />
+              <HeroFigure
+                label="floor"
+                value={`${Math.round(report.thresholds.minBlockRate * 100)}%`}
+              />
+              <HeroFigure
+                label="false positives"
+                value={`${overall.falsePositives}/${overall.controlsTotal}`}
+              />
+              <HeroFigure
+                label="fp ceiling"
+                value={`${Math.round(report.thresholds.maxFalsePositiveRate * 100)}%`}
+              />
+            </div>
+          </div>
         )}
+        {report ? (
+          <Receipt
+            label="Gate"
+            origin={`≥ ${Math.round(report.thresholds.minBlockRate * 100)}% block · ≤ ${Math.round(report.thresholds.maxFalsePositiveRate * 100)}% false-positive`}
+          />
+        ) : null}
       </CardBody>
     </Card>
   )
 }
 
 /**
- * Guardrails (§ rails) — the defense-in-depth pipeline made visible: the ordered
- * input then output rails with their true method, OWASP mapping and verdict
- * semantics; the active engine (programmatic vs NeMo Colang); and a compact
- * red-team block-rate teaser. Rail statuses derive from `GET /security/posture`
- * where an OWASP row exists; the rest are always-on parts of the pipeline, badged
- * `wired`. Per-run guardrail verdicts belong to a run, so they are rendered on the
- * Console beside the run that produced them rather than mirrored here.
+ * Two charts over the same report: how well each attack family was held, and
+ * which rail did the holding.
+ *
+ * Neither is a time-series, because there is no `ts` anywhere in this payload —
+ * a red-team report is a snapshot, and the honest marks for a snapshot are
+ * comparison and distribution.
+ */
+function RedteamCharts({ report }: { report: RedteamReportResponse }): ReactElement {
+  const attackCategories = useMemo(
+    () =>
+      (Array.isArray(report.categories) ? report.categories : []).filter(
+        (c) => c.category !== 'benign_control',
+      ),
+    [report.categories],
+  )
+  const byLayer = useMemo(() => layerDistribution(report), [report])
+  const floor = report.thresholds.minBlockRate
+  const below = attackCategories.filter((c) => c.blockRate < floor)
+  const noRail = byLayer.find((row) => row.layer === 'none')?.attacks ?? 0
+
+  return (
+    <div className="grid min-w-0 gap-6 lg:grid-cols-2">
+      <Card className="flex min-w-0 flex-col rounded-lg">
+        <CardHeader
+          as="h3"
+          eyebrow="per attack family"
+          title="Block rate by category"
+          actions={
+            <Badge tone="neutral" className="font-mono">
+              {attackCategories.length} families
+            </Badge>
+          }
+        />
+        <CardBody className="flex min-h-0 flex-1 flex-col gap-4">
+          {attackCategories.length === 0 ? (
+            <Absence
+              figure="Block rate by category"
+              why="The battery reported only benign controls."
+            />
+          ) : (
+            <>
+              <RankedBars
+                label="Block rate by attack category"
+                data={attackCategories.map((c) => ({
+                  name: c.category.replace(/_/g, ' '),
+                  value: Math.round(c.blockRate * 100),
+                }))}
+                valueFormatter={(v) => `${v}%`}
+                color="graph"
+                maxRows={10}
+                // A block rate is a rate: eleven of them do not add up to a
+                // twelfth, so the tail is named as dropped rather than summed.
+                tail="omit"
+              />
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {below.length === 0 ? (
+                  <Badge tone="ok" className="gap-1.5">
+                    <ShieldCheck className="size-3 shrink-0" aria-hidden />
+                    every family clears the {Math.round(floor * 100)}% floor
+                  </Badge>
+                ) : (
+                  below.map((c) => (
+                    <Badge key={c.category} tone="block" className="gap-1.5">
+                      <Ban className="size-3 shrink-0" aria-hidden />
+                      {c.category.replace(/_/g, ' ')} below the floor
+                    </Badge>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+          <Receipt
+            className="mt-auto"
+            origin="redteam · categories[].blockRate"
+            detail={`floor ${Math.round(floor * 100)}% · benign controls excluded`}
+          />
+        </CardBody>
+      </Card>
+
+      <Card className="flex min-w-0 flex-col rounded-lg">
+        <CardHeader
+          as="h3"
+          eyebrow="attacks[].layer"
+          title="Which rail caught the attack"
+          actions={
+            <Badge tone={noRail === 0 ? 'ok' : 'block'} className="gap-1.5">
+              {noRail === 0 ? (
+                <ShieldCheck className="size-3 shrink-0" aria-hidden />
+              ) : (
+                <Ban className="size-3 shrink-0" aria-hidden />
+              )}
+              {noRail === 0 ? 'every attack met a rail' : `${noRail} met no rail`}
+            </Badge>
+          }
+        />
+        <CardBody className="flex min-h-0 flex-1 flex-col gap-4">
+          {byLayer.length === 0 ? (
+            <Absence
+              figure="Attacks per rail"
+              why="No verdict in this battery named the rail that judged it."
+            />
+          ) : (
+            <div className="min-w-0">
+              <BarChart
+                allowDecimals={false}
+                data={byLayer}
+                index="layer"
+                category="attacks"
+                color="graph"
+                height={232}
+                valueFormatter={(v) => `${v} attacks`}
+              />
+            </div>
+          )}
+          <Receipt
+            className="mt-auto"
+            origin="redteam · attacks[].layer"
+            detail="`none` is an attack no rail fired on"
+          />
+        </CardBody>
+      </Card>
+    </div>
+  )
+}
+
+/** The three-way coverage roll-up: icon, word and count for each posture state. */
+function CoverageRollup({ entries }: { entries: PostureEntry[] }): ReactElement {
+  const counts = new Map<string, number>()
+  for (const entry of entries) counts.set(entry.status, (counts.get(entry.status) ?? 0) + 1)
+
+  return (
+    <div className="grid w-full gap-2.5 sm:grid-cols-3">
+      {COVERAGE.map(({ key, label, icon: Icon, tone }) => (
+        <div
+          key={key}
+          className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-surface-2/40 px-3.5 py-2.5"
+        >
+          <span
+            className={cn(
+              'grid size-9 shrink-0 place-items-center rounded-md',
+              SIGNALS[tone].bg,
+              SIGNALS[tone].text,
+            )}
+          >
+            <Icon className="size-4" aria-hidden />
+          </span>
+          <span className="min-w-0">
+            <Figure size="stat" className="block text-foreground">
+              {String(counts.get(key) ?? 0)}
+            </Figure>
+            <span className="eyebrow">{label}</span>
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * OWASP coverage — every threat row the platform maps a control to, its live
+ * status, and the introspected signals those statuses derive from.
+ *
+ * `GET /security/posture` was already being fetched for the rail badges; only two
+ * of its rows (LLM01, LLM02) reached the screen, and its numeric signals reached
+ * it not at all.
+ */
+function PostureCoverage({ posture }: { posture: SecurityPostureResponse | null }): ReactElement {
+  const entries = posture?.entries ?? []
+  const signals = posture?.signals ?? null
+
+  return (
+    <DataPanel
+      eyebrow="GET /security/posture"
+      title="OWASP coverage"
+      maxHeight={440}
+      actions={
+        <InfoTip label="How coverage status is decided">
+          Every status is derived on the server from the wiring signals below, not claimed
+          here.
+        </InfoTip>
+      }
+      toolbar={entries.length === 0 ? undefined : <CoverageRollup entries={entries} />}
+      footer={
+        signals == null ? undefined : (
+          <Receipt
+            label="Signals"
+            origin={`${signals.hazard_categories} hazard categories · ${signals.rls_tables} RLS-enforced tables · max ${signals.max_plan_iterations} plan iterations`}
+            detail={`pii engine ${signals.pii_engine} · mode ${signals.mode} · rls ${signals.rls_fail_closed ? 'fail-closed' : 'fail-open'}`}
+          />
+        )
+      }
+    >
+      {entries.length === 0 ? (
+        /* "Data held behind a lock" — the posture endpoint is the lock, and it
+           did not open. The words below carry the state; the picture is silent. */
+        <SceneState name="security" size="md">
+          <Absence
+            className="text-left"
+            figure="OWASP coverage"
+            why="The posture endpoint did not answer this session."
+            needed="A reachable /security/posture."
+          />
+        </SceneState>
+      ) : (
+        <Table className="min-w-[720px]">
+          <THead>
+            <TH className="w-28">Threat</TH>
+            <TH>Control</TH>
+            <TH className="w-40">Module</TH>
+            <TH className="w-32">Status</TH>
+          </THead>
+          <TBody>
+            {entries.map((entry) => {
+              const status = statusBadge(entry.status)
+              return (
+                <TR key={entry.threat_id} className="align-top">
+                  <TD>
+                    <Figure className="text-foreground">{entry.threat_id}</Figure>
+                    <p className="mt-1 text-xs text-muted-foreground">{entry.name}</p>
+                  </TD>
+                  <TD>
+                    <span className="flex items-start gap-1.5">
+                      <span className="min-w-0 text-sm leading-relaxed break-words text-foreground">
+                        {entry.control}
+                      </span>
+                      <InfoTip label={`How ${entry.threat_id} is controlled`}>
+                        {entry.mechanism}
+                      </InfoTip>
+                    </span>
+                    {entry.refs.length > 0 ? (
+                      <Figure className="mt-1 block break-words text-muted-foreground">
+                        {entry.refs.join(' · ')}
+                      </Figure>
+                    ) : null}
+                  </TD>
+                  <TD>
+                    <Figure className="break-words text-muted-foreground">{entry.module}</Figure>
+                  </TD>
+                  <TD>
+                    <Badge tone={status.tone} className="uppercase">
+                      {status.label}
+                    </Badge>
+                  </TD>
+                </TR>
+              )
+            })}
+          </TBody>
+        </Table>
+      )}
+    </DataPanel>
+  )
+}
+
+/**
+ * Guardrails (§ rails) — the defense-in-depth pipeline made visible.
+ *
+ * The screen now leads with what the rails actually *did*: a gauge on the
+ * measured block rate, the per-family rates ranked against the gate's floor, and
+ * the distribution of which rail caught each attack — the one fact in this
+ * payload that used to be fetched and never drawn. Under it sit the OWASP
+ * coverage rows, then the ordered input and output rails with their true method,
+ * OWASP mapping and verdict semantics, the active engine, and the tenant's own
+ * folded policy.
+ *
+ * Nothing here is a trend: `POST /redteam/run` and `GET /security/posture` carry
+ * no timestamp on any row, so every mark is comparison, composition or a single
+ * bounded value.
  */
 function GuardrailsView(): ReactElement {
   // Live session token — the literal `null`s these two accessors were called with
@@ -471,10 +793,10 @@ function GuardrailsView(): ReactElement {
         if (alive) setRedteam(r)
       })
       .catch(() => {
-        /* honest: teaser shows its unavailable empty state */
+        /* honest: the hero shows its stated absence */
       })
-      // `finally` always resolves the spinner — a failure shows the teaser's
-      // empty state rather than spinning forever.
+      // `finally` always resolves the spinner — a failure shows the stated
+      // absence rather than spinning forever.
       .finally(() => {
         if (alive) setRedteamLoading(false)
       })
@@ -494,19 +816,20 @@ function GuardrailsView(): ReactElement {
         title="Guardrails"
         actions={
           <InfoTip label="How to read the rail stack">
-            The defence-in-depth pipeline, in the order it runs: what each rail checks,
-            the OWASP row it answers, and the verdict it is allowed to reach.
+            The rails in the order they run, each with the OWASP row it answers.
           </InfoTip>
         }
       />
 
-      <EngineIndicator signals={posture?.signals ?? null} />
+      <RedteamHero report={redteam} loading={redteamLoading} />
 
-      <TenantRailPolicy />
+      {redteam ? <RedteamCharts report={redteam} /> : null}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="rounded-lg">
-          <CardBody>
+      <PostureCoverage posture={posture} />
+
+      <div className="grid min-w-0 gap-6 xl:grid-cols-2">
+        <Card className="min-w-0 rounded-lg">
+          <CardBody className="min-w-0">
             <RailStack
               title="Input rails"
               eyebrow="on the request · before the model"
@@ -515,8 +838,8 @@ function GuardrailsView(): ReactElement {
             />
           </CardBody>
         </Card>
-        <Card className="rounded-lg">
-          <CardBody>
+        <Card className="min-w-0 rounded-lg">
+          <CardBody className="min-w-0">
             <RailStack
               title="Output rails"
               eyebrow="on the answer · before the user"
@@ -527,7 +850,9 @@ function GuardrailsView(): ReactElement {
         </Card>
       </div>
 
-      <RedteamTeaser report={redteam} loading={redteamLoading} />
+      <EngineIndicator signals={posture?.signals ?? null} />
+
+      <TenantRailPolicy />
     </div>
   )
 }

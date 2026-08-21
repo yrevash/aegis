@@ -1,8 +1,9 @@
 'use client'
 
-import { Brain, User, Users } from 'lucide-react'
+import { User, Users } from 'lucide-react'
 import type { ReactElement } from 'react'
 
+import { SceneState } from '@/components/illustration/Scene'
 import { Badge } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
 import type { MemorySubjectRow } from '@/lib/api/memory'
@@ -37,16 +38,12 @@ export function SubjectPicker({
 }): ReactElement {
   if (rows.length === 0) {
     return (
-      <div className="flex min-h-40 flex-col items-center justify-center gap-3 text-center">
-        <Brain className="size-7 text-muted-foreground/50" aria-hidden />
-        <div>
-          <p className="text-sm font-medium text-foreground">No memory subjects yet</p>
-          <p className="mt-1 max-w-md text-sm text-muted-foreground">
-            Memory is keyed to a person. Ask the agent a question and this fills in with
-            what it learned, or write the first fact yourself once a subject appears.
-          </p>
-        </div>
-      </div>
+      <SceneState name="subjects" className="py-4">
+        <p className="text-sm font-medium text-foreground">No memory subjects yet</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Ask the agent a question and this fills in.
+        </p>
+      </SceneState>
     )
   }
 
@@ -77,7 +74,7 @@ export function SubjectPicker({
                 <span className="block truncate text-sm font-medium text-foreground">
                   {row.label}
                 </span>
-                <span className="tabular block font-mono text-[0.62rem] text-muted-foreground">
+                <span className="tabular block truncate font-mono text-[0.62rem] text-muted-foreground">
                   {subjectSummary(row)}
                 </span>
               </span>

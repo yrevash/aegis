@@ -4,8 +4,11 @@ import { ArrowRight, FlaskConical, Loader2 } from 'lucide-react'
 import { useMemo, useState, type ReactElement } from 'react'
 
 import { BarChart } from '@/components/charts/BarChart'
+import { SceneState } from '@/components/illustration/Scene'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { CountUp } from '@/components/shared'
+import { Receipt } from '@/components/primitives/Receipt'
+import { ErrorState } from '@/components/primitives/States'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { postOpsDiagnose, postOpsRelease } from '@/lib/api/client'
@@ -79,18 +82,17 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
   )
 
   return (
-    <Card>
+    <Card className="flex min-w-0 flex-col">
       <CardHeader
         eyebrow="POST /ops/diagnose"
         title="Diagnosis"
         actions={
           <InfoTip label="About diagnosis">
-            Finds the dominant failure mode in recent evals and drafts a fix; releasing that draft
-            sends it through the tiered gate.
+            Finds the dominant failure mode in recent evals and drafts a fix.
           </InfoTip>
         }
       />
-      <CardBody className="space-y-4">
+      <CardBody className="min-w-0 space-y-4">
         <button
           type="button"
           onClick={() => void runDiagnose()}
@@ -105,32 +107,45 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
           {busy === 'diagnose' ? 'Diagnosing…' : 'Diagnose failures'}
         </button>
 
-        {error && <p className="text-xs text-danger">{error}</p>}
+        {error && <ErrorState error={error} />}
+
+        {!diag && !error && (
+          /* A fault being diagnosed — before the button is pressed there is
+             nothing under it but dead space. */
+          <SceneState name="diagnose" size="sm">
+            <p className="text-sm text-muted-foreground">
+              Nothing diagnosed this session.
+            </p>
+          </SceneState>
+        )}
 
         {diag && (
-          <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-4">
+          <div className="min-w-0 space-y-3 rounded-lg border border-border bg-surface-2/40 p-4">
             <div className="flex flex-wrap items-center gap-2">
               <span className="eyebrow">Failing metrics</span>
-              <span className="font-mono text-[0.62rem] text-muted-foreground">
-                {diag.failures_considered} failures reviewed
-              </span>
               {diag.draft_version_id != null && (
-                <Badge tone="graph" className="ml-auto text-[0.56rem]">
+                <Badge tone="graph" className="ml-auto">
                   draft #{diag.draft_version_id}
                 </Badge>
               )}
             </div>
-            <p className="text-xs leading-snug text-foreground">{diag.failure_summary}</p>
+            <p className="text-xs leading-snug break-words text-foreground">
+              {diag.failure_summary}
+            </p>
             {breakdown.length > 0 && (
-              <BarChart
-                data={breakdown}
-                index="metric"
-                category="count"
-                color="block"
-                height={160}
-                valueFormatter={(v) => `${v}`}
-              />
+              <div className="min-w-0">
+                <BarChart
+                  allowDecimals={false}
+                  data={breakdown}
+                  index="metric"
+                  category="count"
+                  color="block"
+                  height={160}
+                  valueFormatter={(v) => `${v}`}
+                />
+              </div>
             )}
+            <Receipt origin={`ops.diagnose · ${diag.failures_considered} failures reviewed`} />
 
             {!release && (
               <button
@@ -139,17 +154,21 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
                 disabled={busy !== null || diag.draft_version_id == null}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border h-10 touch-manipulation px-3 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
               >
-                {busy === 'release' ? 'Releasing…' : 'Release draft'} <ArrowRight className="size-3.5" aria-hidden />
+                {busy === 'release' ? (
+                  <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+                ) : null}
+                {busy === 'release' ? 'Releasing…' : 'Release draft'}{' '}
+                <ArrowRight className="size-3.5" aria-hidden />
               </button>
             )}
           </div>
         )}
 
         {release && (
-          <div className="space-y-2.5 rounded-lg border border-border p-4">
+          <div className="min-w-0 space-y-2.5 rounded-lg border border-border p-4">
             <div className="flex flex-wrap items-center gap-2">
               <span className="eyebrow">Release outcome</span>
-              <Badge tone={RISK_TONE[release.risk_level] ?? 'risk'} className="text-[0.56rem]">
+              <Badge tone={RISK_TONE[release.risk_level] ?? 'risk'}>
                 {release.risk_level} risk
               </Badge>
               <Badge
@@ -160,38 +179,38 @@ export function DiagnosePanel({ onChanged }: { onChanged: () => void }): ReactEl
               </Badge>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-baseline gap-1">
-                <CountUp
-                  value={release.eval_score}
-                  format={(n) => n.toFixed(3)}
-                  className="text-base leading-6 font-semibold text-ok-ink"
-                />
-                <span className="font-mono text-[0.6rem] text-muted-foreground">draft</span>
-              </div>
-              <ArrowRight className="size-3 text-muted-foreground" />
-              <div className="flex items-baseline gap-1">
-                <span className="tabular font-display text-lg font-semibold text-muted-foreground">
+              <span className="flex items-baseline gap-1">
+                <Figure className="font-semibold text-foreground">
+                  {release.eval_score.toFixed(3)}
+                </Figure>
+                <span className="eyebrow">draft</span>
+              </span>
+              <ArrowRight className="size-3 text-muted-foreground" aria-hidden />
+              <span className="flex items-baseline gap-1">
+                <Figure className="text-muted-foreground">
                   {release.baseline_score.toFixed(3)}
-                </span>
-                <span className="font-mono text-[0.6rem] text-muted-foreground">baseline</span>
-              </div>
+                </Figure>
+                <span className="eyebrow">baseline</span>
+              </span>
               <span
                 className={cn(
-                  'tabular ml-auto rounded-md px-1.5 py-0.5 font-mono text-[0.62rem] font-medium',
+                  'tabular ml-auto rounded-md px-1.5 py-0.5 font-mono text-[0.72rem] font-medium',
                   release.eval_score >= release.baseline_score
-                    ? 'bg-ok/15 text-ok-ink'
-                    : 'bg-block/15 text-block-ink',
+                    ? 'bg-ok/20 text-[color:var(--ok-ink)]'
+                    : 'bg-block/25 text-[color:var(--block-ink)]',
                 )}
               >
-                {release.eval_score >= release.baseline_score ? '▲' : '▼'}{' '}
+                <span aria-hidden>{release.eval_score >= release.baseline_score ? '▲' : '▼'}</span>{' '}
                 {Math.abs(release.eval_score - release.baseline_score).toFixed(3)}
               </span>
             </div>
-            <p className="text-xs leading-snug text-muted-foreground">{release.reason}</p>
+            <p className="text-xs leading-snug break-words text-muted-foreground">
+              {release.reason}
+            </p>
             {release.risk_reasons.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {release.risk_reasons.map((r) => (
-                  <Badge key={r} tone="risk" className="text-[0.56rem]">
+                  <Badge key={r} tone="risk">
                     {r}
                   </Badge>
                 ))}

@@ -1,10 +1,12 @@
 'use client'
 
-import { Check, Pencil, Plus, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Check, Loader2, Pencil, Plus, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
+import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Input } from '@/components/primitives/input'
 import {
   correctMemoryFact,
@@ -131,57 +133,82 @@ export function FactManager({
           if (draft.trim() !== '' && !busy) void submit()
         }}
       >
-        <label className="eyebrow" htmlFor="memory-fact-text">
-          Teach it something
-        </label>
+        <span className="flex items-center gap-1.5">
+          <label className="eyebrow" htmlFor="memory-fact-text">
+            Teach it something
+          </label>
+          {/* The screening mechanism is a real constraint a writer cannot infer,
+              so it stays — one layer down, in one sentence. */}
+          <InfoTip label="What happens to a fact on the way in">
+            Screened by the same guardrails a live question goes through, because a stored
+            memory is replayed into later prompts as trusted context.
+          </InfoTip>
+        </span>
         <textarea
           id="memory-fact-text"
+          name="fact_text"
           value={draft}
           maxLength={MAX_CHARS}
           rows={3}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Prefers email over phone for anything non-urgent."
+          placeholder="e.g. Prefers email over phone for anything non-urgent…"
           className="w-full resize-y rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
         />
         <div className="flex flex-wrap items-center gap-2">
+          {/* Relation and value are triple keys, not prose: no autocomplete
+              history, no spellcheck squiggle, no machine translation. */}
           <Input
-            aria-label="Relation"
+            aria-label="Relation, optional"
+            name="predicate"
             value={predicate}
             maxLength={64}
+            autoComplete="off"
+            spellCheck={false}
+            translate="no"
             onChange={(e) => setPredicate(e.target.value)}
-            placeholder="relation (optional)"
+            placeholder="relation…"
             className="h-8 w-44"
           />
           <Input
-            aria-label="Value"
+            aria-label="Value, optional"
+            name="object"
             value={object}
             maxLength={128}
+            autoComplete="off"
+            spellCheck={false}
+            translate="no"
             onChange={(e) => setObject(e.target.value)}
-            placeholder="value (optional)"
+            placeholder="value…"
             className="h-8 w-44"
           />
-          <span className="tabular ml-auto font-mono text-[0.62rem] text-muted-foreground">
+          <Figure className="ml-auto text-[0.62rem] leading-4 text-muted-foreground">
             {draft.length}/{MAX_CHARS}
-          </span>
+          </Figure>
+          {/* Enabled until the request starts, then a spinner in the icon's slot —
+              never a button that goes dead with no sign anything happened. */}
           <Button type="submit" size="sm" disabled={busy || draft.trim() === ''}>
-            <Plus className="size-3.5" aria-hidden /> Save fact
+            {busy ? (
+              <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <Plus className="size-3.5" aria-hidden />
+            )}
+            {busy ? 'Saving…' : 'Save fact'}
           </Button>
         </div>
-        <p className="flex items-start gap-1.5 text-[0.68rem] leading-relaxed text-muted-foreground">
-          <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-ok-ink" aria-hidden />
-          Anything saved here is screened by the same guardrails a live question goes
-          through, before it is stored — a stored memory is replayed into later prompts
-          as trusted context.
+        {/* A status hue with its icon and its word, not a paragraph. */}
+        <p className="flex items-center gap-1.5 text-[0.68rem] text-muted-foreground">
+          <ShieldCheck className="size-3.5 shrink-0 text-ok-ink" aria-hidden />
+          Screened before it is stored
         </p>
       </form>
 
       {failure !== null && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm break-words text-destructive">
           {failure}
         </p>
       )}
       {note !== null && (
-        <p role="status" className="text-sm text-ok-ink">
+        <p role="status" aria-live="polite" className="text-sm break-words text-ok-ink">
           {note}
         </p>
       )}
@@ -190,10 +217,7 @@ export function FactManager({
       {facts.state.status === 'loading' && <LoadingRow label="Loading facts…" />}
       {facts.state.status === 'error' && <ErrorRow message={facts.state.message} />}
       {facts.state.status === 'ready' && rows.length === 0 && (
-        <EmptyRow>
-          The agent believes nothing about this subject yet. Write the first fact above,
-          or let a conversation teach it one.
-        </EmptyRow>
+        <EmptyRow>Nothing believed yet — write the first fact above.</EmptyRow>
       )}
       {rows.length > 0 && (
         <ul className="flex flex-col gap-1.5">
@@ -203,19 +227,28 @@ export function FactManager({
                 <div className="flex flex-col gap-2 p-3">
                   <textarea
                     aria-label={`Correct fact ${fact.id}`}
+                    name={`fact_text_${fact.id}`}
                     value={editText}
                     maxLength={MAX_CHARS}
                     rows={2}
                     onChange={(e) => setEditText(e.target.value)}
                     className="w-full resize-y rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
                   />
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       size="sm"
                       disabled={busy || editText.trim() === ''}
                       onClick={() => void save(fact.id)}
                     >
-                      <Check className="size-3.5" aria-hidden /> Save correction
+                      {busy ? (
+                        <Loader2
+                          className="size-3.5 animate-spin motion-reduce:animate-none"
+                          aria-hidden
+                        />
+                      ) : (
+                        <Check className="size-3.5" aria-hidden />
+                      )}
+                      {busy ? 'Saving…' : 'Save correction'}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
                       Cancel
@@ -227,18 +260,26 @@ export function FactManager({
                 </div>
               ) : confirmId === fact.id ? (
                 <div className="flex flex-col gap-2 p-3">
-                  <p className="text-sm text-foreground">
+                  <p role="alert" className="text-sm break-words text-foreground">
                     Delete “{fact.text}”? The row is removed from the database, not
                     hidden, and the agent stops recalling it immediately.
                   </p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       size="sm"
                       variant="destructive"
                       disabled={busy}
                       onClick={() => void remove(fact.id)}
                     >
-                      <Trash2 className="size-3.5" aria-hidden /> Delete permanently
+                      {busy ? (
+                        <Loader2
+                          className="size-3.5 animate-spin motion-reduce:animate-none"
+                          aria-hidden
+                        />
+                      ) : (
+                        <Trash2 className="size-3.5" aria-hidden />
+                      )}
+                      {busy ? 'Deleting…' : 'Delete permanently'}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setConfirmId(null)}>
                       Keep it
@@ -247,8 +288,10 @@ export function FactManager({
                 </div>
               ) : (
                 <div className="flex items-center gap-2 px-3 py-2">
-                  <span className="min-w-0 flex-1 text-sm text-foreground">{fact.text}</span>
-                  <Badge tone="neutral" className="shrink-0 text-[0.56rem]">
+                  <span className="min-w-0 flex-1 text-sm break-words text-foreground">
+                    {fact.text}
+                  </span>
+                  <Badge tone="neutral" className="tabular shrink-0 text-[0.56rem]">
                     #{fact.id}
                   </Badge>
                   <Button

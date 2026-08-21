@@ -35,3 +35,6 @@ next-env.d.ts
 
 # Per-process build outputs (see next.config.mjs, AEGIS_DIST_DIR)
 .next-*
+
+# Screenshot sweep output (scripts/shoot.mjs) — evidence, not source.
+/shots/

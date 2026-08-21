@@ -1,17 +1,22 @@
 'use client'
 
-import { Brain } from 'lucide-react'
+import { Brain, Clock, MessagesSquare, Users } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { SceneState } from '@/components/illustration/Scene'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { Card, CardBody } from '@/components/ui/Card'
+import { StatCard } from '@/components/ui/StatCard'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { Receipt } from '@/components/primitives/Receipt'
 import { ChatThreadsPanel } from '@/components/memory/ChatThreadsPanel'
+import { formatAgo } from '@/components/memory/datetime'
 import { ErrorRow, LoadingRow } from '@/components/memory/StateRow'
 import { SubjectPanels } from '@/components/memory/SubjectRecord'
 import { useAsync } from '@/components/memory/useAsync'
 import { getMemorySubjects } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { cn } from '@/lib/utils'
 
 import { FactManager } from './FactManager'
 import { ScopeLadder } from './ScopeLadder'
@@ -75,8 +80,49 @@ function MemoryControl({ token }: { token: string | null }): ReactElement {
         title="Memory"
       />
 
+      {/* The record's own size, led with. Every figure is a field off the same
+          response the picker below renders — one receipt covers all four. */}
+      {current !== null && (
+        <div>
+          <div
+            className={cn(
+              'grid grid-cols-1 gap-4 sm:grid-cols-2',
+              canManageOthers ? 'xl:grid-cols-4' : 'xl:grid-cols-3',
+            )}
+          >
+            <StatCard
+              label="Facts held"
+              value={String(current.fact_count)}
+              icon={Brain}
+              tone="graph"
+            />
+            <StatCard
+              label="Sessions"
+              value={String(current.session_count)}
+              icon={MessagesSquare}
+              tone="agent"
+            />
+            <StatCard
+              label="Last active"
+              value={current.last_active === null ? 'never' : formatAgo(current.last_active)}
+              icon={Clock}
+              tone="neutral"
+            />
+            {canManageOthers && (
+              <StatCard
+                label="Subjects in reach"
+                value={String(rows.length)}
+                icon={Users}
+                tone="ml"
+              />
+            )}
+          </div>
+          <Receipt origin="GET /memory/subjects" className="mt-4" />
+        </div>
+      )}
+
       <div className="grid items-start gap-6 lg:grid-cols-5">
-        <Card className="lg:col-span-2">
+        <Card className="min-w-0 lg:col-span-2">
           <CardBody>
             <div className="flex flex-col gap-5">
               <div className="flex flex-col gap-3">
@@ -107,16 +153,15 @@ function MemoryControl({ token }: { token: string | null }): ReactElement {
           </CardBody>
         </Card>
 
-        <Card className="lg:col-span-3">
+        <Card className="min-w-0 lg:col-span-3">
           <CardBody>
             {selected === null ? (
-              <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
-                <Brain className="size-7 text-muted-foreground/50" aria-hidden />
-                <p className="max-w-md text-sm text-muted-foreground">
-                  Choose a subject to see what the agent has learned, correct anything it
-                  has wrong, and decide what it keeps.
+              <SceneState name="subjects" size="md" className="py-6">
+                <p className="text-sm font-medium text-foreground">No subject chosen</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Pick one to read, correct and erase its memory.
                 </p>
-              </div>
+              </SceneState>
             ) : (
               <FactManager
                 token={token}
@@ -171,7 +216,10 @@ export function MemoryControlMount(): ReactElement {
 
   if (!hydrated) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground">
+      <div
+        role="status"
+        className="flex min-h-[240px] items-center justify-center rounded-lg border border-dashed border-border bg-surface-2/40 text-sm text-muted-foreground"
+      >
         Connecting…
       </div>
     )

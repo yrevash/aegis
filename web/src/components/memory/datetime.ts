@@ -19,10 +19,22 @@ export function formatAgo(value: string | null | undefined): string {
   return `${days}d ago`
 }
 
-/** A short absolute calendar date ("11 Feb 2023"); null/invalid → em dash. */
+/**
+ * A short absolute calendar date ("11 Feb 2023"); null/invalid → em dash.
+ *
+ * One `Intl.DateTimeFormat`, built once, with the locale left undefined: a pinned
+ * `en-US` is a hardcoded date format, and constructing a formatter per call is the
+ * expensive half of `toLocaleDateString`.
+ */
+const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+})
+
 export function formatDate(value: string | null | undefined): string {
   if (!value) return '—'
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
+  return DATE_FORMAT.format(d)
 }

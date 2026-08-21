@@ -11,16 +11,21 @@ import { cn } from '@/lib/utils'
 import type { MemoryWriteRow, MemoryWritesResponse } from '@/lib/api/memory'
 
 import { EmptyRow, ErrorRow, LoadingRow } from './StateRow'
+import { OP_LABEL } from './memoryCharts'
 import { PanelHeader } from './PanelHeader'
 import { formatAgo } from './datetime'
 import type { AsyncState } from './useAsync'
 
-/** Op → plain verb + icon + badge tone (drops the ADD/UPDATE/INVALIDATE codes). */
+/**
+ * Op → plain verb + icon + badge tone (drops the ADD/UPDATE/INVALIDATE codes).
+ * The words come from `OP_LABEL` so this timeline and the activity chart above it
+ * cannot drift into two spellings of the same op.
+ */
 const OP_STYLE: Record<string, { icon: LucideIcon; tone: BadgeTone; label: string }> = {
-  ADD: { icon: FilePlus2, tone: 'ok', label: 'Learned' },
-  UPDATE: { icon: PencilLine, tone: 'graph', label: 'Updated' },
-  INVALIDATE: { icon: FileX2, tone: 'block', label: 'Retired' },
-  NOOP: { icon: PencilLine, tone: 'neutral', label: 'Reviewed' },
+  ADD: { icon: FilePlus2, tone: 'ok', label: OP_LABEL.ADD },
+  UPDATE: { icon: PencilLine, tone: 'graph', label: OP_LABEL.UPDATE },
+  INVALIDATE: { icon: FileX2, tone: 'block', label: OP_LABEL.INVALIDATE },
+  NOOP: { icon: PencilLine, tone: 'neutral', label: OP_LABEL.NOOP },
 }
 
 /** A compact key=value diff of a before/after snapshot. */
@@ -28,7 +33,10 @@ function Delta({ row }: { row: MemoryWriteRow }): ReactElement | null {
   const keys = Array.from(new Set([...Object.keys(row.before), ...Object.keys(row.after)]))
   if (keys.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[0.62rem]">
+    <div
+      translate="no"
+      className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 font-mono text-[0.62rem] break-words"
+    >
       {keys.map((k) => {
         const before = row.before[k]
         const after = row.after[k]
@@ -69,17 +77,24 @@ function WriteRow({ row }: { row: MemoryWriteRow }): ReactElement {
 
   return (
     <li className="relative flex gap-3 pl-0">
-      <span className="z-10 mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border border-border bg-card">
+      <span
+        aria-hidden
+        className="z-10 mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border border-border bg-card"
+      >
         <Icon className="size-3 text-muted-foreground" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <Badge tone={style.tone}>{style.label}</Badge>
           {row.fact_id != null && (
-            <span className="font-mono text-[0.62rem] text-muted-foreground">fact #{row.fact_id}</span>
+            <span translate="no" className="tabular font-mono text-[0.62rem] text-muted-foreground">
+              fact #{row.fact_id}
+            </span>
           )}
           {supersedes != null && (
-            <span className="font-mono text-[0.62rem] text-block-ink">supersedes #{String(supersedes)}</span>
+            <span translate="no" className="tabular font-mono text-[0.62rem] text-block-ink">
+              supersedes #{String(supersedes)}
+            </span>
           )}
           <span className="eyebrow ml-auto text-[0.56rem]">{formatAgo(row.ts)}</span>
         </div>
@@ -92,13 +107,19 @@ function WriteRow({ row }: { row: MemoryWriteRow }): ReactElement {
             aria-label={`Detail for write #${row.id}`}
             className="shrink-0 rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                'size-3.5 transition-transform motion-reduce:transition-none',
+                open && 'rotate-180',
+              )}
+            />
           </button>
         </div>
         {open && (
           <div className="animate-reveal mt-1.5 rounded-md border border-border/60 bg-surface-2/40 p-2">
             <Delta row={row} />
-            <p className="mt-1 font-mono text-[0.6rem] text-muted-foreground/80">
+            <p translate="no" className="mt-1 font-mono text-[0.6rem] break-words text-muted-foreground/80">
               {row.model ?? 'system'}
               {row.trace_id ? ` · ${row.trace_id}` : ''}
             </p>
@@ -123,7 +144,7 @@ interface Props {
 export function WriteLogPanel({ state }: Props): ReactElement {
   const rows = state.status === 'ready' ? state.data.rows : []
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <PanelHeader
         icon={History}
         title="Recent updates"
@@ -149,7 +170,7 @@ export function WriteLogPanel({ state }: Props): ReactElement {
         <EmptyRow>No updates yet. Changes appear here, newest first.</EmptyRow>
       )}
       {state.status === 'ready' && rows.length > 0 && (
-        <ol className="relative flex-1 space-y-3 before:absolute before:top-2 before:bottom-2 before:left-[9px] before:w-px before:bg-border/70">
+        <ol className="relative space-y-3 before:absolute before:top-2 before:bottom-2 before:left-[9px] before:w-px before:bg-border/70">
           {rows.map((row, i) => (
             <RevealOnScroll key={row.id} delayMs={i * 40}>
               <WriteRow row={row} />

@@ -134,15 +134,19 @@ function GuardrailRow({ entry }: { entry: GuardrailEntry }): ReactElement {
     <li className="rounded-lg border border-border bg-surface-2/60 p-2.5">
       <div className="flex items-center gap-2">
         <Icon
+          aria-hidden
           className={
             meta.variant === 'ok'
-              ? 'size-3.5 text-ok-ink'
+              ? 'size-3.5 shrink-0 text-ok-ink'
               : meta.variant === 'risk'
-                ? 'size-3.5 text-risk-ink'
-                : 'size-3.5 text-block-ink'
+                ? 'size-3.5 shrink-0 text-risk-ink'
+                : 'size-3.5 shrink-0 text-block-ink'
           }
         />
-        <span className="font-mono text-[0.7rem] tracking-wide text-foreground uppercase">
+        <span
+          translate="no"
+          className="min-w-0 font-mono text-[0.7rem] tracking-wide break-words text-foreground uppercase"
+        >
           {entry.stage}
           {entry.layer ? ` · ${LAYER_LABEL[entry.layer] ?? entry.layer}` : ''}
         </span>
@@ -151,7 +155,9 @@ function GuardrailRow({ entry }: { entry: GuardrailEntry }): ReactElement {
         </Badge>
       </div>
 
-      <p className="mt-1.5 text-[0.74rem] leading-snug text-muted-foreground">{entry.reason}</p>
+      <p className="mt-1.5 min-w-0 text-[0.74rem] leading-snug break-words text-muted-foreground">
+        {entry.reason}
+      </p>
 
       {hasDiff && (
         <div className="mt-2 space-y-1">

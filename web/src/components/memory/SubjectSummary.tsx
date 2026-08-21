@@ -4,6 +4,7 @@ import { Brain, Clock } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import { CountUp, MiniTrend } from '@/components/shared'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { cn } from '@/lib/utils'
 
@@ -44,11 +45,16 @@ export function SubjectSummary({
   loading = false,
   sample = false,
 }: SubjectSummaryProps): ReactElement {
+  // A trend needs two points *and* two distinct values before it is a shape.
+  const plottable = trend != null && trend.length > 1
+  const hasShape = plottable && new Set(trend).size > 1
+  const isFlat = plottable && !hasShape
+
   return (
-    <div className="flex h-full flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-start gap-2">
         <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-blue-200/12">
-          <Brain className="size-4 text-blue-700" />
+          <Brain className="size-4 text-blue-700" aria-hidden />
         </span>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -63,7 +69,9 @@ export function SubjectSummary({
               </span>
             )}
           </div>
-          <h2 className="t-title mt-0.5 truncate text-foreground">{subjectLabel}</h2>
+          <h2 translate="no" className="t-title mt-0.5 truncate text-foreground">
+            {subjectLabel}
+          </h2>
         </div>
       </div>
 
@@ -87,14 +95,25 @@ export function SubjectSummary({
             {lastSeen && (
               <span className="inline-flex items-center gap-1 text-muted-foreground">
                 {highlights.length > 0 && <span aria-hidden className="text-muted-foreground/50">·</span>}
-                <Clock className="size-3" /> last seen {lastSeen}
+                <Clock className="size-3" aria-hidden /> last seen {lastSeen}
               </span>
             )}
           </span>
         )}
       </div>
 
-      {trend && trend.length > 1 && (
+      {/*
+        **The label only appears when there is a shape under it.**
+
+        `MiniTrend` draws a flat dashed baseline for a series it cannot plot, so a
+        record whose fact count never moved rendered the words MEMORY GROWTH above
+        40px of nothing — a heading for an absence, which is the one thing a label
+        must never be. A series with no variance is not a small trend, it is a
+        different statement, and it gets one line in the slot the chart would have
+        taken (DESIGN.md §1). No writes at all says nothing here: the write-log
+        card beside this one already carries that state.
+      */}
+      {hasShape ? (
         <div className="-mt-1">
           <div className="mb-1 flex items-center gap-1.5">
             <span className="eyebrow text-[0.56rem]">Memory growth</span>
@@ -104,15 +123,26 @@ export function SubjectSummary({
           </div>
           <MiniTrend data={trend} color="agent" height={40} variant="area" />
         </div>
-      )}
+      ) : isFlat ? (
+        <p className="-mt-1 text-xs text-muted-foreground">
+          Fact count unchanged across the write log — nothing to plot.
+        </p>
+      ) : null}
 
-      {/* The three headline counts — figures lead (§1.1), count-up on mount. */}
-      <dl className="mt-auto grid grid-cols-3 gap-3 border-t border-border/70 pt-3">
+      {/*
+        The three counts this card owns. They are set at `stat`, not at the 28px
+        metric step they used to wear: the screen's KPI band above is its one
+        `display` group (DESIGN.md §3 allows exactly one per screen), and a second
+        row of 28px numerals lower down competes with it instead of supporting it.
+      */}
+      <dl className="mt-1 grid grid-cols-3 gap-3 border-t border-border/70 pt-3">
         {stats.map((s) => (
-          <div key={s.label} className="flex flex-col gap-0.5">
+          <div key={s.label} className="flex min-w-0 flex-col gap-0.5">
             <dt className="eyebrow text-[0.58rem]">{s.label}</dt>
-            <dd className={cn('t-metric text-foreground', s.value == null && 'text-muted-foreground')}>
-              {s.value == null ? '—' : <CountUp value={s.value} />}
+            <dd>
+              <Figure size="stat" className={cn(s.value == null && 'text-muted-foreground')}>
+                {s.value == null ? '—' : <CountUp value={s.value} />}
+              </Figure>
             </dd>
           </div>
         ))}

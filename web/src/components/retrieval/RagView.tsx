@@ -1,13 +1,14 @@
 'use client'
 
-import { Layers } from 'lucide-react'
 import { useState, type ReactElement } from 'react'
 
 import { ArsenalPanel } from '@/components/retrieval/ArsenalPanel'
 import { ProvenanceDonut } from '@/components/retrieval/ProvenanceDonut'
 import { RerankScoreboard } from '@/components/retrieval/RerankScoreboard'
 import { QueryBar } from '@/components/console/QueryBar'
+import { SceneState } from '@/components/illustration/Scene'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { Card, CardBody } from '@/components/ui/Card'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { personasForRole } from '@/config/personas'
 import type { Provenance, Role, ScoredSource } from '@/lib/stream'
@@ -94,15 +95,18 @@ function RagView({ role }: { role: Role }): ReactElement {
       />
 
       {data === null ? (
-        <div className="flex min-h-64 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-surface-2/40 text-center">
-          <Layers className="size-8 text-muted-foreground/50" aria-hidden />
-          <div>
-            <p className="text-sm font-medium text-foreground">No retrieval measured yet</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Run a query above to watch the recall arms, fusion, and rerank light up.
-            </p>
-          </div>
-        </div>
+        <Card>
+          <CardBody className="py-10">
+            {/* `md` (200px), not `lg`: a 268px scene plus the card and shell
+                padding is wider than a 390px viewport can hold. */}
+            <SceneState name="retrieval" size="md">
+              <p className="text-sm font-medium text-foreground">No retrieval measured yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Run a query to light up the arms, fusion and rerank.
+              </p>
+            </SceneState>
+          </CardBody>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
           <div className="min-w-0 xl:col-span-2">

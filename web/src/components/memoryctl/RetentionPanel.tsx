@@ -1,10 +1,14 @@
 'use client'
 
-import { Timer, Trash2 } from 'lucide-react'
+import { CircleCheck, Loader2, Timer, Trash2 } from 'lucide-react'
 import { useState, type ReactElement } from 'react'
 
+import { BarChart } from '@/components/charts/BarChart'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
+import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
+import { Receipt } from '@/components/primitives/Receipt'
 import {
   forgetMemorySubject,
   getMemoryRetention,
@@ -12,6 +16,7 @@ import {
 } from '@/lib/api/client'
 import type { MemorySubjectRow } from '@/lib/api/memory'
 
+import { atRiskBars } from '@/components/memory/memoryCharts'
 import { ErrorRow, LoadingRow } from '@/components/memory/StateRow'
 import { useAsync } from '@/components/memory/useAsync'
 
@@ -63,6 +68,7 @@ export function RetentionPanel({
     [token, subject, refreshKey],
   )
   const [busy, setBusy] = useState(false)
+  const [confirmSweep, setConfirmSweep] = useState(false)
   const [confirmErase, setConfirmErase] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -84,6 +90,7 @@ export function RetentionPanel({
   const sweep = (): Promise<void> =>
     run(async () => {
       const result = await sweepMemoryRetention(token, subject)
+      setConfirmSweep(false)
       const clause = retentionClause(result.removed)
       return clause === null
         ? 'Nothing was past the horizon, so nothing was removed.'
@@ -98,13 +105,25 @@ export function RetentionPanel({
     })
 
   const data = retention.state.status === 'ready' ? retention.state.data : null
-  const clause = data ? retentionClause(data.at_risk) : null
+  const atRisk = data ? atRiskBars(data.at_risk) : []
+  const atRiskTotal = atRisk.reduce((sum, bar) => sum + bar.rows, 0)
+  // What a sweep would take right now, in counts, for the confirmation below.
+  const sweepClause = data ? retentionClause(data.at_risk) : null
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <Timer className="size-4 text-blue-700" aria-hidden />
+    <div className="@container flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Timer className="size-4 shrink-0 text-blue-700" aria-hidden />
         <h3 className="t-title text-foreground">How long this is kept</h3>
+        <InfoTip label="What a sweep never removes">
+          Facts the agent still believes are never removed by age, and the write log is kept
+          whatever happens.
+        </InfoTip>
+        {data !== null && (
+          <Badge tone="neutral" className="ml-auto">
+            {sourceLabel(data.source)}
+          </Badge>
+        )}
       </div>
 
       {retention.state.status === 'loading' && <LoadingRow label="Reading the horizon…" />}
@@ -112,51 +131,119 @@ export function RetentionPanel({
 
       {data !== null && (
         <>
-          <dl className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg border border-border bg-surface-2/40 px-3 py-2">
-              <dt className="eyebrow">Conversation turns</dt>
-              <dd className="tabular mt-0.5 font-mono text-sm text-foreground">
-                {data.episodic_days > 0 ? `${data.episodic_days} days` : 'kept indefinitely'}
-              </dd>
-            </div>
-            <div className="rounded-lg border border-border bg-surface-2/40 px-3 py-2">
-              <dt className="eyebrow">Superseded facts</dt>
-              <dd className="tabular mt-0.5 font-mono text-sm text-foreground">
-                {data.closed_fact_days > 0
-                  ? `${data.closed_fact_days} days`
-                  : 'kept indefinitely'}
-              </dd>
-            </div>
-          </dl>
+          <div className="grid gap-4 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+            <dl className="grid min-w-0 grid-cols-2 gap-3 self-start">
+              <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 px-3 py-2">
+                <dt className="eyebrow">Conversation turns</dt>
+                <dd className="mt-0.5 text-foreground">
+                  {data.episodic_days > 0 ? (
+                    <Figure size="stat" unit="days">
+                      {data.episodic_days}
+                    </Figure>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">kept indefinitely</span>
+                  )}
+                </dd>
+              </div>
+              <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 px-3 py-2">
+                <dt className="eyebrow">Superseded facts</dt>
+                <dd className="mt-0.5 text-foreground">
+                  {data.closed_fact_days > 0 ? (
+                    <Figure size="stat" unit="days">
+                      {data.closed_fact_days}
+                    </Figure>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">kept indefinitely</span>
+                  )}
+                </dd>
+              </div>
+            </dl>
 
-          <p className="text-sm text-muted-foreground">
-            <Badge tone="neutral" className="mr-1.5 text-[0.56rem]">
-              {sourceLabel(data.source)}
-            </Badge>
-            {clause === null
-              ? 'Nothing has aged past the horizon yet.'
-              : `${clause} are past the horizon and will go on the next daily pass.`}{' '}
-            Facts the agent currently believes are never removed by age, and the
-            write log is kept whatever happens — it is the record of who changed what.
-          </p>
-
-          {canSweep && (
-            <div>
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => void sweep()}>
-                <Timer className="size-3.5" aria-hidden /> Apply the horizon now
-              </Button>
+            <div className="min-w-0">
+              <p className="eyebrow mb-1.5">past the horizon now</p>
+              {atRiskTotal > 0 ? (
+                <BarChart
+                  allowDecimals={false}
+                  data={atRisk}
+                  index="tier"
+                  category="rows"
+                  color="graph"
+                  valueFormatter={(v) => `${v} ${v === 1 ? 'row' : 'rows'}`}
+                  height={172}
+                />
+              ) : (
+                // A status hue never travels alone: icon and word both.
+                <p className="flex items-center gap-2 py-6 text-sm text-foreground">
+                  <CircleCheck className="size-4 shrink-0 text-ok-ink" aria-hidden />
+                  Nothing has aged past the horizon
+                </p>
+              )}
             </div>
-          )}
+          </div>
+
+          {/*
+            **The sweep asks first, and names what it will take.**
+
+            It is a real delete — the same class of act as the erase button below
+            it — and it shipped as a single unguarded click. The counts are
+            already on screen, so the confirmation can say exactly what goes
+            rather than asking "are you sure?" about an unnamed quantity, which is
+            this file's own rule (see `memoryControl.retentionClause`).
+          */}
+          {canSweep &&
+            (confirmSweep ? (
+              <div className="flex flex-col gap-2">
+                <p role="alert" className="text-sm break-words text-foreground">
+                  {sweepClause === null
+                    ? 'Nothing is past the horizon right now, so this would remove nothing.'
+                    : `This removes ${sweepClause}. The rows are deleted, not hidden; the write log is kept.`}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={busy}
+                    onClick={() => void sweep()}
+                  >
+                    {busy ? (
+                      <Loader2
+                        className="size-3.5 animate-spin motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                    ) : (
+                      <Timer className="size-3.5" aria-hidden />
+                    )}
+                    {busy ? 'Applying…' : 'Apply the horizon'}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmSweep(false)}>
+                    Keep it
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <Button size="sm" variant="outline" onClick={() => setConfirmSweep(true)}>
+                  <Timer className="size-3.5" aria-hidden /> Apply the horizon now
+                </Button>
+              </div>
+            ))}
         </>
       )}
 
       <div className="border-t border-border pt-3">
         {confirmErase ? (
           <div className="flex flex-col gap-2">
-            <p className="text-sm text-foreground">{erasureWarning(subjectRow)}</p>
-            <div className="flex items-center gap-2">
+            <p role="alert" className="text-sm break-words text-foreground">
+              {erasureWarning(subjectRow)}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" variant="destructive" disabled={busy} onClick={() => void erase()}>
-                <Trash2 className="size-3.5" aria-hidden /> Erase everything
+                {busy ? (
+                  <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+                ) : (
+                  <Trash2 className="size-3.5" aria-hidden />
+                )}
+                {busy ? 'Erasing…' : 'Erase everything'}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setConfirmErase(false)}>
                 Keep it
@@ -171,14 +258,21 @@ export function RetentionPanel({
       </div>
 
       {failure !== null && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm break-words text-destructive">
           {failure}
         </p>
       )}
       {note !== null && (
-        <p role="status" className="text-sm text-ok-ink">
+        <p role="status" aria-live="polite" className="text-sm break-words text-ok-ink">
           {note}
         </p>
+      )}
+
+      {data !== null && (
+        <Receipt
+          origin="GET /memory/retention"
+          detail={`${data.scope} scope${data.keeps_audit ? ' · write log never swept' : ''}`}
+        />
       )}
     </div>
   )

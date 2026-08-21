@@ -1,22 +1,29 @@
 'use client'
 
-import { ArrowRight, Waypoints } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 
+import { BarChart } from '@/components/charts/BarChart'
 import { beatFromSignal } from '@/components/console/motion'
 import { QueryBar } from '@/components/console/QueryBar'
+import { SceneState } from '@/components/illustration/Scene'
+import { Figure } from '@/components/primitives/Figure'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { Receipt } from '@/components/primitives/Receipt'
+import { EmptyState } from '@/components/primitives/States'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { ScrollArea } from '@/components/primitives/scroll-area'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { DataPanel } from '@/components/ui/DataPanel'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { colorForKind } from '@/config/signals'
+import { degreeDistribution, kindCounts } from './graphStats'
 import { personasForRole } from '@/config/personas'
 import { getGraph } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { cn } from '@/lib/utils'
 import type { GraphResponse } from '@/lib/api/types'
 import type { GraphEdge, GraphNode, Role } from '@/lib/stream'
 import type { RunState } from '@/state/runReducer'
@@ -28,10 +35,13 @@ const KnowledgeGraph = dynamic(
   () => import('@/components/graph/KnowledgeGraph').then((m) => m.KnowledgeGraph),
   {
     ssr: false,
+    // The title matches the mounted card's, so the header does not change word
+    // under the reader when the canvas arrives.
     loading: () => (
-      <Card className="flex h-full flex-col overflow-hidden">
-        <CardHeader title="Knowledge graph" />
-        <div className="min-h-0 flex-1 animate-pulse bg-surface-2/30" />
+      <Card className="flex h-full flex-col overflow-hidden" role="status" aria-live="polite">
+        <CardHeader title="Orchestration" />
+        <span className="sr-only">Loading the knowledge graph…</span>
+        <div aria-hidden className="min-h-0 flex-1 animate-pulse bg-surface-2/30" />
       </Card>
     ),
   },
@@ -79,6 +89,41 @@ function kindsOf(nodes: GraphNode[]): string[] {
   return [...new Set(nodes.map((n) => n.kind))].sort()
 }
 
+/**
+ * How many bars a distribution needs before a plotted axis earns its height.
+ *
+ * A histogram of one or two bars is not a distribution — it is two numbers drawn
+ * inside 200px of empty gridlines, which is the single loudest way a panel can
+ * look broken. Below this, the same counts are stated as figures and the card
+ * shrinks to fit them.
+ */
+const MIN_BARS = 3
+
+/** A category and its count, for the compact path below {@link MIN_BARS}. */
+interface CountItem {
+  label: string
+  value: number
+}
+
+/** Too few categories to plot: the counts themselves, at figure size. */
+function CountStrip({ items, label }: { items: CountItem[]; label: string }): ReactElement {
+  return (
+    <ul className="flex flex-wrap gap-2" aria-label={label}>
+      {items.map((item) => (
+        <li
+          key={item.label}
+          className="flex min-w-0 flex-col gap-0.5 rounded-md border border-border bg-surface-2/40 px-3 py-2"
+        >
+          <span className="eyebrow truncate" title={item.label}>
+            {item.label}
+          </span>
+          <Figure size="stat">{item.value}</Figure>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 /** A coloured kind chip — the entity type dot + label. */
 function KindChip({ kind }: { kind: string }): ReactElement {
   return (
@@ -108,6 +153,10 @@ function GraphView({ role }: { role: Role }): ReactElement {
   const { state, running, start, reset } = useRunStream()
   const [personaId, setPersonaId] = useState(personasForRole(role)[0]?.id ?? '')
   const [graph, setGraph] = useState<GraphResponse>(EMPTY_GRAPH)
+  // Whether `/graph` has answered. Until it has, an empty graph is unknown
+  // rather than absent, and the canvas keeps its place instead of flashing an
+  // empty state that the very next render replaces.
+  const [graphLoaded, setGraphLoaded] = useState(false)
 
   useEffect(() => {
     // Wait for the persisted session; firing now would send no bearer.
@@ -115,12 +164,18 @@ function GraphView({ role }: { role: Role }): ReactElement {
     let alive = true
     void getGraph(token)
       .then((g) => {
-        if (alive) setGraph(g)
+        if (alive) {
+          setGraph(g)
+          setGraphLoaded(true)
+        }
       })
       // Fall back to the honest empty graph — the view renders its empty state
       // rather than waiting on data that will never arrive.
       .catch(() => {
-        if (alive) setGraph(EMPTY_GRAPH)
+        if (alive) {
+          setGraph(EMPTY_GRAPH)
+          setGraphLoaded(true)
+        }
       })
     return () => {
       alive = false
@@ -135,6 +190,15 @@ function GraphView({ role }: { role: Role }): ReactElement {
   const view = useMemo(() => viewOf(graph, state), [graph, state])
   const rows = useMemo(() => entityRows(view.nodes, view.edges), [view])
   const kinds = useMemo(() => kindsOf(view.nodes), [view.nodes])
+  // Both charts are computed here, from the returned shape — `GraphResponse`
+  // carries no numeric field at all — so both receipts name the derivation.
+  const degrees = useMemo(() => degreeDistribution(rows), [rows])
+  const kindBars = useMemo(() => kindCounts(view.nodes.map((n) => n.kind)), [view.nodes])
+  const derivedFrom = view.scoped
+    ? '/query stream · the touched subgraph'
+    : 'GET /graph · counted in the browser'
+  // Past this many cells the off-screen ones stop being laid out at all.
+  const longRelationList = view.edges.length > 50
   const nodeLabel = useMemo(() => {
     const m = new Map<string, string>()
     for (const n of view.nodes) m.set(n.id, n.label)
@@ -157,75 +221,148 @@ function GraphView({ role }: { role: Role }): ReactElement {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         {/* The graph — the large centrepiece. */}
         <div className="min-w-0 xl:col-span-2">
-          <div className="h-[560px] lg:h-[680px]">
-            <KnowledgeGraph base={graph} state={state} beat={beat} idle={idle} />
-          </div>
-        </div>
-
-        {/* Entity list + kind legend. */}
-        <Card className="flex min-w-0 flex-col overflow-hidden xl:col-span-1">
-          <CardHeader
-            title={
-              <span className="flex items-center gap-2">
-                <Waypoints className="size-4 shrink-0 text-blue-600" aria-hidden />
-                Entities in view
-              </span>
-            }
-            actions={
-              <div className="flex flex-wrap items-center gap-2">
-                <InfoTip label="About Entities in view">
-                  Every typed entity node the graph is painting, with its kind and its degree — how
-                  many relations touch it. Once a run traverses, the list narrows to that
-                  answer&apos;s evidence subgraph.
-                </InfoTip>
-                <Badge tone="graph">
-                  {view.nodes.length} {view.nodes.length === 1 ? 'entity' : 'entities'}
-                </Badge>
-              </div>
-            }
-          />
-
-          {/* Entity-kind colour legend. */}
-          {kinds.length > 0 && (
-            <div className="flex flex-wrap gap-x-3 gap-y-1.5 px-5 pt-3 pb-3">
-              {kinds.map((kind) => (
-                <KindChip key={kind} kind={kind} />
-              ))}
+          {graphLoaded && view.nodes.length === 0 ? (
+            // An empty force graph is 680px of nothing — the largest blank
+            // region this portal can produce. It says the same thing in a
+            // panel the size of the sentence instead.
+            <Card className="min-w-0">
+              <CardHeader eyebrow="entities · relations" title="Orchestration" />
+              <CardBody>
+                <SceneState name="curious" size="md">
+                  <EmptyState
+                    title="No entity in the graph"
+                    body="Ingest a document, or run a query to build an evidence subgraph."
+                    className="text-left"
+                  />
+                </SceneState>
+              </CardBody>
+            </Card>
+          ) : (
+            /* The canvas sizes itself from this box, so the box must shrink with
+               the viewport — a fixed 560px tall graph is most of a phone screen. */
+            <div className="h-[360px] min-w-0 sm:h-[480px] lg:h-[600px] xl:h-[680px]">
+              <KnowledgeGraph base={graph} state={state} beat={beat} idle={idle} />
             </div>
           )}
+        </div>
 
-          <div className="min-h-0 flex-1">
-            {rows.length === 0 ? (
-              <div className="flex h-full min-h-40 items-center justify-center px-5 text-center text-sm text-muted-foreground">
-                No entities yet — run a query to populate the graph.
-              </div>
-            ) : (
-              <ScrollArea className="h-[360px] xl:h-[520px]">
-                <Table>
-                  <THead>
-                    <TH>Entity</TH>
-                    <TH>Kind</TH>
-                    <TH className="text-right">Degree</TH>
-                  </THead>
-                  <TBody>
-                    {rows.map(({ node, degree }) => (
-                      <TR key={node.id}>
-                        <TD className="max-w-[14rem] truncate font-medium">{node.label}</TD>
-                        <TD>
-                          <KindChip kind={node.kind} />
-                        </TD>
-                        <TD className="text-right font-mono tabular-nums text-muted-foreground">
-                          {degree}
-                        </TD>
-                      </TR>
-                    ))}
-                  </TBody>
-                </Table>
-              </ScrollArea>
-            )}
-          </div>
-        </Card>
+        {/* Entity list + kind legend. `DataPanel` owns the scroll: a bare table
+            here widened the document rather than the panel at 390. */}
+        <DataPanel
+          className="min-w-0 xl:col-span-1"
+          title="Entities in view"
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <InfoTip label="About Entities in view">
+                Degree is how many relations touch an entity; a run narrows the list to its own
+                evidence subgraph.
+              </InfoTip>
+              <Badge tone="graph">
+                <Figure className="text-xs leading-4">{view.nodes.length}</Figure>
+                {view.nodes.length === 1 ? 'entity' : 'entities'}
+              </Badge>
+            </div>
+          }
+          toolbar={kinds.length > 0 ? kinds.map((kind) => <KindChip key={kind} kind={kind} />) : undefined}
+          maxHeight={rows.length === 0 ? undefined : 520}
+        >
+          {rows.length === 0 ? (
+            <SceneState name="empty" className="py-4">
+              <p className="text-sm font-medium text-foreground">No entities in view</p>
+              <p className="mt-1 text-sm text-muted-foreground">Run a query to populate it.</p>
+            </SceneState>
+          ) : (
+            <Table>
+              <THead>
+                <TH>Entity</TH>
+                <TH>Kind</TH>
+                <TH className="text-right">Degree</TH>
+              </THead>
+              <TBody>
+                {rows.map(({ node, degree }) => (
+                  <TR key={node.id}>
+                    <TD className="max-w-[14rem] font-medium">
+                      <span className="block truncate" title={node.label}>
+                        {node.label}
+                      </span>
+                    </TD>
+                    <TD>
+                      <KindChip kind={node.kind} />
+                    </TD>
+                    <TD className="text-right">
+                      <Figure className="text-muted-foreground">{degree}</Figure>
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          )}
+        </DataPanel>
       </div>
+
+      {/* Two distributions, both computed from the returned graph — the API
+          carries no numeric field, and each receipt says so. */}
+      {view.nodes.length > 0 && (
+        // `items-start`, so a card that took the compact path is not stretched to
+        // its neighbour's chart height — which would put the dead space back
+        // inside the card instead of removing it.
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+          <Card className="min-w-0">
+            <CardHeader eyebrow="relations per entity" title="How connected the graph is" />
+            <CardBody className="space-y-3 pt-4">
+              {degrees.length < MIN_BARS ? (
+                <CountStrip
+                  label="Entities per degree"
+                  items={degrees.map((d) => ({
+                    label: `${d.degree} relation${d.degree === '1' ? '' : 's'}`,
+                    value: d.entities,
+                  }))}
+                />
+              ) : (
+                <BarChart
+                  allowDecimals={false}
+                  data={degrees}
+                  index="degree"
+                  category="entities"
+                  color="graph"
+                  valueFormatter={(v) => `${v} ${v === 1 ? 'entity' : 'entities'}`}
+                  height={196}
+                />
+              )}
+              <Receipt
+                origin={derivedFrom}
+                detail={`degree counted over ${view.edges.length} edges`}
+              />
+            </CardBody>
+          </Card>
+
+          <Card className="min-w-0">
+            <CardHeader eyebrow="entities per kind" title="What is in the graph" />
+            <CardBody className="space-y-3 pt-4">
+              {kindBars.length < MIN_BARS ? (
+                <CountStrip
+                  label="Entities per kind"
+                  items={kindBars.map((k) => ({ label: k.kind, value: k.entities }))}
+                />
+              ) : (
+                <BarChart
+                  allowDecimals={false}
+                  data={kindBars}
+                  index="kind"
+                  category="entities"
+                  color="graph"
+                  valueFormatter={(v) => `${v} ${v === 1 ? 'entity' : 'entities'}`}
+                  height={196}
+                />
+              )}
+              <Receipt
+                origin={derivedFrom}
+                detail={`node.kind tallied over ${view.nodes.length} entities`}
+              />
+            </CardBody>
+          </Card>
+        </div>
+      )}
 
       {/* Relations — the real relation phrases between entities in view. */}
       <Card>
@@ -234,26 +371,33 @@ function GraphView({ role }: { role: Role }): ReactElement {
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <InfoTip label="About Relations">
-                The directed edges between entities, each carrying its real relation phrase. These
-                are the paths the retriever can traverse to reason over connected evidence.
+                The directed edges the retriever can traverse, each with its real relation phrase.
               </InfoTip>
               <Badge tone="graph">
-                {view.edges.length} {view.edges.length === 1 ? 'relation' : 'relations'}
+                <Figure className="text-xs leading-4">{view.edges.length}</Figure>
+                {view.edges.length === 1 ? 'relation' : 'relations'}
               </Badge>
             </div>
           }
         />
         <CardBody>
           {view.edges.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No relations yet — run a query to traverse the graph.
-            </p>
+            <SceneState name="curious" size="md" className="py-4">
+              <p className="text-sm font-medium text-foreground">No relations traversed yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">Ask a question to walk the edges.</p>
+            </SceneState>
           ) : (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {view.edges.map((e, i) => (
-                <div
+                <li
                   key={`${nodeId(e.source)}->${nodeId(e.target)}:${e.relation}:${i}`}
-                  className="flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface-2/40 px-3 py-2 text-sm"
+                  className={cn(
+                    'flex min-w-0 items-center gap-2 rounded-lg border border-border bg-surface-2/40 px-3 py-2 text-sm',
+                    // Past ~50 rows the browser skips rendering what is off-screen.
+                    // The intrinsic size is the row's real height, so the scrollbar
+                    // does not jump as cells enter and leave.
+                    longRelationList && '[contain-intrinsic-size:auto_2.5rem] [content-visibility:auto]',
+                  )}
                 >
                   <span className="min-w-0 flex-1 truncate font-medium text-foreground">
                     {nodeLabel(nodeId(e.source))}
@@ -265,9 +409,9 @@ function GraphView({ role }: { role: Role }): ReactElement {
                   <span className="min-w-0 flex-1 truncate text-right font-medium text-foreground">
                     {nodeLabel(nodeId(e.target))}
                   </span>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </CardBody>
       </Card>

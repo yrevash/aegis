@@ -14,7 +14,8 @@ import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { Receipt } from '@/components/primitives/Receipt'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { SceneState } from '@/components/illustration/Scene'
 import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { errorSentence } from '@/lib/api/apiError'
@@ -46,10 +47,10 @@ function ControlRow({ row }: { row: GuardrailControl }): ReactElement {
   const provenance = provenanceOf(row)
   const added = addedMembers(row)
   return (
-    <div className="rounded-lg border border-border bg-surface-2/40 p-4">
+    <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="font-medium text-foreground">{name}</span>
+          <span className="min-w-0 break-words font-medium text-foreground">{name}</span>
           <InfoTip label={`About ${name}`}>{row.control.description}</InfoTip>
         </div>
         <Badge tone={provenance.mine ? 'ok' : 'neutral'} className="uppercase">
@@ -89,14 +90,14 @@ function ControlRow({ row }: { row: GuardrailControl }): ReactElement {
 /** One rail, as the pipeline describes itself. */
 function RailRow({ rail }: { rail: GuardrailRail }): ReactElement {
   return (
-    <div className="grid gap-2 border-b border-border py-3 last:border-b-0 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_6rem]">
+    <div className="grid min-w-0 gap-2 border-b border-border py-3 last:border-b-0 sm:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_6rem]">
       <div className="min-w-0">
-        <p className="font-medium text-foreground">{rail.name}</p>
-        <Figure className="text-muted-foreground">
+        <p className="break-words font-medium text-foreground">{rail.name}</p>
+        <Figure className="break-words text-muted-foreground">
           {`${rail.stage}${rail.threshold ? ` · ${rail.threshold}` : ''}${rail.model_backed ? ' · model-backed' : ''}`}
         </Figure>
       </div>
-      <p className="text-sm leading-relaxed text-muted-foreground">
+      <p className="min-w-0 text-sm leading-relaxed break-words text-muted-foreground">
         {rail.screens}
         {rail.settings.length > 0 ? (
           <span className="mt-0.5 block">
@@ -166,9 +167,7 @@ export function TenantRailPolicy(): ReactElement {
           right={
             <>
               <InfoTip label="About your rail policy">
-                What the rails enforce for your tenant right now, read off the same folded
-                policy a question meets. Your tenant may tighten any of these and can never
-                go below the platform floor — the resolver takes the stricter value, so a
+                You may tighten any of these; the resolver takes the stricter value, so a
                 weaker one loses by arithmetic rather than by a check.
               </InfoTip>
               {policy ? (
@@ -188,22 +187,31 @@ export function TenantRailPolicy(): ReactElement {
           <LoadingState rows={4} label="Resolving your rails…" className="mt-4" />
         ) : error ? (
           <ErrorState error={error} className="mt-4" />
-        ) : !policy ? null : (
+        ) : !policy ? (
+          /* "Data held behind a lock" — the policy did not open, and a screen that
+             renders nothing here is indistinguishable from a tenant with no rails. */
+          <SceneState name="sealed" size="md" className="mt-4">
+            <Absence
+              className="text-left"
+              figure="Your rail policy"
+              why="The policy endpoint returned nothing for this session."
+            />
+          </SceneState>
+        ) : (
           <>
             {!policy.resolved ? (
               <p className="mt-4 text-sm text-muted-foreground">
-                No tenant layer was read for this session, so what follows is the platform
-                floor and nothing else.
+                No tenant layer was read — this is the platform floor.
               </p>
             ) : null}
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="mt-4 grid min-w-0 gap-3 @container sm:grid-cols-2">
               {policy.controls.map((row) => (
                 <ControlRow key={row.key} row={row} />
               ))}
             </div>
 
-            <div className="mt-6">
+            <div className="mt-6 min-w-0">
               <p className="eyebrow mb-1">the stack · in the order it runs</p>
               <div className="mt-2">
                 {policy.rails.map((rail) => (

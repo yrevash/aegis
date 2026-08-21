@@ -142,7 +142,7 @@ export function DashboardCharts({
         {queryVolume.length < 1 ? (
           <Accumulating />
         ) : (
-          <BarChart data={queryVolume} index="t" category="calls" color="graph" height={200} />
+          <BarChart data={queryVolume} index="t" category="calls" color="graph" height={200} allowDecimals={false} />
         )}
       </BentoTile>
     </>

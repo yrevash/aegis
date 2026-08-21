@@ -1,9 +1,10 @@
 'use client'
 
-import { Gauge, Loader2, Ruler, ShieldAlert, SlidersHorizontal } from 'lucide-react'
+import { Gauge, Ruler, ShieldAlert, SlidersHorizontal } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -57,23 +58,19 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
         title="Loop parameters"
         actions={
           <InfoTip label="About the loop parameters">
-            The read-only knobs the tiered release gate runs on: the eval margin a draft must clear,
-            the diff-size fractions that bucket a change low or high, the term lists that force a
-            human gate, and the autonomy ceiling above which nothing auto-promotes.
+            Read-only here: these are the knobs the tiered release gate itself runs on.
           </InfoTip>
         }
       />
-      <CardBody className="space-y-5">
+      <CardBody className="@container min-w-0 space-y-5">
         {error ? (
-          <p className="py-8 text-center text-sm text-danger">{error}</p>
+          <ErrorState error={error} />
         ) : loading || params == null ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading loop parameters…
-          </div>
+          <LoadingState rows={4} label="Loading loop parameters…" />
         ) : (
           <>
             {/* Headline numeric knobs */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid min-w-0 grid-cols-1 gap-4 @sm:grid-cols-2 @3xl:grid-cols-4">
               <StatCard
                 label="Eval margin"
                 value={params.eval_margin.toFixed(3)}
@@ -101,29 +98,28 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
             </div>
 
             {/* Term lists that force a human gate */}
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className="rounded-lg border border-border bg-surface-2/40 p-4">
+            <div className="grid min-w-0 grid-cols-1 gap-4 @2xl:grid-cols-2">
+              <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 p-4">
                 <div className="mb-2.5 flex items-center gap-1.5">
-                  <ShieldAlert className="size-3.5 text-block-ink" />
+                  <ShieldAlert className="size-3.5 shrink-0 text-block-ink" aria-hidden />
                   <span className="eyebrow">safety terms</span>
                   <InfoTip label="About safety terms">
-                    A draft touching any of these is treated as guardrail-adjacent and cannot
-                    auto-ship.
+                    A draft touching any of these cannot auto-ship.
                   </InfoTip>
-                  <span className="ml-auto font-mono text-[0.62rem] text-muted-foreground">
+                  <span className="tabular ml-auto font-mono text-xs text-muted-foreground">
                     {params.safety_terms.length}
                   </span>
                 </div>
                 <TermChips terms={params.safety_terms} tone="block" />
               </div>
-              <div className="rounded-lg border border-border bg-surface-2/40 p-4">
+              <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 p-4">
                 <div className="mb-2.5 flex items-center gap-1.5">
-                  <ShieldAlert className="size-3.5 text-risk-ink" />
+                  <ShieldAlert className="size-3.5 shrink-0 text-risk-ink" aria-hidden />
                   <span className="eyebrow">critical config markers</span>
                   <InfoTip label="About critical config markers">
-                    Config keys matching these (model, tools, permissions…) escalate the risk tier.
+                    Config keys matching these escalate the risk tier.
                   </InfoTip>
-                  <span className="ml-auto font-mono text-[0.62rem] text-muted-foreground">
+                  <span className="tabular ml-auto font-mono text-xs text-muted-foreground">
                     {params.critical_config_markers.length}
                   </span>
                 </div>
@@ -132,9 +128,9 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
             </div>
 
             {/* Auto-tunable config keys + their per-release cap */}
-            <div>
+            <div className="min-w-0">
               <p className="eyebrow mb-2">auto-tunable config keys · max Δ per release</p>
-              <div className="overflow-hidden rounded-lg border border-border">
+              <div className="min-w-0 overflow-hidden rounded-lg border border-border">
                 <Table>
                   <THead>
                     <TH>config key</TH>
@@ -151,7 +147,7 @@ export function LoopParams({ params, loading, error }: Props): ReactElement {
                     ) : (
                       tunable.map((t) => (
                         <TR key={t.key}>
-                          <TD className="font-mono">{t.key}</TD>
+                          <TD className="font-mono break-words">{t.key}</TD>
                           <TD className="tabular text-right font-mono">
                             {t.max != null ? `±${t.max}` : 'unbounded'}
                           </TD>

@@ -3,8 +3,12 @@
 import { IdCard } from 'lucide-react'
 import type { ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import { Badge } from '@/components/ui/Badge'
 import type { MemoryProfileResponse } from '@/lib/api/memory'
+
+/** Built once — constructing an `Intl.NumberFormat` per cell is the costly half. */
+const NUMBER_FORMAT = new Intl.NumberFormat(undefined)
 
 import { EmptyRow, ErrorRow, LoadingRow } from './StateRow'
 import { PanelHeader } from './PanelHeader'
@@ -26,9 +30,15 @@ function renderValue(value: unknown): ReactElement {
     )
   }
   if (typeof value === 'number') {
-    return <span className="tabular font-mono text-[0.8rem] text-foreground">{value.toLocaleString('en-US')}</span>
+    // The reader's locale, not a pinned `en-US` — a hardcoded grouping separator
+    // is a hardcoded number format however it is spelled.
+    return (
+      <Figure className="text-[0.8rem] leading-5 text-foreground">
+        {NUMBER_FORMAT.format(value)}
+      </Figure>
+    )
   }
-  return <span className="text-[0.8rem] text-foreground">{String(value)}</span>
+  return <span className="min-w-0 text-[0.8rem] break-words text-foreground">{String(value)}</span>
 }
 
 interface Props {
@@ -44,7 +54,7 @@ export function StructuredProfilePanel({ state }: Props): ReactElement {
   const entries = state.status === 'ready' ? Object.entries(state.data.data) : ([] as [string, unknown][])
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <PanelHeader
         icon={IdCard}
         title="Profile"
@@ -67,7 +77,7 @@ export function StructuredProfilePanel({ state }: Props): ReactElement {
         // Two columns of stacked label/value cells: the same twelve-odd fields
         // in roughly half the vertical run. List-valued fields (risk flags,
         // entitlements) take the full width so their chips stay on one line.
-        <dl className="grid flex-1 grid-cols-2 gap-x-4 border-t border-border/60">
+        <dl className="grid grid-cols-2 gap-x-4 border-t border-border/60">
           {entries.map(([k, v]) =>
             Array.isArray(v) ? (
               // List fields run full width with their chips on the label's line.

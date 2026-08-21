@@ -75,7 +75,22 @@ export function toPercent(value: number, domain: [number, number]): number {
 export function formatValue(value: number, unit?: string): string {
   const abs = Math.abs(value)
   const decimals = abs >= 100 ? 0 : abs >= 10 ? 1 : 2
-  return `${value.toFixed(decimals)}${unit ?? ''}`
+  return `${DECIMALS[decimals].format(value)}${unit ?? ''}`
+}
+
+/**
+ * The three fixed-decimal formatters {@link formatValue} picks between.
+ *
+ * Through `Intl.NumberFormat` rather than `toFixed`, so a grouped magnitude gets
+ * its separator from the locale instead of from a template string. The locale is
+ * named explicitly: an unnamed one resolves to the *runtime's*, which is the
+ * server's during SSR and the browser's after hydration — and an axis label that
+ * differs between the two is a hydration mismatch.
+ */
+const DECIMALS: Record<number, Intl.NumberFormat> = {
+  0: new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }),
+  1: new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+  2: new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
 }
 
 /** Compact, human-readable labels for the conformal deferral signals. */

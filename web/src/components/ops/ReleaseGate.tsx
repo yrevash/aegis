@@ -4,7 +4,9 @@ import { Check, Loader2, RotateCcw, ShieldAlert, ShieldCheck, X } from 'lucide-r
 import { useMemo, useState, type ReactElement } from 'react'
 
 import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { EmptyState, ErrorState, LoadingState } from '@/components/primitives/States'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { postOpsReleaseDecision, postOpsRollback } from '@/lib/api/client'
@@ -50,23 +52,27 @@ function ReleaseRow({
   }
 
   return (
-    <li className="rounded-lg border border-border bg-card p-3.5">
+    <li className="min-w-0 rounded-lg border border-border bg-card p-3.5">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={RISK_TONE[row.risk] ?? 'risk'}>
           <ShieldAlert className="size-3" aria-hidden /> {row.risk} risk
         </Badge>
-        {row.prompt_key && <span className="font-mono text-[0.7rem] text-foreground">{row.prompt_key}</span>}
+        {row.prompt_key && (
+          <Figure className="min-w-0 break-words text-foreground">{row.prompt_key}</Figure>
+        )}
         {row.draft_version_id != null && (
-          <span className="font-mono text-[0.62rem] text-muted-foreground">draft #{row.draft_version_id}</span>
+          <Figure className="text-muted-foreground">draft #{row.draft_version_id}</Figure>
         )}
         {row.reason && (
           <InfoTip label={`Why this ${row.risk}-risk draft needs sign-off`}>{row.reason}</InfoTip>
         )}
-        <span className="eyebrow ml-auto text-[0.56rem]">{formatAgo(row.created_at)}</span>
+        <span className="eyebrow ml-auto">{formatAgo(row.created_at)}</span>
       </div>
 
       {decided ? (
         <div
+          role="status"
+          aria-live="polite"
           className={cn(
             'mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium',
             decided.outcome === 'promoted' ? 'bg-ok/15 text-ok-ink' : 'bg-surface-2 text-muted-foreground',
@@ -104,7 +110,11 @@ function ReleaseRow({
           >
             <X className="size-3.5" aria-hidden /> Reject
           </button>
-          {error && <span className="text-xs text-danger">{error}</span>}
+          {error && (
+            <span role="alert" className="min-w-0 text-xs break-words text-danger">
+              {error}
+            </span>
+          )}
         </div>
       )}
     </li>
@@ -167,27 +177,25 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
           <div className="flex items-center gap-2">
             {!loading && !error ? <Badge tone="risk">{rows.length} awaiting</Badge> : null}
             <InfoTip label="About the release gate">
-              Low-risk improvements that clear the eval margin and touch nothing sensitive auto-ship
-              and never land here. What remains are the policy- or guardrail-touching edits that need
-              explicit human sign-off.
+              Low-risk edits that clear the eval margin auto-ship; what lands here is the
+              policy- or guardrail-touching remainder.
             </InfoTip>
           </div>
         }
       />
-      <CardBody className="space-y-4">
+      <CardBody className="@container min-w-0 space-y-4">
         {error ? (
-          <p className="py-8 text-center text-sm text-danger">{error}</p>
+          <ErrorState error={error} />
         ) : loading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading the release queue…
-          </div>
+          <LoadingState rows={3} label="Loading the release queue…" />
         ) : rows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 py-10 text-center text-sm text-muted-foreground">
-            <ShieldCheck className="size-6 text-ok-ink" />
-            <p>Nothing awaiting approval — the loop is caught up.</p>
-          </div>
+          <EmptyState
+            icon={ShieldCheck}
+            title="Nothing awaiting approval"
+            body="The loop is caught up — every draft either auto-shipped or was decided."
+          />
         ) : (
-          <div className="grid gap-4 sm:grid-cols-[auto_1fr] sm:items-center">
+          <div className="grid min-w-0 gap-4 @md:grid-cols-[auto_minmax(0,1fr)] @md:items-center">
             <div className="mx-auto w-[150px]">
               <DonutChart
                 data={riskMix}
@@ -206,8 +214,8 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
         )}
 
         {/* One-click rollback. */}
-        <div className="flex flex-wrap items-center gap-3 border-t border-border/60 pt-3">
-          <p className="min-w-0 font-mono text-[0.68rem] text-muted-foreground">{PROMPT_KEY}</p>
+        <div className="flex min-w-0 flex-wrap items-center gap-3 border-t border-border/60 pt-3">
+          <Figure className="min-w-0 break-words text-muted-foreground">{PROMPT_KEY}</Figure>
           {rollback ? (
             <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-ok-ink">
               <RotateCcw className="size-3.5" aria-hidden />
@@ -220,10 +228,19 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
               disabled={rollingBack}
               className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border h-10 touch-manipulation px-3 text-[0.78rem] font-medium text-foreground transition-colors hover:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
             >
-              <RotateCcw className="size-3.5" aria-hidden /> {rollingBack ? 'Rolling back…' : 'Roll back to last-good'}
+                {rollingBack ? (
+                <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : (
+                <RotateCcw className="size-3.5" aria-hidden />
+              )}
+              {rollingBack ? 'Rolling back…' : 'Roll back to last-good'}
             </button>
           )}
-          {rollbackError && <p className="w-full text-xs text-danger">{rollbackError}</p>}
+          {rollbackError && (
+            <p role="alert" className="w-full text-xs break-words text-danger">
+              {rollbackError}
+            </p>
+          )}
         </div>
       </CardBody>
     </Card>

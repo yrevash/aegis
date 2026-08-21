@@ -5,6 +5,7 @@ import type { ReactElement } from 'react'
 import { RankedBars, type RankedDatum } from '@/components/charts/RankedBars'
 import { Figure } from '@/components/primitives/Figure'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { EmptyState } from '@/components/primitives/States'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import type { RetrievalOrigin } from '@/lib/stream'
@@ -13,6 +14,12 @@ import { ORIGIN_LABEL, type RetrievalObservability } from './observability'
 export interface ProvenanceDonutProps {
   obs: RetrievalObservability
 }
+
+/**
+ * Counts through `Intl`, with the locale named so the server render and the
+ * client render produce the same characters.
+ */
+const COUNT = new Intl.NumberFormat('en-US')
 
 /**
  * The provenance donut — the origins mix (vector / graph / bm25) that fed the
@@ -68,25 +75,28 @@ export function ProvenanceDonut({ obs }: ProvenanceDonutProps): ReactElement {
       />
       <CardBody className="space-y-3 pt-4">
         {data.length === 0 ? (
-          <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
-            No recall arms fired yet.
-          </div>
+          // Compact, not a 160px centred void: there is nothing to plot here, so
+          // the card is only as tall as the sentence that says so.
+          <EmptyState
+            title="No recall arm fired"
+            body="This run reported no vector, graph or keyword candidate."
+          />
         ) : hasCounts ? (
           <>
             <div>
               <p className="eyebrow">candidates in the fused pool</p>
               <p className="mt-1">
-                <Figure size="stat">{obs.fused_candidates}</Figure>
+                <Figure size="stat">{COUNT.format(obs.fused_candidates)}</Figure>
               </p>
             </div>
             <RankedBars
               label="Candidates per recall arm, most first"
               data={data}
-              valueFormatter={(v) => `${v} candidates`}
+              valueFormatter={(v) => `${COUNT.format(v)} candidates`}
             />
             <Receipt
               origin="/query stream · per-arm candidate counts"
-              detail={`${obs.fused_candidates} candidates in the fused pool · ${fusionLabel}`}
+              detail={`${COUNT.format(obs.fused_candidates)} candidates in the fused pool · ${fusionLabel}`}
             />
           </>
         ) : (
@@ -111,7 +121,7 @@ export function ProvenanceDonut({ obs }: ProvenanceDonutProps): ReactElement {
             </div>
             <Receipt
               origin={`/query stream · ${fusionLabel} fusion`}
-              detail={`${obs.fused_candidates} candidates in the fused pool`}
+              detail={`${COUNT.format(obs.fused_candidates)} candidates in the fused pool`}
             />
           </>
         )}

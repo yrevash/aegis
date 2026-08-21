@@ -3,6 +3,9 @@
 import { ChevronDown, Network } from 'lucide-react'
 import { useState, type ReactElement } from 'react'
 
+import { BarChart } from '@/components/charts/BarChart'
+import { Figure } from '@/components/primitives/Figure'
+import { Receipt } from '@/components/primitives/Receipt'
 import { RevealOnScroll } from '@/components/shared'
 import { Badge } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
@@ -12,6 +15,7 @@ import { EmptyRow, ErrorRow, LoadingRow } from './StateRow'
 import { PanelHeader } from './PanelHeader'
 import { formatDate } from './datetime'
 import type { AsyncState } from './useAsync'
+import { confidenceBands, medianImportance, totalRecalls } from './memoryCharts'
 import { factStatus, validFactCount } from './memoryText'
 
 /**
@@ -23,7 +27,7 @@ function FactDetail({ fact }: { fact: MemoryFactRow }): ReactElement {
   const invalid = !fact.is_valid
   return (
     <div className="animate-reveal border-t border-border/60 px-3 py-2.5">
-      <p className="font-mono text-[0.64rem] leading-relaxed text-muted-foreground">
+      <p translate="no" className="font-mono text-[0.64rem] leading-relaxed break-words text-muted-foreground">
         <span className="text-blue-600">{fact.subject}</span>
         {' · '}
         <span className="text-blue-700">{fact.predicate}</span>
@@ -88,20 +92,27 @@ function FactRow({ fact }: { fact: MemoryFactRow }): ReactElement {
           {fact.text}
         </span>
         <span className="flex w-full items-center gap-2">
-          <span
-            className="tabular shrink-0 font-mono text-[0.68rem] text-muted-foreground"
-            title={`Confidence ${Math.round(fact.confidence * 100)}%`}
+          <Figure
+            label={`Confidence ${Math.round(fact.confidence * 100)} percent`}
+            className="shrink-0 text-[0.68rem] leading-4 text-muted-foreground"
           >
             {Math.round(fact.confidence * 100)}%
-          </span>
-          <span className="tabular shrink-0 font-mono text-[0.6rem] text-muted-foreground">
+          </Figure>
+          <Figure
+            label={`Recalled ${fact.access_count} times`}
+            className="shrink-0 text-[0.6rem] leading-4 text-muted-foreground"
+          >
             {fact.access_count}× recalled
-          </span>
+          </Figure>
           <Badge tone={status.tone === 'ok' ? 'ok' : 'neutral'} className="shrink-0 text-[0.56rem]">
             {status.label}
           </Badge>
           <ChevronDown
-            className={cn('ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')}
+            aria-hidden
+            className={cn(
+              'ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none',
+              open && 'rotate-180',
+            )}
           />
         </span>
       </button>
@@ -125,6 +136,13 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
   const all = state.status === 'ready' ? state.data.rows : []
   const rows = showSuperseded ? all : all.filter((r) => r.is_valid)
   const validCount = validFactCount(all)
+  // `confidence`, `importance` and `access_count` are on every row and were
+  // rendered nowhere but a per-row percentage. The distribution is the panel's
+  // headline; the other two close it as measured detail.
+  const bands = confidenceBands(all)
+  const populatedBands = bands.filter((b) => b.facts > 0).length
+  const median = medianImportance(all)
+  const recalls = totalRecalls(all)
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -141,12 +159,17 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
                 {validCount} current
               </Badge>
             )}
-            <label className="flex cursor-pointer items-center gap-1.5 text-[0.62rem] text-muted-foreground">
+            <label
+              htmlFor="facts-show-superseded"
+              className="flex cursor-pointer items-center gap-1.5 text-[0.62rem] text-muted-foreground"
+            >
               <input
+                id="facts-show-superseded"
+                name="show-superseded"
                 type="checkbox"
                 checked={showSuperseded}
                 onChange={(e) => setShowSuperseded(e.target.checked)}
-                className="size-3 accent-[var(--blue-600)]"
+                className="size-3 accent-[var(--blue-600)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
               superseded
             </label>
@@ -159,6 +182,30 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
       {state.status === 'ready' && rows.length === 0 && (
         <EmptyRow>No facts recorded for this subject yet.</EmptyRow>
       )}
+
+      {bands.length > 0 && (
+        <div className="min-w-0">
+          <p className="eyebrow mb-1">confidence</p>
+          {/*
+            **The plot is sized to the distribution it holds.** Five fixed bands
+            with one of them populated is the common shape on a young record, and
+            a 148px plot around a single bar left most of this card as whitespace.
+            The bands themselves stay — dropping the empty ones would rescale a
+            fixed 0–100% axis and misstate where the mass sits — but the height
+            drops to the compact step when there is only one bar to draw.
+          */}
+          <BarChart
+            allowDecimals={false}
+            data={bands}
+            index="band"
+            category="facts"
+            color="graph"
+            valueFormatter={(v) => `${v} ${v === 1 ? 'fact' : 'facts'}`}
+            height={populatedBands <= 1 ? 104 : 148}
+          />
+        </div>
+      )}
+
       {state.status === 'ready' && rows.length > 0 && (
         <ul className="flex flex-1 flex-col gap-1.5">
           {rows.map((f, i) => (
@@ -167,6 +214,13 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
             </RevealOnScroll>
           ))}
         </ul>
+      )}
+
+      {state.status === 'ready' && all.length > 0 && (
+        <Receipt
+          origin="GET /memory/facts"
+          detail={`${validCount} current${median === null ? '' : ` · median importance ${median}`} · ${recalls} recalls`}
+        />
       )}
     </div>
   )

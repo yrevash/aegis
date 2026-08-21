@@ -4,11 +4,14 @@ import { ArrowRight, ChevronDown, MessagesSquare, Network, ScanSearch, Search, T
 import { useState, type ReactElement } from 'react'
 
 import { getRecallDebug } from '@/lib/api/client'
+import { SceneState } from '@/components/illustration/Scene'
 import { RevealOnScroll } from '@/components/shared'
 import { Badge } from '@/components/ui/Badge'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/primitives/button'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Receipt } from '@/components/primitives/Receipt'
 import { cn } from '@/lib/utils'
 import type { RecallDebugItem } from '@/lib/api/memory'
 
@@ -38,18 +41,24 @@ function RecallRow({ item }: { item: RecallDebugItem }): ReactElement {
         aria-expanded={open}
         className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="min-w-0 flex-1 text-xs leading-snug text-foreground">{item.text}</span>
-        <span
-          className="tabular shrink-0 font-mono text-[0.66rem] text-foreground"
-          title={`Match ${item.score.toFixed(2)}`}
+        <span className="min-w-0 flex-1 text-xs leading-snug break-words text-foreground">
+          {item.text}
+        </span>
+        <Figure
+          label={`Match score ${item.score.toFixed(2)}`}
+          className="shrink-0 text-[0.66rem] leading-4 text-foreground"
         >
           {item.score.toFixed(2)}
-        </span>
+        </Figure>
         <Badge tone={item.injected ? 'ok' : 'neutral'} className="shrink-0 text-[0.54rem]">
           {item.injected ? 'used' : 'not used'}
         </Badge>
         <ChevronDown
-          className={cn('size-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')}
+          aria-hidden
+          className={cn(
+            'size-3 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none',
+            open && 'rotate-180',
+          )}
         />
       </button>
       {open && (
@@ -62,7 +71,12 @@ function RecallRow({ item }: { item: RecallDebugItem }): ReactElement {
                   {dim.hint}
                 </InfoTip>
               </div>
-              <MiniMeter value={scores[dim.key]} hex={dim.hex} height={4} />
+              <MiniMeter
+                value={scores[dim.key]}
+                hex={dim.hex}
+                height={4}
+                label={`${dim.label} score`}
+              />
             </div>
           ))}
         </div>
@@ -88,10 +102,12 @@ function RecallGroup({
   return (
     <div>
       <div className="flex items-center gap-1.5">
-        <Icon className="size-3.5 text-muted-foreground" />
-        <span className="t-label text-foreground">{title}</span>
-        <span className={cn('size-2 rounded-full', dotClass)} />
-        <span className="ml-auto font-mono text-[0.6rem] text-muted-foreground">{count} used</span>
+        <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <h4 className="t-label text-foreground">{title}</h4>
+        <span aria-hidden className={cn('size-2 shrink-0 rounded-full', dotClass)} />
+        <Figure className="ml-auto text-[0.6rem] leading-4 text-muted-foreground">
+          {count} used
+        </Figure>
       </div>
       <ul className="mt-1.5 space-y-1.5">
         {items.map((item, i) => (
@@ -136,25 +152,40 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
   return (
     <Card className="overflow-hidden">
       <div className="flex w-full items-center gap-2 px-5 py-3.5 transition-colors hover:bg-surface-2/40">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-          className="flex flex-1 items-center gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="grid size-6 place-items-center rounded-md bg-blue-200/12">
-            <ScanSearch className="size-3.5 text-blue-700" />
-          </span>
-          <span className="t-title text-foreground">Why did it recall this?</span>
-        </button>
+        {/* The heading wraps the disclosure control, rather than sitting inside it:
+            the accordion pattern keeps the title in the heading outline and still
+            makes the whole row the target. */}
+        <h3 className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="flex w-full items-center gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span
+              aria-hidden
+              className="grid size-6 shrink-0 place-items-center rounded-md bg-blue-200/12"
+            >
+              <ScanSearch className="size-3.5 text-blue-700" />
+            </span>
+            <span className="t-title min-w-0 text-pretty text-foreground">
+              Why did it recall this?
+            </span>
+          </button>
+        </h3>
         <InfoTip label="About recall">
-          For a given question, this shows which memories the agent pulled in and how it ranked
-          them — by how well they match, how recent they are, and how important they are.
+          Which memories a question pulls in, ranked by match, recency and importance.
         </InfoTip>
         {/* No role chip. A literal `admin` Badge sat here and told an `ai_team` analyst
             that their own recall card belonged to somebody else. The panel is served to
             whoever the bearer authorises; it has no business labelling them. */}
-        <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
+        <ChevronDown
+          aria-hidden
+          className={cn(
+            'size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none',
+            open && 'rotate-180',
+          )}
+        />
       </div>
 
       {open && (
@@ -169,25 +200,37 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
               setQuery(recallQuery(draft))
             }}
           >
-            <div className="relative flex-1">
-              <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <div className="relative min-w-0 flex-1">
+              <label htmlFor="recall-query" className="sr-only">
+                Ask what the agent would recall
+              </label>
+              <Search
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+              />
               <input
+                id="recall-query"
+                name="recall-query"
+                type="search"
+                autoComplete="off"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder="Ask what the agent would recall…"
-                className="h-9 w-full rounded-md border border-input bg-surface pr-3 pl-9 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="h-9 w-full min-w-0 rounded-md border border-input bg-surface pr-3 pl-9 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
             <Button type="submit" className="shrink-0" disabled={recallQuery(draft) === null}>
-              Show recall <ArrowRight />
+              Show recall <ArrowRight aria-hidden />
             </Button>
           </form>
 
           {query === null && (
-            <p className="py-8 text-sm text-muted-foreground">
-              Ask a question above to see which memories it would pull in, and how they were
-              ranked.
-            </p>
+            <SceneState name="curious" size="md" className="py-2">
+              <p className="text-sm font-medium text-foreground">Nothing traced yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Ask a question to see what it would recall.
+              </p>
+            </SceneState>
           )}
           {query !== null && state.status === 'loading' && (
             <LoadingRow label="Gathering memories…" />
@@ -217,7 +260,7 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                   captioned block with the context budget on its own header rule. */}
               <figure className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface-2/40">
                 <figcaption className="flex items-center gap-2 border-b border-border/70 bg-surface-2/70 px-3 py-1.5">
-                  <Terminal className="size-3.5 shrink-0 text-blue-800" />
+                  <Terminal className="size-3.5 shrink-0 text-blue-800" aria-hidden />
                   <span className="t-label text-foreground">What the agent sees</span>
                   <InfoTip label="About context">
                     The block of memory text assembled and handed to the model for this question.
@@ -228,18 +271,24 @@ export function RecallDebugPanel({ token, subject }: Props): ReactElement {
                       hex={usedPct > 90 ? 'var(--risk)' : 'var(--blue-100)'}
                       height={4}
                       className="w-12"
+                      label="Context budget used"
                     />
-                    <span className="tabular font-mono text-[0.62rem] text-foreground">
+                    <Figure className="text-[0.62rem] leading-4 text-foreground">
                       {data.tokens_used} / {TOKEN_BUDGET} tokens
-                    </span>
+                    </Figure>
                   </span>
                 </figcaption>
-                <pre className="flex-1 overflow-auto p-3 font-mono text-[0.68rem] leading-relaxed whitespace-pre-wrap text-foreground">
+                <pre
+                  translate="no"
+                  className="min-w-0 flex-1 overflow-auto p-3 font-mono text-[0.68rem] leading-relaxed break-words whitespace-pre-wrap text-foreground"
+                >
                   {data.working_memory}
                 </pre>
               </figure>
             </div>
           )}
+
+          {data && <Receipt origin="GET /memory/recall_debug" />}
         </div>
       )}
     </Card>

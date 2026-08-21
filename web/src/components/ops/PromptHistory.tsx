@@ -1,9 +1,13 @@
 'use client'
 
-import { FileDiff, GitBranch, Loader2 } from 'lucide-react'
+import { FileDiff, GitBranch } from 'lucide-react'
 import { useMemo, useState, type ReactElement } from 'react'
 
+import { SceneState } from '@/components/illustration/Scene'
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { Absence } from '@/components/primitives/Receipt'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
@@ -39,6 +43,7 @@ function VersionRow({
   return (
     <li className="relative flex gap-3">
       <span
+        aria-hidden
         className={cn(
           'z-10 mt-1 grid size-4 shrink-0 place-items-center rounded-full border-2 border-card',
           style.dot,
@@ -47,27 +52,31 @@ function VersionRow({
       <button
         type="button"
         onClick={() => onSelect(row.version)}
+        aria-pressed={role != null}
         className={cn(
-          'min-w-0 flex-1 rounded-lg border p-3 text-left transition-colors',
+          'min-w-0 flex-1 rounded-lg border p-3 text-left transition-colors motion-reduce:transition-none',
+          'outline-none focus-visible:ring-2 focus-visible:ring-ring',
           role
             ? 'border-primary/40 bg-surface-2/60 ring-1 ring-primary/20'
             : 'border-border bg-card hover:bg-surface-2/40',
         )}
       >
         <div className="flex flex-wrap items-center gap-2">
-          <span className="tabular font-display text-sm font-semibold text-foreground">v{row.version}</span>
-          <Badge tone={style.tone} className="text-[0.58rem]">
-            {row.status}
-          </Badge>
+          <Figure className="font-semibold text-foreground">v{row.version}</Figure>
+          <Badge tone={style.tone}>{row.status}</Badge>
           {role && (
-            <span className="eyebrow rounded-sm bg-foreground px-1.5 py-0.5 text-[0.54rem] text-background">
+            <span className="eyebrow rounded-sm bg-foreground px-1.5 py-0.5 text-background">
               diff {role}
             </span>
           )}
-          <span className="eyebrow ml-auto text-[0.56rem]">{formatAgo(row.created_at)}</span>
+          <span className="eyebrow ml-auto">{formatAgo(row.created_at)}</span>
         </div>
-        {row.notes && <p className="mt-1 text-xs leading-snug text-muted-foreground">{row.notes}</p>}
-        <p className="mt-1 font-mono text-[0.6rem] text-muted-foreground/80">by {row.created_by ?? 'system'}</p>
+        {row.notes && (
+          <p className="mt-1 text-xs leading-snug break-words text-muted-foreground">{row.notes}</p>
+        )}
+        <Figure className="mt-1 block break-words text-muted-foreground/80">
+          by {row.created_by ?? 'system'}
+        </Figure>
       </button>
     </li>
   )
@@ -129,7 +138,10 @@ function DiffBody({ base, target }: { base: DiffSide; target: DiffSide }): React
   }
   const lines = unifiedDiff(base.text.split('\n'), target.text.split('\n'))
   return (
-    <pre className="overflow-auto rounded-lg border border-border bg-surface-2/40 p-3 font-mono text-[0.68rem] leading-relaxed">
+    <pre
+      translate="no"
+      className="overflow-auto rounded-lg border border-border bg-surface-2/40 p-3 font-mono text-[0.68rem] leading-relaxed"
+    >
       {lines.map((line, i) => (
         <div
           key={i}
@@ -209,33 +221,36 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
         title="Prompt history"
         actions={
           <InfoTip label="About the prompt history">
-            Every version of the tracked prompt with its lifecycle status. Tap two versions on the
-            timeline to diff them — red is removed from the base, green is added in the proposal.
-            Only the active version&rsquo;s body is the real one; the rest are illustrative samples,
-            badged as such.
+            Only the active version&rsquo;s body is the real one; the rest are illustrative
+            samples, badged as such.
           </InfoTip>
         }
       />
-      <CardBody>
+      <CardBody className="@container min-w-0">
         {error ? (
-          <p className="py-8 text-center text-sm text-danger">{error}</p>
+          <ErrorState error={error} />
         ) : loading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading versions…
-          </div>
+          <LoadingState rows={4} label="Loading versions…" />
         ) : (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_1fr]">
+          <div className="grid min-w-0 gap-6 @3xl:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
             {/* Timeline */}
-            <div>
+            <div className="min-w-0">
               <div className="mb-3 flex items-center gap-2">
-                <span className="grid size-7 place-items-center rounded-lg bg-blue-400/12">
-                  <GitBranch className="size-4 text-blue-600" />
+                <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-blue-400/12">
+                  <GitBranch className="size-4 text-blue-600" aria-hidden />
                 </span>
                 <h4 className="t-label text-foreground">Versions</h4>
-                <span className="eyebrow ml-auto text-[0.56rem]">tap two to diff</span>
+                <span className="eyebrow ml-auto">tap two to diff</span>
               </div>
               {rows.length === 0 ? (
-                <p className="py-8 text-sm text-muted-foreground">No prompt versions recorded yet.</p>
+                /* The branching commit graph this timeline would have drawn. */
+                <SceneState name="versions" size="sm">
+                  <Absence
+                    className="text-left"
+                    figure="Version timeline"
+                    why="No version of this prompt has been recorded."
+                  />
+                </SceneState>
               ) : (
                 <ol className="relative space-y-2.5 before:absolute before:top-2 before:bottom-2 before:left-[7px] before:w-0.5 before:bg-border/70">
                   {rows.map((row) => (
@@ -251,29 +266,27 @@ export function PromptHistory({ rows, active, loading, error }: Props): ReactEle
             </div>
 
             {/* Diff */}
-            <div>
+            <div className="min-w-0">
               <div className="mb-3 flex items-center gap-2">
-                <span className="grid size-7 place-items-center rounded-lg bg-blue-100/12">
-                  <FileDiff className="size-4 text-blue-800" />
+                <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-blue-100/12">
+                  <FileDiff className="size-4 text-blue-800" aria-hidden />
                 </span>
                 <h4 className="t-label text-foreground">Diff</h4>
                 {baseSide && targetSide && (
                   <>
-                    <span className="eyebrow ml-auto text-[0.58rem]">
+                    <span className="eyebrow ml-auto">
                       v{baseSide.version} → v{targetSide.version}
                     </span>
                     {(baseSide.sample || targetSide.sample) && (
-                      <Badge tone="neutral" className="text-[0.54rem]">
-                        sample
-                      </Badge>
+                      <Badge tone="neutral">sample</Badge>
                     )}
                   </>
                 )}
               </div>
               {!baseSide || !targetSide ? (
-                <div className="flex h-full min-h-[200px] items-center justify-center rounded-lg border border-dashed border-border/70 py-8 text-center text-sm text-muted-foreground">
+                <p className="rounded-lg border border-dashed border-border/70 px-4 py-8 text-sm text-muted-foreground">
                   Select two versions on the timeline to compare them.
-                </div>
+                </p>
               ) : (
                 <DiffBody base={baseSide} target={targetSide} />
               )}

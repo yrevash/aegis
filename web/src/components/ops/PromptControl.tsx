@@ -3,7 +3,9 @@
 import { CheckCircle2, Loader2, Lock, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { Button } from '@/components/primitives/button'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import {
@@ -21,6 +23,15 @@ import {
 import { useAuth } from '@/lib/auth/AuthContext'
 
 import { PROMPT_KEY } from './opsShared'
+
+/**
+ * When a run happened, in the reader's own locale — one formatter, built once,
+ * rather than a `toLocaleString()` call per row.
+ */
+const RUN_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
 
 /**
  * **Prompt control** — change the live system prompt without a deploy, and see that it
@@ -129,24 +140,20 @@ export function PromptControl(): ReactElement {
         title="Live prompt"
         actions={
           <InfoTip label="About prompt control">
-            The prompt your assistant is running right now, for this tenant only. Save a new
-            version, activate it, and every run from that moment uses it — no deploy, no
-            restart. The platform floor below it is composed underneath every version and
-            cannot be edited from here.
+            Activating a version takes effect on the next run with no deploy; the platform
+            floor below it cannot be edited here.
           </InfoTip>
         }
       />
-      <CardBody>
+      <CardBody className="min-w-0">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 motion-safe:animate-spin" /> Loading the live prompt…
-          </div>
+          <LoadingState rows={5} label="Loading the live prompt…" />
         ) : error && screen == null ? (
-          <p className="py-8 text-center text-sm text-danger">{error}</p>
+          <ErrorState error={error} />
         ) : screen == null ? null : (
-          <div className="space-y-6">
+          <div className="min-w-0 space-y-6">
             {/* What is live, right now. */}
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
               <span className="inline-flex items-center gap-1.5 rounded-md bg-surface-2 px-2.5 py-1 text-sm text-foreground">
                 <CheckCircle2 className="size-4 text-success" aria-hidden="true" />
                 {screen.onShippedPrompt
@@ -182,6 +189,8 @@ export function PromptControl(): ReactElement {
               </label>
               <textarea
                 id="prompt-draft"
+                name="system_prompt"
+                translate="no"
                 value={draft}
                 readOnly={!editable}
                 onChange={(e) => setDraft(e.target.value)}
@@ -194,8 +203,10 @@ export function PromptControl(): ReactElement {
                   disabled={busy || !editable || draft.trim().length === 0}
                   onClick={() => void saveDraft()}
                 >
-                  {busy && <Loader2 className="size-4 motion-safe:animate-spin" />}
-                  Save as a new version
+                  {busy && (
+                    <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
+                  )}
+                  {busy ? 'Saving…' : 'Save as a new version'}
                 </Button>
                 {!editable && (
                   <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -206,8 +217,16 @@ export function PromptControl(): ReactElement {
               </div>
             </div>
 
-            {note && <p className="text-sm text-success">{note}</p>}
-            {error && <p className="text-sm text-danger">{error}</p>}
+            {note && (
+              <p role="status" aria-live="polite" className="text-sm break-words text-success">
+                {note}
+              </p>
+            )}
+            {error && (
+              <p role="alert" className="text-sm break-words text-danger">
+                {error}
+              </p>
+            )}
 
             {/* History. */}
             <div>
@@ -217,7 +236,7 @@ export function PromptControl(): ReactElement {
                   No versions yet. Saving one puts it here as a draft.
                 </p>
               ) : (
-                <ul className="divide-y divide-border rounded-lg border border-border">
+                <ul className="min-w-0 divide-y divide-border rounded-lg border border-border">
                   {screen.versions.map((row) => (
                     <VersionLine
                       key={row.id}
@@ -242,7 +261,10 @@ export function PromptControl(): ReactElement {
               <h4 className="t-label mb-2 text-foreground">
                 Platform floor — composed underneath every version
               </h4>
-              <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-surface-2 px-3 py-2 font-mono text-xs text-muted-foreground">
+              <pre
+                translate="no"
+                className="max-h-56 overflow-auto break-words whitespace-pre-wrap rounded-lg border border-border bg-surface-2 px-3 py-2 font-mono text-xs text-muted-foreground"
+              >
                 {screen.floor}
               </pre>
             </div>
@@ -254,10 +276,16 @@ export function PromptControl(): ReactElement {
                 <label htmlFor="run-lookup" className="sr-only">
                   Run id
                 </label>
+                {/* A run id is an opaque identifier: no autocomplete history, no
+                    spellcheck squiggle, no machine translation. */}
                 <input
                   id="run-lookup"
+                  name="run_id"
                   value={lookupId}
-                  placeholder="Paste a run id"
+                  autoComplete="off"
+                  spellCheck={false}
+                  translate="no"
+                  placeholder="Paste a run id…"
                   onChange={(e) => setLookupId(e.target.value)}
                   className="h-9 min-w-0 flex-1 rounded-md border border-border bg-card px-3 font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
@@ -283,30 +311,37 @@ export function PromptControl(): ReactElement {
                   Which prompt ran?
                 </Button>
               </div>
-              {lookup && <p className="mb-3 text-sm text-foreground">{lookup}</p>}
+              {lookup && (
+                <p role="status" aria-live="polite" className="mb-3 text-sm break-words text-foreground">
+                  {lookup}
+                </p>
+              )}
               {runs.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No runs recorded yet. {runWindow}
                 </p>
               ) : (
                 <>
-                  <ul className="divide-y divide-border rounded-lg border border-border">
+                  <ul className="min-w-0 divide-y divide-border rounded-lg border border-border">
                     {runs.map((run) => (
                       <li
                         key={run.runId}
-                        className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm"
+                        className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm"
                       >
-                        <code className="font-mono text-xs text-muted-foreground">
+                        <Figure
+                          label={`run ${run.runId}`}
+                          className="min-w-0 break-words text-muted-foreground"
+                        >
                           {run.runId.slice(0, 12)}
-                        </code>
-                        <span className="text-foreground">
+                        </Figure>
+                        <span className="min-w-0 text-foreground">
                           {run.version == null
                             ? 'ran on the shipped prompt'
                             : `ran on version ${run.version}`}
                         </span>
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {new Date(run.ts).toLocaleString()}
-                        </span>
+                        <Figure className="ml-auto text-xs leading-5 text-muted-foreground">
+                          {RUN_TIME_FORMAT.format(new Date(run.ts))}
+                        </Figure>
                       </li>
                     ))}
                   </ul>
@@ -336,8 +371,8 @@ function VersionLine({
   onLoad: () => void
 }): ReactElement {
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
-      <span className="text-sm font-medium text-foreground">Version {row.version}</span>
+    <li className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
+      <span className="min-w-0 text-sm font-medium text-foreground">Version {row.version}</span>
       <span className="text-xs text-muted-foreground">{row.status}</span>
       {row.isActive && (
         <span className="inline-flex items-center gap-1 rounded-md bg-success/12 px-2 py-0.5 text-xs text-success">

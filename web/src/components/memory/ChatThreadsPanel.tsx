@@ -3,6 +3,7 @@
 import { MessagesSquare, Pencil, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+import { SceneState } from '@/components/illustration/Scene'
 import { Button } from '@/components/primitives/button'
 import {
   deleteSession,
@@ -84,13 +85,13 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
   }
 
   return (
-    <div className="flex h-full flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <PanelHeader
         icon={MessagesSquare}
         title="Chats"
         tint="bg-blue-200/12"
         ink="text-blue-700"
-        info="Your own console conversations. A chat's id is also its memory_session id, so the transcript here and the recall on this page describe the same thread. Turns are written by the run that produced them and cannot be edited."
+        info="A chat's id is also its memory_session id, so this transcript and the recall on this page describe the same thread. Turns are written by the run that produced them and cannot be edited."
         right={
           sessions != null ? (
             <span className="eyebrow text-muted-foreground">{sessions.length}</span>
@@ -101,9 +102,10 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
       {error != null && <ErrorRow message={error} />}
       {error == null && sessions == null && <LoadingRow label="Loading chats…" />}
       {error == null && sessions != null && sessions.length === 0 && (
-        <EmptyRow>
-          No conversations yet. Ask something in the Console and it will appear here.
-        </EmptyRow>
+        <SceneState name="assistant" size="md" className="py-4">
+          <p className="text-sm font-medium text-foreground">No conversations yet</p>
+          <p className="mt-1 text-sm text-muted-foreground">Ask something in the Console.</p>
+        </SceneState>
       )}
 
       {sessions != null && sessions.length > 0 && (
@@ -114,11 +116,14 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
                 <button
                   type="button"
                   onClick={() => open(row.id)}
-                  className="min-w-0 flex-1 text-left"
+                  className="min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-expanded={openId === row.id}
                 >
                   <span className="block truncate text-sm text-foreground">{row.title}</span>
-                  <span className="block font-mono text-[0.68rem] text-muted-foreground">
+                  <span
+                    translate="no"
+                    className="tabular block truncate font-mono text-[0.68rem] text-muted-foreground"
+                  >
                     {row.last_active_at != null ? formatAgo(row.last_active_at) : '—'} ·{' '}
                     {row.id.slice(0, 8)}
                   </span>
@@ -130,7 +135,7 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
                   aria-label={`Rename ${row.title}`}
                   onClick={() => rename(row)}
                 >
-                  <Pencil className="size-3.5" />
+                  <Pencil className="size-3.5" aria-hidden />
                 </Button>
                 <Button
                   type="button"
@@ -139,7 +144,7 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
                   aria-label={`Delete ${row.title}`}
                   onClick={() => remove(row)}
                 >
-                  <Trash2 className="size-3.5" />
+                  <Trash2 className="size-3.5" aria-hidden />
                 </Button>
               </div>
 
@@ -152,7 +157,7 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
                     </EmptyRow>
                   )}
                   {turns?.map((turn) => (
-                    <div key={turn.turn_index} className="text-sm">
+                    <div key={turn.turn_index} className="min-w-0 text-sm break-words">
                       <span className="eyebrow mr-2 text-muted-foreground">{turn.role}</span>
                       <span className="text-foreground">{turn.content}</span>
                     </div>

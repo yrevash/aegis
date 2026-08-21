@@ -23,6 +23,18 @@ import { ORIGIN_LABEL, type RetrievalObservability } from './observability'
 /** Whether a stage ran (on), demonstrably did not (off), or isn't measurable. */
 type Status = 'on' | 'off' | 'na'
 
+/**
+ * Counts and scores through `Intl`, not template strings — and with the locale
+ * named, so the server render and the client render agree character for
+ * character rather than differing by a thousands separator.
+ */
+const COUNT = new Intl.NumberFormat('en-US')
+
+const SCORE = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
 /** Per-origin icon for the recall arms. */
 const ARM_ICON: Partial<Record<RetrievalOrigin, LucideIcon>> = {
   vector: Boxes,
@@ -112,13 +124,20 @@ function ArmChip({
         fired ? 'border-border bg-surface-2/50' : 'border-dashed border-border bg-transparent',
       )}
     >
-      <Icon className={cn('size-4 shrink-0', fired ? 'text-blue-600' : 'text-muted-foreground/60')} />
+      <Icon
+        aria-hidden
+        className={cn('size-4 shrink-0', fired ? 'text-blue-600' : 'text-muted-foreground/60')}
+      />
       <div className="min-w-0">
         <p className={cn('truncate text-xs font-medium', fired ? 'text-foreground' : 'text-muted-foreground')}>
           {ORIGIN_LABEL[origin]}
         </p>
         <p className="tabular-nums font-mono text-[0.68rem] text-muted-foreground">
-          {fired ? (showCount ? `${candidates} candidates` : 'fired · count n/a') : 'no candidates'}
+          {fired
+            ? showCount
+              ? `${COUNT.format(candidates)} candidates`
+              : 'fired · count n/a'
+            : 'no candidates'}
         </p>
       </div>
     </div>
@@ -186,11 +205,13 @@ export function ArsenalPanel({ obs }: ArsenalPanelProps): ReactElement {
             icon={GitMerge}
             title="RRF fusion"
             status={rrfOn ? 'on' : 'off'}
-            metric={rrfOn ? `${obs.fused_candidates} fused` : undefined}
+            metric={rrfOn ? `${COUNT.format(obs.fused_candidates)} fused` : undefined}
           >
             <p className="text-xs text-muted-foreground">
               Reciprocal-rank fusion blends the arms into one ranked pool of{' '}
-              <span className="tabular-nums font-medium text-foreground">{obs.fused_candidates}</span>{' '}
+              <span className="tabular-nums font-medium text-foreground">
+                {COUNT.format(obs.fused_candidates)}
+              </span>{' '}
               candidates before rerank.
             </p>
           </StageRow>
@@ -199,7 +220,9 @@ export function ArsenalPanel({ obs }: ArsenalPanelProps): ReactElement {
             icon={ArrowDownNarrowWide}
             title="LLM rerank"
             status={rr.ran ? 'on' : 'off'}
-            metric={rr.ran ? `${rr.kept}/${rr.input_candidates} kept` : undefined}
+            metric={
+              rr.ran ? `${COUNT.format(rr.kept)}/${COUNT.format(rr.input_candidates)} kept` : undefined
+            }
           >
             {rr.top_scores.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5">
@@ -209,7 +232,7 @@ export function ArsenalPanel({ obs }: ArsenalPanelProps): ReactElement {
                     key={i}
                     className="tabular-nums rounded-md bg-blue-400/12 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-600"
                   >
-                    {s.toFixed(2)}
+                    {SCORE.format(s)}
                   </span>
                 ))}
               </div>

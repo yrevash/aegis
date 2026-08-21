@@ -1,10 +1,14 @@
 'use client'
 
 import { GitPullRequestArrow } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 
+import { DonutChart, type DonutDatum } from '@/components/charts/DonutChart'
+import { rampHex } from '@/components/charts/palette'
+import { SceneState } from '@/components/illustration/Scene'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { PageHeader } from '@/components/primitives/PageHeader'
+import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { CapabilityMap, type Capability } from '@/components/shared'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -74,6 +78,67 @@ function useLoad<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled, nonce])
   return state
+}
+
+/**
+ * The prompt lifecycle, in the order a version moves through it. Ordinal, so the
+ * ramp is read by position — `rampHex` is addressed by rank, not by meaning.
+ */
+const LIFECYCLE = ['active', 'staged', 'draft', 'archived'] as const
+
+/**
+ * Every version of the tracked prompt, counted by lifecycle status.
+ *
+ * A real count off `GET /ops/prompts`, and the one composition this payload
+ * carries — there is no timestamp series here, only a snapshot of where each
+ * version sits.
+ */
+function PromptVersionMix({ rows }: { rows: OpsPromptVersionRow[] }): ReactElement {
+  const mix = useMemo<DonutDatum[]>(() => {
+    const counts = new Map<string, number>()
+    for (const row of rows) counts.set(row.status, (counts.get(row.status) ?? 0) + 1)
+    const known = LIFECYCLE.filter((s) => counts.has(s))
+    const otherTotal = [...counts.entries()]
+      .filter(([s]) => !LIFECYCLE.includes(s as (typeof LIFECYCLE)[number]))
+      .reduce((sum, [, n]) => sum + n, 0)
+    const names = otherTotal > 0 ? [...known, 'other'] : known
+    return names.map((name, i) => ({
+      name,
+      value: name === 'other' ? otherTotal : (counts.get(name) ?? 0),
+      color: 'graph' as const,
+      hex: rampHex(i, names.length),
+    }))
+  }, [rows])
+
+  return (
+    <Card className="flex min-w-0 flex-col">
+      <CardHeader as="h3" eyebrow="GET /ops/prompts" title="Version mix" />
+      <CardBody className="flex min-h-0 flex-1 flex-col gap-4">
+        {mix.length === 0 ? (
+          /* A branching commit graph — literally this panel's subject, and there
+             is none of it yet. */
+          <SceneState name="versions" size="sm">
+            <Absence
+              className="text-left"
+              figure="Version mix"
+              why="No version of this prompt has been recorded."
+            />
+          </SceneState>
+        ) : (
+          <div className="min-w-0">
+            <DonutChart
+              data={mix}
+              height={170}
+              centerLabel={String(rows.length)}
+              centerSub="versions"
+              valueFormatter={(v) => `${v}`}
+            />
+          </div>
+        )}
+        <Receipt className="mt-auto" origin="ops.prompts[].status" />
+      </CardBody>
+    </Card>
+  )
 }
 
 /**
@@ -147,43 +212,50 @@ function LLMOpsView(): ReactElement {
   ]
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="trace → eval → diagnose → release"
         title="LLMOps"
         actions={
           <InfoTip label="What this loop is">
-            The self-improvement loop, and the human gate in the middle of it. Every
-            figure comes straight from the /ops accessors — nothing on this page is
-            composed in the browser.
+            Every figure comes straight from the /ops accessors — nothing here is composed
+            in the browser.
           </InfoTip>
         }
       />
 
-      {/* Row 1 — quality trend hero + the live loop strip. */}
-      <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
-        <EvalTrend rows={evalRows} loading={evals.loading} error={evals.error} />
-        <Card>
-          <CardHeader
-            eyebrow="closed · human-gated"
-            title="Loop"
-            actions={
-              <span className="grid size-8 place-items-center rounded-md bg-blue-50">
-                <GitPullRequestArrow className="size-4 text-blue-800" aria-hidden />
-              </span>
-            }
-          />
-          <CardBody>
-            <CapabilityMap items={loopSteps} />
-          </CardBody>
-        </Card>
+      {/* Row 1 — quality trend hero + the live loop strip and version mix. */}
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[2fr_minmax(0,1fr)]">
+        <EvalTrend
+          rows={evalRows}
+          loading={evals.loading}
+          error={evals.error}
+          params={params.data}
+        />
+        <div className="flex min-w-0 flex-col gap-6">
+          <Card className="min-w-0">
+            <CardHeader
+              eyebrow="closed · human-gated"
+              title="Loop"
+              actions={
+                <span className="grid size-8 place-items-center rounded-md bg-blue-50">
+                  <GitPullRequestArrow className="size-4 text-blue-800" aria-hidden />
+                </span>
+              }
+            />
+            <CardBody>
+              <CapabilityMap items={loopSteps} />
+            </CardBody>
+          </Card>
+          <PromptVersionMix rows={promptRows} />
+        </div>
       </div>
 
       {/* Row 2 — the one panel an operator acts on: change the live prompt, no deploy. */}
       <PromptControl />
 
       {/* Row 3 — release gate + diagnosis. */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-2">
         <ReleaseGate
           rows={pendingRows}
           loading={pending.loading}

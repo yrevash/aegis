@@ -31,13 +31,17 @@ function SessionMessages({ token, sessionId }: { token: string | null; sessionId
   const { state } = useAsync(() => getMemorySessionMessages(token, sessionId), [token, sessionId])
   if (state.status === 'loading') return <LoadingRow label="Loading transcript…" />
   if (state.status === 'error')
-    return <p className="py-3 text-xs text-destructive">Could not load transcript. {state.message}</p>
+    return (
+      <p role="alert" className="py-3 text-xs text-destructive">
+        Could not load transcript. {state.message}
+      </p>
+    )
   if (state.data.rows.length === 0)
     return <p className="py-3 text-xs text-muted-foreground">No messages recorded.</p>
   return (
-    <ol className="mt-1 space-y-2 border-l border-border/70 pl-3">
+    <ol className="mt-1 min-w-0 space-y-2 border-l border-border/70 pl-3">
       {state.data.rows.map((m) => (
-        <li key={m.id} className="text-xs leading-snug">
+        <li key={m.id} className="min-w-0 text-xs leading-snug break-words">
           <span className={cn('mr-1.5 font-mono text-[0.6rem] uppercase tracking-wide', roleTint(m.role))}>
             {m.role}
           </span>
@@ -57,14 +61,19 @@ function SessionRow({ token, session }: { token: string | null; session: MemoryS
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-start gap-2.5 rounded-lg px-3.5 py-2.5 text-left transition-colors hover:bg-surface-2/50"
+        className="flex w-full items-start gap-2.5 rounded-lg px-3.5 py-2.5 text-left transition-colors hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-blue-200/12">
+        <span
+          aria-hidden
+          className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-blue-200/12"
+        >
           <MessagesSquare className="size-3.5 text-blue-700" />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2">
-            <span className="font-mono text-[0.72rem] text-foreground">{session.id}</span>
+          <span className="flex flex-wrap items-center gap-2">
+            <span translate="no" className="min-w-0 truncate font-mono text-[0.72rem] text-foreground">
+              {session.id}
+            </span>
             {session.persona && (
               <Badge tone="neutral" className="text-[0.58rem]">
                 {session.persona}
@@ -79,7 +88,13 @@ function SessionRow({ token, session }: { token: string | null; session: MemoryS
             {session.summary ?? 'No running summary yet.'}
           </span>
         </span>
-        <ChevronDown className={cn('mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
+        <ChevronDown
+          aria-hidden
+          className={cn(
+            'mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none',
+            open && 'rotate-180',
+          )}
+        />
       </button>
       {open && <div className="px-3.5 pb-3"><SessionMessages token={token} sessionId={session.id} /></div>}
     </li>
@@ -99,8 +114,9 @@ interface Props {
 export function EpisodicSessionsPanel({ token, sessions }: Props): ReactElement {
   if (sessions.length === 0) {
     return (
-      <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-        <History className="size-4" /> No past sessions recorded for this subject yet.
+      <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+        <History className="size-4 shrink-0" aria-hidden /> No past sessions recorded for this
+        subject yet.
       </div>
     )
   }

@@ -44,8 +44,28 @@ export default async function PortalLayout({
         <Sidebar portal={portal} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar portal={portal} />
-          <main id={MAIN_ID} tabIndex={-1} className="flex-1 px-5 py-6 md:px-8 md:py-8">
-            <div className="animate-section mx-auto w-full max-w-7xl">{children}</div>
+          {/*
+           * `min-w-0` on the scroller, not just on the column: a flex/grid child's
+           * default `min-width:auto` lets its widest descendant — one long table row,
+           * one unbroken id — set the track width, and the page body scrolls sideways
+           * instead of the table doing it. That is the defect class this codebase has
+           * hit four separate times, and it is invisible at 1440 while being the whole
+           * experience at 390.
+           *
+           * The cap is `1440px` because DESIGN.md §4 says so. It read `max-w-7xl`
+           * (1280px), which is why `McpConsoleView` declares its own `max-w-[1440px]`
+           * that the shell was silently overriding — a screen asking for a width the
+           * shell would not give it, and two different content widths depending on
+           * which screen you were on.
+           */}
+          <main
+            id={MAIN_ID}
+            tabIndex={-1}
+            className="min-w-0 flex-1 px-5 py-6 md:px-8 md:py-8"
+          >
+            <div className="animate-section mx-auto w-full min-w-0 max-w-[1440px]">
+              {children}
+            </div>
           </main>
         </div>
       </div>
