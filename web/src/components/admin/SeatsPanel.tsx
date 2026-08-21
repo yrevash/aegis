@@ -77,6 +77,10 @@ export function SeatsPanel({
   // The tenant actually being read. A tenant admin's is pinned by the session; a
   // platform operator picks one, defaulting to the first the roster returns.
   const [chosen, setChosen] = useState<number | null>(tenantId)
+  // Whether the roster call has settled, either way. Without this the seats read
+  // below cannot tell "the picker has not answered yet" from "there is nothing to
+  // pick", and those need different answers: wait, versus say so.
+  const [rosterSettled, setRosterSettled] = useState(!canChooseTenant)
 
   useEffect(() => {
     if (!canChooseTenant) return
@@ -86,11 +90,15 @@ export function SeatsPanel({
         if (!alive) return
         setTenants(res.rows)
         setChosen((current) => current ?? res.rows[0]?.id ?? null)
+        setRosterSettled(true)
       })
       .catch(() => {
         // A failed roster read leaves no picker — the server's own refusal on the
         // seats read below still says what is missing.
-        if (alive) setTenants([])
+        if (alive) {
+          setTenants([])
+          setRosterSettled(true)
+        }
       })
     return () => {
       alive = false
@@ -102,6 +110,22 @@ export function SeatsPanel({
   useEffect(() => {
     let alive = true
     setLoad({ status: 'loading' })
+
+    // A platform operator holds no seat of their own, so `GET /admin/seats` with no
+    // tenant is a request that cannot succeed — the server answers 400 saying exactly
+    // that. It was firing on every load of this screen, before the tenant roster had
+    // resolved and set `chosen`, and then firing again correctly a moment later. The
+    // refusal was real but the request was ours to not make.
+    if (scope == null && canChooseTenant) {
+      if (!rosterSettled) return // the picker is still resolving; wait, do not guess
+      setLoad({
+        status: 'error',
+        message:
+          'Seats belong to a tenant, and no tenant is available to read. Create one first.',
+      })
+      return
+    }
+
     getSeats(token, scope)
       .then((res) => alive && setLoad({ status: 'ready', rows: res.rows }))
       .catch(
@@ -118,7 +142,7 @@ export function SeatsPanel({
     return () => {
       alive = false
     }
-  }, [token, scope])
+  }, [token, scope, canChooseTenant, rosterSettled])
 
   const apply = (userId: number, body: Parameters<typeof putSeat>[2], marker: string): void => {
     setSaving(marker)

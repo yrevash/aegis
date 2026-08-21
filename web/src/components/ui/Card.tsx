@@ -95,7 +95,19 @@ export function CardHeader({
         {eyebrow ? <p className="eyebrow mb-1">{eyebrow}</p> : null}
         <Heading className="text-pretty text-base leading-6 font-semibold text-foreground">{title}</Heading>
       </div>
-      {actions ? <div className="shrink-0">{actions}</div> : null}
+      {/*
+       * Not `shrink-0`. A header's actions slot is usually one button, where refusing to
+       * shrink is right — but several callers put a `flex-wrap` row of filter chips in
+       * here, and `shrink-0` pins that row to its single-line width so it can never
+       * actually wrap. It just runs off the page: `devops/audit` measured
+       * `scrollWidth 753` against a 390px viewport, a 363px horizontal scroll on the
+       * whole document, from six lens chips that had every opportunity to stack.
+       *
+       * Plain `flex-shrink: 1` with the default `min-width: auto` is the fix: a flex item
+       * still will not shrink below its min-content width, so a lone nowrap button is
+       * unaffected, while a wrapping row is free to become two lines.
+       */}
+      {actions ? <div>{actions}</div> : null}
     </div>
   )
 }

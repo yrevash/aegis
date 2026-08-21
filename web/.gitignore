@@ -38,3 +38,6 @@ next-env.d.ts
 
 # Screenshot sweep output (scripts/shoot.mjs) — evidence, not source.
 /shots/
+
+# healthcheck.mjs output — evidence, regenerated on demand.
+/healthcheck.json

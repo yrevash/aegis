@@ -145,7 +145,15 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
               direction at the bottom under six other cards. Side by side, the pair is
               the model: on the left the servers this deployment may call, on the right
               what it answers to a caller of its own. */}
-          <div className="grid gap-4 xl:grid-cols-2">
+          {/*
+           * `minmax(0,1fr)` on both tracks, not a bare `grid-cols-2`. A grid item
+           * defaults to `min-width: auto`, so an `auto` track cannot size below its
+           * content's min-content width — here the single stacked column measured
+           * 454.8px inside a 350px grid at 390px, pushing 85px of horizontal scroll
+           * onto the whole document. The `minmax(0, …)` is what lets the track shrink
+           * and hands the overflow to the panels, which own scrollers for it.
+           */}
+          <div className="grid min-w-0 gap-4 [grid-template-columns:minmax(0,1fr)] xl:[grid-template-columns:minmax(0,1fr)_minmax(0,1fr)]">
             <Connections
               data={data}
               busy={busy}

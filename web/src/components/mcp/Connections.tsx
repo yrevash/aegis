@@ -353,7 +353,11 @@ function PeerCard({
   return (
     <li
       className={cn(
-        'flex flex-col gap-3 rounded-lg border p-4 transition-colors duration-[--dur-fast]',
+        // `min-w-0`: this card is a grid/flex descendant, so its default
+        // `min-width: auto` let its widest row — a peer URL and its status chips —
+        // set the track width instead of wrapping. It put 64px of horizontal scroll
+        // on the whole document at 390px.
+        'flex min-w-0 flex-col gap-3 rounded-lg border p-4 transition-colors duration-[--dur-fast]',
         server.enabled ? 'border-border bg-card' : 'border-border bg-surface-2/60',
       )}
     >

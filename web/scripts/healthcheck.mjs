@@ -112,20 +112,27 @@ for (const [portal, { user, sections }] of Object.entries(PORTALS)) {
     // Ignore the dev server's own HMR/chunk noise — it says nothing about the product.
     const real = bad.filter((b) => !/_next|__nextjs|hot-update/.test(b.url))
     const refused = real.filter((b) => b.status === 401 || b.status === 403)
+    // A 4xx that is NOT an auth refusal is a request the client should not have sent:
+    // wrong shape, missing argument, unusable route. It is a defect, and it must not
+    // share a bucket with a refusal — nor fall through to OK, which is what happened
+    // when `platform_admin/roles` fired `GET /admin/seats` with no tenant on every
+    // load and this check reported the screen healthy because 400 is neither 403 nor 5xx.
+    const malformed = real.filter((b) => b.status >= 400 && b.status < 500 &&
+                                          b.status !== 401 && b.status !== 403)
     const failed = real.filter((b) => b.status >= 500)
 
     let status = 'OK'
-    if (failed.length) status = 'FAILED'
+    if (failed.length || malformed.length) status = 'FAILED'
     else if (m.chars < 40) status = 'EMPTY'
     else if (refused.length) status = 'REFUSED'
 
     const overflow = m.scrollWidth > m.innerWidth
     results.push({ portal, section, status, chars: m.chars, overflow,
                    refused: refused.map((r) => `${r.status} ${r.url}`),
-                   failed: failed.map((r) => `${r.status} ${r.url}`) })
+                   failed: [...failed, ...malformed].map((r) => `${r.status} ${r.url}`) })
 
     const mark = { OK: '✓', REFUSED: '⚠', FAILED: '✗', EMPTY: '✗' }[status]
-    const extra = [...refused, ...failed].map((r) => `${r.status} ${r.url}`).join(', ')
+    const extra = [...refused, ...malformed, ...failed].map((r) => `${r.status} ${r.url}`).join(', ')
     console.log(`  ${mark} ${status.padEnd(8)} ${section.padEnd(12)} ${String(m.chars).padStart(6)} chars` +
                 `${overflow ? '  OVERFLOW' : ''}${extra ? `  ← ${extra}` : ''}`)
   }
