@@ -188,8 +188,13 @@ export function ReadinessVerdict({ data }: { data: ReadyzResponse }): ReactEleme
  * The strip is `role="img"` with the tally spelled out, and each segment carries
  * its word in the legend — the hue is the fast read, never the only one
  * (DESIGN.md §2).
+ *
+ * Exported because the dependency table on `/app/devops/stack` probes the same
+ * eight components through `GET /platform/health` and needs the same mark. §5 is
+ * explicit that a treatment is never re-improvised per screen: a second strip,
+ * hand-built over there, would be two pictures of one fact that could disagree.
  */
-function HealthStrip({ components }: { components: ReadyComponent[] }): ReactElement | null {
+export function HealthStrip({ components }: { components: ReadyComponent[] }): ReactElement | null {
   const slices = verdictSplit(components)
   if (slices.length === 0) return null
   const up = slices.find((s) => s.status === 'up')?.count ?? 0

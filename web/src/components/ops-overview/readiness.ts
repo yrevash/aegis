@@ -214,6 +214,34 @@ export function fmtClock(iso: string): string {
   return TIME.format(new Date(iso))
 }
 
+/**
+ * Split a server-supplied origin into the identifier and the sentence after it.
+ *
+ * `GET /platform/caches` answers `source: "aegis.core.cache_stats — counters
+ * incremented inside each cache"`. That is two different things joined by a dash:
+ * the **identifier**, which is the receipt (§5), and an **explanation of the
+ * mechanism**, which §4 sends to an `InfoTip`. Printed whole under a 230px triage
+ * tile it wrapped to three lines of monospace and was the longest text on the card
+ * whose subject is a hit rate.
+ *
+ * So the caller prints the identifier and passes the remainder as `detail`, which
+ * {@link Receipt} already relocates to its own tooltip once it is longer than a
+ * measured fact. **Nothing is dropped** — the sentence is one hover or one tab
+ * away, in the treatment the whole console already uses for it.
+ *
+ * The split is on a spaced em or en dash only. A dash *inside* an identifier is
+ * not spaced (`aegis.core.cache_stats`, `in_process_rolling_window`), and an
+ * origin with no dash at all comes back whole with no note — never truncated.
+ */
+export function splitOrigin(source: string): { origin: string; note: string | null } {
+  const match = /\s+[—–]\s+/.exec(source)
+  if (!match) return { origin: source.trim(), note: null }
+  return {
+    origin: source.slice(0, match.index).trim(),
+    note: source.slice(match.index + match[0].length).trim() || null,
+  }
+}
+
 /** `2.4s` / `740ms`, the same ladder the latency screen uses. */
 export function fmtMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`

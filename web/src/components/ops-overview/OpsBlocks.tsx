@@ -16,7 +16,7 @@ import type { ReactElement, ReactNode } from 'react'
 import { SceneState } from '@/components/illustration/Scene'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { Absence, Receipt } from '@/components/primitives/Receipt'
+import { Receipt } from '@/components/primitives/Receipt'
 import { ErrorState, LoadingState } from '@/components/primitives/States'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -28,8 +28,9 @@ import type { CacheStatsResponse } from '@/lib/api/pipeline'
 import type { LatencyResponse } from '@/lib/api/platform'
 import { cn } from '@/lib/utils'
 
+import { AbsenceMark } from './AbsenceMark'
 import { DeepLink } from './ComponentBoard'
-import { ago, fmtClock, fmtInt, fmtMs, fmtPercent, WORKER_STATE, type LivenessResponse } from './readiness'
+import { ago, fmtClock, fmtInt, fmtMs, fmtPercent, splitOrigin, WORKER_STATE, type LivenessResponse } from './readiness'
 
 /** A panel's fetch, in the three states a panel has to draw. */
 export type Async<T> =
@@ -151,10 +152,16 @@ function WorkerBody({ health }: { health: LivenessResponse }): ReactElement {
           </InfoTip>
         </div>
       </div>
+      {/*
+        The origin is the identifier; `status ok` is a second fact about the same
+        probe and it wrapped the receipt onto a third line under a tile whose
+        subject is one word. It joins the detail, which `Receipt` already puts in
+        its own tooltip — reachable, not printed (DESIGN.md §4).
+      */}
       <Receipt
         className="mt-auto"
-        origin={`${health.product} ${health.version} · status ${health.status}`}
-        detail="the API process's own supervisor state, not a probe of a remote worker"
+        origin={`${health.product} ${health.version}`}
+        detail={`status ${health.status} · the API process's own supervisor state, not a probe of a remote worker`}
       />
     </>
   )
@@ -177,16 +184,23 @@ export function LatencyBlock({ latency, portal }: { latency: Async<LatencyRespon
   )
 }
 
+/**
+ * The latency window: three bars when there are readings, one marked absence when
+ * there are not — and in both cases the *window itself*, drawn.
+ *
+ * The empty case used to be the whole card: a four-line block explaining that no
+ * run had been recorded and what would fill the window. It was the longest text on
+ * the overview, on a tile whose subject is three numbers. It is an
+ * {@link AbsenceMark} now — one line, the reason and the remediation one hover or
+ * one tab away.
+ *
+ * The fill meter is drawn in the empty case too, which it was not before. `0 of 512
+ * slots` is a **measured** zero, not a fabricated one: the buffer really is empty
+ * and its capacity really is 512, so the bar is the honest picture of exactly the
+ * fact the sentence was spending four lines on.
+ */
 function LatencyBody({ data }: { data: LatencyResponse }): ReactElement {
-  if (data.empty || data.run_p50_ms == null) {
-    return (
-      <Absence
-        figure="Run percentiles"
-        why="No run has been recorded in this process's window yet."
-        needed="one completed run — the window fills from GET /latency"
-      />
-    )
-  }
+  const empty = data.empty || data.run_p50_ms == null
   const capacity = data.window_capacity
   const percentiles = [
     ['p50', data.run_p50_ms],
@@ -200,30 +214,38 @@ function LatencyBody({ data }: { data: LatencyResponse }): ReactElement {
   const scale = percentiles.reduce((m, [, v]) => (v == null ? m : Math.max(m, v)), 0)
   return (
     <>
-      <dl className="min-w-0 space-y-2">
-        {percentiles.map(([label, value]) => (
-          <div key={label} className="flex min-w-0 items-center gap-3">
-            <dt className="eyebrow w-7 shrink-0">{label}</dt>
-            <dd className="flex min-w-0 flex-1 items-center gap-3">
-              {value == null || scale <= 0 ? (
-                <span className="min-w-0 flex-1 text-xs text-muted-foreground italic">no reading</span>
-              ) : (
-                <>
-                  <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-                    <span
-                      className="block h-full rounded-full bg-blue-600"
-                      style={{ width: `${Math.max(2, (value / scale) * 100)}%` }}
-                    />
-                  </span>
-                  <Figure className="shrink-0 text-foreground">{fmtMs(value)}</Figure>
-                </>
-              )}
-            </dd>
-          </div>
-        ))}
-      </dl>
+      {empty ? (
+        <AbsenceMark
+          figure="Run percentiles"
+          why="No run has been recorded in this process's window yet, so there is nothing to take a percentile of."
+          needed="one completed run — the window fills from GET /latency"
+        />
+      ) : (
+        <dl className="min-w-0 space-y-2">
+          {percentiles.map(([label, value]) => (
+            <div key={label} className="flex min-w-0 items-center gap-3">
+              <dt className="eyebrow w-7 shrink-0">{label}</dt>
+              <dd className="flex min-w-0 flex-1 items-center gap-3">
+                {value == null || scale <= 0 ? (
+                  <span className="min-w-0 flex-1 text-xs text-muted-foreground italic">no reading</span>
+                ) : (
+                  <>
+                    <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+                      <span
+                        className="block h-full rounded-full bg-blue-600"
+                        style={{ width: `${Math.max(2, (value / scale) * 100)}%` }}
+                      />
+                    </span>
+                    <Figure className="shrink-0 text-foreground">{fmtMs(value)}</Figure>
+                  </>
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
       {capacity == null || capacity <= 0 ? (
-        <Absence
+        <AbsenceMark
           figure="Window fill"
           why="This process reported no window capacity, so the run count has no denominator."
           needed="a window_capacity on GET /latency"
@@ -266,6 +288,11 @@ export function CacheBlock({ caches, portal }: { caches: Async<CacheStatsRespons
 }
 
 function CacheBody({ data }: { data: CacheStatsResponse }): ReactElement {
+  // `source` arrives as `identifier — what the counters are`. The identifier is the
+  // receipt; the clause after it explains a mechanism, which is a tooltip (§4). Both
+  // stay on the page — see {@link splitOrigin}.
+  const { origin, note } = splitOrigin(data.source)
+  const detail = [note, data.caveat].filter((part) => part != null && part !== '').join(' · ')
   return (
     <>
       <ul className="min-w-0 space-y-3">
@@ -289,7 +316,7 @@ function CacheBody({ data }: { data: CacheStatsResponse }): ReactElement {
           </li>
         ))}
       </ul>
-      <Receipt className="mt-auto" origin={data.source} detail={data.caveat} />
+      <Receipt className="mt-auto" origin={origin} detail={detail === '' ? null : detail} />
     </>
   )
 }
@@ -463,13 +490,19 @@ export function AuditBlock({
  * file from the browser would be inventing a capability. It is stated in the slot the
  * panel would have occupied, because a silence an operator cannot see is one they
  * fill in themselves.
+ *
+ * **It is a mark, not a paragraph.** Stated full-width between the triage band and
+ * the audit trail, it was the longest single block of prose on the screen — a
+ * three-line essay about a panel that does not exist, sitting above the panels that
+ * do. The claim is unchanged and the security reasoning is intact; it is one hover
+ * or one tab away rather than always-on (§4, §5).
  */
 export function LogsAbsence({ className }: { className?: string }): ReactElement {
   return (
-    <Absence
+    <AbsenceMark
       className={cn('min-w-0', className)}
       figure="Live server logs"
-      why="Aegis serves no application-log stream; the only SSE log is per-document ingest."
+      why="Aegis serves no application-log stream; the only SSE log in the codebase is the per-document ingest log, which is a different thing wearing a similar name."
       needed="a redacted, RBAC-scoped log endpoint — a security decision before a rendering one"
     />
   )

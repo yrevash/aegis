@@ -13,6 +13,12 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
+// Two pieces of the ops console's shared health vocabulary, imported rather than
+// rebuilt here: the strip is the same mark the readiness board leads with, and the
+// mark is the compact form of `primitives/Receipt`'s `Absence`. DESIGN.md §5 —
+// never re-improvise a treatment per screen.
+import { AbsenceMark } from '@/components/ops-overview/AbsenceMark'
+import { HealthStrip } from '@/components/ops-overview/ComponentBoard'
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
@@ -90,32 +96,65 @@ function StatusPill({ status }: { status: ComponentStatus }): ReactElement {
 }
 
 /**
- * One component row: what it is, its verdict, and the probe that produced it.
+ * One component row: what it is, its verdict, and — one layer down — the probe.
  *
- * The evidence is not optional and not a tooltip. It is the middle column, at
- * reading size, because a health page whose verdicts cannot be checked is a
- * health page asking to be trusted — which is the one thing this product refuses
- * to ask for (DESIGN.md §1).
+ * **Where the evidence went.** It used to be the middle column, at reading size:
+ * eight rows of `Evidence: SELECT 1 on the SERVING engine — the pool requests are
+ * answered on, not a fresh side connection`, wrapped across two or three lines
+ * each. That is the shape DESIGN.md §4 names outright — a status told in prose
+ * where a mark would tell it in one glance — and it was the same wall the ops
+ * overview's readiness board had just stopped drawing.
+ *
+ * It is in this row's {@link InfoTip} now, with the component key, its category
+ * and whatever `detail` the server sent, reachable by hover **and** by keyboard
+ * focus, behind a trigger whose `aria-label` names its subject. A health page
+ * whose verdicts cannot be checked is a health page asking to be trusted, so
+ * **nothing was deleted** — the receipt stopped being always-on (§4).
+ *
+ * **The one exception is drawn on the face.** When a component is actually
+ * `down` or `degraded`, the server's own `detail` stays on the row. The moment it
+ * is needed is the wrong moment to make someone hover for it.
  */
 function ComponentRow({ row }: { row: ComponentHealth }): ReactElement {
+  const failing = row.status === 'down' || row.status === 'degraded'
   return (
     <TR className="align-top">
-      <TD className="whitespace-nowrap">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium text-foreground">{row.name}</span>
-          <span className="eyebrow">
-            {row.category}
-            {row.required ? ' · required' : ''}
+      <TD>
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-sm font-medium text-foreground" title={row.name}>
+              {row.name}
+            </span>
+            <InfoTip label={`Evidence for ${row.name}`} className="shrink-0">
+              <span className="block space-y-1.5">
+                <span className="tabular block font-mono text-foreground">
+                  {row.key} · {row.category} · {row.required ? 'required' : 'optional'}
+                </span>
+                {row.detail == null || failing ? null : <span className="block">{row.detail}</span>}
+                <span className="block">
+                  <span className="text-foreground">Evidence:</span> {row.evidence}
+                </span>
+              </span>
+            </InfoTip>
           </span>
+          {failing && row.detail ? (
+            <span className="text-pretty text-xs leading-relaxed break-words text-foreground">
+              {row.detail}
+            </span>
+          ) : null}
         </div>
       </TD>
-      <TD>
-        <div className="flex max-w-xl flex-col gap-1.5">
-          {row.detail ? (
-            <span className="text-[0.8125rem] leading-relaxed text-foreground">{row.detail}</span>
-          ) : null}
-          <Receipt label="Evidence" origin={row.evidence} variant="inline" />
-        </div>
+      {/*
+        Dropped below `sm`, not scrolled to. The verdict is this table's subject and
+        a 390px reader must not have to drag sideways to reach it; the scope is the
+        least load-bearing of the three columns and it is already in the row's tip,
+        so hiding it there is the honest trade rather than pushing Status off-screen.
+      */}
+      <TD className="hidden whitespace-nowrap sm:table-cell">
+        <span className="eyebrow">
+          {row.category}
+          {row.required ? ' · required' : ''}
+        </span>
       </TD>
       <TD className="whitespace-nowrap text-right">
         <StatusPill status={row.status} />
@@ -129,9 +168,14 @@ function ComponentRow({ row }: { row: ComponentHealth }): ReactElement {
  *
  * This is the page's most easily "tidied" panel and it is the one that must not be:
  * a dashboard's silences are invisible, so a reader who cannot tell a figure that is
- * missing from one that was never possible invents the missing one. Each gap is an
- * {@link Absence}, in the same treatment the rest of the console uses for a figure it
- * cannot source.
+ * missing from one that was never possible invents the missing one.
+ *
+ * So every gap is still here, in the console's one treatment for a figure it cannot
+ * source — as the {@link AbsenceMark} form of it. Five gaps at three sentences each
+ * was 1,013px of prose at 390px, on a card whose entire content is *things that are
+ * not there*; §5 is explicit that a stated absence "is also never three sentences".
+ * The figure and the fact that it is unrecorded stay on the face; the reason and the
+ * remediation are one hover or one tab away, and neither is lost.
  */
 function NotRecordedCard({
   title,
@@ -142,11 +186,11 @@ function NotRecordedCard({
 }): ReactElement | null {
   if (gaps.length === 0) return null
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader eyebrow="stated, not filled in" title={title} />
-      <CardBody className="grid gap-3 md:grid-cols-2">
+      <CardBody className="grid min-w-0 gap-2 pt-0 sm:grid-cols-2 xl:grid-cols-3">
         {gaps.map((gap) => (
-          <Absence key={gap.figure} figure={gap.figure} why={gap.why} needed={gap.needs} />
+          <AbsenceMark key={gap.figure} figure={gap.figure} why={gap.why} needed={gap.needs} />
         ))}
       </CardBody>
     </Card>
@@ -173,24 +217,39 @@ function StageBar({ value, max }: { value: number; max: number }): ReactElement 
   )
 }
 
-/** The component table, rendered only for a principal the backend admits. */
+/**
+ * The component table, rendered only for a principal the backend admits.
+ *
+ * It leads with the {@link HealthStrip} — the same mark the ops overview's board
+ * leads with, imported rather than rebuilt, because two hand-built pictures of one
+ * fact are two pictures that can disagree (DESIGN.md §5). The strip answers *how
+ * many and is anything wrong*; the rows answer *which*. That is one mark per fact:
+ * the panel's `n probed` caption is a caption, not a second visual.
+ */
 function ComponentPanel({ data }: { data: PlatformHealthResponse }): ReactElement {
   return (
     <div className="space-y-4">
       <DataPanel
-        eyebrow="probed concurrently · every verdict carries its evidence"
+        eyebrow="probed concurrently · every verdict keeps its evidence"
         title="Dependencies"
         maxHeight={420}
+        // `w-full` because `DataPanel`'s toolbar is a wrapping flex row and the
+        // strip is the only thing in it: without it the bar shrinks to its content.
+        toolbar={
+          <div className="w-full min-w-0">
+            <HealthStrip components={data.components} />
+          </div>
+        }
         actions={
           <span className="text-xs text-muted-foreground">
             <Figure>{data.components.length}</Figure> probed
           </span>
         }
       >
-        <Table className="min-w-[560px]">
+        <Table className="min-w-[280px]">
           <THead>
             <TH>Component</TH>
-            <TH>What answered</TH>
+            <TH className="hidden sm:table-cell">Scope</TH>
             <TH className="text-right">Status</TH>
           </THead>
           <TBody>
