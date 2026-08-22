@@ -39,6 +39,7 @@ profile are refreshed at the end. Everything is dependency-injected (``complete`
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -97,6 +98,8 @@ _SUMMARY_PROMPT = (
     "preserves durable context (who the user is, what they want, decisions and "
     "commitments). Return ONLY the updated summary text."
 )
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -290,6 +293,52 @@ def _render_turns(summary: str | None, turns: Sequence[MemoryMessage]) -> str:
     return "\n\n".join(parts)
 
 
+#: Subjects a durable "fact about the user" may never actually be about. The extraction
+#: prompt already asks the model not to record the assistant's own statements, and the
+#: model does it anyway: a real deployment stored *"The assistant lacks historical
+#: reporting tools and cannot query historical data"* as an ``entity_attr`` about the
+#: user, at confidence 1.0 and with no expiry.
+#:
+#: That single row is worse than noise, because memory is recalled into the next turn's
+#: context. A sentence asserting the assistant cannot do something is a **standing
+#: instruction not to try** — it outlives the gap it described, so the day the tool is
+#: added the agent keeps declining, citing a memory of its own past limitation. The
+#: subject of the sentence is the system, and the system is not what this table is for.
+_NON_SUBJECTS: frozenset[str] = frozenset(
+    {"assistant", "the assistant", "ai", "the ai", "agent", "the agent",
+     "system", "the system", "aegis", "model", "the model", "bot", "the bot",
+     "chatbot", "the chatbot"}
+)
+
+#: Phrasings that make a sentence a claim about the *tooling* rather than about a person.
+#: Matched only in combination with a system subject or an explicit self-reference, so a
+#: user's own genuine constraint ("I cannot access the finance dashboard") still records.
+_CAPABILITY_CLAIM = (
+    "lacks ", "lack ", "cannot query", "cannot access", "has no tool", "have no tool",
+    "no tools", "does not have the tool", "is unable to", "cannot retrieve",
+    "not available in this", "does not support",
+)
+
+
+def _is_about_the_system(candidate: FactSchemaLike) -> bool:
+    """Whether this candidate records the assistant's own state rather than the user's.
+
+    Two independent signals, because the model reaches the same bad row by two routes:
+    naming the assistant as the ``subject``, or writing a subject-less ``text`` that is
+    plainly a statement about tooling. Either is enough to drop it.
+
+    Deliberately conservative about the second: a capability phrase only disqualifies a
+    fact when the sentence is *about* the assistant, so a real standing constraint on the
+    person — the thing this table exists to remember — is never mistaken for one.
+    """
+    subject = (getattr(candidate, "subject", "") or "").strip().lower()
+    if subject in _NON_SUBJECTS:
+        return True
+    text = (getattr(candidate, "text", "") or "").strip().lower()
+    names_system = any(f"the {n}" in text or text.startswith(n) for n in ("assistant", "system", "agent", "model"))
+    return names_system and any(phrase in text for phrase in _CAPABILITY_CLAIM)
+
+
 async def _extract_candidates(
     *,
     summary: str | None,
@@ -315,7 +364,23 @@ async def _extract_candidates(
         extraction = spec.FactExtraction.model_validate_json(raw)
     except (ValueError, ValidationError):
         return []
-    return [c for c in extraction.facts if c.confidence >= config.tau_extract]
+    # Two gates, and the second is not a duplicate of the prompt. The prompt asks the
+    # model not to record the assistant's own statements; this enforces it. A rule that
+    # only exists as a sentence in a prompt is a rule the model is free to ignore, and
+    # this one it demonstrably did.
+    kept: list[FactSchemaLike] = []
+    for candidate in extraction.facts:
+        if candidate.confidence < config.tau_extract:
+            continue
+        if _is_about_the_system(candidate):
+            logger.info(
+                "memory: dropped a candidate fact about the assistant rather than the "
+                "subject: %r",
+                (getattr(candidate, "text", "") or "")[:160],
+            )
+            continue
+        kept.append(candidate)
+    return kept
 
 
 async def _decide_op(

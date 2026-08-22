@@ -21,7 +21,7 @@
  */
 
 import type { Signal } from '@/config/signals'
-import type { ToolCall, ToolResult } from '@/lib/stream'
+import type { GuardStage, GuardVerdict, ToolCall, ToolResult } from '@/lib/stream'
 import type { RunState } from '@/state/runReducer'
 
 import { agentIdOf, agentIdOfNode, readSynthesis, type SynthesisView } from './eventViews'
@@ -335,17 +335,27 @@ export function focusLane(lanes: AgentLane[]): string | null {
 }
 
 /** How each rail names itself on the activity rail. */
-const GUARD_STAGE: Record<string, string> = {
+const GUARD_STAGE: Record<GuardStage, string> = {
   input: 'Input',
   output: 'Output',
   tool_result: 'Tool result',
 }
 
-/** The verdict word, in the tense a person reads. */
-const GUARD_VERDICT: Record<string, string> = {
+/**
+ * The verdict word, in the tense a person reads.
+ *
+ * Keyed by :type:`GuardVerdict` and **not** by `string`, which is the whole point. As a
+ * `Record<string, string>` this map was missing `flag` and TypeScript could not say so,
+ * so an off-topic query — the commonest non-blocking verdict there is — rendered on the
+ * activity rail as literally "Input rail — undefined" while the reason underneath
+ * explained the flag perfectly well. Typing the key means the next verdict added to the
+ * union fails the build here instead of shipping that word to a user.
+ */
+const GUARD_VERDICT: Record<GuardVerdict, string> = {
   pass: 'passed',
   block: 'blocked',
   redact: 'redacted',
+  flag: 'flagged',
 }
 
 /** One line on the supervisor-level activity rail. */

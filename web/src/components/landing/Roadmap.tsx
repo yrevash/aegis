@@ -54,14 +54,17 @@ export function Roadmap(): ReactElement {
       id="status"
       eyebrow="Posture"
       title="What runs today, and what does not."
-      lead="Nothing in the right-hand column is on any screen in the console. It is here so the left-hand column can be read as a complete list rather than a flattering selection."
+      lead="Nothing on the right is on any screen in the console."
     >
       <div className="grid gap-x-14 gap-y-10 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)] lg:items-start">
         <LandingScene name="running" width={280} className="mx-auto lg:mx-0" />
 
         <div className="grid gap-x-14 gap-y-10 sm:grid-cols-2">
           <div>
-            <h3 className={cn(COLUMN_HEAD, 'mb-3 text-foreground')}>Running today</h3>
+            <h3 className={cn(COLUMN_HEAD, 'mb-3 flex items-baseline gap-2 text-foreground')}>
+              Running today
+              <span className="text-ok-ink">{RUNNING.length}</span>
+            </h3>
             <ul className="divide-y divide-border border-t border-border">
               {RUNNING.map((item) => (
                 <li key={item} className="flex items-start gap-2.5 py-3 text-sm text-foreground">
@@ -73,7 +76,10 @@ export function Roadmap(): ReactElement {
           </div>
 
           <div>
-            <h3 className={cn(COLUMN_HEAD, 'mb-3 text-muted-foreground')}>Not built yet</h3>
+            <h3 className={cn(COLUMN_HEAD, 'mb-3 flex items-baseline gap-2 text-muted-foreground')}>
+              Not built yet
+              <span>{NEXT.length}</span>
+            </h3>
             <ul className="divide-y divide-border border-t border-border">
               {NEXT.map((item) => (
                 <li

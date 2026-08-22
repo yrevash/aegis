@@ -220,3 +220,33 @@ def test_find_requests_is_low_risk_and_declared_read_only():
     assert spec.read_only is True
     assert spec.destructive is False
     assert TOOL_REGISTRY["update_request_status"].risk is RiskLevel.HIGH
+
+
+def test_every_id_taking_tool_states_where_an_id_may_come_from():
+    """The provenance rule must reach the tool the model is actually considering.
+
+    It was written once, on ``find_requests`` ("use this to obtain a request id — never
+    guess or invent one"), which is exactly where a model reaching for a *write* tool
+    never reads it. Asked a read-only question about an escalation runbook, a four-agent
+    fan-out had all four lanes call ``add_case_note`` with a request id assembled from
+    the words of the question — four attempted writes, four "no such request".
+
+    So: every tool whose args carry a ``request_id`` states the rule itself.
+    """
+    from app.adapter.tools import TOOL_REGISTRY
+
+    id_taking = [
+        name
+        for name, spec in TOOL_REGISTRY.items()
+        if "request_id" in spec.args_model.model_fields and name != "find_requests"
+    ]
+    assert id_taking, "the registry must still expose id-taking write tools"
+
+    for name in id_taking:
+        description = TOOL_REGISTRY[name].description
+        assert "find_requests" in description, (
+            f"{name} does not tell the model where a request_id comes from"
+        )
+        assert "invent" in description.lower(), (
+            f"{name} does not forbid inventing an id"
+        )

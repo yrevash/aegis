@@ -594,6 +594,29 @@ def require_tenant_admin(auth: AuthContext = Depends(require_auth)) -> AuthConte
 # Multi-role dependency singletons (built once at import so they are immutable
 # defaults, not per-signature calls — the B008-safe idiom for ``require_roles``).
 require_admin_or_devops = require_roles(Role.ADMIN, Role.DEVOPS)
+
+
+def require_platform_security_reader(
+    auth: AuthContext = Depends(require_auth),
+) -> AuthContext:
+    """Admit the principals who may read or exercise the **deployment's** security state.
+
+    ``require_admin_or_devops`` was the wrong shape here in both directions, because the
+    coarse :class:`Role` cannot tell a platform admin from a tenant admin — they are both
+    ``ADMIN``. So a *tenant* admin could run the platform-wide red-team battery and read
+    the serving role's RLS attributes, which are facts about the deployment and not about
+    their tenant; while the platform's own ``ai_team`` — the people whose job this is —
+    were refused, and the red-team screen simply failed for them.
+
+    The rule is the one :func:`~app.api.routes_health.require_infra_reader` already
+    applies to the other process-wide surface: platform staff, or the platform admin.
+    Reused rather than restated so the two cannot drift into different answers about the
+    same question. The import is deferred because ``routes_health`` imports *this*
+    module at load time; a module-level import here would close that cycle.
+    """
+    from app.api.routes_health import require_infra_reader  # noqa: PLC0415
+
+    return require_infra_reader(auth)
 """Admit the operator (``admin``) or the platform/ops (``devops``) role."""
 require_admin_or_client = require_roles(Role.ADMIN, Role.CLIENT)
 """Admit the operator (``admin``) or the business/end-user (``client``) role."""
@@ -3760,7 +3783,7 @@ async def governance_dashboard_route(
 
 @router.get("/security/posture", response_model=SecurityPostureResponse, tags=["platform"])
 async def security_posture_route(
-    auth: AuthContext = Depends(require_admin_or_devops),
+    auth: AuthContext = Depends(require_platform_security_reader),
 ) -> SecurityPostureResponse:
     """Return the live threat → control security posture (admin/devops — the security view).
 
@@ -3797,7 +3820,7 @@ async def latency(
 
 @router.post("/redteam/run", response_model=RedteamReportResponse, tags=["platform"])
 async def redteam_run(
-    auth: AuthContext = Depends(require_admin_or_devops),
+    auth: AuthContext = Depends(require_platform_security_reader),
 ) -> RedteamReportResponse:
     """Run the offline attack battery and return the real verdicts (admin/devops).
 

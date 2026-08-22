@@ -93,3 +93,6 @@ vector_storage/
 
 # Lane screenshot scratch
 .console-shots/
+
+# LightRAG runtime cache — regenerated on every ingest, never source.
+backend/rag_storage/

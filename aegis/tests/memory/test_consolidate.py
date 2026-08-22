@@ -664,3 +664,38 @@ async def test_the_sweep_declares_platform_scope_before_reading_the_queue(db, mo
     assert order and order[0] == "scope", (
         f"the platform scope must be bound before the queue is read, got {order[:3]!r}"
     )
+
+
+def test_a_fact_about_the_assistant_is_never_stored_as_a_fact_about_the_user():
+    """Memory records the subject, not the system — enforced, not merely requested.
+
+    The extraction prompt already says "do NOT extract the assistant's own statements".
+    A live deployment stored *"The assistant lacks historical reporting tools and cannot
+    query historical data"* anyway, as an ``entity_attr`` at confidence 1.0 with no
+    expiry. Memory is recalled into the next turn's context, so that row is a standing
+    instruction not to try: it outlives the gap it described, and the day the tool ships
+    the agent keeps declining, citing its own memory of a limitation that is gone.
+
+    The counter-case is the point of the second assertion — a real standing constraint on
+    the *person* is exactly what this table is for and must survive the filter.
+    """
+    from aegis.memory.consolidate import _is_about_the_system
+
+    class Candidate:
+        def __init__(self, subject: str, text: str) -> None:
+            self.subject, self.text = subject, text
+
+    # Dropped: the observed row, by either route the model reaches it.
+    assert _is_about_the_system(
+        Candidate("assistant", "The assistant lacks historical reporting tools.")
+    )
+    assert _is_about_the_system(
+        Candidate("user", "The assistant lacks historical reporting tools and cannot query historical data.")
+    )
+    assert _is_about_the_system(Candidate("the system", "Aegis has no tool for that."))
+
+    # Kept: a genuine constraint on the person, which reads similarly and is not the same.
+    assert not _is_about_the_system(
+        Candidate("user", "The user cannot access the finance dashboard and asks colleagues instead.")
+    )
+    assert not _is_about_the_system(Candidate("user", "The user prefers to be contacted via email."))

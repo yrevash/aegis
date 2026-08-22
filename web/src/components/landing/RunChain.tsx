@@ -177,8 +177,8 @@ export function RunChain(): ReactElement {
             className="shrink-0 border-t-0 pt-0"
           />
           <p className="max-w-prose text-pretty text-xs leading-relaxed text-muted-foreground">
-            The shape of a run, not a recording of one. A run&rsquo;s own figures are
-            per-tenant, and they live behind the login.
+            The shape of a run, not a recording of one — a run&rsquo;s own figures live
+            behind the login.
           </p>
         </div>
       </div>

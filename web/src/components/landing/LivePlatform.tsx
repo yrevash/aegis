@@ -1,11 +1,13 @@
 'use client'
 
+import { ArrowRight } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
 import { getPublicMetrics } from '@/lib/api/client'
 import type { PublicMetricsResponse } from '@/lib/api/types'
+import { cn } from '@/lib/utils'
 
 import { LandingScene } from './LandingScene'
 import { LandingSection } from './LandingSection'
@@ -53,25 +55,34 @@ export function LivePlatform(): ReactElement {
       tone="surface"
       eyebrow="Read live"
       title="Nothing on this page is a fixture."
-      lead="The two blocks below are fetched from public endpoints when the page loads. There is no demo mode behind them: with nothing to read, they render nothing rather than something plausible."
+      lead="Both blocks below are fetched from public endpoints on load. There is no demo mode behind them."
     >
       {manifest.state === 'up' ? (
-        <div className="grid gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)] lg:items-start">
+        <div className="grid gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,9fr)] lg:items-start">
           <LandingScene name="liveData" width={280} className="mx-auto lg:mx-0" />
 
           <div className="min-w-0">
             <h3 className="font-display text-lg leading-6 font-semibold text-foreground">
-              {manifest.data.module_count} modules, each paired with what it actually runs on
+              {manifest.data.module_count} modules, and what each one actually runs on
             </h3>
             <p className="mt-2 max-w-[62ch] text-pretty text-sm leading-relaxed text-muted-foreground">
-              Branding, never hiding. This list is the platform&rsquo;s own capability
-              manifest, so it cannot drift from what is installed — and the count above is
-              read from it rather than typed here.
+              Both read from the manifest, so neither can drift from what is installed.
             </p>
 
-            <ul className="mt-6 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
-              {manifest.data.modules.map((module) => (
-                <li key={module.name} className="min-w-0 bg-surface px-5 py-4">
+            <ul className="mt-5 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2">
+              {manifest.data.modules.map((module, index) => (
+                <li
+                  key={module.name}
+                  className={cn(
+                    'min-w-0 bg-surface px-5 py-4',
+                    // An odd manifest left a tinted half-row of nothing at the end
+                    // of the grid, which reads as a module that failed to render.
+                    // The last card takes the whole row instead.
+                    index === manifest.data.modules.length - 1 &&
+                      manifest.data.modules.length % 2 === 1 &&
+                      'sm:col-span-2',
+                  )}
+                >
                   <h4 className="truncate text-sm font-semibold tracking-[-0.01em] text-foreground">
                     {module.name.replace(/^Aegis /, '')}
                   </h4>
@@ -99,18 +110,80 @@ export function LivePlatform(): ReactElement {
 
       <MetricRow className="mt-14" />
 
-      {/* The adapter claim, which used to be a four-box flowchart of its own. It is
-          one sentence about a directory, and a flowchart of four labelled boxes was
-          never going to be the thing a jury remembered about this page. */}
-      <p className="mt-14 max-w-[62ch] text-pretty text-[0.9375rem] leading-relaxed text-muted-foreground">
-        <span className="font-semibold text-foreground">
-          The core is a package you import, not an application you fork.
-        </span>{' '}
-        Everything above is domain-agnostic. Pointing Aegis at a new domain means writing
-        one adapter — schema, tools, prompts, ML target, corpus — and the core never
-        learns the domain.
-      </p>
+      <AdapterSeam className="mt-14" />
     </LandingSection>
+  )
+}
+
+/** The five files a new domain costs. */
+const ADAPTER = ['schema', 'tools', 'prompts', 'ML target', 'corpus'] as const
+
+/**
+ * The join between two boxes of the seam.
+ *
+ * Hidden below `sm`, where the boxes stack and reading order already carries the
+ * direction; an arrow rotated a quarter turn would only be a second way of
+ * saying "next". Decorative either way — the labels are the information.
+ */
+function Seam(): ReactElement {
+  return (
+    <ArrowRight
+      aria-hidden
+      className="hidden size-4 shrink-0 self-center text-muted-foreground sm:block"
+      strokeWidth={2}
+    />
+  )
+}
+
+/**
+ * What porting Aegis to a new domain costs, as a seam rather than a paragraph.
+ *
+ * It was three lines of prose naming five things, which is a list wearing a
+ * sentence. Drawn, the claim is also *sharper*: the seam is visible, the five
+ * chips are countable, and "the core never learns the domain" is a label on the
+ * left box rather than an assertion at the end of a paragraph.
+ */
+function AdapterSeam({ className }: { className?: string }): ReactElement {
+  return (
+    <figure className={className}>
+      <figcaption className="text-[0.9375rem] leading-relaxed font-semibold text-foreground">
+        The core is a package you import, not an application you fork.
+      </figcaption>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1.2fr)_auto_minmax(0,1fr)] sm:items-stretch">
+        <div className="min-w-0 rounded-lg border border-border bg-surface-2 px-4 py-3.5">
+          <p className="text-sm font-medium text-foreground">Everything above</p>
+          <p className="mt-1 text-[0.8125rem] leading-5 text-muted-foreground">
+            domain-agnostic, and it stays that way
+          </p>
+        </div>
+
+        <Seam />
+
+        <div className="min-w-0 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3.5">
+          <p className="eyebrow mb-2">One adapter</p>
+          <ul className="flex flex-wrap gap-1.5">
+            {ADAPTER.map((part) => (
+              <li
+                key={part}
+                className="tabular rounded-full bg-surface px-2.5 py-1 font-mono text-[0.7rem] text-blue-700"
+              >
+                {part}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <Seam />
+
+        <div className="min-w-0 rounded-lg border border-border bg-surface-2 px-4 py-3.5">
+          <p className="text-sm font-medium text-foreground">Your domain</p>
+          <p className="mt-1 text-[0.8125rem] leading-5 text-muted-foreground">
+            the core never learns it
+          </p>
+        </div>
+      </div>
+    </figure>
   )
 }
 
@@ -173,8 +246,7 @@ function MetricRow({ className }: { className?: string }): ReactElement | null {
         Counted by the platform itself
       </h3>
       <p className="mt-2 max-w-[62ch] text-pretty text-sm leading-relaxed text-muted-foreground">
-        A figure nothing has measured yet says so instead of showing a zero — a
-        fabricated zero and a real zero are different claims.
+        A figure nothing has measured says so, rather than showing a zero.
       </p>
 
       <dl className="mt-6 grid grid-cols-2 gap-x-8 gap-y-7 sm:grid-cols-3 lg:grid-cols-5">

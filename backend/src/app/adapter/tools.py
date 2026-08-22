@@ -265,7 +265,12 @@ class AssignArgs(BaseModel):
 class AddNoteArgs(BaseModel):
     """Arguments for :func:`add_case_note`."""
 
-    request_id: str = Field(description="Id of the request to annotate.")
+    request_id: str = Field(
+        description=(
+            "Id of the request to annotate, as returned by find_requests. Not a title, "
+            "a document name or a phrase from the question."
+        )
+    )
     body: str = Field(min_length=1, description="Note text to append.")
     author: str | None = Field(default=None, description="Who wrote the note.")
     retract: bool = Field(
@@ -665,6 +670,27 @@ class ToolSpec:
         }
 
 
+#: Where a ``request_id`` is allowed to come from, stated on **every** tool that takes
+#: one rather than only on the tool that produces them.
+#:
+#: The rule was written once, in ``find_requests``' description ("use this to obtain a
+#: request id — never guess or invent one") — which is precisely where a model reaching
+#: for a *write* tool never reads it. Asked a read-only question about an escalation
+#: runbook, a four-agent fan-out had all four lanes call ``add_case_note`` with a
+#: request id assembled out of the words in the question. Four writes attempted, four
+#: "no such request", nothing learned between them.
+#:
+#: A constraint that only appears on the tool a model chose *not* to call is not a
+#: constraint. This is appended to each write tool's own description so the rule arrives
+#: with the tool the model is actually considering.
+_ID_RULE = (
+    "The request_id must be an id that find_requests returned — call it first and use "
+    "one of its results. Never invent an id or assemble one from words in the question; "
+    "an identifier that was not returned by a lookup does not name a real request and "
+    "this call will fail against it. If no lookup has been run, run one instead of "
+    "guessing."
+)
+
 TOOL_REGISTRY: dict[str, ToolSpec] = {
     "find_requests": ToolSpec(
         name="find_requests",
@@ -691,7 +717,9 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "update_request_status": ToolSpec(
         name="update_request_status",
-        description="Change the lifecycle status of a service request.",
+        description=(
+            "Change the lifecycle status of a service request. " + _ID_RULE
+        ),
         args_model=UpdateStatusArgs,
         handler=update_request_status,
         # HIGH: resolving/closing a customer request is a consequential,
@@ -705,7 +733,9 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "assign_request": ToolSpec(
         name="assign_request",
-        description="Assign or unassign a service request to a support agent.",
+        description=(
+            "Assign or unassign a service request to a support agent. " + _ID_RULE
+        ),
         args_model=AssignArgs,
         handler=assign_request,
         risk=RiskLevel.MEDIUM,
@@ -715,7 +745,9 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "add_case_note": ToolSpec(
         name="add_case_note",
-        description="Append (or retract) a note on a service request's timeline.",
+        description=(
+            "Append (or retract) a note on a service request's timeline. " + _ID_RULE
+        ),
         args_model=AddNoteArgs,
         handler=add_case_note,
         risk=RiskLevel.LOW,

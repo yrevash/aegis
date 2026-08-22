@@ -1,5 +1,7 @@
 import type { ReactElement } from 'react'
 
+import { cn } from '@/lib/utils'
+
 import { LandingScene } from './LandingScene'
 import { LandingSection } from './LandingSection'
 
@@ -40,12 +42,34 @@ export function TeamSection(): ReactElement {
       tone="surface"
       eyebrow="Fan-out"
       title="You choose how wide it runs. The run tells you who actually decided."
-      lead="A question can be answered by one lane or by a team of specialists working at once. The width is a control in the composer — and the answer that comes back names the party that settled it, including the case where that party was not you."
+      lead="The width is a control in the composer. The run names whoever settled it."
     >
       <div className="grid gap-x-14 gap-y-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center">
-        <LandingScene name="team" width={420} className="mx-auto lg:mx-0" />
+        <LandingScene name="team" width={380} className="mx-auto lg:mx-0" />
 
         <div className="min-w-0">
+          {/* A picture of the control itself. `aria-hidden` because the list
+              directly under it names all three widths and says what each does —
+              announcing the segments would read the same three words twice. */}
+          <div
+            aria-hidden
+            className="mb-5 inline-flex max-w-full flex-wrap gap-1 rounded-lg border border-border bg-surface-2 p-1"
+          >
+            {WIDTHS.map((width, index) => (
+              <span
+                key={width.label}
+                className={cn(
+                  'rounded-md px-4 py-1.5 text-sm font-medium',
+                  index === WIDTHS.length - 1
+                    ? 'bg-blue-600 text-white'
+                    : 'text-muted-foreground',
+                )}
+              >
+                {width.label}
+              </span>
+            ))}
+          </div>
+
           <ul className="divide-y divide-border border-y border-border">
             {WIDTHS.map((width) => (
               <li key={width.label} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-3.5">
