@@ -31,6 +31,17 @@ export interface TurnAttachment {
   /** The SNIFFED type, never the browser's declaration. Null if hygiene could not run. */
   mimeType: string | null
   blocked: boolean
+  /**
+   * Why a rail refused, in the server's own words; `''` when nothing refused.
+   *
+   * The two refusals this can carry are not interchangeable: *blocked by the injection
+   * screen* means the image carries an instruction aimed at the model, and *blocked
+   * because the injection screen could not run* means the screener was unavailable and
+   * the rail failed closed. The first says "this image"; the second says "try again, or
+   * tell an operator". A screen that renders only "refused" cannot tell them apart, and
+   * neither can the person reading it.
+   */
+  blockedReason: string
   /** The screened description the rails produced. */
   summary: string
   /** One line: which controls ran, and which did not. */
@@ -49,6 +60,7 @@ export function toTurnAttachment(
     filename: response.filename,
     mimeType: response.mime_type,
     blocked: response.blocked,
+    blockedReason: response.blocked_reason,
     summary: response.summary,
     coverage: response.coverage,
     previewUrl,
@@ -60,6 +72,15 @@ export interface AttachmentVerdict {
   blocked: boolean
   /** The verdict in three words or fewer. */
   label: string
+  /**
+   * Why it was refused — the server's sentence verbatim, `''` when nothing refused.
+   *
+   * Separate from `detail` rather than folded into it: *which controls ran* and *why one
+   * of them said no* are different claims, and a refusal that only says which controls
+   * ran is the state this console shipped in — "Image refused. Controls run: hygiene,
+   * injection_screen." and nothing an operator could act on.
+   */
+  reason: string
   /** Which controls ran — the server's own sentence, never a paraphrase. */
   detail: string
 }
@@ -69,6 +90,7 @@ export function attachmentVerdict(attachment: TurnAttachment): AttachmentVerdict
   return {
     blocked: attachment.blocked,
     label: attachment.blocked ? 'Image refused' : 'Image screened',
+    reason: attachment.blockedReason,
     detail: attachment.coverage,
   }
 }

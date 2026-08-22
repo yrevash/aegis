@@ -98,6 +98,14 @@ async def test_screen_completer_error_fails_closed():
     assert analyst.calls == []
     assert result.outcome is VisionOutcome.BLOCKED
     assert result.blocked_stage is VisionStage.INJECTION_SCREEN
+    # A screen that *crashed* is not a screen that *looked*: ``screened`` defaulted to
+    # True on this path, so a deployment outage was reported to the operator in the same
+    # sentence as a flagged image ("blocked by the injection screen"). The pipeline reads
+    # this flag to pick between the two, and they are different problems with different
+    # actions.
+    assert result.screen is not None
+    assert result.screen.screened is False
+    assert "could not run" in result.blocked_reason
 
 
 async def test_unparseable_screen_reply_blocks(monkeypatch):

@@ -3399,31 +3399,79 @@ async def ops_rollback(
     req: OpsRollbackRequest,
     auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsRollbackResponse:
-    """Revert ``prompt_key`` to its previous version — a one-call rollback (admin/ai_team).
+    """Revert ``prompt_key`` to its previous version **in one tenant scope** (admin/ai_team).
 
-    Reactivates the most-recent archived version and archives the current active. 503
-    when the stores are off.
+    Reactivates the most-recent archived version of that key *within the caller's scope*
+    and archives the current active. 503 when the stores are off.
+
+    **The scope is not optional, and it does not come from the body.**
+    :func:`app.ops.registry.rollback` takes ``tenant_id=None`` by default, and ``None``
+    there is not "whichever tenant" — it is the **platform** scope. Calling it unscoped
+    from here was wrong twice over:
+
+    * a tenant operator's rollback silently looked in a history that is not theirs, found
+      nothing, and answered ``reverted: false`` — the "rollback does nothing" report; and
+    * ``require_admin_or_ai_team`` admits a **tenant-bound** ``ai_team`` principal
+      (:meth:`AuthContext.is_platform_staff` is a role statement, and that principal is
+      not platform staff), so whenever the platform key did have a prior version, a
+      tenant operator could revert the *platform's* live prompt.
+
+    So the scope is resolved from the token by :func:`_scope_tenant`, exactly as
+    ``POST /llmops/prompts/rollback`` resolves it: ``tenant_id`` in the body is a
+    *selector* platform staff may aim with, never an authority — a tenant-bound caller
+    naming another tenant gets a 403, and one naming nothing gets its own tenant rather
+    than the platform. The two write guards are imported from
+    :mod:`app.api.routes_llmops` rather than restated here, because a second copy of a
+    policy is a second thing to forget to update: the prompt-ownership rule (§7.16 rows 7
+    and 14) has one home.
+
+    A revert with no earlier version **in that scope** is a 409 carrying the reason,
+    not a 200 carrying ``reverted: false``. "Nothing happened" and "nothing *could*
+    happen" are the same pixel on a console otherwise, and this endpoint spent its whole
+    life rendering the first when it meant the second. ``reverted`` therefore only ever
+    reads ``true`` in a 200; it is kept on the wire because the Release-gate card reads
+    it, and dropping a field is a worse answer than keeping an honest constant.
     """
     _require_stores()
+    from app.api.routes_llmops import _guard_writable_key, _guard_writable_scope
     from app.data.session import get_sessionmaker
     from app.ops import registry
 
+    scope = _scope_tenant(auth, req.tenant_id)
+    _guard_writable_key(auth, req.prompt_key)
+    _guard_writable_scope(auth, scope)
+
     async with get_sessionmaker()() as session:
-        reverted = await registry.rollback(session, req.prompt_key)
+        reverted = await registry.rollback(session, req.prompt_key, scope)
+        if reverted is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "There is no earlier version to roll back to for this prompt in "
+                    "this scope."
+                ),
+            )
+        version = reverted.version
         await session.commit()
+        # This tenant's cache slot only — the same per-tenant invalidation the LLMOps
+        # rollback does, for the same reason: clearing the whole cache would drop every
+        # other tenant to the floor prompt until the next restart.
+        await registry.refresh_cache(session, scope)
     await _safe_audit(
         "ops.rollback",
         auth,
         payload={
             "prompt_key": req.prompt_key,
-            "reverted": reverted is not None,
-            "active_version": reverted.version if reverted is not None else None,
+            "reverted": True,
+            "active_version": version,
         },
+        tenant_id=scope,
     )
     return OpsRollbackResponse(
         prompt_key=req.prompt_key,
-        reverted=reverted is not None,
-        active_version=reverted.version if reverted is not None else None,
+        tenant_id=scope,
+        reverted=True,
+        active_version=version,
     )
 
 

@@ -319,3 +319,60 @@ async def test_the_login_matches_the_call_that_was_observed_working():
         "provider": "db",
         "refresh": True,
     }
+
+
+# ── a stale cached session ───────────────────────────────────────────────────
+
+
+@dataclass
+class FlakyFirstCall:
+    """Superset that refuses the first request to ``path`` and accepts the rest.
+
+    The shape of a cached service token outliving its session: Superset restarts, or
+    the fixed cache window (Superset does not report a lifetime) guesses too long, and
+    the *next* call is refused even though the credentials are still good.
+    """
+
+    inner: FakeSuperset
+    path: str
+    status: int = 401
+    refusals: int = 1
+
+    async def request(self, method, url, *, json=None, headers=None):
+        response = await self.inner.request(method, url, json=json, headers=headers)
+        if url.endswith(self.path) and self.refusals > 0:
+            self.refusals -= 1
+            return FakeResponse(self.status, {"message": "Token has expired"})
+        return response
+
+
+async def test_a_stale_session_re_logs_in_once_instead_of_failing_the_board():
+    """One expired cached token must not take the whole analytics screen down.
+
+    The page issues a board request per tile — ~18 in parallel — all sharing one cached
+    service token. Before this, a token that expired early refused every one of them
+    and the screen stayed broken until the fixed cache window elapsed, which is a
+    screen-wide outage reported as eighteen separate failures.
+    """
+    client, fake = _wired()
+    flaky = FlakyFirstCall(inner=fake, path=CHART_DATA_PATH)
+    client._transport = flaky  # noqa: SLF001 - swapping the seam is the point
+
+    data = await client.board_data(BOARD, 3)
+
+    assert data.rows, "the retry must return the tenant's real rows"
+    logins = [c["path"] for c in fake.calls].count(LOGIN_PATH)
+    assert logins == 2, "the stale session must be discarded and re-established once"
+
+
+async def test_a_genuine_refusal_is_retried_once_and_then_raised():
+    """The retry must not turn a real refusal into an infinite loop or a silent pass."""
+    client, fake = _wired()
+    flaky = FlakyFirstCall(inner=fake, path=CHART_DATA_PATH, refusals=99)
+    client._transport = flaky  # noqa: SLF001 - swapping the seam is the point
+
+    with pytest.raises(SupersetRejectedError):
+        await client.board_data(BOARD, 3)
+
+    attempts = [c["path"] for c in fake.calls].count(CHART_DATA_PATH)
+    assert attempts == 2, "exactly one retry, then the refusal is reported"

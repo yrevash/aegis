@@ -134,7 +134,11 @@ function AttachmentChip({ attachment }: { attachment: TurnAttachment }): ReactEl
         className="size-8 shrink-0 rounded-md border border-border object-cover"
       />
       <span className="max-w-[28rem]">
-        <span className="font-medium">{verdict.label}.</span> {verdict.detail}
+        <span className="font-medium">{verdict.label}.</span>{' '}
+        {/* The rail's own reason leads, then the coverage — a refusal that lists only
+            which controls ran tells the reader nothing they can act on. */}
+        {verdict.reason !== '' ? `${verdict.reason} ` : ''}
+        {verdict.detail}
       </span>
     </div>
   )

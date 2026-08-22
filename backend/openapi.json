@@ -1223,6 +1223,12 @@
             "title": "Blocked",
             "type": "boolean"
           },
+          "blocked_reason": {
+            "default": "",
+            "description": "WHY the rail refused, in the pipeline's own sentence; '' when nothing refused. It carries the distinction :mod:`aegis.vision.pipeline` draws and this response used to drop — 'blocked by the injection screen' (the image carries an instruction) versus 'blocked because the injection screen could not run' (the screener was unavailable and the rail failed closed). They are different facts and they need different actions from the operator.",
+            "title": "Blocked Reason",
+            "type": "string"
+          },
           "coverage": {
             "description": "One line: which controls ran, and which did not.",
             "title": "Coverage",
@@ -7273,6 +7279,18 @@
           "prompt_key": {
             "title": "Prompt Key",
             "type": "string"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which scope to revert in — a SELECTOR, never an authority. Only platform staff may name a tenant other than their own (and `null` = the platform's own prompts); a tenant-bound caller reverts in its own scope whatever it sends here, and naming somebody else's tenant is a 403.",
+            "title": "Tenant Id"
           }
         },
         "required": [
@@ -7300,13 +7318,26 @@
             "type": "string"
           },
           "reverted": {
+            "default": true,
+            "description": "Always true in a 200. A key with no earlier version in this scope is a 409 naming the reason, not a quiet `false`.",
             "title": "Reverted",
             "type": "boolean"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The scope the revert actually ran in, as resolved from the token. Echoed back because 'which prompt did I just revert' is exactly the question the unscoped version of this endpoint could not answer; `null` = the platform.",
+            "title": "Tenant Id"
           }
         },
         "required": [
-          "prompt_key",
-          "reverted"
+          "prompt_key"
         ],
         "title": "OpsRollbackResponse",
         "type": "object"
@@ -13404,7 +13435,7 @@
     },
     "/v1/database/browse": {
       "post": {
-        "description": "Browse one table under a resolved scope.\n\nEvery identifier in ``body`` — the table, the ordering column, the filter column — is\nmatched against the catalog **this connection can read**, never escaped. A column a\ngrant withholds is not in the catalog, so it cannot be named here at all.\n\nArgs:\n    body: The table, the page, and the optional tenant selector.\n    auth: The platform admin.\n\nReturns:\n    The rows, with the bounds that fired stated on the result.\n\nRaises:\n    HTTPException: 400 for an identifier that is not in the catalog or a read the\n        planner refuses, 403 for a scope this caller may not read, 429 for the rate\n        limit, 503 when the console's connection is not read-only.",
+        "description": "Browse one table under a resolved scope.\n\nEvery identifier in ``body`` — the table, the ordering column, the filter column — is\nmatched against the catalog **this connection can read**, never escaped. A column a\ngrant withholds is not in the catalog, so it cannot be named here at all.\n\nArgs:\n    body: The table, the page, and the optional tenant selector.\n    auth: The platform admin.\n\nReturns:\n    The rows, with the bounds that fired stated on the result.\n\nRaises:\n    HTTPException: 400 for an identifier that is not in the catalog or a read the\n        planner refuses, 403 for a scope this caller may not read, 404 for a tenant\n        selector that names no tenant, 429 for the rate limit, 503 when the console's\n        connection is not read-only.",
         "operationId": "database_browse_v1_database_browse_post",
         "requestBody": {
           "content": {
@@ -13451,7 +13482,7 @@
     },
     "/v1/database/inspections/{inspection_id}": {
       "post": {
-        "description": "Run one entry from the closed set of inspections.\n\nAn id that is not in the catalogue is refused; there is no fallback to a free-form\nstatement, because there is no free-form statement. A parameter the inspection does not\ndeclare is refused too, rather than dropped — a silently dropped filter answers a\ndifferent question than the one asked.\n\nArgs:\n    body: The row limit, the declared parameters, and the optional tenant selector.\n    inspection_id: Which inspection to run.\n    auth: The platform admin.\n\nReturns:\n    The rows, with the bounds that fired stated on the result.\n\nRaises:\n    HTTPException: 400 for an unknown inspection or parameter, 403 for a scope this\n        caller may not read, 429 for the rate limit, 503 when the console's connection\n        is not read-only.",
+        "description": "Run one entry from the closed set of inspections.\n\nAn id that is not in the catalogue is refused; there is no fallback to a free-form\nstatement, because there is no free-form statement. A parameter the inspection does not\ndeclare is refused too, rather than dropped — a silently dropped filter answers a\ndifferent question than the one asked.\n\nArgs:\n    body: The row limit, the declared parameters, and the optional tenant selector.\n    inspection_id: Which inspection to run.\n    auth: The platform admin.\n\nReturns:\n    The rows, with the bounds that fired stated on the result.\n\nRaises:\n    HTTPException: 400 for an unknown inspection or parameter, 403 for a scope this\n        caller may not read, 404 for a tenant selector that names no tenant, 429 for\n        the rate limit, 503 when the console's connection is not read-only.",
         "operationId": "database_inspection_v1_database_inspections__inspection_id__post",
         "parameters": [
           {
@@ -16093,7 +16124,7 @@
     },
     "/v1/ops/rollback": {
       "post": {
-        "description": "Revert ``prompt_key`` to its previous version — a one-call rollback (admin/ai_team).\n\nReactivates the most-recent archived version and archives the current active. 503\nwhen the stores are off.",
+        "description": "Revert ``prompt_key`` to its previous version **in one tenant scope** (admin/ai_team).\n\nReactivates the most-recent archived version of that key *within the caller's scope*\nand archives the current active. 503 when the stores are off.\n\n**The scope is not optional, and it does not come from the body.**\n:func:`app.ops.registry.rollback` takes ``tenant_id=None`` by default, and ``None``\nthere is not \"whichever tenant\" — it is the **platform** scope. Calling it unscoped\nfrom here was wrong twice over:\n\n* a tenant operator's rollback silently looked in a history that is not theirs, found\n  nothing, and answered ``reverted: false`` — the \"rollback does nothing\" report; and\n* ``require_admin_or_ai_team`` admits a **tenant-bound** ``ai_team`` principal\n  (:meth:`AuthContext.is_platform_staff` is a role statement, and that principal is\n  not platform staff), so whenever the platform key did have a prior version, a\n  tenant operator could revert the *platform's* live prompt.\n\nSo the scope is resolved from the token by :func:`_scope_tenant`, exactly as\n``POST /llmops/prompts/rollback`` resolves it: ``tenant_id`` in the body is a\n*selector* platform staff may aim with, never an authority — a tenant-bound caller\nnaming another tenant gets a 403, and one naming nothing gets its own tenant rather\nthan the platform. The two write guards are imported from\n:mod:`app.api.routes_llmops` rather than restated here, because a second copy of a\npolicy is a second thing to forget to update: the prompt-ownership rule (§7.16 rows 7\nand 14) has one home.\n\nA revert with no earlier version **in that scope** is a 409 carrying the reason,\nnot a 200 carrying ``reverted: false``. \"Nothing happened\" and \"nothing *could*\nhappen\" are the same pixel on a console otherwise, and this endpoint spent its whole\nlife rendering the first when it meant the second. ``reverted`` therefore only ever\nreads ``true`` in a 200; it is kept on the wire because the Release-gate card reads\nit, and dropping a field is a worse answer than keeping an honest constant.",
         "operationId": "ops_rollback_v1_ops_rollback_post",
         "requestBody": {
           "content": {

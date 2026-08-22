@@ -154,7 +154,9 @@ async def classify_image(
         completer: A vision-capable async chat completer.
 
     Returns:
-        The verdict. Any completer error yields ``injection=True``.
+        The verdict. Any completer error yields ``injection=True`` **and**
+        ``screened=False`` — the block came from the control being unavailable, not from
+        anything in the image.
     """
     try:
         raw = await completer(
@@ -164,6 +166,14 @@ async def classify_image(
         logger.warning("Image injection screen call failed; failing closed.", exc_info=True)
         return ImageScreenVerdict(
             injection=True,
+            # ``screened`` defaults to True, and leaving the default here said "a vision
+            # model looked at this image and refused it" about a call that never
+            # completed. Downstream that is not a nuance: ``aegis.vision.pipeline``
+            # renders exactly this flag as "Image blocked by the injection screen" versus
+            # "Image blocked because the injection screen could not run", and the two must
+            # never be confused — one is about the user's image, the other is about our
+            # deployment being down.
+            screened=False,
             reason="Image injection screen unavailable; blocked as a precaution.",
         )
     return _parse_verdict(raw)

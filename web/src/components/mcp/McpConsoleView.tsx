@@ -87,9 +87,31 @@ function McpConsoleBody({ token }: { token: string | null }): ReactElement {
     void load()
   }, [load])
 
+  /**
+   * Declare a peer, handing the refusal *back* rather than posting it page-level.
+   *
+   * The declaration is the one write on this page with a form behind it, so its
+   * refusal belongs beside the fields that caused it — in the drawer, which now stays
+   * open holding them. A banner at the top of the page, above a drawer that had
+   * already closed and blanked itself, is what made an invalid id cost the operator
+   * everything they had typed.
+   */
   const onCreate = useCallback(
-    (body: McpServerCreate) => void run('create', () => createMcpServer(token, body)),
-    [run, token],
+    async (body: McpServerCreate): Promise<string | null> => {
+      setBusy('create')
+      try {
+        const next = await createMcpServer(token, body)
+        setData(next)
+        setProbe(next.probe ?? null)
+        setError(null)
+        return null
+      } catch (caught) {
+        return errorSentence(caught, 'That declaration did not reach the registry. Try it again.')
+      } finally {
+        setBusy(null)
+      }
+    },
+    [token],
   )
   const onUpdate = useCallback(
     (serverId: string, body: McpServerUpdate) =>

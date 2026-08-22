@@ -31,6 +31,12 @@ import type {
 } from '@/lib/api/mcp'
 import { cn } from '@/lib/utils'
 
+import {
+  afterSubmit,
+  beforeSubmit,
+  refuseLocally,
+  type DeclareState,
+} from './declareForm'
 import { PEER_STATE_TEXT, peerState, type PeerState } from './mcpConsole'
 
 /** Badge tone per connection state. Never the only carrier — the word is beside it. */
@@ -48,14 +54,26 @@ const STATE_ICON = {
   disabled: Power,
 } as const
 
+/** The blank declaration. One constant, so "reset" and "initial" cannot drift apart. */
+const EMPTY_DRAFT: McpServerCreate = {
+  serverId: '',
+  label: '',
+  url: '',
+  authHeader: 'Authorization',
+  credential: '',
+}
+
 /**
  * Connections — declare an external MCP server, prove it answers, turn it off, forget it.
  *
  * **The credential is one-way, and the form says so.** What comes back from the server is
  * a twelve-character fingerprint, never the secret; the field is a password input, is
- * cleared the moment the request is sent, and there is no response type in
- * `lib/api/mcp.ts` with anywhere to put a credential. The row shows *whether* this
+ * cleared as soon as the registry *accepts* the declaration, and there is no response type
+ * in `lib/api/mcp.ts` with anywhere to put a credential. The row shows *whether* this
  * process holds one and *who* set it, which is what an operator actually needs to know.
+ * (It used to be cleared the moment the request was *sent*, which bought nothing — the
+ * value is in this component's state either way — and cost the operator a retype every
+ * time the registry refused the id beside it. See {@link afterSubmit}.)
  *
  * **Testing is a button, not a page load.** Reaching a peer is a request to somebody
  * else's network; doing it on render would do it on every refresh. The result is the
@@ -86,19 +104,22 @@ export function Connections({
   data: McpConsole
   busy: string | null
   probe: McpProbe | null
-  onCreate: (body: McpServerCreate) => void
+  /** Resolves to the registry's refusal sentence, or `null` when it accepted. */
+  onCreate: (body: McpServerCreate) => Promise<string | null>
   onUpdate: (serverId: string, body: McpServerUpdate) => void
   onDelete: (serverId: string) => void
   onTest: (serverId: string) => void
 }): ReactElement {
-  const [draft, setDraft] = useState<McpServerCreate>({
-    serverId: '',
-    label: '',
-    url: '',
-    authHeader: 'Authorization',
-    credential: '',
+  // Drawer, draft and last verdict are one state because they change together and the
+  // rules for how are in `declareForm.ts` — see there for what each transition costs.
+  const [form, setForm] = useState<DeclareState<McpServerCreate>>({
+    open: false,
+    draft: EMPTY_DRAFT,
+    notice: null,
   })
-  const [declaring, setDeclaring] = useState(false)
+  const { draft, open: declaring, notice } = form
+  const setDraft = (next: McpServerCreate): void =>
+    setForm((current) => ({ ...current, draft: next }))
   const [confirming, setConfirming] = useState<string | null>(null)
   const id = useId()
 
@@ -117,10 +138,27 @@ export function Connections({
     setProbes((current) => ({ ...current, [probe.serverId]: probe }))
   }, [probe])
 
-  const submit = (): void => {
-    onCreate({ ...draft, serverId: draft.serverId.trim() })
-    setDraft({ serverId: '', label: '', url: '', authHeader: 'Authorization', credential: '' })
-    setDeclaring(false)
+  /**
+   * Declare the peer, and let the registry's answer decide what happens to the form.
+   *
+   * Nothing is cleared or closed until the server has spoken. A refusal keeps the
+   * drawer open with every value intact and prints the reason under the field it is
+   * about; only acceptance blanks the draft.
+   */
+  const submit = async (): Promise<void> => {
+    const serverId = draft.serverId.trim()
+    // Cleared first, on *every* attempt — including one that never leaves the browser,
+    // which used to leave the previous verdict standing and reading as this one's.
+    const attempt = beforeSubmit(form)
+    if (!serverId) {
+      setForm(refuseLocally(attempt, 'An id is required — it becomes the tool namespace.'))
+      return
+    }
+    setForm(attempt)
+    const reason = await onCreate({ ...attempt.draft, serverId })
+    setForm((current) =>
+      afterSubmit(current, { reason }, EMPTY_DRAFT, `${serverId} is declared.`),
+    )
   }
 
   return (
@@ -134,7 +172,10 @@ export function Connections({
             variant={declaring ? 'outline' : 'default'}
             size="sm"
             aria-expanded={declaring}
-            onClick={() => setDeclaring((open) => !open)}
+            // Opening the drawer is a fresh attempt: the last verdict goes with it.
+            onClick={() =>
+              setForm((current) => ({ ...current, open: !current.open, notice: null }))
+            }
           >
             {declaring ? (
               <X className="mr-1 size-3" aria-hidden />
@@ -177,12 +218,38 @@ export function Connections({
           />
         )}
 
+        {/* The verdict on the last declaration, and only ever that one. It sits outside
+            the drawer so an accepted declaration — which closes the drawer — still says
+            so. */}
+        {notice ? (
+          <p
+            role="status"
+            className={cn(
+              'flex items-start gap-2 rounded-lg border px-3 py-2 text-sm',
+              notice.kind === 'ok'
+                ? 'border-ok/60 bg-ok/10 text-foreground'
+                : 'border-block/60 bg-block/10 text-foreground',
+            )}
+          >
+            {notice.kind === 'ok' ? (
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ok-ink" aria-hidden />
+            ) : (
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-block-ink" aria-hidden />
+            )}
+            <span className="min-w-0">{notice.text}</span>
+          </p>
+        ) : null}
+
         {declaring ? (
           <form
             className="grid gap-3 border-t border-border pt-4 md:grid-cols-2 xl:grid-cols-1"
+            // The browser's own validation bubble would abort the submit event, and an
+            // aborted submit is exactly the case that used to leave a stale verdict on
+            // screen. Validation happens in `submit`, where it can say so in the banner.
+            noValidate
             onSubmit={(event) => {
               event.preventDefault()
-              submit()
+              void submit()
             }}
           >
             <Field
@@ -275,7 +342,10 @@ export function Connections({
               />
             </Field>
             <div className="md:col-span-2 xl:col-span-1">
-              <Button type="submit" disabled={busy === 'create' || !draft.serverId.trim()}>
+              {/* Disabled only while the request is in flight. A button greyed out for a
+                  missing id is a control that refuses without saying why; `submit` says
+                  why instead. */}
+              <Button type="submit" disabled={busy === 'create'}>
                 {busy === 'create' ? (
                   <Loader2 className="mr-2 size-4 animate-spin motion-reduce:animate-none" aria-hidden />
                 ) : null}

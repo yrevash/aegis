@@ -1,0 +1,1 @@
+{"entities": [{"id": "procedure:refunds above 500 usd", "label": "Refunds above 500 USD", "kind": "procedure"}, {"id": "procedure:supervisor sign-off", "label": "supervisor sign-off", "kind": "procedure"}], "relations": [{"src_id": "procedure:refunds above 500 usd", "tgt_id": "procedure:supervisor sign-off", "phrase": "require"}]}

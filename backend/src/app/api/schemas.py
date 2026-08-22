@@ -1330,13 +1330,36 @@ class OpsRollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prompt_key: str
+    tenant_id: int | None = Field(
+        default=None,
+        description=(
+            "Which scope to revert in — a SELECTOR, never an authority. Only platform "
+            "staff may name a tenant other than their own (and `null` = the platform's "
+            "own prompts); a tenant-bound caller reverts in its own scope whatever it "
+            "sends here, and naming somebody else's tenant is a 403."
+        ),
+    )
 
 
 class OpsRollbackResponse(BaseModel):
     """Body for `POST /ops/rollback` — the newly-active version after the revert."""
 
     prompt_key: str
-    reverted: bool
+    tenant_id: int | None = Field(
+        default=None,
+        description=(
+            "The scope the revert actually ran in, as resolved from the token. Echoed "
+            "back because 'which prompt did I just revert' is exactly the question the "
+            "unscoped version of this endpoint could not answer; `null` = the platform."
+        ),
+    )
+    reverted: bool = Field(
+        default=True,
+        description=(
+            "Always true in a 200. A key with no earlier version in this scope is a "
+            "409 naming the reason, not a quiet `false`."
+        ),
+    )
     active_version: int | None = None
 
 

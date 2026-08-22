@@ -137,19 +137,30 @@ export function AttachmentPicker({
                 <ShieldCheck aria-hidden className="mt-0.5 size-3.5 shrink-0" />
               )}
               <span>
-                <span className="font-medium">{verdict.label}.</span> {verdict.detail}
+                <span className="font-medium">{verdict.label}.</span>{' '}
+                {/* The reason first, the coverage after: WHY it refused is what the person
+                    can act on; WHICH controls ran is the evidence behind it. */}
+                {verdict.reason !== '' ? `${verdict.reason} ` : ''}
+                {verdict.detail}
               </span>
             </p>
           )}
 
           <p className="mt-2 text-[0.74rem] leading-snug text-muted-foreground">
             {verdict?.blocked === true
-              ? 'The description is not carried into the run. Send the question on its own, or attach a different image.'
+              ? 'The description is not carried into the run. Read the refusal above before you retry: an image the screen flagged will be refused again, while a screen that could not run may pass on a second attempt.'
               : 'The screened description goes with your next question, labelled as evidence.'}
           </p>
 
           <p className="mt-2 max-h-28 overflow-y-auto rounded-lg border border-border bg-surface-2/40 px-2.5 py-2 text-[0.74rem] leading-snug whitespace-pre-wrap text-muted-foreground">
-            {attachment.summary.trim() === '' ? 'No description was produced.' : attachment.summary}
+            {/* A blocked attachment has no description by design — the model never ran —
+                so the box carries the rail's sentence instead of the empty-state line,
+                which is what made a refusal read as "nothing happened". */}
+            {attachment.summary.trim() !== ''
+              ? attachment.summary
+              : attachment.blockedReason.trim() !== ''
+                ? attachment.blockedReason
+                : 'No description was produced.'}
           </p>
         </>
       )}

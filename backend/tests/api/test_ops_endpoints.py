@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 
+import pgsupport
 import pytest
 import pytest_asyncio
 
@@ -23,16 +24,29 @@ from app.adapter import DEFAULT_PERSONA_ID
 from app.core.llm import LLMResult, Usage
 from app.core.models import ModelRole
 from app.core.security import create_access_token
-from app.data.models import Approval, ApprovalStatus, EvalResult, PromptStatus, PromptVersion
+from app.data.models import (
+    Approval,
+    ApprovalStatus,
+    EvalResult,
+    PromptStatus,
+    PromptVersion,
+    Tenant,
+)
 from app.data.session import get_sessionmaker
 from app.ops import registry
 
 pytestmark = pytest.mark.asyncio
 
 
-def _role_headers(role: str) -> dict[str, str]:
-    """Auth header for a principal minted from a *coarse* role (fine == coarse here)."""
-    token = create_access_token(user_id=1, username="u", role=role, tenant_id=1)
+def _role_headers(role: str, *, tenant_id: int | None = 1) -> dict[str, str]:
+    """Auth header for a principal minted from a *coarse* role (fine == coarse here).
+
+    ``tenant_id`` defaults to a tenant-bound principal, and is passed as ``None`` for the
+    staff shape ``app.seed`` actually provisions for ``ai_team``/``devops`` — the two are
+    not interchangeable now that the Improvement-loop mutations resolve a scope from the
+    token (:meth:`AuthContext.is_platform_staff` is a role statement plus that ``None``).
+    """
+    token = create_access_token(user_id=1, username="u", role=role, tenant_id=tenant_id)
     return {"Authorization": f"Bearer {token}"}
 
 PK = DEFAULT_PERSONA_ID
@@ -153,8 +167,14 @@ async def test_ops_endpoints_reachable_by_ai_team(client, seeded, monkeypatch):
     assert rel.status_code == 200
     assert rel.json()["outcome"] == "promoted"
 
-    rollback = await client.post("/ops/rollback", json={"prompt_key": PK}, headers=ai)
-    assert rollback.status_code == 200
+    # The rollback leg runs as the **un-tenanted** ai_team account — the shape ``app.seed``
+    # provisions, and the one that is platform staff. ``/ops/rollback`` reverts in the
+    # caller's resolved scope now, and this key's history lives in the platform scope; the
+    # tenant-bound token above would correctly find nothing to revert in tenant 1. That
+    # distinction is the subject of ``test_ops_rollback_cannot_reach_the_platform_prompt``.
+    staff = _role_headers("ai_team", tenant_id=None)
+    rollback = await client.post("/ops/rollback", json={"prompt_key": PK}, headers=staff)
+    assert rollback.status_code == 200, rollback.text
 
 
 async def test_ops_release_decide_stays_admin_only(client, seeded):
@@ -304,3 +324,70 @@ async def test_ops_rollback_reverts(client, admin_headers, seeded, monkeypatch):
     assert body["reverted"] is True and body["active_version"] == 1
     async with get_sessionmaker()() as s:
         assert (await registry.get_active(s, PK)).version == 1
+
+
+async def _promote_a_second_platform_version() -> None:
+    """Give the platform key a prior version, so there is something to roll back to."""
+    draft_id = await _make_draft(LOW_DRAFT)
+    async with get_sessionmaker()() as s:
+        await registry.promote(s, draft_id)
+        await s.commit()
+
+
+async def test_ops_rollback_cannot_reach_the_platform_prompt(client, seeded, db):
+    """A tenant operator's revert stays in its own scope — the whole point of the fix.
+
+    ``require_admin_or_ai_team`` admits a **tenant-bound** ``ai_team`` principal, and the
+    handler used to call ``registry.rollback`` with no tenant at all — which is not
+    "whichever tenant", it is the *platform* scope. So the moment the platform key had a
+    prior version (promoted below, exactly as a release does), that principal's rollback
+    landed on the platform's live prompt for every tenant on the box.
+
+    Both halves are asserted, because either alone would pass a broken build: the call is
+    refused, **and** the platform's active version is still the one the platform put live.
+    """
+    await _promote_a_second_platform_version()
+    async with get_sessionmaker()() as s:
+        assert (await registry.get_active(s, PK)).version == 2
+
+    resp = await client.post(
+        "/ops/rollback", json={"prompt_key": PK}, headers=_role_headers("ai_team")
+    )
+    assert resp.status_code == 409, resp.text
+    assert "no earlier version" in resp.json()["detail"]
+
+    async with get_sessionmaker()() as s:
+        assert (await registry.get_active(s, PK)).version == 2, (
+            "the platform's live prompt was reverted by a tenant-bound principal"
+        )
+
+
+async def test_ops_rollback_reverts_inside_the_callers_own_tenant(client, db):
+    """The other half: scoped is not the same as broken — a tenant reverts its own key.
+
+    And the ``tenant_id`` in the body is a selector, never an authority: naming somebody
+    else's tenant is a 403 rather than a wider revert.
+    """
+    async with get_sessionmaker()() as session:
+        await pgsupport.seed(session, Tenant(id=1, name="Acme"), Tenant(id=2, name="Globex"))
+        await session.commit()
+    for body in ("ACME v1", "ACME v2"):
+        async with get_sessionmaker()() as s:
+            pv = await registry.create_draft(
+                s, prompt_key=PK, system_prompt=body, tenant_id=1
+            )
+            await registry.promote(s, pv.id)
+            await s.commit()
+
+    ai = _role_headers("ai_team")
+    resp = await client.post("/ops/rollback", json={"prompt_key": PK}, headers=ai)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tenant_id"] == 1 and body["active_version"] == 1
+    async with get_sessionmaker()() as s:
+        assert (await registry.get_active(s, PK, 1)).version == 1
+
+    other = await client.post(
+        "/ops/rollback", json={"prompt_key": PK, "tenant_id": 2}, headers=ai
+    )
+    assert other.status_code == 403, other.text

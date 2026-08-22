@@ -228,10 +228,25 @@ function GraphView({ role }: { role: Role }): ReactElement {
             <Card className="min-w-0">
               <CardHeader eyebrow="entities · relations" title="Orchestration" />
               <CardBody>
+                {/*
+                  What this view is actually filled by, stated instead of an
+                  instruction. `GET /graph` returns the durable Neo4j graph the
+                  ingest pipeline's `graph` stage projects into (its own stage
+                  facts report `projected_entities` / `projected_relations`),
+                  unioned with whatever the current run's retrieval touched. A
+                  query cannot add an entity to it — `viewOf` only ever *narrows*
+                  to `state.touchedNodes`, which are a subset of what is already
+                  there — so the old "run a query to build an evidence subgraph"
+                  told an operator to take an action that could not work. The
+                  second half is the other true reading of an empty payload: the
+                  route falls back to the in-process slice when the durable store
+                  cannot be read, and Neo4j holding entities the API cannot reach
+                  arrives here as exactly these zero nodes.
+                */}
                 <SceneState name="curious" size="md">
                   <EmptyState
                     title="No entity in the graph"
-                    body="Ingest a document, or run a query to build an evidence subgraph."
+                    body="Document ingestion writes this graph; a query only highlights what it already holds. Empty means nothing ingested — or the graph store is unreadable."
                     className="text-left"
                   />
                 </SceneState>
@@ -269,7 +284,11 @@ function GraphView({ role }: { role: Role }): ReactElement {
           {rows.length === 0 ? (
             <SceneState name="empty" className="py-4">
               <p className="text-sm font-medium text-foreground">No entities in view</p>
-              <p className="mt-1 text-sm text-muted-foreground">Run a query to populate it.</p>
+              {/* Same correction as the canvas beside it: this list is `viewOf(graph,
+                  state)`, so a run can only narrow it. Nothing a query does adds a row. */}
+              <p className="mt-1 text-sm text-muted-foreground">
+                Document ingestion fills the graph. A query narrows this list, never adds to it.
+              </p>
             </SceneState>
           ) : (
             <Table>

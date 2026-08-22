@@ -469,6 +469,17 @@ class AttachmentResponse(BaseModel):
         ),
     )
     blocked: bool = Field(description="Whether a rail refused the attachment.")
+    blocked_reason: str = Field(
+        default="",
+        description=(
+            "WHY the rail refused, in the pipeline's own sentence; '' when nothing "
+            "refused. It carries the distinction :mod:`aegis.vision.pipeline` draws and "
+            "this response used to drop — 'blocked by the injection screen' (the image "
+            "carries an instruction) versus 'blocked because the injection screen could "
+            "not run' (the screener was unavailable and the rail failed closed). They "
+            "are different facts and they need different actions from the operator."
+        ),
+    )
     summary: str = Field(description="The model's reading of the image, or '' if blocked.")
     coverage: str = Field(description="One line: which controls ran, and which did not.")
 
@@ -530,6 +541,11 @@ async def create_attachment(
         filename=req.filename,
         mime_type=None if analysis.image is None else analysis.image.sniffed_mime,
         blocked=analysis.blocked,
+        # The pipeline has always computed this; only the wire shape dropped it, which
+        # left the composer with a refusal it could not explain ("No description was
+        # produced") for two situations the vision module documents as never to be
+        # confused: the image was flagged, or it could not be checked at all.
+        blocked_reason=analysis.blocked_reason,
         # ``answer`` is already empty on a blocked run — the model never ran — so this
         # restates the invariant rather than relying on it.
         summary="" if analysis.blocked else analysis.answer,

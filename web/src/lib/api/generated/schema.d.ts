@@ -708,8 +708,9 @@ export interface paths {
          *
          *     Raises:
          *         HTTPException: 400 for an identifier that is not in the catalog or a read the
-         *             planner refuses, 403 for a scope this caller may not read, 429 for the rate
-         *             limit, 503 when the console's connection is not read-only.
+         *             planner refuses, 403 for a scope this caller may not read, 404 for a tenant
+         *             selector that names no tenant, 429 for the rate limit, 503 when the console's
+         *             connection is not read-only.
          */
         post: operations["database_browse_v1_database_browse_post"];
         delete?: never;
@@ -746,8 +747,8 @@ export interface paths {
          *
          *     Raises:
          *         HTTPException: 400 for an unknown inspection or parameter, 403 for a scope this
-         *             caller may not read, 429 for the rate limit, 503 when the console's connection
-         *             is not read-only.
+         *             caller may not read, 404 for a tenant selector that names no tenant, 429 for
+         *             the rate limit, 503 when the console's connection is not read-only.
          */
         post: operations["database_inspection_v1_database_inspections__inspection_id__post"];
         delete?: never;
@@ -2294,10 +2295,38 @@ export interface paths {
         put?: never;
         /**
          * Ops Rollback
-         * @description Revert ``prompt_key`` to its previous version — a one-call rollback (admin/ai_team).
+         * @description Revert ``prompt_key`` to its previous version **in one tenant scope** (admin/ai_team).
          *
-         *     Reactivates the most-recent archived version and archives the current active. 503
-         *     when the stores are off.
+         *     Reactivates the most-recent archived version of that key *within the caller's scope*
+         *     and archives the current active. 503 when the stores are off.
+         *
+         *     **The scope is not optional, and it does not come from the body.**
+         *     :func:`app.ops.registry.rollback` takes ``tenant_id=None`` by default, and ``None``
+         *     there is not "whichever tenant" — it is the **platform** scope. Calling it unscoped
+         *     from here was wrong twice over:
+         *
+         *     * a tenant operator's rollback silently looked in a history that is not theirs, found
+         *       nothing, and answered ``reverted: false`` — the "rollback does nothing" report; and
+         *     * ``require_admin_or_ai_team`` admits a **tenant-bound** ``ai_team`` principal
+         *       (:meth:`AuthContext.is_platform_staff` is a role statement, and that principal is
+         *       not platform staff), so whenever the platform key did have a prior version, a
+         *       tenant operator could revert the *platform's* live prompt.
+         *
+         *     So the scope is resolved from the token by :func:`_scope_tenant`, exactly as
+         *     ``POST /llmops/prompts/rollback`` resolves it: ``tenant_id`` in the body is a
+         *     *selector* platform staff may aim with, never an authority — a tenant-bound caller
+         *     naming another tenant gets a 403, and one naming nothing gets its own tenant rather
+         *     than the platform. The two write guards are imported from
+         *     :mod:`app.api.routes_llmops` rather than restated here, because a second copy of a
+         *     policy is a second thing to forget to update: the prompt-ownership rule (§7.16 rows 7
+         *     and 14) has one home.
+         *
+         *     A revert with no earlier version **in that scope** is a 409 carrying the reason,
+         *     not a 200 carrying ``reverted: false``. "Nothing happened" and "nothing *could*
+         *     happen" are the same pixel on a console otherwise, and this endpoint spent its whole
+         *     life rendering the first when it meant the second. ``reverted`` therefore only ever
+         *     reads ``true`` in a 200; it is kept on the wire because the Release-gate card reads
+         *     it, and dropping a field is a worse answer than keeping an honest constant.
          */
         post: operations["ops_rollback_v1_ops_rollback_post"];
         delete?: never;
@@ -4144,6 +4173,12 @@ export interface components {
              * @description Whether a rail refused the attachment.
              */
             blocked: boolean;
+            /**
+             * Blocked Reason
+             * @description WHY the rail refused, in the pipeline's own sentence; '' when nothing refused. It carries the distinction :mod:`aegis.vision.pipeline` draws and this response used to drop — 'blocked by the injection screen' (the image carries an instruction) versus 'blocked because the injection screen could not run' (the screener was unavailable and the rail failed closed). They are different facts and they need different actions from the operator.
+             * @default
+             */
+            blocked_reason: string;
             /**
              * Coverage
              * @description One line: which controls ran, and which did not.
@@ -7446,6 +7481,11 @@ export interface components {
         OpsRollbackRequest: {
             /** Prompt Key */
             prompt_key: string;
+            /**
+             * Tenant Id
+             * @description Which scope to revert in — a SELECTOR, never an authority. Only platform staff may name a tenant other than their own (and `null` = the platform's own prompts); a tenant-bound caller reverts in its own scope whatever it sends here, and naming somebody else's tenant is a 403.
+             */
+            tenant_id?: number | null;
         };
         /**
          * OpsRollbackResponse
@@ -7456,8 +7496,17 @@ export interface components {
             active_version?: number | null;
             /** Prompt Key */
             prompt_key: string;
-            /** Reverted */
+            /**
+             * Reverted
+             * @description Always true in a 200. A key with no earlier version in this scope is a 409 naming the reason, not a quiet `false`.
+             * @default true
+             */
             reverted: boolean;
+            /**
+             * Tenant Id
+             * @description The scope the revert actually ran in, as resolved from the token. Echoed back because 'which prompt did I just revert' is exactly the question the unscoped version of this endpoint could not answer; `null` = the platform.
+             */
+            tenant_id?: number | null;
         };
         /**
          * OutputRailVerdict

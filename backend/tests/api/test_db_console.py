@@ -548,6 +548,37 @@ async def test_a_refusal_explains_itself(client, admin_headers, console_on, two_
     assert "closed set" in unknown_inspection.json()["detail"]
 
 
+@pytest.mark.parametrize("tenant_id", [0, -1, 999999], ids=["zero", "negative", "unknown"])
+async def test_a_tenant_selector_naming_no_tenant_is_a_404_not_a_500(
+    client, admin_headers, console_on, two_tenants, db, tenant_id
+):
+    """The console's own audit row used to turn a mistyped selector into a 500.
+
+    ``db.query.execute`` is written **before** the statement runs and carries the resolved
+    scope in ``audit_log.tenant_id``, which has a foreign key to ``tenants(id)``. So an id
+    with no tenant behind it never reached a refusal: it raised
+    ``ForeignKeyViolationError`` out of the bookkeeping, and the operator got
+    ``Internal Server Error`` on an authenticated route for a typo.
+
+    The non-vacuity check is the second half — a real tenant is still 200 on the identical
+    request, so this cannot pass by refusing everything.
+    """
+    refused = await client.post(
+        "/database/browse",
+        headers=admin_headers,
+        json={"table": "usage_ledger", "limit": 1, "tenantId": tenant_id},
+    )
+    assert refused.status_code == 404, refused.text
+    assert f"no tenant {tenant_id}" in refused.json()["detail"]
+
+    accepted = await client.post(
+        "/database/browse",
+        headers=admin_headers,
+        json={"table": "usage_ledger", "limit": 1, "tenantId": 901},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+
 async def test_the_console_is_rate_limited(client, admin_headers, console_on, two_tenants):
     """The one rate limit in ``backend/src``, on the page that most needs one."""
     routes_db._recent.clear()

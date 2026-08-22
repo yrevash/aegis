@@ -340,3 +340,11 @@ async def test_a_refused_attachment_is_a_two_hundred_carrying_the_verdict(
     # The sniffed type, never the declaration — the one lie that is a whole rail bypass.
     assert payload["mime_type"] == "image/png"
     assert payload["coverage"] != ""
+    # The refusal says WHICH refusal it is. ``aegis.vision.pipeline`` computes the
+    # distinction its own docstring says must never be blurred — "blocked by the injection
+    # screen" (this image carries an instruction) versus "blocked because the injection
+    # screen could not run" (fail-closed, nobody looked at it) — and this response used to
+    # drop the sentence entirely, leaving the composer with "No description was produced."
+    # for both. The screen cannot run here, so it must be the second one.
+    assert "could not run" in payload["blocked_reason"], payload["blocked_reason"]
+    assert "injection screen" in payload["blocked_reason"]

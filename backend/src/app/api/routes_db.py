@@ -275,6 +275,57 @@ def _scope_for(auth: AuthContext, requested: int | None) -> tuple[ScopeBinding, 
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 
+async def _require_known_tenant(requested: int | None) -> None:
+    """Refuse a tenant selector that names no tenant — **before** anything is written.
+
+    The console's own bookkeeping is what made this necessary. ``db.query.execute`` is
+    written *before* the statement runs and carries the resolved scope in
+    ``audit_log.tenant_id``, which has a foreign key to ``tenants(id)``. So an id with no
+    tenant row — a mistyped ``999999``, a ``0``, a stale bookmark — did not fail as a bad
+    request: it failed as a ``ForeignKeyViolationError`` out of the audit write, i.e. an
+    unguarded 500 on an authenticated route, before the read it was about to refuse had
+    even been attempted. The selector is validated here instead, where the answer is a
+    sentence rather than a stack trace.
+
+    **404, not 400.** The body is well-formed and the id is the right shape; what is
+    missing is the tenant. And it discloses nothing: :func:`narrow_to` has already 403'd a
+    tenant-bound caller naming somebody else, so the only principal that can reach this
+    check with an unknown id is one whose ``GET /database/overview`` already lists every
+    tenant it may select.
+
+    Args:
+        requested: The tenant id the operator selected, or ``None`` for no selection —
+            which is nothing to check, since the caller's own authority is not a
+            wire-supplied id.
+
+    Raises:
+        HTTPException: 404 when ``requested`` names no row in ``tenants``.
+    """
+    if requested is None:
+        return
+    from aegis.governance.models import Tenant
+    from sqlalchemy import select
+
+    from app.data.session import get_sessionmaker
+
+    # Deliberately the *serving* connection, not the console's read-only one: this is a
+    # check on the constraint the audit write is about to hit, so it has to be asked of
+    # the connection that will hit it.
+    async with get_sessionmaker()() as session:
+        known = (
+            await session.execute(select(Tenant.id).where(Tenant.id == requested))
+        ).scalar_one_or_none()
+    if known is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"There is no tenant {requested}. The tenant selector must name a "
+                "tenant that exists — GET /database/overview lists the ones this "
+                "console can read."
+            ),
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Wire shapes
 # ─────────────────────────────────────────────────────────────────────────────
@@ -770,11 +821,13 @@ async def database_browse(
 
     Raises:
         HTTPException: 400 for an identifier that is not in the catalog or a read the
-            planner refuses, 403 for a scope this caller may not read, 429 for the rate
-            limit, 503 when the console's connection is not read-only.
+            planner refuses, 403 for a scope this caller may not read, 404 for a tenant
+            selector that names no tenant, 429 for the rate limit, 503 when the console's
+            connection is not read-only.
     """
     _rate_limit(auth)
     binding, _scope = _scope_for(auth, body.tenant_id)
+    await _require_known_tenant(body.tenant_id)
     runner = _runner()
     posture = await runner.posture()
     if not posture.is_safe:
@@ -843,11 +896,13 @@ async def database_inspection(
 
     Raises:
         HTTPException: 400 for an unknown inspection or parameter, 403 for a scope this
-            caller may not read, 429 for the rate limit, 503 when the console's connection
-            is not read-only.
+            caller may not read, 404 for a tenant selector that names no tenant, 429 for
+            the rate limit, 503 when the console's connection is not read-only.
     """
     _rate_limit(auth)
     binding, _scope = _scope_for(auth, body.tenant_id)
+    # The same selector, the same foreign key, the same 500 — see ``/database/browse``.
+    await _require_known_tenant(body.tenant_id)
     runner = _runner()
     posture = await runner.posture()
     if not posture.is_safe:

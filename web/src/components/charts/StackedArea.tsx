@@ -12,9 +12,11 @@ import {
 } from 'recharts'
 
 import { Figure } from '@/components/primitives/Figure'
+import { cn } from '@/lib/utils'
 
 import { ChartTooltip } from './ChartTooltip'
 import { ORDINAL_MAX, rampHex } from './palette'
+import { shownSeries, toggleSeries } from './seriesToggle'
 
 /** The figure a legend entry prints — its explicit summary, else its last value. */
 function legendValue(
@@ -73,6 +75,13 @@ interface StackedAreaProps {
  * read at a single x is the only way to compare bands, so the cursor is a full
  * vertical rule and the tooltip lists every band at that bucket.
  *
+ * **The legend is a control, and now it is one.** Its entries were `<button>`s
+ * carrying hover handlers only: clicking one fired nothing and changed nothing, so
+ * the affordance was a lie. Clicking now toggles that band out of the stack and back
+ * — `aria-pressed` carries the state, the swatch hollows out and the label is struck
+ * through, so the state survives losing the pointer and is legible without colour.
+ * Keyboard comes free with the button element: Tab reaches it, Enter/Space toggles.
+ *
  * Nothing animates: a stack that grows in on mount confirms no state change, and
  * `prefers-reduced-motion` should not need a special case to be honoured.
  */
@@ -85,11 +94,15 @@ export function StackedArea({
   xTickCount = 6,
 }: StackedAreaProps): ReactElement {
   const [focused, setFocused] = useState<string | null>(null)
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set<string>())
 
+  // Indexed off the whole series list, never the visible subset: hiding a band must
+  // not re-colour its neighbours, or the reader loses track of which is which.
   const colors = useMemo(
     () => new Map(series.map((s, i) => [s.key, rampHex(i, series.length)])),
     [series],
   )
+  const drawn = useMemo(() => shownSeries(series, hidden), [series, hidden])
 
   // Keep a readable number of x ticks by sampling, never by rotating labels:
   // a rotated axis costs vertical space and legibility in equal measure.
@@ -126,7 +139,7 @@ export function StackedArea({
             cursor={{ stroke: 'var(--blue-600)', strokeWidth: 1, strokeDasharray: '4 4' }}
             content={<ChartTooltip valueFormatter={valueFormatter} />}
           />
-          {series.map((s) => (
+          {drawn.map((s) => (
             <Area
               key={s.key}
               type="monotone"
@@ -143,31 +156,50 @@ export function StackedArea({
         </RechartsAreaChart>
       </ResponsiveContainer>
 
-      <ul className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-        {series.map((s) => (
-          <li key={s.key}>
-            <button
-              type="button"
-              className="flex items-center gap-1.5 rounded-sm px-0.5 text-[0.72rem] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              onMouseEnter={() => setFocused(s.key)}
-              onMouseLeave={() => setFocused(null)}
-              onFocus={() => setFocused(s.key)}
-              onBlur={() => setFocused(null)}
-            >
-              <span
-                className="size-2 shrink-0 rounded-[2px]"
-                style={{ background: colors.get(s.key) }}
-                aria-hidden
-              />
-              <span className="text-muted-foreground">{s.label}</span>
-              {series.length <= ORDINAL_MAX && legendValue(s, latest) != null && (
-                <Figure className="text-[0.72rem] leading-4 font-medium text-foreground">
-                  {valueFormatter(legendValue(s, latest) as number)}
-                </Figure>
-              )}
-            </button>
-          </li>
-        ))}
+      <ul className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
+        {series.map((s) => {
+          const off = hidden.has(s.key)
+          return (
+            <li key={s.key} className="min-w-0">
+              <button
+                type="button"
+                aria-pressed={!off}
+                aria-label={`${off ? 'Show' : 'Hide'} ${s.label}`}
+                className="flex items-center gap-1.5 rounded-sm px-0.5 text-[0.72rem] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
+                onClick={() => setHidden((current) => toggleSeries(current, s.key))}
+                onMouseEnter={() => setFocused(s.key)}
+                onMouseLeave={() => setFocused(null)}
+                onFocus={() => setFocused(s.key)}
+                onBlur={() => setFocused(null)}
+              >
+                {/* Hidden reads as a hollow swatch, not a paler one: a second step of
+                    the same blue is exactly what this ramp already uses for rank. */}
+                <span
+                  className="size-2 shrink-0 rounded-[2px]"
+                  style={
+                    off
+                      ? { boxShadow: `inset 0 0 0 1px ${colors.get(s.key)}` }
+                      : { background: colors.get(s.key) }
+                  }
+                  aria-hidden
+                />
+                <span className={cn('truncate text-muted-foreground', off && 'line-through')}>
+                  {s.label}
+                </span>
+                {series.length <= ORDINAL_MAX && legendValue(s, latest) != null && (
+                  <Figure
+                    className={cn(
+                      'text-[0.72rem] leading-4 font-medium',
+                      off ? 'text-muted-foreground line-through' : 'text-foreground',
+                    )}
+                  >
+                    {valueFormatter(legendValue(s, latest) as number)}
+                  </Figure>
+                )}
+              </button>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )

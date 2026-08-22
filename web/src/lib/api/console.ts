@@ -93,6 +93,13 @@ export interface AttachmentResponse {
   /** The SNIFFED content type, never the caller's declaration. Null if hygiene could not run. */
   mime_type: string | null
   blocked: boolean
+  /**
+   * Why a rail refused, in the server's own sentence; `''` when nothing refused.
+   * It distinguishes "blocked by the injection screen" (the image carries an
+   * instruction) from "blocked because the injection screen could not run" (the rail
+   * failed closed) — two states the operator has to act on differently.
+   */
+  blocked_reason: string
   summary: string
   /** One line: which controls ran, and which did not. */
   coverage: string

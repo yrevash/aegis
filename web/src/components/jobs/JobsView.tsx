@@ -7,6 +7,7 @@ import {
   CircleCheck,
   Layers,
   Loader2,
+  Lock,
   RefreshCw,
   RotateCcw,
   TriangleAlert,
@@ -24,6 +25,7 @@ import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate
 import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { CorpusPanel } from '@/components/jobs/CorpusPanel'
 import { IngestLog } from '@/components/jobs/IngestLog'
+import { canWriteJobs, NO_TENANT_REASON } from '@/components/jobs/jobsPolicy'
 import { PipelineIso } from '@/components/jobs/PipelineIso'
 import { UploadPanel } from '@/components/jobs/UploadPanel'
 import { cancelJob, getJobs, JobsApiError, requeueJob, type JobRunRow } from '@/lib/api/jobs'
@@ -111,6 +113,12 @@ export function NotRecorded({ what = 'not recorded' }: { what?: string }): React
 
 interface JobsViewProps {
   token: string | null
+  /**
+   * The session's tenant pin. `null` is an untenanted principal (the platform
+   * operator), for whom every write on this screen is a 403 or a 400 — see
+   * {@link canWriteJobs}, which is where that reasoning is written down.
+   */
+  tenantId: number | null
 }
 
 /**
@@ -125,13 +133,23 @@ interface JobsViewProps {
  * only "failed" would reproduce it in the browser. **Cancel** signals the
  * orchestrator and records who asked on the row.
  *
+ * **Both controls, and the upload beside them, are withheld from a principal with no
+ * tenant** — see {@link canWriteJobs}. They are not disabled buttons: the backend loads
+ * every one of these rows under the caller's own tenant, so for an untenanted operator
+ * they were thirteen buttons whose only possible outcome was a 403. The read stays,
+ * because `GET /jobs` really does answer it — with every tenant's rows.
+ *
  * The screen is now two things rather than thirty-five panels: the funnel above
  * ({@link PipelineIso} — the six ingest stages as isometric solids, height by the
  * number of runs that committed each one) and this table beneath it. The prose
  * that used to sit between them is in the column tips and the stage tips; the
  * refusal banner and the stated absences stay, because those are the product.
  */
-export function JobsView({ token }: JobsViewProps): ReactElement {
+export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
+  // The one gate on this screen's writes. `GET /jobs` still answers for an untenanted
+  // operator — every tenant's rows, deliberately — so the read stays and only the
+  // controls the backend guard makes impossible are withheld.
+  const canWrite = canWriteJobs(tenantId)
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [busy, setBusy] = useState<number | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
@@ -322,6 +340,17 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
                 )
               })}
             </div>
+            {!canWrite ? (
+              <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-xs text-muted-foreground">
+                <Lock className="size-3 shrink-0" aria-hidden />
+                {NO_TENANT_REASON}
+                <InfoTip label="Why re-queue, cancel and upload are not offered">
+                  Re-queue and cancel load the row under the caller&apos;s own tenant, and an
+                  upload needs one to own the chunks. This session has none, so the backend
+                  refuses all three. They belong on the tenant&apos;s own portal.
+                </InfoTip>
+              </span>
+            ) : null}
             <p className="ml-auto text-xs text-muted-foreground">
               {load.status === 'loading' ? (
                 'Reading the queue…'
@@ -367,7 +396,9 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
                   Detail
                 </Th>
                 <Th>Log</Th>
-                <Th className="text-right">Action</Th>
+                {/* The column itself goes, not just its buttons: a column of stated
+                    absences is still a column promising a control. */}
+                {canWrite ? <Th className="text-right">Action</Th> : null}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -412,29 +443,31 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
                         />
                       )}
                     </td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {TERMINAL.has(row.status) ? (
-                        <RowAction
-                          icon={RotateCcw}
-                          label="Re-queue"
-                          hint={`job ${row.id}`}
-                          busy={busy === row.id}
-                          onClick={() => void act(row.id, 'requeue')}
-                        />
-                      ) : (
-                        <RowAction
-                          icon={XCircle}
-                          label="Cancel"
-                          hint={`job ${row.id}`}
-                          busy={busy === row.id}
-                          onClick={() => void act(row.id, 'cancel')}
-                        />
-                      )}
-                    </td>
+                    {canWrite ? (
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        {TERMINAL.has(row.status) ? (
+                          <RowAction
+                            icon={RotateCcw}
+                            label="Re-queue"
+                            hint={`job ${row.id}`}
+                            busy={busy === row.id}
+                            onClick={() => void act(row.id, 'requeue')}
+                          />
+                        ) : (
+                          <RowAction
+                            icon={XCircle}
+                            label="Cancel"
+                            hint={`job ${row.id}`}
+                            busy={busy === row.id}
+                            onClick={() => void act(row.id, 'cancel')}
+                          />
+                        )}
+                      </td>
+                    ) : null}
                   </tr>
                   {openJob === row.id && row.document_id !== null ? (
                     <tr>
-                      <td colSpan={8} className="bg-surface-2/40 p-3">
+                      <td colSpan={canWrite ? 8 : 7} className="bg-surface-2/40 p-3">
                         <IngestLog documentId={row.document_id} token={token} />
                       </td>
                     </tr>
@@ -447,15 +480,19 @@ export function JobsView({ token }: JobsViewProps): ReactElement {
       </DataPanel>
 
       {/* The front door and the corpus, side by side beneath the queue: an upload
-          is what puts a document into it, and `documents` is what came out. */}
-      <div className="grid items-start gap-4 xl:grid-cols-2">
-        <UploadPanel
-          token={token}
-          onUploaded={() => {
-            void refresh()
-            setCorpusKey((n) => n + 1)
-          }}
-        />
+          is what puts a document into it, and `documents` is what came out. The
+          front door is withheld from an untenanted operator — `POST /documents`
+          refuses it — so the corpus, which reads fine, takes the full width. */}
+      <div className={cn('grid items-start gap-4', canWrite && 'xl:grid-cols-2')}>
+        {canWrite ? (
+          <UploadPanel
+            token={token}
+            onUploaded={() => {
+              void refresh()
+              setCorpusKey((n) => n + 1)
+            }}
+          />
+        ) : null}
         <CorpusPanel
           token={token}
           reloadKey={corpusKey}
@@ -538,6 +575,7 @@ export function JobsMount(): ReactElement {
   // bearer, and hold it back until the persisted session has been restored.
   const { session, hydrated } = useAuth()
   const [deep, setDeep] = useState(false)
+  const canWrite = canWriteJobs(session?.tenantId ?? null)
 
   if (!hydrated) {
     return (
@@ -556,10 +594,21 @@ export function JobsMount(): ReactElement {
           actions={
             <>
               <InfoTip label="How re-queue and cancel behave">
-                Re-queueing passes admission control — the in-flight cap and the budget
-                pre-authorisation — and a refusal is shown with the reason it carried, never
-                queued out of sight. Cancel signals the orchestrator and records who asked, on
-                the row.
+                {canWrite ? (
+                  <>
+                    Re-queueing passes admission control — the in-flight cap and the budget
+                    pre-authorisation — and a refusal is shown with the reason it carried,
+                    never queued out of sight. Cancel signals the orchestrator and records who
+                    asked, on the row.
+                  </>
+                ) : (
+                  <>
+                    Re-queue, cancel and upload all act as the caller&apos;s own tenant, and
+                    this session has none — so they are not offered here rather than offered
+                    and refused. The queue itself is every tenant&apos;s, which is the platform
+                    operator&apos;s view of it.
+                  </>
+                )}
               </InfoTip>
               <button
                 type="button"
@@ -573,7 +622,7 @@ export function JobsMount(): ReactElement {
             </>
           }
         />
-        <JobsView token={session?.token ?? null} />
+        <JobsView token={session?.token ?? null} tenantId={session?.tenantId ?? null} />
         {/* §7.10 is an aggregation over exactly the rows this page lists — worker
             liveness, per-stage timings, the dependency table and everything it
             states it cannot measure. It is nine panels, so it is behind a

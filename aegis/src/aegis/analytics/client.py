@@ -153,6 +153,33 @@ class SupersetClient:
                 action=START_SUPERSET,
             ) from exc
 
+    def _invalidate_service_session(self) -> None:
+        """Drop the cached service JWT and its CSRF token so the next call re-logs in.
+
+        Both are cleared together because they are one session: a CSRF token is minted
+        against the service JWT, so keeping the CSRF value after discarding the JWT
+        would send the next login's request with the previous session's token.
+        """
+        self._service_token = ""
+        self._csrf_token = ""
+        self._service_token_expires_at = 0.0
+
+    @staticmethod
+    def _session_went_stale(response: HttpResponse) -> bool:
+        """Whether this refusal is the cached session having expired under us.
+
+        The service token is cached for a fixed window because Superset does not report
+        its lifetime (see :meth:`service_token`), so the cache can outlive the session
+        it names — Superset restarting, its secret rotating, or the guessed window
+        simply being too long. Superset answers such a request 401/403, and 422 when
+        FAB fails to *verify* the token rather than to authorise it.
+
+        These are the codes worth one silent re-login. A refusal that is genuinely about
+        permission answers the same way the second time and is then raised as normal, so
+        retrying costs one round trip and never converts a real refusal into a success.
+        """
+        return response.status_code in (401, 403, 422)
+
     @staticmethod
     def _detail(response: HttpResponse) -> str:
         """Superset's own error text, when it sent one worth repeating."""
@@ -302,18 +329,30 @@ class SupersetClient:
         rls = guest_token_rls(scope, column=self._config.tenant_column)
         user = guest_user(scope)
         resource_uuid = board.embedded_uuid
-        service = await self.service_token()
-        response = await self._request(
-            "POST",
-            GUEST_TOKEN_PATH,
-            token=service,
-            csrf=self._csrf_token,
-            json={
-                "user": user,
-                "resources": [{"type": "dashboard", "id": resource_uuid}],
-                "rls": [dict(clause) for clause in rls],
-            },
-        )
+        mint_payload = {
+            "user": user,
+            "resources": [{"type": "dashboard", "id": resource_uuid}],
+            "rls": [dict(clause) for clause in rls],
+        }
+
+        async def _mint() -> HttpResponse:
+            service = await self.service_token()
+            return await self._request(
+                "POST",
+                GUEST_TOKEN_PATH,
+                token=service,
+                csrf=self._csrf_token,
+                json=mint_payload,
+            )
+
+        response = await _mint()
+        # One silent re-login on a stale cached session. Without it a service token that
+        # expired early takes every board on the analytics screen down together — the
+        # page issues ~18 of these in parallel, so a single stale cache is a screen-wide
+        # outage that lasts until the fixed cache window elapses, not a single slow tile.
+        if self._session_went_stale(response):
+            self._invalidate_service_session()
+            response = await _mint()
         if response.status_code >= 400:
             raise SupersetRejectedError(
                 "Superset refused to mint a guest token for this board.",
@@ -357,10 +396,24 @@ class SupersetClient:
         payload = chart_data_payload(
             board, scope, tenant_column=self._config.tenant_column, window=window
         )
-        token = await self.guest_token(board, scope)
-        response = await self._request(
-            "POST", CHART_DATA_PATH, guest_token=token, csrf=self._csrf_token, json=payload
-        )
+        async def _query() -> HttpResponse:
+            token = await self.guest_token(board, scope)
+            return await self._request(
+                "POST",
+                CHART_DATA_PATH,
+                guest_token=token,
+                csrf=self._csrf_token,
+                json=payload,
+            )
+
+        response = await _query()
+        # The guest token is minted from the service session, so a stale session reaches
+        # this call as a refused *guest* token. Re-mint once against a fresh login rather
+        # than reporting the tenant's chart as broken; ``guest_token`` does its own
+        # single retry, so the two together are bounded at one re-login.
+        if self._session_went_stale(response):
+            self._invalidate_service_session()
+            response = await _query()
         if response.status_code >= 400:
             raise SupersetRejectedError(
                 f"Superset refused the query behind '{board.title}'.",

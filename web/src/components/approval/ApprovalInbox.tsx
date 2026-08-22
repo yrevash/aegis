@@ -12,10 +12,10 @@ import {
   Timer,
   XCircle,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 
 import { ConsentStatement, GateReceipt, ProposedAction } from '@/components/approval/ApprovalCard'
-import { readApproval } from '@/components/approval/approvalActions'
+import { decisionQuestion, readApproval } from '@/components/approval/approvalActions'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { Card } from '@/components/ui/Card'
@@ -920,6 +920,21 @@ function WaitingGate({
   const consentId = `gate-consent-${row.id}`
   const persona = personaLabel(row.persona)
   const headline = view.actions[0]?.name ?? row.action
+  /** The decision awaiting confirmation on this gate, or null. */
+  const [pending, setPending] = useState<ApprovalDecision | null>(null)
+  /** Focus moves to the commit button when the question opens, so the keyboard is
+      aimed at the thing being confirmed rather than at the row behind it. */
+  const commitRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (pending != null) commitRef.current?.focus()
+  }, [pending])
+
+  // A gate that stops being decidable (the sweeper took it, a refresh landed) must not
+  // leave a live question on screen for a decision that can no longer be made.
+  useEffect(() => {
+    if (!row.decidable) setPending(null)
+  }, [row.decidable])
 
   return (
     <article
@@ -1060,30 +1075,87 @@ function WaitingGate({
               <Gavel className="size-3.5 shrink-0" aria-hidden />
               What approving authorises
             </p>
-            <ConsentStatement id={consentId} view={view} className="mt-1.5 text-[0.82rem]" />
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <Button
-                aria-describedby={consentId}
-                disabled={!row.decidable || busy}
-                onClick={() => onDecide('approve')}
-              >
-                {busy ? (
-                  <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-                ) : (
-                  <CheckCircle2 className="size-4" aria-hidden />
-                )}
-                {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
-              </Button>
-              <Button
-                variant="outline"
-                className="border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
-                aria-describedby={consentId}
-                disabled={!row.decidable || busy}
-                onClick={() => onDecide('reject')}
-              >
-                <XCircle className="size-4" aria-hidden /> Reject
-              </Button>
-            </div>
+            {/* While the question is up it *is* the consent sentence, and a more specific
+                one — it names the calls rather than counting them. Two sentences saying
+                the same thing at the same moment is the text bomb this surface is trying
+                not to be. Nothing loses its accessible description: the sentence only
+                described the two arm buttons, which are not on screen while it is gone. */}
+            {pending == null && (
+              <ConsentStatement id={consentId} view={view} className="mt-1.5 text-[0.82rem]" />
+            )}
+            {/*
+              **Both decisions ask once, and the question names the calls.** Approving
+              executes a real tool action against a real system and rejecting ends a
+              parked run; neither can be taken back from this screen, and both used to
+              be one click in a list where the row under the cursor moves as the SLA
+              order re-sorts. The two-step is the shape the destructive controls
+              elsewhere use (`memoryctl/FactManager`, `memoryctl/RetentionPanel`): a
+              sentence naming what happens, a coloured commit, and "Keep waiting".
+            */}
+            {pending == null ? (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <Button
+                  aria-describedby={consentId}
+                  disabled={!row.decidable || busy}
+                  onClick={() => setPending('approve')}
+                >
+                  {busy ? (
+                    <Loader2
+                      className="size-4 animate-spin motion-reduce:animate-none"
+                      aria-hidden
+                    />
+                  ) : (
+                    <CheckCircle2 className="size-4" aria-hidden />
+                  )}
+                  {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
+                  aria-describedby={consentId}
+                  disabled={!row.decidable || busy}
+                  onClick={() => setPending('reject')}
+                >
+                  <XCircle className="size-4" aria-hidden /> Reject
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-3 flex min-w-0 flex-col gap-2">
+                <p role="alert" className="text-[0.82rem] leading-relaxed break-words text-foreground">
+                  {decisionQuestion(pending, view, ownerLabel(row.tenant_id))}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    ref={commitRef}
+                    size="sm"
+                    variant="destructive"
+                    className={cn(
+                      pending === 'approve' && 'bg-ok text-white hover:bg-ok/90',
+                    )}
+                    disabled={busy}
+                    onClick={() => {
+                      setPending(null)
+                      onDecide(pending)
+                    }}
+                  >
+                    {busy ? (
+                      <Loader2
+                        className="size-3.5 animate-spin motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                    ) : pending === 'approve' ? (
+                      <CheckCircle2 className="size-3.5" aria-hidden />
+                    ) : (
+                      <XCircle className="size-3.5" aria-hidden />
+                    )}
+                    {pending === 'approve' ? 'Yes, run it' : 'Yes, reject it'}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setPending(null)}>
+                    Keep waiting
+                  </Button>
+                </div>
+              </div>
+            )}
             {/* The server's own rule, on its own line. Squeezed into the button row it
                 had ~40px of column at 390px and read one word to a line. */}
             {row.blocked_reason && (

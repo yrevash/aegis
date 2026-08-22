@@ -128,3 +128,35 @@ export function readApproval(approval: AuthorisingGate): ApprovalView {
     summary: summaryFor(actions.length),
   }
 }
+
+/**
+ * The question asked before a decision is committed, naming the calls it decides.
+ *
+ * The queue's Approve and Reject used to act on a single click, in a list that re-sorts
+ * itself as SLA deadlines pass. Approving *executes a real tool action* against a real
+ * system and rejecting ends a parked run; neither can be taken back from that screen, so
+ * both now ask once — and the question has to name what it is deciding, not "this gate".
+ * A confirmation that says "are you sure?" about an unnamed quantity is the thing this
+ * codebase already refuses to build (`memoryctl/RetentionPanel`).
+ *
+ * It lives here, beside {@link summaryFor}, for the reason the summary does: a second
+ * spelling of the sentence that records what a person authorised is a second thing to
+ * keep true.
+ *
+ * @param decision - Which button was pressed.
+ * @param view - The gate, already read into the calls it authorises.
+ * @param owner - Whose gate it is, in words — "Tenant #2", "Aegis itself".
+ * @returns One sentence, naming every call the decision covers.
+ */
+export function decisionQuestion(
+  decision: 'approve' | 'reject',
+  view: ApprovalView,
+  owner: string,
+): string {
+  const calls = view.actions.map((a) => a.name).join(', ')
+  // An unreadable gate still gets a question; it just cannot name a call in it.
+  const named = calls === '' ? 'this gate' : calls
+  return decision === 'approve'
+    ? `Run ${named} now on ${owner}? It cannot be recalled.`
+    : `Reject ${named}? The parked run ends and none of them run.`
+}

@@ -117,6 +117,7 @@ function attachmentOf(overrides) {
     filename: 'meter.png',
     mimeType: 'image/png',
     blocked: false,
+    blockedReason: '',
     summary: 'A utility meter reading 04182.',
     coverage: 'Hygiene, injection screen, image PII and the output rails all ran.',
     previewUrl: 'data:image/png;base64,AA==',
@@ -135,6 +136,34 @@ test('a refused image never reaches the model, and the turn still says why', () 
   const verdict = attachmentVerdict(refused)
   assert.equal(verdict.blocked, true)
   assert.equal(verdict.detail, refused.coverage, 'the chip repeats the server, never a paraphrase')
+})
+
+test('a refusal says WHICH refusal it was, in the rail’s own words', () => {
+  // The pipeline distinguishes "your image was flagged" from "we could not check your
+  // image and failed closed", and the console could not: the reason never reached the
+  // wire, so both rendered as "Image refused" plus a list of controls. They need
+  // different actions from whoever is looking at the screen.
+  const flagged = attachmentVerdict(
+    attachmentOf({
+      blocked: true,
+      summary: '',
+      blockedReason:
+        'Image blocked by the injection screen: the image carries an instruction for the model.',
+    }),
+  )
+  const unscreenable = attachmentVerdict(
+    attachmentOf({
+      blocked: true,
+      summary: '',
+      blockedReason:
+        'Image blocked because the injection screen could not run: no vision completer configured.',
+    }),
+  )
+  assert.match(flagged.reason, /blocked by the injection screen/)
+  assert.match(unscreenable.reason, /could not run/)
+  assert.notEqual(flagged.reason, unscreenable.reason)
+  // And a screened image carries no refusal to render.
+  assert.equal(attachmentVerdict(attachmentOf()).reason, '')
 })
 
 test('a screened image travels as labelled evidence beside the question', () => {
