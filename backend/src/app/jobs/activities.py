@@ -519,6 +519,23 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
                 spec.heartbeat_seconds,
             )
         except GatewayBudgetExceededError as exc:
+            # The tenant learns their cap stopped work *now*, by name, instead of
+            # discovering it as a red row in the jobs table later. This is the emit point
+            # the notification subsystem's fourth requirement names: a budget refusal in
+            # the middle of a background stage is precisely the failure nobody is
+            # watching a screen for. ``finish_ingest`` will also emit its ``job.failed``
+            # a moment later — two alerts, deliberately, because "the ingest failed" and
+            # "you are over your cap" are different facts and only one of them tells the
+            # reader what to change.
+            from app.data.notifications import (  # noqa: PLC0415 - lazy, as the other emit is
+                notify_budget_exceeded,
+            )
+
+            await notify_budget_exceeded(
+                tenant_id=inp.tenant_id,
+                reason=str(exc),
+                because=f"the {inp.stage!r} stage of document {inp.document_id}",
+            )
             # A first-class job outcome, not a surprise on the invoice (task 9.2). The
             # tenant hit a cap *during* the stage — `@tenant_activity` binds their
             # governance context, so the gateway enforces on every call a handler makes
@@ -586,6 +603,86 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
         stage=inp.stage,
         document_id=inp.document_id,
         committed=bool(result.rowcount),
+    )
+
+
+#: Where a tenant goes to look at a finished (or failed) ingest. The role segment is the
+#: tenant-admin portal's, which is the surface that actually renders the jobs table; a
+#: console reading these for another role rewrites the segment for the viewer, because
+#: the emitter knows which *screen* is right and cannot know who will read it.
+_JOBS_HREF = "/app/tenant_admin/jobs"
+
+
+async def _notify_ingest_finished(
+    status: JobStatus,
+    *,
+    tenant_id: int | None,
+    workflow_id: str,
+    document_id: int,
+    filename: str | None,
+    chunk_count: int | None,
+    completed_stage: str | None,
+    error: str | None,
+) -> None:
+    """Tell the tenant their ingest is over — durably, and without ever failing it.
+
+    Split out of :func:`finish_ingest` so the activity's own body stays the three writes
+    it is about. Everything here is presentation: which of the two kinds this terminal
+    status is, and one sentence naming the file.
+
+    **It cannot fail the ingest.** :func:`app.data.notifications.emit` opens its own
+    session, catches everything, and returns ``None`` on failure; this function adds no
+    statement that could raise before reaching it. That property is the reason the alert
+    is worth having at all — an ingest that succeeded and was then recorded as failed
+    because a notification insert hit a lock would be a strictly worse platform than one
+    with no alerts.
+
+    ``CANCELLED`` is reported as ``job.failed`` at ``warning`` rather than earning a
+    sixth kind. The wire vocabulary is small on purpose (the frontend switches on it),
+    and "the run did not produce a corpus" is the fact a reader acts on; the title says
+    *cancelled* so nobody has to infer it from a severity.
+
+    Args:
+        status: The terminal :class:`aegis.jobs.JobStatus` just committed.
+        tenant_id: The owning tenant — the notification's scope.
+        workflow_id: The orchestrator execution id; the idempotency key is built on it.
+        document_id: The document this ingest was for.
+        filename: The document's filename, for the sentence a human reads.
+        chunk_count: Chunks written, or ``None`` if the run never reached ``chunk``.
+        completed_stage: The furthest stage committed, named when the run failed.
+        error: The failure reason, when there is one.
+    """
+    # Lazy: keeps ``app.data`` off this module's import path, which the worker imports
+    # long before any host wiring exists.
+    from app.data.notifications import emit  # noqa: PLC0415
+
+    name = filename or f"document {document_id}"
+    if status is JobStatus.SUCCEEDED:
+        kind, severity, title = "job.succeeded", "info", "Ingest finished"
+        body = (
+            f"{name} ingested — {chunk_count} chunk(s)."
+            if chunk_count
+            else f"{name} ingested."
+        )
+    elif status is JobStatus.CANCELLED:
+        kind, severity, title = "job.failed", "warning", "Ingest cancelled"
+        body = f"{name} was cancelled at the {completed_stage or 'first'} stage."
+    else:
+        kind, severity, title = "job.failed", "critical", "Ingest failed"
+        where = f" at the {completed_stage} stage" if completed_stage else ""
+        body = f"{name} failed{where}: {error or 'no reason recorded'}."
+    await emit(
+        tenant_id=tenant_id,
+        kind=kind,
+        severity=severity,
+        title=title,
+        body=body,
+        entity_ref=f"document:{document_id}",
+        href=_JOBS_HREF,
+        # One terminal alert per workflow execution, enforced by the unique index rather
+        # than by trusting the guard above. A re-upload of the same bytes is a *new*
+        # workflow, so it is a new alert — which is right: the tenant asked again.
+        dedupe_key=f"{kind}:workflow:{workflow_id}",
     )
 
 
@@ -682,7 +779,16 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
                 Document.status.is_distinct_from(status),
             )
             .values(status=status, error=inp.error)
-            .returning(Document.id, Document.chunk_count, Document.completed_stage)
+            .returning(
+                Document.id,
+                Document.chunk_count,
+                Document.completed_stage,
+                # Returned for the notification below, and only for it: the alert has to
+                # name the file ("policy-4.pdf ingested") rather than its row id, and
+                # reading it in a second SELECT would be a second read of a row this
+                # UPDATE has already locked.
+                Document.filename,
+            )
         )
     ).first()
     closed = row[1] if row is not None else None
@@ -707,6 +813,31 @@ async def finish_ingest(inp: FinishInput, *, session: AsyncSession) -> None:
             document_id=inp.document_id,
             job_id=job_id,
             status=status.value,
+            completed_stage=row[2],
+            error=inp.error,
+        )
+        # ...and the tenant's alert, under the SAME guard. This is the headline case the
+        # notification subsystem exists for: a hundred documents queued, and the answer
+        # to "are they done yet" arriving instead of being polled for.
+        #
+        # Inside ``if row is not None`` and nowhere else, for the reason the whole
+        # activity is built around: a Temporal activity can commit and die before the
+        # orchestrator records its completion, then replay in a fresh worker. The guarded
+        # ``UPDATE`` matches nothing on that replay, so this emits nothing — the same
+        # rule that stops ``run_finished`` recording a second ending. The emitter carries
+        # a ``dedupe_key`` on top of that, so even a caller that got the guard wrong
+        # cannot write two rows.
+        #
+        # ``await``ed rather than fire-and-forget: :func:`app.data.notifications.emit`
+        # swallows every failure it can have, so awaiting it cannot fail this activity,
+        # and a task spawned here would outlive the worker's activity scope.
+        await _notify_ingest_finished(
+            status,
+            tenant_id=inp.tenant_id,
+            workflow_id=inp.workflow_id,
+            document_id=inp.document_id,
+            filename=row[3],
+            chunk_count=closed,
             completed_stage=row[2],
             error=inp.error,
         )

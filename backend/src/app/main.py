@@ -33,6 +33,7 @@ from app.api.routes_health import mount as _mount_health
 from app.api.routes_llmops import mount as _mount_llmops
 from app.api.routes_mcp import mount as _mount_mcp
 from app.api.routes_memory import mount as _mount_memory
+from app.api.routes_notifications import mount as _mount_notifications
 from app.api.routes_pipelines import mount as _mount_pipelines
 from app.api.routes_redteam import mount as _mount_redteam
 from app.api.routes_reports import mount as _mount_reports
@@ -110,6 +111,12 @@ _mount_mcp(router)
 # opens no connection until a request asks it to, and the input rail it screens an
 # authored body with is the platform's already-bound one.
 _mount_skills(router)
+
+# The alert surface — the durable notification inbox plus the SSE stream that pushes
+# into it. Same shape and the same idempotent mount. It opens no connection at import:
+# the Redis subscription behind the stream is started by the lifespan below (and lazily
+# by the first publish, so a worker process that never runs a lifespan still gets it).
+_mount_notifications(router)
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +503,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         jwt_expire_minutes=settings.jwt_expire_minutes,
     )
 
+    # The notification fan-out. Started here so the Redis subscription exists before the
+    # first SSE connection rather than being raced into life by it, and so a Redis that
+    # is down says so once, at boot, instead of once per stream. It never raises: an
+    # unreachable Redis degrades the bus to in-process delivery and logs exactly what
+    # that costs (see :mod:`app.notifications`). The rows stay durable in Postgres
+    # either way, which is why this is not a startup gate.
+    from app.notifications import get_bus
+
+    notification_bus = get_bus()
+    await notification_bus.start()
+
     # The SLA sweeper (§1.3): an in-process asyncio task — no cron, no Docker — that
     # expires past-deadline approvals and auto-rejects HIGH-risk ones. Only runs with
     # the real stores; the offline "lite" demo and tests skip it.
@@ -588,6 +606,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await exits.aclose()
         warm_task.cancel()
+        # Cancel the bus's Redis reader before the loop closes. Without this the task is
+        # torn down by interpreter exit and asyncio reports "Task was destroyed but it is
+        # pending" — a shutdown-time diagnostic that looks like a defect and is not.
+        await notification_bus.stop()
         if (
             sweeper_task is not None
             or memory_sweeper_task is not None

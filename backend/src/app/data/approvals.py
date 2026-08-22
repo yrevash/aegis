@@ -90,6 +90,84 @@ def to_row(row: Approval) -> ApprovalRow:
     )
 
 
+#: Where an approver goes to decide a gate. The tenant-admin portal's approvals section
+#: — the surface that renders the inbox; a console reading this for another role rewrites
+#: the role segment for the viewer.
+_APPROVALS_HREF = "/app/tenant_admin/approvals"
+
+
+async def _notify_approval_awaiting(row: Approval) -> None:
+    """Announce a gate that is now waiting on a human. Never fails the enqueue.
+
+    Targets the **tenant** (``user_id`` left ``None``), not the user whose run raised the
+    gate. That is the whole point of a gate: the person who needs to see it is an
+    approver, and the requester is by construction not authorised to decide it.
+
+    A ``HIGH``-risk gate is ``critical`` rather than ``warning``, because the SLA policy
+    treats it differently too — an unanswered HIGH-risk gate is auto-**rejected** when
+    its deadline passes (decision D5), so the cost of not looking is a refused action
+    rather than a lapsed one.
+
+    Args:
+        row: The freshly inserted ``PENDING`` approval.
+    """
+    from .notifications import emit
+
+    await emit(
+        tenant_id=row.tenant_id,
+        kind="approval.awaiting",
+        severity="critical" if row.risk is RiskLevel.HIGH else "warning",
+        title="Approval needed",
+        body=(
+            f"{row.action} is waiting on a decision "
+            f"({row.risk.value} risk, by {_iso_utc(row.sla_deadline) or 'no deadline'})."
+        ),
+        entity_ref=f"approval:{row.id}",
+        href=_APPROVALS_HREF,
+        # The approval id is already the gate's idempotency key (``enqueue_approval`` is
+        # documented idempotent on it), so it is the right dedupe key here too: one
+        # announcement per gate, whatever re-enters the node.
+        dedupe_key=f"approval.awaiting:{row.id}",
+    )
+
+
+async def _notify_sla_auto_decided(row: Approval, new_status: ApprovalStatus) -> None:
+    """Announce that the sweeper, not a person, decided a gate.
+
+    Only for the ``REJECTED`` half. An ``EXPIRED`` row is a gate that lapsed with no
+    consequence beyond itself, and alerting on every one of them would fill a tenant's
+    bell with the routine end of gates nobody meant to answer. A HIGH-risk
+    auto-**reject** is different: an action the platform was asked to take was refused,
+    by a timer, with no human in the loop — the audit row this sweeper already writes
+    (``approval.sla_expired``) records it, and an audit row is something you find only if
+    you go looking.
+
+    Args:
+        row: The approval the sweeper just transitioned.
+        new_status: What it was transitioned to.
+    """
+    if new_status is not ApprovalStatus.REJECTED:
+        return
+    from .notifications import emit
+
+    await emit(
+        tenant_id=row.tenant_id,
+        kind="sla.auto_decided",
+        severity="critical",
+        title="Auto-rejected on SLA",
+        body=(
+            f"{row.action} was auto-rejected: a {row.risk.value}-risk action passed its "
+            "SLA deadline undecided, and the safe answer to an unanswered gate is no."
+        ),
+        entity_ref=f"approval:{row.id}",
+        href=_APPROVALS_HREF,
+        # A row can only make this transition once (the sweep is guarded on PENDING), so
+        # the id alone is the key; it is here so a second sweeper process racing the
+        # first cannot produce a second alert either.
+        dedupe_key=f"sla.auto_decided:{row.id}",
+    )
+
+
 @dataclass(frozen=True)
 class ApprovalResolution:
     """The outcome of an optimistic decision transition on one approval.
@@ -200,7 +278,18 @@ async def enqueue_approval(
         session.add(row)
         await session.commit()
         await session.refresh(row)
-        return to_row(row)
+    # After the commit and outside the session block, deliberately. A gate that exists
+    # and nobody knows about is the pull-only failure this platform had everywhere, and
+    # a gate that was *announced* and then rolled back would be worse. ``emit`` opens its
+    # own transaction and swallows every failure it can have, so this line can neither
+    # fail the enqueue nor delay the run past its own commit — see
+    # :func:`app.data.notifications.emit`.
+    #
+    # The early return above (``existing is not None``) never reaches here, so a
+    # re-emitted gate from a resumed run announces nothing a second time. The emitter's
+    # ``dedupe_key`` on the approval id is the backstop for that, not the mechanism.
+    await _notify_approval_awaiting(row)
+    return to_row(row)
 
 
 async def get_approval(approval_id: str) -> ApprovalRow | None:
@@ -440,6 +529,9 @@ async def sweep_expired(now: datetime | None = None) -> list[SweepAction]:
     """
     cutoff = now or _now()
     actions: list[SweepAction] = []
+    #: The transitions to announce once the transaction has committed. Collected rather
+    #: than emitted inline — see the loop after ``session.commit()``.
+    decided: list[tuple[Approval, ApprovalStatus]] = []
     async with get_sessionmaker()() as session:
         await set_tenant_scope(session, None)
         stmt = select(Approval).where(
@@ -497,7 +589,15 @@ async def sweep_expired(now: datetime | None = None) -> list[SweepAction]:
                     id=row.id, run_id=row.run_id, status=new_status, risk=row.risk
                 )
             )
+            decided.append((row, new_status))
         await session.commit()
+    # After the commit, and outside the session block: the audit row above is written in
+    # the sweeper's transaction because a decision and its record must not be able to
+    # disagree, but a notification is neither — it is a copy, and one published for a
+    # transition that then rolled back would be an alert about something that did not
+    # happen. Each call swallows its own failures, so a sweeper cycle cannot die here.
+    for row, new_status in decided:
+        await _notify_sla_auto_decided(row, new_status)
     return actions
 
 

@@ -238,6 +238,15 @@ _TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "approvals",
     "chat_messages",
     "chat_sessions",
+    # The durable alert inbox (``app.data.models.Notification``). A row belongs to one
+    # tenant and optionally to one user inside it; a NULL-tenant row is a platform
+    # notice no tenant is entitled to read, so the standard (NULL-is-invisible)
+    # predicate is right and this is deliberately NOT a platform baseline. The
+    # user-narrowing half — ``user_id IS NULL OR user_id = :me`` — is not expressible
+    # here (this policy knows the tenant GUC and nothing about a user), which is
+    # precisely why ``app.data.notifications.scope_predicate`` carries it at the
+    # application layer and every reader of this table goes through that one function.
+    "notifications",
 )
 
 #: Tables where a row with a NULL ``tenant_id`` is a **platform baseline every tenant

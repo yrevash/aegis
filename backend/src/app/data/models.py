@@ -52,7 +52,7 @@ from aegis.governance.models import (
 from aegis.jobs.models import Chunk
 from aegis.ops.models import EvalResult, PromptStatus, PromptVersion
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Index, String, Text, func
+from sqlalchemy import ForeignKey, Index, String, Text, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = [
@@ -69,6 +69,9 @@ __all__ = [
     "Chunk",
     "EvalResult",
     "JsonB",
+    "Notification",
+    "NotificationKind",
+    "NotificationSeverity",
     "PromptStatus",
     "PromptVersion",
     "Tenant",
@@ -291,6 +294,143 @@ class McpServer(Base):
     created_by: Mapped[str | None] = mapped_column(String(255), default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+class NotificationKind(StrEnum):
+    """The vocabulary of things worth telling somebody about, unprefixed by any UI.
+
+    A ``<subject>.<event>`` name rather than a screen name, because the alert outlives
+    the panel that first rendered it: ``job.succeeded`` still means the same thing when
+    the jobs page is redesigned, and ``ingest_toast`` would not.
+
+    Stored as a plain ``String`` column, **not** a native Postgres enum, and that is the
+    one schema decision in this table that is worth arguing. A native enum would need
+    :func:`aegis.governance.schema.reconcile_enum_values` to run before any row carrying
+    a new label could be written — the exact ``invalid input value for enum`` failure
+    that ``run_status.REJECTED`` produced — and a notification is the last thing that
+    should be able to fail a boot or a write. The Python enum is therefore the
+    *vocabulary* (what emitters spell, what the frontend switches on) and the column is
+    the *storage*: adding a kind is one line here and no DDL anywhere.
+    """
+
+    JOB_SUCCEEDED = "job.succeeded"
+    JOB_FAILED = "job.failed"
+    APPROVAL_AWAITING = "approval.awaiting"
+    BUDGET_EXCEEDED = "budget.exceeded"
+    SLA_AUTO_DECIDED = "sla.auto_decided"
+
+
+class NotificationSeverity(StrEnum):
+    """How loudly a notification should read. Three values, deliberately.
+
+    ``info`` is "this finished", ``warning`` is "this needs you", ``critical`` is "this
+    stopped work". A fourth level would have to be explained on every screen that
+    renders a colour for it, and the emitters here have never needed one.
+    """
+
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class Notification(Base):
+    """One durable alert for a tenant, and optionally for one user inside it.
+
+    **Durable first, pushed second.** This row is the notification; the SSE frame that
+    :mod:`app.notifications.bus` publishes is a *copy in flight*. A user who was
+    disconnected when their ingest finished sees it on their next load because the row
+    is here — an alert that only ever existed in a process's memory is not an alert, it
+    is a toast. That ordering is enforced in :func:`app.data.notifications.emit`, which
+    commits before it publishes and publishes nothing when the commit wrote no row.
+
+    Scoping, and the two columns that carry it
+    ------------------------------------------
+
+    ``tenant_id`` is who owns it. ``user_id`` is optional and narrows it further:
+    ``NULL`` means *everyone in that tenant* (an ingest finished, a gate is waiting),
+    and a value means *this person only*. The read predicate is therefore
+    ``tenant_id = :scope AND (user_id IS NULL OR user_id = :me)`` — see
+    :func:`app.data.notifications.scope_predicate`, which is the single place it is
+    written and is used by the list, the count, both mark-read writes **and** the SSE
+    filter, so a stream cannot disagree with the list about what a principal may see.
+
+    Like ``Approval`` and the chat tables, ``tenant_id`` is a plain indexed column with
+    no cross-package DDL foreign key to ``aegis.governance``'s ``tenants``; the
+    ``tenant_isolation`` RLS policy plus the app-level predicate provide the isolation.
+    ``notifications`` is registered in
+    :data:`aegis.governance.rls._TENANT_SCOPED_TABLES` in the same change that declares
+    it — this deployment runs the **fail-open** predicate, so the app-level filter is
+    load-bearing and the policy is the second lock, not the only one.
+
+    Why ``dedupe_key`` is a UNIQUE column and not a Python ``if``
+    ------------------------------------------------------------
+
+    Every emitter in this platform can run twice. A Temporal activity commits and dies
+    before the orchestrator records its completion, and replays in a fresh worker; the
+    SLA sweeper runs every cycle; a re-uploaded document takes the same code path as a
+    new one. Each call site *does* carry its own guard (``finish_ingest`` emits only
+    when its ``WHERE status IS DISTINCT FROM`` matched a row), but a guard in the caller
+    protects only that caller, and "two rows claiming one event" is not a state this
+    table should be able to hold at all. So the second alert is refused by a unique
+    index and an ``ON CONFLICT DO NOTHING``: the insert reports no row, and
+    :func:`app.data.notifications.emit` publishes nothing, so a replay produces neither
+    a duplicate row nor a duplicate frame.
+
+    ``NULL`` is allowed and is not constrained (Postgres permits many NULLs in a unique
+    index), which is the honest default for an event that genuinely happens repeatedly
+    and should be reported every time.
+    """
+
+    __tablename__ = "notifications"
+
+    #: A uuid4 hex, minted by the emitter. A string rather than a serial because it is
+    #: the SSE frame's identity too, and the frame is built before the transaction that
+    #: would allocate a sequence value has committed.
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    #: ``NULL`` == everyone in the tenant. See the class docstring.
+    user_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    kind: Mapped[str] = mapped_column(String(64), index=True)
+    severity: Mapped[str] = mapped_column(String(16), default=NotificationSeverity.INFO)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    body: Mapped[str] = mapped_column(Text(), default="")
+    #: ``job:21`` / ``document:23`` / ``approval:seed-gate-northwind`` — what the alert
+    #: is *about*, in a form the frontend can key on without parsing prose out of
+    #: ``body``. Indexed because "is there already an alert about this document" is the
+    #: one question anything other than the inbox asks of this table.
+    entity_ref: Mapped[str | None] = mapped_column(String(255), default=None, index=True)
+    #: The in-app path to open, e.g. ``/app/tenant_admin/jobs``. Server-chosen rather
+    #: than derived in the browser: the emitter is the only thing that knows which
+    #: surface actually shows this entity, and a client-side mapping table would be a
+    #: second copy of the routing that silently rots.
+    href: Mapped[str | None] = mapped_column(String(512), default=None)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
+    #: ``NULL`` until read. A timestamp rather than a boolean because "when did they see
+    #: it" is a question the boolean cannot answer and costs nothing to keep.
+    read_at: Mapped[datetime | None] = mapped_column(default=None)
+    #: The idempotency key described in the class docstring, or ``NULL`` for an event
+    #: that should be reported every time it happens.
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), default=None)
+
+    __table_args__ = (
+        # The inbox query, exactly: "this tenant's notifications, newest first". The
+        # composite index is what keeps that a range scan rather than a sort over the
+        # tenant's whole history once a busy tenant has months of rows.
+        Index("ix_notifications_tenant_created", "tenant_id", "created_at"),
+        # The unread badge's query, and the ``read-all`` write's WHERE clause. Partial
+        # on PostgreSQL — read rows are the overwhelming majority and are never in the
+        # answer, so indexing them would be paying for the rows the query excludes.
+        Index(
+            "ix_notifications_unread",
+            "tenant_id",
+            "user_id",
+            postgresql_where=text("read_at IS NULL"),
+        ),
+        # The idempotency guarantee. UNIQUE rather than merely indexed: see the class
+        # docstring — the emitter's ``ON CONFLICT DO NOTHING`` is what turns a replay
+        # into a no-op, and it has nothing to conflict *on* without this.
+        Index("ux_notifications_dedupe", "dedupe_key", unique=True),
+    )
 
 
 # ``Chunk`` / ``EvalResult`` / ``PromptStatus`` / ``PromptVersion`` are imported from

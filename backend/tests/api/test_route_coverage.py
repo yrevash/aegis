@@ -17,7 +17,12 @@ This module relates them, from the real artefacts on both sides:
   decides — per portal — which component a section actually mounts (the ``[role]``
   URL segment carries the *fine* role since §7.2, so there are five portals, not
   four, and the two admin tiers no longer share one);
-* the **call graph** from each mounted component through its imports to the
+* the **portal shell** ``web/src/app/app/[role]/layout.tsx``, which every portal wraps
+  every section in. It is a second reachability root because the chrome is a surface:
+  the notification bell lives in ``Topbar``, is on screen in all five portals, and
+  belongs to no section at all — so an analysis rooted only at section components would
+  report the most reachable endpoints in the product as reachable from nowhere;
+* the **call graph** from each of those roots through its imports to the
   ``web/src/lib/api`` functions that name endpoint paths and methods.
 
 The last piece is a static analysis of TypeScript, so it is deliberately narrow
@@ -69,6 +74,12 @@ _WEB_SRC = _REPO_ROOT / "web" / "src"
 _API_DIR = _WEB_SRC / "lib" / "api"
 _PORTAL_TS = _WEB_SRC / "lib" / "portal.ts"
 _SECTION_PAGE = _WEB_SRC / "app" / "app" / "[role]" / "[section]" / "page.tsx"
+#: The portal **shell** — the layout wrapped around every section of every portal
+#: (``Sidebar`` + ``Topbar``). A second reachability root beside the section components:
+#: an endpoint called from the chrome is reachable from every portal at once, and was
+#: previously reachable from none of the roots this analysis walked. See the
+#: ``portal_endpoints`` fixture.
+_PORTAL_LAYOUT = _WEB_SRC / "app" / "app" / "[role]" / "layout.tsx"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -591,15 +602,36 @@ UNREACHABLE_BY_DESIGN: dict[tuple[str, str], str] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+#: The pseudo-section standing for the portal **shell** — the layout every portal wraps
+#: its sections in. Not a real section id, and spelled so it can never collide with one.
+_SHELL = "«shell»"
+
+
 @pytest.fixture(scope="module")
 def portal_endpoints() -> dict[tuple[str, str], set[Endpoint]]:
-    """Endpoints reachable from each ``(role, section)`` the portals expose."""
+    """Endpoints reachable from each ``(role, section)`` the portals expose.
+
+    Plus one entry per role for the **shell** (:data:`_SHELL`). The analysis walks the
+    import graph from each *section component*, and that was the whole story while every
+    surface lived inside a section — but the chrome is a surface too. The notification
+    bell lives in ``Topbar``, which ``app/[role]/layout.tsx`` renders around every
+    section of every portal, so its endpoints are reachable from more places than any
+    section's and were reachable from none of the roots this fixture used to have.
+
+    Allowlisting them instead would have been the wrong repair twice over: it would have
+    recorded "deliberately unreachable" about a surface that is on screen in every
+    portal, and it would have left the *next* thing wired into the chrome — a global
+    search, a presence indicator — invisible to this analysis in the same way.
+    """
     assert _WEB_SRC.is_dir(), f"web sources missing at {_WEB_SRC}"
     api = _api_endpoints_by_export()
     components = _page_component_modules()
     console = _console_sections()
+    assert _PORTAL_LAYOUT.is_file(), f"portal shell missing at {_PORTAL_LAYOUT}"
+    shell = _endpoints_reachable_from(_PORTAL_LAYOUT, api)
     out: dict[tuple[str, str], set[Endpoint]] = {}
     for role, sections in _role_sections().items():
+        out[(role, _SHELL)] = set(shell)
         for section in sections:
             component = _component_for(role, section, console)
             assert component is not None, (

@@ -822,6 +822,17 @@ async def refuse_if_over_budget(
     try:
         await enforce_governance(tenant_id=tenant_id, user_id=user_id)
     except BudgetExceededError as exc:
+        # The tenant learns their cap bound, in the bell, at most once an hour — see
+        # :func:`app.data.notifications.notify_budget_exceeded` for why the rate limit is
+        # a unique index rather than a timer. The 429 already tells *this* caller; the
+        # notification tells the administrator who can raise the cap, who is generally
+        # not holding the refused request. It cannot fail this refusal: the emitter
+        # swallows everything and the ``raise`` below is unconditional either way.
+        from app.data.notifications import notify_budget_exceeded
+
+        await notify_budget_exceeded(
+            tenant_id=tenant_id, user_id=user_id, reason=f"{exc}.", because=because
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"{exc}. {because}",

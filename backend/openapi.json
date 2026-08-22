@@ -5216,6 +5216,42 @@
         "title": "MLExplainResponse",
         "type": "object"
       },
+      "MarkAllReadResponse": {
+        "additionalProperties": false,
+        "description": "Body for ``POST /notifications/read-all``.",
+        "properties": {
+          "marked": {
+            "description": "How many rows this call flipped; 0 is normal.",
+            "title": "Marked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "marked"
+        ],
+        "title": "MarkAllReadResponse",
+        "type": "object"
+      },
+      "MarkReadResponse": {
+        "additionalProperties": false,
+        "description": "Body for ``POST /notifications/{id}/read``.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "read": {
+            "default": true,
+            "title": "Read",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "MarkReadResponse",
+        "type": "object"
+      },
       "MemoryEvent": {
         "description": "Long-term memory recall summary for one turn (glass-box; purely additive).\n\nEmitted once by the ``recall_memory`` node when long-term memory is active (a\n``session_id`` and resolved subject are present). It surfaces how much durable\ncontext was recalled into the working-memory block — nothing on the single-shot\npath, where the node is a silent pass-through. A client that does not know this\nvariant simply ignores it, so it is fully back-compatible.",
         "properties": {
@@ -6694,6 +6730,109 @@
           "needs"
         ],
         "title": "NotRecorded",
+        "type": "object"
+      },
+      "NotificationRow": {
+        "additionalProperties": false,
+        "description": "One durable alert, exactly as the bell renders it.\n\nDeliberately snake_case on the wire — this is the contract the frontend was built\nagainst in parallel, and an alias layer here would have made the two disagree on the\none field a reader actually keys on.\n\nThe row carries **no ``tenant_id`` and no ``user_id``**. Those are how the server\ndecides who may see it (:func:`app.data.notifications.scope_predicate`); a client\nthat could read them is a client that could be tempted to filter with them, and a\nfilter in the browser is not a boundary.",
+        "properties": {
+          "body": {
+            "description": "One sentence naming the thing, e.g. 'policy-4.pdf ingested — 12 chunks.'",
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 UTC.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "entity_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it is about: 'job:21', 'document:23'.",
+            "title": "Entity Ref"
+          },
+          "href": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The in-app path to open, e.g. '/app/tenant_admin/jobs'.",
+            "title": "Href"
+          },
+          "id": {
+            "description": "Opaque row id; also the SSE frame's identity.",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "description": "job.succeeded | job.failed | approval.awaiting | budget.exceeded | sla.auto_decided — a <subject>.<event> name, never a screen name.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 UTC, or null.",
+            "title": "Read At"
+          },
+          "severity": {
+            "description": "info | warning | critical.",
+            "title": "Severity",
+            "type": "string"
+          },
+          "title": {
+            "description": "The short line, e.g. 'Ingest finished'.",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "severity",
+          "title",
+          "body",
+          "created_at"
+        ],
+        "title": "NotificationRow",
+        "type": "object"
+      },
+      "NotificationsResponse": {
+        "additionalProperties": false,
+        "description": "Body for ``GET /notifications`` — the page, and the badge.\n\n``unread`` is counted over the caller's whole scope with no ``LIMIT``, not over\n``rows``. A badge that saturated at the page size would under-report exactly when a\ntenant most needed it to be right.",
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "unread": {
+            "default": 0,
+            "description": "Unread notifications in the caller's scope.",
+            "title": "Unread",
+            "type": "integer"
+          }
+        },
+        "title": "NotificationsResponse",
         "type": "object"
       },
       "OpsActivePromptResponse": {
@@ -15694,6 +15833,171 @@
         "summary": "List Models",
         "tags": [
           "console"
+        ]
+      }
+    },
+    "/v1/notifications": {
+      "get": {
+        "description": "Return the caller's notifications, newest first, with the unread total.\n\n``require_auth`` rather than a role guard: an alert is addressed to a principal, and\nevery role has work that finishes. The narrowing is the sealed scope, not the role.\n\nA tenant's rows are its own; a row targeted at one user is that user's alone. Both\nhalves come from :func:`app.data.notifications.scope_predicate` — see the module\ndocstring for why there is exactly one copy of it.",
+        "operationId": "get_notifications_v1_notifications_get",
+        "parameters": [
+          {
+            "description": "Return only unread rows (the count is unaffected).",
+            "in": "query",
+            "name": "unread_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Return only unread rows (the count is unaffected).",
+              "title": "Unread Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Maximum rows.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Maximum rows.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/v1/notifications/read-all": {
+      "post": {
+        "description": "Mark every unread notification in the caller's scope read.\n\nDeclared **above** ``/notifications/{id}/read`` for readability only — the two\ncannot collide (three path segments against two), but a reader scanning this file\nshould meet the literal path before the parameterised one.",
+        "operationId": "read_all_notifications_v1_notifications_read_all_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkAllReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read All Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/v1/notifications/stream": {
+      "get": {
+        "description": "Push notifications to this principal as they are written, over SSE.\n\nWhat arrives, and what does not\n-------------------------------\n\nOnly what is published **while this connection is held**. There is no replay on\nconnect: the backlog is ``GET /notifications``, which the frontend calls separately,\nand a stream that also replayed would double every alert on the load path and\nre-toast history on every reconnect.\n\nEach frame is ``event: notification`` with one :class:`NotificationRow` as its\n``data``. Between frames the stream emits an SSE **comment** every\n:data:`PING_SECONDS` seconds, so an idle connection keeps producing bytes and the\nproxies that close a quiet ``text/event-stream`` (nginx at 60s by default) do not.\nA comment is not a message: ``EventSource`` never surfaces it, so the heartbeat costs\nthe frontend nothing.\n\nOne opening ``event: ready`` frame reports which transport is behind this stream —\n``{\"mode\": \"redis\"}`` when notifications cross process boundaries, ``in-process``\nwhen Redis was unreachable and this connection can only hear what this interpreter\npublished. That is deliberately on the wire rather than only in a log: \"the alert\nnever arrived\" and \"the alert arrived in another process\" are the same symptom, and\nan operator holding the stream open can now tell them apart.\n\nThe scope is sealed before the generator is built\n-------------------------------------------------\n\n``tenant_id`` and ``user_id`` are resolved from the bearer token *here*, in the\nhandler, and closed over. Resolving them inside the loop would re-read a principal\nwhose token may since have been reissued with a different tenant; sealing them at\nconnect makes the stream's authority exactly the authority the connection was opened\nwith, and :func:`app.data.notifications.visible_to` applies it to every frame.",
+        "operationId": "stream_notifications_v1_notifications_stream_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stream Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/v1/notifications/{notification_id}/read": {
+      "post": {
+        "description": "Mark one notification read.\n\n**404, never 403, for a row outside the caller's scope.** A 403 would confirm that\nanother tenant's notification id is real, which is a working oracle for enumerating\nthem; \"no such notification\" is both true from this caller's point of view and\nuseless to an attacker. The scope terms live in the ``UPDATE``'s own ``WHERE`` (see\n:func:`app.data.notifications.mark_read`), so the wrong tenant's id matches nothing\nrather than being loaded and then refused.\n\nRaises:\n    HTTPException: 404 when no such notification exists in the caller's scope.",
+        "operationId": "read_notification_v1_notifications__notification_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "title": "Notification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Notification",
+        "tags": [
+          "notifications"
         ]
       }
     },
