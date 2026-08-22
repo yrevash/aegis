@@ -139,6 +139,45 @@ export function tally(components: ReadyComponent[]): Record<ComponentStatus, num
 }
 
 /**
+ * The order the health strip reads in, left to right.
+ *
+ * Not severity order. The strip is read as *the platform*, and a platform is
+ * mostly working: `up` anchors the left edge so the healthy mass keeps the same
+ * position every time an operator glances at it, and the exceptions accumulate
+ * from the right in the order they matter.
+ */
+export const VERDICT_ORDER = ['up', 'degraded', 'down', 'unknown', 'not_applicable'] as const
+
+/** One segment of the health strip: a verdict, how many wear it, what share that is. */
+export interface VerdictSlice {
+  status: ComponentStatus
+  count: number
+  /** `count / components.length`, 0..1. */
+  share: number
+}
+
+/**
+ * The health strip's segments — the tally as widths, in {@link VERDICT_ORDER}.
+ *
+ * **Only verdicts that actually occurred get a segment.** A zero-width slice for
+ * every state the platform is *not* in is the bar-chart spelling of zero-fill: it
+ * puts a red key on the legend of a platform with nothing red in it, and after a
+ * week of that an operator stops reading the legend. Nothing is invented and
+ * nothing is padded — the shares are counts over the real denominator, so they
+ * sum to 1 whenever there is anything to draw.
+ */
+export function verdictSplit(components: ReadyComponent[]): VerdictSlice[] {
+  const total = components.length
+  if (total === 0) return []
+  const counts = tally(components)
+  return VERDICT_ORDER.filter((status) => counts[status] > 0).map((status) => ({
+    status,
+    count: counts[status],
+    share: counts[status] / total,
+  }))
+}
+
+/**
  * The worker supervisor's five states, spelled out.
  *
  * `disabled` is **ready, not broken**: a deployment that never intended to run a

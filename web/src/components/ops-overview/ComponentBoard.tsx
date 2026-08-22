@@ -13,7 +13,8 @@ import {
 import Link from 'next/link'
 import type { ReactElement } from 'react'
 
-import { Receipt } from '@/components/primitives/Receipt'
+import { Figure } from '@/components/primitives/Figure'
+import { InfoTip } from '@/components/primitives/InfoTip'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import type { Signal } from '@/config/signals'
@@ -23,7 +24,7 @@ import {
   ago,
   categoryLabel,
   groupByCategory,
-  tally,
+  verdictSplit,
   type ComponentStatus,
   type ReadyComponent,
   type ReadyzResponse,
@@ -39,12 +40,59 @@ import {
  * established nothing, and an operator who learns that amber sometimes means "no
  * answer" stops trusting amber when it means "degraded".
  */
-const VERDICT: Record<ComponentStatus, { icon: LucideIcon; word: string; tone: Signal }> = {
-  up: { icon: CircleCheck, word: 'Up', tone: 'ok' },
-  down: { icon: OctagonX, word: 'Down', tone: 'block' },
-  degraded: { icon: TriangleAlert, word: 'Degraded', tone: 'risk' },
-  unknown: { icon: CircleHelp, word: 'Unknown', tone: 'neutral' },
-  not_applicable: { icon: CircleSlash, word: 'Not applicable', tone: 'neutral' },
+interface Verdict {
+  icon: LucideIcon
+  word: string
+  tone: Signal
+  /** The solid step, for a strip segment — a mark, never text. */
+  fill: string
+  /** The tile: a wash, a hairline and a 3px spine, all one hue. */
+  tile: string
+  /** The glyph's ink — the 700 step that is legible on the wash (DESIGN.md §2). */
+  ink: string
+}
+
+const VERDICT: Record<ComponentStatus, Verdict> = {
+  up: {
+    icon: CircleCheck,
+    word: 'Up',
+    tone: 'ok',
+    fill: 'bg-ok',
+    tile: 'border-ok/35 border-l-ok bg-ok/8',
+    ink: 'text-ok-ink',
+  },
+  down: {
+    icon: OctagonX,
+    word: 'Down',
+    tone: 'block',
+    fill: 'bg-block',
+    tile: 'border-block/45 border-l-block bg-block/10',
+    ink: 'text-block-ink',
+  },
+  degraded: {
+    icon: TriangleAlert,
+    word: 'Degraded',
+    tone: 'risk',
+    fill: 'bg-risk',
+    tile: 'border-risk/45 border-l-risk bg-risk/10',
+    ink: 'text-risk-ink',
+  },
+  unknown: {
+    icon: CircleHelp,
+    word: 'Unknown',
+    tone: 'neutral',
+    fill: 'bg-muted-foreground/45',
+    tile: 'border-border border-l-muted-foreground/60 bg-surface-2/60',
+    ink: 'text-muted-foreground',
+  },
+  not_applicable: {
+    icon: CircleSlash,
+    word: 'Not applicable',
+    tone: 'neutral',
+    fill: 'bg-muted-foreground/25',
+    tile: 'border-border border-l-border bg-surface-2/40',
+    ink: 'text-muted-foreground',
+  },
 }
 
 /** The status chip: glyph, word, tone — in that order, always all three. */
@@ -127,64 +175,136 @@ export function ReadinessVerdict({ data }: { data: ReadyzResponse }): ReactEleme
   )
 }
 
-/** One component: verdict, identity, how fresh the reading is, and its evidence. */
-function ComponentRow({
-  component,
-  now,
-  /** True when the banner above already carries this component's remediation text. */
-  detailShownAbove,
-}: {
-  component: ReadyComponent
-  now: number
-  detailShownAbove: boolean
-}): ReactElement {
-  const failingRequired = component.status === 'down' && component.required
+/**
+ * The health strip — the whole platform's up-versus-down as one bar.
+ *
+ * This is the mark the board leads with, and it exists because the fact an
+ * operator wants in the first half-second — *is anything broken* — was previously
+ * only recoverable by reading eight paragraphs and holding the tally in your head.
+ * Every width is a real count over the real denominator ({@link verdictSplit});
+ * nothing is padded and no verdict the platform is not currently in gets a
+ * segment, so the legend below only ever names states that actually occurred.
+ *
+ * The strip is `role="img"` with the tally spelled out, and each segment carries
+ * its word in the legend — the hue is the fast read, never the only one
+ * (DESIGN.md §2).
+ */
+function HealthStrip({ components }: { components: ReadyComponent[] }): ReactElement | null {
+  const slices = verdictSplit(components)
+  if (slices.length === 0) return null
+  const up = slices.find((s) => s.status === 'up')?.count ?? 0
+  const spoken = slices.map((s) => `${s.count} ${VERDICT[s.status].word.toLowerCase()}`).join(', ')
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3">
+      <p className="min-w-0 shrink-0">
+        <span className="eyebrow block">components up</span>
+        <Figure size="stat" className="text-foreground" label={`${up} of ${components.length} components up`}>
+          {up}/{components.length}
+        </Figure>
+      </p>
+      <div className="min-w-0 flex-1 basis-64 space-y-2">
+        <div
+          className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-surface-2"
+          role="img"
+          aria-label={`${components.length} components: ${spoken}`}
+        >
+          {slices.map((slice) => (
+            <span
+              key={slice.status}
+              className={cn('h-full first:rounded-l-full last:rounded-r-full', VERDICT[slice.status].fill)}
+              style={{ width: `${slice.share * 100}%` }}
+            />
+          ))}
+        </div>
+        <ul className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
+          {slices.map((slice) => {
+            const verdict = VERDICT[slice.status]
+            const Icon = verdict.icon
+            return (
+              <li key={slice.status} className="flex items-center gap-1.5">
+                <Icon className={cn('size-3.5 shrink-0', verdict.ink)} aria-hidden />
+                <span className="text-[0.8125rem] text-foreground">{verdict.word}</span>
+                <Figure className="text-muted-foreground">{slice.count}</Figure>
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One component as a tile: the glyph and hue you read at a glance, the name, and
+ * everything else one keystroke away.
+ *
+ * **Where the evidence went.** Each verdict used to carry its probe command as a
+ * line of monospace under it — eight of them, and the honesty that made Aegis
+ * worth showing was what made the panel unreadable. It is in the tile's
+ * {@link InfoTip} now, along with the component key, its category and whatever
+ * `detail` the server sent, reachable by hover *and* by keyboard focus. Nothing
+ * was deleted; it stopped being always-on.
+ *
+ * The status word stays on the tile face rather than moving into the tip, because
+ * DESIGN.md §2 does not let a hue carry a state on its own — the tint is the fast
+ * read and the glyph plus the word are what make it a fact.
+ */
+function ComponentTile({ component, now }: { component: ReadyComponent; now: number }): ReactElement {
+  const status = asStatus(component.status)
+  const verdict = VERDICT[status]
+  const Icon = verdict.icon
   return (
     <li
       className={cn(
-        'min-w-0 border-l-2 py-3 pl-3 first:pt-0 last:pb-0',
-        failingRequired ? 'border-l-block bg-block/5' : 'border-l-transparent',
+        'flex min-w-0 flex-col gap-1.5 rounded-md border border-l-[3px] p-3',
+        verdict.tile,
       )}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <StatusChip status={asStatus(component.status)} />
-        <span className="min-w-0 text-sm font-medium break-words text-foreground">{component.name}</span>
-        <span className="tabular font-mono text-xs text-muted-foreground">{component.key}</span>
-        <span
-          className={cn(
-            'tabular ml-auto shrink-0 font-mono text-xs',
-            failingRequired ? 'font-semibold text-block-ink' : 'text-muted-foreground',
-          )}
-        >
-          {component.required ? 'required' : 'optional'}
+      <div className="flex min-w-0 items-center gap-2">
+        <Icon className={cn('size-4 shrink-0', verdict.ink)} aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={component.name}>
+          {component.name}
         </span>
-        <span className="tabular shrink-0 font-mono text-xs text-muted-foreground">
-          {ago(component.measured_at, now)}
-        </span>
+        <InfoTip label={`Evidence for ${component.name}`} className="shrink-0">
+          <span className="block space-y-1.5">
+            <span className="tabular block font-mono text-foreground">
+              {component.key} · {categoryLabel(component.category)}
+            </span>
+            {component.detail == null ? null : <span className="block">{component.detail}</span>}
+            <span className="block">
+              <span className="text-foreground">Evidence:</span>{' '}
+              {component.evidence ?? 'no evidence reported by the probe'}
+            </span>
+          </span>
+        </InfoTip>
       </div>
-      {component.detail == null || detailShownAbove ? null : (
-        <p className="mt-1.5 min-w-0 text-pretty text-xs leading-relaxed break-words text-muted-foreground">
-          {component.detail}
-        </p>
-      )}
-      <Receipt
-        label="Evidence"
-        origin={component.evidence ?? "no evidence reported by the probe"}
-        variant="inline"
-        className="mt-1.5"
-      />
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="eyebrow truncate">
+          <span className={verdict.ink}>{verdict.word}</span>
+          <span className="text-muted-foreground"> · {component.required ? 'required' : 'optional'}</span>
+        </span>
+        <Figure className="shrink-0 text-muted-foreground">{ago(component.measured_at, now)}</Figure>
+      </div>
     </li>
   )
 }
 
 /**
- * The component health board — every dependency `/readyz` probes, grouped by the
- * category the server assigned it.
+ * The component health board — every dependency `/readyz` probes, as one strip and
+ * a grid of tiles.
  *
- * One panel rather than four, because the categories are uneven (four stores, one
- * substrate) and a grid of cards sized by their tallest member is mostly whitespace.
- * Inside a group the worst verdict sorts first; the groups themselves keep a fixed
- * order so a component stays where an operator learned to look for it.
+ * **What this replaced.** Eight stacked prose rows, each a verdict chip followed by
+ * a wrapped line of probe evidence, inside four category sections: roughly 730px of
+ * monospace on a 1440px screen to say "everything is up". The panel's own header
+ * already knew the answer — *8 components · 8 up* — and that fact was the one thing
+ * not drawn.
+ *
+ * Now the strip answers it in one mark, and the tiles answer *which* in eight.
+ * The tiles are one flat grid rather than four category sections: with four stores,
+ * one substrate, two model-plane components and one isolation check, per-category
+ * rows leave nine empty cells and three extra headings. The **order** is still
+ * category-then-severity ({@link groupByCategory}), so a component sits where an
+ * operator learned to look for it; the category itself is on the tile's tip.
  */
 export function ComponentBoard({
   data,
@@ -197,21 +317,12 @@ export function ComponentBoard({
   portal: string
   className?: string
 }): ReactElement {
-  const groups = groupByCategory(data.components)
-  const counts = tally(data.components)
-  const summary = [
-    `${counts.up} up`,
-    counts.degraded > 0 ? `${counts.degraded} degraded` : null,
-    counts.down > 0 ? `${counts.down} down` : null,
-    counts.unknown > 0 ? `${counts.unknown} unknown` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  const ordered = groupByCategory(data.components).flatMap((group) => group.rows)
 
   return (
     <Card className={cn('min-w-0', className)}>
       <CardHeader
-        eyebrow={`${data.components.length} components · ${summary}`}
+        eyebrow="aegis · GET /readyz"
         title="Component health"
         actions={
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -220,22 +331,13 @@ export function ComponentBoard({
           </div>
         }
       />
-      <CardBody className="flex min-w-0 flex-col gap-5 pt-0">
-        {groups.map(({ category, rows }) => (
-          <section key={category} className="min-w-0">
-            <h3 className="eyebrow mb-1">{categoryLabel(category)}</h3>
-            <ul className="min-w-0 divide-y divide-border/70">
-              {rows.map((component) => (
-                <ComponentRow
-                  key={component.key}
-                  component={component}
-                  now={now}
-                  detailShownAbove={data.failing.includes(component.key)}
-                />
-              ))}
-            </ul>
-          </section>
-        ))}
+      <CardBody className="flex min-w-0 flex-col gap-4 pt-0">
+        <HealthStrip components={data.components} />
+        <ul className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {ordered.map((component) => (
+            <ComponentTile key={component.key} component={component} now={now} />
+          ))}
+        </ul>
       </CardBody>
     </Card>
   )

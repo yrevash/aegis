@@ -198,6 +198,43 @@ A console, so density is a feature — but density is not the same as *text*.
   tooltip. If it explains a *number*, it is a `Receipt`. If it explains an absence, it is an
   `Absence` in the slot the number would occupy — one line, not three.
 
+### Status and health surfaces lead with a mark, and keep their evidence in a disclosure
+
+The rule above has one instance it kept losing, so it is written out. The devops readiness board
+rendered eight components as eight stacked prose rows — a verdict chip, then the probe's own
+command wrapped across two lines of monospace — which was **730px of text to say "everything is
+up"**, on a panel whose header already knew the answer. The one fact an operator wants in the first
+half-second was the only thing not drawn.
+
+**A state is drawn before it is described.** Any surface whose subject is up/down, pass/fail,
+healthy/degraded — a readiness board, a worker tile, a guardrail verdict, a stage in a pipeline —
+opens with a mark that answers *how many, and is anything wrong* at a glance: a proportional strip,
+a grid of status tiles, a bullet bar. A count in the card's eyebrow is a caption, not the visual.
+
+**Prose is never the default carrier of a state.** "Status word + explanatory paragraph" is the
+shape this rule deletes. A state is a **glyph, a word and a hue** — all three, never a hue alone
+(§2) — and the sentence saying what that state *means* goes in an `InfoTip`.
+
+**Per-item evidence moves one layer down; it is never dropped.** The receipt is the product (§5).
+Evidence relocated off the face must stay reachable by hover **and** keyboard focus, behind a
+trigger whose `aria-label` names what it belongs to (`Evidence for PostgreSQL`), with the visible
+`--blue-600` focus ring every interactive element owes. Hiding it is the redesign; losing it is a
+regression.
+
+**One mark per fact.** The strip answers *how many*, the tiles answer *which*. Two marks of one
+field is the duplication called out for the SBOM donut — do not add a gauge beside a bar that
+already carries the same number.
+
+**Zero is not drawn.** A segment or a legend key is emitted only for a state that actually
+occurred; a zero-width red slice on a platform with nothing red in it is the chart spelling of
+zero-fill, and a week of it teaches an operator to stop reading the legend. A verdict this build
+does not recognise counts as `unknown` and takes the neutral tone — never `up`. Both are asserted
+by `web/tests/devops/healthStrip.test.mjs`.
+
+**The one exception: an active failure keeps its remediation sentence on the page.** When a
+required component is genuinely down, the server's own `detail` stays visible in the failure
+banner. The moment it is needed is the wrong moment to make someone hover for it.
+
 ## 5. The receipt, still the signature
 
 Aegis refuses to assert anything without its origin — `Source:` lines, evidence on health rows,
@@ -353,7 +390,8 @@ For composition reference on the floating-card language:
 Do not ship: generic SaaS chrome · excess cards · glassmorphism · giant centred hero text on a
 product screen · repetitive equal-thirds sections · decorative icons duplicating their label ·
 pill overuse · cheap shadows · animation for its own sake · a colour that means nothing · **a
-paragraph where a chart, a badge or a tooltip would do.**
+paragraph where a chart, a badge or a tooltip would do** · **a status told in prose when a strip,
+a tile or a bar would tell it in one glance (§4).**
 
 ## 10. Workflow
 

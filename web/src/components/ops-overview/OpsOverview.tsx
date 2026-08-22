@@ -211,24 +211,33 @@ export function OpsOverview({ token }: { token: string | null }): ReactElement {
       ) : (
         <>
           <ReadinessVerdict data={readyz.data} />
-          <div className="grid min-w-0 items-start gap-4 lg:grid-cols-3">
-            <ComponentBoard data={readyz.data} now={now} portal={portal} className="lg:col-span-2" />
-            <div className="flex min-w-0 flex-col gap-4">
-              <WorkerBlock health={health} portal={portal} />
-              <LatencyBlock latency={latency} portal={portal} />
-            </div>
-          </div>
+          {/*
+            Full width, not two thirds. The board used to be a 730px column of probe
+            evidence that needed the height of the two tiles beside it; as a strip and a
+            grid of tiles it is ~230px, and eight tiles across the whole content width
+            fit on two rows instead of three. The tiles that used to sit beside it join
+            the band below, which also closes the empty third column that band had.
+          */}
+          <ComponentBoard data={readyz.data} now={now} portal={portal} />
         </>
       )}
 
-      {/* The three standing questions that are not readiness: what the caches are
-          doing, how far behind the dependencies are, and the one thing this screen
-          deliberately does not have. */}
-      <div className="grid min-w-0 items-start gap-4 lg:grid-cols-3">
+      {/* The four standing questions that are not readiness: whether the worker is
+          taking jobs, how slow runs are, what the caches are doing, and how far behind
+          the dependencies are. */}
+      {/* `items-start`, not stretched. These four carry very different amounts — a
+          worker state is a glyph and a word, a cache panel is five rows — and equal
+          heights buy an aligned row of receipts at the price of ~200px of void inside
+          the shortest card. A short card is allowed to be short. */}
+      <div className="grid min-w-0 items-start gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <WorkerBlock health={health} portal={portal} />
+        <LatencyBlock latency={latency} portal={portal} />
         <CacheBlock caches={caches} portal={portal} />
         <PatchBlock patches={patches} stack={stack} now={now} portal={portal} />
-        <LogsAbsence />
       </div>
+
+      {/* The one thing this screen deliberately does not have. */}
+      <LogsAbsence />
 
       <AuditBlock audit={audit} now={now} portal={portal} />
     </div>

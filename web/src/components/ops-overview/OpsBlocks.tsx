@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { DataPanel } from '@/components/ui/DataPanel'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/Table'
+import { SIGNALS } from '@/config/signals'
 import type { AuditLogResponse, PatchCheckResponse, StackResponse } from '@/lib/api/types'
 import type { CacheStatsResponse } from '@/lib/api/pipeline'
 import type { LatencyResponse } from '@/lib/api/platform'
@@ -120,24 +121,36 @@ export function WorkerBlock({ health, portal }: { health: Async<LivenessResponse
   )
 }
 
+/**
+ * The worker's state as a medallion, not a paragraph.
+ *
+ * This card was a badge with a sentence under it — *"The supervisor holds a live
+ * worker, so queued jobs are being taken."* — which is the shape DESIGN.md §4 sends
+ * to an `InfoTip`, and that is exactly where it is now. What is left on the face is
+ * a glyph in the state's own hue, the state's word at title size, and the receipt.
+ *
+ * The hue is never alone: the word sits beside it, because `ok`, `risk` and `block`
+ * fail CVD separation against each other by design.
+ */
 function WorkerBody({ health }: { health: LivenessResponse }): ReactElement {
   const known = WORKER_STATE[health.worker]
+  const signal = SIGNALS[known?.tone ?? 'neutral']
   return (
     <>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Badge tone={known?.tone ?? 'neutral'} className="gap-1.5">
-          <Cpu className="size-3.5" aria-hidden />
-          {known?.word ?? health.worker}
-        </Badge>
-        {/* The raw word only when it is one this console has no wording for —
-            printing `down` beside a badge that already says Down is restatement. */}
-        {known == null ? (
-          <span className="tabular font-mono text-xs text-muted-foreground">{health.worker}</span>
-        ) : null}
+      <div className="flex min-w-0 items-center gap-3">
+        <span className={cn('grid size-12 shrink-0 place-items-center rounded-full', signal.bg)} aria-hidden>
+          <Cpu className={cn('size-6', signal.text)} />
+        </span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-base leading-6 font-semibold text-foreground">
+            {known?.word ?? health.worker}
+          </span>
+          <InfoTip label="What this worker state means">
+            {known?.line ??
+              `The supervisor reported "${health.worker}", a state this console has no wording for.`}
+          </InfoTip>
+        </div>
       </div>
-      <p className="min-w-0 text-pretty text-sm leading-relaxed text-muted-foreground">
-        {known?.line ?? 'The supervisor reported a state this console has no wording for; the raw word is beside the badge.'}
-      </p>
       <Receipt
         className="mt-auto"
         origin={`${health.product} ${health.version} · status ${health.status}`}
@@ -175,25 +188,35 @@ function LatencyBody({ data }: { data: LatencyResponse }): ReactElement {
     )
   }
   const capacity = data.window_capacity
+  const percentiles = [
+    ['p50', data.run_p50_ms],
+    ['p95', data.run_p95_ms],
+    ['max', data.run_max_ms],
+  ] as const
+  // The shared scale is the largest reading present, so the three bars are read by
+  // aligned length against each other — the bullet form DESIGN.md §2 asks for when
+  // several bounded values sit side by side. A missing reading gets no bar at all
+  // rather than a zero-length one, which would draw "fast" where we mean "unknown".
+  const scale = percentiles.reduce((m, [, v]) => (v == null ? m : Math.max(m, v)), 0)
   return (
     <>
-      <dl className="grid min-w-0 grid-cols-3 gap-3">
-        {(
-          [
-            ['p50', data.run_p50_ms],
-            ['p95', data.run_p95_ms],
-            ['max', data.run_max_ms],
-          ] as const
-        ).map(([label, value]) => (
-          <div key={label} className="min-w-0">
-            <dt className="eyebrow">{label}</dt>
-            <dd className="mt-1">
-              {value == null ? (
-                <span className="text-xs text-muted-foreground italic">no reading</span>
+      <dl className="min-w-0 space-y-2">
+        {percentiles.map(([label, value]) => (
+          <div key={label} className="flex min-w-0 items-center gap-3">
+            <dt className="eyebrow w-7 shrink-0">{label}</dt>
+            <dd className="flex min-w-0 flex-1 items-center gap-3">
+              {value == null || scale <= 0 ? (
+                <span className="min-w-0 flex-1 text-xs text-muted-foreground italic">no reading</span>
               ) : (
-                <Figure size="stat" className="text-foreground">
-                  {fmtMs(value)}
-                </Figure>
+                <>
+                  <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+                    <span
+                      className="block h-full rounded-full bg-blue-600"
+                      style={{ width: `${Math.max(2, (value / scale) * 100)}%` }}
+                    />
+                  </span>
+                  <Figure className="shrink-0 text-foreground">{fmtMs(value)}</Figure>
+                </>
               )}
             </dd>
           </div>
