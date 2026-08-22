@@ -524,6 +524,8 @@ class _RecordingProjector:
         tenant_value: str | None,
         source: str,
         extractor: str,
+        entity_sources=None,  # noqa: ANN001 - Mapping[str, Sequence[str]]
+        relation_sources=None,  # noqa: ANN001
     ) -> ProjectionResult:
         """Record one projection and return the configured outcome."""
         self.calls.append(
@@ -533,6 +535,8 @@ class _RecordingProjector:
                 "tenant_value": tenant_value,
                 "source": source,
                 "extractor": extractor,
+                "entity_sources": dict(entity_sources or {}),
+                "relation_sources": dict(relation_sources or {}),
             }
         )
         if self._result is not None:
@@ -685,11 +689,12 @@ async def test_graph_indexes_the_extraction_for_the_arm_that_has_to_find_it(
     reports the count the vector store confirmed rather than the count it sent.
     """
     indexer = _RecordingGraphIndexer(GraphVectorResult(entities=2, relations=1))
+    projector = _RecordingProjector()
     set_ingest_dependencies(
         IngestDependencies(
             store=store,
             extractor=_FixedExtractor(),
-            project=_RecordingProjector(),
+            project=projector,
             index_graph=indexer,
         )
     )
@@ -708,6 +713,13 @@ async def test_graph_indexes_the_extraction_for_the_arm_that_has_to_find_it(
     # carries from the vector back to the node.
     assert "Transformer" in call["entity_sources"]
     assert all(call["entity_sources"].values()), "an entity was attributed to no chunk"
+    # And the *graph* is given the same attribution, because the graph's copy is the one
+    # that is read: ``_find_related_text_unit_from_entities`` takes ``source_id`` off the
+    # node, not off the vector payload. A stage that told only the vector store would
+    # leave the arm exactly where it was — matching entities and quoting nothing, which is
+    # the ``No entities with text chunks found`` this wiring removes.
+    assert projector.calls[0]["entity_sources"] == call["entity_sources"]
+    assert projector.calls[0]["relation_sources"] == call["relation_sources"]
     assert facts["entity_vectors"] == 2
     assert facts["relation_vectors"] == 1
     assert "graph_vectors" not in facts

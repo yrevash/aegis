@@ -68,7 +68,6 @@ from typing import Any
 from aegis.retrieval.graph_index import (
     DEFAULT_ENTITY_COLLECTION,
     DEFAULT_RELATION_COLLECTION,
-    GRAPH_FIELD_SEP,
     EntityPoint,
     RelationPoint,
     confirmed_point_keys,
@@ -147,23 +146,6 @@ def _unavailable() -> str | None:
     if not (settings.qdrant_url or "").strip():
         return "QDRANT_URL is not configured"
     return None
-
-
-def _sources(mapping: Mapping[Any, Sequence[str]] | None, key: Any) -> str:  # noqa: ANN401
-    """Return the ``<SEP>``-joined chunk ids for one element, or ``""``.
-
-    Args:
-        mapping: Chunk ids per element, or ``None`` when the caller could not attribute
-            them.
-        key: The element's key in that mapping.
-
-    Returns:
-        LightRAG's ``source_id`` string. Empty rather than invented — the field names
-        chunk ids, and anything else in that slot is a fabrication of shape.
-    """
-    if not mapping:
-        return ""
-    return GRAPH_FIELD_SEP.join(dict.fromkeys(mapping.get(key) or ()))
 
 
 async def _embedded(
@@ -246,17 +228,27 @@ async def publish_document_graph_vectors(
     # docstring: this is what makes the vdb's entity_name and the node's entity_id one
     # string rather than two that agree today.
     node_rows, edge_rows, _dropped = projection_rows(
-        entities, relations, tenant_value=tenant_value, source=source, extractor=extractor
+        entities,
+        relations,
+        tenant_value=tenant_value,
+        source=source,
+        extractor=extractor,
+        entity_sources=entity_sources,
+        relation_sources=relation_sources,
     )
     if not node_rows:
         return GraphVectorResult()
 
+    # ``source_id`` is read off the row rather than joined a second time here. The graph
+    # node and this payload have to carry the same string — the node's copy is what the
+    # reader walks — and two joins of the same mapping is one edit away from being two
+    # different strings.
     entity_points = [
         EntityPoint(
             name=row["entity_id"],
             description=row["description"],
             file_path=row["file_path"],
-            source_id=_sources(entity_sources, row["entity_id"]),
+            source_id=row["source_id"],
         )
         for row in node_rows
     ]
@@ -267,7 +259,7 @@ async def publish_document_graph_vectors(
             keywords=row["keywords"],
             description=row["description"],
             file_path=row["file_path"],
-            source_id=_sources(relation_sources, (row["src"], row["tgt"])),
+            source_id=row["source_id"],
         )
         for row in edge_rows
     ]
@@ -310,7 +302,9 @@ async def publish_document_graph_vectors(
             relations=None,
             attempted_entities=len(entity_points),
             attempted_relations=len(relation_points),
-            failed=str(exc),
+            # ``str(TimeoutError())`` is the empty string, and an empty reason reads
+            # as no reason at all. The class name is the least this can honestly say.
+            failed=str(exc) or type(exc).__name__,
         )
 
     logger.info(

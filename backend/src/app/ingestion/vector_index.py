@@ -56,6 +56,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.ingestion.chunk_kv import ChunkKVResult, kv_rows_from_points, publish_chunk_kv
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,11 @@ class DenseIndexReport:
             These need the ``embed`` stage; naming them keeps a partial rebuild from
             reading as a complete one.
         drift: The post-rebuild comparison of the two stores, when it was run.
+        kv: What LightRAG's chunk KV confirmed holding for the same rows, when it could
+            be asked. Reported beside the vectors rather than folded into them because
+            they answer different questions: the vectors are what the dense arm searches,
+            the KV is what the graph arm quotes from, and a corpus can have one and not
+            the other — which it did, for the whole of the corpus, at 0 rows.
     """
 
     documents: int = 0
@@ -98,6 +104,7 @@ class DenseIndexReport:
     published: int = 0
     unembedded: list[int] = field(default_factory=list)
     drift: IndexDrift | None = None
+    kv: ChunkKVResult | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return the report as plain data, for a job result or a CLI dump."""
@@ -109,6 +116,7 @@ class DenseIndexReport:
             "indexed": len(self.drift.present) if self.drift else None,
             "missing": len(self.drift.missing) if self.drift else None,
             "orphaned": len(self.drift.orphaned) if self.drift else None,
+            "chunk_kv": self.kv.rows if self.kv else None,
         }
 
 
@@ -213,6 +221,7 @@ async def chunk_points(
                     file_path=f"{owner}{_TENANT_TAG_SEP}{source}",
                     full_doc_id=str(record["document_id"]),
                     vector=vector,
+                    ordinal=int(meta.get("ordinal") or 0),
                 )
             )
     return points, unembedded, len(documents)
@@ -260,12 +269,21 @@ async def rebuild_dense_index(
     collection: str = DEFAULT_CHUNK_COLLECTION,
     dry_run: bool = False,
 ) -> DenseIndexReport:
-    """Replay the stored embeddings for a scope into the dense index.
+    """Replay the stored chunks for a scope into both of LightRAG's chunk stores.
 
     Idempotent by construction — every point id is derived from the chunk's
-    content-addressed key, so a second run overwrites the same rows and a corpus that has
-    not changed converges rather than growing. Nothing is deleted first, so there is no
-    window in which the tenant's index is empty.
+    content-addressed key and the KV's primary key is ``(workspace, that same key)``, so a
+    second run overwrites the same rows and a corpus that has not changed converges rather
+    than growing. Nothing is deleted first, so there is no window in which the tenant's
+    index is empty.
+
+    Two stores, because LightRAG reads chunks two ways and this platform had only ever
+    written one of them. The vectors answer the dense arm. The KV
+    (``lightrag_doc_chunks``) is what the graph arm resolves a matched entity's chunk ids
+    through, and it held 0 rows for every workspace — see :mod:`app.ingestion.chunk_kv`.
+    The KV outcome is reported separately and never folded into ``published``: they are
+    different stores and a run can legitimately populate one and be unable to reach the
+    other.
 
     Args:
         session: A session that can see the chunks in scope.
@@ -314,6 +332,15 @@ async def rebuild_dense_index(
     finally:
         if owned:
             qdrant.close()
+
+    # LightRAG's *other* chunk store, replayed from the same list. A corpus whose vectors
+    # are perfect and whose KV is empty is exactly what this deployment was: the graph arm
+    # matched entities and could not quote one line of them, because
+    # ``text_chunks.get_by_ids`` had nothing to return. Same rows, same keys, same tenant
+    # tag — see :mod:`app.ingestion.chunk_kv`.
+    report.kv = await publish_chunk_kv(
+        session, kv_rows_from_points(points), dry_run=dry_run
+    )
 
     logger.info(
         "dense index rebuild (tenant=%s document=%s dry_run=%s): %s; %d row(s) "

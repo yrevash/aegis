@@ -69,9 +69,13 @@ What ``source_id`` carries, and what it does not
 from. It is the field ``lightrag.operate._find_related_text_unit_from_entities`` walks to
 turn a matched entity back into passages — but it reads it off the *graph node*, not off
 this payload, so what is written here is provenance for the store rather than an input to
-retrieval. It is carried anyway, at the chunk granularity the field means: a document id
-in a chunk-id slot would be a fabrication of shape, so a caller that cannot attribute
-chunks passes an empty string rather than something of the wrong kind.
+retrieval. The node's copy is written by :mod:`app.ingestion.graph_projection` from the
+same mapping and in the same call, which is what makes the arm able to quote at all; the
+two are kept identical rather than merely consistent, because a payload that disagreed
+with the node would be a lie about where a vector came from that no query would ever
+surface. It is carried at the chunk granularity the field means: a document id in a
+chunk-id slot would be a fabrication of shape, so a caller that cannot attribute chunks
+passes an empty string rather than something of the wrong kind.
 
 The tenant travels the same way it does for chunks
 --------------------------------------------------

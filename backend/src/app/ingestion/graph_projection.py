@@ -49,6 +49,30 @@ whose owner cannot be established is deliberately shown to nobody. So:
   whoever writes last, and a description built from document text would hand that text to
   the other tenants who merged into the node.
 
+``source_id`` is what makes an entity quotable
+----------------------------------------------
+
+A node also carries ``source_id``: the ``<SEP>``-joined **chunk ids** the entity was
+extracted from. It is not decoration and it is not provenance for a human — it is the
+single field ``lightrag.operate._find_related_text_unit_from_entities`` walks to turn a
+matched entity into passages, and it reads it off the *node*, not off the vector payload.
+Written without it, the graph arm found entities and returned no text at all: the function
+logged ``No entities with text chunks found`` and returned ``[]``, and the arm contributed
+**0 candidates** to every merged ranking. That is measured on the live deployment, after
+the entity vectors were already correct — the arm reported ``Local query: 5 entites, 9
+relations`` in the same run.
+
+Like ``file_path``, a node's ``source_id`` **unions** its contributors, because a merged
+entity really was extracted from all of them and LightRAG merges it the same way. That
+does mean a node shared by two tenants points at both tenants' chunks — which is safe for
+the reason the whole arm is safe, and only for that reason: every chunk the lookup returns
+carries its own tenant-tagged ``file_path`` from the KV row
+(:mod:`app.ingestion.chunk_kv`), and
+:func:`aegis.retrieval.lightrag_backend._scoped_recall` drops the ones the asking tenant
+does not own. The union is what LightRAG's storage contract says; the tag on each passage
+is what enforces the boundary. An edge is single-owner already, so its ``source_id`` is
+simply set.
+
 **The write is verified.** Nothing here trusts that a Cypher statement that returned
 without raising wrote anything: the projection reads back the nodes and edges carrying
 *this* document's tag and reports what it actually found, which is the number the stage
@@ -60,7 +84,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -72,9 +96,11 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "GraphProjectionError",
     "ProjectionResult",
+    "joined_sources",
     "normalised_label",
     "project_document_graph",
     "projection_rows",
+    "tagged_source",
 ]
 
 #: LightRAG's joiner for a merged element's several sources. Restated, not imported: it
@@ -172,7 +198,7 @@ def _quoted(label: str) -> str:
     return label.replace("`", "``")
 
 
-def _tagged_source(source: str, tenant_value: str | None) -> str:
+def tagged_source(source: str, tenant_value: str | None) -> str:
     """Return the ``file_path`` value carrying this element's owning tenant.
 
     Args:
@@ -208,6 +234,28 @@ def normalised_label(label: str) -> str:
     return " ".join(label.split())
 
 
+def joined_sources(mapping: Mapping[Any, Sequence[str]] | None, key: Any) -> str:  # noqa: ANN401
+    """Return the ``<SEP>``-joined chunk ids for one graph element, or ``""``.
+
+    One function for both the node's ``source_id`` and the vector payload's, because the
+    two must be the same string: :mod:`app.ingestion.graph_vectors` reads this value off
+    the row this module built rather than joining a second time.
+
+    Args:
+        mapping: Chunk ids per element, or ``None`` when the caller could not attribute
+            them.
+        key: The element's key in that mapping.
+
+    Returns:
+        LightRAG's ``source_id`` string, duplicates collapsed in first-seen order. Empty
+        rather than invented — the field names chunk ids, and anything else in that slot
+        is a fabrication of shape that resolves to no passage.
+    """
+    if not mapping:
+        return ""
+    return _GRAPH_FIELD_SEP.join(dict.fromkeys(mapping.get(key) or ()))
+
+
 def projection_rows(
     entities: Sequence[Entity],
     relations: Sequence[Relation],
@@ -216,6 +264,8 @@ def projection_rows(
     source: str,
     extractor: str,
     created_at: int | None = None,
+    entity_sources: Mapping[str, Sequence[str]] | None = None,
+    relation_sources: Mapping[tuple[str, str], Sequence[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     """Shape one document's extraction into the Neo4j rows to write.
 
@@ -238,6 +288,11 @@ def projection_rows(
         source: The document's source name, as the ``index`` stage tags it.
         extractor: The extractor's honest ``name``.
         created_at: Unix seconds stamped on the written elements; defaults to now.
+        entity_sources: Chunk ids per normalised entity label. Becomes the node's
+            ``source_id`` — the only route from a matched entity to a passage (see the
+            module docstring). A caller that cannot attribute chunks passes ``None`` and
+            gets ``""``, which is an entity the arm can find and cannot quote.
+        relation_sources: Chunk ids per ``(src label, tgt label)`` pair, likewise.
 
     Returns:
         ``(node_rows, edge_rows, dropped_relations)``.
@@ -247,7 +302,7 @@ def projection_rows(
         if created_at is not None
         else int(datetime.now().timestamp())  # noqa: DTZ005 - LightRAG stores local
     )
-    file_path = _tagged_source(source, tenant_value)
+    file_path = tagged_source(source, tenant_value)
 
     labels: dict[str, str] = {}
     kinds: dict[str, str] = {}
@@ -267,6 +322,7 @@ def projection_rows(
             # No document prose, deliberately: see the module docstring.
             "description": f"{kinds[entity_id]} extracted by the {extractor} extractor",
             "file_path": file_path,
+            "source_id": joined_sources(entity_sources, label),
             "created_at": stamp,
             "extractor": extractor,
         }
@@ -293,6 +349,7 @@ def projection_rows(
                 "keywords": phrase,
                 "description": phrase,
                 "file_path": file_path,
+                "source_id": joined_sources(relation_sources, (src, tgt)),
                 "created_at": stamp,
                 "extractor": extractor,
             }
@@ -345,12 +402,20 @@ def _driver() -> Any:  # noqa: ANN401 - the neo4j AsyncDriver, imported lazily
 #: ``ON MATCH`` never overwrites another writer's classification and never *replaces* a
 #: ``file_path``: it appends this document's tag when it is not already there. Replacing
 #: it would silently transfer a node another tenant contributed to this one.
+#:
+#: ``source_id`` unions the same way, one *chunk id at a time* rather than one string at a
+#: time — ``row.source_id`` is itself a ``<SEP>``-joined list, so the membership test has
+#: to look inside it. ``reduce`` does that in plain Cypher; the alternative was APOC, which
+#: is a plugin this deployment must not require. Replacing instead of unioning would drop
+#: an earlier document's chunks from a shared entity, and the passage it can no longer
+#: quote is exactly the failure this field exists to end.
 _MERGE_NODES = """
 UNWIND $rows AS row
 MERGE (n:`{label}` {{entity_id: row.entity_id}})
 ON CREATE SET n.entity_type = row.entity_type,
               n.description = row.description,
               n.file_path = row.file_path,
+              n.source_id = row.source_id,
               n.created_at = row.created_at,
               n.{extractor_prop} = row.extractor
 ON MATCH SET  n.entity_type = coalesce(n.entity_type, row.entity_type),
@@ -359,6 +424,15 @@ ON MATCH SET  n.entity_type = coalesce(n.entity_type, row.entity_type),
                   WHEN n.file_path IS NULL OR n.file_path = '' THEN row.file_path
                   WHEN row.file_path IN split(n.file_path, $sep) THEN n.file_path
                   ELSE n.file_path + $sep + row.file_path
+              END,
+              n.source_id = CASE
+                  WHEN row.source_id IS NULL OR row.source_id = '' THEN n.source_id
+                  WHEN n.source_id IS NULL OR n.source_id = '' THEN row.source_id
+                  ELSE reduce(
+                      acc = n.source_id, s IN split(row.source_id, $sep) |
+                      CASE WHEN s = '' OR s IN split(acc, $sep)
+                           THEN acc ELSE acc + $sep + s END
+                  )
               END
 """
 
@@ -372,6 +446,7 @@ MERGE (a)-[r:{rel_type} {{{source_prop}: row.file_path}}]->(b)
 SET r.keywords = row.keywords,
     r.description = row.description,
     r.file_path = row.file_path,
+    r.source_id = row.source_id,
     r.weight = 1.0,
     r.created_at = row.created_at,
     r.{extractor_prop} = row.extractor
@@ -402,6 +477,8 @@ async def project_document_graph(
     tenant_value: str | None,
     source: str,
     extractor: str,
+    entity_sources: Mapping[str, Sequence[str]] | None = None,
+    relation_sources: Mapping[tuple[str, str], Sequence[str]] | None = None,
 ) -> ProjectionResult:
     """Write one document's extraction into the durable graph and verify it landed.
 
@@ -416,6 +493,10 @@ async def project_document_graph(
             corpus. This is what decides who may see the result; it is never omitted.
         source: The document's source name, tagged into ``file_path``.
         extractor: The extractor's honest ``name``, recorded on every element.
+        entity_sources: Chunk ids per normalised entity label, unioned into each node's
+            ``source_id``. Omitted, the entity is findable and not quotable — see the
+            module docstring for the measured symptom.
+        relation_sources: Chunk ids per ``(src label, tgt label)`` pair, likewise.
 
     Returns:
         What was attempted and what was verified present afterwards.
@@ -435,6 +516,8 @@ async def project_document_graph(
         tenant_value=tenant_value,
         source=source,
         extractor=extractor,
+        entity_sources=entity_sources,
+        relation_sources=relation_sources,
     )
     if not node_rows:
         return ProjectionResult(dropped_relations=dropped)

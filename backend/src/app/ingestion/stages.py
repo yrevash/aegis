@@ -83,11 +83,13 @@ from temporalio.exceptions import ApplicationError
 
 from app.config import get_settings
 from app.ingestion.artifacts import dumps_parsed, loads_parsed
+from app.ingestion.chunk_kv import ChunkKVRow, publish_chunk_kv
 from app.ingestion.graph_projection import (
     GraphProjectionError,
     ProjectionResult,
     normalised_label,
     project_document_graph,
+    tagged_source,
 )
 from app.ingestion.graph_vectors import GraphVectorResult
 from app.ingestion.store import DocumentStore, DocumentStoreProtocol
@@ -296,6 +298,8 @@ class IngestDependencies:
         tenant_value: str | None,
         source: str,
         extractor: str,
+        entity_sources: Mapping[str, Sequence[str]] | None = None,
+        relation_sources: Mapping[tuple[str, str], Sequence[str]] | None = None,
     ) -> ProjectionResult:
         """Write one document's extraction into the durable graph, and report what landed.
 
@@ -312,6 +316,11 @@ class IngestDependencies:
                 owner cannot be established is shown to nobody.
             source: The document's source name, as ``index`` tags it.
             extractor: The extractor's honest ``name``.
+            entity_sources: Chunk ids per normalised entity label, written onto the
+                node as LightRAG's ``source_id``. This is the field the ``local`` arm
+                walks to turn a matched entity into a passage; without it the arm
+                returns entities and contributes no candidates at all.
+            relation_sources: Chunk ids per ``(src label, tgt label)`` pair, likewise.
 
         Returns:
             What was attempted and what was verified present in the graph afterwards.
@@ -323,6 +332,8 @@ class IngestDependencies:
             tenant_value=tenant_value,
             source=source,
             extractor=extractor,
+            entity_sources=entity_sources,
+            relation_sources=relation_sources,
         )
 
     async def publish_graph_vectors(
@@ -1199,6 +1210,17 @@ async def index_stage(
     differently, and rebuilding the index later costs nothing (see
     :mod:`app.ingestion.vector_index`).
 
+    **LightRAG keeps chunks in two stores and this stage writes both.** The vectors are
+    what the dense arm searches. The KV (``lightrag_doc_chunks``) is what the *graph* arm
+    reads: a matched entity names chunk ids and nothing else, and
+    ``text_chunks.get_by_ids`` is the only thing that turns those ids into text. That
+    table held **0 rows for every workspace**, because the ``ainsert`` bypass skips the
+    one call in LightRAG that writes it — so the graph arm returned entities and
+    contributed no passages to any answer. See :mod:`app.ingestion.chunk_kv`; the write
+    runs on this session inside a ``SAVEPOINT`` and its outcome is reported rather than
+    raised, because the corpus is fully searchable without it and a wholly correct
+    document must not be discarded over a derived index.
+
     **The stage then reads the index back and refuses to report a success it cannot
     show.** It used to log ``"indexed 37 chunk(s)"`` on the strength of a publish call
     that had returned without raising, and record ``{"indexed": 37}`` onto the ingest log
@@ -1254,17 +1276,48 @@ async def index_stage(
             kind="IndexNotWritten",
         )
 
+    # The second of LightRAG's two chunk stores. The dense arm reads the vectors; the
+    # graph arm reads *this*, because a matched entity names chunk ids and nothing else,
+    # and ``text_chunks.get_by_ids`` is where those ids become text. It is written here
+    # rather than in ``graph`` because it is a fact about chunks, not about extraction: a
+    # chunk no entity happens to mention still belongs in the store, and the two writes
+    # then share one list and cannot disagree about which chunks exist.
+    kv = await publish_chunk_kv(
+        session,
+        [
+            ChunkKVRow(
+                key=chunk.id,
+                content=chunk.text,
+                # The same tag the graph carries and the dense point carries, from the
+                # one function that spells it — this is the field ``_scoped_recall``
+                # reads to decide whether a graph-arm passage may be shown at all.
+                file_path=tagged_source(str(chunk.metadata["source"]), owner_token),
+                full_doc_id=str(document_id),
+                chunk_order_index=chunk.ordinal,
+            )
+            for chunk in published
+        ],
+    )
+
     logger.info(
         "indexed %d chunk(s) of document %s; the index reports holding %s",
         len(published),
         document_id,
         "an unauditable number" if indexed is None else indexed,
     )
-    report_stage_facts(
-        indexed=len(published),
-        verified=indexed,
-        collection=owner_token,
-    )
+    facts: dict[str, Any] = {
+        "indexed": len(published),
+        "verified": indexed,
+        "collection": owner_token,
+        # What the KV confirmed holding, on the same rule as ``verified``: ``None`` means
+        # it could not be asked and is never rounded to zero.
+        "chunk_kv": kv.rows,
+    }
+    if kv.skipped is not None:
+        facts["chunk_kv_note"] = f"skipped: {kv.skipped}"
+    elif kv.failed is not None:
+        facts["chunk_kv_note"] = f"failed: {kv.failed}"
+    report_stage_facts(**facts)
     return {}
 
 
@@ -1307,6 +1360,15 @@ async def graph_stage(
     publishes the same entities and relations as vectors, shaped from the same
     ``projection_rows`` call as the graph itself so the two cannot name an entity
     differently.
+
+    Finding an entity is still not quoting one, and that gap was measured too. Both writes
+    above were correct and the arm *still* contributed 0 candidates to the merged ranking,
+    because ``lightrag.operate._find_related_text_unit_from_entities`` reads ``source_id``
+    off the matched **node** to learn which chunks the entity came from, and the nodes
+    carried none: it logged ``No entities with text chunks found`` and returned before it
+    read a single chunk. So the chunk ids accumulated below travel into both the node and
+    the vector payload, and the passages they name are written by the ``index`` stage into
+    LightRAG's chunk KV (:mod:`app.ingestion.chunk_kv`). Three stores and one set of ids.
 
     **And the stage refuses to report a success it cannot show.** It reports what each
     store confirms holding, not what was handed to it; a projection that was owed and did
@@ -1425,6 +1487,8 @@ async def graph_stage(
             tenant_value=tenant_metadata_value(owner),
             source=source,
             extractor=extractor.name,
+            entity_sources=entity_sources,
+            relation_sources=relation_sources,
         )
     except GraphProjectionError as exc:
         raise ApplicationError(str(exc), type="GraphNotProjected") from exc

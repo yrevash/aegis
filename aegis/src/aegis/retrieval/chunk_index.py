@@ -116,6 +116,11 @@ class ChunkPoint:
         full_doc_id: The owning document's id, as a string.
         vector: The embedding of record, read from ``chunks.embedding``. Never recomputed
             here.
+        ordinal: The chunk's position in its document. Not part of the dense payload —
+            LightRAG's chunk *vector* has no such field — but LightRAG's chunk **KV** does
+            (``chunk_order_index``), and the two stores must be built from one list rather
+            than from two reads that can disagree about which chunks exist. See
+            :mod:`app.ingestion.chunk_kv`.
     """
 
     key: str
@@ -123,6 +128,7 @@ class ChunkPoint:
     file_path: str
     full_doc_id: str
     vector: Sequence[float]
+    ordinal: int = 0
 
 
 @dataclass(frozen=True, slots=True)
