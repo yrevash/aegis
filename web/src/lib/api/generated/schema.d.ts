@@ -2116,6 +2116,18 @@ export interface paths {
          *     Trace-eval rows are keyed by ``run_id`` (one row per graded facet). Filter by
          *     ``run_id`` for a single run's breakdown; ``prompt_key`` narrows to rows whose detail
          *     carries it. ``limit`` is clamped to ``[1, 500]``. Degrades to empty when stores off.
+         *
+         *     **This route leaked every tenant's eval rows to every authenticated account.** It
+         *     carried only ``require_auth`` while its siblings ``/ops/params`` and
+         *     ``/ops/releases/pending`` guard ``admin, ai_team``, and its query had no tenant
+         *     clause. Postgres did not save it: this deployment installs the **fail-open**
+         *     ``tenant_isolation`` predicate by default, under which a session that binds no scope
+         *     reads *every* tenant's rows — so a missing clause is a live leak, not an empty list.
+         *     Measured before the fix: ``vertex.client``, a ``client``-role account in tenant 2,
+         *     read 364 rows of which **274 belonged to tenant 1**.
+         *
+         *     Both halves are needed. The guard alone would still hand one tenant's admin another
+         *     tenant's rows; the clause alone would still expose the surface to a ``client``.
          */
         get: operations["ops_evals_v1_ops_evals_get"];
         put?: never;

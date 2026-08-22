@@ -1,0 +1,194 @@
+[
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 390,
+    "detail": "llmops @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 390,
+    "detail": "llmops @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 390,
+    "detail": "llmops @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 834,
+    "detail": "llmops @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 834,
+    "detail": "llmops @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 834,
+    "detail": "llmops @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 1440,
+    "detail": "llmops @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 1440,
+    "detail": "llmops @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 1440,
+    "detail": "llmops @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 1920,
+    "detail": "llmops @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 1920,
+    "detail": "llmops @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "llmops",
+    "width": 1920,
+    "detail": "llmops @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 390,
+    "detail": "cache @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 390,
+    "detail": "cache @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 834,
+    "detail": "cache @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 834,
+    "detail": "cache @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 1440,
+    "detail": "cache @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 1440,
+    "detail": "cache @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 1920,
+    "detail": "cache @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "cache",
+    "width": 1920,
+    "detail": "cache @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 390,
+    "detail": "guardrails @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 390,
+    "detail": "guardrails @390: [aegis] request failed {route: GET /security/posture, status: 403}"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 390,
+    "detail": "guardrails @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 834,
+    "detail": "guardrails @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 834,
+    "detail": "guardrails @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 834,
+    "detail": "guardrails @834: [aegis] request failed {route: POST /redteam/run, status: 403}"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 1440,
+    "detail": "guardrails @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 1440,
+    "detail": "guardrails @1440: [aegis] request failed {route: GET /security/posture, status: 403}"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 1440,
+    "detail": "guardrails @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 1920,
+    "detail": "guardrails @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 1920,
+    "detail": "guardrails @1920: [aegis] request failed {route: GET /security/posture, status: 403}"
+  },
+  {
+    "kind": "console",
+    "section": "guardrails",
+    "width": 1920,
+    "detail": "guardrails @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  }
+]

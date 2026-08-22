@@ -15724,7 +15724,7 @@
     },
     "/v1/ops/evals": {
       "get": {
-        "description": "Return recent persisted trace-eval rows (the eval trend / per-step scores).\n\nTrace-eval rows are keyed by ``run_id`` (one row per graded facet). Filter by\n``run_id`` for a single run's breakdown; ``prompt_key`` narrows to rows whose detail\ncarries it. ``limit`` is clamped to ``[1, 500]``. Degrades to empty when stores off.",
+        "description": "Return recent persisted trace-eval rows (the eval trend / per-step scores).\n\nTrace-eval rows are keyed by ``run_id`` (one row per graded facet). Filter by\n``run_id`` for a single run's breakdown; ``prompt_key`` narrows to rows whose detail\ncarries it. ``limit`` is clamped to ``[1, 500]``. Degrades to empty when stores off.\n\n**This route leaked every tenant's eval rows to every authenticated account.** It\ncarried only ``require_auth`` while its siblings ``/ops/params`` and\n``/ops/releases/pending`` guard ``admin, ai_team``, and its query had no tenant\nclause. Postgres did not save it: this deployment installs the **fail-open**\n``tenant_isolation`` predicate by default, under which a session that binds no scope\nreads *every* tenant's rows — so a missing clause is a live leak, not an empty list.\nMeasured before the fix: ``vertex.client``, a ``client``-role account in tenant 2,\nread 364 rows of which **274 belonged to tenant 1**.\n\nBoth halves are needed. The guard alone would still hand one tenant's admin another\ntenant's rows; the clause alone would still expose the surface to a ``client``.",
         "operationId": "ops_evals_v1_ops_evals_get",
         "parameters": [
           {

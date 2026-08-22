@@ -57,8 +57,26 @@ function arg(name, fallback) {
   return i === -1 ? fallback : process.argv[i + 1]
 }
 
+/**
+ * Whose account each portal belongs to.
+ *
+ * `--user` used to default to `northwind.analyst` whatever `--portal` said, so
+ * `--portal platform_admin` with no `--user` signed in as an ai_team account, got
+ * redirected to the ai_team console, and shot **that** portal four times while writing
+ * the screenshots under `platform_admin/` and reporting "0 problems". A green sweep was
+ * therefore not evidence of anything. The portal now picks its own account, and the
+ * landed URL is asserted below so a redirect can never be mistaken for a pass.
+ */
+const PORTAL_USER = {
+  platform_admin: 'admin',
+  tenant_admin: 'northwind.admin',
+  ai_team: 'northwind.analyst',
+  devops: 'devops',
+  client: 'northwind.client',
+}
+
 const PORTAL = arg('portal', 'ai_team')
-const USER = arg('user', 'northwind.analyst')
+const USER = arg('user', PORTAL_USER[PORTAL] ?? 'northwind.analyst')
 const PASSWORD = arg('password', 'demo')
 const BASE = arg('base', 'http://localhost:3001')
 const OUT = arg('out', join('web', 'shots', PORTAL))
@@ -98,6 +116,16 @@ const page = await context.newPage()
 console.log(`signing in as ${USER} …`)
 try {
   await signIn(page)
+  const landed = new URL(page.url()).pathname
+  if (!landed.startsWith(`/app/${PORTAL}/`)) {
+    // A silent redirect is how the wrong portal gets swept under the right name.
+    console.error(
+      `sign-in as ${USER} landed on ${landed}, not /app/${PORTAL}/… — that account does ` +
+        `not own this portal, so the sweep would measure the wrong screens.`,
+    )
+    await browser.close()
+    process.exit(1)
+  }
   console.log(`signed in → ${page.url()}\n`)
 } catch (err) {
   console.error(`sign-in failed: ${err.message}`)

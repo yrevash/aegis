@@ -1681,7 +1681,7 @@ async def graph(
 @router.post("/ml/explain", response_model=MLExplainResponse, tags=["ml"])
 async def ml_explain(
     req: MLExplainRequest,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
     predict: Callable[[dict[str, Any]], MLExplainResponse] = Depends(get_ml_predict),
 ) -> MLExplainResponse:
     """Return a conformalised, SHAP-explained prediction for the given features.
@@ -3076,7 +3076,7 @@ def _iso_ts(ts: object) -> str | None:
 @router.get("/ops/prompts", response_model=OpsPromptsResponse, tags=["ops"])
 async def ops_prompts(
     prompt_key: str,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsPromptsResponse:
     """List every versioned system prompt for ``prompt_key``, newest version first.
 
@@ -3113,7 +3113,7 @@ async def ops_prompts(
 @router.get("/ops/prompts/active", response_model=OpsActivePromptResponse, tags=["ops"])
 async def ops_prompts_active(
     prompt_key: str,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsActivePromptResponse:
     """Return the single live version for ``prompt_key`` (DB), else the cached one.
 
@@ -3161,13 +3161,25 @@ async def ops_evals(
     prompt_key: str | None = None,
     run_id: str | None = None,
     limit: int = 50,
-    auth: AuthContext = Depends(require_auth),
+    auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsEvalsResponse:
     """Return recent persisted trace-eval rows (the eval trend / per-step scores).
 
     Trace-eval rows are keyed by ``run_id`` (one row per graded facet). Filter by
     ``run_id`` for a single run's breakdown; ``prompt_key`` narrows to rows whose detail
     carries it. ``limit`` is clamped to ``[1, 500]``. Degrades to empty when stores off.
+
+    **This route leaked every tenant's eval rows to every authenticated account.** It
+    carried only ``require_auth`` while its siblings ``/ops/params`` and
+    ``/ops/releases/pending`` guard ``admin, ai_team``, and its query had no tenant
+    clause. Postgres did not save it: this deployment installs the **fail-open**
+    ``tenant_isolation`` predicate by default, under which a session that binds no scope
+    reads *every* tenant's rows — so a missing clause is a live leak, not an empty list.
+    Measured before the fix: ``vertex.client``, a ``client``-role account in tenant 2,
+    read 364 rows of which **274 belonged to tenant 1**.
+
+    Both halves are needed. The guard alone would still hand one tenant's admin another
+    tenant's rows; the clause alone would still expose the surface to a ``client``.
     """
     if not _stores_on():
         return OpsEvalsResponse(rows=[])
@@ -3179,7 +3191,15 @@ async def ops_evals(
         from app.data.session import get_sessionmaker
 
         async with get_sessionmaker()() as session:
+            # `_scope_tenant` yields None for platform staff (who may see every
+            # tenant) and the caller's own id otherwise. `is_(None)` for the platform
+            # case rather than "no clause": `aegis.ops.diagnose._tenant_clause`
+            # documents why — `if tenant_id is not None` makes None mean *every*
+            # tenant, which is the bug this route already shipped once.
+            scoped = _scope_tenant(auth, None)
             stmt = select(EvalResult)
+            if scoped is not None:
+                stmt = stmt.where(EvalResult.tenant_id == scoped)
             if run_id is not None:
                 stmt = stmt.where(EvalResult.run_id == run_id)
             if prompt_key is not None:

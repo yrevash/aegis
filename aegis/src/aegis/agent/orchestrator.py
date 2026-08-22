@@ -344,7 +344,24 @@ async def run_agent(
                     prompt_tokens=int(final.get("prompt_tokens", 0)),
                     completion_tokens=int(final.get("completion_tokens", 0)),
                     cost_usd=float(final.get("cost_usd", 0.0)),
-                    cache_hit=bool(final.get("cache_hit", False)),
+                    # `answer_cached`, not `cache_hit`. They are different facts that
+                    # were sharing a word, and the dashboard read the wrong one.
+                    #
+                    # `state["cache_hit"]` is the *retrieval* cache — the context was
+                    # reused, then the model still planned, called tools and generated.
+                    # `state["answer_cached"]` is the *answer* cache — generation was
+                    # skipped outright and work was genuinely avoided.
+                    #
+                    # The run header fed `analytics_runs_daily.cache_hits`, which every
+                    # "cache saved us N%" figure is built on. Measured on real traffic:
+                    # 24 runs flagged as cache hits had each made 11-14 real LLM calls,
+                    # spent 3,600-4,700 prompt tokens, and averaged $0.014084 against
+                    # $0.013811 for the "misses". A cache hit that costs more than a miss
+                    # is not a cache hit — it was a retrieval reuse wearing the wrong name.
+                    #
+                    # Retrieval-cache reuse is not lost: it is still on the `provenance`
+                    # event, which is where it was always the honest answer.
+                    cache_hit=bool(final.get("answer_cached", False)),
                 )
             )
             # Terminal run reached: fire the best-effort post-run hook (e.g. trace-eval)

@@ -84,9 +84,40 @@ function seriesHexes(count: number): string[] {
  * that are the same on every row. The full value is in the table under the chart and in
  * the hover.
  */
+/**
+ * Read a label as an epoch-millisecond instant, or `null` if it is not one.
+ *
+ * The `*_daily` boards group by `date_trunc('day', …)`, and that arrives on the wire as
+ * a number — `{"day": 1787164200000.0}`. Nothing formatted it, so ~70 axis ticks across
+ * ~13 boards rendered as `1785349800000`, and because the rows were then sorted by
+ * *measure* rather than by time, "Spend over time" plotted in arbitrary order. A time
+ * axis that is neither legible nor monotonic is worse than no chart.
+ *
+ * Deliberately narrow: 12–14 digits inside a sane calendar window. A bare count like
+ * `1785` must keep reading as a category, not become 1970.
+ */
+const EPOCH_FLOOR_MS = Date.UTC(2000, 0, 1)
+const EPOCH_CEIL_MS = Date.UTC(2100, 0, 1)
+
+function asEpochMs(label: string): number | null {
+  if (!/^\d{12,14}(\.\d+)?$/.test(label.trim())) return null
+  const ms = Number(label)
+  return Number.isFinite(ms) && ms >= EPOCH_FLOOR_MS && ms < EPOCH_CEIL_MS ? ms : null
+}
+
+/** Built once — a formatter per row is a formatter per render. */
+const DAY_LABEL = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+
 function shortLabel(label: string): string {
+  const ms = asEpochMs(label)
+  if (ms !== null) return DAY_LABEL.format(new Date(ms))
   if (label.length <= 18) return label
   return `…${label.slice(-17)}`
+}
+
+/** Whether every row is an instant — i.e. this board is a time series, not a category. */
+function isTimeSeries(rows: readonly ChartRow[]): boolean {
+  return rows.length > 1 && rows.every((r) => asEpochMs(String(r.label)) !== null)
 }
 
 interface CategoryBarsProps {
@@ -129,7 +160,13 @@ export function CategoryBars({
 
   const data = useMemo(() => {
     const primary = measures[0]
-    const sorted = [...rows].sort((a, b) => Number(b[primary]) - Number(a[primary]))
+    // Time reads left to right; a category reads biggest first. Sorting an instant by
+    // its measure is what put the daily boards in arbitrary order.
+    const sorted = isTimeSeries(rows)
+      ? [...rows].sort(
+          (a, b) => (asEpochMs(String(a.label)) ?? 0) - (asEpochMs(String(b.label)) ?? 0),
+        )
+      : [...rows].sort((a, b) => Number(b[primary]) - Number(a[primary]))
     if (sorted.length <= maxRows) {
       return sorted.map((row) => ({ ...row, label: shortLabel(row.label) }))
     }
