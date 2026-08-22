@@ -316,6 +316,20 @@ class Settings(BaseSettings):
     # default. It does NOT switch reranking off — nothing does that silently.
     rerank_local: bool = Field(default=True)
 
+    # ── Knowledge-graph extraction (ingest ``graph`` stage) ──────────────────
+    # Which extractor turns a chunk into entities and relations. "llm" (the default) runs
+    # one cheap-model extraction per chunk, content-addressed and cached to disk, so the
+    # same text is never paid for twice and a re-ingest is free. "spacy" forces the
+    # deterministic, offline, zero-cost extractor.
+    #
+    # The default costs money, so it is stated rather than assumed: on the policy document
+    # this stage was verified against, spaCy found 1 entity and 0 relations — its NER
+    # surfaces names, and its only notion of a relation is two entities sharing a sentence
+    # — while the cached LLM extractor found 10 entities and 6 stated relations. A graph
+    # of nodes with no edges is not a knowledge graph, and fabricating edges to fill it is
+    # the one thing this platform must never do.
+    graph_extractor: str = Field(default="llm")
+
     # ── Run mode (see docs/operations/runbook.md) ───────────────────────────────────────
     # "on" (default) uses the real stores — LightRAG over Neo4j + Qdrant with a
     # Redis semantic cache. "off" runs a self-contained in-memory backend + cache

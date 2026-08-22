@@ -1016,12 +1016,37 @@ def build_agent(
             attempts = "\n".join(
                 f"- {r['summary']} ({'ok' if r['ok'] else 'FAILED'})" for r in prior
             )
-            user_content += (
-                "\n\nA previous action attempt did not fully achieve the goal:\n"
-                f"{attempts}\n"
-                "Reconsider and propose a corrected next action, or answer directly "
-                "if no further action can help."
+            # Two different situations wear the same shape here, and telling the planner
+            # the wrong one is why the approval gate stayed shut.
+            #
+            # This block was written for the failure case — "your attempt did not achieve
+            # the goal, propose a corrected action" — and that framing is actively wrong
+            # after a *successful read*. Observed: the planner called `find_requests`,
+            # got real ids back, was told it had not achieved the goal, and "corrected"
+            # by running a wider `find_requests`. It looked things up twice and never
+            # acted, so the high-risk write was never proposed and the human gate never
+            # raised.
+            #
+            # A round whose every result succeeded and whose every tool was read-only did
+            # not fail — it gathered. It needs the opposite instruction.
+            succeeded_read = bool(prior) and all(r["ok"] for r in prior) and all(
+                deps.tool_read_only(str(r.get("tool", ""))) for r in prior
             )
+            if succeeded_read:
+                user_content += (
+                    "\n\nYou already looked this up, and it succeeded. Here is what came "
+                    f"back:\n{attempts}\n"
+                    "Do not look it up again. Use these results to take the next action "
+                    "the question asks for, or answer directly if the question only "
+                    "asked for information."
+                )
+            else:
+                user_content += (
+                    "\n\nA previous action attempt did not fully achieve the goal:\n"
+                    f"{attempts}\n"
+                    "Reconsider and propose a corrected next action, or answer directly "
+                    "if no further action can help."
+                )
         messages = [
             {
                 "role": "system",
@@ -1190,7 +1215,12 @@ def build_agent(
             )
             ok = bool(ok) and allowed
             writer(events.tool_result(call["id"], ok, summary))
-            results.append({"call_id": call["id"], "ok": ok, "summary": summary})
+            # ``tool`` carries the name forward so ``reflect`` can tell a read from a
+            # write. Without it the row is anonymous by the time the loop decides
+            # whether the goal was met.
+            results.append(
+                {"call_id": call["id"], "ok": ok, "summary": summary, "tool": call["name"]}
+            )
         return {"tool_results": results}
 
     async def reflect(state: AgentState) -> dict[str, Any]:
@@ -1211,7 +1241,21 @@ def build_agent(
         iteration = state.get("plan_iterations", 0)
         budget = config.max_plan_iterations
 
-        done = bool(results) and all(r["ok"] for r in results)
+        # A round that only *looked something up* has not met the goal.
+        #
+        # `done` used to be "every tool call succeeded", which is right for a write and
+        # wrong for a read: a successful `find_requests` reported goal-met, the turn ran
+        # straight to `generate`, and the second planning round — the one that would act
+        # on what was just found — never existed. Measured across six runs: the planner
+        # called the lookup unprompted every time, got real ids back, said in prose that
+        # the record should be closed, and never proposed the write. The human approval
+        # gate was unreachable from natural language for exactly this reason.
+        #
+        # Reporting the read as `ok=False` would also re-plan, and was the tempting fix.
+        # It is a lie — the read succeeded — and it renders in the console as a failed
+        # tool, so it would have bought a working gate with a false event on the trace.
+        acted = [r for r in results if not deps.tool_read_only(str(r.get("tool", "")))]
+        done = bool(results) and all(r["ok"] for r in results) and bool(acted)
         budget_left = iteration < budget
         # Self-repair master switch: when disabled, the reflect node still runs and
         # reports the outcome but NEVER routes back to plan (a single linear pass).

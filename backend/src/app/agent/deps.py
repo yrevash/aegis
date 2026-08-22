@@ -444,6 +444,7 @@ class AgentDeps(_AegisAgentDeps):
             tool_definitions_for=_default_tool_definitions_for,
             run_tool=_default_run_tool,
             tool_risk=_default_tool_risk,
+            tool_read_only=_default_tool_read_only,
             render_system_prompt=_default_render_system_prompt,
             agent_roster=_default_agent_roster,
             subagent_roster=_default_subagent_roster,
@@ -570,6 +571,22 @@ def _default_tool_risk(tool_name: str) -> RiskLevel:
     if tool_name == LOAD_SKILL_TOOL:
         return LOAD_SKILL_RISK
     return merged_tool_risk(tool_name)
+
+
+def _default_tool_read_only(tool_name: str) -> bool:
+    """Return whether ``tool_name`` only reads — used by ``reflect`` to decide goal-met.
+
+    Fails **safe in the opposite direction to risk**, and the asymmetry is deliberate.
+    Unknown risk resolves to HIGH so an invented tool cannot skip the human gate; unknown
+    read-only resolves to ``False`` — "assume it wrote something" — so an unrecognised
+    tool ends the plan loop exactly as it did before this seam existed. Guessing
+    read-only for a name we do not know would keep re-planning around a tool nobody
+    registered, which is a loop, not a safeguard.
+    """
+    from app.adapter.tools import TOOL_REGISTRY
+
+    spec = TOOL_REGISTRY.get(tool_name)
+    return bool(getattr(spec, "read_only", False)) if spec else False
 
 
 def _default_render_system_prompt(

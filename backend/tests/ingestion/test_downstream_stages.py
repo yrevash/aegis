@@ -23,12 +23,16 @@ import pgsupport
 import pytest
 from aegis.governance.models import Budget, BudgetScope, BudgetWindow
 from aegis.jobs import Chunk
+from aegis.jobs.facts import collect_stage_facts
 from aegis.retrieval.graph_extract import Entity, Relation
+from aegis.retrieval.types import tenant_metadata_value
 from sqlalchemy import select
+from temporalio.exceptions import ApplicationError
 
 from app.api.schemas import Role
 from app.core.security import TENANT_ADMIN, create_access_token
 from app.data import Tenant, User, get_sessionmaker, set_tenant_scope
+from app.ingestion.graph_projection import ProjectionResult
 from app.ingestion.stages import (
     IngestDependencies,
     chunk_stage,
@@ -495,3 +499,135 @@ async def test_graph_records_the_entities_and_relations_on_the_chunk_row(
     assert [chunk.meta for chunk in await _chunks(document_id)] == before, (
         "a second extraction changed the recorded graph for text that did not change"
     )
+
+
+class _RecordingProjector:
+    """Stands in for the durable graph, recording what the stage handed it.
+
+    The real projector refuses to run in a test process — there is no scratch Neo4j, so a
+    test that wrote into it would be writing into the developer's own graph. What can be
+    asserted here is the half that decides who sees the result: the tenant and the source
+    the stage attributes its extraction to.
+    """
+
+    def __init__(self, result: ProjectionResult | None = None) -> None:
+        """Hold the result to return, and start with an empty call log."""
+        self.calls: list[dict[str, object]] = []
+        self._result = result
+
+    async def __call__(
+        self,
+        entities,  # noqa: ANN001 - Sequence[Entity]
+        relations,  # noqa: ANN001 - Sequence[Relation]
+        *,
+        tenant_value: str | None,
+        source: str,
+        extractor: str,
+    ) -> ProjectionResult:
+        """Record one projection and return the configured outcome."""
+        self.calls.append(
+            {
+                "entities": list(entities),
+                "relations": list(relations),
+                "tenant_value": tenant_value,
+                "source": source,
+                "extractor": extractor,
+            }
+        )
+        if self._result is not None:
+            return self._result
+        return ProjectionResult(
+            nodes=len({entity.id for entity in entities}),
+            edges=len(relations),
+            attempted_nodes=len({entity.id for entity in entities}),
+            attempted_edges=len(relations),
+        )
+
+
+async def test_graph_projects_the_extraction_under_the_tenant_that_owns_it(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """The extraction reaches the durable graph, attributed to its owning tenant.
+
+    The stage used to write ``chunks.meta`` and stop there, and ``GET /v1/graph`` reads
+    neither that table nor anything derived from it — so an upload finished with the
+    stage ``completed`` and the graph exactly as large as it had been. The provenance is
+    asserted beside the projection because it is the same fact: an element the graph
+    cannot attribute is shown to no tenant at all.
+    """
+    projector = _RecordingProjector()
+    set_ingest_dependencies(
+        IngestDependencies(
+            store=store, extractor=_FixedExtractor(), project=projector
+        )
+    )
+    await _seed_tenant()
+    document_id = await _chunked_document(client, parsed_artifact, store)
+
+    with collect_stage_facts() as facts:
+        await _handler(db, graph_stage, document_id, "graph")
+
+    assert len(projector.calls) == 1
+    call = projector.calls[0]
+    assert call["tenant_value"] == tenant_metadata_value(_TENANT)
+    assert call["source"], "the projection was handed no source to attribute it to"
+    assert call["extractor"] == "fixed-test-extractor"
+    assert call["entities"], "nothing was handed to the graph to project"
+    # What the graph confirmed holding, which is the only number worth reporting.
+    assert facts["projected_entities"] == len(
+        {entity.id for entity in call["entities"]}
+    )
+    assert facts["projected_relations"] == len(call["relations"])
+
+
+async def test_graph_fails_rather_than_report_an_extraction_the_graph_did_not_get(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """A ``completed`` stage that grew no graph is the defect, not the extraction.
+
+    The measured failure was a stage recording ``{"entities": 1}`` while Neo4j held 78
+    nodes before the upload and 78 after. The extraction is on the chunk rows either way;
+    what a person can see is what did not happen, and the run must say so.
+    """
+    set_ingest_dependencies(
+        IngestDependencies(
+            store=store,
+            extractor=_FixedExtractor(),
+            project=_RecordingProjector(
+                ProjectionResult(nodes=0, edges=0, attempted_nodes=4, attempted_edges=1)
+            ),
+        )
+    )
+    await _seed_tenant()
+    document_id = await _chunked_document(client, parsed_artifact, store)
+
+    with pytest.raises(ApplicationError) as raised:
+        await _handler(db, graph_stage, document_id, "graph")
+    assert raised.value.type == "GraphNotProjected"
+
+
+async def test_a_deployment_with_no_durable_graph_says_so_instead_of_reporting_zero(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """"There is no graph to project into" and "the graph is empty" are different facts.
+
+    Collapsing them into ``projected_entities: 0`` would make a databaseless run look
+    exactly like a broken one, which is the confusion the ``index`` stage's ``verified:
+    null`` already exists to avoid.
+    """
+    set_ingest_dependencies(
+        IngestDependencies(
+            store=store,
+            extractor=_FixedExtractor(),
+            project=_RecordingProjector(ProjectionResult(skipped="STORES=off")),
+        )
+    )
+    await _seed_tenant()
+    document_id = await _chunked_document(client, parsed_artifact, store)
+
+    with collect_stage_facts() as facts:
+        await _handler(db, graph_stage, document_id, "graph")
+
+    assert facts["projected_entities"] == 0
+    assert facts["projection"] == "skipped: STORES=off"
+    assert facts["entities"] > 0, "the extraction itself is unaffected and still recorded"

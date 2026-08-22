@@ -1316,13 +1316,18 @@ def build_server(
     import mcp.types as mcp_types  # noqa: PLC0415
     from mcp.server import Server  # noqa: PLC0415
     from mcp.shared.exceptions import MCPError  # noqa: PLC0415
-    from mcp_types import INVALID_REQUEST  # noqa: PLC0415
 
     governed = GovernedMcpServer(store=store, audit=audit, resolve=resolve)
 
     def _refuse(exc: McpIdentityError) -> MCPError:
         """Turn a per-call identity refusal into a protocol-level error."""
-        return MCPError(code=INVALID_REQUEST, message=str(exc))
+        # ``mcp.types``, not the separately installed top-level ``mcp_types`` package
+        # this line used to import from. That package is a transitive dependency the
+        # SDK happens to pull in and re-export, so nothing declares it: the day it
+        # stops being pulled in, ``build_server`` — the whole MCP front door —
+        # ImportErrors at first use, and ``app.main`` logs "the mcp SDK is not
+        # installed" about an SDK that is.
+        return MCPError(code=mcp_types.INVALID_REQUEST, message=str(exc))
 
     async def on_list_tools(
         ctx: ServerRequestContext[Any, Any],

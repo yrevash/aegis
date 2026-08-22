@@ -475,6 +475,83 @@ async def test_a_probe_reports_what_the_peer_said_and_never_raises():
     assert [t.qualified_name for t in registry.tools()] == ["mcp__acme__search"]
 
 
+class StubbornClient:
+    """A peer client whose **teardown** answers one cancellation by starting another.
+
+    The exact shape of the SDK's ``streamable_http_client``: its ``finally`` awaits a
+    session-termination ``DELETE``, so the *single* cancellation ``asyncio.timeout``
+    delivers is spent on the aborted request and the teardown then blocks on a fresh
+    await that no cancellation is coming for. Against a peer that answers that DELETE and
+    never ends the body — which is what a Streamable HTTP endpoint does, so it is the
+    loopback case of this deployment probing itself — the handler never returns.
+    """
+
+    def __init__(self) -> None:
+        self.swallowed = 0
+
+    async def __aenter__(self):  # noqa: ANN204 - the connected client is itself
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        while self.swallowed < 3:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                self.swallowed += 1
+        return False
+
+    async def list_tools(self):  # noqa: ANN202 - never answers
+        await asyncio.sleep(3600)
+
+
+async def test_a_probe_answers_even_when_the_peers_teardown_resists_cancellation():
+    """The test button always answers — a probe that never returns is the worse failure.
+
+    MUTATION: put the budget back as ``asyncio.timeout`` around ``async with
+    self._client(spec)`` and this hangs for ever, which is the defect verbatim: the
+    handshake succeeds, the tools are listed, and ``POST /mcp/servers/{id}/test`` never
+    returns. ``asyncio.timeout`` cancels its block exactly once, and the SDK's teardown
+    spends that one cancellation before it starts the await that actually blocks.
+    """
+    client = StubbornClient()
+    registry = ExternalToolRegistry(
+        client_factory=lambda _spec, _cred: client, call_timeout_seconds=0.2
+    )
+    registry.register_server(ExternalServerSpec(server_id="acme"))
+
+    started = time.monotonic()
+    result = await registry.probe("acme")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10.0, f"the probe took {elapsed:.1f}s to give up on a 0.2s budget"
+    assert result.reachable is False
+    assert "0.2s" in result.detail, result.detail
+    assert client.swallowed >= 1, "the teardown was never cancelled at all"
+
+
+async def test_a_probe_names_the_peers_real_failure_not_the_task_group_wrapper():
+    """The peer's own sentence is the answer; an ExceptionGroup wrapper is not one.
+
+    MUTATION: report ``str(exc)`` again and every failure — a refused credential, a wrong
+    path, a peer that is not running — reads ``unhandled errors in a TaskGroup
+    (1 sub-exception)``, which names none of them.
+    """
+
+    def _wrapped(_spec, _cred):
+        cause = ConnectionRefusedError("nothing is listening on 127.0.0.1:9")
+        inner = ExceptionGroup("unhandled errors in a TaskGroup", [cause])
+        raise ExceptionGroup("unhandled errors in a TaskGroup", [inner])
+
+    registry = ExternalToolRegistry(client_factory=_wrapped)
+    registry.register_server(ExternalServerSpec(server_id="acme"))
+
+    result = await registry.probe("acme")
+    assert result.reachable is False
+    assert "ConnectionRefusedError" in result.detail, result.detail
+    assert "nothing is listening on 127.0.0.1:9" in result.detail, result.detail
+    assert "sub-exception" not in result.detail, result.detail
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. The TOOL_RESULT rail
 # ─────────────────────────────────────────────────────────────────────────────

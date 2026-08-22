@@ -23,7 +23,10 @@ SYSTEM_PROMPTS: dict[str, str] = {
         "concise and decisive. Ground every claim in retrieved records or "
         "knowledge documents, and cite the request or document id you used. When "
         "you take an action, state what you changed and why. Never fabricate "
-        "request ids, customer data, or resolution figures."
+        "request ids, customer data, or resolution figures. When a question names a "
+        "request by description rather than by id — 'the oldest billing case', 'the "
+        "one waiting on the customer' — look it up first with the read-only lookup "
+        "tool in your list, then work from the ids it returns."
     ),
     "client": (
         "You are a friendly support assistant helping a customer with their own "

@@ -451,18 +451,23 @@ async def test_the_tool_roster_names_the_layer_that_decided_each_row(client, db)
     user = _headers(tenant_id=1, user_id=12, username="a-user", role="client")
 
     mine = (await client.get("/tools", headers=user)).json()
-    assert (mine["allowed_count"], mine["total"]) == (1, 3)
+    assert (mine["allowed_count"], mine["total"]) == (1, 4)
     rows = {row["name"]: row for row in mine["rows"]}
     assert rows["add_case_note"]["allowed"] is True
     assert rows["add_case_note"]["decided_by"] == "platform"
     assert rows["add_case_note"]["requires_approval"] is False
     assert rows["update_request_status"]["allowed"] is False
     assert rows["update_request_status"]["decided_by"] == "persona"
+    # The read tool is registered but NOT granted to the client persona: its scope is
+    # OWN-on-customer_id and nothing pins the filter to the authenticated subject yet,
+    # so an enumeration tool here would be a scope change, not a roster line.
+    assert rows["find_requests"]["allowed"] is False
+    assert rows["find_requests"]["decided_by"] == "persona"
 
-    # The operator persona reaches all three, and the HIGH-risk one already stops at the
+    # The operator persona reaches all four, and the HIGH-risk one already stops at the
     # platform's default gate — which is the tenant layer, at its default value.
     theirs = (await client.get("/tools", headers=admin)).json()
-    assert (theirs["allowed_count"], theirs["total"]) == (3, 3)
+    assert (theirs["allowed_count"], theirs["total"]) == (4, 4)
     operator = {row["name"]: row for row in theirs["rows"]}
     assert operator["update_request_status"]["decided_by"] == "tenant"
     assert operator["update_request_status"]["requires_approval"] is True

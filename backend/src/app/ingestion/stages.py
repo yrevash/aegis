@@ -22,9 +22,10 @@ Stage        Queue           What it does
                              durable source-of-record vector.
 ``index``    ``aegis-...``   Publishes the chunks to the configured knowledge backend,
                              which is what makes them reachable by the dense arm.
-``graph``    ``aegis-cpu``   Extracts entities and relations and records them on the
-                             chunk, so the graph an ingest built is a fact about rows we
-                             own rather than only about a store we do not.
+``graph``    ``aegis-cpu``   Extracts entities and relations, records them on the chunk
+                             so the graph an ingest built is a fact about rows we own,
+                             and projects them into the durable knowledge graph the
+                             product shows (:mod:`app.ingestion.graph_projection`).
 ===========  ==============  ==========================================================
 
 Three rules every handler here obeys, and the reason each is not negotiable:
@@ -82,6 +83,11 @@ from temporalio.exceptions import ApplicationError
 
 from app.config import get_settings
 from app.ingestion.artifacts import dumps_parsed, loads_parsed
+from app.ingestion.graph_projection import (
+    GraphProjectionError,
+    ProjectionResult,
+    project_document_graph,
+)
 from app.ingestion.store import DocumentStore, DocumentStoreProtocol
 from app.ingestion.tables import TableSummaryReport, summarise_document_tables
 
@@ -143,9 +149,15 @@ class IngestDependencies:
         publish: Coroutine taking the document's chunks and writing them into the
             knowledge backend the platform searches. ``None`` resolves the process
             retriever's backend on first use.
-        extractor: The entity/relation extractor. ``None`` builds the best available one
-            (:func:`aegis.retrieval.graph_extract.build_extractor`), whose ``name`` is
-            honest about which one actually ran.
+        extractor: The entity/relation extractor. ``None`` builds the one this deployment
+            configured (see :meth:`resolve_extractor`), whose ``name`` is honest about
+            which one actually ran.
+        project: Coroutine taking a document's extraction and writing it into the durable
+            knowledge graph, returning what verifiably landed. ``None`` uses
+            :func:`app.ingestion.graph_projection.project_document_graph`. This is the
+            seam that keeps a test from writing into the developer's own Neo4j — and the
+            reason the ``graph`` stage can no longer report an extraction the product
+            cannot show.
         verify: Coroutine taking the chunks just published and returning how many the
             search index actually holds — or ``None`` when it cannot tell. Left unset,
             the process retriever's backend is asked. See :meth:`count_indexed`; this is
@@ -158,6 +170,7 @@ class IngestDependencies:
     extractor: Extractor | None = None
     complete: CompleteFn | None = None
     verify: Any = None  # noqa: ANN401 - a coroutine fn; see count_indexed
+    project: Any = None  # noqa: ANN401 - a coroutine fn; see project_graph
 
     def resolve_embed(self) -> EmbedFn:
         """Return the embedding function, resolving the platform default on first use."""
@@ -176,9 +189,46 @@ class IngestDependencies:
         return self.complete
 
     def resolve_extractor(self) -> Extractor:
-        """Return the entity/relation extractor, building the default on first use."""
-        if self.extractor is None:
-            self.extractor = build_extractor(prefer="deterministic")
+        """Return the entity/relation extractor this deployment configured.
+
+        **The choice is a cost decision, so it is a setting rather than a constant.**
+        ``GRAPH_EXTRACTOR=llm`` (the default) runs one cheap-model extraction per chunk,
+        content-addressed and cached to disk, so the same text is never paid for twice and
+        a re-ingest costs nothing. ``GRAPH_EXTRACTOR=spacy`` forces the deterministic,
+        free, offline extractor.
+
+        The default is ``llm`` because the deterministic path does not produce a usable
+        graph, and that is measured rather than assumed: on the refund-escalation policy
+        used to verify this stage, spaCy found **1 entity and 0 relations** (its NER
+        surfaces names, and its "relations" are intra-sentence co-occurrence, which needs
+        two entities in one sentence to exist at all), while the cached LLM extractor
+        found 10 entities and 6 stated relations for one call. A graph of nodes with no
+        edges is not a knowledge graph, and inventing edges to fill it is the one thing
+        this platform must never do — so the honest way to have edges is to pay for the
+        extraction once.
+
+        Falling back is not silent: if the model gateway cannot be resolved the
+        deterministic extractor runs instead and reports its own ``name``, which is
+        recorded on every chunk and on the stage's event.
+        """
+        if self.extractor is not None:
+            return self.extractor
+        choice = (get_settings().graph_extractor or "").strip().lower()
+        if choice != "spacy":
+            try:
+                complete = self.resolve_complete()
+            except Exception as exc:  # noqa: BLE001 - any gateway failure is one outcome
+                logger.warning(
+                    "GRAPH_EXTRACTOR=%s but the model gateway is unavailable (%s); "
+                    "falling back to the deterministic extractor, which yields few "
+                    "relations. The extractor that ran is recorded on every chunk.",
+                    choice or "llm",
+                    exc,
+                )
+            else:
+                self.extractor = build_extractor(complete=complete, prefer="llm")
+                return self.extractor
+        self.extractor = build_extractor(prefer="deterministic")
         return self.extractor
 
     async def publish_chunks(self, chunks: Sequence[RetrievalChunk]) -> None:
@@ -226,6 +276,43 @@ class IngestDependencies:
         if audit is None:
             return None
         return await audit(chunks)
+
+    async def project_graph(
+        self,
+        entities: Sequence[Any],
+        relations: Sequence[Any],
+        *,
+        tenant_value: str | None,
+        source: str,
+        extractor: str,
+    ) -> ProjectionResult:
+        """Write one document's extraction into the durable graph, and report what landed.
+
+        The counterweight to the ``graph`` stage's own ``chunks.meta`` write, and the half
+        that was missing: the meta rows are what *this ingest* extracted, the durable
+        graph is what the product can *show*, and for the whole of Phase 4 only the first
+        of the two was ever written.
+
+        Args:
+            entities: Every entity the document's chunks yielded.
+            relations: Every relation, referring to entities by their extractor id.
+            tenant_value: The owning tenant's metadata value — the provenance
+                ``scoped_graph`` decides visibility from. Never omitted: an element whose
+                owner cannot be established is shown to nobody.
+            source: The document's source name, as ``index`` tags it.
+            extractor: The extractor's honest ``name``.
+
+        Returns:
+            What was attempted and what was verified present in the graph afterwards.
+        """
+        projector = self.project or project_document_graph
+        return await projector(
+            entities,
+            relations,
+            tenant_value=tenant_value,
+            source=source,
+            extractor=extractor,
+        )
 
 
 _dependencies: IngestDependencies | None = None
@@ -1115,7 +1202,10 @@ async def index_stage(
 async def graph_stage(
     session: AsyncSession, *, tenant_id: int | None, document_id: int, stage: str
 ) -> Mapping[str, Any]:
-    """Extract the entities and relations each chunk states, and record them on the row.
+    """Extract what each chunk states, record it on the row, and project it to the graph.
+
+    **Two writes, because they answer two different questions, and for the whole of Phase
+    4 only one of them happened.**
 
     The extraction is written to ``chunks.meta`` — a tenant-scoped, RLS-protected row we
     own — rather than only into a graph store we do not. That is what makes "the graph
@@ -1124,8 +1214,25 @@ async def graph_stage(
     output, so a corpus extracted by the deterministic extractor is never mistaken for one
     an LLM extracted.
 
-    Idempotent: the write is an ``UPDATE`` per chunk id that replaces those metadata keys
-    outright, so a second run over the same text leaves the same single set of entities.
+    That row, however, is not the graph the product shows. ``GET /v1/graph`` reads Neo4j
+    unioned with the in-process per-run slice, and neither of them has ever read
+    ``chunks.meta``. Measured on a real upload: the stage completed reporting one
+    extracted entity while Neo4j held 78 nodes before and 78 after, and the Graph screen
+    59 before and 59 after. So the second write —
+    :func:`app.ingestion.graph_projection.project_document_graph` — puts the same
+    entities and relations into the durable graph, carrying the owning tenant on every
+    element so :func:`~aegis.retrieval.types.scoped_graph` can decide who may see them.
+
+    **And the stage refuses to report a success it cannot show.** It reports what the
+    graph store confirms holding, not what was handed to it; a projection that was owed
+    and did not land fails the stage. A deployment with no durable graph at all
+    (``STORES=off``, no ``NEO4J_URI``, a test process with no scratch instance) is a
+    different fact from a failed write, and is recorded as an explicit ``projection:
+    skipped: …`` rather than passed off as a projection of zero.
+
+    Idempotent in both halves: the ``chunks.meta`` write is an ``UPDATE`` per chunk id
+    that replaces those metadata keys outright, and the projection merges on the graph's
+    own identity, so a second run over the same text converges rather than accumulating.
 
     Args:
         session: The scoped session, inside this stage's transaction.
@@ -1138,22 +1245,30 @@ async def graph_stage(
 
     Raises:
         ApplicationError: Non-retryable, when the document is not visible or owns no
-            tenant.
+            tenant. Retryable, when the durable graph was owed this document's entities
+            and does not hold them afterwards — a graph store blip is worth a second
+            attempt, and a silent success is worth none.
     """
     document = await _document(session, document_id)
-    _owning_tenant(document, stage)
+    owner = _owning_tenant(document, stage)
     rows = await _document_chunks(session, document_id)
     if not rows:
         logger.info("document %s has no chunks to extract from", document_id)
-        report_stage_facts(entities=0, relations=0)
+        report_stage_facts(
+            entities=0, relations=0, projected_entities=0, projected_relations=0
+        )
         return {}
     extractor = _deps().resolve_extractor()
     entities_total = 0
     relations_total = 0
+    extracted: list[Any] = []
+    related: list[Any] = []
     for chunk_id, content, meta in rows:
         entities, relations = await extractor.extract(content)
         entities_total += len(entities)
         relations_total += len(relations)
+        extracted.extend(entities)
+        related.extend(relations)
         await session.execute(
             update(Chunk)
             .where(Chunk.id == chunk_id)
@@ -1183,16 +1298,61 @@ async def graph_stage(
         document_id,
         extractor.name,
     )
-    # Task 4.12b. The *counts* here; the entities and relations themselves are already
-    # durable on ``chunks.meta``, which is what the projection reads them out of — so
-    # this event stays a fixed size whether the document yielded nine entities or nine
-    # thousand.
-    report_stage_facts(
-        entities=entities_total,
-        relations=relations_total,
-        extractor=extractor.name,
-        chunks=len(rows),
+
+    # The same source name the ``index`` stage tags its chunks with, so one document is
+    # one provenance string across both stores rather than two spellings of itself.
+    source = next(
+        (str(meta["source"]) for _, _, meta in rows if meta.get("source")),
+        document.filename,
     )
+    try:
+        projection = await _deps().project_graph(
+            extracted,
+            related,
+            tenant_value=tenant_metadata_value(owner),
+            source=source,
+            extractor=extractor.name,
+        )
+    except GraphProjectionError as exc:
+        raise ApplicationError(str(exc), type="GraphNotProjected") from exc
+    if projection.skipped is not None:
+        # An honest "there is no durable graph here", not a projection of zero. The two
+        # demand opposite responses and are never collapsed into a number.
+        logger.warning(
+            "document %s extracted %d entities that were not projected: %s",
+            document_id,
+            entities_total,
+            projection.skipped,
+        )
+    elif not projection.complete:
+        raise ApplicationError(
+            f"the graph stage handed the knowledge graph "
+            f"{projection.attempted_nodes} entities and {projection.attempted_edges} "
+            f"relations from document {document_id}, and the graph reports holding "
+            f"{projection.nodes} and {projection.edges} of them. The extraction is on "
+            "the chunk rows either way; what is missing is the half a person can see, "
+            "and recording this stage as completed is how that stayed invisible.",
+            type="GraphNotProjected",
+        )
+
+    # Task 4.12b. The *counts* here; the entities and relations themselves are already
+    # durable on ``chunks.meta``, which is what the log's own view reads them out of — so
+    # this event stays a fixed size whether the document yielded nine entities or nine
+    # thousand. ``projected_*`` are what the graph store confirmed holding, never what
+    # was handed to it.
+    facts: dict[str, Any] = {
+        "entities": entities_total,
+        "relations": relations_total,
+        "extractor": extractor.name,
+        "projected_entities": projection.nodes,
+        "projected_relations": projection.edges,
+    }
+    if projection.skipped is not None:
+        facts["projection"] = f"skipped: {projection.skipped}"
+    if projection.dropped_relations:
+        facts["dropped_relations"] = projection.dropped_relations
+    facts["chunks"] = len(rows)
+    report_stage_facts(**facts)
     return {}
 
 

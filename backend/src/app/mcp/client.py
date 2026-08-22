@@ -376,6 +376,144 @@ class ProbeResult:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The clocks
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Connect / write / pool budget for the transport's HTTP client. The SDK's own
+#: recommended value; only the *read* half is pinned to the registry's clock.
+_CONNECT_TIMEOUT_SECONDS = 30.0
+
+#: The read budget :func:`_default_client_factory` uses when it is called through the
+#: bare ``ClientFactory`` seam, which carries no registry to read a clock off.
+_DEFAULT_READ_TIMEOUT_SECONDS = 30.0
+
+#: How long a peer interaction that has just been cancelled is given to unwind before
+#: it is abandoned. See :func:`_bounded` for why abandoning it is the right answer.
+_TEARDOWN_GRACE_SECONDS = 5.0
+
+#: How many cancellations that grace is spread over. More than one because the SDK's
+#: teardown answers a cancellation by starting a *new* await — see :func:`_bounded`.
+_TEARDOWN_CANCEL_ATTEMPTS = 10
+
+
+async def _bounded(coro: Awaitable[Any], seconds: float, what: str) -> Any:  # noqa: ANN401
+    """Await ``coro`` under a deadline **a cancel-resistant teardown cannot outlive**.
+
+    Not ``asyncio.timeout``, and this is the whole of the ``POST /mcp/servers/{id}/test``
+    hang. ``asyncio.timeout`` delivers exactly **one** cancellation into the block it
+    guards, and the MCP SDK's Streamable HTTP context manager spends it: when the body
+    is torn down, ``streamable_http_client`` runs a ``finally`` that awaits
+    ``transport.terminate_session()`` — an HTTP ``DELETE`` to the peer — *after* the
+    single cancellation has already been consumed by the aborted request. Against a peer
+    that answers that DELETE and then never ends the response body — which is exactly
+    what a Streamable HTTP endpoint does, so it is the *loopback* case, this deployment
+    probing itself — that await blocks with no further cancellation coming. The timeout's
+    ``__aexit__`` is never reached, the handler never returns, and the socket is left
+    ESTABLISHED for ever. Reproduced against a peer that trickles keep-alives: a five
+    minute wait on a thirty second budget, with the connection still open afterwards.
+
+    So the interaction runs in a task of its own, and the deadline is enforced from
+    *outside* it. At the deadline the task is cancelled explicitly — a second, fresh
+    cancellation, which does unwind the SDK's ``finally`` — and given
+    :data:`_TEARDOWN_GRACE_SECONDS` to finish. If it still will not, it is **abandoned**
+    and the deadline is reported anyway, because a test button that never answers is
+    worse than one that answers "no": nothing downstream can time out cleanly behind it.
+
+    Args:
+        coro: The peer interaction.
+        seconds: The budget.
+        what: What is being waited on, for the log line if it has to be abandoned.
+
+    Returns:
+        Whatever ``coro`` returned.
+
+    Raises:
+        TimeoutError: When the budget ran out. Whatever ``coro`` raised, otherwise.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        done, _pending = await asyncio.wait({task}, timeout=seconds)
+    except asyncio.CancelledError:
+        # The *caller* was cancelled, not us. Take the peer interaction down with it
+        # rather than leaving a task holding a connection to somebody else's server.
+        task.cancel()
+        raise
+    if done:
+        return task.result()
+    # Cancelled once per slice, not once in total. One ``cancel()`` lands in whatever
+    # the task is awaiting *now*; the SDK's teardown answers it by starting a fresh
+    # await (the session-termination DELETE), which the first cancellation cannot reach.
+    # Re-cancelling is what "the caller has given up" means, and it is what actually
+    # frees the socket instead of leaving it to the peer.
+    unwound: set[asyncio.Future[Any]] = set()
+    for _slice in range(_TEARDOWN_CANCEL_ATTEMPTS):
+        task.cancel()
+        unwound, _still_running = await asyncio.wait(
+            {task}, timeout=_TEARDOWN_GRACE_SECONDS / _TEARDOWN_CANCEL_ATTEMPTS
+        )
+        if unwound:
+            break
+    if not unwound:
+        logger.error(
+            "MCP client: %s did not answer within %gs and did not unwind within a "
+            "further %gs after being cancelled; it has been abandoned so this request "
+            "can answer. Its connection will be released when the peer closes it.",
+            what,
+            seconds,
+            _TEARDOWN_GRACE_SECONDS,
+        )
+    raise TimeoutError(what)
+
+
+#: The leaf exception type raised when a peer answered the protocol but answered badly
+#: — as opposed to a transport failure, where nothing answered at all.
+_PROTOCOL_ERROR_TYPE = "MCPError"
+
+
+def _peer_leaves(exc: BaseException) -> list[tuple[str, str]]:
+    """Return ``(type name, message)`` for every distinct leaf cause of ``exc``.
+
+    The SDK's client raises through two nested ``anyio`` task groups, so a real cause
+    always arrives wrapped in an ``ExceptionGroup`` (often two). Unwrapping is what makes
+    the difference between "a 401", "a wrong path" and "nothing is listening" —
+    :func:`_peer_detail` renders them, and :meth:`ExternalToolRegistry.probe` reads the
+    type to tell "the peer refused us" from "we never reached a peer".
+    """
+    leaves: list[tuple[str, str]] = []
+
+    def walk(node: BaseException) -> None:
+        inner = getattr(node, "exceptions", None)
+        if inner:
+            for child in inner:
+                walk(child)
+            return
+        entry = (type(node).__name__, str(node).strip())
+        if entry not in leaves:
+            leaves.append(entry)
+
+    walk(exc)
+    return leaves
+
+
+def _peer_detail(exc: BaseException) -> str:
+    """Flatten one exception — ``ExceptionGroup`` included — into an operator sentence.
+
+    The peer's own failure sentence *is* the answer a test button exists to give, and
+    every failure used to arrive as the string ``"unhandled errors in a TaskGroup
+    (1 sub-exception)"``: a 401, a wrong path, a TLS failure and a peer that is simply
+    not running were all reported with that one sentence, which names none of them.
+
+    Args:
+        exc: The exception the peer interaction raised.
+
+    Returns:
+        ``"Type: message"`` for each distinct leaf cause, joined with ``"; "``.
+    """
+    rendered = [f"{name}: {text}" if text else name for name, text in _peer_leaves(exc)]
+    return "; ".join(rendered) or type(exc).__name__
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Seams
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -391,6 +529,37 @@ ClientFactory = Callable[[ExternalServerSpec, "str | None"], Any]
 ScreenFn = Callable[[str, str], Awaitable[GuardResult]]
 
 
+class _OwnedTransport:
+    """An SDK ``Client`` bundled with the httpx client Aegis built for it.
+
+    ``streamable_http_client`` takes ownership of the HTTP client **only when it made
+    one itself** — a client handed in is never entered and never closed, in as many
+    words in the SDK. Aegis has to hand one in, because that is the only way to put the
+    peer's credential on every request rather than only on the handshake. So somebody
+    has to close it, and nothing else in the process can: it is created inside the
+    factory and referenced nowhere else. Left unclosed it keeps its connection pool, and
+    a probe of an unreachable peer leaked a socket per press of the test button.
+
+    ``async with`` this instead of the bare client and the two are closed together.
+    """
+
+    def __init__(self, client: Any, http: Any) -> None:  # noqa: ANN401 - SDK/httpx types
+        """Bind ``client`` to the ``http`` client whose lifetime it shares."""
+        self._client = client
+        self._http = http
+
+    async def __aenter__(self) -> Any:  # noqa: ANN401 - the SDK's connected client
+        """Connect the SDK client and return it."""
+        return await self._client.__aenter__()
+
+    async def __aexit__(self, *exc_info: object) -> bool | None:
+        """Close the SDK client, then the HTTP client it was given, always."""
+        try:
+            return await self._client.__aexit__(*exc_info)
+        finally:
+            await self._http.aclose()
+
+
 def _default_client_factory(
     spec: ExternalServerSpec,
     credential: str | None,
@@ -402,17 +571,34 @@ def _default_client_factory(
     handshake. That mirrors the server half's rule (§10.5: scope is per call, because a
     long-lived connection outlives the context that opened it) from the other side.
 
+    The HTTP client is built by the SDK's own :func:`create_mcp_http_client` rather than
+    by calling ``httpx2.AsyncClient`` directly. A bare ``AsyncClient`` inherits httpx's
+    defaults — a five-second **read** timeout and no redirect following — and five
+    seconds is not a Streamable HTTP budget: the transport holds a long-lived SSE stream
+    open, so the library default aborts a perfectly healthy session while it is waiting
+    for the peer's next message. The SDK's helper is the one place that knows the right
+    shape (30s connect/write/pool, a long read for the stream), and the read half is
+    pinned to this deployment's own ``call_timeout_seconds`` so the transport's clock
+    and the registry's clock cannot disagree.
+
     Args:
         spec: The declared server. Its ``url`` is required here — an in-process peer
             has no URL and is supplied through an injected factory instead.
         credential: The secret to send in ``spec.auth_header``, or ``None``.
 
     Returns:
-        An ``mcp.Client``, not yet connected.
+        An :class:`_OwnedTransport` wrapping an ``mcp.Client``, not yet connected.
 
     Raises:
         ValueError: When the spec carries no URL.
     """
+    return _build_default_client(spec, credential, _DEFAULT_READ_TIMEOUT_SECONDS)
+
+
+def _build_default_client(
+    spec: ExternalServerSpec, credential: str | None, read_timeout_seconds: float
+) -> Any:  # noqa: ANN401 - SDK Client
+    """Build the real Streamable HTTP client. See :func:`_default_client_factory`."""
     if not spec.url:
         raise ValueError(
             f"External MCP server {spec.server_id!r} has no URL, and no client factory "
@@ -421,11 +607,17 @@ def _default_client_factory(
     import httpx2  # noqa: PLC0415 - the SDK's own HTTP client
     from mcp import Client  # noqa: PLC0415 - the SDK is an optional extra
     from mcp.client.streamable_http import streamable_http_client  # noqa: PLC0415
+    from mcp.shared._httpx_utils import create_mcp_http_client  # noqa: PLC0415
 
-    http = (
-        httpx2.AsyncClient(headers={spec.auth_header: credential}) if credential else None
+    http = create_mcp_http_client(
+        headers={spec.auth_header: credential} if credential else None,
+        timeout=httpx2.Timeout(
+            _CONNECT_TIMEOUT_SECONDS, read=max(read_timeout_seconds, 1.0)
+        ),
     )
-    return Client(streamable_http_client(spec.url, http_client=http))
+    return _OwnedTransport(
+        Client(streamable_http_client(spec.url, http_client=http)), http
+    )
 
 
 async def _default_screen(text: str, tool_name: str) -> GuardResult:
@@ -639,9 +831,17 @@ class ExternalToolRegistry:
     # ── reaching the peer ────────────────────────────────────────────────────
 
     def _client(self, spec: ExternalServerSpec) -> Any:  # noqa: ANN401 - SDK Client
-        """Build a client for ``spec``, carrying whatever credential it has."""
-        factory = self.client_factory or _default_client_factory
-        return factory(spec, self.credential_for(spec.server_id))
+        """Build a client for ``spec``, carrying whatever credential it has.
+
+        The default path is built here rather than through the bare
+        :data:`ClientFactory` seam so the transport's read budget can be this registry's
+        own :attr:`call_timeout_seconds`: two clocks for one wait is how a transport
+        gives up on a peer the registry was still waiting for, or the other way round.
+        """
+        credential = self.credential_for(spec.server_id)
+        if self.client_factory is None:
+            return _build_default_client(spec, credential, self.call_timeout_seconds)
+        return self.client_factory(spec, credential)
 
     async def probe(self, server_id: str) -> ProbeResult:
         """Connect to ``server_id`` and report what it said, changing nothing.
@@ -649,6 +849,9 @@ class ExternalToolRegistry:
         A failure returns the peer's own sentence rather than raising, because the
         sentence is the answer: "test connection" exists to tell an operator whether a
         configured server is actually reachable, and *why not* is the useful half.
+
+        It **always** answers, inside :attr:`call_timeout_seconds` plus the teardown
+        grace — see :func:`_bounded`, which is where the reason lives.
 
         Args:
             server_id: A declared server.
@@ -661,22 +864,11 @@ class ExternalToolRegistry:
         """
         spec = self.server(server_id)
         try:
-            async with asyncio.timeout(self.call_timeout_seconds):
-                async with self._client(spec) as connected:
-                    listed = await connected.list_tools()
-                    info = getattr(connected, "server_info", None)
-                    return ProbeResult(
-                        server_id=server_id,
-                        reachable=True,
-                        server_name=str(getattr(info, "name", "") or ""),
-                        protocol_version=str(
-                            getattr(connected, "protocol_version", "") or ""
-                        ),
-                        tools=tuple(
-                            str(getattr(tool, "name", ""))
-                            for tool in getattr(listed, "tools", []) or []
-                        ),
-                    )
+            return await _bounded(
+                self._probe(spec),
+                self.call_timeout_seconds,
+                f"the probe of external MCP server {server_id!r}",
+            )
         except TimeoutError:
             return ProbeResult(
                 server_id=server_id,
@@ -688,7 +880,37 @@ class ExternalToolRegistry:
             )
         except Exception as exc:  # noqa: BLE001 - the peer's failure IS the answer
             logger.warning("MCP client: probe of %r failed", server_id, exc_info=True)
-            return ProbeResult(server_id=server_id, reachable=False, detail=str(exc))
+            leaves = _peer_leaves(exc)
+            detail = _peer_detail(exc)
+            answered = any(name == _PROTOCOL_ERROR_TYPE for name, _text in leaves)
+            if answered and not self.has_credential(server_id):
+                # A fact, not a guess, and the one an operator most often needs: the MCP
+                # SDK collapses every non-404 4xx into one sentence that does not say
+                # "401", so a peer that refused an unauthenticated request reads as an
+                # unexplained failure unless the missing credential is named here. Only
+                # said when the peer actually answered — on a connect failure nothing
+                # got far enough for a credential to have mattered.
+                detail = (
+                    f"{detail} (no credential is held for this peer in this process, "
+                    "so the request was sent unauthenticated)"
+                )
+            return ProbeResult(server_id=server_id, reachable=False, detail=detail)
+
+    async def _probe(self, spec: ExternalServerSpec) -> ProbeResult:
+        """Do the handshake and one ``tools/list``. Bounded by its caller."""
+        async with self._client(spec) as connected:
+            listed = await connected.list_tools()
+            info = getattr(connected, "server_info", None)
+            return ProbeResult(
+                server_id=spec.server_id,
+                reachable=True,
+                server_name=str(getattr(info, "name", "") or ""),
+                protocol_version=str(getattr(connected, "protocol_version", "") or ""),
+                tools=tuple(
+                    str(getattr(tool, "name", ""))
+                    for tool in getattr(listed, "tools", []) or []
+                ),
+            )
 
     # ── discovery ────────────────────────────────────────────────────────────
 
@@ -739,9 +961,11 @@ class ExternalToolRegistry:
         """
         spec = self.server(server_id)
         try:
-            async with asyncio.timeout(self.call_timeout_seconds):
-                async with self._client(spec) as connected:
-                    listed = await connected.list_tools()
+            listed = await _bounded(
+                self._list_remote(spec),
+                self.call_timeout_seconds,
+                f"tools/list on external MCP server {server_id!r}",
+            )
         except TimeoutError:
             raise ExternalDiscoveryTimeoutError(
                 f"{server_id!r} did not answer tools/list within "
@@ -769,13 +993,16 @@ class ExternalToolRegistry:
 
         screen = _BoundedScreen(self.screen or _default_screen, self.discovery_concurrency)
         try:
-            async with asyncio.timeout(self.discovery_timeout_seconds):
-                admitted = await asyncio.gather(
+            admitted = await _bounded(
+                asyncio.gather(
                     *(
                         self._admit(server_id, qualified, remote_name, tool, screen)
                         for qualified, remote_name, tool in candidates
                     )
-                )
+                ),
+                self.discovery_timeout_seconds,
+                f"screening the catalogue of external MCP server {server_id!r}",
+            )
         except TimeoutError:
             raise ExternalDiscoveryTimeoutError(
                 f"{server_id!r} answered and advertised {len(candidates)} tool(s), but "
@@ -791,6 +1018,18 @@ class ExternalToolRegistry:
             del self._tools[name]
         self._tools.update(recorded)
         return [recorded[key] for key in sorted(recorded)]
+
+    async def _list_remote(self, spec: ExternalServerSpec) -> Any:  # noqa: ANN401 - SDK
+        """Connect and return the peer's raw ``tools/list``. Bounded by its caller."""
+        async with self._client(spec) as connected:
+            return await connected.list_tools()
+
+    async def _call_remote(
+        self, spec: ExternalServerSpec, remote_name: str, args: dict[str, Any]
+    ) -> Any:  # noqa: ANN401 - SDK CallToolResult
+        """Connect and call one remote tool. Bounded by its caller."""
+        async with self._client(spec) as connected:
+            return await connected.call_tool(remote_name, args)
 
     async def _admit(
         self,
@@ -1006,9 +1245,12 @@ class ExternalToolRegistry:
 
         spec = self.server(tool.server_id)
         try:
-            async with asyncio.timeout(self.call_timeout_seconds):
-                async with self._client(spec) as connected:
-                    result = await connected.call_tool(tool.remote_name, args)
+            result = await _bounded(
+                self._call_remote(spec, tool.remote_name, args),
+                self.call_timeout_seconds,
+                f"the call to {tool.remote_name!r} on external MCP server "
+                f"{tool.server_id!r}",
+            )
         except TimeoutError:
             return await self._failed(
                 ctx,
@@ -1025,7 +1267,10 @@ class ExternalToolRegistry:
                 exc_info=True,
             )
             return await self._failed(
-                ctx, tool, args, f"External MCP server {tool.server_id!r} errored: {exc}"
+                ctx,
+                tool,
+                args,
+                f"External MCP server {tool.server_id!r} errored: {_peer_detail(exc)}",
             )
 
         raw = _payload_text(result)

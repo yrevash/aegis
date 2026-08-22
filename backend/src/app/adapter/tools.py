@@ -33,7 +33,13 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
-from app.adapter.schema import CaseNote, RequestStatus, ServiceRequest
+from app.adapter.schema import (
+    CaseNote,
+    Category,
+    Priority,
+    RequestStatus,
+    ServiceRequest,
+)
 from app.api.schemas import RiskLevel
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,6 +52,19 @@ class RecordStore(Protocol):
 
     def get_request(self, request_id: str) -> ServiceRequest | None:
         """Return the request with ``request_id``, or None if absent."""
+        ...
+
+    def list_requests(self) -> list[ServiceRequest]:
+        """Return every request this store holds, in a stable order.
+
+        The read side of the seam. ``get_request`` can only answer a question that
+        already knows the answer's id, so a store that offered nothing else made an
+        id-taking tool the *only* thing a planner could reach — and a planner that is
+        (correctly) forbidden from inventing ids could therefore reach nothing. This
+        is the one accessor :func:`find_requests` narrows; filtering, ordering and the
+        hard result cap all live in the tool, so a store never has to be trusted to
+        bound anything.
+        """
         ...
 
     def put_request(self, request: ServiceRequest) -> None:
@@ -173,6 +192,60 @@ class ToolContext:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+FIND_REQUESTS_DEFAULT_LIMIT = 10
+"""Rows :func:`find_requests` returns when the caller does not ask for a number."""
+
+FIND_REQUESTS_MAX_LIMIT = 25
+"""Hard ceiling on :func:`find_requests`, enforced by the args model **and** the tool.
+
+A lookup tool exists to hand the planner a *shortlist* to choose from, not a table
+dump. Every row it returns is pasted verbatim into the next planning prompt, so an
+unbounded limit is simultaneously a token bill, a context-window risk and a much
+larger blast radius for the tool-result injection rail to screen. The ceiling is in
+the pydantic model (so an over-large ``limit`` is a validation error the planner sees
+and can correct) and re-applied in the body (so a caller that bypasses the model —
+a future direct call, a test — still cannot exceed it).
+"""
+
+
+class FindRequestsArgs(BaseModel):
+    """Arguments for :func:`find_requests` — every filter optional, all AND-ed."""
+
+    status: RequestStatus | None = Field(
+        default=None, description="Only requests in this lifecycle status."
+    )
+    priority: Priority | None = Field(
+        default=None, description="Only requests at this priority."
+    )
+    category: Category | None = Field(
+        default=None, description="Only requests in this subject area."
+    )
+    customer_id: str | None = Field(
+        default=None, description="Only requests raised by this customer id."
+    )
+    assigned_agent_id: str | None = Field(
+        default=None,
+        description="Only requests assigned to this agent id. Use '' for unassigned.",
+    )
+    text: str | None = Field(
+        default=None,
+        description=(
+            "Case-insensitive substring to match in the request id, title or "
+            "description. Pass a known id here to confirm that request exists."
+        ),
+    )
+    oldest_first: bool = Field(
+        default=True,
+        description="Order by creation time: oldest first (default), else newest first.",
+    )
+    limit: int = Field(
+        default=FIND_REQUESTS_DEFAULT_LIMIT,
+        ge=1,
+        le=FIND_REQUESTS_MAX_LIMIT,
+        description=f"Maximum rows to return (1–{FIND_REQUESTS_MAX_LIMIT}).",
+    )
+
+
 class UpdateStatusArgs(BaseModel):
     """Arguments for :func:`update_request_status`."""
 
@@ -220,6 +293,155 @@ async def _emit_audit(ctx: ToolContext, action: str, payload: dict) -> None:
         trace_id=ctx.trace_id,
         payload=payload,
         approved_by=ctx.approved_by,
+    )
+
+
+def _age_hours(request: ServiceRequest, *, now: datetime) -> float:
+    """Return how many hours ago ``request`` was opened (0.0 if it is in the future).
+
+    ``created_at`` is tz-aware in generated data and tz-naive in hand-built fixtures,
+    so a naive value is read as UTC rather than being allowed to raise mid-lookup.
+    """
+    created = request.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return max(0.0, (now - created).total_seconds() / 3600.0)
+
+
+def _matches(request: ServiceRequest, parsed: FindRequestsArgs) -> bool:
+    """Return whether ``request`` satisfies every filter set on ``parsed``."""
+    if parsed.status is not None and request.status is not parsed.status:
+        return False
+    if parsed.priority is not None and request.priority is not parsed.priority:
+        return False
+    if parsed.category is not None and request.category is not parsed.category:
+        return False
+    if parsed.customer_id is not None and request.customer_id != parsed.customer_id:
+        return False
+    if parsed.assigned_agent_id is not None:
+        wanted = parsed.assigned_agent_id or None  # '' means "unassigned"
+        if request.assigned_agent_id != wanted:
+            return False
+    if parsed.text:
+        needle = parsed.text.casefold()
+        # The **id** is in the haystack deliberately. A planner holding an id from an
+        # earlier turn types it into the only free-text field the tool has; when that
+        # searched prose alone, ``text="req-000029"`` matched nothing, the lookup
+        # reported "no requests match", and the planner re-ran the identical call
+        # rather than acting on a request that plainly exists. Observed live.
+        haystack = f"{request.id}\n{request.title}\n{request.description}".casefold()
+        if needle not in haystack:
+            return False
+    return True
+
+
+def _describe(request: ServiceRequest, *, now: datetime) -> str:
+    """Render one shortlist row: enough to choose between requests, and no more."""
+    age = _age_hours(request, now=now)
+    assignee = request.assigned_agent_id or "unassigned"
+    breach = " SLA-BREACHED" if age > request.sla_hours else ""
+    return (
+        f"{request.id} | {request.status.value} | {request.priority.value} | "
+        f"{request.category.value} | {assignee} | age {age:.0f}h of "
+        f"{request.sla_hours:.0f}h SLA{breach} | {request.title}"
+    )
+
+
+async def find_requests(args: dict, ctx: ToolContext) -> ToolActionResult:
+    """Look up service requests matching a filter (**read-only**, LOW risk).
+
+    **Why this tool exists.** The three write tools all take a ``request_id``, and the
+    persona prompt correctly forbids inventing one. With no read tool in the roster
+    there was no legitimate way for the planner to *obtain* an id, so it could never
+    propose a write — and the human-approval gate on ``update_request_status``, the
+    platform's whole bounded-autonomy story, was unreachable from a plain question
+    like "close the oldest resolved billing case". Observed directly: the planner
+    tried to fabricate a lookup by calling ``load_skill('Service Request Lookup')``,
+    a skill that does not exist, because that was the only read-shaped affordance it
+    had. This tool is the missing lookup, and it deliberately does **not** lower any
+    bar: it neither mutates nor gates, and the write it enables is still HIGH-risk and
+    still stops at the human.
+
+    **Read-only, and structurally so.** It calls exactly one store method —
+    ``list_requests`` — and never ``put_request``, so there is no code path here that
+    can change a record. It therefore has no ``previous_state`` and no ``inverse``:
+    there is nothing to roll back. It still writes an audit row (who looked, with what
+    filter, and which ids came back), because "read-only" is a statement about state,
+    not about accountability.
+
+    **Same data path as every other tool.** The store is the one the caller injected in
+    :class:`ToolContext` — in production the single process-wide record store that
+    ``update_request_status`` writes to and the MCP front door reads. No second
+    connection, no second query, no privileged handle: whatever the platform's scoping
+    of that store is, this tool inherits it exactly and can never see more than the
+    tools already registered beside it.
+
+    **Bounded.** Filters are AND-ed, results are ordered by creation time and truncated
+    to :data:`FIND_REQUESTS_MAX_LIMIT` at the very latest point, so the row count is
+    capped no matter what the planner asks for.
+
+    Args:
+        args: Raw arguments, validated against :class:`FindRequestsArgs`.
+        ctx: The execution context (store, actor, audit sink).
+
+    Returns:
+        A :class:`ToolActionResult` whose ``summary`` is one line per matching request
+        — id, status, priority, category, assignee, age against SLA, title. ``ok`` is
+        False **only** when nothing matched: an empty shortlist is a round that did not
+        advance the goal, and reporting it as such is what lets the graph's bounded
+        self-repair loop widen the filter and try again rather than answering "none"
+        from a filter that was simply too narrow. ``changed`` is always False.
+    """
+    parsed = FindRequestsArgs.model_validate(args)
+    lister = getattr(ctx.store, "list_requests", None)
+    if lister is None:
+        # A store that predates the read side of the protocol. Loud in the summary and
+        # never a silent empty result, which would read as "no such requests".
+        return ToolActionResult(
+            ok=False,
+            changed=False,
+            summary="This record store cannot enumerate requests (no list_requests).",
+        )
+
+    now = datetime.now(tz=UTC)
+    matched = [r for r in lister() if _matches(r, parsed)]
+    matched.sort(
+        key=lambda r: (
+            r.created_at.replace(tzinfo=UTC) if r.created_at.tzinfo is None
+            else r.created_at
+        ),
+        reverse=not parsed.oldest_first,
+    )
+    total = len(matched)
+    # Re-clamp in the body: the args model already refuses an over-large ``limit``, and
+    # a direct caller that skipped it still cannot get more than the ceiling.
+    page = matched[: min(parsed.limit, FIND_REQUESTS_MAX_LIMIT)]
+
+    await _emit_audit(
+        ctx,
+        "find_requests",
+        {
+            "filter": parsed.model_dump(exclude_none=True, mode="json"),
+            "matched": total,
+            "returned": [r.id for r in page],
+        },
+    )
+
+    if not page:
+        return ToolActionResult(
+            ok=False,
+            changed=False,
+            summary="No service requests match that filter. Try a broader one.",
+        )
+
+    header = (
+        f"{len(page)} of {total} matching request(s) "
+        "— id | status | priority | category | assignee | age/SLA | title:"
+    )
+    return ToolActionResult(
+        ok=True,
+        changed=False,
+        summary="\n".join([header, *(_describe(r, now=now) for r in page)]),
     )
 
 
@@ -403,6 +625,14 @@ class ToolSpec:
     args_model: type[BaseModel]
     handler: ToolHandler
     risk: RiskLevel
+    read_only: bool = False
+    """Whether a call cannot modify its environment at all (MCP ``readOnlyHint``).
+
+    Asserted, never inferred from the risk tier: LOW risk means "cheap to get wrong",
+    which is not the same claim as "changes nothing". ``add_case_note`` is LOW and
+    writes; ``find_requests`` is LOW and does not. The default is the cautious reading,
+    so a tool registered without thinking about it is advertised as a writer.
+    """
     destructive: bool = False
     """Whether a call overwrites state a reader would miss (MCP ``destructiveHint``)."""
     idempotent: bool = False
@@ -436,6 +666,29 @@ class ToolSpec:
 
 
 TOOL_REGISTRY: dict[str, ToolSpec] = {
+    "find_requests": ToolSpec(
+        name="find_requests",
+        description=(
+            "Look up service requests on the desk by status, priority, category, "
+            "customer, assignee or free text, newest- or oldest-first. Read-only: it "
+            "changes nothing. Returns a short list of real request ids with the "
+            "fields needed to choose between them (status, priority, category, "
+            "assignee, age against SLA, title). Use this to obtain a request id — "
+            "never guess or invent one."
+        ),
+        args_model=FindRequestsArgs,
+        handler=find_requests,
+        # LOW, and it is the one tool here for which that tier needs no argument: it
+        # reads. It must stay below every deployment's gate_min_risk, because a lookup
+        # that paused for a human would put the approval dialog in front of the step
+        # that merely tells the planner which request the human meant — and the gate
+        # this tool exists to make reachable is the one on the WRITE, which stays HIGH.
+        risk=RiskLevel.LOW,
+        read_only=True,
+        # Reads nothing away and returns the same shortlist for the same filter over
+        # unchanged records, so it is both non-destructive and idempotent.
+        idempotent=True,
+    ),
     "update_request_status": ToolSpec(
         name="update_request_status",
         description="Change the lifecycle status of a service request.",
@@ -473,9 +726,21 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
 
 
 ALLOWLIST: dict[str, frozenset[str]] = {
-    # The operations lead (admin) may perform every action.
+    # The operations lead (admin) may perform every action — and, since the registry
+    # gained a read tool, look requests up. That persona's data scope is
+    # ``ScopeKind.ALL`` ("every request on the desk"), so enumerating the desk grants
+    # it nothing its scope did not already say it has.
     "operations_lead": frozenset(TOOL_REGISTRY),
     # The client (end user) may only annotate their own requests.
+    #
+    # **``find_requests`` is deliberately NOT here.** The client persona's scope is
+    # ``ScopeKind.OWN`` on ``customer_id``, and that narrowing is applied by the
+    # retrieval/data layers from the authenticated subject — a value
+    # :class:`ToolContext` does not carry, so this module cannot enforce it. A tool
+    # that takes ``customer_id`` as a *filter* would let a client enumerate any
+    # customer's requests simply by passing someone else's id. Listing it for this
+    # persona is therefore not a roster line, it is a scope change; it waits until the
+    # authenticated subject reaches the tool layer and the filter can be pinned to it.
     "client": frozenset({"add_case_note"}),
 }
 """Persona id → the set of tool names that persona is authorised to call."""

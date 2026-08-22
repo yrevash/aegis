@@ -43,6 +43,7 @@ __all__ = [
     "OutputGuardFn",
     "RenderPromptFn",
     "RetrieveFn",
+    "ReadOnlyFn",
     "RiskFn",
     "RosterFn",
     "RunToolFn",
@@ -160,6 +161,10 @@ class OutputGuardFn(Protocol):
 
 ToolDefsFn = Callable[[str], list[dict[str, Any]]]
 RiskFn = Callable[[str], RiskLevel]
+
+#: Whether a tool only reads. Defaults to "no tool is read-only", which preserves the
+#: exact behaviour every existing caller and test fake had before this seam existed.
+ReadOnlyFn = Callable[[str], bool]
 
 
 class RenderPromptFn(Protocol):
@@ -482,6 +487,10 @@ class AgentDeps:
     run_tool: RunToolFn
     tool_risk: RiskFn
     render_system_prompt: RenderPromptFn
+    #: Whether a named tool only reads. Defaults to "nothing is read-only", which is
+    #: exactly the behaviour every caller had before this seam existed, so no existing
+    #: construction or test fake changes meaning. The host wires the real registry here.
+    tool_read_only: ReadOnlyFn = field(default=lambda _name: False)
     #: Supervisor roster provider — returns the host adapter's routable specialists.
     #: Defaults to the core ``qa``-only fallback roster, so test fakes that omit it
     #: still route (to ``qa``); the host wires the real adapter roster here.

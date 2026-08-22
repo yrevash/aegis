@@ -152,8 +152,19 @@ def test_list_tools_carries_honest_risk_annotations():
     facade = AdapterToolServer(store=InMemoryRecordStore.from_dataset(generate_synthetic_sync()))
     by_name = {t.name: t for t in facade.list_tools()}
 
-    # No adapter tool is a read; every one of them mutates the record store.
-    assert all(t.annotations.read_only_hint is False for t in by_name.values())
+    # Exactly one adapter tool is a read; the other three mutate the record store.
+    # ``read_only_hint`` therefore has to be per-tool and cannot track the risk tier:
+    # ``find_requests`` and ``add_case_note`` are both LOW and only one of them writes.
+    lookup = by_name["find_requests"]
+    assert lookup.annotations.read_only_hint is True
+    assert lookup.annotations.destructive_hint is False
+    assert lookup.annotations.idempotent_hint is True
+    assert "low risk" in lookup.annotations.title
+    assert all(
+        t.annotations.read_only_hint is False
+        for name, t in by_name.items()
+        if name != "find_requests"
+    )
 
     # LOW risk but NOT idempotent: each call appends another note.
     note = by_name["add_case_note"]
