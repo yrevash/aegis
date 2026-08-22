@@ -4,6 +4,7 @@ import { useCallback, useState, type ReactElement } from 'react'
 
 import { PageHeader } from '@/components/primitives/PageHeader'
 import { SettingsForm } from '@/components/settings/SettingsForm'
+import { TextSizeCard } from '@/components/settings/TextSizeCard'
 import { ToolRosterCard } from '@/components/settings/ToolRosterCard'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { SkillsPanel } from '@/components/skills/SkillsPanel'
@@ -39,6 +40,11 @@ function SettingsView(): ReactElement {
         eyebrow="platform → tenant → you · every value names who decided"
         title="Settings"
       />
+
+      {/* Above the catalogue on purpose: it is the one control on this screen that
+          changes nothing on the server and everything about whether the rest of the
+          screen can be read. It is also in the top bar of every page. */}
+      <TextSizeCard />
 
       <SettingsForm onWritten={bump} />
       <SkillsPanel />

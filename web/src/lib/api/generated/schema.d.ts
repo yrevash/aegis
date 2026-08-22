@@ -2071,6 +2071,138 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Notifications
+         * @description Return the caller's notifications, newest first, with the unread total.
+         *
+         *     ``require_auth`` rather than a role guard: an alert is addressed to a principal, and
+         *     every role has work that finishes. The narrowing is the sealed scope, not the role.
+         *
+         *     A tenant's rows are its own; a row targeted at one user is that user's alone. Both
+         *     halves come from :func:`app.data.notifications.scope_predicate` — see the module
+         *     docstring for why there is exactly one copy of it.
+         */
+        get: operations["get_notifications_v1_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read All Notifications
+         * @description Mark every unread notification in the caller's scope read.
+         *
+         *     Declared **above** ``/notifications/{id}/read`` for readability only — the two
+         *     cannot collide (three path segments against two), but a reader scanning this file
+         *     should meet the literal path before the parameterised one.
+         */
+        post: operations["read_all_notifications_v1_notifications_read_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notifications/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Notifications
+         * @description Push notifications to this principal as they are written, over SSE.
+         *
+         *     What arrives, and what does not
+         *     -------------------------------
+         *
+         *     Only what is published **while this connection is held**. There is no replay on
+         *     connect: the backlog is ``GET /notifications``, which the frontend calls separately,
+         *     and a stream that also replayed would double every alert on the load path and
+         *     re-toast history on every reconnect.
+         *
+         *     Each frame is ``event: notification`` with one :class:`NotificationRow` as its
+         *     ``data``. Between frames the stream emits an SSE **comment** every
+         *     :data:`PING_SECONDS` seconds, so an idle connection keeps producing bytes and the
+         *     proxies that close a quiet ``text/event-stream`` (nginx at 60s by default) do not.
+         *     A comment is not a message: ``EventSource`` never surfaces it, so the heartbeat costs
+         *     the frontend nothing.
+         *
+         *     One opening ``event: ready`` frame reports which transport is behind this stream —
+         *     ``{"mode": "redis"}`` when notifications cross process boundaries, ``in-process``
+         *     when Redis was unreachable and this connection can only hear what this interpreter
+         *     published. That is deliberately on the wire rather than only in a log: "the alert
+         *     never arrived" and "the alert arrived in another process" are the same symptom, and
+         *     an operator holding the stream open can now tell them apart.
+         *
+         *     The scope is sealed before the generator is built
+         *     -------------------------------------------------
+         *
+         *     ``tenant_id`` and ``user_id`` are resolved from the bearer token *here*, in the
+         *     handler, and closed over. Resolving them inside the loop would re-read a principal
+         *     whose token may since have been reissued with a different tenant; sealing them at
+         *     connect makes the stream's authority exactly the authority the connection was opened
+         *     with, and :func:`app.data.notifications.visible_to` applies it to every frame.
+         */
+        get: operations["stream_notifications_v1_notifications_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read Notification
+         * @description Mark one notification read.
+         *
+         *     **404, never 403, for a row outside the caller's scope.** A 403 would confirm that
+         *     another tenant's notification id is real, which is a working oracle for enumerating
+         *     them; "no such notification" is both true from this caller's point of view and
+         *     useless to an attacker. The scope terms live in the ``UPDATE``'s own ``WHERE`` (see
+         *     :func:`app.data.notifications.mark_read`), so the wrong tenant's id matches nothing
+         *     rather than being loaded and then refused.
+         *
+         *     Raises:
+         *         HTTPException: 404 when no such notification exists in the caller's scope.
+         */
+        post: operations["read_notification_v1_notifications__notification_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/ops/diagnose": {
         parameters: {
             query?: never;
@@ -6386,6 +6518,30 @@ export interface components {
             unknown_features?: string[];
         };
         /**
+         * MarkAllReadResponse
+         * @description Body for ``POST /notifications/read-all``.
+         */
+        MarkAllReadResponse: {
+            /**
+             * Marked
+             * @description How many rows this call flipped; 0 is normal.
+             */
+            marked: number;
+        };
+        /**
+         * MarkReadResponse
+         * @description Body for ``POST /notifications/{id}/read``.
+         */
+        MarkReadResponse: {
+            /** Id */
+            id: string;
+            /**
+             * Read
+             * @default true
+             */
+            read: boolean;
+        };
+        /**
          * MemoryEvent
          * @description Long-term memory recall summary for one turn (glass-box; purely additive).
          *
@@ -7220,6 +7376,84 @@ export interface components {
             needs: string;
             /** Why */
             why: string;
+        };
+        /**
+         * NotificationRow
+         * @description One durable alert, exactly as the bell renders it.
+         *
+         *     Deliberately snake_case on the wire — this is the contract the frontend was built
+         *     against in parallel, and an alias layer here would have made the two disagree on the
+         *     one field a reader actually keys on.
+         *
+         *     The row carries **no ``tenant_id`` and no ``user_id``**. Those are how the server
+         *     decides who may see it (:func:`app.data.notifications.scope_predicate`); a client
+         *     that could read them is a client that could be tempted to filter with them, and a
+         *     filter in the browser is not a boundary.
+         */
+        NotificationRow: {
+            /**
+             * Body
+             * @description One sentence naming the thing, e.g. 'policy-4.pdf ingested — 12 chunks.'
+             */
+            body: string;
+            /**
+             * Created At
+             * @description ISO 8601 UTC.
+             */
+            created_at: string;
+            /**
+             * Entity Ref
+             * @description What it is about: 'job:21', 'document:23'.
+             */
+            entity_ref?: string | null;
+            /**
+             * Href
+             * @description The in-app path to open, e.g. '/app/tenant_admin/jobs'.
+             */
+            href?: string | null;
+            /**
+             * Id
+             * @description Opaque row id; also the SSE frame's identity.
+             */
+            id: string;
+            /**
+             * Kind
+             * @description job.succeeded | job.failed | approval.awaiting | budget.exceeded | sla.auto_decided — a <subject>.<event> name, never a screen name.
+             */
+            kind: string;
+            /**
+             * Read At
+             * @description ISO 8601 UTC, or null.
+             */
+            read_at?: string | null;
+            /**
+             * Severity
+             * @description info | warning | critical.
+             */
+            severity: string;
+            /**
+             * Title
+             * @description The short line, e.g. 'Ingest finished'.
+             */
+            title: string;
+        };
+        /**
+         * NotificationsResponse
+         * @description Body for ``GET /notifications`` — the page, and the badge.
+         *
+         *     ``unread`` is counted over the caller's whole scope with no ``LIMIT``, not over
+         *     ``rows``. A badge that saturated at the page size would under-report exactly when a
+         *     tenant most needed it to be right.
+         */
+        NotificationsResponse: {
+            /** Rows */
+            rows?: components["schemas"]["NotificationRow"][];
+            /**
+             * Unread
+             * @description Unread notifications in the caller's scope.
+             * @default 0
+             */
+            unread: number;
         };
         /**
          * OpsActivePromptResponse
@@ -12634,6 +12868,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelsResponse"];
+                };
+            };
+        };
+    };
+    get_notifications_v1_notifications_get: {
+        parameters: {
+            query?: {
+                /** @description Return only unread rows (the count is unaffected). */
+                unread_only?: boolean;
+                /** @description Maximum rows. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_all_notifications_v1_notifications_read_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkAllReadResponse"];
+                };
+            };
+        };
+    };
+    stream_notifications_v1_notifications_stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    read_notification_v1_notifications__notification_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkReadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

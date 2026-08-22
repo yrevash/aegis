@@ -649,9 +649,15 @@ function AdminCommandCenter(): ReactElement {
               {routing.length > 0 ? (
                 <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {routing.map(({ role, model }) => (
+                    // `min-w-0` on the grid child, not only on the truncating span inside
+                    // it: a grid item's automatic minimum is its content's min-content
+                    // width, so the `1fr` track floors at the widest model id and the whole
+                    // page scrolls sideways rather than the id ellipsing. Invisible at
+                    // 390px until the text-size control was raised a step, then a 56px
+                    // document scroll.
                     <li
                       key={role}
-                      className="flex items-center gap-2.5 rounded-md border border-border bg-surface-2/50 px-3 py-2"
+                      className="flex min-w-0 items-center gap-2.5 rounded-md border border-border bg-surface-2/50 px-3 py-2"
                     >
                       <span className="shrink-0 text-sm font-medium text-foreground">{role}</span>
                       <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />

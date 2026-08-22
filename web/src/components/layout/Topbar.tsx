@@ -5,6 +5,8 @@ import { usePathname, useRouter } from 'next/navigation'
 import { LogOut, UserRound } from 'lucide-react'
 import type { ReactElement } from 'react'
 
+import { NotificationBell } from '@/components/notifications/NotificationBell'
+import { TextSizeMenu } from '@/components/settings/TextSizeMenu'
 import { portalLabelFor, SECTIONS, type Portal } from '@/lib/portal'
 import { useAuth } from '@/lib/auth/AuthContext'
 
@@ -33,7 +35,15 @@ import { activeSectionFrom } from './navGroups'
  *
  * The notification bell that used to sit here was fed by nothing, so it answered
  * "you're all caught up" whatever the platform's actual state — a reassurance the
- * console had not earned. It comes back when there is a feed behind it.
+ * console had not earned. **There is a feed behind it now**, so it is back: it reads
+ * `GET /notifications`, holds a live socket on `/notifications/stream`, and says which
+ * of the two it is running on. When the backend does not serve those routes it renders
+ * with no count and states that, which is the same honesty the deletion was about.
+ *
+ * The **text-size control** is here for an accessibility reason that only works if it is
+ * here: its home is Settings, but the person who needs it is by definition on a screen
+ * they are struggling to read, and making them navigate to a settings section first is
+ * the failure. Both controls drive one shared step, so they cannot disagree.
  */
 export function Topbar({ portal }: { portal: Portal }): ReactElement {
   const pathname = usePathname()
@@ -53,15 +63,28 @@ export function Topbar({ portal }: { portal: Portal }): ReactElement {
 
       <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
         <ol className="flex items-center gap-2 text-sm">
-          <li className="hidden min-w-0 sm:block">
+          {/*
+           * The portal crumb is drawn from `lg`, where the rail is also visible; below
+           * that the section name has the bar to itself.
+           *
+           * Two things were wrong here and they compounded. `truncate` is
+           * `overflow: hidden`, which does nothing on an inline box, so this anchor never
+           * truncated — it overran its `<li>` and the section label drew on top of it
+           * ("Tenant admin po**Set…**"). And with both crumbs competing for a bar that
+           * now also holds two more controls, 834px at the largest text step left
+           * "Settings" as "Set…". The `<a>` is a block so it truncates when it has to,
+           * and the crumb that gives way is the one the rail repeats — the section a
+           * person is actually on is the half worth keeping whole.
+           */}
+          <li className="hidden min-w-0 lg:block">
             <Link
               href={`/app/${portal}`}
-              className="truncate rounded-sm text-muted-foreground outline-none transition-colors duration-[--dur-fast] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+              className="block truncate rounded-sm text-muted-foreground outline-none transition-colors duration-[--dur-fast] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
             >
               {portalLabelFor(portal)}
             </Link>
           </li>
-          <li aria-hidden className="hidden text-muted-foreground/50 sm:block">
+          <li aria-hidden className="hidden text-muted-foreground/50 lg:block">
             /
           </li>
           <li className="min-w-0">
@@ -73,21 +96,34 @@ export function Topbar({ portal }: { portal: Portal }): ReactElement {
       </nav>
 
       <div className="flex shrink-0 items-center gap-2">
-        <p className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground">
+        <TextSizeMenu />
+        <NotificationBell />
+        {/*
+         * Who is signed in, said once for assistive tech at every width, and drawn only
+         * from `sm` up.
+         *
+         * Below `sm` the chip was an avatar glyph carrying no text — and every control in
+         * this bar is sized in `rem`, so at the largest text step five of them came to
+         * 275px of a 390px bar and the breadcrumb truncated to "S.". The section a person
+         * is looking at is worth more of that bar than a second glyph for an identity the
+         * Sign out button beside it already implies, so the chip is what gives way. The
+         * sentence stays.
+         */}
+        <p className="sr-only">
+          Signed in as {displayName}, {portalLabelFor(portal)}
+        </p>
+        <p className="hidden items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-foreground sm:inline-flex">
           <span
             aria-hidden
             className="flex size-6 items-center justify-center rounded-md bg-surface-2 text-muted-foreground"
           >
             <UserRound className="size-4" aria-hidden />
           </span>
-          <span className="hidden min-w-0 flex-col leading-tight sm:flex">
+          <span className="flex min-w-0 flex-col leading-tight">
             <span className="truncate font-medium capitalize">{displayName}</span>
             <span className="truncate font-mono text-[0.62rem] tracking-wide text-muted-foreground">
               {portal.replace('_', ' ')}
             </span>
-          </span>
-          <span className="sr-only">
-            Signed in as {displayName}, {portalLabelFor(portal)}
           </span>
         </p>
         <button

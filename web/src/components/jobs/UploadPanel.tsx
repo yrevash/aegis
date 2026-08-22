@@ -98,7 +98,18 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
+        {/*
+          `[&>*]:min-w-0` on the grid and `w-full min-w-0` on the file input, for one
+          reason each. A grid item's automatic minimum is its content's min-content
+          width, so a single-column track floors at whatever the widest child insists on
+          — and `<input type="file">` insists: its intrinsic width is the platform's own
+          "Choose File · no file chosen" chrome plus the `file:` button, and it does not
+          shrink for anybody. At 390px with the text-size control at its top step that
+          came to 459px inside a 358px card, scrolling the whole document sideways on
+          the client and tenant-admin document screens. `w-full` overrides the intrinsic
+          width; `min-w-0` is what lets it go below it.
+        */}
+        <div className="grid min-w-0 gap-3 md:grid-cols-3 [&>*]:min-w-0">
           <label className="flex flex-col gap-1.5 text-sm md:col-span-3">
             <span className="font-medium text-foreground">Document</span>
             <input
@@ -106,7 +117,7 @@ export function UploadPanel({ token, onUploaded }: UploadPanelProps): ReactEleme
               type="file"
               accept="application/pdf,.pdf"
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-              className="h-11 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background file:mr-3 file:rounded-md file:border-0 file:bg-surface-2 file:px-3 file:py-1 file:text-sm file:text-foreground"
+              className="h-11 w-full min-w-0 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background file:mr-3 file:rounded-md file:border-0 file:bg-surface-2 file:px-3 file:py-1 file:text-sm file:text-foreground"
             />
           </label>
 

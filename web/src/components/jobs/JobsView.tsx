@@ -483,7 +483,11 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
           is what puts a document into it, and `documents` is what came out. The
           front door is withheld from an untenanted operator — `POST /documents`
           refuses it — so the corpus, which reads fine, takes the full width. */}
-      <div className={cn('grid items-start gap-4', canWrite && 'xl:grid-cols-2')}>
+      {/* `[&>*]:min-w-0` for the reason `DocumentsView` already carries it on its copy
+          of this pair: below `xl` this is one auto-sized track, and a grid item's
+          default `min-width: auto` lets the upload form's file input set the track
+          wider than the viewport. */}
+      <div className={cn('grid items-start gap-4 [&>*]:min-w-0', canWrite && 'xl:grid-cols-2')}>
         {canWrite ? (
           <UploadPanel
             token={token}

@@ -64,8 +64,20 @@ export function PageHeader({
           </p>
         )}
       </div>
+      {/*
+       * Not `shrink-0`, and this is the same defect `CardHeader` already documents
+       * fixing one file over. An actions slot is usually one button, where refusing to
+       * shrink is right — but several screens put a scope chip *and* a button in here,
+       * and `shrink-0` pins that row to its single-line width so the `flex-wrap` beside
+       * it can never fire. It runs off the page instead: `tenant_admin/roles` measured
+       * a 28px document scroll at 390px once the text-size control was raised one step,
+       * and 85px at the top step, from a row that had every opportunity to stack.
+       *
+       * The failure was latent at 100% — which is the argument for the accessibility
+       * control being a real test of the layout rather than a setting bolted beside it.
+       */}
       {actions == null ? null : (
-        <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>
       )}
     </div>
   )

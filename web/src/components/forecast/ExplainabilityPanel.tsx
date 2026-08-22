@@ -40,11 +40,19 @@ const pct = (v: number): string => `${(v * 100).toFixed(1)}%`
 /** One measured fact off the card — a mono label over its value. */
 function Fact({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
+    // `min-w-0` + `break-words`: `detail` carries class names the server chose —
+    // `SplitConformalRegressor` is one unbreakable 22-character word — and at 390px
+    // with the text-size control at its top step it is wider than the two-column cell
+    // it sits in. It escaped by 0.91px, which `document.scrollWidth` rounds up to a 1px
+    // sideways scroll of the whole page. `break-words` only breaks a word that does not
+    // otherwise fit, so nothing shorter is affected.
+    <div className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-surface-2/40 p-3.5">
       <span className="eyebrow">{label}</span>
-      <Figure className="text-[0.95rem] leading-5 font-semibold">{value}</Figure>
+      <Figure className="break-words text-[0.95rem] leading-5 font-semibold">{value}</Figure>
       {detail ? (
-        <span className="text-[0.72rem] leading-snug text-muted-foreground">{detail}</span>
+        <span className="break-words text-[0.72rem] leading-snug text-muted-foreground">
+          {detail}
+        </span>
       ) : null}
     </div>
   )

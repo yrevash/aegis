@@ -29,13 +29,22 @@ function extractData(frame: string): string | null {
  * Read an SSE response body to completion, decoding each frame into a
  * {@link StreamEvent} and invoking `onEvent`.
  *
+ * The payload type is a parameter defaulting to {@link StreamEvent}, because the
+ * run stream is no longer the only SSE endpoint the console reads —
+ * `GET /notifications/stream` carries a different payload over the identical wire
+ * format. The frame splitting below is the part that is genuinely hard (see the
+ * CRLF note), and a second copy of it is how one of these two streams silently
+ * stops flushing. Nothing else about this function changes: the `event:` name is
+ * still ignored, so a caller reading a stream that multiplexes several event
+ * names must narrow the payload itself.
+ *
  * @param body - The `ReadableStream` from a streaming `fetch` response.
  * @param onEvent - Called once per successfully parsed event.
  * @param signal - Optional abort signal to stop reading early.
  */
-export async function readSSEStream(
+export async function readSSEStream<T = StreamEvent>(
   body: ReadableStream<Uint8Array>,
-  onEvent: (event: StreamEvent) => void,
+  onEvent: (event: T) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const reader = body.getReader()
@@ -46,7 +55,7 @@ export async function readSSEStream(
     const data = extractData(frame)
     if (data === null) return
     try {
-      onEvent(JSON.parse(data) as StreamEvent)
+      onEvent(JSON.parse(data) as T)
     } catch (error) {
       // One malformed frame does not justify tearing down the stream — but it is not
       // nothing either, and swallowing it in silence is how a frame-splitting bug went
