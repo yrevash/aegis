@@ -100,3 +100,28 @@ def test_a_projection_that_landed_short_is_not_complete() -> None:
     assert ProjectionResult(nodes=10, edges=3, attempted_nodes=10, attempted_edges=3).complete
     assert not ProjectionResult(nodes=0, edges=0, attempted_nodes=10).complete
     assert not ProjectionResult(nodes=10, edges=0, attempted_nodes=10, attempted_edges=3).complete
+
+
+def test_the_writer_labels_nodes_where_lightrags_reader_looks(monkeypatch):
+    """The writer's label must follow LightRAG's own three-step resolution.
+
+    ``lightrag.kg.neo4j_impl`` resolves ``NEO4J_WORKSPACE`` → else the workspace it was
+    constructed with (Aegis threads ``WORKSPACE`` into it) → else ``"base"``. This
+    implemented only the first and last, so a deployment setting ``WORKSPACE`` alone —
+    the shape every ``.env`` here uses to isolate a run — wrote every node under
+    ``base`` while the reader matched on the run's own label. The graph was fully
+    written and entirely invisible.
+    """
+    from app.ingestion.graph_projection import _workspace_label
+
+    monkeypatch.delenv("NEO4J_WORKSPACE", raising=False)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    assert _workspace_label() == "base", "no workspace at all is still LightRAG's base"
+
+    # The step that was missing: WORKSPACE alone must reach the label.
+    monkeypatch.setenv("WORKSPACE", "run1")
+    assert _workspace_label() == "run1"
+
+    # NEO4J_WORKSPACE still wins, exactly as it does inside LightRAG.
+    monkeypatch.setenv("NEO4J_WORKSPACE", "explicit")
+    assert _workspace_label() == "explicit"

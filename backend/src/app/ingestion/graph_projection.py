@@ -148,8 +148,22 @@ def _workspace_label() -> str:
 
     Computed exactly as ``lightrag.kg.neo4j_impl`` computes it, because a node written
     under a different label is a node the reader's ``MATCH`` never returns.
+
+    That resolution has **three** steps, and this function used to implement two of
+    them: ``NEO4J_WORKSPACE`` wins if set, *else the workspace LightRAG was constructed
+    with* — which Aegis threads through from ``WORKSPACE`` — else ``"base"``. Dropping
+    the middle step is not a cosmetic difference: a deployment that sets ``WORKSPACE``
+    and not ``NEO4J_WORKSPACE`` (the shape every ``.env`` here uses to isolate a run)
+    had its reader looking under that workspace's label while this writer labelled
+    everything ``base``. The whole knowledge graph was written, and none of it was
+    visible — ``GET /graph`` answered ``{"nodes": [], "edges": []}`` over a Neo4j
+    holding 122 nodes and 272 edges.
     """
-    return os.environ.get("NEO4J_WORKSPACE", "").strip() or "base"
+    return (
+        os.environ.get("NEO4J_WORKSPACE", "").strip()
+        or os.environ.get("WORKSPACE", "").strip()
+        or "base"
+    )
 
 
 def _quoted(label: str) -> str:
