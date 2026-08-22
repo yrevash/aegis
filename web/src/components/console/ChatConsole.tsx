@@ -887,7 +887,21 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
                 role="tabpanel"
                 id="console-panel-flow"
                 aria-labelledby="console-tab-flow"
-                className="min-h-0 flex-1"
+                // The panel is the graph's bounds, and `overflow-hidden` makes that
+                // literal: the canvas is fitted into whatever height the frame has left
+                // after the composer, and nothing inside it can paint outside it. That is
+                // the whole fix for the graph that used to run down over the composer —
+                // no z-index anywhere, just a box the graph cannot leave.
+                //
+                // Below `lg` the frame is in document flow and has no height to hand
+                // down, so the panel names one, and only when there is a graph to draw.
+                // It is deliberately not a height on a `flex-1` item: a flex item takes
+                // its main size from `flex-basis`, and `flex-1`'s `0%` beats a height
+                // outright — which collapsed this panel to nothing on the first attempt.
+                className={cn(
+                  'flex min-h-0 flex-col overflow-hidden lg:flex-1',
+                  newest !== null && 'max-lg:h-[68vh]',
+                )}
               >
                 {newest === null ? (
                   <p className="rounded-lg border border-border bg-surface-2/40 px-4 py-6 text-sm text-muted-foreground">
@@ -895,7 +909,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
                     no trajectory to draw. Ask a question to watch the graph execute.
                   </p>
                 ) : (
-                  <FlowCanvas state={newest} height={460} />
+                  <FlowCanvas state={newest} />
                 )}
               </div>
             )}

@@ -8,12 +8,23 @@ import {
   MarkerType,
   Position,
   ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
   type Edge,
+  type FitViewOptions,
   type Node,
   type NodeProps,
 } from '@xyflow/react'
 import { useReducedMotion } from 'motion/react'
-import { useMemo, type ReactElement } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+  type RefObject,
+} from 'react'
 
 import '@xyflow/react/dist/style.css'
 
@@ -40,17 +51,31 @@ import { useAgentTopology } from './useAgentTopology'
  * That is a presentation choice, not a second layout. The tested part — which layer a
  * stage sits in, which row it takes inside that layer, which edges close a cycle — is
  * `layoutFlow`'s and is read, not recomputed. What changes is only that fourteen
- * sequential stages laid out horizontally are 2,600 flow-units wide and shrink to an
- * illegible ribbon inside a console column, while the same fourteen laid out vertically
- * fit the column's width at full size and scroll in the direction a page already
- * scrolls.
+ * sequential stages laid out horizontally are 2,600 flow-units wide against a console
+ * column's ~1,100, while the same fourteen laid out vertically are about 950 tall
+ * against a panel's ~550 — the transposed spine is the orientation that survives being
+ * fitted into the space this tab actually has.
+ *
+ * `LAYER_Y` is the tightest rhythm the boxes read at, and it is chosen for that fit: at
+ * the old 84 the graph could not reach the readability floor in a 900px window.
  */
-const LAYER_Y = 84
-const ROW_X = 3.4
+const LAYER_Y = 58
+const ROW_X = 6
 
 /** Node box, in flow units. Positions are centres, so half of each is subtracted. */
 const NODE_W = 136
-const NODE_H = 48
+const NODE_H = 40
+
+/**
+ * How the graph is fitted into the box it is given.
+ *
+ * `minZoom` is the readability floor, not a preference: below roughly half size the
+ * stage names stop being words, and a picture nobody can read is worse than one they
+ * have to pan. So the graph shrinks to fit down to this, and past it the canvas pans
+ * **inside its own bounded box** — drag, the zoom controls, or the arrow keys — rather
+ * than growing the box and walking over the composer, which is what it used to do.
+ */
+const FIT: FitViewOptions = { padding: 0.06, minZoom: 0.5, maxZoom: 1 }
 
 /** Idle mark colours for the light canvas — a stage that has not run yet. */
 const IDLE_STROKE = '#e5edf5'
@@ -83,7 +108,7 @@ function StageNode({ data }: NodeProps<Node<StageData>>): ReactElement {
   return (
     <div
       className={cn(
-        'relative flex flex-col justify-center rounded-lg border px-2.5 py-1.5 text-center',
+        'relative flex flex-col justify-center overflow-hidden rounded-lg border px-2.5 py-1 text-center',
         'transition-shadow duration-[var(--dur-base)]',
         active ? 'bg-card shadow-hover' : done ? 'bg-card' : 'bg-surface-2/70',
       )}
@@ -107,16 +132,19 @@ function StageNode({ data }: NodeProps<Node<StageData>>): ReactElement {
         />
       )}
 
+      {/* Sized for the zoom it is actually read at. The whole graph fitted into a console
+          panel lands around 0.6, so the label is set a little larger and a little tighter
+          than a 1:1 reading of it would want. */}
       <span
         className={cn(
-          'truncate text-[0.76rem] font-medium',
+          'truncate text-[0.82rem] leading-tight font-medium',
           active ? 'text-foreground' : done ? 'text-foreground/80' : 'text-muted-foreground',
         )}
         title={data.label}
       >
         {data.short}
       </span>
-      <span className="tabular truncate font-mono text-[0.62rem] text-muted-foreground">
+      <span className="tabular truncate font-mono text-[0.64rem] leading-tight text-muted-foreground">
         {/* A stage that emits no events of its own says so, rather than being drawn as
             skipped — `recall_memory` and `persist_memory` are wired plain by design. */}
         {silent && status === 'idle'
@@ -193,10 +221,64 @@ function Legend(): ReactElement {
   )
 }
 
+/**
+ * Keep the graph fitted to the box, rather than fitting it once and hoping.
+ *
+ * React Flow's `fitView` prop fits on the first frame the nodes are measured on, and
+ * never again. Three things invalidate that fit: the topology arriving from the backend
+ * after the snapshot painted, the run traversing more of the graph, and — the one that
+ * actually broke — the container changing size. This refits on all three.
+ *
+ * Deliberately **not** gated on `useNodesInitialized`: with these nodes it reports false
+ * for the lifetime of the canvas even though the graph is measured and drawn, so gating
+ * on it meant no refit ever ran and a resized window kept the zoom it was born with.
+ * `fitView` is a no-op against unmeasured nodes anyway, and every trigger here fires
+ * after a paint.
+ */
+function FitToBox({
+  signature,
+  boxRef,
+}: {
+  signature: string
+  boxRef: RefObject<HTMLDivElement | null>
+}): null {
+  const { fitView } = useReactFlow()
+
+  const fit = useCallback(() => {
+    void fitView(FIT)
+  }, [fitView])
+
+  useEffect(() => {
+    // One frame late: the status change that triggered this can also change a node's
+    // measured size, and fitting to the pre-paint size lands slightly off.
+    const frame = requestAnimationFrame(fit)
+    return () => cancelAnimationFrame(frame)
+  }, [fit, signature])
+
+  useEffect(() => {
+    const box = boxRef.current
+    if (box === null || typeof ResizeObserver === 'undefined') return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const observer = new ResizeObserver(() => {
+      // Deliberately *after* the current frame. React Flow keeps the pane's dimensions
+      // in its own store, fed by its own ResizeObserver on the same element; fitting
+      // from inside this callback computes against the size the pane had a moment ago,
+      // which is how a resized window kept the zoom it was given at the old height.
+      clearTimeout(timer)
+      timer = setTimeout(fit, 80)
+    })
+    observer.observe(box)
+    return () => {
+      clearTimeout(timer)
+      observer.disconnect()
+    }
+  }, [boxRef, fit])
+
+  return null
+}
+
 interface FlowCanvasProps {
   state: RunState
-  /** Floor for the canvas height. The graph's own extent wins when it is taller. */
-  height?: number
 }
 
 /**
@@ -213,7 +295,7 @@ interface FlowCanvasProps {
  * with the generated snapshot as the initial value, so the picture is the real graph
  * from the first frame and never a hand-drawn diagram that can drift.
  */
-export function FlowCanvas({ state, height = 420 }: FlowCanvasProps): ReactElement {
+function FlowCanvasInner({ state }: FlowCanvasProps): ReactElement {
   const topology = useAgentTopology()
   const reduced = useReducedMotion() ?? false
   const map = useMemo(() => buildFlowMap(topology), [topology])
@@ -297,53 +379,143 @@ export function FlowCanvas({ state, height = 420 }: FlowCanvasProps): ReactEleme
     [map, flow, state.running, reduced],
   )
 
-  // The canvas is as tall as the graph, and the page scrolls.
-  //
-  // The alternative — a fixed 600px box with `fitView` — is what this looked like first,
-  // and it is the failure mode of every embedded graph: fourteen sequential stages fitted
-  // into 600px is a zoom of about 0.45, at which the stage names stop being words. A
-  // reader cannot act on a picture they cannot read, so the box grows to the graph
-  // instead and the whole thing stays at full size. `fitView` is pinned to zoom 1 so it
-  // only ever centres.
-  const maxLayer = Math.max(0, ...map.nodes.map((n) => map.position[n.id]?.layer ?? 0))
-  const canvasHeight = Math.max(height, maxLayer * LAYER_Y + NODE_H + 48)
+  /**
+   * What a refit is owed to.
+   *
+   * The topology can arrive after the snapshot painted, and a live run changes which
+   * stages are lit and how far down the spine the frontier has reached — both change
+   * what "the graph" is, and a fit from before them is stale. Statuses are folded in as
+   * one string so a token arriving without changing anything visible does not refit.
+   */
+  const signature = useMemo(
+    () => `${map.nodes.map((n) => `${n.id}:${flow.status[n.id] ?? 'idle'}`).join('|')}`,
+    [map, flow],
+  )
+
+  const boxRef = useRef<HTMLDivElement>(null)
+  const { fitView, setViewport, getViewport, zoomIn, zoomOut } = useReactFlow()
+
+  /**
+   * Keyboard parity with the mouse.
+   *
+   * The pane is pannable by drag and zoomable by its controls; neither is reachable
+   * without a pointer. The box itself is the tab stop, arrows pan it, `+`/`-` zoom and
+   * `0` re-fits — so a keyboard user can reach every part of a graph that is larger than
+   * its box, which is exactly the case the zoom floor creates.
+   */
+  const onKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      const step = event.shiftKey ? 160 : 56
+      const duration = reduced ? 0 : 120
+      const pan = (dx: number, dy: number): void => {
+        const viewport = getViewport()
+        void setViewport({ ...viewport, x: viewport.x + dx, y: viewport.y + dy }, { duration })
+      }
+      switch (event.key) {
+        case 'ArrowUp':
+          pan(0, step)
+          break
+        case 'ArrowDown':
+          pan(0, -step)
+          break
+        case 'ArrowLeft':
+          pan(step, 0)
+          break
+        case 'ArrowRight':
+          pan(-step, 0)
+          break
+        case '+':
+        case '=':
+          void zoomIn({ duration })
+          break
+        case '-':
+        case '_':
+          void zoomOut({ duration })
+          break
+        case '0':
+          void fitView({ ...FIT, duration })
+          break
+        default:
+          return
+      }
+      event.preventDefault()
+    },
+    [fitView, getViewport, reduced, setViewport, zoomIn, zoomOut],
+  )
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+    // `h-full min-h-0` and a `flex-1` canvas: the box is whatever height the tab panel
+    // has, and the graph is fitted into it. It used to be the other way round — the box
+    // grew to the graph's own extent inside a fixed-height column — and since React Flow
+    // paints its nodes absolutely positioned, the overflow did not just spill, it painted
+    // *over* the composer underneath. Bounding the box is the fix; the composer needs no
+    // z-index of its own.
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
         <BranchTag branch={flow.branch} denied={flow.denied} />
         <Legend />
       </div>
 
       <div
-        className="w-full overflow-hidden rounded-lg border border-border bg-surface-2/40"
-        style={{ height: canvasHeight }}
+        ref={boxRef}
+        tabIndex={0}
+        // `application`, not `group`: a screen reader in browse mode eats the arrow keys
+        // before the handler below sees them, and arrows are how a keyboard user reaches
+        // the part of the graph that is off the box.
+        role="application"
+        aria-roledescription="Graph canvas"
+        aria-label="The compiled agent graph, with the stages this run executed"
+        aria-describedby="flow-canvas-keys"
+        onKeyDown={onKeyDown}
+        className={cn(
+          'relative min-h-0 w-full min-w-0 flex-1 overflow-hidden',
+          'rounded-lg border border-border bg-surface-2/40',
+          'focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25 focus-visible:outline-none',
+        )}
       >
         <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={NODE_TYPES}
           fitView
-          // `maxZoom: 1` keeps a short run from being blown up past its natural size;
-          // the floor is the readability floor — below it the stage labels stop being
-          // words, so the canvas pans instead of shrinking further.
-          fitViewOptions={{ padding: 0.03, minZoom: 1, maxZoom: 1 }}
+          fitViewOptions={FIT}
           proOptions={{ hideAttribution: true }}
           nodesDraggable={false}
           nodesConnectable={false}
           elementsSelectable={false}
+          // The wheel keeps belonging to the page: below `lg` the console is in document
+          // flow, and a canvas that swallowed the wheel would trap a phone mid-scroll.
           panOnScroll={false}
           zoomOnScroll={false}
           preventScrolling={false}
           minZoom={0.3}
           maxZoom={1.6}
           panOnDrag
-          aria-label="The compiled agent graph, with the stages this run executed"
         >
           <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#e5edf5" />
-          <Controls showInteractive={false} position="bottom-right" />
+          <Controls showInteractive={false} position="bottom-right" aria-label="Zoom and fit the graph" />
+          <FitToBox signature={signature} boxRef={boxRef} />
         </ReactFlow>
       </div>
+
+      <p id="flow-canvas-keys" className="sr-only">
+        Arrow keys pan the graph, plus and minus zoom, zero fits it to the box.
+      </p>
     </div>
+  )
+}
+
+/**
+ * `ReactFlowProvider` is what lets this component refit the graph itself.
+ *
+ * `useReactFlow` — the only way to re-run `fitView` after the first frame, which is the
+ * whole point here — has to be called under a provider, and the one React Flow mounts
+ * internally is *inside* `<ReactFlow>`, out of reach of the component that renders it.
+ */
+export function FlowCanvas({ state }: FlowCanvasProps): ReactElement {
+  return (
+    <ReactFlowProvider>
+      <FlowCanvasInner state={state} />
+    </ReactFlowProvider>
   )
 }
