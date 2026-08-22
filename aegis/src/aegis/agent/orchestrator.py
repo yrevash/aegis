@@ -61,6 +61,11 @@ logger = logging.getLogger(__name__)
 StampFn = Callable[..., Any]
 EnqueueApprovalFn = Callable[..., Awaitable[str | None]]
 OnTerminalFn = Callable[..., None]
+#: The sink :func:`resume_parked_run` hands each continuation event to, in order. A host
+#: that keeps a durable run record passes one so the events a *headless* resume produced
+#: are recorded exactly like the ones the live socket streamed; a host that keeps no
+#: record passes nothing and the resume is unchanged.
+EventSinkFn = Callable[[dict[str, Any]], None]
 
 
 def _dict_stamp(payload: dict[str, Any], *, run_id: str, seq: int) -> dict[str, Any]:
@@ -385,6 +390,90 @@ def _is_interrupt(chunk: Any) -> bool:  # noqa: ANN401 - opaque astream chunk
     return isinstance(chunk, dict) and "__interrupt__" in chunk
 
 
+def _offer(sink: EventSinkFn | None, payload: dict[str, Any], *, run_id: str) -> None:
+    """Hand one continuation event to the host's sink, if it wants them.
+
+    Wrapped, because of the ordering this whole path exists to protect: the gated tool
+    has already run by the time most of these arrive, so a sink that raises must cost a
+    log line and not the resume. Loud, never silent — a swallowed failure here is exactly
+    how the run record would come to disagree with the approval record again.
+
+    Args:
+        sink: The host's collector, or ``None`` when the host keeps no run record.
+        payload: The event as the graph emitted it (or the terminal one built below).
+        run_id: The run being resumed, for the log line.
+    """
+    if sink is None:
+        return
+    try:
+        sink(dict(payload))
+    except Exception:  # noqa: BLE001 - recording must never break the resume
+        logger.exception(
+            "Collecting a continuation event of run %s for its durable record failed; "
+            "the resume itself is unaffected, but that run's record will be short an "
+            "event.",
+            run_id,
+        )
+
+
+def _resumed_terminal(
+    graph: Any,  # noqa: ANN401 - CompiledStateGraph
+    config: dict[str, Any],
+    *,
+    run_id: str,
+    reparked: bool,
+) -> dict[str, Any]:
+    """Build the ``run_finished`` that closes a headless resume.
+
+    The live loop ends every run with this event, folded by
+    :func:`aegis.runs.record.apply_event` into the header's ``status``, ``finished_at``
+    and usage totals. A headless resume produced no such event at all, which is why a
+    parked run's header stayed at ``awaiting_approval`` even after a human had approved
+    it and the work had run. This synthesises the same event from the same source the
+    live loop reads — the graph's final state — so the two paths cannot disagree.
+
+    Args:
+        graph: The compiled graph that was just driven.
+        config: Its config, carrying ``thread_id == run_id``.
+        run_id: The resumed run.
+        reparked: Whether the continuation hit a *second* approval gate.
+
+    Returns:
+        The terminal event payload, unstamped (the host owns ``seq``).
+    """
+    if reparked:
+        # Honest over convenient: the continuation stopped at another interrupt, so the
+        # run is parked again on its checkpoint. Claiming ``completed`` here would put
+        # the very contradiction this function exists to remove back into the header.
+        logger.warning(
+            "Run %s hit a second approval gate during its headless resume; it is parked "
+            "again on its checkpoint, so its record says awaiting_approval rather than "
+            "claiming a completion that has not happened.",
+            run_id,
+        )
+        return events.run_finished(RunStatus.AWAITING_APPROVAL)
+    try:
+        final = dict(graph.get_state(config).values)
+        return events.run_finished(
+            RunStatus(final.get("status", RunStatus.COMPLETED.value)),
+            prompt_tokens=int(final.get("prompt_tokens", 0)),
+            completion_tokens=int(final.get("completion_tokens", 0)),
+            cost_usd=float(final.get("cost_usd", 0.0)),
+            cache_hit=bool(final.get("cache_hit", False)),
+        )
+    except Exception:  # noqa: BLE001 - the drive already succeeded; do not undo it
+        # The drive returned without raising and without interrupting, so the graph did
+        # reach its end — ``completed`` is a true statement about it even when the store
+        # can no longer be read for the totals. Raising instead would release the
+        # approval row and invite a second execution of a tool that has already run.
+        logger.exception(
+            "Run %s resumed to completion but its final state could not be read; its "
+            "record carries the outcome without the usage totals.",
+            run_id,
+        )
+        return events.run_finished(RunStatus.COMPLETED)
+
+
 async def resume_parked_run(
     run_id: str | None,
     decision: ApprovalDecision,
@@ -392,6 +481,7 @@ async def resume_parked_run(
     graph: Any,  # noqa: ANN401 - CompiledStateGraph
     config: dict[str, Any] | None = None,
     approver: str | None = None,
+    on_event: EventSinkFn | None = None,
 ) -> bool:
     """Drive a parked run from its checkpoint to completion (headless, exactly once).
 
@@ -400,6 +490,26 @@ async def resume_parked_run(
     supplies the compiled ``graph`` (its checkpointer holds the paused state) plus the
     ``config`` carrying ``thread_id == run_id``. This resumes with ``Command(resume=...)``
     and streams headless; the gated tool executes exactly once.
+
+    **Headless is not unrecorded.** This function used to discard every chunk it drove
+    (``pass``), which is what made a parked run's durable header permanently wrong: the
+    header is folded from the run's events, the continuation emitted a whole run's worth
+    of them, and none was ever seen again. A host that keeps a run record passes
+    ``on_event`` and receives the continuation in order, closed by the terminal
+    ``run_finished`` :func:`_resumed_terminal` builds — the same event, from the same
+    final state, that the live loop emits. A host that keeps no record passes nothing and
+    nothing changes for it.
+
+    Args:
+        run_id: The parked run (also the checkpoint's ``thread_id``).
+        decision: The human's verdict. A **rejection** is resumed too, and deliberately:
+            the graph routes an unapproved gate to ``generate``, so the run reaches a
+            real terminal state saying the action was refused instead of sitting parked
+            forever next to an ``approvals`` row that says it was decided.
+        graph: The compiled graph whose checkpointer holds the paused state.
+        config: Its config; defaults to ``{"configurable": {"thread_id": run_id}}``.
+        approver: Who decided, threaded into the resumed graph state.
+        on_event: Optional sink for the continuation's events, in order.
 
     Returns:
         ``True`` if the run was resumed to completion; ``False`` when there is nothing
@@ -428,12 +538,28 @@ async def resume_parked_run(
     resume_cmd = Command(
         resume={"approved": decision is ApprovalDecision.APPROVE, "approver": approver}
     )
+    reparked = False
     try:
-        async for _mode, _chunk in graph.astream(
+        async for mode, chunk in graph.astream(
             resume_cmd, config, stream_mode=["custom", "updates"]
         ):
-            pass  # drive headless to completion; the tool runs exactly once
+            # Driven headless to completion — the tool runs exactly once — but the
+            # chunks are handed on rather than dropped, so the run's log continues where
+            # the parked stream left off.
+            if mode == "custom":
+                if isinstance(chunk, dict):
+                    _offer(on_event, chunk, run_id=run_id)
+            elif mode == "updates" and _is_interrupt(chunk):
+                reparked = True
     except Exception as exc:  # noqa: BLE001 - surfaced as ResumeFailedError, never lost
+        # Nothing is recorded on this path on purpose: the caller releases the approval
+        # back to PENDING, so a retry will drive the same continuation again, and a
+        # partial append here would be counted twice by that retry.
         logger.exception("Headless resume of run %s failed", run_id)
         raise ResumeFailedError(f"headless resume of run {run_id} failed: {exc}") from exc
+    _offer(
+        on_event,
+        _resumed_terminal(graph, config, run_id=run_id, reparked=reparked),
+        run_id=run_id,
+    )
     return True

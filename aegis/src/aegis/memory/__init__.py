@@ -37,6 +37,7 @@ from aegis.memory.retention import (
     apply_retention,
     retention_preview,
 )
+from aegis.memory.scope import bind_memory_scope, bound_memory_scope
 from aegis.memory.scoring import (
     ForgetPolicy,
     RecallCandidate,
@@ -100,6 +101,8 @@ __all__ = [
     "add_fact",
     "apply_retention",
     "assemble_working_memory",
+    "bind_memory_scope",
+    "bound_memory_scope",
     "build_working_text",
     "consolidate",
     "correct_fact",

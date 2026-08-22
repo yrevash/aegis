@@ -272,7 +272,12 @@ async def stream_forget(
         ``True`` if a fact was forgotten, ``False`` if none matched the subject/tenant.
     """
     from aegis.memory.crud import forget_fact
+    from aegis.memory.scope import bind_memory_scope
 
+    # This commits, and its caller carries on with the same session, so the scope has to
+    # outlive the commit — see :mod:`aegis.memory.scope`. (``stream_add`` needs no bind
+    # of its own: ``consolidate`` binds the same tenant before its first statement.)
+    await bind_memory_scope(session, tenant_id)
     fact = await forget_fact(
         session,
         fact_id=fact_id,

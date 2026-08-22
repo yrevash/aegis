@@ -1156,6 +1156,72 @@ async def _safe_chat_turn(
         )
 
 
+#: The conversation a run is filed under when the caller named none — one durable thread
+#: per memory subject. Prefixed so it is obviously server-minted and can never collide
+#: with a console-minted session id (those are uuids).
+_DEFAULT_MEMORY_THREAD = "thread"
+
+#: ``aegis.memory.stores.MemorySession.id`` is ``String(64)``; read here so a minted id
+#: that would not fit is refused rather than truncated into another subject's thread.
+_MEMORY_SESSION_ID_CHARS = 64
+
+
+def _memory_session_for(requested: str | None, subject: str | None) -> str | None:
+    """Return the conversation this run's long-term memory is written under.
+
+    **This is the fix for "the agent never learns".** Both memory nodes open with
+    ``if deps.memory is None or state.get("session_id") is None: return {}``, so a run
+    with no session id recalls nothing and — the half that actually loses data —
+    *persists* nothing. The browser console always sends a ``session_id``, so the defect
+    was invisible there; every other caller of ``POST /query`` (a script, an integration,
+    an evaluation harness, ``curl``) sent ``{"query": …}`` and the turn went nowhere. On a
+    clean database three real questions produced 73 ``usage_ledger`` rows and zero
+    ``memory_message`` rows.
+
+    Falling back to a stable per-subject thread rather than to a per-request one is the
+    load-bearing choice. Recall is **subject**-scoped for facts and episodic memory and
+    **session**-scoped only for the verbatim raw window and the running summary (see
+    ``aegis.memory.recall.recall``), so a fresh id per request would still make the turn
+    durable — but it would leave every thread one turn long, which means no raw window
+    ever has a predecessor in it and ``consolidation_every_n`` is never reached, so
+    episodic memory would never be distilled into facts. One thread per subject gives the
+    session-scoped tiers something real to read and lets consolidation fire.
+
+    What it deliberately does **not** touch: ``chat_messages``. That transcript is a
+    conversation a person opened in the console and can reopen; minting one for an API
+    call would put a session nobody started into their session list. Long-term memory is
+    the agent's, the transcript is the user's, and only the first is defaulted here.
+
+    Args:
+        requested: The client's ``session_id``, when it sent one. Always wins — a caller
+            that manages its own threads is not overridden.
+        subject: The resolved memory subject. ``None`` (no authenticated subject) means
+            there is nobody to remember, so memory stays correctly inert.
+
+    Returns:
+        The session id to run under, or ``None`` to leave memory inert.
+    """
+    if requested:
+        return requested
+    if not subject:
+        return None
+    minted = f"{_DEFAULT_MEMORY_THREAD}:{subject}"
+    if len(minted) > _MEMORY_SESSION_ID_CHARS:
+        # ``memory_session.id`` is ``String(64)``. Truncating would file two subjects'
+        # threads under one id — a cross-subject memory leak — so an over-long subject
+        # leaves memory inert and says so, loudly, instead.
+        logger.warning(
+            "Memory subject %r yields a default thread id of %d characters (the column "
+            "holds %d); this run's memory is inert. The adapter's memory_subject_for "
+            "must return a shorter key.",
+            subject,
+            len(minted),
+            _MEMORY_SESSION_ID_CHARS,
+        )
+        return None
+    return minted
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1434,11 +1500,16 @@ async def query(
 ) -> EventSourceResponse:
     """Run a query and stream the agent's step events over SSE."""
     persona = _resolve_persona(req.persona, auth)
-    # Resolve the adapter-scoped memory subject (app-level isolation key). ``None`` — or
-    # a request with no ``session_id`` — keeps memory inert and the stream unchanged.
+    # Resolve the adapter-scoped memory subject (app-level isolation key). ``None`` —
+    # an anonymous or subject-less principal — keeps memory inert and the stream
+    # unchanged.
     from app.adapter.memory_spec import memory_subject_for
 
     memory_subject = memory_subject_for(auth.user_id, persona)
+    # The thread the run's long-term memory is written under. See
+    # :func:`_memory_session_for`: a client that names one owns it, and one that names
+    # none still gets a durable thread rather than an agent that cannot learn.
+    memory_session = _memory_session_for(req.session_id, memory_subject)
     await _safe_audit(
         "query.start",
         auth,
@@ -1507,7 +1578,7 @@ async def query(
                     role=auth.role.value,
                     deps=deps,
                     registry=get_approval_registry(),
-                    session_id=req.session_id,
+                    session_id=memory_session,
                     memory_subject=memory_subject,
                     # Validated in ``QueryRequest``, honoured in ``decide_depth``, and
                     # narrowed only by the tenant's cap (reported as `platform_cap`).

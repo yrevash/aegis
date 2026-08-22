@@ -403,11 +403,22 @@ async def bootstrap_rls(engine: AsyncEngine | None = None) -> None:
     *closed* under a bound scope. See ``_TENANT_ISOLATION_PREDICATE`` in
     :mod:`aegis.governance.rls` for the full reasoning.
 
+    **Which flavour of the predicate gets installed is decided here**, immediately before
+    the DDL, and that is not tidiness. ``configure_rls`` was called in :func:`get_engine`
+    only, while ``bootstrap`` runs on the *owner* engine and startup reaches it before
+    anything builds the serving one — so the policy was installed from the module default
+    and ``RLS_FAIL_CLOSED=true`` silently installed the fail-**open** predicate. The
+    setting appeared to be honoured (the boot log even said which flavour it was
+    installing) while the control it names was off: the worst possible shape for a
+    security posture. Setting it here means the installed policy always matches the
+    configured posture, whatever order the engines happen to be built in.
+
     Args:
         engine: Engine to configure; defaults to the process-wide **owner/DDL** engine,
             since ``ALTER TABLE``/``CREATE POLICY`` require ownership of the tables and
             the serving role deliberately owns nothing.
     """
+    configure_rls(fail_closed=get_settings().rls_fail_closed)
     await _aegis_bootstrap_rls(engine or get_admin_engine())
 
 
@@ -801,6 +812,12 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
        raises ``UndefinedColumn``, the gateway swallows it (usage recording is
        best-effort by design), the row is lost, and the USD budget caps computed by
        summing those rows quietly stop binding.
+    1b. :func:`aegis.runs.partitions.ensure_run_event_partitions` — roll ``run_events``'
+       monthly partitions forward to cover this month and next. The ``after_create`` hook
+       seeds them only on the boot that creates the table, so without this a
+       long-running database eventually has no partition for "now" — and a partitioned
+       table with no covering partition rejects every write, which would take out the
+       agent's durable run record and the ingest log together.
     2. :func:`_align_timestamp_columns` — convert any timestamp column left naive by
        an earlier bootstrap to ``timestamptz``.
 
@@ -842,6 +859,9 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     import aegis.settings.models  # noqa: F401,PLC0415 - registration side-effect only
     import aegis.skills.models  # noqa: F401,PLC0415 - registration side-effect only
     from aegis.data import AegisBase  # noqa: PLC0415 - local to avoid an import-time dep
+    from aegis.runs.partitions import (  # noqa: PLC0415 - local, same reason
+        ensure_run_event_partitions,
+    )
 
     import app.memory.stores  # noqa: F401,PLC0415 - registration side-effect only
 
@@ -856,6 +876,15 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
         await _retenant_prompt_version_indexes(conn)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(AegisBase.metadata.create_all)
+        # ``run_events`` is PARTITIONED BY RANGE (ts) and a partitioned table with no
+        # partition covering "now" rejects **every** write. ``create_all``'s
+        # ``after_create`` hook seeds the first two months, but only on the boot that
+        # created the table: a database built in August and still serving in October has
+        # nowhere to put a row, and the failure would land on the agent's durable run
+        # record and the ingest log rather than at startup. Idempotent (CREATE TABLE IF
+        # NOT EXISTS + drop-then-create policy DDL), a no-op off PostgreSQL, and it runs
+        # on the owner connection this bootstrap already holds.
+        await ensure_run_event_partitions(conn)
         await reconcile_additive_columns(conn, metadatas)
         await _align_timestamp_columns(conn, metadatas)
     serving_role = serving_role_name()

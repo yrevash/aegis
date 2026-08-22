@@ -34,7 +34,9 @@ import urllib.error
 import urllib.request
 
 BASE = "http://localhost:8110"
-DSN = "postgresql://aegis_app@localhost:5432/taif"
+#: Which database to interrogate. Defaults to the demo DB; point it at an isolated
+#: one (e.g. `taif_run1`) to verify a clean corpus without touching the demo data.
+DSN = os.environ.get("AEGIS_VERIFY_DSN", "postgresql://aegis_app@localhost:5432/taif")
 
 #: Questions chosen so that *between them* every module is exercised, and each one is
 #: labelled with what it must provoke. A suite where every question takes the same path
@@ -159,8 +161,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--queries", type=int, default=len(QUESTIONS))
     ap.add_argument("--base", default=BASE)
+    ap.add_argument("--dsn", default=DSN)
     args = ap.parse_args()
     globals()["BASE"] = args.base
+    globals()["DSN"] = args.dsn
 
     print(f"\nAegis end-to-end consistency check — {args.base}\n{'=' * 62}")
 
@@ -255,8 +259,8 @@ def main() -> int:
 
     check(
         "runs recorded == queries sent",
-        after["runs"] - before["runs"] == len(questions),
-        f"+{after['runs'] - before['runs']} for {len(questions)} queries",
+        after["runs"] - before["runs"] == len(spec),
+        f"+{after['runs'] - before['runs']} for {len(spec)} queries",
     )
     check(
         "usage_ledger grew (model calls are metered)",

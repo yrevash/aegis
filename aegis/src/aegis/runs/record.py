@@ -347,6 +347,7 @@ async def record_events(
     job_id: int | None = None,
     agent_id: str | None = None,
     now: datetime | None = None,
+    timestamps: Sequence[datetime] | None = None,
 ) -> RunHeader:
     """Append events to the durable log and fold them onto the run's header.
 
@@ -367,6 +368,15 @@ async def record_events(
             rather than left to the database's ``DEFAULT now()`` so the fold sees the
             same instant that is stored — a header computed from a timestamp the writer
             never saw would not be reproducible from the log.
+        timestamps: When each event actually happened, one per entry in ``events``.
+            ``None`` (the default) records the whole batch at ``now``, which is right for
+            a writer that appends an event as it occurs — :mod:`app.jobs.ingest_log`
+            writes one event per transaction, so "now" *is* the event's moment. It is
+            wrong for a writer that buffers a whole run and records it at the end: every
+            row would carry the flush time, ``started_at`` and ``finished_at`` would fold
+            to the same instant, and the log would report every run as instantaneous.
+            Passing the real emission times keeps the record's pacing honest and routes
+            each row to the partition its own month owns.
 
     Returns:
         The run's header after folding the batch in.
@@ -374,10 +384,20 @@ async def record_events(
     Raises:
         RunPartitionMissingError: If an event's timestamp falls outside every existing
             partition. Nothing in the batch is written.
-        ValueError: If an event is unstamped or carries an unknown terminal status.
+        ValueError: If an event is unstamped, carries an unknown terminal status, or
+            ``timestamps`` does not line up one-to-one with ``events``.
     """
     ts = now or datetime.now(UTC)
-    records = [_record_from_event(event, ts=ts) for event in events]
+    if timestamps is not None and len(timestamps) != len(events):
+        raise ValueError(
+            f"record_events got {len(timestamps)} timestamps for {len(events)} events; "
+            "they are positional, so a mismatch would file events under the wrong "
+            "instants rather than under none."
+        )
+    records = [
+        _record_from_event(event, ts=ts if timestamps is None else timestamps[index])
+        for index, event in enumerate(events)
+    ]
     header = await read_run_header(session, run_id)
     if header is None:
         header = RunHeader(run_id=run_id, tenant_id=tenant_id, user_id=user_id)

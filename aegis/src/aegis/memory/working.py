@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.memory.config import MemoryConfig
 from aegis.memory.recall import RecallBundle, load_raw_window, recall
+from aegis.memory.scope import bind_memory_scope
 from aegis.memory.scoring import RecallCandidate
 from aegis.memory.spec import MemorySpec
 from aegis.memory.stores import MemoryMessage
@@ -360,6 +361,11 @@ async def assemble_working_memory(
     Returns:
         The assembled :class:`AssembledMemory`.
     """
+    # The graph's entry point into memory, so it is where the scope becomes a property of
+    # the session rather than of one transaction: ``recall`` commits its access bumps and
+    # the ``load_raw_window`` below then runs in a *fresh* transaction, which without this
+    # carries no tenant scope at all (see :mod:`aegis.memory.scope`).
+    await bind_memory_scope(session, tenant_id)
     bundle = await recall(
         session,
         subject_id=subject_id,

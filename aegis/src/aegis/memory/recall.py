@@ -33,6 +33,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.memory.config import MemoryConfig
+from aegis.memory.scope import bind_memory_scope
 from aegis.memory.scoring import RecallCandidate, rank_top
 from aegis.memory.spec import MemorySpec, resolve_spec
 from aegis.memory.stores import MemoryFact, MemoryMessage, MemoryProfile, MemorySession
@@ -447,6 +448,12 @@ async def recall(
         A :class:`RecallBundle` with each tier's selected items.
     """
     spec = resolve_spec(spec)
+    # Recall COMMITS, in ``_bump_recall_access`` below, and both this session and its
+    # caller keep working afterwards (the assembler re-reads the raw window on it). The
+    # tenant GUC is transaction-local, so a one-shot ``set_tenant_scope`` by the caller
+    # is gone by then and every later statement runs unscoped — zero rows under
+    # ``RLS_FAIL_CLOSED=true``. Binding the *session* makes the scope survive the commit.
+    await bind_memory_scope(session, tenant_id)
     raw_window = await load_raw_window(
         session,
         subject_id=subject_id,

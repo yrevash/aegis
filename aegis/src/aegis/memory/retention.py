@@ -59,6 +59,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from aegis.memory.scope import bind_memory_scope
 from aegis.memory.stores import (
     ConsolidationStatus,
     MemoryConsolidationJob,
@@ -173,6 +174,33 @@ def _scope_clause(
     return terms
 
 
+async def _bind_retention_scope(
+    session: AsyncSession,
+    *,
+    tenant_id: int | None,
+    unrestricted: bool,
+    untenanted: bool,
+) -> None:
+    """Bind the RLS scope matching this sweep's stated app-level scope.
+
+    The tri-state above collapses to the two scopes the database understands: a numbered
+    tenant, or the platform scope. ``untenanted`` maps to the platform scope because the
+    rows it sweeps carry ``tenant_id IS NULL``, which no numeric scope can see — the
+    ``tenant_id IS NULL`` term built by :func:`_scope_clause` is what keeps that sweep
+    confined, exactly as it is on the recall path.
+
+    An **unstated** scope binds nothing: :func:`_scope_clause` is about to refuse the
+    call, and widening the policy on the way to that refusal would be the wrong order.
+
+    Bound to the session rather than the transaction so a caller that commits between the
+    preview and the sweep — or between the tenant's rows and the untenanted ones — does
+    not silently continue unscoped (see :mod:`aegis.memory.scope`).
+    """
+    if tenant_id is None and not unrestricted and not untenanted:
+        return
+    await bind_memory_scope(session, tenant_id)
+
+
 def _cutoff(days: int, *, now: datetime) -> datetime:
     """The instant a row must predate to be eligible under a ``days`` horizon."""
     return now - timedelta(days=days)
@@ -239,6 +267,9 @@ async def retention_preview(
     """
     now = now or datetime.now(UTC)
     counts = {"messages": 0, "sessions": 0, "facts": 0, "jobs": 0}
+    await _bind_retention_scope(
+        session, tenant_id=tenant_id, unrestricted=unrestricted, untenanted=untenanted
+    )
 
     if policy.episodic_days > 0:
         cutoff = _cutoff(policy.episodic_days, now=now)
@@ -345,6 +376,9 @@ async def apply_retention(
     """
     now = now or datetime.now(UTC)
     counts = {"messages": 0, "sessions": 0, "facts": 0, "jobs": 0}
+    await _bind_retention_scope(
+        session, tenant_id=tenant_id, unrestricted=unrestricted, untenanted=untenanted
+    )
 
     if policy.episodic_days > 0:
         cutoff = _cutoff(policy.episodic_days, now=now)

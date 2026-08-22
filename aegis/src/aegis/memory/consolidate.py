@@ -50,6 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.core.models import ModelRole
 from aegis.memory.config import MemoryConfig
+from aegis.memory.scope import bind_memory_scope
 from aegis.memory.scoring import ForgetPolicy
 from aegis.memory.spec import FactSchemaLike, MemorySpec, resolve_spec
 from aegis.memory.stores import (
@@ -813,6 +814,10 @@ async def enqueue_consolidation(
     Returns:
         The persisted :class:`MemoryConsolidationJob` (status ``PENDING``).
     """
+    # This commits, and the request path keeps using the session afterwards. Bound to the
+    # session rather than to this transaction so what follows the commit stays scoped —
+    # see :mod:`aegis.memory.scope`.
+    await bind_memory_scope(session, tenant_id)
     job = MemoryConsolidationJob(
         subject_id=subject_id,
         session_id=session_id,
@@ -861,6 +866,13 @@ async def consolidate(
     """
     spec = resolve_spec(spec)
     result = ConsolidationResult()
+
+    # Consolidation does not commit, but it is *reached* after one: ``sweep_pending``
+    # commits each job's claim before calling this, and ``stream_add`` commits right
+    # after. Binding here means every statement below — the session/turn loads, the
+    # neighbour searches in ``vector_ops``, the bitemporal writes, the profile and the
+    # summary — carries this job's tenant, whichever transaction it lands in.
+    await bind_memory_scope(session, tenant_id)
 
     sess, turns = await _load_session_and_turns(
         session, subject_id=subject_id, session_id=session_id, tenant_id=tenant_id
@@ -935,6 +947,12 @@ async def prune_forgotten(
     decay/floor test is applied in Python because it is not portable SQL across the SQLite
     test DB and Postgres. Does **not** commit — the caller owns the transaction boundary.
 
+    **Cross-tenant by construction**, which is why it takes no ``tenant_id``: it scans
+    every live fact on the platform. The caller must therefore have bound the *platform*
+    scope (``bind_memory_scope(session, None)``, as :func:`sweep_pending` does) — under
+    ``RLS_FAIL_CLOSED=true`` a session left bound to one tenant archives only that
+    tenant's facts and an unbound one archives none, both silently.
+
     Returns:
         The number of facts archived.
     """
@@ -1006,7 +1024,6 @@ async def sweep_pending(
     # once here rather than inside the loop's ``try``, where an ImportError would be
     # swallowed as a per-job failure and read as "consolidation is broken".
     from aegis.governance.context import governed  # noqa: PLC0415 - see above
-    from aegis.governance.rls import set_tenant_scope  # noqa: PLC0415 - see above
 
     # **This sweeper's authority spans every tenant, and it has to say so.**
     #
@@ -1019,11 +1036,19 @@ async def sweep_pending(
     # sweep would find zero PENDING jobs, process zero, report success, and memory
     # consolidation would silently stop for every tenant at once.
     #
-    # `set_tenant_scope(session, None)` is not "clear the scope" — per its own
+    # A scope of ``None`` is not "clear the scope" — per ``set_tenant_scope``'s
     # contract it is the platform assertion, written to a second GUC precisely so
     # that "a caller whose authority spans every tenant" and "nobody bound a scope"
-    # stop being spelled identically. That distinction is what this call buys.
-    await set_tenant_scope(session, None)
+    # stop being spelled identically. That distinction is what this buys.
+    #
+    # ``bind_memory_scope`` rather than a one-shot ``set_tenant_scope`` because this
+    # function **commits per job, deliberately** — one poisoned job must not roll back
+    # the batch — and a transaction-local GUC does not survive a commit. The one-shot
+    # form scoped the queue read and nothing after it: every claim, every statement of
+    # every consolidation, every terminal status update and the whole forget sweep ran
+    # unscoped. Under the fail-closed posture that is a sweep which claims nothing,
+    # consolidates nothing and marks nothing DONE, while reporting success.
+    await bind_memory_scope(session, None)
 
     stmt = (
         select(MemoryConsolidationJob)
@@ -1031,14 +1056,29 @@ async def sweep_pending(
         .order_by(MemoryConsolidationJob.created_at, MemoryConsolidationJob.id)
         .limit(limit)
     )
-    jobs = list((await session.execute(stmt)).scalars().all())
+    # Read every job's identity ONCE, here, while the instances are live — and work from
+    # the plain tuples afterwards. The loop below spans commits and, on the error path, a
+    # ``rollback``, and a rollback expires every instance in the session whatever
+    # ``expire_on_commit`` says. A later ``job.id`` is then a lazy refresh, issued from
+    # whatever context happens to be current: inside the ``except`` block it raised
+    # ``MissingGreenlet``, escaped the handler whose entire purpose is that one bad job
+    # cannot break the batch, and took down the sweep, the request that fired it and
+    # every background sweeper in the process with it.
+    jobs = [
+        (job.id, job.tenant_id, job.subject_id, job.session_id)
+        for job in (await session.execute(stmt)).scalars().all()
+    ]
 
     processed = 0
-    for job in jobs:
+    for job_id, job_tenant, job_subject, job_session in jobs:
+        # Back to the platform scope for the claim: the queue spans tenants, and the
+        # previous iteration left the session bound to *its* job's tenant, under which
+        # this job's row may be invisible. Re-binding is a no-op on the first pass.
+        await bind_memory_scope(session, None)
         claim = (
             update(MemoryConsolidationJob)
             .where(
-                MemoryConsolidationJob.id == job.id,
+                MemoryConsolidationJob.id == job_id,
                 MemoryConsolidationJob.status == ConsolidationStatus.PENDING,
             )
             .values(
@@ -1051,6 +1091,15 @@ async def sweep_pending(
             continue
         await session.commit()
 
+        # The claim is durable, so this unit of work now has an owner — and the scope
+        # narrows from the platform to that owner for everything the job does, including
+        # its terminal status update. Bound *here* rather than relying on ``consolidate``
+        # to do it, because the ERROR branch below must also run under the job's own
+        # tenant: a failure before ``consolidate`` bound anything would otherwise write
+        # the error under the previous job's tenant and, fail-closed, update no row at
+        # all — leaving the job stuck in RUNNING with nothing to say why.
+        await bind_memory_scope(session, job_tenant)
+
         try:
             # The job row is where this unit of work acquires an owner, so it is where
             # the billing scope is bound. Consolidation makes live model calls —
@@ -1061,22 +1110,25 @@ async def sweep_pending(
             #
             # Bound per job and not per sweep, because one drain covers several tenants
             # and the wrong tenant's cap is not better than none.
-            with governed(tenant_id=job.tenant_id):
+            with governed(tenant_id=job_tenant):
                 await consolidate(
                     session,
-                    subject_id=job.subject_id,
-                    session_id=job.session_id,
+                    subject_id=job_subject,
+                    session_id=job_session,
                     config=config,
                     complete=complete,
                     embed=embed,
-                    tenant_id=job.tenant_id,
+                    tenant_id=job_tenant,
                     spec=spec,
                 )
         except Exception as exc:  # noqa: BLE001 - queue must never crash the sweep
             await session.rollback()
+            # The rollback discarded the transaction-local GUCs; the session-level
+            # binding re-applies this job's scope to the transaction the UPDATE opens,
+            # which is the only reason this row is still writable here.
             await session.execute(
                 update(MemoryConsolidationJob)
-                .where(MemoryConsolidationJob.id == job.id)
+                .where(MemoryConsolidationJob.id == job_id)
                 .values(status=ConsolidationStatus.ERROR, error=str(exc)[:2000])
             )
             await session.commit()
@@ -1084,7 +1136,7 @@ async def sweep_pending(
 
         await session.execute(
             update(MemoryConsolidationJob)
-            .where(MemoryConsolidationJob.id == job.id)
+            .where(MemoryConsolidationJob.id == job_id)
             .values(status=ConsolidationStatus.DONE, error=None)
         )
         await session.commit()
@@ -1095,6 +1147,9 @@ async def sweep_pending(
     # its own — a prune failure must never wedge consolidation, and it does not affect the
     # returned processed-jobs count.
     try:
+        # Platform scope again: the forget sweep is cross-tenant by construction (it
+        # takes no tenant argument), and the session is still bound to the last job's.
+        await bind_memory_scope(session, None)
         pruned = await prune_forgotten(session, config=config)
         if pruned:
             await session.commit()

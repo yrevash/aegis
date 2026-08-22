@@ -1,3 +1,19 @@
+// The probes moved to `@/lib/api/readiness` — only `web/src/lib/api` may call
+// `fetch`, because route coverage is proved by walking the import graph from
+// there. Re-exported so this module's consumers are unaffected.
+// Imported as well as re-exported: `export … from` forwards the names to this
+// module's consumers but does not bring them into its own scope, and the helpers
+// below annotate against them.
+import type { ReadyComponent } from '@/lib/api/readiness'
+
+export {
+  getReadyz,
+  getLiveness,
+  type ReadyComponent,
+  type ReadyzResponse,
+  type LivenessResponse,
+} from '@/lib/api/readiness'
+
 /**
  * The two unauthenticated probes the ops overview polls, and the vocabulary it
  * reads them with.
@@ -11,7 +27,7 @@
  * version the operator is looking at.
  *
  * **Neither takes a bearer.** A liveness probe that needs a token is a probe a load
- * balancer cannot make, so both sit at {@link API_ORIGIN} rather than under `/v1`.
+ * balancer cannot make, so both sit at {@link } rather than under `/v1`.
  * Nothing here reads the session.
  *
  * **`/readyz` answers 503 when it is not ready, and the body is the point.** A plain
@@ -24,7 +40,6 @@
  * @see aegis/src/aegis/core/health.py
  */
 
-import { API_ORIGIN } from '@/lib/api/config'
 
 /**
  * One component's verdict.
@@ -34,64 +49,6 @@ import { API_ORIGIN } from '@/lib/api/config'
  * or the components that read it maps `unknown` onto a failure tone.
  */
 export type ComponentStatus = 'up' | 'down' | 'degraded' | 'unknown' | 'not_applicable'
-
-/** One dependency, and the probe or query that produced its verdict. */
-export interface ReadyComponent {
-  key: string
-  name: string
-  /** `store` · `substrate` · `model` · `isolation`. */
-  category: string
-  status: ComponentStatus
-  /** What the probe measured, in the server's own words. Often null. */
-  detail: string | null
-  /** The call or SQL behind the verdict. Never empty. */
-  evidence: string
-  measured_at: string
-  /** Whether `/readyz` refuses traffic when this component is down. */
-  required: boolean
-}
-
-/** Body of `GET /readyz` (200 when ready, 503 when a required component is down). */
-export interface ReadyzResponse {
-  /** `ready` | `not_ready`. */
-  status: string
-  /** Keys of the required components that are down. Empty when ready. */
-  failing: string[]
-  components: ReadyComponent[]
-}
-
-/** Body of `GET /health` — liveness plus the worker supervisor's own word. */
-export interface LivenessResponse {
-  status: string
-  product: string
-  version: string
-  /** `running` | `down` | `starting` | `disabled` | `stopped`. */
-  worker: string
-}
-
-/** GET a root probe, keeping the body on the statuses that carry one. */
-async function probe<T>(path: string, alsoAccept: number[], signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`${API_ORIGIN}${path}`, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-    signal,
-  })
-  if (!res.ok && !alsoAccept.includes(res.status)) {
-    throw new Error(`The probe at ${path} answered HTTP ${res.status}, so this deployment's readiness is unknown.`)
-  }
-  return (await res.json()) as T
-}
-
-/** Every dependency's verdict with its evidence. 503 is a real answer, not a failure. */
-export async function getReadyz(signal?: AbortSignal): Promise<ReadyzResponse> {
-  return probe<ReadyzResponse>('/readyz', [503], signal)
-}
-
-/** Liveness, product version, and the job worker's supervisor state. */
-export async function getLiveness(signal?: AbortSignal): Promise<LivenessResponse> {
-  return probe<LivenessResponse>('/health', [], signal)
-}
 
 // ── Reading the payload ──────────────────────────────────────────────────────
 
@@ -112,6 +69,23 @@ export function categoryLabel(category: string): string {
 }
 
 /** Severity order inside a group: what needs attention sits at the top. */
+/**
+ * Narrow a wire status to one this build can rank, without pretending to know it.
+ *
+ * `status` is `string` on the wire on purpose: a newer backend can ship a verdict this
+ * client has never heard of, and typing it as the union would be a claim we cannot keep.
+ * An unrecognised code sorts and counts as `unknown`, which is already the "we have not
+ * established anything" bucket — never as `up`, which would quietly upgrade a state we
+ * do not understand into a healthy one.
+ */
+export function asStatus(value: string): ComponentStatus {
+  return (['up', 'down', 'degraded', 'unknown', 'not_applicable'] as const).includes(
+    value as ComponentStatus,
+  )
+    ? (value as ComponentStatus)
+    : 'unknown'
+}
+
 const SEVERITY: Record<ComponentStatus, number> = {
   down: 0,
   degraded: 1,
@@ -144,7 +118,7 @@ export function groupByCategory(
     // for, then alphabetically — so an optional store never sits above a required one.
     rows: [...(seen.get(category) ?? [])].sort(
       (a, b) =>
-        SEVERITY[a.status] - SEVERITY[b.status] ||
+        SEVERITY[asStatus(a.status)] - SEVERITY[asStatus(b.status)] ||
         Number(b.required) - Number(a.required) ||
         a.name.localeCompare(b.name),
     ),
@@ -160,7 +134,7 @@ export function tally(components: ReadyComponent[]): Record<ComponentStatus, num
     unknown: 0,
     not_applicable: 0,
   }
-  for (const c of components) counts[c.status] += 1
+  for (const c of components) counts[asStatus(c.status)] += 1
   return counts
 }
 

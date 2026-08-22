@@ -27,15 +27,18 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from datetime import UTC, datetime
 from typing import Any
 
 from aegis.agent.approvals import ApprovalRegistry
 from aegis.agent.orchestrator import ResumeFailedError
 from aegis.agent.orchestrator import resume_parked_run as _core_resume
 from aegis.agent.orchestrator import run_agent as _core_run_agent
+from aegis.core.types import RunStatus
 
 from app.agent.approvals import get_approval_registry, get_parked_runs
 from app.agent.deps import AgentDeps, deps_for_run
+from app.agent.run_log import TERMINAL_EVENT_TYPE
 from app.api.schemas import (
     ApprovalDecision,
     ApprovalDecisionResponse,
@@ -206,6 +209,101 @@ def _fire_trace_eval(
         logger.warning("Post-run trace-eval kickoff failed for %s", run_id, exc_info=True)
 
 
+def _fire_run_record(
+    run_id: str, streamed: list[Any], stamped_at: list[datetime]
+) -> None:
+    """Persist this run into the durable run record, off the hot path.
+
+    **The fix for the platform's headline consistency defect.** ``aegis.runs`` — the
+    append-only ``run_events`` log and its regenerable ``runs`` header — was reachable
+    only from the demo seeder and the ingest pipeline, so a tenant's real questions were
+    metered in ``usage_ledger``, audited in ``audit_log``, and recorded as runs nowhere
+    at all. Every event of this run has just been streamed; this is where it becomes
+    durable.
+
+    The tenant and user are read **here**, while the request's sealed governance context
+    is still bound — :mod:`app.agent.run_log` does the write on a background task, by
+    which time it is not. Neither value is ever taken from the client.
+
+    Best-effort in the strict sense: any failure to even schedule the write is logged and
+    swallowed, because the answer this run produced has already been delivered.
+    """
+    try:
+        from app.agent.run_log import fire_run_record
+
+        gov = None
+        try:
+            from app.core.governance import get_governance_context
+
+            gov = get_governance_context()
+        except Exception:  # noqa: BLE001 - governance is optional at this seam
+            gov = None
+        fire_run_record(
+            run_id=run_id,
+            events=streamed,
+            tenant_id=gov.tenant_id if gov is not None else None,
+            user_id=gov.user_id if gov is not None else None,
+            timestamps=stamped_at,
+        )
+    except Exception:  # noqa: BLE001 - recording must never disturb the stream
+        logger.exception("Durable run-record kickoff failed for run %s", run_id)
+
+
+def _record_abandoned_gate(streamed: list[Any], stamped_at: list[datetime]) -> None:
+    """Record a run whose socket died **while it was parked at the approval gate**.
+
+    ``approval_park_timeout`` is ``None`` in this deployment, which means the live
+    ``/query`` socket holds a gate open indefinitely and never emits the
+    ``run_finished(awaiting_approval)`` that :func:`run_agent` records on. So the way a
+    run actually becomes parked here is that the client goes away: the route's task is
+    cancelled while the core loop is inside ``registry.wait``, this generator unwinds,
+    and — until now — the run left **no ``runs`` row at all** while its ``approvals`` row
+    sat ``PENDING``. That is the same consistency defect as a header stuck at
+    ``awaiting_approval``, one notch worse: not a stale row, no row.
+
+    So the terminal event the socket never lived to carry is synthesised here, from the
+    fact that decides it: the last event this run emitted was ``approval_required``, and
+    both the durable ``approvals`` row and the checkpoint were written before it. The run
+    is not abandoned — it is *waiting*, durably — and ``awaiting_approval`` says so.
+    :func:`resume_parked_run` appends the rest when a human decides.
+
+    **Only that case.** A stream that ends anywhere else is a client that hung up
+    mid-answer, and there is no honest terminal status for it: ``error`` would blame the
+    run for the browser, ``completed`` would invent an outcome. Those stay unrecorded, as
+    they were.
+
+    Synchronous throughout (:func:`_fire_run_record` only schedules a task), because this
+    runs in an unwinding — usually *cancelled* — generator, where an ``await`` either
+    raises immediately or turns a ``GeneratorExit`` into a ``RuntimeError``.
+
+    Args:
+        streamed: Everything the run emitted, in order.
+        stamped_at: When each was emitted, positionally.
+    """
+    try:
+        if not streamed or getattr(streamed[-1], "type", None) != "approval_required":
+            return
+        last = streamed[-1]
+        run_id = str(last.run_id)
+        logger.info(
+            "Run %s was left parked at its approval gate by a departing client; "
+            "recording it as awaiting_approval so the runs row and the approvals row "
+            "agree until the gate is decided.",
+            run_id,
+        )
+        streamed.append(
+            events.stamp(
+                events.run_finished(RunStatus.AWAITING_APPROVAL),
+                run_id=run_id,
+                seq=int(last.seq) + 1,
+            )
+        )
+        stamped_at.append(datetime.now(UTC))
+        _fire_run_record(run_id, streamed, stamped_at)
+    except Exception:  # noqa: BLE001 - a teardown path may not raise
+        logger.exception("Recording the parked run at stream teardown failed")
+
+
 async def run_agent(
     query: str,
     *,
@@ -282,11 +380,39 @@ async def run_agent(
         )
     ) as stream:
         attributed = False
-        async for event in stream:
-            if not attributed:
-                attributed = True
-                _record_prompt_attribution(event, persona)
-            yield event
+        # Every event this run streamed, retained so the run can be written to the
+        # durable record (``run_events`` + the folded ``runs`` header) when it ends. This
+        # is the only place with both the whole ordered stream and the request's
+        # governance context, which is why the wiring is here and not in the route: a
+        # second consumer of ``run_agent`` would otherwise have to remember to record.
+        streamed: list[Any] = []
+        # When each event was emitted, captured here because the wire schema carries no
+        # timestamp: the whole run is written in one transaction at the end, so without
+        # these every row would land at the flush instant and the header would fold
+        # ``started_at == finished_at`` — a durable record saying every run was
+        # instantaneous.
+        stamped_at: list[datetime] = []
+        recorded = False
+        try:
+            async for event in stream:
+                if not attributed:
+                    attributed = True
+                    _record_prompt_attribution(event, persona)
+                streamed.append(event)
+                stamped_at.append(datetime.now(UTC))
+                if not recorded and getattr(event, "type", None) == TERMINAL_EVENT_TYPE:
+                    # Fired BEFORE the yield, deliberately: ``run_finished`` is the last
+                    # event of every outcome (completed, blocked, errored, parked at a
+                    # gate), and a client that disconnects while receiving it closes this
+                    # generator at that yield. Scheduling first means the record of a run
+                    # does not depend on the socket surviving long enough to hear that it
+                    # finished.
+                    recorded = True
+                    _fire_run_record(event.run_id, streamed, stamped_at)
+                yield event
+        finally:
+            if not recorded:
+                _record_abandoned_gate(streamed, stamped_at)
 
 
 def _record_prompt_attribution(event: Any, persona: str | None) -> None:  # noqa: ANN401
@@ -497,8 +623,31 @@ async def decide_approval(
         status = "approved"
         if run_id:
             get_parked_runs().pop(run_id)
+    elif (
+        won
+        and decision is ApprovalDecision.REJECT
+        and not live_woken
+        and run_id
+        and not _is_mcp_proposal(run_id)
+    ):
+        # A rejected gate is a run that has been DECIDED, not one that may be left
+        # parked. The graph already knows what to do with a refusal — ``approval`` routes
+        # an unapproved gate to ``generate``, which answers saying the action was not
+        # authorised — and the live path has always driven exactly that. The parked path
+        # dropped the handle and walked away, so the checkpoint sat unfinished and the
+        # run header stayed ``awaiting_approval`` next to an ``approvals`` row reading
+        # ``REJECTED``: the same two-tables-disagree defect as the approve path, with the
+        # tool correctly not run. Driving it here gives the run a real terminal status.
+        #
+        # The row is already ``REJECTED`` (a terminal state ``resolve_approval`` reached
+        # directly), so nothing is finalised afterwards — see ``resume_parked_run``.
+        await resume_parked_run(
+            approval_id, run_id, decision, approver=approver, deps=deps
+        )
+        get_parked_runs().pop(run_id)
     elif (decision is ApprovalDecision.REJECT or live_woken) and run_id:
-        # Rejected, or a live socket is executing it — drop any resumable handle.
+        # Rejected on a path with nothing to resume (an MCP proposal, a replayed
+        # decision), or a live socket is executing it — drop any resumable handle.
         get_parked_runs().pop(run_id)
 
     return ApprovalDecisionResponse(
@@ -539,6 +688,15 @@ async def resume_parked_run(
     ``RESUMING``, which matches neither the decision path nor the sweeper: neither
     approved nor rejected, and unreachable forever.
 
+    **The continuation is recorded.** The events this headless drive produces are
+    collected and appended to the run's durable log, then the ``runs`` header is re-folded
+    from them (:func:`app.agent.run_log.save_run_continuation`). Without that the header
+    a parked run wrote at the gate — ``awaiting_approval`` — was its *final* word: a
+    dashboard showed a run still waiting for a human that had been approved, executed and
+    finished, while the ``approvals`` row recorded the decision correctly. Two of our own
+    tables disagreeing about one run is the one defect a platform that sells reconcilable
+    figures cannot ship.
+
     Returns:
         ``True`` if the run was resumed to completion (via handle *or* rehydration);
         ``False`` when there is nothing resumable, or when the resume failed and the row
@@ -558,9 +716,24 @@ async def resume_parked_run(
         graph = _durable_graph(await deps_for_run(deps or AgentDeps.default()))
         config = {"configurable": {"thread_id": run_id}}
 
+    # The continuation as it happens, and when. The core hands each event here rather
+    # than dropping it; the times are taken at collection because these events, like a
+    # live run's, carry no timestamp of their own and the whole batch commits at the end.
+    continuation: list[dict[str, Any]] = []
+    continuation_at: list[datetime] = []
+
+    def collect(payload: dict[str, Any]) -> None:
+        continuation.append(payload)
+        continuation_at.append(datetime.now(UTC))
+
     try:
         resumed = await _core_resume(
-            run_id, decision, graph=graph, config=config, approver=approver
+            run_id,
+            decision,
+            graph=graph,
+            config=config,
+            approver=approver,
+            on_event=collect,
         )
     except ResumeFailedError:
         logger.warning(
@@ -570,12 +743,106 @@ async def resume_parked_run(
             exc_info=True,
         )
         await _safe_release(approval_id)
+        # Nothing recorded: the row goes back to PENDING, so the retry that follows will
+        # drive this same continuation again and an append here would be counted twice.
         return False
 
     get_parked_runs().pop(run_id)
     if resumed:
-        await _safe_finalize(approval_id)
+        await _record_continuation(approval_id, run_id, continuation, continuation_at)
+        if decision is ApprovalDecision.APPROVE:
+            # Only an approval finalises to APPROVED. A rejection reached its terminal
+            # ``REJECTED`` in ``resolve_approval`` already, and finalising it here would
+            # overwrite a human's refusal with the opposite decision.
+            await _safe_finalize(approval_id)
     return resumed
+
+
+async def _parked_run_tenant(approval_id: str) -> int | None:
+    """Return the tenant the parked run belongs to, from the server's own records.
+
+    **Not the governance context, and that is the point.** ``POST /v1/query`` binds a
+    governance context around its stream, so :func:`_fire_run_record` reads the run's
+    tenant straight off it; the decision endpoints bind none, so reading it here yields
+    ``None`` — and ``None`` is not "unknown", it is the *platform* scope
+    (:func:`aegis.governance.rls.set_tenant_scope`). Writing the continuation under it
+    filed a resumed run's events as platform rows: invisible to the tenant that made the
+    run, and so invisible to :func:`aegis.runs.record.rebuild_run_header`, which then
+    "reconciled" the header back to ``awaiting_approval``. Measured, not theorised — it
+    is what the first end-to-end run of this fix did.
+
+    So the tenant is taken from the ``approvals`` row, which is the right question asked
+    of the right record: it is stamped server-side at enqueue time from the governance
+    context of the run *that raised the gate* (:func:`_enqueue_gate`), it is the tenant
+    ``_enforce_approval_tenant`` has already checked this approver against, and it is the
+    tenant of the events being appended rather than of the person appending them. It is
+    never accepted from a client on any path.
+
+    Args:
+        approval_id: The gate that was just decided.
+
+    Returns:
+        The owning tenant, or ``None`` for a genuinely platform-level gate (and when the
+        row cannot be read, which is logged).
+    """
+    try:
+        from app.data import get_approval
+
+        row = await get_approval(approval_id)
+        if row is not None:
+            return row.tenant_id
+        logger.warning(
+            "Approval %s has no durable row, so the resumed run's continuation is "
+            "recorded at platform scope.",
+            approval_id,
+        )
+    except Exception:  # noqa: BLE001 - fall through to the governance context
+        logger.warning(
+            "Could not read approval %s to attribute the resumed run's continuation.",
+            approval_id,
+            exc_info=True,
+        )
+    try:
+        from app.core.governance import get_governance_context
+
+        gov = get_governance_context()
+        return gov.tenant_id if gov is not None else None
+    except Exception:  # noqa: BLE001 - governance is optional at this seam
+        return None
+
+
+async def _record_continuation(
+    approval_id: str,
+    run_id: str,
+    continuation: list[dict[str, Any]],
+    continuation_at: list[datetime],
+) -> None:
+    """Append a resumed run's continuation to its durable record and re-fold the header.
+
+    The run's *user* is deliberately not passed on: the person who approved a gate is not
+    the person whose run it is, and :func:`aegis.runs.record.record_events` preserves the
+    owner already on the header. See :func:`_parked_run_tenant` for where the tenant
+    comes from and why it is not the approver's.
+
+    Awaited rather than fired, and wrapped: by the time the decision endpoint answers,
+    ``runs`` and ``approvals`` agree — and a recording failure costs a loud log line, not
+    the resume, which has already run the approved action.
+    """
+    try:
+        from app.agent.run_log import save_run_continuation
+
+        await save_run_continuation(
+            run_id=run_id,
+            events=continuation,
+            tenant_id=await _parked_run_tenant(approval_id),
+            timestamps=continuation_at,
+        )
+    except Exception:  # noqa: BLE001 - recording must never break the resume
+        logger.exception(
+            "Durable run-continuation kickoff failed for run %s; the approved action "
+            "ran, but the run header still says awaiting_approval.",
+            run_id,
+        )
 
 
 def _is_mcp_proposal(run_id: str | None) -> bool:

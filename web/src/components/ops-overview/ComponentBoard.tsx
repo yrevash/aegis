@@ -27,6 +27,7 @@ import {
   type ComponentStatus,
   type ReadyComponent,
   type ReadyzResponse,
+  asStatus,
 } from './readiness'
 
 /**
@@ -89,7 +90,7 @@ export function ReadinessVerdict({ data }: { data: ReadyzResponse }): ReactEleme
               {failing.map((c) => (
                 <li key={c.key} className="min-w-0 space-y-1">
                   <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-foreground">
-                    <StatusChip status={c.status} />
+                    <StatusChip status={asStatus(c.status)} />
                     <span className="min-w-0 break-words">{c.name}</span>
                     <span className="tabular font-mono text-xs text-muted-foreground">{c.key}</span>
                   </p>
@@ -146,7 +147,7 @@ function ComponentRow({
       )}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <StatusChip status={component.status} />
+        <StatusChip status={asStatus(component.status)} />
         <span className="min-w-0 text-sm font-medium break-words text-foreground">{component.name}</span>
         <span className="tabular font-mono text-xs text-muted-foreground">{component.key}</span>
         <span
@@ -166,7 +167,12 @@ function ComponentRow({
           {component.detail}
         </p>
       )}
-      <Receipt label="Evidence" origin={component.evidence} variant="inline" className="mt-1.5" />
+      <Receipt
+        label="Evidence"
+        origin={component.evidence ?? "no evidence reported by the probe"}
+        variant="inline"
+        className="mt-1.5"
+      />
     </li>
   )
 }

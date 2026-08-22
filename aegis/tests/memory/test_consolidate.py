@@ -609,24 +609,31 @@ async def test_the_sweep_declares_platform_scope_before_reading_the_queue(db, mo
     **zero** rows. The sweep would find no PENDING jobs, process none, return 0, and
     report success, while memory consolidation was silently dead for every tenant.
 
-    That failure is invisible to the rest of this file, because these tests run on
-    SQLite where :func:`set_tenant_scope` is a no-op — every assertion here passes
-    with the binding removed. So the claim under test is the *call*, not its effect:
-    the platform assertion is made, and it is made before the queue is read.
+    The claim under test is the *call*, not its effect — the effect (a sweep that still
+    completes with the fail-closed predicate installed) is asserted end-to-end in
+    ``test_scope_binding.py``, which installs that predicate on its own database.
+
+    The binding is observed at :func:`aegis.memory.scope.bind_memory_scope` rather than
+    at ``set_tenant_scope``: the scope has to survive this function's **per-job commits**,
+    so it is bound to the session (an ``after_begin`` listener re-applies it to every
+    transaction) instead of once to the transaction that happens to be open.
     """
     calls: list[int | None] = []
     order: list[str] = []
 
-    import aegis.governance.rls as rls_module
+    # Via ``sys.modules``: ``aegis.memory`` re-exports the *function* ``consolidate``,
+    # which shadows the submodule of the same name on the package attribute.
+    import sys
 
-    real_scope = rls_module.set_tenant_scope
+    consolidate_module = sys.modules["aegis.memory.consolidate"]
+    real_bind = consolidate_module.bind_memory_scope
 
     async def spy(session, tenant_id):
         calls.append(tenant_id)
         order.append("scope")
-        return await real_scope(session, tenant_id)
+        return await real_bind(session, tenant_id)
 
-    monkeypatch.setattr(rls_module, "set_tenant_scope", spy)
+    monkeypatch.setattr(consolidate_module, "bind_memory_scope", spy)
 
     async with db() as s:
         cfg = MemoryConfig()
