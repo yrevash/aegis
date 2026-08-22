@@ -225,6 +225,13 @@ async def test_registry_covers_the_governance_memory_ops_and_host_tables():
         "approvals",
         "chat_messages",
         "chat_sessions",
+        # Added with the alert subsystem. A notification names what happened inside one
+        # tenant — a document's filename, a gate's risk, a spend cap — and it is pushed
+        # to a live stream as well as queried, so it is scoped in both places: this
+        # policy, and the app-level predicate the stream filter shares with the SQL.
+        # Listed here because this test is what makes adding a tenant-scoped table a
+        # deliberate act; it caught this one on the run after the table landed.
+        "notifications",
     }
     # ``tenants`` is keyed by ``id``, so a policy filtering on ``tenant_id`` would not
     # compile there — it is correctly absent. ``chunks`` used to be listed here for the
