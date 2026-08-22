@@ -97,10 +97,17 @@ def require_llmops_operator(auth: AuthContext = Depends(require_auth)) -> AuthCo
     selector, any tenant's. A client or a plain member is refused: the active system
     prompt is the instruction set behind every answer, and reading it is a map of what
     the assistant will and will not do.
+
+    **``ai_team`` is admitted whether or not it is pinned to a tenant**, and that is the
+    difference between this surface and the process-wide ones. A cache hit rate or the
+    serving role's RLS attributes are facts about the *deployment*, so a tenant-pinned
+    principal is refused them outright — there is no filter that would make them safe. A
+    prompt is not like that: it is tenant-scoped data, and :func:`_scope` already seals a
+    pinned caller into their own tenant and 403s them for naming another. So the ai_team
+    portal mounts this section for a tenant's own analyst and the section works, instead
+    of rendering a screen that could only ever refuse them.
     """
-    if auth.fine_role in (PLATFORM_ADMIN, TENANT_ADMIN) or (
-        auth.is_platform_staff() and auth.role.value == "ai_team"
-    ):
+    if auth.fine_role in (PLATFORM_ADMIN, TENANT_ADMIN) or auth.role.value == "ai_team":
         return auth
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,

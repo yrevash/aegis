@@ -413,9 +413,12 @@ function EngineIndicator({
 function RedteamHero({
   report,
   loading,
+  platformWide,
 }: {
   report: RedteamReportResponse | null
   loading: boolean
+  /** Whether this principal may read process-wide facts at all (no tenant pin). */
+  platformWide: boolean
 }): ReactElement {
   const overall = report?.overall ?? null
 
@@ -454,8 +457,16 @@ function RedteamHero({
             <Absence
               className="text-left"
               figure="Block rate"
-              why="The offline battery did not answer this session."
-              needed="Run it from the Red-team dashboard."
+              why={
+                platformWide
+                  ? 'The offline battery did not answer this session.'
+                  : 'The battery runs across every tenant, so it is a platform-operations reading.'
+              }
+              needed={
+                platformWide
+                  ? 'Run it from the Red-team dashboard.'
+                  : 'A devops or platform-admin account.'
+              }
             />
           </SceneState>
         ) : (
@@ -665,7 +676,14 @@ function CoverageRollup({ entries }: { entries: PostureEntry[] }): ReactElement 
  * of its rows (LLM01, LLM02) reached the screen, and its numeric signals reached
  * it not at all.
  */
-function PostureCoverage({ posture }: { posture: SecurityPostureResponse | null }): ReactElement {
+function PostureCoverage({
+  posture,
+  platformWide,
+}: {
+  posture: SecurityPostureResponse | null
+  /** Whether this principal may read process-wide facts at all (no tenant pin). */
+  platformWide: boolean
+}): ReactElement {
   const entries = posture?.entries ?? []
   const signals = posture?.signals ?? null
 
@@ -698,8 +716,12 @@ function PostureCoverage({ posture }: { posture: SecurityPostureResponse | null 
           <Absence
             className="text-left"
             figure="OWASP coverage"
-            why="The posture endpoint did not answer this session."
-            needed="A reachable /security/posture."
+            why={
+              platformWide
+                ? 'The posture endpoint did not answer this session.'
+                : 'Posture describes the deployment, not one tenant.'
+            }
+            needed={platformWide ? 'A reachable /security/posture.' : 'A devops or platform-admin account.'}
           />
         </SceneState>
       ) : (
@@ -777,9 +799,21 @@ function GuardrailsView(): ReactElement {
   const [redteam, setRedteam] = useState<RedteamReportResponse | null>(null)
   const [redteamLoading, setRedteamLoading] = useState(true)
 
+  // The deployment's security posture and the attack battery are process-wide facts —
+  // one number over every tenant that shared the worker — so `require_infra_reader`
+  // refuses a tenant-pinned principal outright, and rightly. Firing these anyway gave a
+  // tenant's own analyst two panels that could only ever 403, which is the same defect
+  // the Cache section had. The gate is the tenant pin, never the role name: an un-pinned
+  // ai_team operator is platform staff and still sees both.
+  const platformWide = session?.tenantId == null
+
   useEffect(() => {
     // Wait for the persisted session; firing now would send no bearer.
     if (!hydrated) return
+    if (!platformWide) {
+      setRedteamLoading(false)
+      return
+    }
     let alive = true
     void getSecurityPosture(token)
       .then((p) => {
@@ -803,7 +837,7 @@ function GuardrailsView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token, hydrated])
+  }, [token, hydrated, platformWide])
 
   const postureByThreat = new Map<string, PostureEntry>(
     (posture?.entries ?? []).map((e) => [e.threat_id, e]),
@@ -821,11 +855,11 @@ function GuardrailsView(): ReactElement {
         }
       />
 
-      <RedteamHero report={redteam} loading={redteamLoading} />
+      <RedteamHero report={redteam} loading={redteamLoading} platformWide={platformWide} />
 
       {redteam ? <RedteamCharts report={redteam} /> : null}
 
-      <PostureCoverage posture={posture} />
+      <PostureCoverage posture={posture} platformWide={platformWide} />
 
       <div className="grid min-w-0 gap-6 xl:grid-cols-2">
         <Card className="min-w-0 rounded-lg">
