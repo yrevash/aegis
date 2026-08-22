@@ -40,21 +40,38 @@ CONTEXTS = ["Closures are approved within 5 business days.", "Premium plans rene
 # ── check_grounding unit ──
 
 @pytest.mark.asyncio
-async def test_empty_contexts_is_noop_pass():
-    v = await check_grounding("anything", [], completer=_boom)
-    assert v.grounded is True
+async def test_an_answer_with_no_passages_is_not_reported_as_grounded():
+    """No passages is the finding, not a reason to skip the check.
+
+    This asserted ``grounded is True`` — "nothing to ground on, so pass". An audit found
+    what that costs: a run retrieved nothing, answered by citing a document id that
+    exists in no corpus (``DOC-REF-001``), and shipped with the output rail reporting a
+    clean pass and the console reading "output checked". The same silence let an answer
+    recalled from memory be presented as retrieved context.
+
+    Still cheap and offline — ``_boom`` proves no model call is made on this branch.
+    """
+    for contexts in ([], None):
+        v = await check_grounding("anything", contexts, completer=_boom)
+        assert v.grounded is False, "an answer with nothing behind it is not grounded"
+        assert "no passages" in v.reason.lower() or "nothing supports" in v.reason.lower()
 
 
 @pytest.mark.asyncio
-async def test_none_contexts_is_noop_pass():
-    v = await check_grounding("anything", None, completer=_boom)
-    assert v.grounded is True
+async def test_an_empty_answer_with_no_passages_is_still_a_pass():
+    """There is no claim to be ungrounded, so there is nothing to report."""
+    assert (await check_grounding("   ", [], completer=_boom)).grounded is True
 
 
 @pytest.mark.asyncio
-async def test_whitespace_only_contexts_is_noop():
+async def test_blank_passages_count_as_no_passages():
+    """Whitespace is not evidence. Passages that hold nothing ground nothing.
+
+    Same reasoning as the empty-list case: this used to pass, which meant a retrieval
+    arm returning blank strings produced an answer reported as grounded in them.
+    """
     v = await check_grounding("anything", ["   ", ""], completer=_boom)
-    assert v.grounded is True
+    assert v.grounded is False
 
 
 @pytest.mark.asyncio
@@ -114,10 +131,29 @@ async def test_pipeline_grounding_disabled_by_default():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_no_contexts_is_noop():
+async def test_pipeline_flags_an_answer_that_retrieved_nothing():
+    """The rail must speak in the case it was silent for."""
     guard = Guardrails(completer=output_completer(grounded=False), ground_answers=True)
     res = await guard.check_output("some answer")  # no contexts passed
-    assert res.verdict is GuardVerdict.PASS
+    assert res.verdict is GuardVerdict.FLAG and res.layer == "grounding"
+    assert "retrieved no passages" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_no_contexts_never_blocks_even_under_the_strict_posture():
+    """FLAG, never BLOCK — otherwise the strict posture is unusable.
+
+    Plenty of legitimate turns answer with no retrieval: a refusal, a question about the
+    conversation itself. Blocking those would teach an operator to switch the rail off,
+    which costs more than the flag is worth.
+    """
+    guard = Guardrails(
+        completer=output_completer(grounded=False),
+        ground_answers=True,
+        grounding_block=True,
+    )
+    res = await guard.check_output("I cannot answer that.")
+    assert res.verdict is GuardVerdict.FLAG, "a missing corpus must not block an answer"
 
 
 @pytest.mark.asyncio

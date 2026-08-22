@@ -1014,10 +1014,41 @@ class Guardrails:
 
         Advisory by default (an ungrounded answer is a non-blocking FLAG); a hard
         BLOCK when ``grounding_block`` is set. Returns None when grounding is
-        disabled, no contexts were supplied, or the answer is judged grounded.
+        disabled or the answer is judged grounded.
+
+        **An answer with no retrieved contexts is the case this rail most needs to
+        speak on, and it was the one case it stayed silent for.** ``not contexts``
+        short-circuited to ``None``, so the layer never appeared: an audit caught a run
+        that retrieved nothing, answered by citing a document id — ``DOC-REF-001``, which
+        exists in no corpus — and shipped with the output rail reporting a clean pass and
+        the console badge reading "output checked". The same silence let a prior answer
+        recalled from memory be presented as retrieved context, which is how a one-time
+        cross-tenant disclosure became a permanent one.
+
+        Nothing retrieved means nothing supports the claims. That is not a reason to skip
+        the check; it is the finding. So it is reported — but only ever as a **FLAG**,
+        never a BLOCK, even under ``grounding_block``: plenty of legitimate turns answer
+        with no retrieval (a refusal, a question about the conversation itself), and
+        blocking those would make the strict posture unusable and teach operators to
+        turn the rail off. An empty answer still returns ``None`` — there is no claim to
+        be ungrounded.
         """
-        if not self._ground_answers or not contexts:
+        if not self._ground_answers:
             return None
+        if not contexts:
+            if not text.strip():
+                return None
+            return GuardResult(
+                verdict=GuardVerdict.FLAG,
+                reason=(
+                    "Ungrounded answer flagged: this run retrieved no passages, so "
+                    "nothing in the corpus supports this answer. It may be drawn from "
+                    "the model's own knowledge or from recalled conversation, neither "
+                    "of which is a source in this tenant's documents."
+                ),
+                text=text,
+                layer="grounding",
+            )
         verdict = await check_grounding(
             text, contexts, completer=self._completer, block=self._grounding_block
         )

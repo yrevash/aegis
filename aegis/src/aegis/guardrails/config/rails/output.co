@@ -28,15 +28,24 @@ define flow guardrail output content safety
     stop
 
 # 3. Output grounding / hallucination self-check (OWASP LLM09 Misinformation).
-#    ADVISORY by default: it judges whether the answer's claims are supported by
-#    the retrieved `relevant_chunks` but does NOT `stop` — an ungrounded answer is
-#    flagged, never withheld (matching the programmatic pipeline's FLAG posture).
-#    An enterprise that wants a hard block adds `bot refuse output` + `stop` under
-#    the branch. No-op when there are no retrieved contexts to ground against.
+#    The check RUNS and is recorded in the rail log; it deliberately emits nothing.
+#
+#    It used to end `bot inform ungrounded`, commented "no `stop`; the answer is
+#    still delivered". That comment was wrong about NeMo's own semantics: a `bot`
+#    message inside an OUTPUT rail *replaces* the answer and NeMo records the rail
+#    as having stopped the turn, which `_stopped_rails` reads — correctly — as a
+#    block. So the flow documented as advisory withheld the answer outright, and a
+#    legitimate "I don't have that document" refusal reached the user as
+#    "[response withheld by the output guardrail]". Worse than the hallucination it
+#    was meant to catch.
+#
+#    An output rail cannot annotate; it can only replace. So the annotation belongs
+#    to the programmatic pipeline, which raises the same finding as a non-blocking
+#    FLAG (`Guardrails._screen_grounding`), and both engines run on every turn.
+#    An enterprise wanting a hard block adds `bot refuse output` + `stop` here,
+#    which is then a deliberate withholding rather than an accidental one.
 define flow guardrail output grounding
   $grounded = execute self_check_grounding
-  if not $grounded
-    bot inform ungrounded
 
 # 4. PII redaction on the outbound path (sensitive information disclosure, LLM06).
 #    The action rewrites the bot message with any PII masked.

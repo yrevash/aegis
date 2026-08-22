@@ -122,7 +122,16 @@ async def check_grounding(
     """
     passages = [c for c in (contexts or []) if isinstance(c, str) and c.strip()]
     if not passages:
-        return GroundingVerdict(grounded=True, reason="Grounding rail skipped (no contexts).")
+        # Not "skipped, therefore fine". An answer with no passages behind it is
+        # ungrounded by definition, and saying otherwise is how a fabricated citation
+        # reached a user under a clean output-rail verdict. The caller
+        # (:meth:`~aegis.guardrails.pipeline.Guardrails._screen_grounding`) decides what
+        # to do about it and deliberately never blocks on this branch; this function's
+        # job is only to stop reporting it as grounded.
+        return GroundingVerdict(
+            grounded=bool(not answer.strip()),
+            reason="No passages were retrieved, so nothing supports this answer.",
+        )
     if not answer.strip():
         return GroundingVerdict(grounded=True, reason="Grounding rail skipped (empty answer).")
     if completer is None:
