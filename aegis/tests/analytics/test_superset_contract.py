@@ -337,12 +337,13 @@ class FlakyFirstCall:
     path: str
     status: int = 401
     refusals: int = 1
+    message: str = "Token has expired"
 
     async def request(self, method, url, *, json=None, headers=None):
         response = await self.inner.request(method, url, json=json, headers=headers)
         if url.endswith(self.path) and self.refusals > 0:
             self.refusals -= 1
-            return FakeResponse(self.status, {"message": "Token has expired"})
+            return FakeResponse(self.status, {"message": self.message})
         return response
 
 
@@ -376,3 +377,35 @@ async def test_a_genuine_refusal_is_retried_once_and_then_raised():
 
     attempts = [c["path"] for c in fake.calls].count(CHART_DATA_PATH)
     assert attempts == 2, "exactly one retry, then the refusal is reported"
+
+
+async def test_a_csrf_mismatch_is_treated_as_a_stale_session_and_recovers():
+    """The 400 that actually took analytics down, on a Superset that was up.
+
+    A CSRF token is only meaningful against the Flask session cookie it was minted for,
+    so a mismatch IS a stale session — but Superset reports it as a plain 400, which
+    fell through a predicate that only knew 401/403/422. Every board then reported
+    "Superset refused to mint a guest token" indefinitely while ``/health`` answered
+    200, because nothing ever invalidated the poisoned pair.
+    """
+    client, fake = _wired()
+    flaky = FlakyFirstCall(
+        inner=fake,
+        path=GUEST_TOKEN_PATH,
+        status=400,
+        message="400 Bad Request: The CSRF tokens do not match.",
+    )
+    client._transport = flaky  # noqa: SLF001 - swapping the seam is the point
+
+    data = await client.board_data(BOARD, 3)
+    assert data.rows, "a CSRF mismatch must re-establish the session, not fail the board"
+    assert [c["path"] for c in fake.calls].count(LOGIN_PATH) == 2
+
+
+async def test_an_ordinary_bad_request_is_still_reported():
+    """Only a CSRF 400 is a stale session. A malformed query is a real refusal."""
+    client, fake = _wired(**{GUEST_TOKEN_PATH: FakeResponse(400, {"message": "datasource 7 does not exist"})})
+    with pytest.raises(SupersetRejectedError):
+        await client.board_data(BOARD, 3)
+    # One attempt, not two: this must not be retried.
+    assert [c["path"] for c in fake.calls].count(LOGIN_PATH) == 1

@@ -34,6 +34,7 @@ rather than against the documentation:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -114,6 +115,16 @@ class SupersetClient:
         self._service_token = ""
         self._service_token_expires_at = 0.0
         self._csrf_token = ""
+        # Serialises re-establishing the session. The CSRF token is instance state and
+        # the Flask session cookie it belongs to lives in the transport's shared cookie
+        # jar, so the two are only valid **as a pair**. The analytics page asks for ~18
+        # boards at once; when the cached token expires they all re-login concurrently,
+        # and the last writer of the CSRF need not be the last writer of the cookie.
+        # That pairs one login's token with another's cookie, which is a mismatch no
+        # retry can fix and which the next burst re-creates — analytics stuck at 502
+        # against a healthy Superset. One coroutine refreshes; the rest await it and
+        # then read a consistent pair.
+        self._login_lock = asyncio.Lock()
 
     # ── transport ────────────────────────────────────────────────────────────
 
@@ -174,11 +185,27 @@ class SupersetClient:
         simply being too long. Superset answers such a request 401/403, and 422 when
         FAB fails to *verify* the token rather than to authorise it.
 
+        **And 400, when the CSRF token does not match** — which is the one that actually
+        took analytics down. A CSRF token is only meaningful against the Flask session
+        cookie it was minted for, so a mismatch is by definition a stale session, but it
+        arrives as a plain 400 and so fell straight through this predicate to the caller.
+        Every board then reported "Superset refused" forever, on a Superset that was up
+        the whole time and answering ``/health`` 200. Narrowed to the CSRF message so an
+        ordinary bad request — a malformed query context, a datasource that does not
+        exist — is still reported rather than retried and reported.
+
         These are the codes worth one silent re-login. A refusal that is genuinely about
         permission answers the same way the second time and is then raised as normal, so
         retrying costs one round trip and never converts a real refusal into a success.
         """
-        return response.status_code in (401, 403, 422)
+        if response.status_code in (401, 403, 422):
+            return True
+        if response.status_code != 400:
+            return False
+        # ``_detail`` is the same extractor the raised error uses, so the message this
+        # reads is the message an operator would have seen — and it looks in the parsed
+        # body as well as the raw text, because Superset returns its errors as JSON.
+        return "csrf" in SupersetClient._detail(response).lower()
 
     @staticmethod
     def _detail(response: HttpResponse) -> str:
@@ -236,6 +263,22 @@ class SupersetClient:
         if self._service_token and self._now() < self._service_token_expires_at:
             return self._service_token
 
+        async with self._login_lock:
+            # Re-check inside the lock: while this coroutine waited, the coroutine that
+            # held the lock will have established a session, and joining that one is the
+            # whole point. Logging in again here would issue a fresh cookie and orphan
+            # the CSRF token the winner just stored.
+            if self._service_token and self._now() < self._service_token_expires_at:
+                return self._service_token
+            return await self._login()
+
+    async def _login(self) -> str:
+        """Establish a fresh service session. Callers must hold ``_login_lock``.
+
+        Split out so the cookie and the CSRF token can only ever be written by one
+        coroutine at a time — see the lock's own comment for why a mismatched pair is
+        unrecoverable rather than merely slow.
+        """
         response = await self._request(
             "POST",
             LOGIN_PATH,
