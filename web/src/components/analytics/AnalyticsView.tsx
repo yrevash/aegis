@@ -94,6 +94,19 @@ function AnalyticsView(): ReactElement {
   // ── the ledger, which is the page's own data ───────────────────────────────
   useEffect(() => {
     if (!hydrated) return
+    // `GET /admin/usage` is `require_tenant_admin`. The analytics section is mounted on
+    // the client portal too, where this panel could only ever 403 — so it asked, was
+    // refused, and rendered "the usage ledger did not answer", which blames the backend
+    // for a permission decision. The boards on this page are unaffected and still load;
+    // a client reads their own spend on Savings, which is scoped to them by design.
+    if (session?.role !== 'admin') {
+      setUsage(null)
+      setUsageError(
+        'The spend ledger is a tenant-administrator reading. Your own costs are on Savings.',
+      )
+      setUsageLoaded(true)
+      return
+    }
     let alive = true
     setUsageLoaded(false)
     void getUsage(token, { window: windowKey })
@@ -116,7 +129,7 @@ function AnalyticsView(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token, hydrated, windowKey])
+  }, [token, hydrated, windowKey, session?.role])
 
   // ── whether the Superset add-on is there at all ────────────────────────────
   useEffect(() => {

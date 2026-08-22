@@ -194,3 +194,28 @@ export function errorSentence(
   if (typeof error === 'string' && error.trim() !== '') return error.trim()
   return fallback
 }
+
+/**
+ * Log one failed backend call, at a level proportionate to whose failure it is.
+ *
+ * Two things this fixes, both reported from a real console.
+ *
+ * The facts go in the **message**, never in a second object argument. Next.js's dev
+ * overlay renders the message and prints an object argument as `{}`, so the previous
+ * line surfaced as `[aegis] request failed {}` — naming neither the route nor the
+ * status in the one place a developer actually reads it.
+ *
+ * And the level is graded. A refusal the screen handles on purpose — a tenant-pinned
+ * account opening a platform-wide panel — is not a fault, and logging it as a red
+ * console error makes a working boundary look like a broken product. Only a failure the
+ * backend owns (5xx) is an error; a refusal is a warning, still visible, not alarming.
+ *
+ * @param route - `"GET /v1/…"`, from {@link ApiError.route}.
+ * @param status - The HTTP status the backend answered with.
+ * @param detail - The server's own sentence, when it sent one.
+ */
+export function logRequestFailure(route: string, status: number, detail?: string): void {
+  const line = `[aegis] ${route} → ${status}${detail ? `: ${detail}` : ''}`
+  if (status >= 500) console.error(line)
+  else console.warn(line)
+}

@@ -177,7 +177,14 @@ function AdminCommandCenter(): ReactElement {
       getGatewayOptimization(token).then(set(setOpt)),
       getGovernanceDashboard(token).then(set(setGov)),
       getLatency(token).then(set(setLatency)),
-      getSecurityPosture(token).then(set(setPosture)),
+      // Posture describes the DEPLOYMENT — one reading across every tenant that shared
+      // the worker — so `require_infra_reader` refuses a tenant-pinned principal. This
+      // dashboard serves both admin portals, and a tenant admin is pinned, so asking
+      // unconditionally guaranteed a 403 on their overview every single load. The gate
+      // is the tenant pin, never the role name.
+      ...(session?.tenantId == null
+        ? [getSecurityPosture(token).then(set(setPosture))]
+        : []),
       getUsage(token, { window: 'month' }).then(set(setLedger)),
     ]).then(() => {
       if (alive) setSettled(true)
@@ -185,7 +192,7 @@ function AdminCommandCenter(): ReactElement {
     return () => {
       alive = false
     }
-  }, [token, hydrated])
+  }, [token, hydrated, session?.tenantId])
 
   // ── the per-tenant slices, once the tenant list is known ─────────────────────
   const tenantIds = useMemo(() => (gov?.tenants ?? []).map((t) => t.id), [gov])

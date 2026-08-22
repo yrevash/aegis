@@ -16,7 +16,7 @@
  * @see backend/src/app/api/routes_console.py
  */
 
-import { ApiError, apiMessage } from './apiError'
+import { ApiError, apiMessage, logRequestFailure } from './apiError'
 import { getAuthToken, reportSessionExpired } from './authToken'
 import { API_BASE } from './config'
 
@@ -188,7 +188,10 @@ async function consoleRequest<T>(
   if (!res.ok) {
     const failure = new ConsoleApiError(res.status, init.method ?? 'GET', path, await detailOf(res))
     if (res.status === 401) reportSessionExpired()
-    console.error('[aegis] request failed', { route: failure.route, status: res.status })
+    // Same line, same reasons, as `lib/api/client.ts` — see the comment there. Facts in
+    // the message because an object argument renders as `{}` in Next.js's overlay, and
+    // a graded level because a deliberate refusal is not a backend failure.
+    logRequestFailure(failure.route, res.status, failure.message)
     throw failure
   }
   return (await res.json()) as T

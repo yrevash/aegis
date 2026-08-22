@@ -81,7 +81,7 @@ import type {
   SecurityPostureResponse,
 } from '@/lib/api/platform'
 
-import { ApiError, serverDetail } from './apiError'
+import { ApiError, logRequestFailure, serverDetail } from './apiError'
 import { getAuthToken, reportSessionExpired } from './authToken'
 import { API_BASE } from './config'
 
@@ -121,7 +121,7 @@ async function request<T>(
       .catch(() => null)
     const failure = new ApiError(res.status, method, path, detail ?? undefined)
     if (res.status === 401) reportSessionExpired()
-    console.error('[aegis] request failed', { route: failure.route, status: res.status })
+    logRequestFailure(failure.route, res.status, detail ?? undefined)
     throw failure
   }
   return (await res.json()) as T
