@@ -1,0 +1,651 @@
+<title>Aegis Test Runbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+
+<style>
+  :root {
+    --rail:      #0b1f3f;
+    --rail-2:    #12305e;
+    --accent:    #1570ef;
+    --accent-d:  #0b3b8f;
+    --ground:    #eef2f8;
+    --surface:   #ffffff;
+    --surface-2: #f6f9fd;
+    --line:      #d8e2f0;
+    --line-soft: #e8eef7;
+    --ink:       #0d1b2f;
+    --ink-2:     #3d5372;
+    --ink-3:     #6b809d;
+    --ok:        #067647;
+    --ok-bg:     #e9f7ef;
+    --warn:      #b54708;
+    --warn-bg:   #fdf3e7;
+    --block:     #b42318;
+    --block-bg:  #fdeceb;
+    --radius:    0.875rem;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 20px 96px;
+    display: grid;
+    grid-template-columns: 218px minmax(0, 1fr);
+    gap: 40px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .toc { position: static; margin-bottom: 24px; }
+  }
+
+  /* ── masthead ─────────────────────────────────────────── */
+  .masthead {
+    background: var(--rail);
+    color: #dce7f7;
+    padding: 34px 0 30px;
+    margin-bottom: 34px;
+  }
+  .masthead-inner { max-width: 1280px; margin: 0 auto; padding: 0 20px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.17em;
+    text-transform: uppercase;
+    color: #7ea5dd;
+    margin: 0 0 8px;
+  }
+  .masthead h1 {
+    font-size: clamp(1.75rem, 4vw, 2.35rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 10px;
+    color: #ffffff;
+    text-wrap: balance;
+  }
+  .masthead p {
+    margin: 0;
+    max-width: 62ch;
+    color: #b6cbe8;
+    font-size: 15px;
+  }
+  .urls {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-top: 20px;
+  }
+  .url {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: var(--rail-2);
+    border: 1px solid #1d417a;
+    color: #cfe0f7;
+    padding: 6px 11px;
+    border-radius: 7px;
+    white-space: nowrap;
+  }
+  .url b { color: #7ea5dd; font-weight: 500; }
+
+  /* ── table of contents ────────────────────────────────── */
+  .toc { position: sticky; top: 22px; }
+  .toc-h {
+    font-family: var(--mono);
+    font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 10px; padding-left: 12px;
+  }
+  .toc a {
+    display: block;
+    padding: 7px 12px;
+    border-radius: 8px;
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 14px;
+    border-left: 2px solid transparent;
+  }
+  .toc a:hover { background: var(--surface); color: var(--accent); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .toc .cnt { float: right; color: var(--ink-3); font-family: var(--mono); font-size: 11.5px; }
+  .toc hr { border: 0; border-top: 1px solid var(--line); margin: 12px 12px; }
+
+  /* ── sections ─────────────────────────────────────────── */
+  section { scroll-margin-top: 22px; margin-bottom: 40px; }
+
+  .sec-head { margin-bottom: 16px; }
+  .sec-head h2 {
+    font-size: 1.4rem; font-weight: 600; letter-spacing: -0.015em;
+    margin: 0 0 6px; color: var(--ink); text-wrap: balance;
+  }
+  .sec-head p { margin: 0; color: var(--ink-2); max-width: 72ch; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin-bottom: 14px;
+  }
+
+  /* login block */
+  .login {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 11px 14px;
+    margin-bottom: 16px;
+  }
+  .login .lbl {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  code, .cred {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: #eaf1fb;
+    border: 1px solid #d3e2f7;
+    color: var(--accent-d);
+    padding: 2px 7px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .cred { font-weight: 500; }
+
+  /* test rows */
+  .t { border-top: 1px solid var(--line-soft); padding: 14px 0; }
+  .t:first-of-type { border-top: 0; padding-top: 4px; }
+  .t:last-child { padding-bottom: 2px; }
+  .t-name {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--accent);
+    margin: 0 0 7px; font-weight: 500;
+  }
+  .t p { margin: 0 0 6px; }
+  .t p:last-child { margin-bottom: 0; }
+  .want {
+    display: block;
+    border-left: 2px solid var(--ok);
+    background: var(--ok-bg);
+    padding: 8px 12px;
+    border-radius: 0 7px 7px 0;
+    color: #06482e;
+    margin-top: 8px;
+  }
+  .want b { color: var(--ok); font-weight: 600; }
+  .note {
+    display: block;
+    border-left: 2px solid var(--warn);
+    background: var(--warn-bg);
+    padding: 8px 12px;
+    border-radius: 0 7px 7px 0;
+    color: #7a3208;
+    margin-top: 8px;
+  }
+  .note b { color: var(--warn); font-weight: 600; }
+
+  /* chips */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .chip-ok    { background: var(--ok-bg);    color: var(--ok);    border: 1px solid #b7e4cb; }
+  .chip-warn  { background: var(--warn-bg);  color: var(--warn);  border: 1px solid #f2d5b3; }
+  .chip-fixed { background: #eaf1fb;         color: var(--accent-d); border: 1px solid #d3e2f7; }
+
+  /* tables */
+  .tw { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--ink-3); background: var(--surface-2);
+    font-weight: 500; white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .lead-in { color: var(--ink-2); margin: 0 0 14px; max-width: 74ch; }
+  h3.sub {
+    font-size: 1rem; font-weight: 600; margin: 22px 0 10px; color: var(--ink);
+  }
+  h3.sub:first-child { margin-top: 0; }
+  a { color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  .foot {
+    color: var(--ink-3); font-size: 13px; border-top: 1px solid var(--line);
+    padding-top: 16px; margin-top: 8px;
+  }
+</style>
+
+<div class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow">End-to-end verification · 22 Aug 2026</p>
+    <h1>Aegis Test Runbook</h1>
+    <p>Every portal, every account, what to click and what a correct result looks like. The stack was stopped, restarted clean and verified before this was written — all eight components report <b>up</b>.</p>
+    <div class="urls">
+      <span class="url"><b>App</b> &nbsp;http://localhost:3001</span>
+      <span class="url"><b>API</b> &nbsp;http://127.0.0.1:8110</span>
+      <span class="url"><b>Superset</b> &nbsp;http://localhost:8088</span>
+      <span class="url"><b>Password (all accounts)</b> &nbsp;demo</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-h">Runbook</p>
+    <a href="#preflight">Pre-flight</a>
+    <a href="#isolation">Tenant isolation <span class="cnt">★</span></a>
+    <hr>
+    <p class="toc-h">Portals</p>
+    <a href="#platform">Platform admin <span class="cnt">12</span></a>
+    <a href="#tenant">Tenant admin <span class="cnt">13</span></a>
+    <a href="#aiteam">AI team <span class="cnt">16</span></a>
+    <a href="#devops">DevOps <span class="cnt">9</span></a>
+    <a href="#client">Client <span class="cnt">11</span></a>
+    <hr>
+    <a href="#known">Known &amp; expected</a>
+  </nav>
+
+  <main>
+
+  <!-- ══ PRE-FLIGHT ══ -->
+  <section id="preflight">
+    <div class="sec-head">
+      <h2>Pre-flight</h2>
+      <p>Confirmed a few minutes ago. If any of this is red, stop — the tests below will produce misleading results.</p>
+    </div>
+
+    <div class="card">
+      <h3 class="sub">Services</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Service</th><th>Port</th><th>State</th><th>Why it matters</th></tr></thead>
+          <tbody>
+            <tr><td>PostgreSQL</td><td class="num">5432</td><td><span class="chip chip-ok">up</span></td><td>Every row you will read — database <code>taif_run1</code></td></tr>
+            <tr><td>Redis / Memurai</td><td class="num">6379</td><td><span class="chip chip-ok">up</span></td><td>Caches, rate limiter</td></tr>
+            <tr><td>Neo4j</td><td class="num">7687</td><td><span class="chip chip-ok">up</span></td><td>Knowledge graph</td></tr>
+            <tr><td>Qdrant</td><td class="num">6333</td><td><span class="chip chip-ok">up</span></td><td>Vector retrieval</td></tr>
+            <tr><td>Temporal</td><td class="num">7233</td><td><span class="chip chip-ok">up</span></td><td>Durable ingestion workflows</td></tr>
+            <tr><td>Superset</td><td class="num">8088</td><td><span class="chip chip-ok">up</span></td><td>Analytics boards</td></tr>
+            <tr><td>Backend</td><td class="num">8110</td><td><span class="chip chip-ok">up</span></td><td>API + in-process Temporal workers</td></tr>
+            <tr><td>Frontend</td><td class="num">3001</td><td><span class="chip chip-ok">up</span></td><td>The app</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub">Live baseline</h3>
+      <p class="lead-in">A real multi-agent query was run against Northwind and reconciled across every store. Use these as your reference numbers — they should only ever grow as you test.</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Signal</th><th>Value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Components up</td><td class="num">8 / 8</td><td>Including the LLM gateway, after a real model call</td></tr>
+            <tr><td>Run just executed</td><td class="num">13 nodes</td><td>completed · 13,857 + 301 tokens · $0.0104</td></tr>
+            <tr><td>Documents ingested</td><td class="num">13</td><td>SUCCEEDED, with real Temporal workflows</td></tr>
+            <tr><td>Job runs</td><td class="num">17</td><td>SUCCEEDED</td></tr>
+            <tr><td>Graph — Northwind</td><td class="num">50 nodes / 49 edges</td><td>Vertex sees <b>0</b> — that is the isolation working</td></tr>
+            <tr><td>Approvals pending</td><td class="num">3</td><td>One per scope: platform, Northwind, Vertex</td></tr>
+            <tr><td>Audit rows</td><td class="num">1,522</td><td>Append-only</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ ISOLATION ══ -->
+  <section id="isolation">
+    <div class="sec-head">
+      <h2>Start here: tenant isolation</h2>
+      <p>This is the single most important thing to test, and the fastest way to embarrass the platform if it is wrong. Two tenants exist — <b>Northwind</b> (tenant 1) and <b>Vertex</b> (tenant 2). Use two browser profiles, or one normal and one private window, so both sessions live at once.</p>
+    </div>
+
+    <div class="card">
+      <div class="t">
+        <p class="t-name">Spend must not leak</p>
+        <p>Sign in as <span class="cred">northwind.client</span> in one window and <span class="cred">vertex.client</span> in the other. Open <b>Savings</b> on both.</p>
+        <span class="want"><b>Correct:</b> the two figures differ and each matches only its own tenant's spend. Right now Northwind reads about <b>$2.69 actual / $3.14 saved</b> and Vertex about <b>$0.15 / $0.28</b>. Now run a query as Northwind and refresh both — Northwind moves, <b>Vertex must not move at all</b>.</span>
+        <span class="note"><b>Why this one first:</b> until today this screen showed every tenant the same process-wide number, so one tenant's query visibly moved another tenant's money. It is fixed and ledger-backed — this is the test that proves it.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Knowledge must not leak</p>
+        <p>Open the <b>Graph</b> section as an AI-team or admin account on each tenant.</p>
+        <span class="want"><b>Correct:</b> Northwind shows around <b>50 nodes / 49 edges</b> — real entities like <i>Baltic Freight Ltd</i>, <i>Anna Kowalski</i>, <i>Operations Committee</i>. Vertex shows <b>an empty graph</b>, because nothing has been ingested for Vertex. Empty here is the right answer, not a bug.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Decisions must not cross</p>
+        <p>As <span class="cred">northwind.admin</span>, open <b>Approvals</b> and try to act on Vertex's gate.</p>
+        <span class="want"><b>Correct:</b> you only see your own tenant's gate. A platform gate shows for <span class="cred">admin</span> only, and a tenant's own admin is the one who decides a tenant gate — the buttons are disabled with the reason stated, not silently missing.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Documents must not cross</p>
+        <p>Open <b>Documents</b> as each tenant.</p>
+        <span class="want"><b>Correct:</b> Northwind's filenames are all <code>northwind-*</code> / policy files; Vertex's are <code>vertex-*</code>. Neither lists the other's.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ PLATFORM ADMIN ══ -->
+  <section id="platform">
+    <div class="sec-head">
+      <h2>Platform admin</h2>
+      <p>Runs the platform itself — creates tenants and users, sets caps, decides platform gates. Has <b>no owning tenant</b>, which is deliberate and shapes what it can and cannot do.</p>
+    </div>
+
+    <div class="login">
+      <span class="lbl">Sign in</span>
+      <span class="cred">admin</span> <span class="lbl">/</span> <span class="cred">demo</span>
+      <span class="lbl">12 sections</span>
+    </div>
+
+    <div class="card">
+      <div class="t">
+        <p class="t-name">Roles &amp; access</p>
+        <p>Create a tenant with a daily cap. Then create a user in it. Then try to create the <i>same</i> tenant name again, and try to demote yourself.</p>
+        <span class="want"><b>Correct:</b> both creations succeed and appear immediately in Governance and in every tenant picker. The duplicate is refused with a sentence naming the clash. Your own row's non-admin options are disabled — the platform will not let you remove the last platform admin.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Governance</p>
+        <p>Read the spend-vs-cap rings after creating that cap.</p>
+        <span class="want"><b>Correct:</b> your new tenant appears with its cap and $0.00 used. Northwind and Vertex show real spend against a 50M-token / $200 daily cap.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Approvals</p>
+        <p>Approve the <b>platform</b> gate. Try to act on a tenant gate.</p>
+        <span class="want"><b>Correct:</b> the platform gate moves out of Waiting into Decision history. Tenant gates are disabled for you with the reason "a tenant's own admin decides it".</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Database <span class="chip chip-fixed">fixed today</span></p>
+        <p>Pick a table (try <code>audit_log</code>), switch the scope selector between Every tenant / #1 / #2, and use <b>Count exactly</b>.</p>
+        <span class="want"><b>Correct:</b> the counts change per scope and the total matches the real <code>taif_run1</code> database. Try an injection payload in any field — it is refused with a message naming the readable tables and columns.</span>
+        <span class="note"><b>Was broken:</b> this screen was pointed at a different database entirely, so it narrated someone else's deployment. Now repointed, with the read-only role granted on this database.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">MCP</p>
+        <p>Declare a server with a bad id like <code>audit_peer</code> (underscore), then a valid one like <code>audit-peer</code>. Use <b>Test</b>. Then change a tool's risk, disable, remove.</p>
+        <span class="want"><b>Correct:</b> the bad id is refused <b>and the drawer stays open with everything you typed still there</b> — that was fixed today; it used to throw the form away. Test reports real tool discovery or a real connection error. Remove asks first; Cancel keeps the peer.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Jobs <span class="chip chip-fixed">fixed today</span></p>
+        <p>Just look at it.</p>
+        <span class="want"><b>Correct:</b> <b>no</b> Re-queue, Cancel or Upload controls, and a "Read-only: no owning tenant" chip explaining why. You have no tenant, and those writes require one — so the screen no longer offers thirteen buttons that can only fail.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Audit &amp; Analytics</p>
+        <p>Work the audit filters (actor, action, outcome, date range) and export CSV. Switch analytics between 24 hours and 30 days.</p>
+        <span class="want"><b>Correct:</b> filters query the server and row counts change. The CSV carries a scope/window/exporter header and the export itself is audited. Analytics boards render with real data — no blank tiles.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Console, Settings, Forecast, Dashboard</p>
+        <p>Ask the console a real question. Change a platform setting and reload. Switch forecast between Spend and Calls.</p>
+        <span class="want"><b>Correct:</b> the console streams a full trace with cost. Settings persist across reload. Forecast states honestly when it has too few observations rather than inventing a line.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ TENANT ADMIN ══ -->
+  <section id="tenant">
+    <div class="sec-head">
+      <h2>Tenant admin</h2>
+      <p>Runs one tenant. This is the richest portal and the one a jury will most likely explore — it has documents, prompts, memory and approvals all in one place.</p>
+    </div>
+
+    <div class="login">
+      <span class="lbl">Sign in</span>
+      <span class="cred">northwind.admin</span> <span class="lbl">or</span> <span class="cred">vertex.admin</span>
+      <span class="lbl">/</span> <span class="cred">demo</span>
+      <span class="lbl">13 sections</span>
+    </div>
+
+    <div class="card">
+      <div class="t">
+        <p class="t-name">Documents → Jobs → Graph — the full ingestion chain</p>
+        <p>This is the best single demo in the product. Upload a <b>PDF</b> on Documents (PDF only — other types are refused with a clear reason). Then watch Jobs. Then open the graph.</p>
+        <span class="want"><b>Correct:</b> the upload returns a real <code>workflow_id</code>; a new job appears in Jobs and walks six stages — parse, chunk, enrich, embed, index, graph; it finishes SUCCEEDED; and new entities from your document appear in the knowledge graph. That is Temporal, Docling, Qdrant and Neo4j all doing real work.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">LLM Ops — prompts <span class="chip chip-fixed">fixed today</span></p>
+        <p>Open the prompt editor. Read what is in the box <i>before</i> touching anything. Then try <b>Make live</b>, and try saving an empty body.</p>
+        <span class="want"><b>Correct:</b> the box either holds the live prompt text, or says plainly that the shipped prompt is running and its text is not on this API. <b>Make live</b> asks first and names the version it will displace. An empty body is refused outright, with the reason on the disabled button.</span>
+        <span class="note"><b>Was dangerous:</b> the editor loaded blank while a prompt was live, so one click could replace a tenant's entire operating prompt with nothing. There was no confirmation and no way back.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Approvals <span class="chip chip-fixed">fixed today</span></p>
+        <p>Click Approve, then back out. Then commit a decision.</p>
+        <span class="want"><b>Correct:</b> the first click <b>arms</b> and fires no request — it asks, naming <i>every</i> call the approval will run, not just the first one, and says it cannot be recalled. "Keep waiting" restores it untouched. Only the second click decides.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Memory <span class="chip chip-fixed">fixed today</span></p>
+        <p>Have a two-turn console conversation, then come back here. Rename a chat. Delete a chat.</p>
+        <span class="want"><b>Correct:</b> the agent recalls the earlier turn in turn two — memory is real, not decorative. Rename and Delete now actually fire requests (both were completely inert), Delete asks first, and the list re-reads from the server afterwards.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Analytics <span class="chip chip-fixed">fixed today</span></p>
+        <p>Load the page and switch periods.</p>
+        <span class="want"><b>Correct:</b> every board renders. If you see a wall of failures, tell me — that was a real defect where one expired token took all eighteen boards down at once, and it now recovers by itself.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Governance, Roles, Forecast, Audit, Console</p>
+        <p>Set a per-user cap above your tenant's cap. Export a forecast CSV.</p>
+        <span class="want"><b>Correct:</b> the over-tenant cap is refused with a sentence naming the cap that actually binds — a stored number that could never apply is worse than a refusal. The CSV header states the scope it was taken under.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ AI TEAM ══ -->
+  <section id="aiteam">
+    <div class="sec-head">
+      <h2>AI team</h2>
+      <p>The deepest portal — sixteen sections covering evaluation, guardrails, retrieval, memory and the agent itself. Two accounts exist and <b>they deliberately see different things</b>, which is itself worth testing.</p>
+    </div>
+
+    <div class="login">
+      <span class="lbl">Sign in</span>
+      <span class="cred">northwind.analyst</span> <span class="lbl">(tenant 1)</span>
+      <span class="lbl">or</span>
+      <span class="cred">ai</span> <span class="lbl">(no tenant)</span>
+      <span class="lbl">/</span> <span class="cred">demo</span>
+      <span class="lbl">16 sections</span>
+    </div>
+
+    <div class="card">
+      <div class="t">
+        <p class="t-name">Cache — the two accounts differ <span class="chip chip-fixed">fixed today</span></p>
+        <p>Look at the left rail as <span class="cred">northwind.analyst</span>, then as <span class="cred">ai</span>.</p>
+        <span class="want"><b>Correct:</b> <span class="cred">ai</span> has a <b>Cache</b> item and it loads. <span class="cred">northwind.analyst</span> has <b>no Cache item at all</b>. A cache hit rate is one number across every tenant sharing the worker, so a tenant-pinned account genuinely may not read it — and the rail no longer offers a page that can only refuse.</span>
+        <span class="note">This is the exact "always refused, never loads" you hit earlier. The gate is the tenant pin, not the role name.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Console — the agent proper</p>
+        <p>Ask something that needs a tool. Then ask something that should trip the human gate, e.g. asking it to <i>issue a credit</i> or <i>update a request's status</i>.</p>
+        <span class="want"><b>Correct:</b> you see the run stream live — plan, guardrail, retrieval, tool calls, reflection, synthesis — and a cost. A risky action <b>parks the run</b> and appears in Approvals; approving it resumes and executes exactly once; rejecting ends the run as <b>rejected</b>, not "completed".</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Console — mode picker and fan-out</p>
+        <p>Set the mode to <b>Team</b> and ask a broad question.</p>
+        <span class="want"><b>Correct:</b> multiple sub-agent lanes appear and run in parallel, each streaming its own reasoning, then a synthesis step merges them. The run records the width and who chose it.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Console — image attachment <span class="chip chip-fixed">fixed today</span></p>
+        <p>Attach an image.</p>
+        <span class="want"><b>Correct:</b> if it is refused, <b>you are told which of two things happened</b> — the screen flagged your image, or the screen could not run and it failed closed as a precaution. Those are different facts and the second one may pass on a retry. It used to say only "no description was produced".</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Graph <span class="chip chip-fixed">fixed today</span></p>
+        <p>Open it as <span class="cred">northwind.analyst</span>.</p>
+        <span class="want"><b>Correct:</b> a populated graph — roughly 50 nodes. The empty-state text, if you ever see it, says <i>ingestion</i> fills the graph and a query only narrows it.</span>
+        <span class="note"><b>Was badly broken:</b> the graph was written under one label and read under another, so the API returned nothing while Neo4j held 122 nodes. Every screen showed an empty graph. Fixed, and the orphaned data recovered.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Evals, Harness, Red-team, Guardrails</p>
+        <p>Run an evaluation. Run the guardrail harness against an injection attempt.</p>
+        <span class="want"><b>Correct:</b> real verdicts with reasons — not a static table. A prompt-injection attempt is blocked and the reason names the rail that caught it.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">RAG, Memory, Token optimisation, Voice, Vision, Simulation, MLOps</p>
+        <p>Work through each. Check figures against what you did in the console.</p>
+        <span class="want"><b>Correct:</b> token-optimisation savings track the ledger; memory shows facts extracted from your real conversations; nothing shows a fabricated zero where it means "not measured".</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ DEVOPS ══ -->
+  <section id="devops">
+    <div class="sec-head">
+      <h2>DevOps</h2>
+      <p>Infrastructure and security posture. Redesigned today — this is where the "text bomb" fix landed, so it is worth a look for that reason alone.</p>
+    </div>
+
+    <div class="login">
+      <span class="lbl">Sign in</span>
+      <span class="cred">devops</span> <span class="lbl">/</span> <span class="cred">demo</span>
+      <span class="lbl">9 sections</span>
+    </div>
+
+    <div class="card">
+      <div class="t">
+        <p class="t-name">Overview — component health <span class="chip chip-fixed">redesigned today</span></p>
+        <p>Look at the card, then hover a component tile, then <b>tab</b> to one with the keyboard.</p>
+        <span class="want"><b>Correct:</b> <b>8/8</b> as a figure with a proportional bar, then eight compact tiles — not eight paragraphs. The probe command for each component is still there, in the ⓘ, reachable by hover <i>and</i> by keyboard. 60% shorter, 73% less text.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Tech Stack &amp; Versions <span class="chip chip-fixed">redesigned today</span></p>
+        <p>Same treatment on the Dependencies table.</p>
+        <span class="want"><b>Correct:</b> one line per dependency with the evidence in a per-row ⓘ. At a narrow window the Scope column drops rather than pushing Status into a sideways scroll — the verdict is the point of the table.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Cache</p>
+        <p>This is where cache stats legitimately live.</p>
+        <span class="want"><b>Correct:</b> it loads, with per-cache counters and hit rates. A cache that has had no lookups says so rather than showing 0%.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Security &amp; Red-team</p>
+        <p>Run the attack battery.</p>
+        <span class="want"><b>Correct:</b> real per-attack verdicts. Injection is never reported as fully solved — the posture is defence-in-depth, and it says so.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Patch check, Latency, Audit</p>
+        <p>Run the patch check.</p>
+        <span class="want"><b>Correct:</b> it reports outdated / current / unknown counts against the real registry, and says plainly when the registry could not be reached rather than implying everything is current.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ CLIENT ══ -->
+  <section id="client">
+    <div class="sec-head">
+      <h2>Client</h2>
+      <p>The end-customer view — deliberately the narrowest. Its job is to answer "what did this cost me, what is it doing, and what needs my decision".</p>
+    </div>
+
+    <div class="login">
+      <span class="lbl">Sign in</span>
+      <span class="cred">northwind.client</span> <span class="lbl">or</span> <span class="cred">vertex.client</span>
+      <span class="lbl">/</span> <span class="cred">demo</span>
+      <span class="lbl">11 sections</span>
+    </div>
+
+    <div class="card">
+      <div class="t">
+        <p class="t-name">Savings <span class="chip chip-fixed">fixed today</span></p>
+        <p>The headline screen. Read it on both tenants — see <a href="#isolation">Tenant isolation</a>.</p>
+        <span class="want"><b>Correct:</b> your own tenant's figures only. The breakdown attributes the saving to small-model routing and reports the two cache sources at $0 <i>with the reason</i> — a cache hit skips the model entirely, so it never reaches the ledger this figure is built from. That honesty is deliberate; the headline is conservative rather than inflated.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Console &amp; Risk</p>
+        <p>Ask a question. Then try to make it do something it should not.</p>
+        <span class="want"><b>Correct:</b> normal questions answer with sources. Out-of-scope or risky asks are refused with a reason, or parked for a human — a client cannot self-approve.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Documents, Approvals, Forecast, Memory, Simulation</p>
+        <p>Check the documents list matches your tenant only.</p>
+        <span class="want"><b>Correct:</b> your tenant's documents; approvals show the fate of gates raised by your own runs.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ KNOWN ══ -->
+  <section id="known">
+    <div class="sec-head">
+      <h2>Known &amp; expected — not bugs</h2>
+      <p>Things you will hit that are either deliberate or already on my list. Worth knowing so you do not spend time reporting them.</p>
+    </div>
+
+    <div class="card">
+      <div class="t">
+        <p class="t-name">Awaiting your decision</p>
+        <p>As <span class="cred">northwind.analyst</span>, <b>LLM Ops</b> and parts of <b>Guardrails</b> refuse with a 403.</p>
+        <span class="note"><b>This is the open policy question I asked you about.</b> Should a tenant's own AI team operate <i>their own tenant's</i> prompts, and see their own security posture? My recommendation: yes to prompts (the scoping already exists and you already allow tenant admins), no to posture and red-team (those are deployment-wide facts that cannot be narrowed to a tenant). Say which and I will implement it.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Six documents sit at PENDING forever</p>
+        <p>Documents 1–6 (<code>northwind-*</code>, <code>vertex-*</code>) never ingest.</p>
+        <span class="note"><b>Deliberate.</b> The seeder creates them as <i>records, not bytes</i> — there is no file behind them, so it refuses to claim a parse and a chunk count that never happened. Every real upload you make will ingest properly. Tell me if you would rather they were real files so the demo has no permanently-queued rows.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">The client Analytics tile refuses part of its data</p>
+        <span class="note">A client account calling a tenant-admin usage endpoint. Same class as the Cache fix — either the panel should not be on that portal, or the endpoint should admit a client scoped to itself. On my list.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">"Not recorded" is a real answer</p>
+        <span class="note">Run latency, queue depth and several pipeline figures will say <b>not recorded</b> with a ⓘ explaining what would fill them. That is the platform refusing to fabricate a zero. It is a feature, and it is worth pointing at during a demo.</span>
+      </div>
+
+      <div class="t">
+        <p class="t-name">Budgets can stop the platform — on purpose</p>
+        <span class="note">If queries or ingestion start failing with <code>BudgetExceededError</code>, a cap was hit. That happened during the audits and blocked Northwind entirely; caps are now 50M tokens / $200 per tenant per day. It is correct enforcement, not a fault — but raise the caps rather than debugging the agent.</span>
+      </div>
+    </div>
+
+    <p class="foot">Stack restarted clean and verified 22 Aug 2026. Backend 1,243 tests · aegis 2,307 · web 261 · typecheck clean. Last portal sweep: 61 screens, 54 OK, 0 failed, 0 empty, 0 horizontal overflow.</p>
+  </section>
+
+  </main>
+</div>
