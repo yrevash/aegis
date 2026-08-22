@@ -258,11 +258,28 @@ class Settings(BaseSettings):
     # programmatic rails (``app.guardrails.check_input``/``check_output``,
     # delegating to ``aegis.guardrails``) the agent graph calls directly, and the
     # declarative **NeMo Guardrails Colang** policy (``app.guardrails.nemo``,
-    # delegating to ``aegis.guardrails.nemo``) callable directly for the jury's
-    # readable security artifact. This field is currently unused for automatic
-    # dispatch (the strangler shim onto ``aegis.guardrails`` — see
-    # docs/module/MODULE_REFERENCE.md — always uses
-    # the programmatic rails); kept for forward compatibility / config parity.
+    # delegating to ``aegis.guardrails.nemo``), whose eight flows mirror the
+    # programmatic pipeline layer for layer.
+    #
+    # Three postures, and this field really does dispatch (the comment here used to say
+    # it was "currently unused for automatic dispatch", which was stale — the shim has
+    # routed on it for some time, and a stale comment about whether a security control
+    # is wired is its own defect):
+    #
+    #   "programmatic" — the fast offline pipeline alone.
+    #   "nemo"         — the declarative Colang policy alone.
+    #   "both"         — the pipeline first, then the Colang engine over what it
+    #                    returned. Two independent implementations of one policy, and a
+    #                    payload must get past both. Strictest verdict wins and
+    #                    redactions accumulate.
+    #
+    # ``both`` is the strongest posture and the one this deployment runs. It costs one
+    # extra model call on the turns the pipeline did not already refuse, and it is the
+    # only posture that keeps every rail: the Colang policy has no grounding action, so
+    # ``nemo`` alone silently drops the output grounding self-check.
+    #
+    # An unrecognised value keeps the programmatic rails and logs — a typo can never
+    # turn enforcement off.
     guardrails_engine: str = Field(default="programmatic")
 
     # ── Output grounding rail (OWASP LLM09; docs/security/overview.md §3) ──

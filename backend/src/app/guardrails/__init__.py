@@ -148,15 +148,90 @@ async def tenant_pipeline(*, live: bool) -> Guardrails:
     return guard.with_completer(_gateway_completer if live else None)
 
 
+#: The engine postures an operator may select.
+#:
+#: ``programmatic`` — the fast offline pipeline alone (the historical default).
+#: ``nemo``          — the declarative Colang policy alone.
+#: ``both``          — **the pipeline first, then the Colang engine over what it
+#:                     returned.** Defence in depth: two independent implementations of
+#:                     the same policy, and a payload has to get past both.
+_ENGINE_MODES = ("programmatic", "nemo", "both")
+
+
+def _engine_mode() -> str:
+    """Return the selected engine posture, normalised, defaulting safely.
+
+    An unrecognised value is not silently treated as "off": it keeps the programmatic
+    rails (so a typo can never disable enforcement) and says so, because a deployment
+    that believes it selected an engine and got none is exactly the shape of failure
+    this whole module exists to prevent.
+    """
+    mode = get_settings().guardrails_engine.strip().lower()
+    if mode in _ENGINE_MODES:
+        return mode
+    logger.warning(
+        "guardrails_engine=%r is not one of %s; enforcing with the programmatic "
+        "pipeline. The rails are ON — only the *engine selection* was ignored.",
+        mode,
+        _ENGINE_MODES,
+    )
+    return "programmatic"
+
+
+def _combine(first: GuardResult, second: GuardResult) -> GuardResult:
+    """Fold a second engine's verdict onto the first's, strictest wins.
+
+    Used only by the ``both`` posture, where the same text is judged twice by two
+    independent implementations. The rules follow from what each verdict means rather
+    than from an ordering on the enum:
+
+    * A **block** from either engine is the answer. Two rails disagreeing about whether
+      something is safe is resolved in favour of the one that said no.
+    * Redactions **accumulate**. Each engine may catch a detector the other missed, and
+      the text that survives is the one the second engine returned — it saw the first's
+      redactions and may have added its own on top.
+    * A **flag** is advisory and never downgrades a redact; a pass never overrides
+      anything.
+
+    The ``reason`` names both engines whenever the second one changed the outcome, so an
+    operator reading a trace can tell *which* implementation objected — that is the whole
+    value of running two.
+    """
+    if second.verdict is GuardVerdict.BLOCK:
+        return second.model_copy(
+            update={
+                "redactions": sorted({*first.redactions, *second.redactions}),
+                "layer": second.layer or "nemo",
+            }
+        )
+    if first.verdict is GuardVerdict.BLOCK:
+        return first
+    merged = sorted({*first.redactions, *second.redactions})
+    # Whichever engine returned the stronger non-blocking verdict owns the record; the
+    # text always comes from the second, which is the one that saw the first's output.
+    stronger = first if _RANK[first.verdict] >= _RANK[second.verdict] else second
+    return stronger.model_copy(update={"text": second.text, "redactions": merged})
+
+
+#: How strongly a non-blocking verdict speaks. ``redact`` changed the text and must not
+#: be lost behind a ``flag`` (advisory) or a ``pass`` (said nothing).
+_RANK: dict[GuardVerdict, int] = {
+    GuardVerdict.PASS: 0,
+    GuardVerdict.FLAG: 1,
+    GuardVerdict.REDACT: 2,
+    GuardVerdict.BLOCK: 3,
+}
+
+
 def _use_nemo_engine() -> bool:
     """Whether this request should enforce via the NeMo Colang engine.
 
-    True only when the operator selected ``guardrails_engine="nemo"`` AND the
+    True when the operator selected ``guardrails_engine="nemo"`` or ``"both"`` AND the
     optional ``nemoguardrails`` package is importable. Any other value (default
     ``"programmatic"``) — or an unavailable package — keeps the fast programmatic
     pipeline, which is also the fallback so the live path never loses its rails.
     """
-    if get_settings().guardrails_engine.strip().lower() != "nemo":
+    if _engine_mode() == "programmatic":
         return False
     if not nemo.nemo_available():
         logger.warning(
@@ -199,6 +274,23 @@ async def check_input(text: str) -> GuardResult:
         to be prompt injection; ``redact`` when it was clean of injection but
         carried PII (``text`` is the redacted form); otherwise ``pass``.
     """
+    mode = _engine_mode()
+    if mode == "both" and _use_nemo_engine():
+        # Pipeline first: it is offline, costs nothing, and catches the cheap failures
+        # (malformed payload, PII) before the Colang engine spends a model call on them.
+        programmatic = await (await _request_guard()).check_input(text)
+        if programmatic.verdict is GuardVerdict.BLOCK:
+            # Already refused. Running the second engine could only agree, and a blocked
+            # payload must not reach a classifier API — that is the disclosure the PII
+            # layer sits in front of.
+            return programmatic
+        try:
+            # The engine judges what the pipeline RETURNED, not the raw input: PII is
+            # already masked, so the Colang actions never see it either.
+            engine = await nemo.nemo_check_input(programmatic.text)
+        except Exception as exc:  # noqa: BLE001 - fail closed, never silently pass
+            return _fail_closed("input", exc)
+        return _combine(programmatic, engine)
     if _use_nemo_engine():
         try:
             return await nemo.nemo_check_input(text)
@@ -230,6 +322,20 @@ async def check_output(
         redacted form); ``flag`` when it was judged ungrounded (advisory);
         otherwise ``pass``.
     """
+    mode = _engine_mode()
+    if mode == "both" and _use_nemo_engine():
+        # Pipeline first, and on this path it is also the only one that can judge
+        # grounding — the Colang policy has no grounding action (see the note above), so
+        # running it alone would drop that rail entirely. Another reason "both" is the
+        # posture that loses nothing.
+        programmatic = await (await _request_guard()).check_output(text, contexts=contexts)
+        if programmatic.verdict is GuardVerdict.BLOCK:
+            return programmatic
+        try:
+            engine = await nemo.nemo_check_output(programmatic.text)
+        except Exception as exc:  # noqa: BLE001 - fail closed, never silently pass
+            return _fail_closed("output", exc)
+        return _combine(programmatic, engine)
     if _use_nemo_engine():
         try:
             return await nemo.nemo_check_output(text)
