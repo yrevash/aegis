@@ -67,3 +67,28 @@ test('the active section is read off the portal route, and nothing else is', () 
   assert.equal(activeSectionFrom('/app/devops'), '')
   assert.equal(activeSectionFrom('/login'), '')
 })
+
+test('a tenant-pinned principal is not offered the process-wide sections', () => {
+  // `ai_team` mounts `cache`, and the seeded analyst is pinned to a tenant, so that
+  // nav item led to a 403 every time it was clicked — `require_infra_reader` refuses
+  // a pinned principal outright, and rightly: a cache hit rate is one number over
+  // every tenant that shared the worker, and no filter makes it safe.
+  const pinned = navSectionIds('ai_team', 1)
+  assert.ok(!pinned.includes('cache'), 'a pinned principal must not be offered cache')
+
+  // The gate is the tenant pin, NOT the role name: the same role arrives un-pinned as
+  // platform staff and is entitled to read it. Keying on the role would take the
+  // section away from the operator who can use it.
+  const staff = navSectionIds('ai_team', null)
+  assert.ok(staff.includes('cache'), 'un-pinned platform staff keep the section')
+
+  // devops is platform staff by construction and must be untouched.
+  assert.ok(navSectionIds('devops', null).includes('cache'))
+
+  // Nothing else moved: dropping one section must not reorder or lose the rest.
+  assert.deepEqual(
+    pinned,
+    staff.filter((id) => id !== 'cache'),
+    'only the refused section is removed',
+  )
+})

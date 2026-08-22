@@ -443,9 +443,40 @@ export function coarseRoleFor(portal: Portal): Role {
   }
 }
 
-/** Section definitions for a portal, in nav order. */
-export function sectionsFor(portal: Portal): Section[] {
-  return ROLE_SECTIONS[portal].map((id) => SECTIONS[id])
+/**
+ * Sections whose data is process-wide and cannot be narrowed to one tenant.
+ *
+ * A cache hit rate is one number over every tenant that shared the worker, and the
+ * serving role's RLS attributes are a fact about the deployment, not about a tenant.
+ * `require_infra_reader` therefore refuses a tenant-pinned principal outright, and it
+ * is right to — there is no filter that would make the figure safe.
+ *
+ * The portal listed these anyway. `ai_team` mounts `cache`, and the seeded analyst is
+ * tenant-pinned, so that nav item led to a 403 every single time it was clicked, with
+ * a Retry button offering to do it again. That is the failure this file's own doctrine
+ * forbids: a portal must not offer a control the backend guard makes impossible.
+ *
+ * The gate is the **tenant pin, not the role name**, because the same role can arrive
+ * either way — an un-pinned `ai_team` operator is platform staff and may read these,
+ * a tenant's own analyst may not. Keying on the role would take the section away from
+ * the operator who is entitled to it.
+ */
+export const PLATFORM_ONLY_SECTIONS: ReadonlySet<string> = new Set(['cache'])
+
+/**
+ * Section definitions for a portal, in nav order.
+ *
+ * @param portal - The fine role whose navigation is being drawn.
+ * @param tenantId - The principal's tenant pin, or `null` for platform staff. Omit it
+ *   only where no principal is in hand (the static route manifest, the RBAC delegation
+ *   map) — those describe the catalogue, not one person's view of it.
+ */
+export function sectionsFor(portal: Portal, tenantId?: number | null): Section[] {
+  const ids =
+    tenantId == null
+      ? ROLE_SECTIONS[portal]
+      : ROLE_SECTIONS[portal].filter((id) => !PLATFORM_ONLY_SECTIONS.has(id))
+  return ids.map((id) => SECTIONS[id])
 }
 
 /** The default (first) section slug for a portal. */

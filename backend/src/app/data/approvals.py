@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.schemas import ApprovalDecision, ApprovalRow, RiskLevel
 from app.config import get_settings
 
-from .models import Approval, ApprovalStatus
+from .models import Approval, ApprovalStatus, AuditLog
 from .session import bind_scope_for_session, get_sessionmaker, set_tenant_scope
 
 logger = logging.getLogger(__name__)
@@ -459,6 +459,39 @@ async def sweep_expired(now: datetime | None = None) -> list[SweepAction]:
             row.status = new_status
             row.decided_at = cutoff
             row.decided_by = "sla-sweeper"
+            # The audit row is written in THIS transaction, beside the status change,
+            # because the sweeper is the only decision-maker on this platform that is
+            # not a person: a human decision leaves ``approval.decision`` and a name,
+            # and this used to leave nothing at all — an automated REJECT of a HIGH-risk
+            # action appeared in the inbox as decided, by nobody, for no stated reason.
+            # Committing them together is what stops the decision and its record from
+            # ever disagreeing, which a second connection or a post-commit write could.
+            session.add(
+                AuditLog(
+                    tenant_id=row.tenant_id,
+                    ts=cutoff,
+                    action="approval.sla_expired",
+                    actor="sla-sweeper",
+                    trace_id=row.trace_id,
+                    payload={
+                        "approval_id": row.id,
+                        "run_id": row.run_id,
+                        "action_requested": row.action,
+                        "risk": row.risk.value,
+                        "status": new_status.value,
+                        "sla_deadline": row.sla_deadline.isoformat()
+                        if row.sla_deadline is not None
+                        else None,
+                        # Why this row and not another: HIGH fails safe, the rest lapse.
+                        "reason": (
+                            "auto-rejected: a HIGH-risk action passed its SLA deadline "
+                            "undecided, and the safe answer to an unanswered gate is no"
+                            if new_status is ApprovalStatus.REJECTED
+                            else "expired: the SLA deadline passed with no decision"
+                        ),
+                    },
+                )
+            )
             actions.append(
                 SweepAction(
                     id=row.id, run_id=row.run_id, status=new_status, risk=row.risk

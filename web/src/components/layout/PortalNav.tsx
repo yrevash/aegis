@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import type { ReactElement } from 'react'
 
+import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import type { Portal } from '@/lib/portal'
 
@@ -71,9 +72,14 @@ export function PortalNav({
   className,
 }: PortalNavProps): ReactElement {
   const roomy = density === 'drawer'
+  // The rail is drawn for a *principal*, not for a role. A tenant-pinned operator is
+  // refused the process-wide sections outright (see `PLATFORM_ONLY_SECTIONS`), so
+  // offering them here produced a nav item that could only ever 403 — with a Retry
+  // button beside it. Same role un-pinned is platform staff and keeps them.
+  const { session } = useAuth()
   return (
     <nav aria-label="Sections" className={cn('flex flex-col gap-6', className)}>
-      {navGroupsFor(portal).map((group) => (
+      {navGroupsFor(portal, session?.tenantId ?? null).map((group) => (
         <div key={group.heading}>
           {/* Not `.eyebrow`: that utility hard-sets `--muted-foreground`, which
               is 3.45:1 on navy and fails AA at 11px. Same anatomy, rail ink. */}

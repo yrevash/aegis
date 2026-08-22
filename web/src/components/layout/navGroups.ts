@@ -31,11 +31,14 @@ export interface NavGroup {
  * alphabetically would put "Workspace" after "Trust" on four of the five portals.
  *
  * @param portal - The fine role whose navigation is being drawn.
+ * @param tenantId - The principal's tenant pin, or `null` for platform staff. Drops the
+ *   sections a pinned principal is structurally refused (see `PLATFORM_ONLY_SECTIONS`),
+ *   so the rail never offers a page that can only 403.
  * @returns The groups, in nav order, each with its sections in nav order.
  */
-export function navGroupsFor(portal: Portal): NavGroup[] {
+export function navGroupsFor(portal: Portal, tenantId?: number | null): NavGroup[] {
   const groups = new Map<string, Section[]>()
-  for (const section of sectionsFor(portal)) {
+  for (const section of sectionsFor(portal, tenantId)) {
     const key = section.group ?? DEFAULT_GROUP
     const bucket = groups.get(key)
     if (bucket) bucket.push(section)
@@ -51,8 +54,10 @@ export function navGroupsFor(portal: Portal): NavGroup[] {
  * Grouping *clusters*, so this is not `ROLE_SECTIONS` in its own order — but it
  * is the same membership, with no entry added, dropped or repeated.
  */
-export function navSectionIds(portal: Portal): string[] {
-  return navGroupsFor(portal).flatMap((group) => group.items.map((item) => item.id))
+export function navSectionIds(portal: Portal, tenantId?: number | null): string[] {
+  return navGroupsFor(portal, tenantId).flatMap((group) =>
+    group.items.map((item) => item.id),
+  )
 }
 
 /**

@@ -117,6 +117,48 @@ async def test_sla_sweeper_expires_and_auto_rejects_high(db):
     assert remaining == {"fresh"}
 
 
+async def test_the_sweepers_automated_decision_leaves_an_audit_trail(db):
+    """The one decision-maker here that is not a person must still be accountable.
+
+    A human decision writes ``approval.decision`` and a name. The sweeper wrote
+    nothing at all, so an auto-REJECT of a HIGH-risk action showed up in the inbox as
+    decided, by nobody, for no stated reason — and across a whole deployment's
+    audit_log there were zero sweeper rows to reconstruct it from.
+    """
+    from sqlalchemy import select
+
+    from app.data.models import AuditLog
+    from app.data.session import get_sessionmaker
+
+    await enqueue_approval(
+        approval_id="high", run_id="rh", action="issue_credit",
+        risk=RiskLevel.HIGH, sla_seconds=-10,
+    )
+    await enqueue_approval(
+        approval_id="low", run_id="rl", action="lookup",
+        risk=RiskLevel.LOW, sla_seconds=-10,
+    )
+
+    await sweep_expired()
+
+    async with get_sessionmaker()() as session:
+        rows = (
+            await session.execute(
+                select(AuditLog).where(AuditLog.action == "approval.sla_expired")
+            )
+        ).scalars().all()
+
+    by_approval = {r.payload["approval_id"]: r for r in rows}
+    assert set(by_approval) == {"high", "low"}, "every transition is recorded, not just one"
+    assert all(r.actor == "sla-sweeper" for r in rows)
+
+    # The record must carry WHY, and the two outcomes must not read alike.
+    assert by_approval["high"].payload["status"] == ApprovalStatus.REJECTED.value
+    assert by_approval["low"].payload["status"] == ApprovalStatus.EXPIRED.value
+    assert "auto-rejected" in by_approval["high"].payload["reason"]
+    assert by_approval["high"].payload["action_requested"] == "issue_credit"
+
+
 async def test_sla_sweeper_is_noop_when_nothing_expired(db):
     await enqueue_approval(approval_id="ok", run_id="r", action="x", sla_seconds=3600)
     assert await sweep_expired() == []
