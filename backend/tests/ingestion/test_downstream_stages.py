@@ -33,6 +33,7 @@ from app.api.schemas import Role
 from app.core.security import TENANT_ADMIN, create_access_token
 from app.data import Tenant, User, get_sessionmaker, set_tenant_scope
 from app.ingestion.graph_projection import ProjectionResult
+from app.ingestion.graph_vectors import GraphVectorResult
 from app.ingestion.stages import (
     IngestDependencies,
     chunk_stage,
@@ -631,3 +632,123 @@ async def test_a_deployment_with_no_durable_graph_says_so_instead_of_reporting_z
     assert facts["projected_entities"] == 0
     assert facts["projection"] == "skipped: STORES=off"
     assert facts["entities"] > 0, "the extraction itself is unaffected and still recorded"
+
+
+class _RecordingGraphIndexer:
+    """Stands in for the graph vector index, recording what the stage handed it.
+
+    The real publisher refuses to run in a test process for the reason the projector does
+    — there is no scratch Qdrant, so a test that published would write into whatever node
+    the developer was looking at. What is assertable here is the half the stage owns: that
+    it reports the count the *store* confirmed, and what it does when the store cannot.
+    """
+
+    def __init__(self, result: GraphVectorResult | None = None) -> None:
+        """Hold the outcome to return, and start with an empty call log."""
+        self.calls: list[dict[str, object]] = []
+        self._result = result
+
+    async def __call__(
+        self,
+        entities,  # noqa: ANN001 - Sequence[Entity]
+        relations,  # noqa: ANN001 - Sequence[Relation]
+        *,
+        tenant_value: str | None,
+        source: str,
+        extractor: str,
+        entity_sources=None,  # noqa: ANN001 - Mapping[str, Sequence[str]]
+        relation_sources=None,  # noqa: ANN001
+    ) -> GraphVectorResult:
+        """Record one publish and return the configured outcome."""
+        self.calls.append(
+            {
+                "entities": list(entities),
+                "relations": list(relations),
+                "tenant_value": tenant_value,
+                "source": source,
+                "entity_sources": dict(entity_sources or {}),
+                "relation_sources": dict(relation_sources or {}),
+            }
+        )
+        return self._result or GraphVectorResult(entities=1, relations=0)
+
+
+async def test_graph_indexes_the_extraction_for_the_arm_that_has_to_find_it(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """Neo4j is what the Graph screen draws; ``entities_vdb`` is what a query can reach.
+
+    The measured gap was 156 nodes in the graph and 0 points in the entity collection, so
+    hybrid recall's ``local`` arm — which matches a vector *first* and looks the name up
+    in the graph second — returned nothing for every query ever asked. The stage now makes
+    the third write, attributed to the same tenant and source as the other two, and
+    reports the count the vector store confirmed rather than the count it sent.
+    """
+    indexer = _RecordingGraphIndexer(GraphVectorResult(entities=2, relations=1))
+    set_ingest_dependencies(
+        IngestDependencies(
+            store=store,
+            extractor=_FixedExtractor(),
+            project=_RecordingProjector(),
+            index_graph=indexer,
+        )
+    )
+    await _seed_tenant()
+    document_id = await _chunked_document(client, parsed_artifact, store)
+
+    with collect_stage_facts() as facts:
+        await _handler(db, graph_stage, document_id, "graph")
+
+    assert len(indexer.calls) == 1
+    call = indexer.calls[0]
+    assert call["tenant_value"] == tenant_metadata_value(_TENANT)
+    assert call["entities"], "nothing was handed to the graph index"
+    # ``source_id`` is LightRAG's chunk-level provenance, and it is keyed by the same
+    # normalised label the graph node is stored under — the string the ``local`` arm
+    # carries from the vector back to the node.
+    assert "Transformer" in call["entity_sources"]
+    assert all(call["entity_sources"].values()), "an entity was attributed to no chunk"
+    assert facts["entity_vectors"] == 2
+    assert facts["relation_vectors"] == 1
+    assert "graph_vectors" not in facts
+
+
+async def test_an_unwritable_graph_index_degrades_the_arm_and_never_the_ingest(
+    client, db, wired, store, temporal, parsed_artifact
+) -> None:
+    """A failed vector publish is reported, not raised — and never reported as zero.
+
+    The opposite call from the projection, and deliberately so. A projection that did not
+    land leaves the entities in no place a person can see, so the stage fails. These
+    vectors are an *index over* a graph that has already been verified present: the chunk
+    rows, the embeddings, Neo4j and the dense index are all correct and the corpus is
+    still searchable, so failing here would discard a wholly correct document because a
+    second index blipped. ``None`` rather than ``0`` because "the index could not be
+    asked" and "the arm has nothing to find" call for opposite responses.
+    """
+    set_ingest_dependencies(
+        IngestDependencies(
+            store=store,
+            extractor=_FixedExtractor(),
+            project=_RecordingProjector(),
+            index_graph=_RecordingGraphIndexer(
+                GraphVectorResult(
+                    entities=None,
+                    relations=None,
+                    attempted_entities=2,
+                    attempted_relations=1,
+                    failed="connection refused",
+                )
+            ),
+        )
+    )
+    await _seed_tenant()
+    document_id = await _chunked_document(client, parsed_artifact, store)
+
+    with collect_stage_facts() as facts:
+        await _handler(db, graph_stage, document_id, "graph")
+
+    assert facts["entity_vectors"] is None
+    assert facts["relation_vectors"] is None
+    assert facts["graph_vectors"] == "failed: connection refused"
+    assert facts["projected_entities"] > 0, "the durable graph is unaffected"

@@ -72,6 +72,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "GraphProjectionError",
     "ProjectionResult",
+    "normalised_label",
     "project_document_graph",
     "projection_rows",
 ]
@@ -186,6 +187,27 @@ def _tagged_source(source: str, tenant_value: str | None) -> str:
     return f"{tag}{_TENANT_TAG_SEP}{source}"
 
 
+def normalised_label(label: str) -> str:
+    """Return the surface form the graph stores an entity under.
+
+    One function rather than an expression inlined wherever a label is needed, because
+    three separate places now have to agree on it byte-for-byte: the node's ``entity_id``
+    in Neo4j, the ``entity_name`` in the vector point
+    (:mod:`app.ingestion.graph_vectors`), and the key any caller attributes chunk ids
+    under. LightRAG's ``local`` arm matches a vector, reads the name off it and looks
+    *that string* up in the graph — a node it cannot find is dropped silently, so a lone
+    extra space in one of the three is a vector that matches and contributes nothing.
+
+    Args:
+        label: The extractor's raw label.
+
+    Returns:
+        The label with internal whitespace collapsed and the ends stripped; ``""`` when
+        the label was whitespace only, which the callers drop rather than store.
+    """
+    return " ".join(label.split())
+
+
 def projection_rows(
     entities: Sequence[Entity],
     relations: Sequence[Relation],
@@ -230,7 +252,7 @@ def projection_rows(
     labels: dict[str, str] = {}
     kinds: dict[str, str] = {}
     for entity in entities:
-        label = " ".join(entity.label.split())
+        label = normalised_label(entity.label)
         if not label:
             continue
         # First mention wins the surface form, so a re-run over unchanged text writes the

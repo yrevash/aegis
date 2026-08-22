@@ -86,8 +86,10 @@ from app.ingestion.artifacts import dumps_parsed, loads_parsed
 from app.ingestion.graph_projection import (
     GraphProjectionError,
     ProjectionResult,
+    normalised_label,
     project_document_graph,
 )
+from app.ingestion.graph_vectors import GraphVectorResult
 from app.ingestion.store import DocumentStore, DocumentStoreProtocol
 from app.ingestion.tables import TableSummaryReport, summarise_document_tables
 
@@ -158,6 +160,14 @@ class IngestDependencies:
             seam that keeps a test from writing into the developer's own Neo4j — and the
             reason the ``graph`` stage can no longer report an extraction the product
             cannot show.
+        index_graph: Coroutine taking the same extraction and publishing it into the
+            vector collections LightRAG's graph-aware (``local``) arm searches, returning
+            what the store confirms holding. ``None`` uses
+            :func:`app.ingestion.graph_vectors.publish_document_graph_vectors`. Separate
+            from ``project`` because the two write to different stores and one can be
+            configured without the other — and because the graph store is the record
+            while these vectors are an index over it (see that module on why a failure
+            here degrades rather than fails the ingest).
         verify: Coroutine taking the chunks just published and returning how many the
             search index actually holds — or ``None`` when it cannot tell. Left unset,
             the process retriever's backend is asked. See :meth:`count_indexed`; this is
@@ -171,6 +181,7 @@ class IngestDependencies:
     complete: CompleteFn | None = None
     verify: Any = None  # noqa: ANN401 - a coroutine fn; see count_indexed
     project: Any = None  # noqa: ANN401 - a coroutine fn; see project_graph
+    index_graph: Any = None  # noqa: ANN401 - a coroutine fn; see publish_graph_vectors
 
     def resolve_embed(self) -> EmbedFn:
         """Return the embedding function, resolving the platform default on first use."""
@@ -312,6 +323,69 @@ class IngestDependencies:
             tenant_value=tenant_value,
             source=source,
             extractor=extractor,
+        )
+
+    async def publish_graph_vectors(
+        self,
+        entities: Sequence[Any],
+        relations: Sequence[Any],
+        *,
+        tenant_value: str | None,
+        source: str,
+        extractor: str,
+        entity_sources: Mapping[str, Sequence[str]] | None = None,
+        relation_sources: Mapping[tuple[str, str], Sequence[str]] | None = None,
+    ) -> GraphVectorResult:
+        """Index the same extraction for LightRAG's graph-aware arm, and report what landed.
+
+        The counterweight to :meth:`project_graph`, and the half that was missing from
+        *it*: Neo4j is what the Graph screen draws, and ``entities_vdb`` is what a query
+        has to match before anything in Neo4j can be reached. The live deployment had 156
+        nodes in the one and 0 points in the other, so the ``local`` arm of hybrid recall
+        returned nothing for every query ever asked.
+
+        The embedder is resolved only on the default path: a host that injected its own
+        publisher owns a store this process knows nothing about, and resolving the
+        platform's model gateway on its behalf would make a fake-driven test depend on a
+        provider it never asked for.
+
+        Args:
+            entities: Every entity the document's chunks yielded.
+            relations: Every relation, referring to entities by their extractor id.
+            tenant_value: The owning tenant's metadata value — tagged into every
+                ``file_path``, the same way the graph and the chunk vectors carry it.
+            source: The document's source name, as ``index`` tags it.
+            extractor: The extractor's honest ``name``.
+            entity_sources: Chunk ids per normalised entity label, for LightRAG's
+                ``source_id`` field.
+            relation_sources: Chunk ids per ``(src label, tgt label)`` pair, likewise.
+
+        Returns:
+            What was attempted and what the vector store confirmed holding.
+        """
+        if self.index_graph is not None:
+            return await self.index_graph(
+                entities,
+                relations,
+                tenant_value=tenant_value,
+                source=source,
+                extractor=extractor,
+                entity_sources=entity_sources,
+                relation_sources=relation_sources,
+            )
+        from app.ingestion.graph_vectors import (  # noqa: PLC0415 - lazy, avoids a cycle
+            publish_document_graph_vectors,
+        )
+
+        return await publish_document_graph_vectors(
+            entities,
+            relations,
+            tenant_value=tenant_value,
+            source=source,
+            extractor=extractor,
+            embed=self.resolve_embed(),
+            entity_sources=entity_sources,
+            relation_sources=relation_sources,
         )
 
 
@@ -1204,8 +1278,8 @@ async def graph_stage(
 ) -> Mapping[str, Any]:
     """Extract what each chunk states, record it on the row, and project it to the graph.
 
-    **Two writes, because they answer two different questions, and for the whole of Phase
-    4 only one of them happened.**
+    **Three writes, because they answer three different questions, and each was added
+    only after the one before it turned out to be invisible from where a user stands.**
 
     The extraction is written to ``chunks.meta`` — a tenant-scoped, RLS-protected row we
     own — rather than only into a graph store we do not. That is what makes "the graph
@@ -1223,12 +1297,26 @@ async def graph_stage(
     entities and relations into the durable graph, carrying the owning tenant on every
     element so :func:`~aegis.retrieval.types.scoped_graph` can decide who may see them.
 
-    **And the stage refuses to report a success it cannot show.** It reports what the
-    graph store confirms holding, not what was handed to it; a projection that was owed
-    and did not land fails the stage. A deployment with no durable graph at all
-    (``STORES=off``, no ``NEO4J_URI``, a test process with no scratch instance) is a
-    different fact from a failed write, and is recorded as an explicit ``projection:
-    skipped: …`` rather than passed off as a projection of zero.
+    That durable graph, in turn, is not *searchable* on its own. Hybrid recall's second
+    arm (``local``) matches a query against LightRAG's ``entities_vdb`` and only then
+    looks the matched names up in Neo4j — and nothing wrote those vectors, because
+    ``publish_vectors`` deliberately bypasses the ``ainsert`` that would have. Measured:
+    ``lightrag_vdb_entities`` held **0** points against a Neo4j holding 156 nodes for the
+    same workspace, so the graph arm returned nothing for every query ever asked. So the
+    third write — :func:`app.ingestion.graph_vectors.publish_document_graph_vectors` —
+    publishes the same entities and relations as vectors, shaped from the same
+    ``projection_rows`` call as the graph itself so the two cannot name an entity
+    differently.
+
+    **And the stage refuses to report a success it cannot show.** It reports what each
+    store confirms holding, not what was handed to it; a projection that was owed and did
+    not land fails the stage. A deployment with no durable graph at all (``STORES=off``,
+    no ``NEO4J_URI``, a test process with no scratch instance) is a different fact from a
+    failed write, and is recorded as an explicit ``projection: skipped: …`` rather than
+    passed off as a projection of zero. The vector index is reported the same way and
+    fails the stage for neither: it is an index over a graph that is already verified
+    present, rebuildable from durable state, and losing it costs one arm's reach rather
+    than the document — see :mod:`app.ingestion.graph_vectors` for the full argument.
 
     Idempotent in both halves: the ``chunks.meta`` write is an ``UPDATE`` per chunk id
     that replaces those metadata keys outright, and the projection merges on the graph's
@@ -1255,7 +1343,12 @@ async def graph_stage(
     if not rows:
         logger.info("document %s has no chunks to extract from", document_id)
         report_stage_facts(
-            entities=0, relations=0, projected_entities=0, projected_relations=0
+            entities=0,
+            relations=0,
+            projected_entities=0,
+            projected_relations=0,
+            entity_vectors=0,
+            relation_vectors=0,
         )
         return {}
     extractor = _deps().resolve_extractor()
@@ -1263,12 +1356,32 @@ async def graph_stage(
     relations_total = 0
     extracted: list[Any] = []
     related: list[Any] = []
+    # Which chunks each graph element was extracted from, keyed by the *normalised* label
+    # so the mapping lines up with the rows the projection builds. This is LightRAG's
+    # ``source_id``, and it is accumulated here because here is the only place that knows
+    # it: by the time the extraction is flattened into ``extracted``/``related`` the chunk
+    # it came from is gone. The chunk's key is the one the ``index`` stage published it
+    # under, so the two indexes name the same passage.
+    entity_sources: dict[str, list[str]] = {}
+    relation_sources: dict[tuple[str, str], list[str]] = {}
     for chunk_id, content, meta in rows:
         entities, relations = await extractor.extract(content)
         entities_total += len(entities)
         relations_total += len(relations)
         extracted.extend(entities)
         related.extend(relations)
+        chunk_key = chunk_source_id(owner, meta.get("content_id") or chunk_id)
+        labels = {
+            entity.id: normalised_label(entity.label)
+            for entity in entities
+            if normalised_label(entity.label)
+        }
+        for label in dict.fromkeys(labels.values()):
+            entity_sources.setdefault(label, []).append(chunk_key)
+        for relation in relations:
+            src, tgt = labels.get(relation.src_id), labels.get(relation.tgt_id)
+            if src and tgt and src != tgt:
+                relation_sources.setdefault((src, tgt), []).append(chunk_key)
         await session.execute(
             update(Chunk)
             .where(Chunk.id == chunk_id)
@@ -1335,6 +1448,39 @@ async def graph_stage(
             type="GraphNotProjected",
         )
 
+    # The graph is written; now make it *findable*. Gated on the projection having
+    # actually run, because LightRAG's ``local`` arm matches an entity vector and then
+    # looks that name up in the graph — a vector whose node is not there is dropped by
+    # ``_get_node_data`` without comment, so publishing one would raise ``points_count``
+    # and change nothing a query can see.
+    vectors = GraphVectorResult(
+        entities=None,
+        relations=None,
+        skipped=f"the graph itself was not written ({projection.skipped})",
+    )
+    if projection.skipped is None:
+        vectors = await _deps().publish_graph_vectors(
+            extracted,
+            related,
+            tenant_value=tenant_metadata_value(owner),
+            source=source,
+            extractor=extractor.name,
+            entity_sources=entity_sources,
+            relation_sources=relation_sources,
+        )
+        if not vectors.complete:
+            # Not fatal, and not silent: see app.ingestion.graph_vectors on why this
+            # degrades rather than failing an ingest whose durable stores are all correct.
+            logger.warning(
+                "document %s has %s of %d entity and %s of %d relation vector(s) in the "
+                "graph index; the graph arm will not find the rest",
+                document_id,
+                vectors.entities,
+                vectors.attempted_entities,
+                vectors.relations,
+                vectors.attempted_relations,
+            )
+
     # Task 4.12b. The *counts* here; the entities and relations themselves are already
     # durable on ``chunks.meta``, which is what the log's own view reads them out of — so
     # this event stays a fixed size whether the document yielded nine entities or nine
@@ -1346,7 +1492,17 @@ async def graph_stage(
         "extractor": extractor.name,
         "projected_entities": projection.nodes,
         "projected_relations": projection.edges,
+        # What the *vector* store confirmed holding, on the same rule: a writer's own
+        # count is a claim. ``None`` means the index could not be asked, and is never
+        # rounded to zero — "the arm has nothing to find" and "we cannot tell" call for
+        # opposite responses.
+        "entity_vectors": vectors.entities,
+        "relation_vectors": vectors.relations,
     }
+    if vectors.skipped is not None:
+        facts["graph_vectors"] = f"skipped: {vectors.skipped}"
+    elif vectors.failed is not None:
+        facts["graph_vectors"] = f"failed: {vectors.failed}"
     if projection.skipped is not None:
         facts["projection"] = f"skipped: {projection.skipped}"
     if projection.dropped_relations:
