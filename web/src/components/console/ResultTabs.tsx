@@ -1,9 +1,7 @@
 'use client'
 
-import type { ReactElement, ReactNode } from 'react'
+import { useId, useRef, type KeyboardEvent, type ReactElement, type ReactNode } from 'react'
 
-import { Badge } from '@/components/ui/Badge'
-import { Card, CardBody } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
 import type { GraphResponse, MetricsResponse } from '@/lib/api/types'
 import type { RunState } from '@/state/runReducer'
@@ -11,7 +9,6 @@ import type { RunState } from '@/state/runReducer'
 import { AnswerPanel } from './AnswerPanel'
 import { DecisionStrip } from './DecisionStrip'
 import type { Beat } from './motion'
-import { readSources } from './sources'
 import { SourcesTab } from './SourcesTab'
 import { TraceTab } from './TraceTab'
 
@@ -28,8 +25,9 @@ export type ResultTabId = 'sources' | 'trace'
  * tabs.
  *
  * The trust summary above the answer is the reused {@link DecisionStrip}: guardrails
- * held, sources counted, cost measured. The citation strip below names the sources the
- * answer actually stands on, with each one's page when the run reported one.
+ * held, sources counted, cost measured. The citation strip naming what the answer stands
+ * on now closes {@link AnswerPanel} itself — it was a `Card` directly under a `Card`,
+ * which DESIGN.md §1 rules out, and it was talking about the panel above it.
  */
 export function AnswerBlock({
   state,
@@ -38,7 +36,6 @@ export function AnswerBlock({
   state: RunState
   onSeeSources: () => void
 }): ReactElement {
-  const cited = readSources(state.retrievalScores).slice(0, 3)
   const settled = !state.running && state.events.length > 0
 
   return (
@@ -48,35 +45,7 @@ export function AnswerBlock({
        asked for. See the follow-the-newest-turn effect in `ChatConsole`. */
     <div data-answer="" className="flex scroll-mt-2 flex-col gap-3">
       {settled && <DecisionStrip state={state} />}
-      <AnswerPanel state={state} />
-
-      {cited.length > 0 && (
-        <Card>
-          <CardBody className="flex flex-wrap items-center gap-2 pt-4">
-            <span className="eyebrow mr-1">Stands on</span>
-            {cited.map((source) => (
-              <span
-                key={source.id}
-                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface-2/50 px-2 py-1"
-              >
-                <span className="max-w-[16rem] truncate text-[0.74rem] text-foreground">
-                  {source.label}
-                </span>
-                {source.page !== null && <Badge tone="neutral">page {source.page}</Badge>}
-                {source.verbatim === 'verified' && <Badge tone="ok">verbatim</Badge>}
-                {source.verbatim === 'unverified' && <Badge tone="block">unverified</Badge>}
-              </span>
-            ))}
-            <button
-              type="button"
-              onClick={onSeeSources}
-              className="ml-auto rounded-md px-2 py-1 text-[0.74rem] font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              See all sources
-            </button>
-          </CardBody>
-        </Card>
-      )}
+      <AnswerPanel state={state} onSeeSources={onSeeSources} />
     </div>
   )
 }
@@ -118,11 +87,41 @@ export function ResultTabs({
   actions,
 }: ResultTabsProps): ReactElement {
   const sourceCount = state.retrievalScores.length
+  const buttons = useRef<Partial<Record<ResultTabId, HTMLButtonElement | null>>>({})
+  // A thread renders one of these per settled turn, so `result-tab-sources` was a
+  // duplicate id from the second turn on and every `aria-controls` resolved to the
+  // first turn's panel. The prefix is per instance.
+  const uid = useId()
 
   const tabs: { id: ResultTabId; label: string; count: number | null }[] = [
     { id: 'sources', label: 'Sources', count: sourceCount > 0 ? sourceCount : null },
     { id: 'trace', label: 'Trace', count: null },
   ]
+
+  /*
+   * The WAI tablist pattern: one tab stop for the whole set, and the arrows move
+   * between them.
+   *
+   * Every tab used to be its own tab stop, so a keyboard user tabbing through a settled
+   * turn walked *into* the tab row and then had to walk out of it again — and with more
+   * turns in the thread that cost grows with the transcript. `Home`/`End` jump to the
+   * ends. Selection follows focus, which is correct here because both panels are already
+   * mounted-on-demand and cheap to swap.
+   */
+  const move = (event: KeyboardEvent<HTMLButtonElement>): void => {
+    const from = tabs.findIndex((entry) => entry.id === tab)
+    let to = -1
+    if (event.key === 'ArrowRight') to = (from + 1) % tabs.length
+    else if (event.key === 'ArrowLeft') to = (from - 1 + tabs.length) % tabs.length
+    else if (event.key === 'Home') to = 0
+    else if (event.key === 'End') to = tabs.length - 1
+    else return
+    event.preventDefault()
+    const next = tabs[to]
+    if (next === undefined) return
+    onTab(next.id)
+    buttons.current[next.id]?.focus()
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -134,9 +133,17 @@ export function ResultTabs({
               key={entry.id}
               type="button"
               role="tab"
-              id={`result-tab-${entry.id}`}
+              id={`${uid}-tab-${entry.id}`}
+              ref={(node) => {
+                buttons.current[entry.id] = node
+              }}
               aria-selected={selected}
-              aria-controls={`result-panel-${entry.id}`}
+              /* Only the selected panel is mounted — the Flow graph measures its own
+                 container on mount and a hidden one measures 0×0 — so an unselected
+                 tab points at nothing rather than at a missing id. */
+              aria-controls={selected ? `${uid}-panel-${entry.id}` : undefined}
+              tabIndex={selected ? 0 : -1}
+              onKeyDown={move}
               onClick={() => onTab(entry.id)}
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
@@ -165,8 +172,8 @@ export function ResultTabs({
 
       <div
         role="tabpanel"
-        id={`result-panel-${tab}`}
-        aria-labelledby={`result-tab-${tab}`}
+        id={`${uid}-panel-${tab}`}
+        aria-labelledby={`${uid}-tab-${tab}`}
         tabIndex={-1}
       >
         {tab === 'sources' && <SourcesTab state={state} />}

@@ -1,7 +1,7 @@
 'use client'
 
 import { Bot, Inbox, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
-import type { ReactElement, ReactNode } from 'react'
+import { createContext, useContext, type ReactElement, type ReactNode } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Figure } from '@/components/primitives/Figure'
@@ -9,6 +9,21 @@ import { InfoTip } from '@/components/primitives/InfoTip'
 import { Receipt } from '@/components/primitives/Receipt'
 import type { RiskLevel } from '@/lib/stream'
 import type { RunState } from '@/state/runReducer'
+
+import { DEFAULT_RUN_MODE, type RunMode } from './runMode'
+import { WidthCell } from './WidthReceipt'
+
+/**
+ * The width the composer asked for, as this turn was sent.
+ *
+ * It travels by context rather than by prop because the strip is mounted by
+ * `AnswerBlock`, which is handed a `RunState` and nothing about the request that
+ * produced it. The width cell needs both — asked and ran — since stating only the second
+ * is exactly the silent-override this console has already been wrong about once. The
+ * turn provides it; the default is Auto, which asks for nothing and so can be overridden
+ * by nothing.
+ */
+export const RequestedWidth = createContext<RunMode>(DEFAULT_RUN_MODE)
 
 /**
  * One glance cell: a quiet eyebrow, then the figure it labels.
@@ -29,7 +44,7 @@ function Cell({
   children: ReactNode
 }): ReactElement {
   return (
-    <div className="min-w-0 px-4 py-3">
+    <div className="min-w-0 bg-card px-4 py-3">
       <div className="flex items-center gap-1.5">
         <span className="eyebrow truncate">{label}</span>
         {info != null && <InfoTip label={`About ${label}`}>{info}</InfoTip>}
@@ -114,10 +129,18 @@ function ProposedActions({
 /**
  * The decision strip — the outcome of a run read in a single glance.
  *
- * Whether the guardrails held, how many sources backed the answer, what it cost, and
- * every call it proposed. It is one bordered strip with hairline-divided cells rather
- * than three floating cards: three cards inside a tab inside a turn is the third nested
- * surface DESIGN.md §4 refuses, and the cells here are one reading, not three panels.
+ * Whether the guardrails held, how many sources backed the answer, what it cost, how
+ * wide it ran, and every call it proposed. It is one bordered strip with hairline-divided
+ * cells rather than four floating cards: four cards inside a tab inside a turn is the
+ * third nested surface DESIGN.md §4 refuses, and the cells here are one reading, not
+ * four panels.
+ *
+ * **Width is the fourth cell rather than its own section.** It was a bordered panel of
+ * its own between the lanes and the answer — the sixth place a settled turn stated
+ * routing. It is the same kind of fact as the other three and it is read in the same
+ * glance, so it is read here. See {@link WidthCell}, which keeps the null-routing rule
+ * intact: a run that emitted no `routing` event still states that, in the slot the width
+ * would have occupied.
  *
  * **Nothing counts up.** The figures were counted-up on arrival and cross-faded on every
  * phase change, which is the one motion DESIGN.md §6 names outright — a spend figure
@@ -126,6 +149,7 @@ function ProposedActions({
  */
 export function DecisionStrip({ state }: { state: RunState }): ReactElement {
   const { guardrails, retrievalScores, candidates, usage, toolCalls } = state
+  const requested = useContext(RequestedWidth)
 
   const fired = guardrails.filter((g) => g.verdict !== 'pass').length
   const checks = guardrails.length
@@ -137,12 +161,17 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
   return (
     <section
       aria-label="Decision"
-      className="@container/decision rounded-lg border border-border bg-card"
+      className="@container/decision overflow-hidden rounded-lg border border-border bg-card"
     >
       {/* Container, not viewport: the strip sits in the thread column, which is about
           560px at 1440 with the rails out — `sm:grid-cols-3` fired at a 640px window and
-          split it into three 180px cells regardless. */}
-      <div className="grid grid-cols-1 divide-y divide-border @[30rem]/decision:grid-cols-3 @[30rem]/decision:divide-x @[30rem]/decision:divide-y-0">
+          split it into three 180px cells regardless.
+
+          The hairlines are a `gap-px` over a border-coloured ground rather than
+          `divide-x`, because `divide-*` keys off DOM order and not grid position: with
+          four cells wrapped into two columns it drew a stray rule down the middle of the
+          second row. This draws the grid's own gaps, at any column count. */}
+      <div className="grid grid-cols-1 gap-px bg-border @[26rem]/decision:grid-cols-2 @[46rem]/decision:grid-cols-4">
         <Cell
           label="Guardrails"
           info="Injection, PII and schema checks, on the request and on the answer."
@@ -199,6 +228,13 @@ export function DecisionStrip({ state }: { state: RunState }): ReactElement {
           ) : (
             <NotMeasured what="No usage was reported for this run." />
           )}
+        </Cell>
+
+        <Cell
+          label="Width"
+          info="How wide the supervisor ran this turn, and who decided — the router, you, the tenant default, or the tenant’s parallel-agent cap."
+        >
+          <WidthCell state={state} requested={requested} />
         </Cell>
       </div>
 

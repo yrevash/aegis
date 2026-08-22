@@ -11,7 +11,55 @@ import type { RunState } from '@/state/runReducer'
 
 import { AnswerBody } from './AnswerBody'
 import { answerAbsence } from './answerAbsence'
+import { readSources } from './sources'
 import { useRevealedText } from './useRevealedText'
+
+/**
+ * What the answer stands on, at the foot of the answer itself.
+ *
+ * This used to be its own `Card` directly beneath this one — a card under a card, saying
+ * something about the card above it. The citations are part of the answer, not a panel
+ * beside it, so they close it: a hairline, the label once, and at most three chips with
+ * the page each source reported and the span check's verdict where one ran.
+ */
+function StandsOn({
+  state,
+  onSeeSources,
+}: {
+  state: RunState
+  onSeeSources?: () => void
+}): ReactElement | null {
+  const cited = readSources(state.retrievalScores).slice(0, 3)
+  if (cited.length === 0) return null
+
+  return (
+    <div className="mt-4 flex min-w-0 flex-wrap items-center gap-1.5 border-t border-border pt-3">
+      <span className="eyebrow mr-1">Stands on</span>
+      {cited.map((source) => (
+        <span
+          key={source.id}
+          className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-md border border-border bg-surface-2/50 px-2 py-1"
+        >
+          <span className="max-w-[16rem] truncate text-[0.74rem] text-foreground">
+            {source.label}
+          </span>
+          {source.page !== null && <Badge tone="neutral">page {source.page}</Badge>}
+          {source.verbatim === 'verified' && <Badge tone="ok">verbatim</Badge>}
+          {source.verbatim === 'unverified' && <Badge tone="block">unverified</Badge>}
+        </span>
+      ))}
+      {onSeeSources !== undefined && (
+        <button
+          type="button"
+          onClick={onSeeSources}
+          className="ml-auto rounded-md px-2 py-1 text-[0.74rem] font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          See all sources
+        </button>
+      )}
+    </div>
+  )
+}
 
 /**
  * The streamed final answer. Renders answer chunks as they arrive with a live
@@ -50,7 +98,17 @@ import { useRevealedText } from './useRevealedText'
  * page. {@link AnswerBody} renders the structure instead — as React elements, never as
  * HTML.
  */
-export function AnswerPanel({ state }: { state: RunState }): ReactElement {
+export function AnswerPanel({
+  state,
+  onSeeSources,
+}: {
+  state: RunState
+  /**
+   * Opens the Sources tab from the citation strip. Optional — a caller with no tabs to
+   * open (the simulation view) gets the chips and no link, rather than a dead control.
+   */
+  onSeeSources?: () => void
+}): ReactElement {
   const outputGuard = state.guardrails.find((g) => g.stage === 'output')
   const absence = answerAbsence(state)
   const passed = outputGuard?.verdict === 'pass'
@@ -125,6 +183,8 @@ export function AnswerPanel({ state }: { state: RunState }): ReactElement {
             </div>
           )}
         </div>
+
+        <StandsOn state={state} onSeeSources={onSeeSources} />
       </CardBody>
     </Card>
   )

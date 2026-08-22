@@ -32,12 +32,12 @@ export function AgentTracePanel({ state }: { state: RunState }): ReactElement {
         title={
           <span className="flex items-center gap-2">
             <Activity className="size-4 shrink-0 text-blue-700" aria-hidden />
-            Activity
+            Event log
           </span>
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <InfoTip label="About Activity">
+            <InfoTip label="About the event log">
               The agent&rsquo;s step-by-step run log, streamed live as each step lands.
             </InfoTip>
             {streaming && (

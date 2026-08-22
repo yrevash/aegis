@@ -34,8 +34,12 @@ export interface BudgetLine {
 }
 
 /** Two decimals, the way money is written on this screen. */
+/** One formatter, built once. `toFixed` hardcodes the symbol, the separator and the
+ *  decimal mark — correct only for en-US, and silently wrong everywhere else. */
+const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
 function money(value: number): string {
-  return `$${value.toFixed(2)}`
+  return USD.format(value)
 }
 
 /**

@@ -21,6 +21,9 @@
  * defect with an extra step.
  */
 
+/** Built once — `toLocaleString()` constructs a new formatter on every call. */
+const COUNT = new Intl.NumberFormat('en-US')
+
 /**
  * The input rail's ceiling, in characters.
  *
@@ -67,7 +70,7 @@ export function questionLength(composed: string): QuestionLength {
     label: !showCounter
       ? ''
       : over
-        ? `${(-remaining).toLocaleString()} characters over the ${MAX_QUESTION_CHARS.toLocaleString()} the agent accepts — trim it to send.`
-        : `${remaining.toLocaleString()} characters left of ${MAX_QUESTION_CHARS.toLocaleString()}.`,
+        ? `${COUNT.format(-remaining)} characters over the ${COUNT.format(MAX_QUESTION_CHARS)} the agent accepts — trim it to send.`
+        : `${COUNT.format(remaining)} characters left of ${COUNT.format(MAX_QUESTION_CHARS)}.`,
   }
 }

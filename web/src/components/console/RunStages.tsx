@@ -1,14 +1,16 @@
 'use client'
 
-import { Clock, RotateCw, ShieldCheck, Sparkles } from 'lucide-react'
-import { useEffect, useState, type ReactElement } from 'react'
+import { Check, Clock, RotateCw, ShieldCheck } from 'lucide-react'
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { SIGNALS } from '@/config/signals'
+import { SIGNALS, type Signal } from '@/config/signals'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 
+import { ActivityRail } from './ActivityRail'
+import { deriveActivity, deriveAgentPanel, isFailure } from './agentLanes'
 import { deriveTiming, formatDuration, isGuardStage, type Stage } from './stageTimeline'
 
 /** How often the live counters tick. Fast enough to read as live, slow enough to read. */
@@ -54,6 +56,83 @@ function HeadFigure({
       </span>
       <div className="mt-0.5 flex min-h-6 items-baseline">{children}</div>
     </div>
+  )
+}
+
+// ── The trust stack, as four checks in the run header ─────────────────────────
+
+/**
+ * The four claims the product makes, each decidable from the run's own events.
+ *
+ * "Every autonomous action is grounded, guarded, approved, and fully traced." These were
+ * a bordered bar of four lit chips sitting between the question and the run — a fifth
+ * animating hierarchy on a screen that already had four. They are the same four
+ * predicates, reduced to four checks inside the run header, because a summary of what
+ * the run will have proved belongs *on* the run rather than above it.
+ */
+interface TrustCheck {
+  key: string
+  label: string
+  signal: Signal
+  done: (s: RunState) => boolean
+}
+
+const TRUST_CHECKS: readonly TrustCheck[] = [
+  {
+    key: 'grounded',
+    label: 'Grounded',
+    signal: 'graph',
+    done: (s) => s.retrievalScores.length > 0 || s.provenance != null,
+  },
+  {
+    key: 'guarded',
+    label: 'Guarded',
+    signal: 'block',
+    done: (s) => s.guardrails.some((g) => g.stage === 'output') || s.finishedStatus === 'blocked',
+  },
+  {
+    key: 'approved',
+    label: 'Human-approved',
+    signal: 'risk',
+    // Only lights when the run actually paused at the gate AND a human approval let a
+    // tool succeed — a rejected action (tool_result ok=false) stays dark.
+    done: (s) => s.awaitedApproval && s.toolResults.some((r) => r.ok),
+  },
+  { key: 'traced', label: 'Fully traced', signal: 'agent', done: (s) => s.finishedStatus != null },
+]
+
+function TrustChecks({ state }: { state: RunState }): ReactElement {
+  return (
+    <ul aria-label="Trust stack" className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+      {TRUST_CHECKS.map((check) => {
+        const done = check.done(state)
+        const token = SIGNALS[check.signal]
+        return (
+          <li key={check.key} className="flex items-center gap-1">
+            <span
+              className={cn(
+                'grid size-3.5 shrink-0 place-items-center rounded-full border transition-colors duration-500 motion-reduce:transition-none',
+                done ? cn(token.border, token.bg, token.text) : 'border-border text-muted-foreground/50',
+              )}
+            >
+              {done ? (
+                <Check className="size-2" strokeWidth={3} aria-hidden />
+              ) : (
+                <span aria-hidden className="size-1 rounded-full bg-current" />
+              )}
+            </span>
+            <span
+              className={cn(
+                'text-[0.7rem] whitespace-nowrap',
+                done ? token.text : 'text-muted-foreground',
+              )}
+            >
+              {check.label}
+            </span>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
@@ -196,47 +275,74 @@ function StageRow({
           {detail}
         </p>
       )}
-
-      {/* The rails this stage runs, in order. Shown while it runs, because this is the
-          three-to-eight seconds the console used to spend on a spinner — and a reader
-          who can see what is being screened reads a governed product rather than a
-          slow one. */}
-      {guard && stage.running && stage.chain.length > 0 && (
-        <p className="flex flex-wrap items-center gap-1 pl-3.5">
-          {stage.chain.map((layer) => (
-            <span
-              key={layer}
-              className="rounded-full border border-border bg-surface px-1.5 py-0.5 font-mono text-[0.62rem] text-muted-foreground"
-            >
-              {layer}
-            </span>
-          ))}
-          <InfoTip label="About the rail chain">
-            The layers this rail runs, in the order{' '}
-            <span className="font-mono">aegis/guardrails/pipeline.py</span> runs them. The
-            stream reports one verdict and, on a block, the layer that produced it — it does
-            not report per-layer progress, so nothing here is lit as it passes.
-          </InfoTip>
-        </p>
-      )}
     </li>
   )
 }
 
+/** A disclosure that keeps a long list one click away rather than always open. */
+function Disclosure({
+  summary,
+  children,
+}: {
+  summary: string
+  children: ReactNode
+}): ReactElement {
+  return (
+    <details className="min-w-0 rounded-md border border-border bg-surface-2/30 px-2.5 py-1.5">
+      <summary className="cursor-pointer text-[0.75rem] font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        {summary}
+      </summary>
+      <div className="min-w-0 pt-1.5">{children}</div>
+    </details>
+  )
+}
+
 /**
- * The run's spine — every stage it has entered, live, with what each one cost.
+ * What a screen reader is told about this run, in one sentence.
  *
- * ## Why this panel exists
+ * The console had exactly one live region — the answer — so a run starting, a run
+ * finishing and a lane failing were all silent. This is the sentence the console's own
+ * status line announces; it is a pure function of the run so the region's text changes
+ * once per transition rather than on every token.
  *
- * A measured run: the two guardrails take 10.9 of its 29 seconds, and for all 10.9 the
- * console showed a spinner. That is the single largest thing wrong with this screen,
- * and it is not a performance problem — an input rail that screens for prompt injection
- * and PII before a model sees a syllable is the *product*. Hiding it behind a spinner
- * spends the wait and buys nothing with it.
+ * @param state - The reduced run, or `null` when no turn has been sent.
+ * @returns The sentence to announce, or `''` when there is nothing to say.
+ */
+export function announceRun(state: RunState | null): string {
+  if (state === null) return ''
+  if (state.error !== null) return `Run stopped. ${state.error}`
+  const failed = deriveAgentPanel(state).lanes.filter((lane) => isFailure(lane.status))
+  if (state.running) {
+    if (failed.length > 0) return `Run in progress. ${failed[0].label} ${failed[0].status}.`
+    return state.events.length === 0 ? 'Run started.' : 'Run in progress.'
+  }
+  if (state.events.length === 0) return ''
+  const timing = deriveTiming(state)
+  const measured = timing.measured ? ` in ${formatDuration(timing.measuredMs)}` : ''
+  if (failed.length > 0) return `Run finished${measured}. ${failed[0].label} ${failed[0].status}.`
+  return `Run finished${measured}.`
+}
+
+/**
+ * The run panel — one surface for everything a turn is doing while it does it.
  *
- * So every stage the run enters appears here the moment it starts, with a brief naming
- * what it is doing, a bar that grows while it works, and its own duration the instant
- * the wire reports one.
+ * ## What this replaces
+ *
+ * Four panels used to animate at once under a question: a bordered stage timeline with
+ * three head figures and fourteen always-open rows, a bordered trust bar of four lit
+ * chips, the lane board, and the activity rail. Four independent hierarchies, no focal
+ * point — measured at fourteen simultaneous regions on a streaming turn, and the
+ * owner's verdict on it was "too cluttered".
+ *
+ * They are one panel with three zones now:
+ *
+ * - **The header** carries the run's own figures — elapsed, cost, tokens — and the four
+ *   trust checks. One place for what the run *is*.
+ * - **The left zone** is the lane board, passed in as `children` so this file never
+ *   imports it: that is the money shot, N agents working at once, and it is the one
+ *   thing that got *more* room out of the merge.
+ * - **The right zone** is the merged stage-and-activity feed, with the full fourteen-row
+ *   timeline one disclosure away.
  *
  * ## Which figures are whose
  *
@@ -246,8 +352,20 @@ function StageRow({
  * timestamp; it is labelled as the browser's clock and it is replaced by the server's
  * `duration_ms` the moment the stage lands. The totals sum top-level stages only, so a
  * fan-out's lanes are never added to the `run_team` that contains them.
+ *
+ * **Cost has one home per state.** While the run streams it is here, because nothing
+ * else is on screen to carry it; once the run settles it is the decision strip's, and
+ * this panel's settled summary states stages, duration and tokens only. A spend figure
+ * printed twice two hundred pixels apart is the clutter this rebuild exists to remove.
  */
-export function RunStages({ state }: { state: RunState }): ReactElement | null {
+export function RunPanel({
+  state,
+  children,
+}: {
+  state: RunState
+  /** The lane board — the left zone. Passed in, so this file never imports it. */
+  children: ReactNode
+}): ReactElement {
   const timing = deriveTiming(state)
   const running = state.running
   const now = useTick(running && timing.current !== null)
@@ -261,101 +379,142 @@ export function RunStages({ state }: { state: RunState }): ReactElement | null {
     setStartedAt((prev) => (prev?.key === currentKey ? prev : { key: currentKey, at: Date.now() }))
   }, [currentKey])
 
-  if (timing.stages.length === 0 && !running) return null
-
+  // No early return: this panel owns the lane board now, and a run that reported no
+  // stage at all still has lanes — the supervisor's, at minimum — to show.
   const liveMs =
     currentKey !== null && startedAt?.key === currentKey ? Math.max(0, now - startedAt.at) : null
   const scaleMs = Math.max(timing.peakMs, liveMs ?? 0, 1)
   const total = timing.measuredMs + (liveMs ?? 0)
   const done = timing.stages.filter((s) => !s.running).length
+  const activityCount = deriveActivity(state).length
+
+  const stageList = (
+    <ol className="flex min-w-0 flex-col gap-0.5">
+      {timing.stages.map((stage, index) => (
+        <StageRow
+          key={stage.key}
+          stage={stage}
+          liveMs={stage.key === currentKey ? liveMs : null}
+          scaleMs={scaleMs}
+          // A round header where the round changes. The self-repair loop runs
+          // `plan → gate → act → reflect` once per round, and eight identical-looking
+          // rows read as duplicated noise rather than as an agent that judged its own
+          // first attempt insufficient and went again.
+          openRound={
+            stage.round !== null &&
+            stage.round !== (index === 0 ? null : timing.stages[index - 1].round)
+              ? stage.round
+              : null
+          }
+          roundBudget={timing.roundBudget}
+        />
+      ))}
+    </ol>
+  )
 
   return (
     <section
-      aria-label="Stages"
-      className="flex flex-col gap-3 rounded-lg border border-border bg-card px-4 py-3"
+      aria-label="Run"
+      className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card px-4 py-3"
     >
       <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-        <span className="flex items-center gap-2">
-          <Clock aria-hidden className="size-4 text-muted-foreground" />
-          <h3 className="eyebrow">
-            {running ? 'Running' : 'Stages'} · {done}/{timing.stages.length}
-          </h3>
-        </span>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="flex items-center gap-2">
+            <Clock aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <h3 className="eyebrow">
+              {running
+                ? `Running · ${done}/${timing.stages.length}`
+                : `Run · ${timing.stages.length} ${timing.stages.length === 1 ? 'stage' : 'stages'}`}
+            </h3>
+          </span>
 
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
-          <HeadFigure
-            label={running ? 'Elapsed' : 'Measured'}
-            info={
-              running ? (
+          {/* Settled, the head figures collapse into this one line: the ledger of what
+              ran. Cost is deliberately not here — it is the decision strip's, directly
+              under this panel. */}
+          {!running && timing.measured && (
+            <span className="tabular flex min-w-0 items-baseline gap-1.5 font-mono text-[0.72rem] text-muted-foreground">
+              <span>{formatDuration(timing.measuredMs)}</span>
+              <span aria-hidden>·</span>
+              <span>{formatCount(timing.tokens)} tok</span>
+            </span>
+          )}
+
+          <TrustChecks state={state} />
+        </div>
+
+        {running && (
+          <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+            <HeadFigure
+              label="Elapsed"
+              info={
                 <>
                   The stages this run has finished, summed from each one’s own{' '}
                   <span className="font-mono">duration_ms</span>, plus the stage in flight
                   counted by this browser. No event carries a start timestamp, so the live
                   part is the only figure on this panel the server did not send.
                 </>
+              }
+            >
+              <Figure size="stat" className="text-foreground">
+                {timing.measured || liveMs !== null ? formatDuration(total) : 'not measured'}
+              </Figure>
+            </HeadFigure>
+
+            <HeadFigure label="Cost">
+              {timing.measured ? (
+                <Figure className="text-foreground">{formatUsd(timing.costUsd)}</Figure>
               ) : (
-                <>
-                  Summed from each stage’s own <span className="font-mono">duration_ms</span>,
-                  across top-level stages only — a fan-out’s lanes run inside{' '}
-                  <span className="font-mono">run_team</span>, whose duration already covers
-                  them.
-                </>
-              )
-            }
-          >
-            <Figure size="stat" className="text-foreground">
-              {timing.measured || liveMs !== null ? formatDuration(total) : 'not measured'}
-            </Figure>
-          </HeadFigure>
+                <span className="text-[0.8125rem] leading-5 text-muted-foreground">
+                  not measured
+                </span>
+              )}
+            </HeadFigure>
 
-          <HeadFigure label="Cost">
-            {timing.measured ? (
-              <Figure className="text-foreground">{formatUsd(timing.costUsd)}</Figure>
-            ) : (
-              <span className="text-[0.8125rem] leading-5 text-muted-foreground">
-                not measured
-              </span>
-            )}
-          </HeadFigure>
-
-          <HeadFigure label="Tokens">
-            {timing.measured ? (
-              <Figure className="text-foreground">{formatCount(timing.tokens)}</Figure>
-            ) : (
-              <span className="text-[0.8125rem] leading-5 text-muted-foreground">
-                not measured
-              </span>
-            )}
-          </HeadFigure>
-        </div>
+            <HeadFigure label="Tokens">
+              {timing.measured ? (
+                <Figure className="text-foreground">{formatCount(timing.tokens)}</Figure>
+              ) : (
+                <span className="text-[0.8125rem] leading-5 text-muted-foreground">
+                  not measured
+                </span>
+              )}
+            </HeadFigure>
+          </div>
+        )}
       </header>
 
-      {timing.stages.length === 0 ? (
-        <p className="flex items-center gap-2 text-[0.78rem] text-muted-foreground">
-          <Sparkles aria-hidden className="size-3.5" />
-          The question is on its way to the input rail. Every stage it enters appears here.
-        </p>
+      {running ? (
+        /* Again a container query: the feed only earns a column when the turn itself is
+           wide, which at 1440px with both rails out it is not. */
+        <div className="grid min-w-0 gap-4 @[46rem]/turn:grid-cols-[minmax(0,1fr)_16rem]">
+          <div className="flex min-w-0 flex-col gap-3">{children}</div>
+          <div className="flex min-w-0 flex-col gap-2">
+            <ActivityRail state={state} current={timing.current} liveMs={liveMs} />
+            {timing.stages.length > 0 && (
+              <Disclosure summary={`All stages · ${timing.stages.length}`}>{stageList}</Disclosure>
+            )}
+          </div>
+        </div>
       ) : (
-        <ol className="flex flex-col gap-0.5">
-          {timing.stages.map((stage, index) => (
-            <StageRow
-              key={stage.key}
-              stage={stage}
-              liveMs={stage.key === currentKey ? liveMs : null}
-              scaleMs={scaleMs}
-              // A round header where the round changes. The self-repair loop runs
-              // `plan → gate → act → reflect` once per round, and eight identical-looking
-              // rows read as duplicated noise rather than as an agent that judged its own
-              // first attempt insufficient and went again.
-              openRound={
-                stage.round !== null && stage.round !== (index === 0 ? null : timing.stages[index - 1].round)
-                  ? stage.round
-                  : null
-              }
-              roundBudget={timing.roundBudget}
-            />
-          ))}
-        </ol>
+        <div className="flex min-w-0 flex-col gap-3">
+          {children}
+          <div className="flex min-w-0 flex-wrap gap-2">
+            {timing.stages.length > 0 && (
+              <div className="min-w-0 flex-1 basis-64">
+                <Disclosure summary={`All stages · ${timing.stages.length}`}>
+                  {stageList}
+                </Disclosure>
+              </div>
+            )}
+            {activityCount > 0 && (
+              <div className="min-w-0 flex-1 basis-64">
+                <Disclosure summary={`Activity · ${activityCount}`}>
+                  <ActivityRail state={state} />
+                </Disclosure>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </section>
   )

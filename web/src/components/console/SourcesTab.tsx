@@ -3,10 +3,10 @@
 import { BadgeCheck, FileText, ShieldAlert } from 'lucide-react'
 import type { ReactElement } from 'react'
 
+import { Absence } from '@/components/primitives/Receipt'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { RerankScoreboard } from '@/components/retrieval/RerankScoreboard'
-import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 
 import { hasProvenance, hasSpanCheck, readSources, type SourceEvidence } from './sources'
@@ -67,16 +67,14 @@ export function SourcesTab({ state }: { state: RunState }): ReactElement {
 
   if (sources.length === 0) {
     return (
-      <Card>
-        <CardBody className="flex min-h-32 flex-col items-center justify-center gap-2 text-center">
-          <FileText aria-hidden className="size-6 text-muted-foreground/50" />
-          <p className="text-sm text-muted-foreground">
-            {state.candidates > 0
-              ? `Retrieval recalled ${state.candidates} candidates but ranked none of them.`
-              : 'This run retrieved nothing — the answer is not grounded in a document.'}
-          </p>
-        </CardBody>
-      </Card>
+      <Absence
+        figure="Ranked sources"
+        why={
+          state.candidates > 0
+            ? `Retrieval recalled ${state.candidates} candidates and ranked none of them.`
+            : 'This run retrieved nothing, so the answer is not grounded in a document.'
+        }
+      />
     )
   }
 
@@ -106,15 +104,23 @@ export function SourcesTab({ state }: { state: RunState }): ReactElement {
           </ol>
 
           {(!provenance || !checked) && (
-            <p
-              className={cn(
-                'mt-3 rounded-md border border-dashed border-border bg-surface-2/40 px-3 py-2',
-                'text-[0.72rem] leading-snug text-muted-foreground',
-              )}
-            >
-              {!provenance && 'This run reported no page or position for its sources. '}
-              {!checked && 'No verbatim span check ran, so every quote here is the model’s claim.'}
-            </p>
+            <Absence
+              className="mt-3"
+              figure={
+                !provenance && !checked
+                  ? 'Page, position and verbatim check'
+                  : !provenance
+                    ? 'Page and position'
+                    : 'Verbatim span check'
+              }
+              why={
+                !provenance && !checked
+                  ? 'Neither was reported, so every quote here is the model’s claim.'
+                  : checked
+                    ? 'This run reported neither for its sources.'
+                    : 'None ran, so every quote here is the model’s claim.'
+              }
+            />
           )}
         </CardBody>
       </Card>

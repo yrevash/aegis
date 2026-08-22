@@ -55,6 +55,16 @@ const LABEL_OFF = 'rgba(152,162,179,0.75)'
 interface KnowledgeGraphProps {
   base: GraphResponse
   state: RunState
+  /**
+   * Whether to draw the agent-trajectory strip above the graph.
+   *
+   * The console's Trace tab passes `false`: it sits one tab away from the Flow tab,
+   * which renders the *same* `orchestration.ts` model through `FlowCanvas` at full
+   * size. Two renderers of one model on one screen is the duplication this redesign
+   * removed. The standalone `/graph` screen has no Flow tab, so it keeps the strip
+   * and the default stays `true`.
+   */
+  trajectory?: boolean
   /** Current active-beat, so the live node pulses in the shared hue. */
   beat: Beat | null
   /**
@@ -77,7 +87,12 @@ interface KnowledgeGraphProps {
  * active-beat hue. When no run is active the whole viz gently breathes and a
  * dormant scanline sweeps, so the screen stays alive between demos.
  */
-export function KnowledgeGraph({ base, state, beat }: KnowledgeGraphProps): ReactElement {
+export function KnowledgeGraph({
+  base,
+  state,
+  beat,
+  trajectory = true,
+}: KnowledgeGraphProps): ReactElement {
   const [wrapRef, size] = useElementSize<HTMLDivElement>()
   const fgRef = useRef<ForceMethods | null>(null)
   const [reduced] = useState(prefersReducedMotion)
@@ -157,7 +172,7 @@ export function KnowledgeGraph({ base, state, beat }: KnowledgeGraphProps): Reac
       />
 
       {/* Fused agent-trajectory layer above the graph. */}
-      <OrchestrationMap state={state} beat={beat} />
+      {trajectory ? <OrchestrationMap state={state} beat={beat} /> : null}
 
       <div ref={wrapRef} className="relative min-h-0 flex-1">
         {/*

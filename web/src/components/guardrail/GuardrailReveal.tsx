@@ -1,6 +1,6 @@
 'use client'
 
-import { Ban, ChevronDown, Eraser, ShieldCheck, type LucideIcon } from 'lucide-react'
+import { Ban, ChevronDown, Eraser, Flag, ShieldCheck, type LucideIcon } from 'lucide-react'
 import { useMemo, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
@@ -28,7 +28,21 @@ const VERDICT_META: Record<
   pass: { icon: ShieldCheck, variant: 'ok', label: 'pass' },
   redact: { icon: Eraser, variant: 'risk', label: 'redact' },
   block: { icon: Ban, variant: 'block', label: 'block' },
+  // Non-blocking: the rail noted something (off-topic, ungrounded) and let the answer
+  // through. `risk`, not `block` — colouring an advisory as a refusal would overstate it.
+  flag: { icon: Flag, variant: 'risk', label: 'flag' },
 }
+
+/**
+ * What to draw for a verdict this build has never heard of.
+ *
+ * Not defensive habit — this exact lookup returned `undefined` for `flag` and took the
+ * console down. A rail's verdict arrives over the wire from a backend that can ship a new
+ * one before this client is rebuilt, so an unknown code must degrade to a legible marker
+ * rather than a crash. It shows the raw code, because inventing a friendly label for a
+ * verdict we do not understand would be a worse lie than the code itself.
+ */
+const UNKNOWN_VERDICT = { icon: Flag, variant: 'risk', label: 'unknown' } as const
 
 /**
  * Rail layers whose raw name would read as an accusation, and what to show instead.
@@ -126,7 +140,7 @@ export function GuardrailReveal({ guardrails }: GuardrailRevealProps): ReactElem
 
 /** One guardrail verdict, with a before→after diff when it redacted. */
 function GuardrailRow({ entry }: { entry: GuardrailEntry }): ReactElement {
-  const meta = VERDICT_META[entry.verdict]
+  const meta = VERDICT_META[entry.verdict] ?? { ...UNKNOWN_VERDICT, label: String(entry.verdict) }
   const Icon = meta.icon
   const hasDiff = entry.redactions.length > 0 && entry.before_masked != null && entry.after != null
 

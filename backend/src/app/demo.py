@@ -87,13 +87,29 @@ the ``redteam_runs`` rows are **real offline battery runs** — :func:`aegis.red
 runner.run_redteam` with no completer drives the deterministic backstops only, so the
 stored report is a genuine set of verdicts rather than a fabricated one.
 
+The knowledge graph
+-------------------
+
+One more store, and the only part of this corpus that is domain *content*:
+:mod:`app.demo_graph` derives a support-desk knowledge graph from the adapter's own
+records and writes it into Neo4j, because ``GET /graph`` was measured returning two
+nodes left over from an unrelated ingested paper. It is seeded and wiped by the same two
+commands as everything else, tagged on the element itself (a ``demo_tag`` property and
+an extra label) rather than on an identifier column, and reported separately — Neo4j is
+not one of these tables and its counts do not belong in the same total. If the graph
+store is unreachable the PostgreSQL corpus is still written and the reason is printed:
+a second database being down must not cost ninety days of correct history.
+
 What this corpus is **not** made of
 -----------------------------------
 
-The adapter's record generator is deliberately not read here, and that is a correction
-rather than an omission. Everything in these six tables is *platform* telemetry — model
+The adapter's record generator is not read for the six tables above, and that is a
+correction rather than an omission. Everything in them is *platform* telemetry — model
 spend, run headers, job outcomes, the governance trail — and none of it is domain
-content. The first draft of this module did reach into the generator for decoration
+content. (The graph is the exception that proves it: a knowledge graph is domain content
+by definition, so :mod:`app.demo_graph` reads the generator through the seam and derives
+every entity structurally, naming no record type and no field.) The first draft of this
+module did reach into the generator for decoration
 (a record id in a tool argument, a category in an audit payload) and
 ``tests/adapter/test_conformance_suite.py`` refused it, correctly: a core module that
 spells the shipped domain's record type or its collection's field name is a retarget
@@ -1333,10 +1349,17 @@ class DemoSummary:
     Counted rather than assumed: a second run of an idempotent seeder must report every
     table as already present, and a summary that cannot tell the two apart cannot prove
     it.
+
+    :attr:`graph` and :attr:`graph_note` sit **beside** the two dicts rather than inside
+    them. Neo4j is not one of these tables: it has no ``tenant_id`` column, no RLS and no
+    row count comparable to theirs, and folding it in would make ``created`` a mixture of
+    two stores whose totals mean different things.
     """
 
     created: dict[str, int] = field(default_factory=dict)
     existing: dict[str, int] = field(default_factory=dict)
+    graph: Any = None  # app.demo_graph.GraphSummary, or None when Neo4j was unreachable
+    graph_note: str | None = None
 
     def record(self, table: str, *, created: int = 0, existing: int = 0) -> None:
         """Count rows against ``table``."""
@@ -1362,9 +1385,11 @@ class DemoSummary:
 
 @dataclass(slots=True)
 class WipeSummary:
-    """How many demo rows ``--wipe`` removed, per table."""
+    """How many demo rows ``--wipe`` removed, per table (and from the graph)."""
 
     deleted: dict[str, int] = field(default_factory=dict)
+    graph: Any = None  # app.demo_graph.GraphWipeSummary, or None when unreachable
+    graph_note: str | None = None
 
     @property
     def total(self) -> int:
@@ -1533,7 +1558,47 @@ async def seed_demo(
     corpus = build_corpus(scopes, now=end, days=days)
     await _write_corpus(corpus, summary)
     await _write_redteam(scopes, summary)
+    await _write_graph(scopes, summary)
     return summary
+
+
+def _tenant_tags(scopes: Sequence[DemoScope]) -> tuple[str, ...]:
+    """Return the tenant metadata values the graph corpus is distributed across.
+
+    The same token the vector payloads and the graph's ``file_path`` are tagged with
+    (:func:`aegis.retrieval.types.tenant_metadata_value`), so what this writes is what
+    ``GET /graph`` filters on. The platform slice is deliberately absent: it holds no
+    tenant, and a graph element owned by no tenant is the *shared* corpus, which the
+    seed documents already are.
+    """
+    from aegis.retrieval.types import tenant_metadata_value  # noqa: PLC0415
+
+    return tuple(
+        value
+        for scope in scopes
+        if scope.tenant_id is not None
+        and (value := tenant_metadata_value(scope.tenant_id)) is not None
+    )
+
+
+async def _write_graph(scopes: Sequence[DemoScope], summary: DemoSummary) -> None:
+    """Write the demo knowledge graph into Neo4j, and never fail the run for it.
+
+    The graph lives in a different store from every other table here, and that store is
+    optional in a way PostgreSQL is not: ``STORES=off`` has none, a laptop demo may have
+    it stopped, and the test suite has no scratch Neo4j to point at. A seeder that
+    aborted ninety days of correct PostgreSQL history because a second database was down
+    would be trading a whole corpus for a screen — so the failure is *recorded and
+    printed*, never swallowed and never fatal. ``summary.graph is None`` with a note is
+    the honest report of "the graph was not written, and here is why".
+    """
+    from app.demo_graph import GraphUnavailableError, seed_graph  # noqa: PLC0415
+
+    try:
+        summary.graph = await seed_graph(_tenant_tags(scopes))
+    except (GraphUnavailableError, ValueError) as exc:
+        summary.graph_note = str(exc)
+        logger.warning("demo knowledge graph not written: %s", exc)
 
 
 async def wipe_demo() -> WipeSummary:
@@ -1558,6 +1623,18 @@ async def wipe_demo() -> WipeSummary:
             )
             summary.deleted[str(model.__tablename__)] = result.rowcount or 0
         await session.commit()
+
+    # The graph half, in the same call, because a kill switch that removes six of seven
+    # stores is not a kill switch. It is reported separately and cannot fail the wipe:
+    # the PostgreSQL rows are already gone by here, and raising now would tell an
+    # operator the removal failed when most of it succeeded.
+    from app.demo_graph import GraphUnavailableError, wipe_graph  # noqa: PLC0415
+
+    try:
+        summary.graph = await wipe_graph()
+    except GraphUnavailableError as exc:
+        summary.graph_note = str(exc)
+        logger.warning("demo knowledge graph not wiped: %s", exc)
     return summary
 
 
@@ -1572,19 +1649,68 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m app.demo",
         description=(
             "Write (or remove) the Aegis demo corpus: ninety days of usage, runs, "
-            "jobs, audit and approvals history, every row tagged 'demo-'."
+            "jobs, audit and approvals history, every row tagged 'demo-', plus the "
+            "knowledge graph the Graph screen renders, every node tagged 'demo-graph'."
         ),
     )
     parser.add_argument(
         "--wipe",
         action="store_true",
         help=(
-            "Delete every demo-tagged row and report what was removed. Deliberately "
-            f"does NOT require {DEMO_ENV}: the removal path must not fail because a "
-            "variable was not exported."
+            "Delete every demo-tagged row and demo-tagged graph node, and report what "
+            f"was removed. Deliberately does NOT require {DEMO_ENV}: the removal path "
+            "must not fail because a variable was not exported."
+        ),
+    )
+    parser.add_argument(
+        "--prune-graph-source",
+        metavar="TAGGED_PATH",
+        help=(
+            "Delete the knowledge-graph entities whose ONLY source is this exact "
+            "tagged file path (e.g. 't1::example.pdf'). This removes REAL extracted "
+            "knowledge, which is why it is a separate, explicit operation and not part "
+            "of --wipe: it is how a document ingested during testing stops being the "
+            "whole of what the Graph screen shows. Entities another document also "
+            "contributed to are kept and named."
         ),
     )
     return parser
+
+
+def _print_graph(graph: Any, note: str | None) -> None:  # noqa: ANN401 - either summary
+    """Print the Neo4j half of a seed or a wipe, including its absence.
+
+    "The graph store was unreachable" is a result, not a silence: the operator who ran
+    this needs to know the Graph screen will still be empty, and why.
+    """
+    if graph is not None:
+        for line in graph.lines():
+            print(line)
+    elif note:
+        print(f"  neo4j          SKIPPED — {note}")
+
+
+async def _prune(tagged_path: str) -> int:
+    """Delete the graph entities sourced only from ``tagged_path``, and report.
+
+    Returns:
+        ``0`` on success, ``1`` when the graph store could not be reached.
+    """
+    from app.demo_graph import GraphUnavailableError, prune_graph_source  # noqa: PLC0415
+
+    try:
+        removed, kept = await prune_graph_source(tagged_path)
+    except GraphUnavailableError as exc:
+        print(f"PRUNE FAILED  {exc}", file=sys.stderr)
+        return 1
+    print(f"Knowledge graph pruned of {tagged_path!r}")
+    print(f"  neo4j nodes    {removed:>6} deleted")
+    if kept:
+        print(
+            f"  kept           {len(kept)} entity/entities another document also "
+            f"contributed to: {', '.join(kept[:5])}"
+        )
+    return 0
 
 
 async def _run(argv: Sequence[str] | None = None) -> int:
@@ -1599,12 +1725,16 @@ async def _run(argv: Sequence[str] | None = None) -> int:
 
     try:
         await bootstrap()
+        if args.prune_graph_source:
+            return await _prune(args.prune_graph_source)
+
         if args.wipe:
             wiped = await wipe_demo()
             verb = "removed" if wiped.total else "nothing to remove"
             print(f"Aegis demo data {verb}")
             for line in wiped.lines():
                 print(line)
+            _print_graph(wiped.graph, wiped.graph_note)
             return 0
 
         if not demo_enabled():
@@ -1637,6 +1767,7 @@ async def _run(argv: Sequence[str] | None = None) -> int:
     print(f"Aegis demo data {verb}")
     for line in summary.lines():
         print(line)
+    _print_graph(summary.graph, summary.graph_note)
     if summary.total_created:
         print(
             f"  every row carries the {DEMO_PREFIX!r} prefix; "

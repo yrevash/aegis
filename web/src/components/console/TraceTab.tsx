@@ -5,6 +5,7 @@ import { Suspense, lazy, type ReactElement } from 'react'
 import { NodeGantt } from '@/components/charts/NodeGantt'
 import { GuardrailReveal } from '@/components/guardrail/GuardrailReveal'
 import { EfficiencyPanel } from '@/components/metrics/EfficiencyPanel'
+import { Absence } from '@/components/primitives/Receipt'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { AgentTracePanel } from '@/components/trace/AgentTracePanel'
@@ -112,6 +113,19 @@ interface TraceTabProps {
 export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactElement {
   const measured = state.nodeLedger.length > 0
 
+  /*
+   * One height for the graph-and-log pair, from the log's own length.
+   *
+   * Both panels used to be `h-[380px]`, which DESIGN.md §4 rules out by name: a run
+   * with six events sat in 380px with three hundred of them empty, and the same box
+   * held a two-hundred-event run. The floor is what the empty state needs, the ceiling
+   * is the old fixed height, and between them the pair is as tall as the log has
+   * content for. The panel's own scroller owns everything past the ceiling, so a long
+   * run is never clipped — the whole change is at the short end, which is where the
+   * dead canvas was.
+   */
+  const paneHeight = `clamp(14rem, ${(7 + state.events.length * 1.5).toFixed(1)}rem, 24rem)`
+
   return (
     <div className="@container/trace flex flex-col gap-3">
       <Decisions state={state} />
@@ -133,18 +147,18 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
           </CardBody>
         </Card>
       ) : (
-        <Card>
-          <CardBody className="text-sm text-muted-foreground">
-            No node finished with a measured duration on this run, so there is no timing
-            breakdown to draw.
-          </CardBody>
-        </Card>
+        /* A whole Card to carry one sentence is a panel that exists to hold prose.
+           The absence is the same fact in the slot the chart would have occupied. */
+        <Absence
+          figure="Per-node timing and cost"
+          why="No node finished with a measured duration on this run."
+        />
       )}
 
       {/* Container, not `lg:` — this pair sits inside the thread column, and a viewport
           breakpoint firing at a 1024px *window* put two 270px panels side by side. */}
       <div className="grid gap-3 @[52rem]/trace:grid-cols-2">
-        <div className="h-[380px] min-w-0">
+        <div className="min-w-0" style={{ height: paneHeight }}>
           <Suspense
             fallback={
               <Card className="h-full">
@@ -152,10 +166,10 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
               </Card>
             }
           >
-            <KnowledgeGraph base={graph} state={state} beat={beat} idle={false} />
+            <KnowledgeGraph base={graph} state={state} beat={beat} idle={false} trajectory={false} />
           </Suspense>
         </div>
-        <div className="h-[380px] min-w-0">
+        <div className="min-w-0" style={{ height: paneHeight }}>
           <AgentTracePanel state={state} />
         </div>
       </div>

@@ -1,8 +1,9 @@
 'use client'
 
-import { ShieldCheck, Signpost, Search, MessageSquareQuote } from 'lucide-react'
+import { ChevronRight, Search, ShieldCheck, Signpost } from 'lucide-react'
 import type { ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
 
 import { INPUT_CHAIN, OUTPUT_CHAIN } from './stageTimeline'
@@ -31,106 +32,86 @@ const BEATS: readonly Beat[] = [
   { label: 'Output rail', icon: ShieldCheck, chain: OUTPUT_CHAIN },
 ]
 
-/**
- * The layers under a guardrail beat, in the order it runs them.
- *
- * One flowing mono line rather than a chip each. Twelve pills in four narrow cells is
- * the "pill overuse" DESIGN.md §9 names, and it cost the strip about eighty pixels of
- * height to say the same six words.
- */
-function Chain({ layers }: { layers: readonly string[] }): ReactElement {
-  return (
-    <p className="font-mono text-[0.62rem] leading-relaxed text-muted-foreground">
-      {layers.join(' · ')}
-    </p>
-  )
-}
+/** Counts, formatted once at module scope rather than per render. */
+const COUNT = new Intl.NumberFormat('en-US')
 
 /**
- * What is about to happen to the question — the idle console's one true visual.
+ * What is about to happen to the question — one strip, under the composer.
  *
  * ## Why an idle console draws anything at all
  *
- * The idle screen had a wordmark, a field and a screen of nothing, and the nothing was
- * the largest element on it. The rule this surface has always held to is that an empty
- * console must not invent content: no placeholder cards, no sample results, no fabricated
- * figures. That rule rules out a fake dashboard. It does **not** rule out the one thing
- * an empty console can state truthfully — *the path the next question will take* — and
- * that path is the product's whole argument. Twelve named rails run around every answer,
- * and until a question is sent nobody watching this screen knows that.
+ * The rule this surface has always held to is that an empty console must not invent
+ * content: no placeholder cards, no sample results, no fabricated figures. That rules out
+ * a fake dashboard. It does **not** rule out the one thing an empty console can state
+ * truthfully — *the path the next question will take* — and that path is the product's
+ * whole argument. Twelve named rails run around every answer, and until a question is
+ * sent nobody watching this screen knows that.
  *
- * So: four beats, the twelve real layer names, and **not one number**. There is nothing
- * to measure yet and nothing here pretends there is. The moment a question is sent this
- * component is gone and {@link RunStages} draws the same spine filled in with the wire's
- * own durations — the preview and the run are deliberately the same picture, one empty
- * and one measured.
+ * ## Why it is a strip and no longer four cards
+ *
+ * It shipped as a four-cell card grid where every beat carried its own sentence and the
+ * whole thing closed with a second one, which made the *preview* of a run taller than the
+ * control that starts one. Four bordered cells, four sentences and a footnote to say
+ * "there are four steps and two of them are rails" is exactly the text bomb
+ * `03-AI-TEAM-PASS.md` rules out — and the sentences were restatement, not information:
+ * a beat labelled **Route** does not need a line underneath saying it sizes the turn.
+ *
+ * So the sentences are **deleted**, not relocated; the twelve layer names move into the
+ * one `InfoTip` that was already here, where mechanism prose belongs; and the four beats
+ * become one horizontal spine. What survives on the page is the count — `6` under each
+ * rail — because that is a measured fact about the shipped pipeline rather than a
+ * description of it, and it is the number that makes somebody open the tip.
+ *
+ * Not one figure is invented. The moment a question is sent this component is gone and
+ * {@link RunStages} draws the same spine filled in with the wire's own durations — the
+ * preview and the run are deliberately the same picture, one empty and one measured.
  */
 export function RunPreview(): ReactElement {
   return (
-    <section
-      aria-label="What happens to a question"
-      className="@container/preview flex w-full flex-col gap-2.5"
-    >
-      <h2 className="eyebrow flex items-center gap-1.5">
-        Every question takes this path
-        <InfoTip label="About the path">
-          The four beats are the compiled graph’s own, and the layer names under the two
-          rails are the literal order in{' '}
-          <span className="font-mono">aegis/guardrails/pipeline.py</span> —{' '}
-          <span className="font-mono">_screen_input</span> and{' '}
-          <span className="font-mono">check_output</span>. The middle beat stands for
-          whichever route the supervisor picks: answering from memory, retrieving and
-          reasoning, or fanning out to a team. Nothing here is measured, because nothing has
-          run yet.
-        </InfoTip>
-      </h2>
+    <section aria-label="What happens to a question" className="@container/preview w-full min-w-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-surface-2/40 px-3 py-2">
+        <h2 className="eyebrow flex shrink-0 items-center gap-1.5">
+          Every question takes this path
+          <InfoTip label="About the path">
+            The four beats are the compiled graph’s own. The middle one stands for whichever
+            route the supervisor picks: answering from memory, retrieving and reasoning, or
+            fanning out to a team. Nothing here is measured, because nothing has run yet.
+            <span className="mt-2 block font-mono text-[0.68rem] leading-relaxed">
+              <span className="text-muted-foreground">_screen_input</span> ·{' '}
+              {INPUT_CHAIN.join(' · ')}
+            </span>
+            <span className="mt-1 block font-mono text-[0.68rem] leading-relaxed">
+              <span className="text-muted-foreground">check_output</span> ·{' '}
+              {OUTPUT_CHAIN.join(' · ')}
+            </span>
+          </InfoTip>
+        </h2>
 
-      <ol className="grid grid-cols-2 gap-2 @[36rem]/preview:grid-cols-4">
-        {BEATS.map((beat, index) => {
-          const Icon = beat.icon
-          return (
-            <li
-              key={beat.label}
-              className="relative flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-surface-2/40 px-3 py-2.5"
-            >
-              {/* The connector — the track a run fills in. Drawn only where a beat has
-                  a neighbour on the same row. */}
-              {index > 0 && (
-                <span
-                  aria-hidden
-                  className="absolute top-1/2 -left-2 hidden h-px w-2 bg-border @[36rem]/preview:block"
-                />
-              )}
-              <span className="flex min-w-0 items-center gap-1.5">
+        <ol className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1.5">
+          {BEATS.map((beat, index) => {
+            const Icon = beat.icon
+            return (
+              <li key={beat.label} className="flex min-w-0 items-center gap-1.5">
+                {index > 0 && (
+                  <ChevronRight aria-hidden className="size-3 shrink-0 text-border" />
+                )}
                 <Icon aria-hidden className="size-3.5 shrink-0 text-blue-700" />
-                <span className="min-w-0 truncate text-[0.8rem] font-medium text-foreground">
+                <span className="min-w-0 truncate text-[0.78rem] font-medium text-foreground">
                   {beat.label}
                 </span>
                 {beat.chain.length > 0 && (
-                  <span className="tabular ml-auto shrink-0 font-mono text-[0.62rem] text-muted-foreground">
-                    {beat.chain.length}
-                  </span>
+                  <Figure
+                    className="shrink-0 text-[0.66rem] text-muted-foreground"
+                    label={`${COUNT.format(beat.chain.length)} layers`}
+                  >
+                    {COUNT.format(beat.chain.length)}
+                  </Figure>
                 )}
-              </span>
-              {beat.chain.length > 0 ? (
-                <Chain layers={beat.chain} />
-              ) : (
-                <p className="text-[0.68rem] leading-snug text-muted-foreground">
-                  {beat.label === 'Route'
-                    ? 'Sizes the turn: one agent or a team.'
-                    : 'The corpus, the graph, the tools — whichever the route chose.'}
-                </p>
-              )}
-            </li>
-          )
-        })}
-      </ol>
-
-      <p className="flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
-        <MessageSquareQuote aria-hidden className="size-3.5 shrink-0" />
-        Ask something and this spine fills in live, each stage carrying its own duration and
-        cost.
-      </p>
+              </li>
+            )
+          })}
+        </ol>
+      </div>
     </section>
   )
 }

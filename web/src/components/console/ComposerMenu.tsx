@@ -64,21 +64,38 @@ export function ComposerMenu({
       if (boxRef.current?.contains(event.target) === true) return
       setOpen(false)
     }
+    // Tabbing past the last control in the panel closes it, so a keyboard user is not
+    // left with an open panel hanging over the composer they have moved on from.
+    // `relatedTarget` is null for a click on a non-focusable part of the panel, which is
+    // not a departure and must not close it.
+    const onFocusOut = (event: FocusEvent): void => {
+      const next = event.relatedTarget
+      if (!(next instanceof Node)) return
+      if (boxRef.current?.contains(next) === true) return
+      setOpen(false)
+    }
+    const box = boxRef.current
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onDown)
+    box?.addEventListener('focusout', onFocusOut)
     return () => {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onDown)
+      box?.removeEventListener('focusout', onFocusOut)
     }
   }, [open])
 
   return (
-    <div ref={boxRef} className="relative">
+    <div ref={boxRef} className="relative min-w-0">
       <button
         ref={triggerRef}
         type="button"
         disabled={disabled}
-        aria-haspopup="true"
+        // `dialog`, not `menu`: these panels are a priced table, a dropzone and a set of
+        // named choices, none of which behaves like a menubar menu. Announcing one and
+        // shipping the other is how a screen reader ends up promising arrow keys that
+        // are not there.
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((was) => !was)}

@@ -9,8 +9,6 @@ import { SkillsDrawer } from '@/components/skills/SkillsDrawer'
 import { draftFromRun } from '@/components/skills/skillDraft'
 import { AegisLockup } from '@/components/brand/AegisLockup'
 import { Badge } from '@/components/ui/Badge'
-import { Button } from '@/components/primitives/button'
-import { TrustBar } from '@/components/layout/TrustBar'
 import { useAsync } from '@/components/memory/useAsync'
 import { getGraph, getMemoryFacts } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -22,13 +20,12 @@ import type { ApprovalDecision, GraphResponse, MetricsResponse } from '@/lib/api
 import type { Role } from '@/lib/stream'
 import type { RunState } from '@/state/runReducer'
 
-import { ActivityRail } from './ActivityRail'
 import { LaneBoard } from './LaneBoard'
-import { deriveActivity } from './agentLanes'
 import { ApprovalSpotlight } from './ApprovalSpotlight'
 import { AssistantBot } from './AssistantBot'
 import { Composer } from './Composer'
 import { attachmentVerdict, type TurnAttachment } from './composerAttachment'
+import { RequestedWidth } from './DecisionStrip'
 import { FlowCanvas } from './FlowCanvas'
 import { MemoryRail, memoryAccessOf } from './MemoryRail'
 import { memorySubjectOf } from './memorySubject'
@@ -37,19 +34,29 @@ import { digestFacts } from './factDigest'
 import { memoryAvailable } from './memoryCards'
 import { beatFromSignal } from './motion'
 import { AnswerBlock, ResultTabs, type ResultTabId } from './ResultTabs'
-import { RunStages } from './RunStages'
+import { RunPanel, announceRun } from './RunStages'
 import { readSources } from './sources'
 import { DEFAULT_RUN_MODE, type RunMode } from './runMode'
-import { SessionRail } from './SessionRail'
+import { SessionMenu } from './SessionRail'
 import { StreamBanners } from './StreamBanners'
 import { isEmptyChat, type RestoredTurn, type Turn } from './threadReducer'
-import { WidthReceipt } from './WidthReceipt'
 import { useChatThread } from './useChatThread'
 
 const EMPTY_GRAPH: GraphResponse = { nodes: [], edges: [] }
 
 /** Where the memory rail's open/closed choice is remembered for this browser. */
 const RAIL_PREF_KEY = 'aegis.console.memoryRail'
+
+/**
+ * The console's reading measure — the header, the thread and the composer share it.
+ *
+ * With the chat list moved out of the grid there is no column pushing the thread right
+ * any more, and a conversation set edge to edge across 1920px is not a conversation
+ * anybody reads. `64rem` is the width at which a turn still clears the `@[46rem]/turn`
+ * query that gives the run panel its two columns, so the fan-out keeps its side-by-side
+ * layout at every desktop width while the text stays a measure.
+ */
+const MEASURE = 'mx-auto w-full min-w-0 max-w-[64rem]'
 
 
 /**
@@ -142,22 +149,30 @@ interface TurnViewProps {
 }
 
 /**
- * One live turn: the question, the lanes that answered it, and the answer beneath them.
+ * One live turn: the question, the run that answered it, and the answer beneath.
  *
- * The order is the order it happens in. The question rises to the top of the block, the
- * agent lanes appear and stream their own thinking inside their own cards, and the
- * answer forms underneath — live, not once the run settles. The activity rail sits
- * beside the lanes while the run is in flight because it is the *watching*; when the run
- * stops it folds into a summary line, because it was never the result.
+ * ## Four panels became one
  *
- * The cards stay after the run finishes, dimmed and carrying their duration and cost:
+ * The order is still the order it happens in — the question rises to the top of the
+ * block, the run forms under it, the answer forms under that, live rather than once the
+ * run settles. What changed is how many things are doing that at once.
+ *
+ * A streaming turn used to animate four independent hierarchies side by side: a stage
+ * timeline with its own head figures and fourteen always-open rows, a trust bar of four
+ * lit chips, the lane board, and the activity rail. Fourteen simultaneous regions, no
+ * focal point, and the owner's verdict was "too cluttered". They are now one
+ * {@link RunPanel}: its header carries the run's figures and the four trust checks, its
+ * left zone is the lane board — the fan-out is the money shot and it got *more* room out
+ * of the merge — and its right zone is one feed of what is happening now, with the full
+ * timeline a disclosure away.
+ *
+ * The lanes stay after the run finishes, dimmed and carrying their duration and cost:
  * who did what is part of the answer.
  */
 function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): ReactElement {
   const { run } = turn
   const beat = beatFromSignal(run.lastSignal)
   const running = run.running
-  const activityCount = deriveActivity(run).length
   const reduced = useReducedMotion() ?? false
   const [tab, setTab] = useState<ResultTabId>('sources')
   // Once the run has stopped and anything at all arrived, the secondary tabs open. Each
@@ -170,98 +185,70 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
   })
 
   return (
-    <motion.article
-      initial={reduced ? false : { opacity: 0, y: 14 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: reduced ? 0 : 0.24, ease: [0.16, 1, 0.3, 1] }}
-      data-turn=""
-      className="@container/turn flex scroll-mt-4 flex-col gap-4 border-b border-border pb-8 last:border-b-0"
-    >
-      <Question text={turn.question} meta={running ? `Sent ${sent} · running` : `Sent ${sent}`} />
-
-      {turn.attachment !== null && <AttachmentChip attachment={turn.attachment} />}
-
-      <StreamBanners state={run} />
-
-      {run.error !== null && (
-        <p className="rounded-lg border border-block/50 bg-block/10 px-4 py-3 text-sm text-block-ink">
-          <span className="font-semibold">The run stopped.</span> {run.error}
-        </p>
-      )}
-
-      {/* The spine, directly under the question and above everything the run produced.
-          It is the first thing that has anything to say: the input rail takes three
-          seconds before a single agent exists, and this is what fills them. */}
-      <RunStages state={run} />
-
-      {/* Under the spine, not above it. The spine is what is actually happening; the
-          trust stack is a summary of what the run will have proved by the end, and it
-          was sitting between the question and the only live thing on the screen. */}
-      {running && <TrustBar state={run} beat={beat} idle={false} />}
-
-      {/* Again a container query: the activity rail only earns a column when the turn
-          itself is wide, which at 1440px with both rails out it is not. */}
-      <div
-        className={cn(
-          'grid gap-4',
-          running && '@[46rem]/turn:grid-cols-[minmax(0,1fr)_15rem]',
-        )}
+    /* The width this turn *asked* for, made available to the decision strip's width
+       cell. `AnswerBlock` mounts that strip and is handed a run and nothing about the
+       request behind it, and stating only the width that ran is exactly the silent
+       override this console has been wrong about once already. */
+    <RequestedWidth.Provider value={turn.mode}>
+      <motion.article
+        initial={reduced ? false : { opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: reduced ? 0 : 0.24, ease: [0.16, 1, 0.3, 1] }}
+        data-turn=""
+        className="@container/turn flex scroll-mt-4 min-w-0 flex-col gap-4 border-b border-border pb-8 last:border-b-0"
       >
-        <div className="flex min-w-0 flex-col gap-3">
-          <LaneBoard state={run} />
-        </div>
-
-        {running ? (
-          <div className="min-w-0">
-            <ActivityRail state={run} />
-          </div>
-        ) : (
-          activityCount > 0 && (
-            <details className="rounded-lg border border-border bg-surface-2/30 px-3 py-2">
-              <summary className="cursor-pointer text-[0.78rem] font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                Activity · {activityCount}
-              </summary>
-              <div className="pt-2">
-                <ActivityRail state={run} />
-              </div>
-            </details>
-          )
-        )}
-      </div>
-
-      {/* What the run actually ran at, from its own `routing` event — above the
-          answer, because the width is a fact about how the answer was produced and
-          reading it afterwards tells the story backwards. */}
-      {settled && <WidthReceipt state={run} requested={turn.mode} />}
-
-      <AnswerBlock state={run} onSeeSources={() => setTab('sources')} />
-
-      {settled && (
-        <ResultTabs
-          state={run}
-          graph={graph}
-          metrics={metrics}
-          beat={beat}
-          tab={tab}
-          onTab={setTab}
-          actions={
-            // Only on a turn that produced an answer: a skill drafted from a run with
-            // nothing in it would be a template with a question glued to the top, and
-            // the button would be an invitation to save nothing.
-            run.answer.trim() === '' ? null : (
-              <button
-                type="button"
-                onClick={() => onSaveAsSkill(turn)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface/70 px-2.5 py-1.5 text-[0.78rem] font-medium text-blue-700 outline-none transition-colors duration-[var(--dur-fast)] hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <BookOpen aria-hidden className="size-3.5" />
-                Save as skill
-              </button>
-            )
-          }
+        <Question
+          text={turn.question}
+          meta={running ? `Sent ${sent} · running` : `Sent ${sent}`}
         />
-      )}
-    </motion.article>
+
+        {turn.attachment !== null && <AttachmentChip attachment={turn.attachment} />}
+
+        <StreamBanners state={run} />
+
+        {run.error !== null && (
+          <p className="rounded-lg border border-block/50 bg-block/10 px-4 py-3 text-sm text-block-ink">
+            <span className="font-semibold">The run stopped.</span> {run.error}
+          </p>
+        )}
+
+        {/* Everything the run is doing, in one panel: its figures and trust checks in
+            the header, its lanes on the left, and one feed of what is happening now on
+            the right. Directly under the question, because the input rail takes three
+            seconds before a single agent exists and this is what fills them. */}
+        <RunPanel state={run}>
+          <LaneBoard state={run} />
+        </RunPanel>
+
+        <AnswerBlock state={run} onSeeSources={() => setTab('sources')} />
+
+        {settled && (
+          <ResultTabs
+            state={run}
+            graph={graph}
+            metrics={metrics}
+            beat={beat}
+            tab={tab}
+            onTab={setTab}
+            actions={
+              // Only on a turn that produced an answer: a skill drafted from a run with
+              // nothing in it would be a template with a question glued to the top, and
+              // the button would be an invitation to save nothing.
+              run.answer.trim() === '' ? null : (
+                <button
+                  type="button"
+                  onClick={() => onSaveAsSkill(turn)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface/70 px-2.5 py-1.5 text-[0.78rem] font-medium text-blue-700 outline-none transition-colors duration-[var(--dur-fast)] hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <BookOpen aria-hidden className="size-3.5" />
+                  Save as skill
+                </button>
+              )
+            }
+          />
+        )}
+      </motion.article>
+    </RequestedWidth.Provider>
   )
 }
 
@@ -355,7 +342,7 @@ function IdleConsole({
 
       {/* The one thing an empty console can say that is true. Held to the composer's
           own width so the two read as one block rather than as a page of panels. */}
-      <div className="mt-2 w-full max-w-2xl border-t border-border pt-4">
+      <div className="mt-2 w-full max-w-2xl">
         <RunPreview />
       </div>
     </motion.div>
@@ -481,6 +468,24 @@ function ViewTabs({
             id={`console-tab-${tab.id}`}
             aria-selected={selected}
             aria-controls={`console-panel-${tab.id}`}
+            // WAI roving tabindex: one tab stop for the whole tablist, arrows move
+            // between tabs. Without this each tab is its own stop, so a keyboard user
+            // walks through every one to get past the control.
+            tabIndex={selected ? 0 : -1}
+            onKeyDown={(event) => {
+              const order = tabs.map((t) => t.id)
+              const at = order.indexOf(tab.id)
+              const to =
+                event.key === 'ArrowRight' ? order[(at + 1) % order.length]
+                : event.key === 'ArrowLeft' ? order[(at - 1 + order.length) % order.length]
+                : event.key === 'Home' ? order[0]
+                : event.key === 'End' ? order[order.length - 1]
+                : null
+              if (to == null) return
+              event.preventDefault()
+              onView(to)
+              document.getElementById(`console-tab-${to}`)?.focus()
+            }}
             onClick={() => onView(tab.id)}
             className={cn(
               'rounded-full px-3.5 py-1 text-[0.8rem] font-medium transition-colors duration-[var(--dur-fast)]',
@@ -761,50 +766,36 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
      * it stays in document flow, which is the right behaviour on a phone.
      *
      * `8rem` is `h-16` of sticky topbar plus `py-8` twice, from the portal layout.
+     *
+     * **The chat list is no longer one of those columns.** It was a permanent `13rem`
+     * track, so the thread — the thing the console is *for* — was off-centre at every
+     * desktop width, pushed right by a list a person opens perhaps twice a session. It
+     * lives behind one header control now (see {@link SessionMenu}), and the thread is
+     * the only column, held to a reading measure and centred in whatever is left. The
+     * frame itself is unchanged: still `dvh`, still per-column scrollers, still a
+     * document that does not scroll.
      */
     <div
       className={cn(
         'relative flex flex-col gap-4',
-        'lg:grid lg:h-[calc(100dvh-8rem)] lg:grid-cols-[13rem_minmax(0,1fr)] lg:overflow-hidden',
-        railShown && 'xl:grid-cols-[13rem_minmax(0,1fr)_20rem]',
+        'lg:grid lg:h-[calc(100dvh-8rem)] lg:grid-cols-[minmax(0,1fr)] lg:overflow-hidden',
+        railShown && 'xl:grid-cols-[minmax(0,1fr)_20rem]',
       )}
     >
-      {/* The rail is a sidebar from lg up, and a compact picker below it. */}
-      <aside className="hidden lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden">
-        <SessionRail
-          sessions={chat.thread.sessions}
-          activeId={chat.thread.activeSessionId}
-          onSelect={chat.selectChat}
-          onNew={chat.newChat}
-        />
-      </aside>
-
       <div className="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:overflow-hidden">
-        <div className="flex items-center gap-2 lg:hidden">
-          <label htmlFor="chat-picker" className="sr-only">
-            Chat
-          </label>
-          <select
-            id="chat-picker"
-            value={chat.thread.activeSessionId}
-            onChange={(event) => chat.selectChat(event.target.value)}
-            className="h-9 min-w-0 flex-1 rounded-md border border-input bg-surface/60 px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          >
-            {chat.thread.sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title === '' ? 'New chat' : s.title}
-              </option>
-            ))}
-          </select>
-          <Button variant="outline" size="sm" onClick={chat.newChat}>
-            New chat
-          </Button>
-        </div>
-
         {/* One header row, in both states, so the console has a chrome that does not
             move when the first question is sent. Idle has nothing to switch between,
-            so the tabs appear with the thread rather than sitting there disabled. */}
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+            so the tabs appear with the thread rather than sitting there disabled.
+
+            Held to the same measure as the thread beneath it, so the chat control and
+            the composer share one left edge instead of floating apart at 1920. */}
+        <div className={cn(MEASURE, 'flex shrink-0 flex-wrap items-center gap-2')}>
+          <SessionMenu
+            sessions={chat.thread.sessions}
+            activeId={chat.thread.activeSessionId}
+            onSelect={chat.selectChat}
+            onNew={chat.newChat}
+          />
           {!idle && <ViewTabs view={view} onView={setView} />}
           {!idle && view === 'flow' && (
             <span className="flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
@@ -825,6 +816,23 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
           </div>
         </div>
 
+        {/*
+          The console's status line, for a screen reader.
+
+          Until this existed the console had exactly one live region — the answer panel —
+          so a run starting, a run finishing and a lane failing were all silent: somebody
+          not watching the lanes animate had no way to know a seventy-second run had
+          begun, or that it had stopped. It lives out here rather than inside the turn
+          because a live region has to be in the document *before* its text changes to be
+          announced, and a turn mounts at the same instant its run starts.
+
+          `announceRun` is a pure function of the newest run, so the text changes once per
+          transition rather than on every token.
+        */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {announceRun(newest)}
+        </p>
+
         {idle ? (
           <div className="flex min-h-0 flex-1 flex-col lg:overflow-y-auto">
             <IdleConsole samples={samples} onPick={send}>
@@ -843,21 +851,26 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
               id="console-panel-run"
               aria-labelledby="console-tab-run"
               hidden={view !== 'run'}
-              className="flex min-h-0 flex-1 flex-col gap-6 lg:overflow-y-auto lg:pt-0.5 lg:pr-1"
+              className="flex min-h-0 flex-1 flex-col lg:overflow-y-auto lg:pt-0.5 lg:pr-1"
             >
-              {current?.restored.map((turn) => (
-                <RestoredTurnView key={`restored-${turn.turnIndex}`} turn={turn} />
-              ))}
-              {current?.turns.map((turn) => (
-                <TurnView
-                  key={turn.id}
-                  turn={turn}
-                  graph={graph}
-                  metrics={metrics}
-                  onSaveAsSkill={saveAsSkill}
-                />
-              ))}
-              <div ref={threadEndRef} className="scroll-mb-8" />
+              {/* The scroller stays full width so its scrollbar sits at the frame's own
+                  edge; the measure is on the content inside it, so the thread is centred
+                  rather than stretched across 1920px of window. */}
+              <div className={cn(MEASURE, 'flex min-w-0 flex-col gap-6')}>
+                {current?.restored.map((turn) => (
+                  <RestoredTurnView key={`restored-${turn.turnIndex}`} turn={turn} />
+                ))}
+                {current?.turns.map((turn) => (
+                  <TurnView
+                    key={turn.id}
+                    turn={turn}
+                    graph={graph}
+                    metrics={metrics}
+                    onSaveAsSkill={saveAsSkill}
+                  />
+                ))}
+                <div ref={threadEndRef} className="scroll-mb-8" />
+              </div>
             </div>
 
             {/* Mounted only while it is the selected view, and that is load-bearing
@@ -888,10 +901,12 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
                 on content, and the blur was also what let the assistant's face sit on
                 top of the activity log while a run streamed. */}
             <div className="shrink-0 border-t border-border bg-background pt-2 pb-1">
-              <div className="px-1 pb-1">
-                <AssistantBot running={chat.running} />
+              <div className={MEASURE}>
+                <div className="px-1 pb-1">
+                  <AssistantBot running={chat.running} />
+                </div>
+                {composer}
               </div>
-              {composer}
             </div>
           </>
         )}

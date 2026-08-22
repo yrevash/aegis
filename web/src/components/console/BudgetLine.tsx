@@ -3,6 +3,7 @@
 import { CircleDollarSign } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
+import { Figure } from '@/components/primitives/Figure'
 import { getMyBudget, type MyBudgetResponse } from '@/lib/api/console'
 import { cn } from '@/lib/utils'
 
@@ -67,7 +68,22 @@ export function BudgetLine({
       )}
     >
       <CircleDollarSign aria-hidden className="size-3.5 shrink-0" />
-      <span className={cn('truncate', line.measured && 'tabular font-mono')}>{line.text}</span>
+      {/* A measured figure is a figure — mono and tabular through the one primitive that
+          owns that, rather than the two utilities reapplied by hand. An unmeasured line
+          is a sentence and is set as one. */}
+      {line.measured ? (
+        <Figure className="min-w-0 text-[0.72rem]">
+          {/* The ellipsis lives on a block-level child: `text-overflow` has nothing to
+              trim on the inline-flex box `Figure` itself. */}
+          <span className="min-w-0 truncate" title={line.text}>
+            {line.text}
+          </span>
+        </Figure>
+      ) : (
+        <span className="min-w-0 truncate" title={line.text}>
+          {line.text}
+        </span>
+      )}
       {/* Always drawn. It used to be `sm:block`, a viewport breakpoint inside a composer
           that is never as wide as the window. Swapping it for a *container* query
           collapsed the whole line instead: `container-type: inline-size` carries

@@ -31,8 +31,21 @@ export type RunStatus = 'completed' | 'blocked' | 'awaiting_approval' | 'error'
  */
 export type GuardStage = 'input' | 'output' | 'tool_result'
 
-/** Outcome of a guardrail check. */
-export type GuardVerdict = 'pass' | 'block' | 'redact'
+/**
+ * Outcome of a guardrail check.
+ *
+ * **`flag` is a real verdict and was missing here.** The backend's own OpenAPI declares
+ * `GuardVerdict: "pass" | "block" | "redact" | "flag"` — `flag` is the non-blocking
+ * advisory an off-topic or ungrounded answer earns, and `aegis.guardrails.pipeline`
+ * emits it. This hand-written union listed three, so a `flag` arriving on the wire was
+ * a value TypeScript believed impossible: `GuardrailReveal` indexed a `Record<GuardVerdict, …>`
+ * with it, got `undefined`, read `.icon` off it and took the whole console down behind
+ * an error boundary the moment anyone opened the Trace tab on a settled run.
+ *
+ * `tests/state/guardVerdict.test.mjs` now pins this union to the generated schema, because
+ * the failure mode of a hand-maintained copy of a generated type is silence.
+ */
+export type GuardVerdict = 'pass' | 'block' | 'redact' | 'flag'
 
 /** Risk classification for an action or gate. */
 export type RiskLevel = 'low' | 'medium' | 'high'
