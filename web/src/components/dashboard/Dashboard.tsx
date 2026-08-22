@@ -12,6 +12,7 @@ import { Gauge } from '@/components/primitives/Gauge'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { TooltipProvider } from '@/components/primitives/tooltip'
 import { BackendGate } from '@/components/shared/BackendGate'
+import { OpsOverview } from '@/components/ops-overview/OpsOverview'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useMetricsSeries } from '@/state/useMetrics'
 import type { Role } from '@/lib/stream'
@@ -101,6 +102,19 @@ function QualityTile({ quality }: { quality: number | null }): ReactElement {
  * green dot and every illustrative one keeps its honest "sample" badge.
  */
 export function Dashboard({ role, token }: { role: Role; token: string | null }): ReactElement {
+  // DevOps get their own overview. The money-shot metrics dashboard answers "what is
+  // this platform worth", which is the question the *other* roles arrive with; the
+  // operator running the stack arrives with "is it healthy right now, and what needs
+  // me today", and every figure that answers that lives on a different set of
+  // endpoints. Branching here rather than in the section router keeps this surface's
+  // gate (`BackendGate`) and tooltip provider shared between the two.
+  if (role === 'devops') return <OpsOverview token={token} />
+
+  return <ValueDashboard role={role} token={token} />
+}
+
+/** The value-led overview — cost saved, quality, latency, and the ROI spine. */
+function ValueDashboard({ role, token }: { role: Role; token: string | null }): ReactElement {
   const series = useMetricsSeries(token)
   const metrics = series.latest
   const isAdmin = role === 'admin'

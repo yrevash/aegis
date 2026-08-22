@@ -115,6 +115,15 @@ for (const section of SECTIONS[PORTAL]) {
     const onErr = (m) => m.type() === 'error' && errors.push(m.text())
     page.on('console', onErr)
 
+    // Track the responses behind "Failed to load resource", which carries no URL of its
+    // own. `/readyz` answering 503 is its documented contract — the body names the failing
+    // component and a load balancer drains the instance — so the devops overview reading
+    // it is the screen working, not breaking. Without this the one screen built to show
+    // an outage reports four console errors whenever there is one.
+    const responseFailures = []
+    const onResp = (r) => { if (r.status() >= 400) responseFailures.push({ status: r.status(), url: r.url() }) }
+    page.on('response', onResp)
+
     await page.setViewportSize({ width, height: 1000 })
     try {
       await page.goto(`${BASE}/app/${PORTAL}/${section}`, {
@@ -154,7 +163,11 @@ for (const section of SECTIONS[PORTAL]) {
                detail: `${section} @${width}: <main> holds ${again} chars after a retry — did it render?` })
       }
     }
+    const expected = (f) => f.status === 503 && /\/readyz(\?|$)/.test(f.url)
+    const allExpected = responseFailures.length > 0 && responseFailures.every(expected)
     for (const e of errors.slice(0, 3)) {
+      // A bare resource-load error whose every underlying failure was expected is noise.
+      if (/Failed to load resource/.test(e) && allExpected) continue
       note({ kind: 'console', section, width, detail: `${section} @${width}: ${e.slice(0, 200)}` })
     }
 
@@ -163,6 +176,7 @@ for (const section of SECTIONS[PORTAL]) {
       fullPage: width === 1440,
     })
     page.off('console', onErr)
+    page.off('response', onResp)
   }
 }
 

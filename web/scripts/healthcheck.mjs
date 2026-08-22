@@ -70,14 +70,29 @@ for (const [portal, { user, sections }] of Object.entries(PORTALS)) {
 
   const ctx = await browser.newContext()
   const page = await ctx.newPage()
+  // Two attempts. A cold dev server can still be compiling `/login` when the first
+  // fill lands, and a sign-in that races the form is a harness fault reported as a
+  // portal outage — it wrongly failed two whole portals on the previous run.
+  let signedIn = false
+  let lastErr = null
+  for (let attempt = 0; attempt < 2 && !signedIn; attempt += 1) {
+    try {
+      await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('#username', { state: 'visible', timeout: 30_000 })
+      await page.fill('#username', user)
+      await page.fill('#password', 'demo')
+      await Promise.all([
+        page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 45_000 }),
+        page.click('button[type="submit"]'),
+      ])
+      signedIn = true
+    } catch (err) {
+      lastErr = err
+      await page.waitForTimeout(2000)
+    }
+  }
   try {
-    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
-    await page.fill('#username', user)
-    await page.fill('#password', 'demo')
-    await Promise.all([
-      page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 30_000 }),
-      page.click('button[type="submit"]'),
-    ])
+    if (!signedIn) throw lastErr
   } catch (err) {
     console.log(`\n${portal} (${user}) — SIGN-IN FAILED: ${err.message}`)
     await ctx.close()
@@ -119,7 +134,16 @@ for (const [portal, { user, sections }] of Object.entries(PORTALS)) {
     // load and this check reported the screen healthy because 400 is neither 403 nor 5xx.
     const malformed = real.filter((b) => b.status >= 400 && b.status < 500 &&
                                           b.status !== 401 && b.status !== 403)
-    const failed = real.filter((b) => b.status >= 500)
+    // `/readyz` answering 503 is the probe **working**, not the page breaking. Its
+    // contract is to return 503 with a full component body when a required component
+    // is down, so a load balancer drains the instance — which is exactly the state the
+    // devops overview exists to render, and it renders it (3,582 chars, the failing
+    // component named with its remediation). Counting that as a page failure would
+    // mean the one screen built to show an outage is red whenever there is one.
+    // Every other 5xx, and any other endpoint answering 503, still fails.
+    const failed = real.filter(
+      (b) => b.status >= 500 && !(b.status === 503 && /\/readyz(\?|$)/.test(b.url)),
+    )
 
     let status = 'OK'
     if (failed.length || malformed.length) status = 'FAILED'
