@@ -41,11 +41,28 @@ class RunStatus(StrEnum):
     Shared cross-module contract driven by :mod:`aegis.agent` (the orchestrator's
     terminal event) and re-exported by the host's API schema layer. Lives here so
     the agent core never imports the host's ``app.api.schemas``.
+
+    ``REJECTED`` is the outcome that used to have no name. A run whose high-risk
+    action a human **refused** still reaches ``generate`` — the graph answers saying
+    the action was not authorised, which is right — and so used to finish
+    ``COMPLETED``, indistinguishable on status alone from a run that was approved and
+    did the work. The refusal survived only in ``approvals.status`` and in an
+    unchanged ``tool_call_count``, neither of which is on the run header a console
+    lists runs from. A human's "no" is a terminal outcome of the run, not a footnote
+    on another table.
+
+    It is not ``BLOCKED``: that is a *guardrail* stopping a run, a machine decision
+    about content. ``REJECTED`` is a person declining an action. Collapsing them would
+    make "how often did our rails fire?" and "how often did a human say no?" the same
+    number, and they are the two figures a governance dashboard exists to keep apart.
     """
 
     COMPLETED = "completed"
     BLOCKED = "blocked"  # a guardrail stopped the run
     AWAITING_APPROVAL = "awaiting_approval"
+    #: A human refused the run's gated action. Terminal: the run answered, the action
+    #: did not run, and ``tool_call_count`` proves it.
+    REJECTED = "rejected"
     ERROR = "error"
 
 

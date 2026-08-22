@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from aegis.core.models import ModelRole
+from aegis.core.run_context import current_run_id
 from aegis.gateway.limiter import NoSlotLimiter, SlotLimiter
 from aegis.gateway.routing import (
     baseline_role,
@@ -194,6 +195,7 @@ class GovernanceHook(Protocol):
         trace_id: str | None,
         audio_seconds: float = 0.0,
         images: int = 0,
+        run_id: str | None = None,
     ) -> None:
         """Write one durable usage-ledger row for a governed call.
 
@@ -202,6 +204,12 @@ class GovernanceHook(Protocol):
         in the ledger (and therefore under a USD cap) instead of being invisible
         behind ``prompt_tokens=0``. Both default to zero, so a hook written for
         token-only calls keeps working unchanged.
+
+        ``run_id`` is the agent run this call belongs to, read from
+        :func:`aegis.core.run_context.current_run_id`, and ``None`` means the call
+        belongs to **no run** — a job, an ingest pass, a platform probe. That is a
+        fact to store, not a gap to fill: a hook must persist the ``None`` rather
+        than substituting a nearest-run guess or a zero.
 
         The gateway calls this best-effort (a ledger-write failure is swallowed
         and logged, never raised) — see :func:`complete`/:func:`embed`.
@@ -1479,22 +1487,45 @@ async def _record_usage(
     no pre-existing :class:`GovernanceHook` implementation can break. A hook that
     has not yet been widened will raise ``TypeError`` on a transcription — logged
     here at WARNING with the traceback, i.e. visible, never a silent skip.
+
+    ``run_id`` is forwarded the same way, and for a stronger reason. It is the
+    spend↔run attribution (``trace_id`` only ever approximated it — see
+    :class:`aegis.governance.models.UsageLedger`), so it is sent whenever a run is in
+    flight. But a hook that predates it must not cost us the *row*: losing a ledger
+    row loses the spend and, with it, the USD cap computed from it. So a ``TypeError``
+    from the widened call is retried once **without** ``run_id`` and reported at
+    WARNING — the money is still recorded, the attribution is not, and the log says
+    exactly which of the two was lost.
     """
     if ctx is None:
         return
     extra: dict[str, Any] = {}
     if _has_non_token_units(audio_seconds, images):
         extra = {"audio_seconds": audio_seconds, "images": images}
+    run_id = current_run_id()
+    payload: dict[str, Any] = {
+        "model": model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cost_usd": cost_usd,
+        "trace_id": _observability.trace_id(),
+        **extra,
+    }
     try:
-        await _governance.record(
-            ctx,
-            model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost_usd=cost_usd,
-            trace_id=_observability.trace_id(),
-            **extra,
-        )
+        try:
+            await _governance.record(ctx, **payload, **({"run_id": run_id} if run_id else {}))
+        except TypeError:
+            if not run_id:
+                raise
+            logger.warning(
+                "The governance hook does not accept run_id, so this call's $%s is "
+                "recorded but NOT attributed to run %s. Widen "
+                "GovernanceHook.record to close the gap.",
+                cost_usd,
+                run_id,
+                exc_info=True,
+            )
+            await _governance.record(ctx, **payload)
     except Exception:  # noqa: BLE001 - ledger is best-effort at the edge
         logger.warning("Usage-ledger write failed.", exc_info=True)
 

@@ -38,6 +38,7 @@ from uuid import uuid4
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from aegis.core.run_context import run_scope
 from aegis.core.types import ApprovalDecision, RiskLevel, RunStatus
 from aegis.gateway.types import BudgetExceededError
 from aegis.observability import get_tracer, semconv
@@ -188,7 +189,14 @@ async def run_agent(
         return event
 
     tracer = get_tracer()
-    with tracer.start_as_current_span("agent.run") as run_span:
+    # Bind the run id for every model call this run makes, so the gateway can stamp
+    # ``usage_ledger.run_id`` at the one chokepoint that meters spend. It has to wrap
+    # the whole body, guardrail screens and injection classifiers included: those are
+    # real, billed calls the run caused, and leaving them unstamped would recreate the
+    # gap this replaces. The scope is per-asyncio-task, so it cannot cross requests,
+    # and the ``finally`` inside ``run_scope`` unbinds it even when an SSE client
+    # disconnects mid-stream and the generator is closed at a ``yield``.
+    with run_scope(run_id), tracer.start_as_current_span("agent.run") as run_span:
         # Root of the trace tree: mark it AGENT so Phoenix nests every child span
         # (nodes, retrieval, guardrails, tools, LLM/embedding calls) beneath it.
         run_span.set_attribute(
@@ -557,17 +565,22 @@ async def resume_parked_run(
     )
     reparked = False
     try:
-        async for mode, chunk in graph.astream(
-            resume_cmd, config, stream_mode=["custom", "updates"]
-        ):
-            # Driven headless to completion — the tool runs exactly once — but the
-            # chunks are handed on rather than dropped, so the run's log continues where
-            # the parked stream left off.
-            if mode == "custom":
-                if isinstance(chunk, dict):
-                    _offer(on_event, chunk, run_id=run_id)
-            elif mode == "updates" and _is_interrupt(chunk):
-                reparked = True
+        # Same run, so the same ledger attribution: a continuation generates an answer
+        # and may screen and summarise it, and every one of those calls is spend this
+        # run caused. Without the scope they would land with ``run_id`` NULL and the
+        # run's cost would be understated by exactly the part a human's decision drove.
+        with run_scope(run_id):
+            async for mode, chunk in graph.astream(
+                resume_cmd, config, stream_mode=["custom", "updates"]
+            ):
+                # Driven headless to completion — the tool runs exactly once — but the
+                # chunks are handed on rather than dropped, so the run's log continues
+                # where the parked stream left off.
+                if mode == "custom":
+                    if isinstance(chunk, dict):
+                        _offer(on_event, chunk, run_id=run_id)
+                elif mode == "updates" and _is_interrupt(chunk):
+                    reparked = True
     except Exception as exc:  # noqa: BLE001 - surfaced as ResumeFailedError, never lost
         # Nothing is recorded on this path on purpose: the caller releases the approval
         # back to PENDING, so a retry will drive the same continuation again, and a

@@ -38,6 +38,7 @@ export type RunPhase =
   | 'awaiting_approval'
   | 'completed'
   | 'blocked'
+  | 'rejected'
   | 'error'
 
 /** Aggregated usage for the token/cost dashboard. */
@@ -341,7 +342,19 @@ export function runReducer(state: RunState, event: StreamEvent): RunState {
     case 'run_finished':
       return {
         ...next,
-        phase: event.status === 'completed' ? 'completed' : 'blocked',
+        // Not `completed ? completed : blocked`. That ternary rendered a run a human
+        // *refused* as a guardrail block — folding a person's decision into the
+        // machine-refusal count, which is exactly the conflation `rejected` exists to
+        // prevent. Any status this build does not know still falls to `blocked`,
+        // because an unrecognised terminal is safer read as a refusal than as success.
+        phase:
+          event.status === 'completed'
+            ? 'completed'
+            : event.status === 'rejected'
+              ? 'rejected'
+              : event.status === 'error'
+                ? 'error'
+                : 'blocked',
         running: false,
         approval: null,
         finishedStatus: event.status,

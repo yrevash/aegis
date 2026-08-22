@@ -1,26 +1,56 @@
 [
   {
-    "kind": "console",
+    "kind": "blank",
     "section": "analytics",
-    "width": 390,
-    "detail": "analytics @390: Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    "width": 834,
+    "detail": "analytics @834: <main> holds 0 chars after a retry — did it render?"
+  },
+  {
+    "kind": "blank",
+    "section": "analytics",
+    "width": 1920,
+    "detail": "analytics @1920: <main> holds 0 chars after a retry — did it render?"
   },
   {
     "kind": "console",
     "section": "analytics",
-    "width": 390,
-    "detail": "analytics @390: Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
+    "width": 1920,
+    "detail": "analytics @1920: Failed to load resource: the server responded with a status of 403 (FORBIDDEN)"
   },
   {
-    "kind": "console",
-    "section": "analytics",
-    "width": 390,
-    "detail": "analytics @390: Failed to load resource: the server responded with a status of 502 (Bad Gateway)"
-  },
-  {
-    "kind": "console",
-    "section": "analytics",
+    "kind": "blank",
+    "section": "roles",
     "width": 1440,
-    "detail": "analytics @1440: Failed to load resource: the server responded with a status of 403 (FORBIDDEN)"
+    "detail": "roles @1440: <main> holds 0 chars after a retry — did it render?"
+  },
+  {
+    "kind": "console",
+    "section": "roles",
+    "width": 1440,
+    "detail": "roles @1440: Failed to load resource: net::ERR_CONTENT_LENGTH_MISMATCH"
+  },
+  {
+    "kind": "blank",
+    "section": "jobs",
+    "width": 1920,
+    "detail": "jobs @1920: <main> holds 0 chars after a retry — did it render?"
+  },
+  {
+    "kind": "console",
+    "section": "jobs",
+    "width": 1920,
+    "detail": "jobs @1920: Failed to load resource: net::ERR_CONTENT_LENGTH_MISMATCH"
+  },
+  {
+    "kind": "blank",
+    "section": "audit",
+    "width": 1920,
+    "detail": "audit @1920: <main> holds 0 chars after a retry — did it render?"
+  },
+  {
+    "kind": "console",
+    "section": "audit",
+    "width": 1920,
+    "detail": "audit @1920: Failed to load resource: net::ERR_CONTENT_LENGTH_MISMATCH"
   }
 ]

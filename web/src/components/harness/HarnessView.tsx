@@ -188,6 +188,8 @@ function ms(value: number | null): string {
 function statusTone(status: string | null): BadgeTone {
   if (status === 'completed') return 'ok'
   if (status === 'blocked' || status === 'error') return 'block'
+  // A person declining is a refusal, not a fault: `risk` tone, not `block`.
+  if (status === 'rejected') return 'risk'
   if (status === 'awaiting_approval' || status === 'streaming') return 'risk'
   return 'neutral'
 }

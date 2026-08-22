@@ -69,6 +69,20 @@ export function answerAbsence(state: RunState): AnswerAbsence {
     }
   }
 
+  // Checked *before* the blocked branch: a rejected run used to fall through to it and
+  // be explained as a guardrail refusal, which is a false account of what happened. A
+  // person read the proposed action and declined it — the platform behaved correctly and
+  // the run has no answer because nobody authorised one.
+  if (state.phase === 'rejected' || state.finishedStatus === 'rejected') {
+    return {
+      stopped: true,
+      headline: 'The action was declined by a human reviewer.',
+      detail:
+        'The run reached the approval gate and the reviewer refused it, so the action ' +
+        'never ran and no answer was produced.',
+    }
+  }
+
   if (state.phase === 'blocked' || state.finishedStatus === 'blocked') {
     return { stopped: true, ...blockedBecause(state) }
   }

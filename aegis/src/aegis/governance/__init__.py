@@ -88,8 +88,11 @@ from aegis.governance.rls import (
 )
 from aegis.governance.schema import (
     SchemaDriftError,
+    declared_enum_labels,
     plan_additive_columns,
+    plan_enum_values,
     reconcile_additive_columns,
+    reconcile_enum_values,
 )
 from aegis.governance.security import (
     MEMBER,
@@ -188,9 +191,12 @@ __all__ = [
     "create_user",
     "list_tenants",
     "list_users",
+    "declared_enum_labels",
     "plan_additive_columns",
+    "plan_enum_values",
     "principal_role",
     "reconcile_additive_columns",
+    "reconcile_enum_values",
     "record_audit",
     "record_usage",
     "report_rls_enforcement",

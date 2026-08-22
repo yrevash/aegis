@@ -38,7 +38,7 @@ import {
   type ChartRow,
 } from './analyticsBoard'
 import { CategoryBars, TrendLines } from './BoardCharts'
-import { SupersetEmbed } from './SupersetEmbed'
+import { SupersetEmbed, type EmbedState } from './SupersetEmbed'
 
 /** What one board is doing right now. Exhaustive — there is no fourth state. */
 type BoardResult =
@@ -100,6 +100,15 @@ export function SupersetBoards({
     () => boards[0]?.window ?? Object.keys(windows)[0] ?? '',
   )
   const [embedded, setEmbedded] = useState<string | null>(null)
+  /*
+    What the embedded frame turned out to be, reported by the frame's own measurement.
+
+    The header badge used to read a green "Superset answering" over ~900px of white,
+    because it was describing the *query* path — which does answer, and draws every board
+    below — while sitting on top of a frame nobody had checked. It is one card, so it
+    carries one status: the worst of the two.
+  */
+  const [embedState, setEmbedState] = useState<EmbedState>('probing')
   const [results, setResults] = useState<Record<string, BoardResult>>({})
   // The embed is the hero, so one is open from the start rather than behind a click
   // nobody makes during a demo. The first dashboard the caller's role may see.
@@ -140,6 +149,20 @@ export function SupersetBoards({
 
   const drawn = chartBoards.filter((board) => results[board.id]?.state === 'ready').length
   const groups = useMemo(() => groupByDimension(chartBoards), [chartBoards])
+  /** The embed is mounted and measured, and what it drew is nothing. */
+  const embedDown =
+    hero !== null && (embedState === 'blank' || embedState === 'silent' || embedState === 'failed')
+  /*
+    The header badge names the two Superset paths this card holds — the compiled queries
+    behind the gallery, and the embedded frame — and it only ever claims what has been
+    measured. A board still in flight is not a failure, so nothing is asserted about the
+    queries until every one of them has come back.
+  */
+  const inFlight = chartBoards.some(
+    (board) => (results[board.id]?.state ?? 'loading') === 'loading',
+  )
+  const queriesDown = !inFlight && chartBoards.length > 0 && drawn === 0
+  const sectionStatus = badgeStatus(embedDown, queriesDown)
 
   return (
     <Card>
@@ -148,9 +171,9 @@ export function SupersetBoards({
         title={`Insight boards — ${boards.length} for your role`}
         actions={
           <span className="flex flex-wrap items-center gap-2">
-            <Badge tone="ok" className="gap-1.5">
+            <Badge tone={sectionStatus.tone} className="gap-1.5">
               <PlugZap className="size-3" aria-hidden />
-              Superset answering
+              {sectionStatus.label}
             </Badge>
             <InfoTip label="Which boards you can see">
               Each board declares the roles it is for, and the server refuses one you are not
@@ -208,14 +231,25 @@ export function SupersetBoards({
                 {hero.title}
                 <InfoTip label={`About ${hero.title}`}>{hero.summary}</InfoTip>
               </span>
-              <span className="text-xs text-muted-foreground">
-                drawn by Superset itself, inside this page
-              </span>
+              {embedDown ? null : (
+                <span className="text-xs text-muted-foreground">
+                  drawn by Superset itself, inside this page
+                </span>
+              )}
             </h3>
-            <SupersetEmbed boardId={hero.id} title={hero.title} />
+            <SupersetEmbed
+              key={hero.id}
+              boardId={hero.id}
+              title={hero.title}
+              onState={setEmbedState}
+            />
             <Receipt
               origin={`embedded Superset dashboard · ${status?.baseUrl || 'not reported'}`}
-              detail="drawn by Superset under a short-lived guest token whose signed RLS clause the browser cannot edit"
+              detail={
+                embedDown
+                  ? null
+                  : 'drawn by Superset under a short-lived guest token whose signed RLS clause the browser cannot edit'
+              }
             />
           </section>
         ) : null}
@@ -258,6 +292,24 @@ export function SupersetBoards({
       </CardBody>
     </Card>
   )
+}
+
+/**
+ * What the section's own badge is allowed to say, from what has been measured.
+ *
+ * A green "Superset answering" is one claim about two independent paths — the compiled
+ * queries the gallery is drawn from, and the embedded frame — and it used to be printed
+ * whatever either of them did. When they disagree the badge names both, because which
+ * one is broken is the first thing a reader needs.
+ */
+function badgeStatus(
+  embedDown: boolean,
+  queriesDown: boolean,
+): { tone: 'ok' | 'risk'; label: string } {
+  if (embedDown && queriesDown) return { tone: 'risk', label: 'no board answering' }
+  if (embedDown) return { tone: 'risk', label: 'queries answering · embed blank' }
+  if (queriesDown) return { tone: 'risk', label: 'embed drawing · no board answering' }
+  return { tone: 'ok', label: 'Superset answering' }
 }
 
 /**

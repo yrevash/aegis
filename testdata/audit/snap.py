@@ -50,8 +50,20 @@ def snapshot(tenant="1"):
         "select coalesce(sum(jobs),0) from analytics_jobs_daily", tenant)
     out["view_redteam"] = q("select count(*) from analytics_redteam_runs", tenant)
     out["runs_cost_sum"] = q("select coalesce(sum(cost_usd),0) from runs", tenant)
-    out["view_runs_cost"] = q(
-        "select coalesce(sum(cost_usd),0) from analytics_runs_daily", tenant)
+    # analytics_runs_daily no longer has a column called `cost_usd`: it had one, and so
+    # did analytics_spend_daily, and the two disagreed on 100% of runs. The run view now
+    # names them apart — `ledger_cost_usd` is the authoritative per-run spend (summed
+    # from usage_ledger.run_id) and `agent_reported_cost_usd` is the run header's own
+    # self-report. Both are snapshotted, because the gap between them is the number this
+    # audit exists to watch.
+    out["view_runs_ledger_cost"] = q(
+        "select coalesce(sum(ledger_cost_usd),0) from analytics_runs_daily", tenant)
+    out["view_runs_agent_reported_cost"] = q(
+        "select coalesce(sum(agent_reported_cost_usd),0) from analytics_runs_daily",
+        tenant)
+    out["view_spend_unattributed_cost"] = q(
+        "select coalesce(sum(unattributed_cost_usd),0) from analytics_spend_daily",
+        tenant)
     return out
 
 

@@ -193,6 +193,30 @@ class UsageLedger(AegisBase):
     images: Mapped[int] = mapped_column(default=0, server_default="0")
     cost_usd: Mapped[float] = mapped_column(default=0.0)
     trace_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+    #: The agent run this call was made for, or ``NULL`` for a call that belongs to no
+    #: run. **This column is the spend↔run attribution, and ``trace_id`` never was.**
+    #:
+    #: Measured on ``taif_run1`` before it existed: 173 of tenant 1's 1932 ledger rows
+    #: (8.95%, $0.104562) carried a trace matching no ``runs`` row, and all 95 runs that
+    #: *did* match disagreed with the ledger sum for their trace — so ``runs.cost_usd``
+    #: could not sum to total spend by construction, while both figures were labelled
+    #: "cost_usd" on two analytics views.
+    #:
+    #: Three properties this column is required to hold:
+    #:
+    #: * **NULL means "not attributable to a run", never "zero" and never "unknown".**
+    #:   A job, an ingest pass, the chat endpoint and a platform probe all spend real
+    #:   money outside any run; ``analytics_spend_daily`` reports that bucket in its own
+    #:   named column so it cannot be silently folded into a run's cost.
+    #: * **No foreign key to ``runs.run_id``, deliberately.** The ledger row is written
+    #:   at the gateway *during* the run; the ``runs`` header is written by a background
+    #:   task *after* ``run_finished``. An FK would make every in-run ledger INSERT fail
+    #:   its constraint — swallowed, because the ledger write is best-effort — and take
+    #:   the USD caps with it. The join is by value, checked by the reconciliation query,
+    #:   not enforced by the database.
+    #: * **Indexed**, because the one question asked of it — "what did run X spend?" —
+    #:   is a lookup by this column over a table that is the largest in the schema.
+    run_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
 
 
 class AuditLog(AegisBase):

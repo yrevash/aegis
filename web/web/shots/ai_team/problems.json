@@ -72,6 +72,30 @@
     "detail": "llmops @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
   },
   {
+    "kind": "blank",
+    "section": "memory",
+    "width": 834,
+    "detail": "memory @834: <main> holds 0 chars after a retry — did it render?"
+  },
+  {
+    "kind": "console",
+    "section": "memory",
+    "width": 834,
+    "detail": "memory @834: Failed to load resource: net::ERR_CONTENT_LENGTH_MISMATCH"
+  },
+  {
+    "kind": "blank",
+    "section": "memory",
+    "width": 1920,
+    "detail": "memory @1920: <main> holds 0 chars after a retry — did it render?"
+  },
+  {
+    "kind": "console",
+    "section": "memory",
+    "width": 1920,
+    "detail": "memory @1920: Failed to load resource: net::ERR_CONTENT_LENGTH_MISMATCH"
+  },
+  {
     "kind": "console",
     "section": "cache",
     "width": 390,
@@ -129,7 +153,7 @@
     "kind": "console",
     "section": "guardrails",
     "width": 390,
-    "detail": "guardrails @390: [aegis] request failed {route: GET /security/posture, status: 403}"
+    "detail": "guardrails @390: Failed to load resource: the server responded with a status of 403 (Forbidden)"
   },
   {
     "kind": "console",
@@ -153,7 +177,7 @@
     "kind": "console",
     "section": "guardrails",
     "width": 834,
-    "detail": "guardrails @834: [aegis] request failed {route: POST /redteam/run, status: 403}"
+    "detail": "guardrails @834: Failed to load resource: the server responded with a status of 403 (Forbidden)"
   },
   {
     "kind": "console",
@@ -165,7 +189,7 @@
     "kind": "console",
     "section": "guardrails",
     "width": 1440,
-    "detail": "guardrails @1440: [aegis] request failed {route: GET /security/posture, status: 403}"
+    "detail": "guardrails @1440: Failed to load resource: the server responded with a status of 403 (Forbidden)"
   },
   {
     "kind": "console",
@@ -183,7 +207,7 @@
     "kind": "console",
     "section": "guardrails",
     "width": 1920,
-    "detail": "guardrails @1920: [aegis] request failed {route: GET /security/posture, status: 403}"
+    "detail": "guardrails @1920: Failed to load resource: the server responded with a status of 403 (Forbidden)"
   },
   {
     "kind": "console",

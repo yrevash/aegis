@@ -188,7 +188,11 @@ SOURCE_TABLES: tuple[str, ...] = (
 ANALYTICS_VIEWS: tuple[AnalyticsView, ...] = (
     AnalyticsView(
         name="analytics_spend_daily",
-        summary="Model spend and token volume per day and deployment, from the usage ledger.",
+        summary=(
+            "Model spend and token volume per day and deployment, from the usage "
+            "ledger. THE authoritative spend figure; split into the part attributable "
+            "to an agent run and the part that belongs to no run."
+        ),
         source="usage_ledger",
         alias="u",
         projection="""
@@ -199,15 +203,47 @@ ANALYTICS_VIEWS: tuple[AnalyticsView, ...] = (
             SUM(u.prompt_tokens)                     AS prompt_tokens,
             SUM(u.completion_tokens)                 AS completion_tokens,
             SUM(u.prompt_tokens + u.completion_tokens) AS total_tokens,
-            SUM(u.cost_usd)                          AS cost_usd
+            SUM(u.cost_usd)                          AS cost_usd,
+            COUNT(*) FILTER (WHERE u.run_id IS NOT NULL)
+                                                     AS run_attributed_calls,
+            COALESCE(SUM(u.cost_usd) FILTER (WHERE u.run_id IS NOT NULL), 0)
+                                                     AS run_attributed_cost_usd,
+            COUNT(*) FILTER (WHERE u.run_id IS NULL)  AS unattributed_calls,
+            COALESCE(SUM(u.cost_usd) FILTER (WHERE u.run_id IS NULL), 0)
+                                                     AS unattributed_cost_usd
         """,
         group_by="1, 2, 3",
     ),
     AnalyticsView(
         name="analytics_runs_daily",
-        summary="Agent runs per day and outcome, with latency and attributed cost.",
+        summary=(
+            "Agent runs per day and outcome, with latency and cost. Spend here is "
+            "ledger_cost_usd (from usage_ledger, the authoritative source); "
+            "agent_reported_cost_usd is the run's own self-report and is NOT spend."
+        ),
         source="runs",
         alias="r",
+        # Two cost columns, named apart on purpose. This view used to project
+        # ``SUM(r.cost_usd) AS cost_usd`` next to ``analytics_spend_daily.cost_usd``,
+        # two sourced figures with one name that disagreed on 100% of runs (~9.5%
+        # tenant-wide on ``taif_run1``: 1.315074 against 1.454863 for tenant 1).
+        #
+        # * ``ledger_cost_usd`` is the authoritative one: the ledger rows this run
+        #   caused, summed by ``usage_ledger.run_id``. It is the same money as
+        #   ``analytics_spend_daily.cost_usd``, sliced by run, so the two reconcile by
+        #   construction — total spend = the sum of this over all runs, plus the
+        #   ``unattributed_cost_usd`` that view reports for calls belonging to no run.
+        # * ``agent_reported_cost_usd`` is ``runs.cost_usd``: what the agent's own graph
+        #   state accumulated and streamed to the user. It is a real figure and a useful
+        #   one — it is what the run's UI showed — but it counts only the calls the graph
+        #   accounted for itself, not the guardrail screens, injection classifier,
+        #   embeddings and routing calls the same run also paid for. It is a self-report,
+        #   never the bill.
+        #
+        # The correlated subquery is qualified by ``u.tenant_id`` as well as ``run_id``:
+        # the outer tenant predicate constrains ``r``, and a subquery reaching the base
+        # table is not covered by it. Same-run rows always share a tenant, so this
+        # changes no number — it means a future one cannot.
         projection="""
             r.tenant_id                                  AS tenant_id,
             date_trunc('day', r.started_at)              AS day,
@@ -216,7 +252,13 @@ ANALYTICS_VIEWS: tuple[AnalyticsView, ...] = (
             SUM(CASE WHEN r.cache_hit THEN 1 ELSE 0 END) AS cache_hits,
             AVG(r.duration_ms)                           AS avg_duration_ms,
             MAX(r.duration_ms)                           AS max_duration_ms,
-            SUM(r.cost_usd)                              AS cost_usd,
+            SUM((
+                SELECT COALESCE(SUM(u.cost_usd), 0)
+                  FROM usage_ledger u
+                 WHERE u.run_id = r.run_id
+                   AND u.tenant_id IS NOT DISTINCT FROM r.tenant_id
+            ))                                           AS ledger_cost_usd,
+            SUM(r.cost_usd)                              AS agent_reported_cost_usd,
             SUM(r.approval_count)                        AS approvals_raised,
             SUM(r.guardrail_block_count)                 AS guardrail_blocks
         """,
@@ -356,6 +398,20 @@ def provisioning_statements(
     # Superset connects with cannot create anything.
     out.append(f"GRANT CREATE ON SCHEMA public TO {role};")
     for view in ANALYTICS_VIEWS:
+        # DROP first, as its own statement, and it is not belt-and-braces.
+        # ``CREATE OR REPLACE VIEW`` refuses to rename, reorder or remove an existing
+        # column — it can only append — so the moment a view's *shape* changes
+        # (``analytics_runs_daily`` splitting one ambiguous ``cost_usd`` into
+        # ``ledger_cost_usd`` and ``agent_reported_cost_usd`` was exactly that),
+        # re-running this script on a live database failed with "cannot change name of
+        # view column". A provisioning script that only works on a database which has
+        # never been provisioned is not idempotent. Nothing here depends on anything
+        # else here — the views read base tables, never each other — so no CASCADE is
+        # needed or wanted, and the OWNER and GRANT that follow are re-applied
+        # immediately. Kept a separate entry because each element of this tuple is
+        # executed as one statement (asyncpg prepares them, and a prepared statement
+        # may carry exactly one command).
+        out.append(f"DROP VIEW IF EXISTS {view.name};")
         out.append(
             f"-- {view.summary} (source: {view.source})\n"
             f"CREATE OR REPLACE VIEW {view.name} AS\n{view.sql};"

@@ -34,6 +34,14 @@ Constraints, indexes on pre-existing columns, and type changes are explicitly ou
 scope (a timestamp retype has its own dedicated step in the host's bootstrap); an
 index declared *on a newly added column* is created alongside it, so an added column
 is never left half-installed.
+
+**Enum members are the second thing ``create_all`` cannot do**, and they failed the
+same way. ``CREATE TYPE`` is emitted once, on the boot that first creates the type, and
+never again — so adding a member to a Python enum backing a native PostgreSQL type
+(``RunStatus.REJECTED`` was exactly this) leaves every existing database with the old
+label set, and the first write of the new member fails with ``invalid input value for
+enum``. :func:`reconcile_enum_values` is the same idea applied to types instead of
+columns: additive, idempotent, positioned to match the declaration, and loud.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy import text
 from sqlalchemy.schema import CreateIndex
 
@@ -49,7 +58,14 @@ if TYPE_CHECKING:
 
     from sqlalchemy import Column, MetaData
 
-__all__ = ["SchemaDriftError", "plan_additive_columns", "reconcile_additive_columns"]
+__all__ = [
+    "SchemaDriftError",
+    "declared_enum_labels",
+    "plan_additive_columns",
+    "plan_enum_values",
+    "reconcile_additive_columns",
+    "reconcile_enum_values",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -251,4 +267,214 @@ async def reconcile_additive_columns(
     for index in _indexes_for(addable):
         await conn.execute(CreateIndex(index, if_not_exists=True))
         logger.info("schema reconcile: created index %s", index.name)
+    return added
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Native enum types — the second thing ``create_all`` will not do for you
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def declared_enum_labels(metadatas: Iterable[MetaData]) -> dict[str, tuple[str, ...]]:
+    """Return every **named native** enum type the models declare, and its labels.
+
+    The labels are read from SQLAlchemy's own :class:`~sqlalchemy.Enum`, in declaration
+    order, so they are byte-identical to what ``CREATE TYPE`` would have emitted on a
+    fresh database — including the choice of storing a Python enum's *names*
+    (``'COMPLETED'``) rather than its values (``'completed'``), which is SQLAlchemy's
+    default and what the live ``run_status`` type actually holds.
+
+    Unnamed enums are skipped: without a type name there is nothing to ``ALTER``.
+    Non-native enums are skipped too — they are rendered as ``VARCHAR`` plus a CHECK,
+    so they have no type to reconcile (and this is why SQLite needs no handling here).
+
+    Args:
+        metadatas: The declarative metadata objects describing the wanted schema.
+
+    Returns:
+        ``{type_name: (label, …)}`` in declaration order. A type used by more than one
+        column appears once; if two columns disagree about its labels the union is
+        refused rather than guessed — see :func:`plan_enum_values`.
+
+    Raises:
+        SchemaDriftError: If one type name is declared with two different label lists.
+    """
+    declared: dict[str, tuple[str, ...]] = {}
+    for metadata in metadatas:
+        for table in metadata.sorted_tables:
+            for column in table.columns:
+                type_ = column.type
+                if not isinstance(type_, SAEnum):
+                    continue
+                if not type_.name or not type_.native_enum:
+                    continue
+                labels = tuple(type_.enums)
+                previous = declared.get(type_.name)
+                if previous is not None and previous != labels:
+                    msg = (
+                        f"The enum type {type_.name!r} is declared with two different "
+                        f"label lists: {previous} on one column and {labels} on "
+                        f"{table.name}.{column.name}. One type cannot have two "
+                        "definitions; reconciling either one would silently contradict "
+                        "the other, so nothing is done."
+                    )
+                    logger.critical("%s", msg)
+                    raise SchemaDriftError(msg)
+                declared[type_.name] = labels
+    return declared
+
+
+async def _existing_enum_labels(conn: Any) -> dict[str, tuple[str, ...]]:  # noqa: ANN401
+    """Return every enum type in the current schema and its labels, in sort order.
+
+    Args:
+        conn: An open async connection (PostgreSQL).
+
+    Returns:
+        ``{type_name: (label, …)}`` as the database currently holds them.
+    """
+    result = await conn.execute(
+        text(
+            "SELECT t.typname, e.enumlabel "
+            "FROM pg_type t "
+            "JOIN pg_enum e ON e.enumtypid = t.oid "
+            "JOIN pg_namespace n ON n.oid = t.typnamespace "
+            "WHERE n.nspname = current_schema() "
+            "ORDER BY t.typname, e.enumsortorder"
+        )
+    )
+    live: dict[str, list[str]] = {}
+    for type_name, label in result:
+        live.setdefault(type_name, []).append(label)
+    return {name: tuple(labels) for name, labels in live.items()}
+
+
+def plan_enum_values(
+    existing: dict[str, tuple[str, ...]], declared: dict[str, tuple[str, ...]]
+) -> tuple[list[tuple[str, str, str | None]], list[tuple[str, str]]]:
+    """Split enum drift into "labels to add" and "labels only the database has".
+
+    Pure and database-free, so the decision is testable without a live PostgreSQL —
+    the same property :func:`plan_additive_columns` is written for.
+
+    A type the database does not have at all is skipped: ``create_all`` emits
+    ``CREATE TYPE`` for a type it is about to use, in full, so there is no drift.
+
+    **Position is part of the plan.** ``ALTER TYPE … ADD VALUE`` appends by default, so
+    a member declared in the middle of a Python enum would sort last on an upgraded
+    database and in the middle on a fresh one — two databases built from one source
+    disagreeing about ``ORDER BY status``. Each added label therefore carries the
+    declared label it must come *before*, when a later declared label already exists.
+
+    Args:
+        existing: Live types and their labels, from :func:`_existing_enum_labels`.
+        declared: Wanted types and their labels, from :func:`declared_enum_labels`.
+
+    Returns:
+        ``(additions, extraneous)``. ``additions`` is ``(type_name, label,
+        before_label)`` in the order they must be applied, where ``before_label`` is
+        ``None`` for an append. ``extraneous`` is ``(type_name, label)`` for labels the
+        database holds and the models no longer declare — reported, never removed:
+        ``ALTER TYPE … DROP VALUE`` does not exist in PostgreSQL, and rows may still
+        carry the label.
+    """
+    additions: list[tuple[str, str, str | None]] = []
+    extraneous: list[tuple[str, str]] = []
+    for type_name, labels in declared.items():
+        live = existing.get(type_name)
+        if live is None:
+            continue
+        live_set = set(live)
+        # Grows as we plan, so a run of consecutive new labels anchors each one on the
+        # previous plan's target rather than all of them on the same later neighbour.
+        placed = set(live_set)
+        for index, label in enumerate(labels):
+            if label in placed:
+                continue
+            before = next((nxt for nxt in labels[index + 1 :] if nxt in placed), None)
+            additions.append((type_name, label, before))
+            placed.add(label)
+        extraneous.extend(
+            (type_name, label) for label in live if label not in set(labels)
+        )
+    return additions, extraneous
+
+
+async def reconcile_enum_values(
+    conn: Any,  # noqa: ANN401 - AsyncConnection, kept loose (no import-time asyncpg dep)
+    metadatas: Iterable[MetaData],
+) -> list[str]:
+    """Add every native-enum label the models declare and the live types lack.
+
+    Call once at bootstrap, **before** ``create_all`` and on a connection in
+    ``AUTOCOMMIT``. Both of those are requirements, not preferences:
+
+    * *Before ``create_all``* because a table created on this same boot may already
+      declare a column of the type, and because nothing in the bootstrap needs to
+      *write* the new label — PostgreSQL forbids using a value in the transaction that
+      added it (before 15 it forbids adding one inside a transaction block at all).
+    * *AUTOCOMMIT* for the same reason, and it is what makes this work identically on
+      PostgreSQL 9.3 through 18 rather than only on 12 and later.
+
+    Additive only, and that is the whole safety argument: ``ADD VALUE IF NOT EXISTS``
+    cannot invalidate a stored row, cannot rewrite a table, and takes no long lock. A
+    label the database has and the models do not is **reported and left alone** —
+    PostgreSQL has no ``DROP VALUE``, and rows may still carry it.
+
+    Args:
+        conn: An open async connection (PostgreSQL), ideally in AUTOCOMMIT.
+        metadatas: The declarative metadata objects describing the wanted schema.
+
+    Returns:
+        The ``"type.label"`` names added by this call — empty when the database was
+        already in step, and always empty on a non-PostgreSQL dialect (SQLite renders
+        these enums as ``VARCHAR`` + CHECK and the unit suite rebuilds its schema every
+        run, so it has no drift to reconcile).
+
+    Raises:
+        SchemaDriftError: If one enum type name is declared with two label lists.
+    """
+    if conn.dialect.name != "postgresql":
+        return []
+    declared = declared_enum_labels(metadatas)
+    if not declared:
+        return []
+    existing = await _existing_enum_labels(conn)
+    additions, extraneous = plan_enum_values(existing, declared)
+    for type_name, label in extraneous:
+        logger.warning(
+            "Enum type %s holds the label %r, which the models no longer declare. "
+            "Left in place: PostgreSQL cannot drop an enum label, and rows may still "
+            "carry it. Reading code must keep handling it.",
+            type_name,
+            label,
+        )
+    added: list[str] = []
+    for type_name, label, before in additions:
+        # Every identifier here comes from our own declarative metadata, never from
+        # user input. Quoted anyway, because a label is a string literal and a type
+        # name an identifier, and mixing those up is how DDL builders go wrong.
+        clause = f" BEFORE '{before}'" if before else ""
+        statement = (
+            f"ALTER TYPE \"{type_name}\" ADD VALUE IF NOT EXISTS '{label}'{clause}"
+        )
+        try:
+            await conn.execute(text(statement))
+        except Exception:
+            # Never swallowed, and this one is worth a CRITICAL for the same reason the
+            # column path is: until the label exists, every INSERT/UPDATE writing it
+            # fails, and for ``run_status`` that is the run header — the row a console
+            # lists runs from and the row analytics reconcile against.
+            logger.critical(
+                "enum reconcile FAILED for %s.%s (%s); writes of this value will keep "
+                "failing with 'invalid input value for enum'.",
+                type_name,
+                label,
+                statement,
+            )
+            raise
+        added.append(f"{type_name}.{label}")
+        logger.info(
+            "enum reconcile: added missing label %s.%s (%s)", type_name, label, statement
+        )
     return added

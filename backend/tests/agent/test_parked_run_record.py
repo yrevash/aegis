@@ -110,7 +110,13 @@ async def test_a_rejected_park_reaches_a_terminal_status_too(db, make_deps):
 
     done = await _header("run-record-reject")
     assert done.status is not RunStatus.AWAITING_APPROVAL
-    assert done.status is RunStatus.COMPLETED  # the graph answered; the action did not run
+    # REJECTED, not COMPLETED. The graph does answer — it says the action was not
+    # authorised — and this assertion used to read ``is RunStatus.COMPLETED`` because
+    # that was the only terminal status available. It made a refused run
+    # indistinguishable, on the run header, from one that was approved and did the work:
+    # the refusal survived only in ``approvals.status`` and in the ``tool_call_count``
+    # asserted below, neither of which is on the row a console lists runs from.
+    assert done.status is RunStatus.REJECTED
     assert done.tool_call_count == 0  # and nothing was executed on a refusal
 
 

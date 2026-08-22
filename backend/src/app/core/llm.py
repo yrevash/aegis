@@ -218,6 +218,7 @@ class _GovernanceHook:
         trace_id: str | None,
         audio_seconds: float = 0.0,
         images: int = 0,
+        run_id: str | None = None,
     ) -> None:
         """Write one durable usage-ledger row for a governed call.
 
@@ -225,6 +226,12 @@ class _GovernanceHook:
         transcription or vision call (Whisper bills per audio-minute), so those
         calls land in the ledger — and therefore under a USD cap — instead of
         being invisible behind ``prompt_tokens=0``.
+
+        ``run_id`` is the agent run this call belongs to, or ``None`` for a call
+        that belongs to no run (a job, an ingest pass, the chat endpoint). It is
+        stored exactly as given — a ``None`` is written as SQL NULL, which reads
+        as "not attributable" and is reported in its own column by
+        ``analytics_spend_daily`` rather than folded into any run's cost.
 
         The gateway calls this best-effort (a failure is swallowed and logged
         by the caller, never raised) — see ``aegis.gateway.llm._record_usage``.
@@ -241,6 +248,7 @@ class _GovernanceHook:
             trace_id=trace_id,
             audio_seconds=audio_seconds,
             images=images,
+            run_id=run_id,
         )
 
 

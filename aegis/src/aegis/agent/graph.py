@@ -1426,7 +1426,21 @@ def build_agent(
             chunk = " ".join(words[i : i + step])
             suffix = " " if i + step < len(words) else ""
             writer(events.token(chunk + suffix))
-        return {"status": RunStatus.COMPLETED.value}
+        # The terminal status is decided HERE, on the graph's final state, and nowhere
+        # else — which is what makes the live socket and the headless resume agree
+        # without either of them knowing about the other. Both read
+        # ``state["status"]`` off this node's return (``aegis.agent.orchestrator``:
+        # the live loop's ``graph.get_state`` and ``_resumed_terminal``'s), so a run
+        # refused by a human reports ``rejected`` whichever path closed it.
+        #
+        # ``gated and not approved`` is exactly the condition ``generate`` above keys
+        # its "The proposed action was NOT approved by the human gate." line on, and
+        # the condition the ``approval -> generate`` edge routes on. A gate that was
+        # never raised leaves ``gated`` false; an approved one leaves ``approved``
+        # true; only a refusal reaches here with both.
+        refused = bool(state.get("gated")) and not state.get("approved")
+        status = RunStatus.REJECTED if refused else RunStatus.COMPLETED
+        return {"status": status.value}
 
     # Transient-failure policy for the nodes whose bodies are a network call to the
     # model gateway. The predicate is ``aegis.agent.retry.transient_only``, NOT

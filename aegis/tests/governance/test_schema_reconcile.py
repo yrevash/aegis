@@ -28,8 +28,11 @@ import aegis.governance.models  # noqa: F401 - registers the governance tables
 from aegis.data import AegisBase
 from aegis.governance import (
     SchemaDriftError,
+    declared_enum_labels,
     plan_additive_columns,
+    plan_enum_values,
     reconcile_additive_columns,
+    reconcile_enum_values,
 )
 
 LEDGER = AegisBase.metadata.tables["usage_ledger"]
@@ -225,3 +228,84 @@ async def test_reconcile_returns_immediately_on_a_non_postgres_dialect():
             raise AssertionError("no SQL may be emitted on a non-Postgres dialect")
 
     assert await reconcile_additive_columns(_Exploding(), [AegisBase.metadata]) == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Native enum labels — the same failure, one type system further along
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# ``create_all`` emits ``CREATE TYPE`` exactly once, on the boot that first creates it,
+# and never again. So ``RunStatus.REJECTED`` — added so a run a human REFUSED stops being
+# indistinguishable from one that was approved and did the work — existed in Python and
+# in no database built before it, and the first write of it fails with ``invalid input
+# value for enum``. For ``run_status`` that write is the ``runs`` header, i.e. the row a
+# console lists runs from and the row analytics reconcile against.
+
+
+def test_the_declared_labels_are_the_names_postgres_actually_stores():
+    """``run_status`` holds ``'REJECTED'``, not ``'rejected'``, and the plan must agree.
+
+    SQLAlchemy stores a Python enum's *names* by default, which is why the live type's
+    labels are upper-case. A reconciler that planned against ``.value`` would emit
+    ``ADD VALUE 'rejected'`` and leave the database with five labels, one of them
+    unreachable and the real one still missing.
+    """
+    labels = declared_enum_labels([AegisBase.metadata])["run_status"]
+    assert labels == ("COMPLETED", "BLOCKED", "AWAITING_APPROVAL", "REJECTED", "ERROR")
+
+
+def test_a_missing_label_is_planned_into_its_declared_position():
+    """``REJECTED`` goes *before* ``ERROR``, not on the end.
+
+    ``ALTER TYPE … ADD VALUE`` appends by default, so a database upgraded into the new
+    member would sort it last while a database built fresh sorts it fourth — two
+    databases from one source disagreeing about ``ORDER BY status``.
+    """
+    live = {"run_status": ("COMPLETED", "BLOCKED", "AWAITING_APPROVAL", "ERROR")}
+    declared = declared_enum_labels([AegisBase.metadata])
+    additions, extraneous = plan_enum_values(live, {"run_status": declared["run_status"]})
+    assert additions == [("run_status", "REJECTED", "ERROR")]
+    assert extraneous == []
+
+
+def test_a_label_only_the_database_has_is_reported_and_never_dropped():
+    """PostgreSQL cannot drop an enum label, and rows may still carry it.
+
+    Reporting rather than removing is the only honest option; planning a removal would
+    be planning a statement that does not exist.
+    """
+    live = {"run_status": ("COMPLETED", "BLOCKED", "AWAITING_APPROVAL", "ERROR", "LEGACY")}
+    declared = declared_enum_labels([AegisBase.metadata])
+    additions, extraneous = plan_enum_values(live, {"run_status": declared["run_status"]})
+    assert ("run_status", "LEGACY") in extraneous
+    assert all(label != "LEGACY" for _type, label, _before in additions)
+
+
+def test_a_type_the_database_does_not_have_is_left_to_create_all():
+    """No type, no drift: ``create_all`` is about to emit it in full."""
+    assert plan_enum_values({}, {"run_status": ("COMPLETED", "REJECTED")}) == ([], [])
+
+
+def test_an_already_current_type_plans_nothing():
+    """Idempotence, which is what makes this safe to run on every boot."""
+    declared = declared_enum_labels([AegisBase.metadata])
+    assert plan_enum_values(declared, declared) == ([], [])
+
+
+async def test_enum_reconcile_returns_immediately_on_a_non_postgres_dialect():
+    """SQLite renders these as VARCHAR + CHECK, so there is no type to reconcile."""
+
+    class _Exploding:
+        dialect = SimpleNamespace(name="sqlite")
+
+        async def execute(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("no SQL may be emitted on a non-Postgres dialect")
+
+    assert await reconcile_enum_values(_Exploding(), [AegisBase.metadata]) == []
+
+
+async def test_enum_reconcile_is_a_no_op_against_the_real_cluster(pg_owner_engine):
+    """The case every startup after the first one takes, asked of a real PostgreSQL."""
+    async with pg_owner_engine.connect() as conn:
+        engaged = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        assert await reconcile_enum_values(engaged, [AegisBase.metadata]) == []

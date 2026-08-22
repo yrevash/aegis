@@ -35,10 +35,11 @@ from aegis.agent.orchestrator import ResumeFailedError
 from aegis.agent.orchestrator import resume_parked_run as _core_resume
 from aegis.agent.orchestrator import run_agent as _core_run_agent
 from aegis.core.types import RunStatus
+from aegis.governance.context import governed
 
 from app.agent.approvals import get_approval_registry, get_parked_runs
 from app.agent.deps import AgentDeps, deps_for_run
-from app.agent.run_log import TERMINAL_EVENT_TYPE
+from app.agent.run_log import TERMINAL_EVENT_TYPE, parked_run_owner
 from app.api.schemas import (
     ApprovalDecision,
     ApprovalDecisionResponse,
@@ -726,15 +727,36 @@ async def resume_parked_run(
         continuation.append(payload)
         continuation_at.append(datetime.now(UTC))
 
+    # The continuation is governed work, and until now it was not governed at all.
+    # ``POST /v1/query`` binds a governance context around its stream; the decision
+    # endpoints bind none, and the gateway skips **both** budget enforcement and the
+    # usage ledger when no context is bound (``aegis.gateway.llm._record_usage`` returns
+    # immediately on a ``None`` context). Measured on ``taif_run1``: a rejected run's
+    # headless resume generated a real answer through the model and wrote *zero*
+    # ``usage_ledger`` rows — money spent, capped by nothing, recorded nowhere, and
+    # therefore impossible to reconcile against the run it belonged to.
+    #
+    # The principal comes from the platform's own records, never from the approver: the
+    # tenant from the ``approvals`` row (see :func:`_parked_run_tenant`), the user from
+    # the run's stored header. An admin clearing an inbox must not have another tenant's
+    # continuation billed to them, and must not have their own caps applied to it.
+    #
+    # This makes a tenant's cap bind on a resume, which it did not before. That is the
+    # intended consequence: a cap that stops applying the moment a human is involved is
+    # not a cap. A tripped cap surfaces as ``ResumeFailedError`` below, which releases
+    # the approval back to PENDING for a retry rather than stranding it.
+    resume_tenant = await _parked_run_tenant(approval_id)
+    resume_user = await parked_run_owner(run_id, tenant_id=resume_tenant)
     try:
-        resumed = await _core_resume(
-            run_id,
-            decision,
-            graph=graph,
-            config=config,
-            approver=approver,
-            on_event=collect,
-        )
+        with governed(tenant_id=resume_tenant, user_id=resume_user):
+            resumed = await _core_resume(
+                run_id,
+                decision,
+                graph=graph,
+                config=config,
+                approver=approver,
+                on_event=collect,
+            )
     except ResumeFailedError:
         logger.warning(
             "Resume of run %s failed; releasing approval %s back to pending",

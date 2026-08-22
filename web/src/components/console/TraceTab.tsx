@@ -158,17 +158,39 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
       {/* Container, not `lg:` — this pair sits inside the thread column, and a viewport
           breakpoint firing at a 1024px *window* put two 270px panels side by side. */}
       <div className="grid gap-3 @[52rem]/trace:grid-cols-2">
-        <div className="min-w-0" style={{ height: paneHeight }}>
-          <Suspense
-            fallback={
-              <Card className="h-full">
-                <div className="h-full animate-pulse rounded-lg bg-surface-2/30" />
-              </Card>
-            }
-          >
-            <KnowledgeGraph base={graph} state={state} beat={beat} idle={false} trajectory={false} />
-          </Suspense>
-        </div>
+        {graph.nodes.length > 0 ? (
+          <div className="min-w-0" style={{ height: paneHeight }}>
+            <Suspense
+              fallback={
+                <Card className="h-full">
+                  <div className="h-full animate-pulse rounded-lg bg-surface-2/30" />
+                </Card>
+              }
+            >
+              <KnowledgeGraph
+                base={graph}
+                state={state}
+                beat={beat}
+                idle={false}
+                trajectory={false}
+              />
+            </Suspense>
+          </div>
+        ) : (
+          /* A force graph with no node is a dead canvas that badges itself `0/0
+             traversed` and captions itself `graph idle · run a query to traverse` —
+             about a run that has already finished. The absence is the same fact, in
+             the slot the canvas would have taken, and it does not load the canvas
+             chunk to say it. */
+          <Absence
+            figure="Evidence graph"
+            why="This deployment has extracted no entities, so there was no graph to traverse."
+            needed="Ingest a document so extraction can write entities and relations."
+            // `self-start`, or the grid stretches three lines of text to the height of
+            // the event log beside it and the dead canvas comes back as a dead box.
+            className="min-w-0 self-start"
+          />
+        )}
         <div className="min-w-0" style={{ height: paneHeight }}>
           <AgentTracePanel state={state} />
         </div>

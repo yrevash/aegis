@@ -80,6 +80,7 @@ __all__ = [
     "TERMINAL_EVENT_TYPE",
     "durable_events",
     "fire_run_record",
+    "parked_run_owner",
     "record_run",
     "record_run_continuation",
     "routed_agent_id",
@@ -296,6 +297,47 @@ def _numbered(
             )
             stamped.append(numbered)
     return durable_events(stamped, timestamps)
+
+
+async def parked_run_owner(run_id: str, *, tenant_id: int | None) -> int | None:
+    """Return the user a parked run belongs to, from the run's own stored header.
+
+    **Not the approver, and that is the whole point.** The person who decides a gate is
+    frequently not the person whose run it is — an admin clearing an inbox, say — so the
+    approver's id is the wrong answer to "whose spend is this?". The header carries the
+    owner the run was created under, which is the right one.
+
+    Used by :func:`app.agent.resume_parked_run` to bind a governance context around the
+    headless continuation. Without it the continuation ran **ungoverned**: measured on
+    ``taif_run1``, a rejected run's resume made real model calls and wrote *zero*
+    ``usage_ledger`` rows, because the gateway skips both enforcement and ledgering when
+    no context is bound. The money was spent, capped by nothing and recorded nowhere.
+
+    Args:
+        run_id: The parked run.
+        tenant_id: The tenant to bind the read under — resolved from the ``approvals``
+            row, never from the caller's context (the decision endpoints bind none).
+
+    Returns:
+        The run's ``user_id``, or ``None`` when the run has no header, no owner, or the
+        read fails. ``None`` is safe here: it degrades to tenant-level attribution and
+        tenant-level caps, which is strictly better than no governance at all.
+    """
+    try:
+        from app.data.session import get_sessionmaker, set_tenant_scope
+
+        async with get_sessionmaker()() as session:
+            await set_tenant_scope(session, tenant_id)
+            header = await read_run_header(session, run_id)
+            return header.user_id if header is not None else None
+    except Exception:  # noqa: BLE001 - never break a resume to learn who owns it
+        logger.warning(
+            "Could not read run %s's header to find its owner; its continuation will be "
+            "governed and ledgered at tenant scope with no user attributed.",
+            run_id,
+            exc_info=True,
+        )
+        return None
 
 
 async def record_run_continuation(

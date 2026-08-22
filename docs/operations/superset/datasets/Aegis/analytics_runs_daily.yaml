@@ -127,7 +127,7 @@ columns:
   description: null
   python_date_format: null
   extra: null
-- column_name: cost_usd
+- column_name: ledger_cost_usd
   verbose_name: null
   is_dttm: false
   is_active: true
@@ -136,7 +136,22 @@ columns:
   groupby: true
   filterable: true
   expression: null
-  description: null
+  description: The authoritative spend for these runs, summed from usage_ledger by
+    run_id. Reconciles with analytics_spend_daily.run_attributed_cost_usd.
+  python_date_format: null
+  extra: null
+- column_name: agent_reported_cost_usd
+  verbose_name: null
+  is_dttm: false
+  is_active: true
+  type: DOUBLE PRECISION
+  advanced_data_type: null
+  groupby: true
+  filterable: true
+  expression: null
+  description: What the agent's own graph state accumulated and streamed to the user.
+    A self-report over a subset of the run's calls - NOT the bill. Use ledger_cost_usd
+    for spend.
   python_date_format: null
   extra: null
 - column_name: approvals_raised

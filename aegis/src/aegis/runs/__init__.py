@@ -17,6 +17,12 @@ Three modules, one idea:
 * :mod:`aegis.runs.record` — the writer, and the fold that makes the header a
   regenerable projection of the log rather than a second source of truth.
 
+:func:`~aegis.core.run_context.current_run_id` and
+:func:`~aegis.core.run_context.run_scope` — the seam that lets the spend chokepoint
+stamp ``usage_ledger.run_id`` — are re-exported here because this is where a reader
+looks for them. They *live* in :mod:`aegis.core.run_context` so that
+:mod:`aegis.gateway`, which reads them, does not acquire a SQLAlchemy dependency.
+
 Importing this package pulls ``sqlalchemy`` (the ``aegis[data]`` extra) plus the
 governance and jobs models its foreign keys reference — and nothing from any host
 application, no orchestrator SDK and no web framework.
@@ -24,6 +30,12 @@ application, no orchestrator SDK and no web framework.
 
 from __future__ import annotations
 
+from aegis.core.run_context import (
+    bind_run_id,
+    current_run_id,
+    reset_run_id,
+    run_scope,
+)
 from aegis.runs.models import RUN_EVENTS_TABLE, RUNS_TABLE, Run, RunEvent
 from aegis.runs.partitions import (
     RunEventPartition,
@@ -57,6 +69,8 @@ __all__ = [
     "RunHeader",
     "RunPartitionMissingError",
     "apply_event",
+    "bind_run_id",
+    "current_run_id",
     "ensure_run_event_partitions",
     "fold_events",
     "load_run_events",
@@ -67,6 +81,8 @@ __all__ = [
     "rebuild_run_header",
     "reconcile_run_header",
     "record_events",
+    "reset_run_id",
     "run_event_partition_statements",
     "run_event_partitions",
+    "run_scope",
 ]

@@ -135,7 +135,9 @@ export function EfficiencyPanel({ metrics, state }: EfficiencyPanelProps): React
                     ? 'text-ok-ink'
                     : state.finishedStatus === 'blocked'
                       ? 'text-block-ink'
-                      : 'text-muted-foreground',
+                      : state.finishedStatus === 'rejected'
+                        ? 'text-risk-ink'
+                        : 'text-muted-foreground',
                 )}
               >
                 {state.finishedStatus ?? state.phase}

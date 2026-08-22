@@ -58,6 +58,7 @@ from aegis.governance.rls import bootstrap_rls as _aegis_bootstrap_rls
 from aegis.governance.schema import (
     SchemaDriftError,
     reconcile_additive_columns,
+    reconcile_enum_values,
 )
 from sqlalchemy import make_url, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -786,6 +787,74 @@ async def _retenant_prompt_version_indexes(
         )
 
 
+#: The one-off back-fill of ``usage_ledger.run_id``, run exactly once — on the boot
+#: that adds the column — and never again. See :func:`_backfill_usage_ledger_run_id`.
+_BACKFILL_LEDGER_RUN_ID = """
+WITH unambiguous AS (
+    SELECT trace_id,
+           min(run_id)    AS run_id,
+           min(tenant_id) AS tenant_id
+      FROM runs
+     WHERE trace_id IS NOT NULL
+     GROUP BY trace_id
+    HAVING count(*) = 1
+)
+UPDATE usage_ledger u
+   SET run_id = m.run_id
+  FROM unambiguous m
+ WHERE u.run_id IS NULL
+   AND u.trace_id = m.trace_id
+   AND u.tenant_id IS NOT DISTINCT FROM m.tenant_id
+"""
+
+
+async def _backfill_usage_ledger_run_id(
+    conn: Any,  # noqa: ANN401 - AsyncConnection, kept loose (no import-time asyncpg dep)
+) -> None:
+    """Attribute historic ledger rows to a run, but only where that is a fact.
+
+    Called by :func:`bootstrap` **only on the boot that actually adds
+    ``usage_ledger.run_id``** (``reconcile_additive_columns`` reports what it added), so
+    this is a one-off migration step and not a full-table ``UPDATE`` on every restart.
+
+    The rule, and the three cases it deliberately leaves alone:
+
+    * A ledger row whose ``trace_id`` matches **exactly one** ``runs`` row, of the same
+      tenant, is that run's spend. Set it.
+    * A ``trace_id`` matching **no** run — 173 of tenant 1's 1932 rows on ``taif_run1``,
+      8.95% — belongs to no run: a job, an ingest pass, the chat endpoint, a platform
+      probe. It stays ``NULL``, which reads as *not attributable* and is reported as its
+      own bucket by ``analytics_spend_daily`` rather than being folded into anything.
+    * A ``trace_id`` matching **more than one** run stays ``NULL`` too. Picking one would
+      be a guess, and a guess written into a spend column is indistinguishable from a
+      measurement afterwards.
+
+    Historic rows therefore end up *partly* attributed, and that is the honest outcome:
+    the ledger did not record the run at the time, and no back-fill can invent what was
+    never observed. Only rows written after this migration carry attribution recorded at
+    the chokepoint (:func:`aegis.gateway.llm._record_usage`).
+
+    Args:
+        conn: An open (transactional) async connection on the **owner** engine — it must
+            see every tenant's rows, which is exactly what the owner connection does and
+            a serving connection must not.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    result = await conn.execute(text(_BACKFILL_LEDGER_RUN_ID))
+    matched = result.rowcount if result.rowcount is not None else -1
+    remaining = (
+        await conn.execute(text("SELECT count(*) FROM usage_ledger WHERE run_id IS NULL"))
+    ).scalar_one()
+    logger.info(
+        "schema: back-filled usage_ledger.run_id on %s row(s) whose trace matched "
+        "exactly one run; %s row(s) remain NULL and are reported as unattributed "
+        "spend, never as zero.",
+        matched,
+        remaining,
+    )
+
+
 async def bootstrap(engine: AsyncEngine | None = None) -> None:
     """Create every table (relational + JSON embeddings-of-record).
 
@@ -797,6 +866,10 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     With no Alembic in this project, this function is the schema owner, so the
     reconciliation steps a long-lived database needs run here, on PostgreSQL only:
 
+    0a. :func:`aegis.governance.schema.reconcile_enum_values` — add any native-enum
+       label the models declare and the live type lacks (``run_status.REJECTED`` was
+       the first). On its own AUTOCOMMIT connection and before ``create_all``, because
+       PostgreSQL will not let a label be *used* in the transaction that added it.
     0b. :func:`_retenant_prompt_version_indexes` — replace ``prompt_versions``' unique
        index on ``(prompt_key, version)`` with the tenant-scoped one (§7.7). Also before
        ``create_all``, which never touches an existing table's indexes.
@@ -812,6 +885,10 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
        raises ``UndefinedColumn``, the gateway swallows it (usage recording is
        best-effort by design), the row is lost, and the USD budget caps computed by
        summing those rows quietly stop binding.
+    1a. :func:`_backfill_usage_ledger_run_id` — **only** on the boot that step 1 adds
+       ``usage_ledger.run_id``: attribute historic ledger rows to the run whose
+       ``trace_id`` they uniquely match, and leave the rest ``NULL``. NULL is a fact
+       ("this spend belongs to no run"), never a zero.
     1b. :func:`aegis.runs.partitions.ensure_run_event_partitions` — roll ``run_events``'
        monthly partitions forward to cover this month and next. The ``after_create`` hook
        seeds them only on the boot that creates the table, so without this a
@@ -866,6 +943,21 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
     import app.memory.stores  # noqa: F401,PLC0415 - registration side-effect only
 
     metadatas = (Base.metadata, AegisBase.metadata)
+    # Step 0a, and it has to be here rather than inside the transaction below.
+    # ``create_all`` emits ``CREATE TYPE`` once, on the boot that first creates a native
+    # enum, and never again — so a member added to a Python enum (``RunStatus.REJECTED``)
+    # exists in the models and not in any database built before it, and the first write
+    # of that member fails with ``invalid input value for enum``. For ``run_status`` that
+    # write is the run header, so the failure would land on the durable run record rather
+    # than at startup, which is the shape of failure this whole bootstrap exists to
+    # avoid. ``ALTER TYPE … ADD VALUE`` is additive, takes no table lock and cannot
+    # invalidate a stored row; it runs on its OWN AUTOCOMMIT connection because
+    # PostgreSQL forbids using a label in the transaction that added it (and, before 15,
+    # forbids adding one inside a transaction block at all).
+    async with engine.connect() as conn:
+        await reconcile_enum_values(
+            await conn.execution_options(isolation_level="AUTOCOMMIT"), metadatas
+        )
     async with engine.begin() as conn:
         # Before create_all, not after: the current ``chunks`` definition cannot be
         # reconciled onto the pre-tenancy one, so the stale table has to go first.
@@ -885,7 +977,13 @@ async def bootstrap(engine: AsyncEngine | None = None) -> None:
         # NOT EXISTS + drop-then-create policy DDL), a no-op off PostgreSQL, and it runs
         # on the owner connection this bootstrap already holds.
         await ensure_run_event_partitions(conn)
-        await reconcile_additive_columns(conn, metadatas)
+        added = await reconcile_additive_columns(conn, metadatas)
+        if "usage_ledger.run_id" in added:
+            # Gated on the column having just been created, so the back-fill is a
+            # migration step that runs once rather than a full-table UPDATE on every
+            # boot. See :func:`_backfill_usage_ledger_run_id` for what it refuses to
+            # guess.
+            await _backfill_usage_ledger_run_id(conn)
         await _align_timestamp_columns(conn, metadatas)
     serving_role = serving_role_name()
     if serving_role is not None:

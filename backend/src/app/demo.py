@@ -511,6 +511,7 @@ def _ledger_row(
     prompt_tokens: int,
     completion_tokens: int,
     trace_id: str,
+    run_id: str | None = None,
     audio_seconds: float = 0.0,
     images: int = 0,
 ) -> dict[str, Any]:
@@ -519,6 +520,13 @@ def _ledger_row(
     The cost is never invented: :func:`aegis.gateway.routing.unit_cost` is the same
     function the gateway prices a real call with, and it is given the *deployment* so
     a tenant-selected model costs what it costs rather than what its tier costs.
+
+    ``run_id`` follows the live path exactly (see
+    :class:`aegis.governance.models.UsageLedger`): a call an agent run made carries it,
+    and a call that belongs to no run — the standalone embedding and voice traffic
+    :func:`_build_platform_ledger` seeds — leaves it ``None``. That is not a shortcut in
+    the seeder; it is the shape real traffic has, so the demo's unattributed-spend
+    bucket is a real bucket rather than an empty one.
     """
     return {
         "tenant_id": scope.tenant_id,
@@ -538,6 +546,7 @@ def _ledger_row(
             deployment=deployment,
         ),
         "trace_id": trace_id,
+        "run_id": run_id,
     }
 
 
@@ -548,6 +557,7 @@ def _run_calls(
     user_id: int,
     started: datetime,
     trace_id: str,
+    run_id: str,
     fleet: dict[str, ModelRole],
 ) -> list[dict[str, Any]]:
     """Build the ledger rows one agent run's model calls produce.
@@ -577,6 +587,7 @@ def _run_calls(
                 prompt_tokens=rng.randint(700, 2_600),
                 completion_tokens=rng.randint(6, 40),
                 trace_id=trace_id,
+                run_id=run_id,
             )
         )
 
@@ -591,6 +602,7 @@ def _run_calls(
             prompt_tokens=rng.randint(400, 3_200),
             completion_tokens=0,
             trace_id=trace_id,
+            run_id=run_id,
         )
     )
 
@@ -607,6 +619,7 @@ def _run_calls(
                 prompt_tokens=rng.randint(6_000, 30_000),
                 completion_tokens=rng.randint(300, 1_800),
                 trace_id=trace_id,
+                run_id=run_id,
             )
         )
 
@@ -624,6 +637,7 @@ def _run_calls(
                 completion_tokens=rng.randint(80, 500),
                 images=rng.randint(1, 3),
                 trace_id=trace_id,
+                run_id=run_id,
             )
         )
     return rows
@@ -1026,6 +1040,7 @@ def _build_run(
             user_id=user_id,
             started=started,
             trace_id=trace_id,
+            run_id=run_id,
             fleet=fleet,
         )
     )
@@ -1042,6 +1057,7 @@ def _build_run(
                 prompt_tokens=rng.randint(500, 2_000),
                 completion_tokens=rng.randint(4, 24),
                 trace_id=trace_id,
+                run_id=run_id,
             )
         ]
     corpus.ledger.extend(calls)

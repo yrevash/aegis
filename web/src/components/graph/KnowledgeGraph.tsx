@@ -63,6 +63,11 @@ interface KnowledgeGraphProps {
    * size. Two renderers of one model on one screen is the duplication this redesign
    * removed. The standalone `/graph` screen has no Flow tab, so it keeps the strip
    * and the default stays `true`.
+   *
+   * **It names the card, too.** With the strip gone what is left is the knowledge graph
+   * and nothing else, and a card still headed *Orchestration* — with an InfoTip about
+   * which agent handled each step — was describing a layer it had stopped drawing. The
+   * title follows the content.
    */
   trajectory?: boolean
   /** Current active-beat, so the live node pulses in the shared hue. */
@@ -132,6 +137,8 @@ export function KnowledgeGraph({
   // The underlying force layout is left intact (stable), we just stop painting
   // the untouched nodes/edges and fit the view to what's shown.
   const hasRun = state.touchedNodes.length > 0
+  /** A run has executed against this canvas, whether or not it touched an entity. */
+  const ran = state.events.length > 0
   const isNodeShown = (id: string): boolean => !hasRun || touchedNodes.has(id)
 
   const isLinkTouched = (link: GraphLinkObj): boolean =>
@@ -155,14 +162,15 @@ export function KnowledgeGraph({
         title={
           <span className="flex items-center gap-2">
             <Waypoints className="size-4 shrink-0 text-blue-600" aria-hidden />
-            Orchestration
+            {trajectory ? 'Orchestration' : 'Evidence graph'}
           </span>
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <InfoTip label="About Orchestration">
-              Which agent handled each step, drawn over the knowledge graph the run traversed.
-              Multi-agent orchestration on LangGraph.
+            <InfoTip label={trajectory ? 'About Orchestration' : 'About Evidence graph'}>
+              {trajectory
+                ? 'Which agent handled each step, drawn over the knowledge graph the run traversed.'
+                : 'The entities and relations this answer stood on, drawn from the knowledge graph.'}
             </InfoTip>
             <Badge tone="graph">
               {touchedNodes.size}/{base.nodes.length} traversed
@@ -274,7 +282,12 @@ export function KnowledgeGraph({
           <span className="font-mono text-[0.62rem] text-muted-foreground/70">
             {hasRun
               ? `evidence for this answer · ${state.touchedNodes.length} entit${state.touchedNodes.length === 1 ? 'y' : 'ies'} · hover to read`
-              : 'graph idle · run a query to traverse'}
+              : /* A run that finished having touched nothing is a different fact from a
+                   canvas nobody has run against yet, and the caption used to tell a
+                   settled run to "run a query". */
+                ran
+                ? 'this run traversed no entity in the graph'
+                : 'graph idle · run a query to traverse'}
           </span>
           {hasRun && kindLegend.length > 0 && (
             <div className="flex flex-wrap gap-x-2.5 gap-y-1">

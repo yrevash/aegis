@@ -403,6 +403,7 @@ async def record_usage(
     trace_id: str | None,
     audio_seconds: float = 0.0,
     images: int = 0,
+    run_id: str | None = None,
 ) -> None:
     """Write one durable usage-ledger row for a governed model call.
 
@@ -412,6 +413,11 @@ async def record_usage(
     Note that ``cost_usd`` already prices them, which is what makes a USD cap
     bite on a per-minute-billed call — the token caps deliberately do not, since
     an audio minute is not a token.
+
+    ``run_id`` is the agent run this call was made for, and ``None`` — the default —
+    is the honest answer for a call that belongs to no run. It is stored as written:
+    nothing here infers a run from ``trace_id``, because that inference is precisely
+    the one that made per-run cost and total spend two different numbers.
     """
     async with _session() as session:
         # Engage Postgres RLS for this connection (no-op on SQLite; H1).
@@ -427,6 +433,7 @@ async def record_usage(
                 images=images,
                 cost_usd=cost_usd,
                 trace_id=trace_id,
+                run_id=run_id,
             )
         )
         await session.commit()

@@ -138,6 +138,13 @@ function supervisorStatus(state: RunState): LaneStatus {
       return 'waiting'
     case 'blocked':
       return 'blocked'
+    // A human declining an action and a rail refusing content are different facts,
+    // but `LaneStatus` has no member for the first and inventing one here would put a
+    // word on the lane that no other producer of that type can emit. `blocked` is the
+    // honest nearest: the run stopped without doing the thing. The *reason* stays
+    // distinguishable where it is actually read — `phase`, and `approvals.status`.
+    case 'rejected':
+      return 'blocked'
     case 'error':
       return 'failed'
     case 'completed':

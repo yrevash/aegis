@@ -18,8 +18,20 @@
  */
 export type Role = 'admin' | 'ai_team' | 'devops' | 'client'
 
-/** Terminal status of a query run. */
-export type RunStatus = 'completed' | 'blocked' | 'awaiting_approval' | 'error'
+/**
+ * Terminal status of a query run.
+ *
+ * `rejected` is a **person declining an action**; `blocked` is a **guardrail refusing
+ * content**. Keeping them apart is the whole point of the status — a governance
+ * dashboard that folds a human's "no" into the machine-refusal count cannot report on
+ * either. The backend's OpenAPI already emits all five.
+ */
+export type RunStatus =
+  | 'completed'
+  | 'blocked'
+  | 'awaiting_approval'
+  | 'rejected'
+  | 'error'
 
 /**
  * Which guardrail rail produced a verdict.
