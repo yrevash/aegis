@@ -935,12 +935,36 @@ def _resolve_persona(requested: str | None, auth: AuthContext) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def graph_slice_key(tenant_id: int | None, persona: str) -> str:
+    """Return the bucket a run's live graph delta accumulates in.
+
+    **The tenant comes first because it is the boundary; the persona is a narrowing
+    inside it.** Keyed on the persona alone — as this store was — two tenants sharing a
+    persona share a bucket, and every admin tier shares one: ``northwind.admin`` and
+    ``vertex.admin`` are both the admin persona. An audit caught the consequence live,
+    with tenant 1's entity names ("Refund Escalation Policy", "Northwind Trading SLA and
+    Escalation Runbook") rendering in tenant 2's knowledge graph, growing as tenant 1
+    ran queries.
+
+    ``None`` is the untenanted principal's own bucket and is never a wildcard. Platform
+    staff read the whole *durable* graph through ``ALL_TENANTS`` — which is authorised
+    and provenance-checked — and see only their own live delta on top, rather than a
+    pooled slice of everyone's traffic that nothing can attribute.
+    """
+    return f"t{tenant_id}|{persona}" if tenant_id is not None else f"platform|{persona}"
+
+
 @dataclass
 class GraphStore:
-    """Accumulates retrieval graph slices, **scoped per persona** for ``GET /graph``.
+    """Accumulates retrieval graph slices for ``GET /graph``, per tenant AND persona.
 
-    Scoping is a security control (``security.md`` §5 / ASI03): a ``client`` must
-    not see the graph a different persona's runs retrieved.
+    Scoping is a security control (``security.md`` §5 / ASI03). It used to be per
+    persona only, which enforced "a ``client`` must not see what an operations persona
+    retrieved" and silently did not enforce "one tenant must not see another's" — the
+    stronger of the two claims, and the one the graph route's docstring made. Nodes in
+    this slice carry no ``owners`` provenance, so :func:`scoped_graph`'s fail-closed
+    rule cannot catch the leak downstream: the key is the only thing standing between
+    two tenants. See :func:`graph_slice_key`.
     """
 
     _nodes: dict[str, dict[str, GraphNode]] = field(default_factory=dict)
@@ -950,13 +974,20 @@ class GraphStore:
 
     def merge(
         self,
-        persona: str,
+        key: str,
         nodes: list[dict[str, Any]],
         edges: list[dict[str, Any]],
     ) -> None:
-        """Merge a retrieval delta into ``persona``'s graph (dedup by id)."""
-        node_bucket = self._nodes.setdefault(persona, {})
-        edge_bucket = self._edges.setdefault(persona, {})
+        """Merge a retrieval delta into one ``key``'s graph (dedup by id).
+
+        Args:
+            key: A :func:`graph_slice_key` value. Never a bare persona — that is the
+                spelling that pooled two tenants into one bucket.
+            nodes: Touched nodes from a ``retrieval`` event.
+            edges: Touched edges from the same event.
+        """
+        node_bucket = self._nodes.setdefault(key, {})
+        edge_bucket = self._edges.setdefault(key, {})
         for raw in nodes:
             node = GraphNode.model_validate(raw)
             node_bucket[node.id] = node
@@ -964,11 +995,11 @@ class GraphStore:
             edge = GraphEdge.model_validate(raw)
             edge_bucket[(edge.source, edge.target, edge.relation)] = edge
 
-    def response(self, persona: str) -> GraphResponse:
-        """Return ``persona``'s accumulated graph as a :class:`GraphResponse`."""
+    def response(self, key: str) -> GraphResponse:
+        """Return one ``key``'s accumulated graph as a :class:`GraphResponse`."""
         return GraphResponse(
-            nodes=list(self._nodes.get(persona, {}).values()),
-            edges=list(self._edges.get(persona, {}).values()),
+            nodes=list(self._nodes.get(key, {}).values()),
+            edges=list(self._edges.get(key, {}).values()),
         )
 
 
@@ -1606,6 +1637,11 @@ async def query(
             user_id=chat_owner,
         )
 
+    # The bucket this run's live graph delta accumulates in. Derived HERE, from the
+    # authenticated principal, so the tenant boundary on the in-process slice comes from
+    # the token and not from anything the request could influence.
+    slice_key = graph_slice_key(auth.tenant_id, persona)
+
     async def event_source() -> AsyncIterator[ServerSentEvent]:
         token = set_governance_context(governance)
         answer: list[str] = []
@@ -1630,7 +1666,7 @@ async def query(
                     depth_mode=req.depth_mode,
                     requested_fanout=req.requested_fanout,
                 ):
-                    _update_dashboards(event, graph_store, metrics, persona)
+                    _update_dashboards(event, graph_store, metrics, slice_key)
                     if event.type == "token":
                         answer.append(event.text)
                     elif (
@@ -1702,7 +1738,14 @@ async def graph(
         logger.warning("Neo4j knowledge-graph read failed; using the local slice.", exc_info=True)
         durable = None
 
-    local = graph_store.response(persona)
+    # Read the slice for THIS tenant and persona. Keyed on the persona alone, an admin
+    # of one tenant read an admin of another's accumulated deltas — see
+    # `graph_slice_key`. A platform admin resolves to their own `platform|…` bucket, and
+    # gets the whole durable graph through ALL_TENANTS below, which is the authorised
+    # and provenance-checked path.
+    local = graph_store.response(
+        graph_slice_key(None if isinstance(scope, AllTenants) else scope, persona)
+    )
     if durable is None:
         return local
 
@@ -3861,12 +3904,21 @@ def _update_dashboards(
     event: StreamEvent,
     graph_store: GraphStore,
     metrics: MetricsStore,
-    persona: str,
+    slice_key: str,
 ) -> None:
-    """Fold a streamed event into the (persona-scoped) graph and metrics dashboards."""
+    """Fold a streamed event into the graph and metrics dashboards.
+
+    Args:
+        event: The streamed event.
+        graph_store: The live graph slice accumulator.
+        metrics: The efficiency dashboard.
+        slice_key: A :func:`graph_slice_key` value — tenant AND persona. This parameter
+            used to be the bare persona, which is what let one tenant's retrieved
+            entities accumulate into another's graph.
+    """
     if event.type == "retrieval":
         graph_store.merge(
-            persona,
+            slice_key,
             [n.model_dump() for n in event.touched_nodes],
             [e.model_dump() for e in event.touched_edges],
         )
