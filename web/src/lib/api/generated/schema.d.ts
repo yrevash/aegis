@@ -2774,11 +2774,17 @@ export interface paths {
          * @description Return the baseline-vs-actual savings roll-up (any authenticated principal).
          *
          *     ``require_auth`` because the **Savings** figure appears on the Overview surface in
-         *     every role's portal. Derived from the real gateway usage ledger
-         *     (:func:`app.core.llm.usage_tally`): ``saved_usd = baseline − actual`` is the measured
-         *     small-model-routing win; cache savings bypass the ledger and are reported honestly
-         *     at $0 in this figure (measured as cache-hit rate elsewhere), so the headline is
-         *     conservative rather than falsely precise.
+         *     every role's portal — which is exactly why the scope must come from the bearer
+         *     token and nowhere else. ``tenant_scope()`` yields ``ALL_TENANTS`` only for platform
+         *     staff, the sole principal entitled to a platform-wide figure; a tenanted caller
+         *     gets their own id and therefore their own ledger. An untenanted principal is not
+         *     refused here, because the figure has to render on their Overview too — they are
+         *     passed ``None``, which this endpoint reports as zeros rather than as everyone.
+         *
+         *     ``saved_usd = baseline − actual`` is the measured small-model-routing win. Cache
+         *     savings bypass the ledger and are reported honestly at $0 in this figure (measured
+         *     as cache-hit rate elsewhere), so the headline is conservative rather than falsely
+         *     precise.
          */
         get: operations["savings_v1_savings_get"];
         put?: never;

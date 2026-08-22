@@ -1035,6 +1035,44 @@ def _bucket_hour(ts: datetime | None) -> str:
     return ts.astimezone(UTC).replace(minute=0, second=0, microsecond=0).isoformat()
 
 
+async def savings_buckets(tenant_id: int | None = None) -> dict[str, dict[str, float]]:
+    """Split one tenant's whole usage ledger into token-work and non-token-work.
+
+    The savings figure is ``baseline − actual``, and the baseline is only meaningful
+    for **token** work: a frontier *chat* model cannot do an audio minute or an image
+    at all, so those rows have no cheaper-or-dearer alternative to price against (see
+    :func:`aegis.gateway.llm._baseline_cost`). Splitting them here lets the caller
+    price each bucket by its own rule without this module importing the gateway's
+    pricing tables.
+
+    Args:
+        tenant_id: When given, app-scope the read to one tenant (over RLS). ``None``
+            aggregates every tenant and is for platform-wide callers only.
+
+    Returns:
+        ``{"token": {...}, "other": {...}}``, each with ``prompt_tokens``,
+        ``completion_tokens`` and ``cost_usd``. Both buckets are always present, at
+        zero when empty, so a caller never branches on absence.
+    """
+    async with _session() as session:
+        await _set_tenant_scope(session, tenant_id)
+        stmt = select(UsageLedger)
+        if tenant_id is not None:
+            stmt = stmt.where(UsageLedger.tenant_id == tenant_id)
+        rows = (await session.execute(stmt)).scalars().all()
+
+    buckets = {
+        "token": {"prompt_tokens": 0.0, "completion_tokens": 0.0, "cost_usd": 0.0},
+        "other": {"prompt_tokens": 0.0, "completion_tokens": 0.0, "cost_usd": 0.0},
+    }
+    for r in rows:
+        key = "other" if (r.audio_seconds > 0.0 or r.images > 0) else "token"
+        buckets[key]["prompt_tokens"] += r.prompt_tokens
+        buckets[key]["completion_tokens"] += r.completion_tokens
+        buckets[key]["cost_usd"] += r.cost_usd
+    return buckets
+
+
 async def usage_rollup(
     tenant_id: int | None = None, window: str = "day"
 ) -> tuple[int, int, float, list[UsageByModel], list[UsageSeriesPoint]]:

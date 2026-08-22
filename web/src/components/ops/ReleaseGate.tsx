@@ -217,10 +217,27 @@ export function ReleaseGate({ rows, loading, error, onChanged }: Props): ReactEl
         <div className="flex min-w-0 flex-wrap items-center gap-3 border-t border-border/60 pt-3">
           <Figure className="min-w-0 break-words text-muted-foreground">{PROMPT_KEY}</Figure>
           {rollback ? (
-            <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-ok-ink">
-              <RotateCcw className="size-3.5" aria-hidden />
-              Reverted to {rollback.version == null ? 'the last good version' : `v${rollback.version}`}
-            </span>
+            /*
+             * The response's own `reverted` flag decides this, and it used to be
+             * ignored. The server answers `{reverted: false, active_version: null}`
+             * when there is no earlier good version to go back to — nothing is
+             * changed, `prompt_versions` is untouched — and this branch printed
+             * "Reverted to the last good version" anyway, rendering `null` as the
+             * reassuring phrase. An operator on the governance screen was told a
+             * rollback had happened that provably had not: measured, two clicks left
+             * v2 ACTIVE with its `activated_at` unmoved.
+             */
+            rollback.reverted ? (
+              <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-ok-ink">
+                <RotateCcw className="size-3.5" aria-hidden />
+                Reverted to {rollback.version == null ? 'the previous version' : `v${rollback.version}`}
+              </span>
+            ) : (
+              <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <RotateCcw className="size-3.5" aria-hidden />
+                Nothing to roll back to — no earlier good version is recorded
+              </span>
+            )
           ) : (
             <button
               type="button"

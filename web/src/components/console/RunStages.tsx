@@ -82,7 +82,13 @@ const TRUST_CHECKS: readonly TrustCheck[] = [
     key: 'grounded',
     label: 'Grounded',
     signal: 'graph',
-    done: (s) => s.retrievalScores.length > 0 || s.provenance != null,
+    // An answer is what gets grounded, so there must be one. A run stopped at the input
+    // rail retrieved nothing and generated nothing, yet this lit whenever a provenance
+    // record existed — so "Grounded" appeared directly above "Blocked by the input rail
+    // — no answer generated". Claiming an assurance about a thing that does not exist is
+    // the one failure this row of chips must never have.
+    done: (s) =>
+      s.answer.length > 0 && (s.retrievalScores.length > 0 || s.provenance != null),
   },
   {
     key: 'guarded',
@@ -98,6 +104,8 @@ const TRUST_CHECKS: readonly TrustCheck[] = [
     // tool succeed — a rejected action (tool_result ok=false) stays dark.
     done: (s) => s.awaitedApproval && s.toolResults.some((r) => r.ok),
   },
+  // `traced` stays true for a blocked run on purpose: the run *was* fully recorded, and
+  // that a refusal is traceable is exactly the claim worth making about it.
   { key: 'traced', label: 'Fully traced', signal: 'agent', done: (s) => s.finishedStatus != null },
 ]
 

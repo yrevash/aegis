@@ -17020,7 +17020,7 @@
     },
     "/v1/savings": {
       "get": {
-        "description": "Return the baseline-vs-actual savings roll-up (any authenticated principal).\n\n``require_auth`` because the **Savings** figure appears on the Overview surface in\nevery role's portal. Derived from the real gateway usage ledger\n(:func:`app.core.llm.usage_tally`): ``saved_usd = baseline − actual`` is the measured\nsmall-model-routing win; cache savings bypass the ledger and are reported honestly\nat $0 in this figure (measured as cache-hit rate elsewhere), so the headline is\nconservative rather than falsely precise.",
+        "description": "Return the baseline-vs-actual savings roll-up (any authenticated principal).\n\n``require_auth`` because the **Savings** figure appears on the Overview surface in\nevery role's portal — which is exactly why the scope must come from the bearer\ntoken and nowhere else. ``tenant_scope()`` yields ``ALL_TENANTS`` only for platform\nstaff, the sole principal entitled to a platform-wide figure; a tenanted caller\ngets their own id and therefore their own ledger. An untenanted principal is not\nrefused here, because the figure has to render on their Overview too — they are\npassed ``None``, which this endpoint reports as zeros rather than as everyone.\n\n``saved_usd = baseline − actual`` is the measured small-model-routing win. Cache\nsavings bypass the ledger and are reported honestly at $0 in this figure (measured\nas cache-hit rate elsewhere), so the headline is conservative rather than falsely\nprecise.",
         "operationId": "savings_v1_savings_get",
         "responses": {
           "200": {

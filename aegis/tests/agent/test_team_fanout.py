@@ -383,12 +383,22 @@ async def test_a_subagent_proposal_gates_and_resumes_through_the_existing_path()
 
 
 async def test_a_rejected_subagent_proposal_never_executes():
+    """A refused gate reports ``rejected``, even though the other lanes did answer.
+
+    This asserted ``COMPLETED`` while ``RunStatus.REJECTED`` did not yet exist and
+    every terminal state that was not an error collapsed into one value. It is the
+    same contract ``test_rejected_gate_in_a_multi_round_run_is_not_reported_approved``
+    pins for a single agent: work happening elsewhere in the run is not evidence that
+    the human approved the one action they were asked about. Reporting ``completed``
+    here would make a run the operator refused indistinguishable, in the runs list and
+    in the audit record, from one that did what it proposed.
+    """
     deps, rec = build_team_deps(
         roster=_roster(3), lane_behaviour={"data": _propose_high_risk}
     )
     events = await _drive(deps, DEMO_QUERY, approve=False)
     assert rec.executed == []
-    assert _one(events, "run_finished")["status"] == RunStatus.COMPLETED.value
+    assert _one(events, "run_finished")["status"] == RunStatus.REJECTED.value
 
 
 async def test_a_gated_team_run_parks_and_resumes_out_of_band():

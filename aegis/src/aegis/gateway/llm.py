@@ -1263,6 +1263,18 @@ def record_call(
     agg.images += images
 
 
+def baseline_token_cost(prompt_tokens: int, completion_tokens: int) -> float:
+    """Return what token work would have cost at the frontier baseline role.
+
+    The public form of :func:`_baseline_cost`'s token half, for callers that price a
+    *durable* ledger rather than the since-boot tally — notably the tenant-scoped
+    savings roll-up, which must not read the process-global counter. Pricing is linear
+    in tokens, so a caller may pass a summed bucket and get the same figure it would
+    get by pricing each row and adding the results.
+    """
+    return _estimate_cost(_effective_baseline_role(), prompt_tokens, completion_tokens)
+
+
 def usage_tally() -> dict[str, Any]:
     """Return live call counts. ``small_model_share`` is ``None`` before any call.
 

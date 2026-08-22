@@ -361,6 +361,26 @@ async def test_savings_shape_and_math(client, db):
     assert body["note"].strip()
 
 
+async def test_savings_defaults_closed_not_platform_wide(db):
+    """An omitted scope must report zero, never every tenant's spend.
+
+    ``/savings`` used to read the gateway's process-global tally, so one tenant's
+    query moved the number another tenant was shown. The fix makes the scope explicit;
+    this pins the half of it that a future caller can get wrong silently — forgetting
+    to pass a scope has to fail *closed*, because a leak here is invisible (the figure
+    still renders, it is just someone else's money).
+    """
+    from app.platform.savings import build_savings
+
+    default = await build_savings()
+    assert default.baseline_cost_usd == 0.0
+    assert default.actual_cost_usd == 0.0
+    assert default.saved_usd == 0.0
+    assert default.saved_pct == 0.0
+    # An untenanted principal resolves to the same closed scope, not to ALL_TENANTS.
+    assert (await build_savings(None)).saved_usd == 0.0
+
+
 async def test_savings_reachable_for_every_role(client, db):
     """Overview's savings figure must load for every portal role (require_auth)."""
     for username in ("admin", "ai", "devops", "client"):

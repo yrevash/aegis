@@ -1,9 +1,10 @@
 """Baseline-vs-actual spend for ``GET /savings``.
 
-Derived from the real gateway usage ledger (:func:`app.core.llm.usage_tally`).
-The ledger accumulates, per real chat completion, both the **actual** cost and a
-**baseline** cost — what the same tokens would have cost had every call gone to the
-frontier generation model. ``saved_usd`` is exactly that measured gap
+Derived from the persisted, **tenant-scoped** ``usage_ledger`` table — never from the
+gateway's since-boot process-global tally, which every tenant sharing a worker would
+see the others' spend through. Each ledger row carries the **actual** cost and the
+units needed to price a **baseline**: what those same tokens would have cost had the
+call gone to the frontier generation model. ``saved_usd`` is exactly that measured gap
 (``baseline − actual``), and it is attributable, in full, to **small-model routing**:
 those are the only calls the ledger sees.
 
@@ -20,8 +21,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from aegis.gateway.llm import baseline_token_cost
+from aegis.governance.enforcement import savings_buckets
+from aegis.retrieval.types import AllTenants
 from app.api.schemas import SavingsBreakdownRow, SavingsResponse
-from app.core.llm import usage_tally
 
 _NOTE = (
     "saved_usd is the measured gap between an all-frontier-model baseline and actual "
@@ -33,12 +36,45 @@ _NOTE = (
 )
 
 
-def build_savings() -> SavingsResponse:
-    """Build the savings roll-up from the live usage ledger."""
-    tally = usage_tally()
-    baseline = float(tally["baseline_cost_usd"])
-    actual = float(tally["total_cost_usd"])
-    saved = float(tally["cost_saved_usd"])  # == max(0, baseline - actual)
+async def build_savings(scope: int | AllTenants | None = None) -> SavingsResponse:
+    """Build the savings roll-up from the persisted usage ledger, for one scope.
+
+    The scope is an :class:`~aegis.retrieval.types.AllTenants` **or** an ``int`` **or**
+    ``None`` for exactly the reason that type exists: "a platform admin, so restrict
+    nothing" and "this principal is bound to no tenant" are different facts, and
+    collapsing both into ``None`` is what turns an unprivileged caller into a
+    platform-wide read. The default here is therefore the *closed* one — an omitted
+    scope reports zero, not everyone's spend — so forgetting to pass it cannot leak.
+
+    Args:
+        scope: ``ALL_TENANTS`` for the platform-wide figure (platform staff only), a
+            tenant id for that tenant's own ledger, or ``None`` for an untenanted
+            principal, who has no ledger and is honestly shown zeros.
+    """
+    if scope is None:
+        buckets = {
+            "token": {"prompt_tokens": 0.0, "completion_tokens": 0.0, "cost_usd": 0.0},
+            "other": {"prompt_tokens": 0.0, "completion_tokens": 0.0, "cost_usd": 0.0},
+        }
+    else:
+        buckets = await savings_buckets(
+            None if isinstance(scope, AllTenants) else scope
+        )
+    tok, other = buckets["token"], buckets["other"]
+
+    # Token work is priced against the frontier rate; non-token work (audio, images)
+    # has no frontier alternative, so its baseline is floored at its own actual cost
+    # and it books a zero saving rather than a fabricated negative one.
+    baseline = baseline_token_cost(
+        int(tok["prompt_tokens"]), int(tok["completion_tokens"])
+    ) + max(
+        baseline_token_cost(
+            int(other["prompt_tokens"]), int(other["completion_tokens"])
+        ),
+        other["cost_usd"],
+    )
+    actual = tok["cost_usd"] + other["cost_usd"]
+    saved = max(0.0, baseline - actual)
     saved_pct = (saved / baseline) if baseline > 0 else 0.0
 
     breakdown = [
