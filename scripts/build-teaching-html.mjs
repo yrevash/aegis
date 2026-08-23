@@ -396,6 +396,7 @@ async function main() {
     'AGENTS.md',
     'SKILL.md',
     'CHANGELOG.md',
+    'RESUME.md',
     'aegis/README.md',
     'aegis/PUBLIC.md',
     'backend/README.md',

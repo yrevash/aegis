@@ -19,7 +19,8 @@ against.
 | **new to the system** | [`architecture/system-architecture.md`](architecture/system-architecture.md) — the whole platform, top to bottom, in one file |
 | **installing it** | [`install/`](install/README.md) — the only install path, in order, with a check after every step |
 | **an agent doing the install** | [`install/AGENT-CONTEXT.md`](install/AGENT-CONTEXT.md) — the rules and the failures that name something other than their cause |
-| **learning one module** | [`teaching/`](teaching/README.md) — one file per `aegis.*` module, 29 of them |
+| **learning one module** | [`teaching/`](teaching/README.md) — one file per `aegis.*` module, 29 of them, plus a walk-every-screen guide for each of the four personas |
+| **picking the work back up** | [`../RESUME.md`](../RESUME.md) — where the build stands, what is still open, and the environment facts that cost time |
 | **running it on the day** | [`operations/runbook.md`](operations/runbook.md) — three commands and the fallback ladder |
 | **retargeting it to a new domain** | [`../SKILL.md`](../SKILL.md) — the adapter procedure, step by step |
 | **judging or reviewing it** | [`hackathon/brief.md`](hackathon/brief.md), then `system-architecture.md` and [`compliance/`](compliance/README.md) |
