@@ -6,6 +6,7 @@ import {
   CircleAlert,
   CircleCheck,
   Layers,
+  Link2,
   Loader2,
   Lock,
   RefreshCw,
@@ -13,7 +14,15 @@ import {
   TriangleAlert,
   XCircle,
 } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import {
+  Fragment,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { DataPanel } from '@/components/ui/DataPanel'
@@ -25,11 +34,13 @@ import { BackendGate, BackendUnavailable } from '@/components/shared/BackendGate
 import { PipelineHealthPanel } from '@/components/health/PipelineHealthView'
 import { CorpusPanel } from '@/components/jobs/CorpusPanel'
 import { IngestLog } from '@/components/jobs/IngestLog'
+import { focusNote, resolveJobFocus } from '@/components/jobs/jobsFocus'
 import { canWriteJobs, NO_TENANT_REASON } from '@/components/jobs/jobsPolicy'
 import { PipelineIso } from '@/components/jobs/PipelineIso'
 import { UploadPanel } from '@/components/jobs/UploadPanel'
 import { cancelJob, getJobs, JobsApiError, requeueJob, type JobRunRow } from '@/lib/api/jobs'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { useUrlIdParam } from '@/lib/urlState'
 import { cn } from '@/lib/utils'
 /**
  * How often the queue is re-read, in ms.
@@ -153,13 +164,24 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [busy, setBusy] = useState<number | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
-  // Which job's ingest log is expanded. One at a time: the log polls while its document
-  // is still being read, and six open panels would be six polls saying the same thing.
-  const [openJob, setOpenJob] = useState<number | null>(null)
-  // Which document the corpus panel opened directly. A document whose ingest never
-  // started owns no job row, so it is reachable *only* this way — which is the whole
-  // reason `GET /documents` exists beside `GET /jobs`.
-  const [openDocument, setOpenDocument] = useState<number | null>(null)
+  /*
+   * Which document's ingest log is open — held in `?document=`, not in a `useState`.
+   *
+   * One at a time, for the reason it always was: the log polls while its document is
+   * still being read, and six open panels would be six polls saying the same thing. The
+   * change is *where* the one lives. An alert says "policy-4.pdf failed", and it has to
+   * be able to open that document's log — from the bell, after a reload, from a link
+   * pasted to a colleague. State in a hook can do none of those.
+   *
+   * It is one parameter rather than two because a document is the stable identity: the
+   * table row and the corpus row are two ways of naming the same ingest, and keying the
+   * URL on the job id would break the moment a re-queue gave that document a second run.
+   */
+  const [focusDocument, setFocusDocument] = useUrlIdParam('document')
+  // Whether the filter was widened to reveal the focused row. Rendered, not inferred:
+  // a screen that quietly changes the reader's filter and says nothing is a screen
+  // whose controls appear to move on their own.
+  const [widened, setWidened] = useState(false)
   // Bumped after an upload so the corpus listing reloads with the jobs table.
   const [corpusKey, setCorpusKey] = useState(0)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'refused' | 'error'; text: string } | null>(
@@ -229,6 +251,49 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
   const rows = useMemo(() => (load.status === 'ready' ? load.rows : []), [load])
   const shown = useMemo(() => rows.filter((row) => matches(row, filter)), [rows, filter])
   const inFlight = rows.filter((row) => IN_FLIGHT.has(row.status)).length
+
+  /*
+   * What `?document=` resolves to against the rows actually loaded — a run in the
+   * queue, or a document with no run here. `resolveJobFocus` is the whole rule and it
+   * is pure; this component only draws its three answers.
+   */
+  const focus = useMemo(
+    () => resolveJobFocus(rows, focusDocument, (row) => matches(row, filter)),
+    [rows, focusDocument, filter],
+  )
+  const openJob = focus.kind === 'row' ? focus.row.id : null
+  const focusRowId = focus.kind === 'row' && !focus.hiddenByFilter ? focus.row.id : null
+
+  // A new target starts with no claim about the filter having been touched.
+  useEffect(() => {
+    setWidened(false)
+  }, [focusDocument])
+
+  /*
+   * A deep link whose row the active filter hides is the original defect with a query
+   * string on it: the reader is sent to a list that does not contain the thing they
+   * were sent to see. Widen to All, and let `focusNote` say that is what happened.
+   */
+  useEffect(() => {
+    if (focus.kind === 'row' && focus.hiddenByFilter) {
+      setFilter('all')
+      setWidened(true)
+    }
+  }, [focus])
+
+  /*
+   * Bring the focused row into view — but only when it is not already there. Opening a
+   * log by clicking the row three inches down the page should not also move the page;
+   * arriving from an alert at row forty should.
+   */
+  useEffect(() => {
+    if (focusRowId === null || typeof document === 'undefined') return
+    const el = document.getElementById(`job-row-${focusRowId}`)
+    if (el === null) return
+    const box = el.getBoundingClientRect()
+    if (box.top >= 0 && box.bottom <= window.innerHeight) return
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [focusRowId])
 
   /**
    * The live feed.
@@ -302,6 +367,26 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
         </p>
       ) : null}
 
+      {/* Where a link landed, and on what. It is a `status` region rather than a chip
+          because it is the answer to a question the reader asked by clicking, and
+          because the wording changes with what was found. */}
+      {focus.kind !== 'none' && load.status === 'ready' ? (
+        <p
+          role="status"
+          className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-relaxed text-foreground"
+        >
+          <Link2 className="mt-0.5 size-4 shrink-0 text-blue-700" aria-hidden />
+          <span className="min-w-0 flex-1">{focusNote(focus, widened)}</span>
+          <button
+            type="button"
+            onClick={() => setFocusDocument(null)}
+            className={`shrink-0 rounded-md px-1.5 py-0.5 text-xs font-medium text-blue-700 transition-colors duration-[--dur-fast] hover:bg-blue-100 ${FOCUS}`}
+          >
+            Clear
+          </button>
+        </p>
+      ) : null}
+
       <DataPanel
         eyebrow="job_runs · the record layer"
         title="Queue"
@@ -326,7 +411,12 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
                     key={option.id}
                     type="button"
                     aria-pressed={active}
-                    onClick={() => setFilter(option.id)}
+                    onClick={() => {
+                      setFilter(option.id)
+                      // The reader has taken the filter back; the note must stop
+                      // claiming the screen widened it for them.
+                      setWidened(false)
+                    }}
                     className={cn(
                       'h-8 touch-manipulation rounded-full border px-3 text-xs font-medium transition-colors duration-[--dur-fast]',
                       FOCUS,
@@ -404,7 +494,16 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
             <tbody className="divide-y divide-border">
               {shown.map((row) => (
                 <Fragment key={row.id}>
-                  <tr className="align-middle transition-colors duration-[--dur-fast] hover:bg-surface-2/60">
+                  {/* The id is the scroll anchor a deep link aims at, and the tint is
+                      how the reader tells the row they were sent to from the forty
+                      around it. Tint plus the open log, never tint alone. */}
+                  <tr
+                    id={`job-row-${row.id}`}
+                    className={cn(
+                      'align-middle transition-colors duration-[--dur-fast] hover:bg-surface-2/60',
+                      focusRowId === row.id && 'bg-blue-50',
+                    )}
+                  >
                     <td className="px-3 py-2">
                       <Figure className="text-foreground">#{row.id}</Figure>
                       <span className="ml-2 text-xs text-muted-foreground">{row.job_type}</span>
@@ -439,7 +538,9 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
                           hint={`the ingest log for job ${row.id}`}
                           expanded={openJob === row.id}
                           busy={false}
-                          onClick={() => setOpenJob(openJob === row.id ? null : row.id)}
+                          onClick={() =>
+                            setFocusDocument(openJob === row.id ? null : row.document_id)
+                          }
                         />
                       )}
                     </td>
@@ -500,12 +601,19 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
         <CorpusPanel
           token={token}
           reloadKey={corpusKey}
-          onOpen={(documentId) => setOpenDocument(openDocument === documentId ? null : documentId)}
+          onOpen={(documentId) =>
+            setFocusDocument(focusDocument === documentId ? null : documentId)
+          }
         />
       </div>
-      {openDocument !== null ? (
+      {/* A document with no run in this queue — opened from the corpus, or arrived at
+          by a link whose job row is gone. `IngestLog` prints the server's own answer,
+          including *"No document N is visible to this caller."* when the row was
+          deleted or belongs to another tenant. That sentence is the feature: a deep
+          link that lands on nothing has to say what the nothing was. */}
+      {focus.kind === 'document' ? (
         <div className="rounded-lg border border-border bg-surface-2/40 p-4">
-          <IngestLog documentId={openDocument} token={token} />
+          <IngestLog documentId={focus.documentId} token={token} />
         </div>
       ) : null}
     </div>
@@ -626,7 +734,14 @@ export function JobsMount(): ReactElement {
             </>
           }
         />
-        <JobsView token={session?.token ?? null} tenantId={session?.tenantId ?? null} />
+        {/* `JobsView` reads `?document=` through `useSearchParams`, which opts its
+            subtree out of prerendering — and this page is statically generated for
+            every portal/section pair. The boundary lives here, next to the reason for
+            it, rather than in `page.tsx` where its absence would surface as a build
+            failure in an unrelated file. */}
+        <Suspense fallback={<LoadingState rows={4} label="Reading the job queue…" />}>
+          <JobsView token={session?.token ?? null} tenantId={session?.tenantId ?? null} />
+        </Suspense>
         {/* §7.10 is an aggregation over exactly the rows this page lists — worker
             liveness, per-stage timings, the dependency table and everything it
             states it cannot measure. It is nine panels, so it is behind a

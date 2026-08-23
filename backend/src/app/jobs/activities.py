@@ -606,11 +606,23 @@ async def run_stage(inp: StageInput, *, session: AsyncSession) -> StageOutcome:
     )
 
 
-#: Where a tenant goes to look at a finished (or failed) ingest. The role segment is the
-#: tenant-admin portal's, which is the surface that actually renders the jobs table; a
-#: console reading these for another role rewrites the segment for the viewer, because
-#: the emitter knows which *screen* is right and cannot know who will read it.
-_JOBS_HREF = "/app/tenant_admin/jobs"
+#: Where a tenant goes to look at **this** ingest — the section slug and the entity,
+#: with no ``/app/<portal>`` prefix.
+#:
+#: It was ``/app/tenant_admin/jobs``, and that was wrong twice over. A tenant-scoped
+#: alert is visible to that tenant's ``tenant_admin``, ``ai_team`` *and* ``client``, and
+#: platform staff receive every tenant's — so for four readers out of five the absolute
+#: path named a portal their session may not enter, and the console's own route guard
+#: bounced them back to their dashboard with nothing said. And even for the fifth it
+#: opened *a list*, never the job the alert was about.
+#:
+#: The emitter knows which **screen** shows this entity and which entity it is; it
+#: cannot know who will read the row. So it writes both of those and neither of the
+#: portal — the reader resolves ``<section>?<param>=<id>`` against its own portal
+#: (``web/src/lib/notificationTarget.ts``), and declines to link at all when its portal
+#: does not mount that section. See :mod:`app.data.notifications` for the field's
+#: contract.
+_JOBS_TARGET = "jobs?document={document_id}"
 
 
 async def _notify_ingest_finished(
@@ -678,7 +690,7 @@ async def _notify_ingest_finished(
         title=title,
         body=body,
         entity_ref=f"document:{document_id}",
-        href=_JOBS_HREF,
+        href=_JOBS_TARGET.format(document_id=document_id),
         # One terminal alert per workflow execution, enforced by the unique index rather
         # than by trusting the guard above. A re-upload of the same bytes is a *new*
         # workflow, so it is a new alert — which is right: the tenant asked again.

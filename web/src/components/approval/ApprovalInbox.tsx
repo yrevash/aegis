@@ -6,16 +6,26 @@ import {
   ChevronDown,
   Clock3,
   Gavel,
+  Link2,
   Loader2,
   RefreshCw,
   ShieldAlert,
   Timer,
   XCircle,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react'
 
 import { ConsentStatement, GateReceipt, ProposedAction } from '@/components/approval/ApprovalCard'
 import { decisionQuestion, readApproval } from '@/components/approval/approvalActions'
+import { approvalFocusNote, resolveApprovalFocus } from '@/components/approval/approvalsFocus'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { Card } from '@/components/ui/Card'
@@ -37,6 +47,7 @@ import {
 import type { ApprovalDecision } from '@/lib/api/types'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { isPlatformAdmin } from '@/lib/auth/tier'
+import { useUrlParam } from '@/lib/urlState'
 import { cn } from '@/lib/utils'
 
 /** How the list is loading, or what it loaded. */
@@ -233,6 +244,17 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
   const [filter, setFilter] = useState<ApprovalStatusFilter>('pending')
   const [lookback, setLookback] = useState<string>('7d')
   const [tenant, setTenant] = useState<string>('all')
+  /*
+   * The gate a link was sent to, held in `?approval=` so it survives a reload and can
+   * be pasted to whoever actually has to decide it.
+   *
+   * It is the gate's own id and not an index, because the inbox reorders itself —
+   * waiting gates by how little SLA is left, decided ones newest-first — so any
+   * positional reference would point at a different gate an hour later.
+   */
+  const [focusApproval, setFocusApproval] = useUrlParam('approval')
+  // Whether this screen widened the reader's own filters to find that gate.
+  const [widened, setWidened] = useState(false)
   // The tenants seen in an *unfiltered* read. Kept out of the row list because
   // narrowing to one tenant narrows the rows too, and a chooser rebuilt from those
   // rows would drop every option except the one already chosen.
@@ -260,7 +282,11 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
           status: filter,
           since: sinceFor(hours),
           tenantId: canFilterByTenant && tenant !== 'all' ? Number(tenant) : null,
-          limit: 100,
+          // A link asks about one specific gate, so the read that has to contain it
+          // goes to the server's own cap rather than the page size. 100 newest gates
+          // is plenty for browsing and is exactly the wrong number for finding the
+          // hundred-and-first.
+          limit: focusApproval === null ? 100 : 200,
         },
         token,
       )
@@ -279,13 +305,60 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
         ),
       })
     }
-  }, [token, filter, lookback, tenant, canFilterByTenant])
+  }, [token, filter, lookback, tenant, canFilterByTenant, focusApproval])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
   const rows = useMemo(() => (load.status === 'ready' ? load.rows : []), [load])
+
+  /*
+   * The linked gate, resolved against what this query loaded.
+   *
+   * "Widest" is every status, every tenant, since the beginning — the only query whose
+   * empty answer means *there is no such gate here*. Anything narrower answering empty
+   * means the filters hid it, which is the failure this whole section exists to stop
+   * the screen from reporting as "nothing is waiting on you".
+   */
+  const widest = filter === 'all' && lookback === 'all' && tenant === 'all'
+  const focus = useMemo(
+    () => resolveApprovalFocus(rows, focusApproval, widest && load.status === 'ready'),
+    [rows, focusApproval, widest, load.status],
+  )
+
+  // A new target starts with no claim about the filters having been touched.
+  useEffect(() => {
+    setWidened(false)
+  }, [focusApproval])
+
+  /*
+   * Widen once, and only when the gate is not already in view. A gate decided ten
+   * minutes ago is not in the default *Waiting, last 7 days* cut, and that is the
+   * common case for this link — the alert fires the moment the gate opens, and gates
+   * close.
+   */
+  useEffect(() => {
+    if (focus.kind !== 'searching' || load.status !== 'ready') return
+    setFilter('all')
+    setLookback('all')
+    setTenant('all')
+    setWidened(true)
+  }, [focus.kind, load.status])
+
+  /*
+   * Bring the linked gate into view once its card has rendered — and only if it is not
+   * already on screen, so opening a gate by hand does not also move the page.
+   */
+  const focusId = focus.kind === 'waiting' || focus.kind === 'decided' ? focus.row.id : null
+  useEffect(() => {
+    if (focusId === null || typeof document === 'undefined') return
+    const el = document.getElementById(`gate-${focusId}`)
+    if (el === null) return
+    const box = el.getBoundingClientRect()
+    if (box.top >= 0 && box.bottom <= window.innerHeight) return
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [focusId])
 
   /**
    * The two lists, and the counts above them. Waiting gates are ordered by how
@@ -371,6 +444,25 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
         scope={scope}
       />
 
+      {/* Where a link landed, and on what. It sits above the notice because it is
+          about the whole screen rather than about an action just taken. */}
+      {focus.kind !== 'none' && (
+        <p
+          role="status"
+          className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm leading-relaxed text-foreground"
+        >
+          <Link2 className="mt-0.5 size-4 shrink-0 text-blue-700" aria-hidden />
+          <span className="min-w-0 flex-1">{approvalFocusNote(focus, widened)}</span>
+          <button
+            type="button"
+            onClick={() => setFocusApproval(null)}
+            className="shrink-0 rounded-md px-1.5 py-0.5 text-xs font-medium text-blue-700 transition-colors duration-[--dur-fast] hover:bg-blue-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            Clear
+          </button>
+        </p>
+      )}
+
       {notice && (
         <p
           role="status"
@@ -423,7 +515,14 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
             {waiting.map((row, index) => (
               <li
                 key={row.id}
-                className="animate-section"
+                id={`gate-${row.id}`}
+                className={cn(
+                  'animate-section rounded-lg',
+                  // The gate a link was sent to, told apart from the others by more
+                  // than the note above: a ring the reader can find by eye after
+                  // scrolling past three cards.
+                  focusId === row.id && 'ring-2 ring-blue-400 ring-offset-2 ring-offset-background',
+                )}
                 style={{ animationDelay: `${Math.min(index, 6) * 55}ms` }}
               >
                 <WaitingGate
@@ -456,7 +555,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
         >
           <ul className="divide-y divide-border">
             {decided.map((row) => (
-              <DecidedRow key={row.id} row={row} now={now} />
+              <DecidedRow key={row.id} row={row} now={now} focused={focusId === row.id} />
             ))}
           </ul>
         </DataPanel>
@@ -1182,8 +1281,22 @@ function WaitingGate({
  * arguments, the rationale and the gate receipt are all still one click away, and the
  * summary line already carries the four facts an auditor scans for.
  */
-function DecidedRow({ row, now }: { row: ApprovalInboxRow; now: number }): ReactElement {
-  const [open, setOpen] = useState(false)
+function DecidedRow({
+  row,
+  now,
+  focused = false,
+}: {
+  row: ApprovalInboxRow
+  now: number
+  /** This is the gate a link was sent to: open it, and mark it. */
+  focused?: boolean
+}): ReactElement {
+  const [open, setOpen] = useState(focused)
+  // An effect rather than only the initial value: the linked gate can arrive after
+  // this row has already mounted, when widening the query re-reads the list.
+  useEffect(() => {
+    if (focused) setOpen(true)
+  }, [focused])
   const view = readApproval({
     approval_id: row.id,
     action: row.action,
@@ -1195,7 +1308,13 @@ function DecidedRow({ row, now }: { row: ApprovalInboxRow; now: number }): React
   const StatusIcon = statusIcon(row.status)
 
   return (
-    <li className="min-w-0">
+    <li
+      id={`gate-${row.id}`}
+      className={cn(
+        'min-w-0 rounded-md',
+        focused && 'ring-2 ring-blue-400 ring-offset-2 ring-offset-background',
+      )}
+    >
       <button
         type="button"
         aria-expanded={open}
@@ -1323,7 +1442,12 @@ export function ApprovalsMount(): ReactElement {
             </Badge>
           }
         />
-        <ApprovalInbox token={session?.token ?? null} canFilterByTenant={platform} />
+        {/* `ApprovalInbox` reads `?approval=` through `useSearchParams`, which opts its
+            subtree out of prerendering — and this page is statically generated for
+            every portal/section pair. The boundary lives beside the reason for it. */}
+        <Suspense fallback={<LoadingState rows={3} label="Reading the queue…" />}>
+          <ApprovalInbox token={session?.token ?? null} canFilterByTenant={platform} />
+        </Suspense>
       </div>
     </BackendGate>
   )

@@ -147,9 +147,20 @@ async def test_check_output_redacts_pii(monkeypatch):
 
 
 async def test_check_output_passes_clean_answer(monkeypatch):
-    # output content-safety self-check
+    """A clean, grounded answer passes every output rail.
+
+    The answer is now handed the passage it was drawn from. This test is about the
+    CONTENT rails, and calling with no contexts stopped being a neutral way to exercise
+    them: an answer with nothing retrieved behind it is flagged by the grounding rail on
+    purpose (see `test_grounding_rail`), so an implicit no-context call would be
+    asserting the wrong subject.
+    """
+    # output content-safety self-check, and a grounded verdict for the grounding rail
     _mock_classifier(monkeypatch, injection=False, reason="benign")
-    result = await check_output("Revenue grew twelve percent across three regions.")
+    result = await check_output(
+        "Revenue grew twelve percent across three regions.",
+        ["Revenue grew twelve percent across three regions in the last quarter."],
+    )
     assert result.verdict is GuardVerdict.PASS
 
 

@@ -116,7 +116,13 @@ class NotificationRow(BaseModel):
         default=None, description="What it is about: 'job:21', 'document:23'."
     )
     href: str | None = Field(
-        default=None, description="The in-app path to open, e.g. '/app/tenant_admin/jobs'."
+        default=None,
+        description=(
+            "Portal-relative target: '<section>' or '<section>?<param>=<id>', e.g. "
+            "'jobs?document=25'. The reader resolves it against its own portal — one "
+            "row is visible to several portals at once, so no '/app/<portal>' prefix "
+            "is sent."
+        ),
     )
     created_at: str = Field(description="ISO 8601 UTC.")
     read_at: str | None = Field(default=None, description="ISO 8601 UTC, or null.")

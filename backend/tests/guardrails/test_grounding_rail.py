@@ -51,15 +51,28 @@ async def test_grounded_answer_passes(monkeypatch):
     assert result.verdict is GuardVerdict.PASS
 
 
-async def test_no_contexts_is_grounding_noop(monkeypatch):
-    """Every non-graph call site (no contexts) must be a grounding no-op — unaffected."""
-    # grounded=False, but with no contexts the grounding rail never runs, so PASS.
+async def test_an_answer_with_no_contexts_is_flagged_not_passed(monkeypatch):
+    """No retrieval is the finding, not a reason to skip the check.
+
+    This asserted PASS on the reasoning that "with no contexts the grounding rail never
+    runs". An audit found the cost: a run retrieved nothing, answered by citing a
+    document id that exists in no corpus, and shipped with the output rail reporting a
+    clean pass and the console reading "output checked".
+
+    Advisory, and deliberately never a block — the answer is carried through, because
+    plenty of legitimate turns answer with no retrieval (a refusal, a question about the
+    conversation itself) and blocking those would make the rail unusable.
+    """
     _mock_output_completer(monkeypatch, grounded=False)
-    result = await check_output("Closures take 30 days and cost a fee.")
-    assert result.verdict is GuardVerdict.PASS
+    answer = "Closures take 30 days and cost a fee."
+    for contexts in (None, []):
+        result = await check_output(answer) if contexts is None else await check_output(answer, contexts)
+        assert result.verdict is GuardVerdict.FLAG
+        assert result.layer == "grounding"
+        assert result.text == answer, "advisory: the answer is not withheld"
 
 
-async def test_empty_contexts_is_grounding_noop(monkeypatch):
+async def test_an_empty_answer_with_no_contexts_still_passes(monkeypatch):
+    """There is no claim to be ungrounded, so there is nothing to report."""
     _mock_output_completer(monkeypatch, grounded=False)
-    result = await check_output("Closures take 30 days.", [])
-    assert result.verdict is GuardVerdict.PASS
+    assert (await check_output("   ")).verdict is GuardVerdict.PASS

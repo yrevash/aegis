@@ -513,3 +513,74 @@ async def test_the_stream_sends_only_what_this_principal_may_see(db):
     )
     assert row["body"] == "mine."
     await frames.aclose()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. It must send the reader somewhere they can actually go
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The alerts were clickable and the click went nowhere. ``href`` was written absolute
+# and hardcoded to one portal — ``/app/tenant_admin/jobs`` — but a tenant-scoped row is
+# read by that tenant's ``tenant_admin``, ``ai_team`` *and* ``client``, and platform
+# staff receive every tenant's. For four readers out of five the path named a portal
+# their session may not enter, and the console's route guard redirects rather than
+# errors, so the click marked the row read and put them back on their own dashboard
+# with nothing said.
+#
+# The fix is a change of *meaning*, not of field: the emitter writes the screen and the
+# entity (``jobs?document=25``) and never the portal, and the browser resolves it
+# against the viewer's own (``web/src/lib/notificationTarget.ts``). These two tests pin
+# the half that lives here — no ``/app`` prefix, and the entity is in the target, since
+# a link that opens the right *list* is the defect this replaces.
+
+
+async def test_an_ingest_alert_targets_that_document_and_names_no_portal(db):
+    """``jobs?document=<id>`` — the screen and the thing, resolved by whoever reads it."""
+    from app.jobs.activities import _notify_ingest_finished
+    from aegis.jobs import JobStatus
+
+    await _seed()
+    await _notify_ingest_finished(
+        JobStatus.SUCCEEDED,
+        tenant_id=_TENANT_A,
+        workflow_id="ingest:1:25",
+        document_id=25,
+        filename="policy-4.pdf",
+        chunk_count=12,
+        completed_stage="index",
+        error=None,
+    )
+
+    rows, _ = await list_notifications(tenant_id=_TENANT_A, user_id=_USER_A1, limit=50)
+    assert len(rows) == 1
+    href = rows[0]["href"]
+    assert href == "jobs?document=25", (
+        f"the ingest alert targets {href!r}; it must name the section and the document "
+        "and nothing about who is reading it"
+    )
+    assert not href.startswith("/app"), (
+        "an absolute path picks a portal for a row that five portals read — the bug"
+    )
+
+
+async def test_an_approval_alert_targets_that_gate_and_names_no_portal(db):
+    """``approvals?approval=<id>`` — one gate, not the inbox it happens to sit in."""
+    from app.data.approvals import enqueue_approval
+
+    await _seed()
+    await enqueue_approval(
+        approval_id="gate-1",
+        run_id="run-1",
+        action="deactivate_account",
+        tenant_id=_TENANT_A,
+        requested_by=_USER_A1,
+    )
+
+    rows, _ = await list_notifications(tenant_id=_TENANT_A, user_id=_USER_A1, limit=50)
+    assert [row["kind"] for row in rows] == ["approval.awaiting"]
+    href = rows[0]["href"]
+    assert href == "approvals?approval=gate-1", (
+        f"the gate alert targets {href!r}; the inbox's default cut is Waiting/7 days, so "
+        "a link to the list alone shows an empty queue the moment the gate is decided"
+    )
+    assert not href.startswith("/app")

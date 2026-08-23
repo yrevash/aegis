@@ -399,10 +399,13 @@ class Notification(Base):
     #: ``body``. Indexed because "is there already an alert about this document" is the
     #: one question anything other than the inbox asks of this table.
     entity_ref: Mapped[str | None] = mapped_column(String(255), default=None, index=True)
-    #: The in-app path to open, e.g. ``/app/tenant_admin/jobs``. Server-chosen rather
-    #: than derived in the browser: the emitter is the only thing that knows which
-    #: surface actually shows this entity, and a client-side mapping table would be a
-    #: second copy of the routing that silently rots.
+    #: The **portal-relative** target to open, e.g. ``jobs?document=25`` — the section
+    #: that shows this entity, and the entity. Server-chosen rather than derived in the
+    #: browser: the emitter is the only thing that knows which surface shows this
+    #: entity, and a client-side mapping table would be a second copy of the routing
+    #: that silently rots. The ``/app/<portal>`` prefix is deliberately *not* here: one
+    #: row is read by several portals at once, so the reader supplies its own. See
+    #: :mod:`app.data.notifications` for the full contract.
     href: Mapped[str | None] = mapped_column(String(512), default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
     #: ``NULL`` until read. A timestamp rather than a boolean because "when did they see

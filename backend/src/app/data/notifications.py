@@ -24,6 +24,32 @@ happens. The scope itself is resolved from the bearer token
 (``AuthContext.tenant_scope()`` via ``_require_scope``) and never from a query
 parameter.
 
+**``href`` is portal-relative, and the reader resolves it.** The column keeps its name
+and its place in the wire contract, but not its old meaning. It used to be an absolute
+path — ``/app/tenant_admin/jobs`` — and that was a link only one of five portals could
+follow. It is the *scope* that makes it so: a tenant-scoped row is visible to that
+tenant's ``tenant_admin``, ``ai_team`` and ``client`` alike, and platform staff
+(``admin``, ``devops``) see every tenant's, so the emitter has four readers it named the
+wrong portal for and one it named the right one for by luck. The console's route guard
+does not error on a section a session may not enter; it redirects home, silently, which
+is how a bell that "worked" led four readers out of five back to their own dashboard.
+
+So the value written here is ``<section>`` or ``<section>?<param>=<id>`` — the screen
+that shows the entity and the entity itself, with no ``/app/<portal>`` prefix:
+
+* ``jobs?document=25`` — that document's ingest, on whichever portal mounts ``jobs``.
+* ``approvals?approval=<id>`` — that gate.
+* ``governance`` — a screen with no entity; the cap is the tenant's own.
+
+The emitter knows which screen shows the thing and which thing it is. It cannot know
+who will read the row, so it writes neither a portal nor a guess at one. The browser
+resolves ``/app/{viewer's portal}/{target}`` against the section catalogue it already
+owns (``web/src/lib/notificationTarget.ts`` over ``web/src/lib/portal.ts``), and where
+the viewer's portal does not mount that section it renders the alert without a link
+rather than one that bounces. A value beginning with ``/app/`` is still understood —
+rows written before this change are read by stripping the stale portal segment — so
+nothing already in the table became unreadable.
+
 The app-level predicate is not belt-and-braces here, it is the belt. The
 ``notifications`` table is registered in
 :data:`aegis.governance.rls._TENANT_SCOPED_TABLES` and gets a ``tenant_isolation``
@@ -232,7 +258,10 @@ async def emit(
         severity: A :class:`~app.data.models.NotificationSeverity` value.
         user_id: Target one user inside the tenant; ``None`` targets everyone in it.
         entity_ref: What it is about — ``"job:21"``, ``"document:23"``.
-        href: The in-app path to open.
+        href: **Portal-relative** target — ``<section>`` or ``<section>?<param>=<id>``,
+            e.g. ``jobs?document=25``. Never an absolute ``/app/<portal>/…`` path: the
+            emitter cannot know which of the five portals will read the row. See the
+            module docstring.
         dedupe_key: The idempotency key. ``None`` means "report this every time".
 
     Returns:
@@ -316,7 +345,9 @@ async def emit(
 
 
 #: Where a tenant goes to see the cap that stopped their work, and who can raise it.
-_GOVERNANCE_HREF = "/app/tenant_admin/governance"
+#: Portal-relative, per the ``href`` contract in this module's docstring. It carries no
+#: entity because the cap is the tenant's own — the screen *is* the thing.
+_GOVERNANCE_TARGET = "governance"
 
 
 async def notify_budget_exceeded(
@@ -359,7 +390,7 @@ async def notify_budget_exceeded(
         title="Budget cap reached",
         body=f"{reason} Work refused: {because}.",
         entity_ref=f"tenant:{tenant_id}",
-        href=_GOVERNANCE_HREF,
+        href=_GOVERNANCE_TARGET,
         dedupe_key=f"budget.exceeded:{tenant_id}:{hour}",
     )
     if user_id is not None:

@@ -6,6 +6,7 @@ import {
   CheckCheck,
   Info,
   Inbox,
+  Lock,
   OctagonAlert,
   TriangleAlert,
   Volume2,
@@ -18,6 +19,8 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactElement } fr
 
 import { Figure } from '@/components/primitives/Figure'
 import { SIGNALS } from '@/config/signals'
+import { useAuth } from '@/lib/auth/AuthContext'
+import { resolveNotificationTarget } from '@/lib/notificationTarget'
 import { cn } from '@/lib/utils'
 
 import {
@@ -55,6 +58,14 @@ import { useNotifications } from './useNotifications'
  * a click outside closes it, and tabbing past the last row closes it and carries on
  * through the page — rather than a focus trap on a dropdown, which leaves a keyboard
  * user fenced inside a list they only wanted to glance at.
+ *
+ * **A row's destination is computed here, for this reader.** The wire's `href` is
+ * portal-relative — `jobs?document=25` — because one alert is read by several portals
+ * at once; {@link resolveNotificationTarget} resolves it against the signed-in portal.
+ * When that portal does not mount the section, the row is deliberately **not** a link:
+ * it says which screen the alert belongs to and stays markable-read. The thing that was
+ * wrong before was not a missing link, it was a link that silently redirected four
+ * readers out of five back to their own dashboard.
  */
 
 /** The glyph per severity — shape, so the row is not told by hue alone. */
@@ -70,6 +81,11 @@ const FOCUS =
 
 export function NotificationBell(): ReactElement {
   const feed = useNotifications()
+  const { session } = useAuth()
+  // The **viewer's** portal, which is the half of the destination the server cannot
+  // know. Null until the persisted session hydrates: nothing is linked in that window,
+  // because a path built on a guessed portal is the redirect this fixes.
+  const portal = session?.fineRole ?? null
   const [open, setOpen] = useState(false)
   // One clock for every row, ticked while the panel is open. Reading `Date.now()` per
   // row per render makes "4m" and "5m" appear in one list; this makes the ages agree.
@@ -244,6 +260,7 @@ export function NotificationBell(): ReactElement {
                   const tone = severityTone(row.severity)
                   const Icon = SEVERITY_ICON[row.severity] ?? Info
                   const isUnread = row.read_at === null
+                  const target = resolveNotificationTarget(row.href, portal)
                   const className = cn(
                     'grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2 px-3 py-2.5 text-left touch-manipulation transition-colors duration-[--dur-fast] hover:bg-surface-2',
                     FOCUS,
@@ -264,6 +281,16 @@ export function NotificationBell(): ReactElement {
                         <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
                           {row.body}
                         </span>
+                        {/* A target this portal does not mount is said, not hidden and
+                            not linked. `client` has no Jobs section, and the honest
+                            answer to "where does this go" is that it goes to a screen
+                            this account does not have — one line, in the row. */}
+                        {target.kind === 'elsewhere' ? (
+                          <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[0.65rem] text-muted-foreground">
+                            <Lock className="size-3 shrink-0" aria-hidden />
+                            {target.label} is not on your portal
+                          </span>
+                        ) : null}
                         <span className="sr-only">
                           {severityLabel(row.severity)}. {isUnread ? 'Unread' : 'Read'}.
                         </span>
@@ -281,15 +308,20 @@ export function NotificationBell(): ReactElement {
                   return (
                     <li key={row.id}>
                       {/* A row that goes somewhere is a **link**, not a button with a
-                          `router.push` in it. `href` in the contract is an in-app path,
-                          and a button throws away middle-click, ⌘-click, "open in new
-                          tab" and the status bar preview — on the one surface where a
-                          person most wants to peek at a job without leaving what they
-                          are doing. A modified click is left to the browser and does not
-                          mark the row read: they have not read it yet. */}
-                      {row.href !== null && row.href !== '' ? (
+                          `router.push` in it. `href` in the contract resolves to an
+                          in-app path, and a button throws away middle-click, ⌘-click,
+                          "open in new tab" and the status bar preview — on the one
+                          surface where a person most wants to peek at a job without
+                          leaving what they are doing. A modified click is left to the
+                          browser and does not mark the row read: they have not read it
+                          yet.
+
+                          A row with nowhere to go is a button, and always was — the
+                          change is that "nowhere" is now decided per reader rather than
+                          per emitter, so a link is rendered only where it lands. */}
+                      {target.kind === 'link' ? (
                         <Link
-                          href={row.href}
+                          href={target.href}
                           className={className}
                           onClick={(event) => {
                             if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {

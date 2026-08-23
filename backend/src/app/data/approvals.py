@@ -90,10 +90,16 @@ def to_row(row: Approval) -> ApprovalRow:
     )
 
 
-#: Where an approver goes to decide a gate. The tenant-admin portal's approvals section
-#: — the surface that renders the inbox; a console reading this for another role rewrites
-#: the role segment for the viewer.
-_APPROVALS_HREF = "/app/tenant_admin/approvals"
+#: Where an approver goes to decide **this** gate — the section slug and the gate's own
+#: id, with no ``/app/<portal>`` prefix.
+#:
+#: It was ``/app/tenant_admin/approvals``. A gate's alert is tenant-scoped, so it is
+#: also read by that tenant's ``ai_team`` and ``client`` (whose own gates these often
+#: are) and by platform staff; for all of them the absolute path named a portal their
+#: session may not enter, and the route guard sent them home without a word. The
+#: emitter names the screen and the entity — the reader resolves it against its own
+#: portal. See :mod:`app.data.notifications` for the field's contract.
+_APPROVALS_TARGET = "approvals?approval={approval_id}"
 
 
 async def _notify_approval_awaiting(row: Approval) -> None:
@@ -118,12 +124,15 @@ async def _notify_approval_awaiting(row: Approval) -> None:
         kind="approval.awaiting",
         severity="critical" if row.risk is RiskLevel.HIGH else "warning",
         title="Approval needed",
+        # A person reads this on a bell, not in a log. An ISO-8601 stamp with
+        # microseconds and a UTC offset — "by 2026-08-23T05:22:00.125264+00:00" — is
+        # precise and unreadable, and it is the deadline that makes the alert urgent.
         body=(
             f"{row.action} is waiting on a decision "
-            f"({row.risk.value} risk, by {_iso_utc(row.sla_deadline) or 'no deadline'})."
+            f"({row.risk.value} risk, {_deadline_phrase(row.sla_deadline)})."
         ),
         entity_ref=f"approval:{row.id}",
-        href=_APPROVALS_HREF,
+        href=_APPROVALS_TARGET.format(approval_id=row.id),
         # The approval id is already the gate's idempotency key (``enqueue_approval`` is
         # documented idempotent on it), so it is the right dedupe key here too: one
         # announcement per gate, whatever re-enters the node.
@@ -160,7 +169,7 @@ async def _notify_sla_auto_decided(row: Approval, new_status: ApprovalStatus) ->
             "SLA deadline undecided, and the safe answer to an unanswered gate is no."
         ),
         entity_ref=f"approval:{row.id}",
-        href=_APPROVALS_HREF,
+        href=_APPROVALS_TARGET.format(approval_id=row.id),
         # A row can only make this transition once (the sweep is guarded on PENDING), so
         # the id alone is the key; it is here so a second sweeper process racing the
         # first cannot produce a second alert either.
@@ -188,6 +197,26 @@ class ApprovalResolution:
     status: str | None
     run_id: str | None
     decision: ApprovalDecision | None
+
+
+def _deadline_phrase(deadline: datetime | None) -> str:
+    """Render an SLA deadline the way a person reads a deadline: as time remaining.
+
+    "due in 4h", not "by 2026-08-23T05:22:00.125264+00:00". The absolute instant is
+    still on the approvals screen for anyone who needs it; what the alert has to convey
+    is urgency, and a microsecond-precision timestamp conveys it to nobody.
+    """
+    if deadline is None:
+        return "no deadline"
+    remaining = deadline - _now()
+    seconds = remaining.total_seconds()
+    if seconds <= 0:
+        return "past its deadline"
+    if seconds < 3600:
+        return f"due in {max(1, int(seconds // 60))}m"
+    if seconds < 86400:
+        return f"due in {int(seconds // 3600)}h"
+    return f"due in {int(seconds // 86400)}d"
 
 
 async def enqueue_approval(

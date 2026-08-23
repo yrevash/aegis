@@ -7408,7 +7408,7 @@ export interface components {
             entity_ref?: string | null;
             /**
              * Href
-             * @description The in-app path to open, e.g. '/app/tenant_admin/jobs'.
+             * @description Portal-relative target: '<section>' or '<section>?<param>=<id>', e.g. 'jobs?document=25'. The reader resolves it against its own portal — one row is visible to several portals at once, so no '/app/<portal>' prefix is sent.
              */
             href?: string | null;
             /**
