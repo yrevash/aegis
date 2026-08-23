@@ -167,11 +167,21 @@ export function ApprovalSpotlight({
       aria-modal="true"
       aria-label="Human approval required"
     >
-      <div aria-hidden className="absolute inset-0 bg-foreground/30 backdrop-blur-[2px]" />
+      {/* The scrim has to actually dim. At 30% the page read straight through it and the
+          gate — the one moment the platform stops and asks a person — was the least
+          legible thing on screen. `backdrop-blur` is gone rather than increased: DESIGN.md
+          §84 rules out blur on content, and a blur was doing the work an opaque surface
+          should do. */}
+      <div aria-hidden className="absolute inset-0 bg-foreground/60" />
       <div
         ref={cardRef}
         tabIndex={-1}
-        className="animate-trace-in relative z-10 w-full max-w-md min-w-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        // `bg-surface` is load-bearing, not decoration. ApprovalCard paints `bg-risk/[0.04]`
+        // — a 4% tint that composites correctly over an opaque page and is effectively
+        // transparent when the card floats over a scrim, which is what put the run's own
+        // text behind the gate's. The opaque base restores the tint's intended reading and
+        // the shadow lifts the card off the dimmed page.
+        className="animate-trace-in relative z-10 w-full max-w-md min-w-0 overflow-hidden rounded-xl bg-surface shadow-pop outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {children}
       </div>
