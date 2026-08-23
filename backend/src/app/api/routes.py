@@ -3124,7 +3124,7 @@ async def memory_delete_fact(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM-Ops closed loop (`/ops/*`) — prompt registry, trace-eval trend, and the
-# diagnose → release → rollback control surface (docs/learn/40-pipelines.md).
+# diagnose → release → rollback control surface (docs/module/PIPELINES.md).
 #
 # Reads require auth; every mutation (diagnose/release/rollback/decide) is admin-only
 # and audited. All handlers degrade cleanly when the real stores are off: reads return

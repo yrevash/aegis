@@ -128,10 +128,49 @@ The `gate` node routes on the **tool's declared risk tier**: a risky
 proposed action routes to `approval`, which is a genuine LangGraph
 `interrupt()` — the run's state is checkpointed and execution actually
 pauses, to be resumed later from that exact checkpoint once a human
-decides. The checkpointer is injected (defaults to an in-memory saver, but
-is designed to be swapped for a durable one), which is what makes a
-multi-minute human approval survive independently of the process that
-started the run.
+decides.
+
+### The checkpointer — durable since 2026-08-23, and why it took a custom saver
+
+The checkpointer is injected, selected by `AGENT_CHECKPOINTER`:
+
+- `memory` (the default in `Settings`, and what the test suites run) is
+  LangGraph's `InMemorySaver`. A parked run dies with the process.
+- `postgres` is `app.agent.checkpointer.HybridPostgresSaver`, and it is what
+  the deployment runs. A run parked on the gate survives a restart: kill the
+  process, start it again, approve on the new one, and the run finishes from
+  the interrupted checkpoint without re-running any node before the gate.
+
+`HybridPostgresSaver` exists because **neither saver shipped by
+`langgraph-checkpoint-postgres` can serve this codebase**, which is worth
+knowing before you reach for one:
+
+- `PostgresSaver` implements only the **sync** protocol. Its `aget_tuple` /
+  `aput` / `alist` are the inherited stubs that `raise NotImplementedError`.
+  Every run here is driven with `graph.astream(...)`, and LangGraph's async
+  loop awaits `aget_tuple` as its very first act — so it would crash on the
+  first token of the first run.
+- `AsyncPostgresSaver` is the mirror trap. Its **sync** entry points raise
+  `asyncio.InvalidStateError` when called from the saver's own loop, and
+  `aegis.agent.orchestrator` calls the sync `graph.get_state(config)` from
+  inside `async def` bodies in three places, including the resume path.
+
+`HybridPostgresSaver` is the sync saver with its missing async half
+implemented by handing the same sync call to `asyncio.to_thread`, so the
+blocking psycopg work never runs on the event loop and both call styles hit
+one Postgres-backed store. The checkpoint schema is created by LangGraph's own
+idempotent `setup()` on the **owner** DSN and then granted to the serving role,
+which owns nothing — without that grant a fresh box fails mid-run rather than
+at boot.
+
+Measured cost: **~1.4 ms** per checkpoint (the ADR had guessed 20–50 ms).
+Storage grows without bound and nothing prunes it — stated here rather than
+left as folklore.
+
+`GET /v1/agent/checkpoints/{run_id}` exposes the history with `channel_values`,
+interrupt values and task results **deliberately dropped**: they carry the
+query, the retrieved passages and any PII. Another tenant's run answers `404`,
+byte-identical to a run that does not exist.
 
 ### The reflection loop — self-repair, bounded
 

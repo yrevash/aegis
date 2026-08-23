@@ -1,13 +1,23 @@
 # Phase 3 — The platform spine
 
+> **Kept as a record, 2026-08-23.** This phase shipped. It survives the documentation
+> clean-up because `aegis/jobs/stages.py` and `backend/src/app/config.py`
+> cite it for the Temporal sandbox boundary and the job substrate's measurements. The rest of the v2 plan — the
+> master plan, the roadmap, the other phases, six research plans and five technology
+> surveys — was deleted and is in git history (last full set: `2d8b84d`). **Links from
+> here into `plans/` and `research/` are therefore dead**; the bodies are intact, only
+> the cross-references are broken. See [`README.md`](README.md).
+
+
+
 **Everything in phases 4–9 depends on at least one piece of this. Build it first.**
 
 Six pieces, one theme: Aegis has no substrate for durable work, no per-tenant configuration,
 and — measured — no tenants.
 
-Research behind it: [`plans/04-enterprise-substrate.md`](plans/04-enterprise-substrate.md) ·
-[`plans/06-dashboards-control.md`](plans/06-dashboards-control.md) ·
-[`plans/05-modularity-scale.md`](plans/05-modularity-scale.md)
+Research behind it: `plans/04-enterprise-substrate.md` ·
+`plans/06-dashboards-control.md` ·
+`plans/05-modularity-scale.md`
 
 ---
 
@@ -155,7 +165,7 @@ minimum thing that passes a test:
 ## Build vs buy — decided: Temporal orchestrates, Postgres records
 
 24 frameworks surveyed. Full report:
-[`research/job-framework-survey.md`](research/job-framework-survey.md).
+`research/job-framework-survey.md`.
 
 **Decision: adopt Temporal for execution, keep our own tenant-scoped tables as the system of
 record.** An earlier draft of this phase rejected Temporal. That rejection was an architecture
@@ -309,8 +319,11 @@ exists to keep workflow definitions away from the modules that do `asyncio.run()
 
 **Dev server RSS: 135 MB** on macOS (123 MB previously measured on the same class of machine).
 
-**Still outstanding — the Windows leg**, which cannot be run from here. The runbook for it is
-[`docs/install/04-verify.md`](../install/04-verify.md):
+**Still outstanding — the Windows leg**, which cannot be run from here. Its runbook was
+`docs/install/04-verify.md`, deleted on 2026-08-23 when the two install directories were
+merged; the verification table it held now lives in
+[`docs/install/02-bootstrap.md`](../install/02-bootstrap.md), and the three measurements
+below are recorded here rather than there because they are this phase's evidence:
 
 - Total RSS with Postgres 17 + Neo4j Desktop + Memurai + Temporal all running.
 - The same kill test on Windows, confirming behaviour parity.

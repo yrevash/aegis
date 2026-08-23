@@ -69,7 +69,7 @@ Everything else is the **stable core** — built ahead, untouched on the day. On
 4. **ML features + target** — what the ML spine predicts.
 5. **Domain corpus** — what gets ingested into the graph.
 
-Keep these isolated in clearly-named config/adapter modules so that on the day, only these change. Do not let domain logic leak into the core. The seam is documented in [`../learn/50-run-and-extend.md`](../learn/50-run-and-extend.md).
+Keep these isolated in clearly-named config/adapter modules so that on the day, only these change. Do not let domain logic leak into the core. The seam and the step-by-step retargeting procedure are [`../../SKILL.md`](../../SKILL.md).
 
 ---
 
@@ -78,7 +78,7 @@ Keep these isolated in clearly-named config/adapter modules so that on the day, 
 - Working end-to-end system (the vertical slice must work by end of Day 1).
 - Live dashboard (clear, enterprise-grade, projector-legible).
 - Pitch deck + demo video (cater to the jury's language: business value, before/after, why-not-solved-today).
-- **Architecture diagram + system design** — see [`../learn/10-architecture.md`](../learn/10-architecture.md) and the mermaid diagrams throughout [`../teaching/`](../teaching/README.md).
+- **Architecture diagram + system design** — see [`../architecture/system-architecture.md`](../architecture/system-architecture.md) and the mermaid diagrams throughout [`../teaching/`](../teaching/README.md).
 - **One-page threat model** mapping the app to OWASP LLM + Agentic Top 10 — [`../security/threat-model.md`](../security/threat-model.md).
 - **README** that states the architecture in the first screen.
 - **ADRs** — "why this, not that" for the big choices. Nine live in [`../adr/`](../adr/).

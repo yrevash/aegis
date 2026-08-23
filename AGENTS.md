@@ -21,7 +21,7 @@ something about the domain, you have gone the wrong way.
 | `backend/` | The FastAPI composition root. Wires the core to real infrastructure. |
 | `backend/src/app/adapter/` | **The domain seam** — ten pieces, the only thing that changes per domain. |
 | `web/` | The Next.js console. Landing page plus role-scoped portals. |
-| `docs/` | `learn/` (the system end to end), `teaching/` (a 16-module course), `adr/`, `security/`, `dev_new_docs_v2/` (the current phase plan). |
+| `docs/` | `architecture/system-architecture.md` (the system end to end), `install/`, `teaching/` (one file per module, 29), `adr/`, `security/`, `compliance/`. Index: `docs/README.md`. |
 | `scripts/` | `bootstrap` · `preflight` · `start`, each as `.sh` and `.ps1`. |
 
 ## Commands
@@ -86,9 +86,7 @@ Three run modes so a demo never depends on infrastructure being healthy: `safe`
 the authoritative procedure: the ten adapter pieces, the order to edit them in,
 what "done" looks like at each step, and the command that proves it.
 
-Do not follow `docs/learn/50-run-and-extend.md` §7 in preference to it; that
-section is good background on the `AgentDeps` hook table, but `SKILL.md` is the
-procedure.
+`SKILL.md` is the procedure; nothing else in `docs/` supersedes it.
 
 ## Boundaries
 

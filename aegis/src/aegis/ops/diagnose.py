@@ -1,6 +1,6 @@
 """Diagnose — cluster failing evals + propose an improved system prompt (a DRAFT).
 
-The **Diagnose** stage of the LLM-Ops closed loop (see ``docs/learn/40-pipelines.md``
+The **Diagnose** stage of the LLM-Ops closed loop (see ``docs/module/PIPELINES.md``
 Gap 2). It reads the recent *failing* :class:`~aegis.ops.models.EvalResult` rows that
 :mod:`aegis.ops.trace_eval` wrote, tallies **which metrics fail most** (answer vs the
 per-step ``step:retrieval`` / ``step:tool`` / ``step:guardrail`` facets), then feeds the

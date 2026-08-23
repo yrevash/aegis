@@ -4,7 +4,7 @@
 
 The reporting layer: six Postgres views over the platform's own operational
 tables (`analytics_spend_daily`, `analytics_runs_daily`, and four others),
-consumed either through a native `/admin/usage` path or through embedded
+consumed either through a native `/v1/admin/usage` path or through embedded
 Superset dashboards. If you have never worked with database views owned by
 a restricted role before: the interesting technique here is that tenant
 isolation is enforced **twice**, independently — once by the view's own SQL
@@ -90,6 +90,27 @@ A chart rendering empty is, on this platform, most likely this exact
 misconfiguration rather than a genuine "no data" state — worth checking
 first, precisely because it is otherwise silent.
 
+### The second silent failure: Superset pointed at the wrong database
+
+`DB_CONNECTION_MUTATOR` has a sibling, found on 2026-08-23 and worth checking in
+the same breath. The Analytics screen read **Metered spend 88.11** and 9 red-team
+runs while the Aegis-native KPI beside it said **$4.16** and the database held 7.
+Nothing was broken: Superset's stored connection pointed at the database `taif`,
+and the backend serves `taif_run1`. Both had been repointed when the deployment
+moved; this one was missed.
+
+An analytics tool aimed at the wrong database is not a broken chart. It is a
+chart that renders confidently with **another deployment's numbers**, and nothing
+on the screen looks wrong. Verify by a *distinctive* count rather than a
+plausible one — "does this number match a count I can run myself?" — never by
+whether the chart looks populated.
+
+The committed bundle is why it could come back: `databases/Aegis.yaml` hardcoded
+`/taif`, so re-provisioning would have recreated it. The database name is now
+substituted the same way the password already was, defaulting to the database in
+`POSTGRES_DSN` so the two cannot drift by default, and refusing to guess when
+neither is set.
+
 ### Verified live in this project
 
 `spend-by-model`, `runs-by-outcome`, `human-gates` and other boards were
@@ -100,14 +121,14 @@ scoped per tenant when queried as different tenant principals.
 
 ### The two-path design — native works with nothing else running
 
-`/admin/usage` queries the underlying tables directly and needs no Superset
+`/v1/admin/usage` queries the underlying tables directly and needs no Superset
 instance at all — a deployment can show real spend/usage figures with zero
 external dependencies. Superset is additive, for richer dashboard
 composition, not a hard requirement for basic analytics to function.
 
 ## How it runs
 
-1. A caller requests either the native `/admin/usage` endpoint, or a
+1. A caller requests either the native `/v1/admin/usage` endpoint, or a
    Superset-embedded dashboard.
 2. For the native path: a direct query against the `analytics_*` views,
    scoped by the caller's own RLS-bound session.

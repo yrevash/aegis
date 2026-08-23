@@ -81,15 +81,16 @@ cd backend && PYTHONPATH=src:../aegis/src .venv/bin/python -m pytest -q
 bash scripts/prove_memory_scope.sh
 ```
 
-Reference, 2026-08-21: **web 231 · 67/67 pages · aegis 2271 · backend 1181**.
-Known: one pre-existing aegis failure
-(`test_interrupt_is_never_reached_from_inside_a_gathered_task`), and
-`test_reindex_admission.py` fails only when Temporal is down.
+Reference, 2026-08-23: **web 364 · aegis 2324 passed / 14 skipped · backend 1984
+passed / 1 skipped**. Known: `test_reindex_admission.py` fails only when Temporal
+is down.
 
-**Then do the check no test performs.** Sign in at `localhost:3001` as
+**Then do the two checks no test performs.** Sign in at `localhost:3001` as
 `northwind.client`, then as `vertex.client`. They must show **different** figures.
 That is the platform's central claim, and if it is not visibly true the install is
-not finished — whatever the suites say.
+not finished — whatever the suites say. Then park a run on the approval gate,
+restart the backend, and approve it: with `AGENT_CHECKPOINTER=postgres` it finishes,
+and on the default `memory` it cannot.
 
 ---
 

@@ -126,7 +126,7 @@ class RetrievalConfig:
     cache_ttl_seconds: int = 3600
     semantic_threshold: float = 0.985
     #: RRF damping constant (the only RRF tunable — RRF is deliberately *rank-based and
-    #: weightless* per ``docs/learn/10-architecture.md``, so there are no per-arm
+    #: weightless* per ``docs/architecture/system-architecture.md``, so there are no per-arm
     #: fusion weights to expose; a higher ``k`` flattens the rank weighting).
     rrf_k: int = 60
     #: Default upper bound on Self-RAG retrieval passes, read by

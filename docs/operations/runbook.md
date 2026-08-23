@@ -3,6 +3,20 @@
 The one page to run everything **without an agent**. Three commands, one fallback
 ladder. When something is red, the ladder tells you which mode still works.
 
+> **This page describes the `scripts/start.*` launch paths**, which run the backend on
+> **8000** and the console on **3000**. The developed-against deployment runs the backend
+> on **8110** and the console on **3001**, started by hand — see
+> [`../install/02-bootstrap.md`](../install/02-bootstrap.md). Both are real; do not read a
+> port here as contradicting one there.
+>
+> One genuine conflict, stated rather than smoothed over: `scripts/start.sh` sets
+> `NEXT_PUBLIC_API_BASE`, which the install runbook tells you never to set (it overrides
+> the same-origin rewrite in `next.config.mjs` and reintroduces CORS, tunnel and
+> IPv4-only failures). It works for `localhost` on one machine and fails for anything
+> else. If you are not using `start.sh`, do not set it.
+>
+> Add `6333` (Qdrant) to the ports below; it is required in full mode.
+
 ---
 
 ## TL;DR — three commands
@@ -21,7 +35,8 @@ ladder. When something is red, the ladder tells you which mode still works.
 ./scripts/start.sh lite
 ```
 
-Then open **http://localhost:3000** and log in with **admin / admin**.
+Then open **http://localhost:3000** and log in with **admin / demo** (the seeded
+password, unless `AEGIS_SEED_PASSWORD` says otherwise).
 The only secret you must set is `GENAILAB_API_KEY` in `backend/.env`.
 
 ---
@@ -57,7 +72,7 @@ Backend (http://localhost:8000, FastAPI/uvicorn)   endpoints: /auth/login(JWT) /
   ├── STORES=off (lite): in-memory hybrid recall + in-memory cache, SQLite, memory checkpointer ← no databases
   └── STORES=on  (full): Postgres 5432 (primary: tenants/budgets/ledger/approvals/
              checkpoints/audit) · Neo4j 7687 · Redis 6379 · Phoenix 6006
-             plus the EMBEDDED vector store — an on-disk directory, no server, no port
+             plus Qdrant 6333 (the one vector store)
 ```
 
 | Port | Service | Needed in |

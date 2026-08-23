@@ -1,6 +1,17 @@
 # Phase 4 — Ingestion and retrieval, rebuilt on evidence
 
-**Status: approved 2026-08-18. Nothing here is implemented yet.**
+> **Kept as a record, 2026-08-23.** This phase shipped. It survives the documentation
+> clean-up because five source files, `backend/src/app/retrieval/NOTES.md` and
+> `docs/adr/0006` cite its §D6 and D1 for measured numbers that exist nowhere else. The rest of the v2 plan — the
+> master plan, the roadmap, the other phases, six research plans and five technology
+> surveys — was deleted and is in git history (last full set: `2d8b84d`). **Links from
+> here into `plans/` and `research/` are therefore dead**; the bodies are intact, only
+> the cross-references are broken. See [`README.md`](README.md).
+
+
+
+**Status when written: approved 2026-08-18, nothing implemented. It has since shipped —
+see the banner above.**
 
 > ## Amendments of 2026-08-18 — read before the body
 >
@@ -54,10 +65,10 @@ but backwards. Everything below is either measured on hardware, or cited to a pa
 primary source, and every decision carries its reason, its trade-off, and what we would do
 with more room.
 
-Research behind it: [`research/docling-verified.md`](research/docling-verified.md) ·
-[`research/ingestion-sota.md`](research/ingestion-sota.md) ·
-[`research/retrieval-sota.md`](research/retrieval-sota.md) ·
-[`research/eval-design.md`](research/eval-design.md)
+Research behind it: `research/docling-verified.md` ·
+`research/ingestion-sota.md` ·
+`research/retrieval-sota.md` ·
+`research/eval-design.md`
 
 ---
 
@@ -1458,7 +1469,7 @@ bootstrap. **n=50 defends a ≥15-point delta and cannot defend a 5-point one.**
 before a judge asks is worth more than the extra decimal place.
 
 **The day-of procedure** (2 hours, one person, ~$1.60) is designed in
-[`research/eval-design.md`](research/eval-design.md) §4, including a five-rung fallback ladder
+`research/eval-design.md` §4, including a five-rung fallback ladder
 for when the gateway is down. The single most valuable preparation item: **a timed rehearsal
 on an unfamiliar corpus before 30 August.**
 

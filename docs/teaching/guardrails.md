@@ -106,7 +106,7 @@ lazily via `aegis.core.lazy.require`, so importing `aegis.guardrails.nemo`
 and running the test suite never requires the package to be installed.
 
 **But NeMo is not where the actual checking logic lives.** This is the single
-most important fact about this module, and it's easy to miss. `nemo.py`'s own
+most important fact about this module, and it is easy to miss. `nemo.py`'s own
 docstring says it directly:
 
 > *"One policy, two front doors: the fast programmatic API the agent graph
@@ -114,18 +114,69 @@ docstring says it directly:
 
 Concretely: the Colang files (`config/rails/input.co`, `output.co`) define
 *flows* — a declarative, readable list of "when X happens, run action Y".
-Each of those actions, defined in `config/actions.py`, is a thin wrapper that
-calls straight back into `aegis.guardrails.pipeline.check_input()` or
-`check_output()` — the same Python pipeline described above. NeMo does not
-run its own independent detection; it is a **second, declarative front door
-onto the same enforcement code** that the agent graph calls directly and
-faster through the programmatic API.
+Each of those actions, defined in `config/actions.py`, calls the **same rail
+functions** the programmatic pipeline calls (`schema`, `pii`, `classifier`,
+`content_safety`, `topical`, `grounding`). NeMo does not ship its own
+detection here; it is a **second dispatcher over one set of rails**.
 
 Why two front doors for one policy: the Colang files are what a security
 reviewer or a jury can read in plain English without knowing Python — "if the
-user tries to jailbreak, refuse" — while the agent's hot path calls the
-Python pipeline directly because it is faster and does not need an LLM engine
-wrapper in front of it.
+user tries to jailbreak, refuse" — while the agent's hot path can call the
+Python pipeline directly because it is faster and needs no LLM engine wrapper.
+
+### Both front doors actually run — the `guardrails_engine` posture
+
+`backend/src/app/config.py` carries `guardrails_engine`, and it really does
+dispatch. Three values:
+
+| Posture | What runs |
+|---|---|
+| `programmatic` | the offline pipeline alone (the default in `Settings`) |
+| `nemo` | the declarative Colang policy alone |
+| `both` | the pipeline **first**, then the Colang engine over what the pipeline returned — **and this is what the deployment runs** |
+
+Until 2026-08-23 the field selected one engine *or* the other and defaulted to
+`programmatic`, so the Colang policy — eight flows, complete, mirroring the
+pipeline layer for layer — existed as an artifact and judged nothing.
+
+**The order in `both` is load-bearing, not cosmetic:**
+
+- The pipeline is offline and free, so it catches the cheap failures before the
+  engine spends a model call on them.
+- The engine judges the pipeline's **output**, so PII the pipeline masked never
+  reaches the Colang actions' classifier API either — which is exactly the
+  disclosure the PII layer exists to prevent.
+- An already-blocked payload is **not forwarded at all**. The second engine
+  could only agree, and handing refused text to a classifier is the same leak
+  by another route.
+
+Verdicts fold **strictest-wins** and redactions accumulate, so either engine may
+be the one that says no and neither can undo the other's masking. `both` is also
+the only posture that keeps every rail: the Colang policy has no grounding
+action, so `nemo` alone silently drops the output grounding self-check.
+
+An unrecognised value keeps the programmatic rails and logs, rather than being
+treated as a selection — **a typo must never be a way to turn enforcement off.**
+
+### Two rails that documented themselves as advisory and refused anyway
+
+Both were found on 2026-08-23 and both had the same root cause, which is worth
+knowing before you write a Colang flow: **a `bot` message inside a rail makes
+NeMo record that rail as having *stopped* the turn**, and `_stopped_rails` reads
+that — correctly — as a block. A rail cannot annotate. It can only refuse.
+
+- **Topical.** `rails/input.co` ended `bot inform off topic`, under a comment
+  stating its whole purpose: *"an off-topic query is recorded, never blocked, so
+  a legitimate blind-domain demo is never broken."* It blocked. "What is the
+  capital of France?" came back `run_finished: blocked`. On a platform built to
+  be pointed at an unseen domain, "off-topic" is not an edge case — it is every
+  question until the adapter's `DOMAIN_DESCRIPTION` is rewritten.
+- **Grounding.** `rails/output.co` ended `bot inform ungrounded`, commented *"no
+  `stop`; the answer is still delivered"*. A `bot` message inside an **output**
+  rail replaces the answer outright.
+
+The advisory finding now belongs to the programmatic pipeline, which can record
+a non-blocking flag; the Colang flows no longer pretend to.
 
 ### Is the checking custom, or off-the-shelf?
 
@@ -187,6 +238,18 @@ table that will eventually describe a stack the process is not enforcing."*
 An off-topic question does not stop the request — it is flagged and the run
 continues. A tenant can tighten either to a hard block via `topical_block` /
 `grounding_block`, but can never loosen the blocking ones.
+
+**One case in the grounding rail is FLAG even under `grounding_block`:** a run
+that retrieved **nothing**. That used to short-circuit to a silent PASS —
+"nothing to ground against" — which treated the most likely hallucination case
+as the safest one. An audit caught a run that retrieved nothing, cited
+`DOC-REF-001` (a document that exists in no corpus), and shipped with the badge
+reading "output checked". Nothing retrieved means nothing supports the claims:
+that is the finding, not a reason to skip the check. It stays a FLAG because
+plenty of legitimate turns answer with no retrieval — a refusal, a question
+about the conversation itself — and blocking those would teach an operator to
+switch the rail off. An **empty** answer still passes: there is no claim to be
+ungrounded.
 
 ### The `_injection_block` design — why an unchecked refusal is never phrased as an accusation
 
@@ -260,11 +323,15 @@ onto every other tenant's next request.
 
 ## What is not here
 
-- **NeMo does not run independent detection logic.** It is a declarative
-  wrapper whose Colang actions call the same Python pipeline the agent graph
-  calls directly. If you were expecting NeMo's own built-in rail catalogue to
-  be doing the actual work, it is not — Aegis wrote its own rails and gave
-  them a Colang front door.
+- **NeMo does not run independent detection logic.** It is a second dispatcher
+  whose Colang actions call the same rail functions the programmatic pipeline
+  calls. If you were expecting NeMo's own built-in rail catalogue to be doing
+  the actual work, it is not — Aegis wrote its own rails and gave them a Colang
+  front door. What `both` buys is a second, independently-ordered pass over one
+  policy, not a second detector.
+- **A Colang rail cannot annotate.** There is no advisory verdict in NeMo's
+  model: a `bot` message inside a rail stops the turn. Anything that needs to
+  be recorded without refusing belongs in the programmatic pipeline.
 - **Topical and grounding are advisory by default**, not blocking. A jury
   demo asking an off-domain question will see a flag, not a refusal, unless
   the tenant has explicitly tightened it.

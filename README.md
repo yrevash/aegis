@@ -147,6 +147,81 @@ Six checkpoints stand between the model and a real action:
 
 ---
 
+## Standards and compliance readiness
+
+> **Compliance-readiness evidence — not certification.**
+> Aegis holds **no** ISO 27001 certificate, **no** ISO/IEC 42001 certificate, **no**
+> SOC 2 report and **no** EU AI Act conformity assessment. Nobody independent has
+> audited any of it. What follows is a control-by-control map from published
+> frameworks to **files, routes and tests in this repository** — the kind of thing a
+> buyer's security reviewer can open and check, not a badge.
+
+Twelve frameworks are mapped, India's law first because for a deployment in India the
+DPDP Act is *law* and the rest is practice:
+
+| Jurisdiction | Frameworks |
+|---|---|
+| **India** | DPDP Act 2023 + Rules 2025 · CERT-In Directions · MeitY IAGG, RBI ITGRCA, SEBI CSCRF, BIS IS 17428 |
+| **International** | OWASP LLM Top 10 · OWASP Top 10 · MITRE ATLAS · NIST AI RMF · ISO/IEC 42001 · ISO/IEC 27001 · EU AI Act · SOC 2 TSC · GDPR |
+
+Every control sits in one of **four** states — `enforced`, `partial`,
+`not_implemented`, `not_applicable` — and the last two are stated plainly rather than
+dressed up. `enforced` costs the most to claim: it needs a *file* reference **and** a
+*test* reference, and the test suite refuses one without the other.
+
+**The totals are deliberately not printed here.** They change whenever a control
+changes state, and a number typed into a README is a number nobody re-derives. Read
+them from the surfaces that count them on every request:
+
+| Where | What it gives | Who can read it |
+|---|---|---|
+| [`docs/compliance/README.md`](docs/compliance/README.md) | The written authority — every control, its state, its evidence and what is missing | anyone with the repo |
+| `GET /platform/standards` | Framework names, jurisdictions and the four derived counts | **public**, no token — this is what the landing page renders |
+| `GET /compliance` | The full control-by-control map with every file, route and test | platform staff only — a public gap map is a target list |
+
+`backend/tests/api/test_compliance.py` resolves **every** evidence reference against
+the real filesystem, the real served route table and the real pytest node ids on each
+run, so a claim naming a file that no longer exists fails the suite rather than
+reaching a reviewer.
+
+---
+
+## What the stack actually runs on
+
+The mechanisms behind the pitch, each with the file it lives in. Every row but the
+last is also a cell on the landing page, where `web/tests/landing/stackClaims.test.mjs`
+resolves its path against the repository on each run — so a renamed module breaks a
+test instead of leaving a claim standing. Row-level security is off that band only
+because the page already draws it as its own exhibit, and a page should not make one
+argument twice.
+
+| | Mechanism | In the repository |
+|---|---|---|
+| **LangGraph** | A parked run resumes on a fresh worker, from a durable Postgres checkpoint | `backend/src/app/agent/checkpointer.py` |
+| **Temporal** | Ingestion, reindex and reconcile run as durable workflows | `backend/src/app/jobs/flows/ingest.py` |
+| **Qdrant** | The vector arm of a retrieve — one engine, never an in-memory dict | `aegis/src/aegis/retrieval/vector_store.py` |
+| **LightRAG + Neo4j** | The graph arm, over an entity graph extracted from the corpus | `aegis/src/aegis/retrieval/lightrag_backend.py` |
+| **Reciprocal Rank Fusion** | One ranking out of the arms, each passage keeping its origin | `aegis/src/aegis/retrieval/fusion.py` |
+| **ONNX cross-encoder** | Reorders the fused pool locally — deterministic, and off the gateway | `aegis/src/aegis/retrieval/local_reranker.py` |
+| **Presidio** | PII detected and masked on input, on output and on tool results | `aegis/src/aegis/guardrails/pii.py` |
+| **NeMo Guardrails** | Colang rails layered over the always-on programmatic pipeline | `aegis/src/aegis/guardrails/nemo.py` |
+| **MAPIE** | Conformal intervals whose coverage is measured, not asserted | `aegis/src/aegis/ml/model.py` |
+| **SHAP** | Per-prediction drivers, so a signal can be argued with | `aegis/src/aegis/ml/model.py` |
+| **Offline eval gate** | RAGAS-style deterministic proxies — no LLM call, no `ragas` dependency | `aegis/src/aegis/evals/metrics.py` |
+| **OpenTelemetry + OpenInference** | GenAI semantic-convention spans across every run | `aegis/src/aegis/observability/semconv.py` |
+| **Apache Superset** | Embedded dashboards behind a guest token carrying the tenant RLS | `aegis/src/aegis/analytics/rls.py` |
+| **Postgres RLS** | `FORCE ROW LEVEL SECURITY`, and a `NOSUPERUSER NOBYPASSRLS` serving role | `aegis/src/aegis/governance/rls.py` |
+
+The proof for the first row is
+`backend/tests/agent/test_durable_approvals.py::test_fresh_worker_rehydrates_and_resumes_by_thread_id`
+— park the run, restart the worker, resume from the checkpoint.
+
+Both of these sections are rendered on the public landing page, and **both are
+removable by one constant** in `web/src/components/landing/bands.config.ts`, whose
+docstring says exactly what each switch takes off the page.
+
+---
+
 ## The console
 
 Four role-scoped portals — `admin`, `ai_team`, `devops`, `client` — each a focused
@@ -216,14 +291,16 @@ cd web     && npx next build                                           # 65/65 p
 
 ## Documentation
 
-Start with **[`docs/learn/00-what-aegis-is.md`](docs/learn/00-what-aegis-is.md)** —
-a six-file path from zero to the whole system. `INSTALL.md` is the setup manual;
+Start with
+**[`docs/architecture/system-architecture.md`](docs/architecture/system-architecture.md)** —
+the whole platform, top to bottom, in one file. `docs/install/` is the setup path;
 [`docs/README.md`](docs/README.md) indexes everything else.
 
 | | |
 |---|---|
-| [`docs/learn/`](docs/learn/00-what-aegis-is.md) | The system, end to end — architecture, backend, frontend, pipelines, run and extend |
-| [`docs/teaching/`](docs/teaching/README.md) | The course — one folder per module, from no prior knowledge to defending every design decision |
+| [`docs/architecture/system-architecture.md`](docs/architecture/system-architecture.md) | The system, end to end — layers, stores, gateway, security model, one question traced through |
+| [`docs/install/`](docs/install/README.md) | Bring-up: prerequisites, the ordered runbook, the demo seeders |
+| [`docs/teaching/`](docs/teaching/README.md) | The course — one file per `aegis.*` module, from no prior knowledge to defending every design decision |
 | [`docs/module/MODULE_REFERENCE.md`](docs/module/MODULE_REFERENCE.md) | The Module Contract, the streaming spine, and the module map for the importable core |
 | [`docs/adr/`](docs/adr/) | Nine architecture decision records |
 | [`docs/security/`](docs/security/) | Threat model and OWASP Agentic Top-10 mapping |

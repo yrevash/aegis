@@ -22,17 +22,41 @@ Aegis's own backend. That only works if there is a boundary: a leaf module
 so installing it never drags in Docling, Temporal, or a database driver it
 does not need.
 
+## Diagram
+
+```mermaid
+flowchart TD
+    subgraph CORE["aegis.core — zero heavy dependencies"]
+        T["types.py · interfaces.py<br/>the shared vocabulary"]
+        L["lazy.require()<br/>the one door to an optional dependency"]
+        R["registry.py<br/>@register — swap an implementation by name"]
+        S["stream.py · stream_names.py · events.py<br/>the event contract every module narrates through"]
+        C["config.py<br/>CoreSettings, AEGIS_MODE"]
+    end
+    LEAF["Any leaf module<br/>(guardrails, retrieval, ml, …)"] --> CORE
+    DATA["aegis.data"] --> CORE
+    DURABLE["Durable modules<br/>(memory, governance, jobs, …)"] --> DATA
+    CORE -.->|imports nothing internal| X(( ))
+    style CORE fill:#eef,stroke:#448
+```
+
 ## The architecture
 
 ```
 aegis/src/aegis/core/
-  lazy.py       require() — the ONE sanctioned way to reach an optional dependency
-  registry.py   the @register decorator + lookup, so a host can swap implementations
-  interfaces.py Protocols (ChatCompleter, etc.) — structural typing, no inheritance required
-  types.py      shared value types (GuardVerdict, GuardResult, ModelRole, ...)
-  config.py     CoreSettings, AegisMode (lite/full)
-  events.py     AegisEvent hierarchy — the streaming event contract every module emits through
-  stream.py     AegisEmitter — the streaming interface
+  lazy.py         require() — the ONE sanctioned way to reach an optional dependency
+  registry.py     the @register decorator + lookup, so a host can swap implementations
+  interfaces.py   Protocols (ChatCompleter, etc.) — structural typing, no inheritance required
+  types.py        shared value types (GuardVerdict, GuardResult, ModelRole, ...)
+  models.py       shared Pydantic models
+  config.py       CoreSettings, AegisMode (lite/full/auto)
+  events.py       AegisEvent hierarchy — the streaming event contract every module emits through
+  stream.py       AegisEmitter — the streaming interface
+  stream_names.py the closed set of canonical CustomEvent names
+  health.py       the boot-time store probes AEGIS_MODE=full refuses to start without
+  run_context.py  the per-run context every module reads its scope from
+  cache_stats.py  shared cache-hit accounting
+  deprecation.py  the deprecation shim used when a public name moves
 ```
 
 ## What is actually in Aegis

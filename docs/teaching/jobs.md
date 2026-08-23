@@ -42,7 +42,7 @@ flowchart TD
         A6[aegis_request_reindex]
     end
     subgraph QUEUES["3 task queues, different concurrency"]
-        QC["aegis-cpu — max 1 concurrent<br/>(a Docling parse peaks ~2.2 GB)"]
+        QC["aegis-cpu — max 1 concurrent<br/>(a Docling parse peaked 3,363 MB, measured)"]
         QI["aegis-io — max 32 concurrent"]
         QD["aegis-default — max 8, the ONLY queue running workflows"]
     end
@@ -94,10 +94,19 @@ IO_QUEUE  = "aegis-io"        max_concurrent_activities=32
 DEFAULT_QUEUE = "aegis-default"  max_concurrent_activities=8, the only queue with runs_workflows
 ```
 
-`aegis-cpu` is capped at **exactly 1** because a Docling parse can peak
-around 2.2 GB of memory — running two in parallel on one worker risks an
-out-of-memory kill. Stage-to-queue mapping: `parse`→cpu, `chunk`→default,
-`enrich`→default, `embed`→io, `index`→default, `graph`→cpu.
+`aegis-cpu` is capped at **exactly 1** because a Docling parse is the largest
+memory consumer in the system: **3,363 MB peak RSS** on a 126-page table-dense
+document (measured 2026-08-19 on `docling==2.120.3`). An earlier figure of
+2,199 MB, still quoted in some places, was measured on a smaller document and an
+older Docling — **peak RSS scales with the document, not just with the models**,
+so size the machine against the largest document you intend to ingest. Two
+concurrent parses of a large document is ~6.7 GB, which on a 16 GB box with
+Postgres, Neo4j, Redis, Temporal and two dev servers already running is the thing
+that kills it. That measurement is the justification for
+`max_concurrent_activities=1`, not a guess.
+
+Stage-to-queue mapping: `parse`→cpu, `chunk`→default, `enrich`→default,
+`embed`→io, `index`→default, `graph`→cpu.
 
 ### Six activities, four workflows — all named as real constants
 

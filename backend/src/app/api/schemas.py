@@ -1,6 +1,6 @@
 """Shared API contracts — the interface between backend and frontend.
 
-`docs/architecture/backend.md` §7 and `docs/learn/30-frontend.md` both insist this schema is agreed
+`docs/architecture/backend.md` §7 and `DESIGN.md` both insist this schema is agreed
 *before* either side builds against it. Everything the frontend renders during a
 run arrives as one of the `StreamEvent` variants below; every endpoint request /
 response is a model here. Keep this file the single source of truth and generate
@@ -1468,6 +1468,76 @@ class PatchCheckResponse(BaseModel):
     )
     note: str = Field(description="Honest summary of how to read the results.")
     results: list[PatchResult] = Field(default_factory=list)
+
+
+class AdvisoryRequest(BaseModel):
+    """Body for `POST /stack/advisories` — optionally narrow to a subset of packages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    packages: list[str] | None = Field(
+        default=None,
+        description=(
+            "Distribution names to audit; omit/null to audit every installed "
+            "distribution."
+        ),
+    )
+
+
+class AdvisoryVulnerability(BaseModel):
+    """One published advisory against one installed version."""
+
+    id: str = Field(description="The OSV identifier, e.g. 'GHSA-…' or 'PYSEC-…'.")
+    aliases: list[str] = Field(
+        default_factory=list,
+        description="Other ids for the same advisory — the CVE usually lives here.",
+    )
+    summary: str = Field(default="", description="One-line description, as OSV wrote it.")
+    severity: Literal["critical", "high", "moderate", "low", "unknown"] = Field(
+        description="The publisher's own rating; 'unknown' when detail was not fetched."
+    )
+    detail_fetched: bool = Field(
+        description="False ⇒ the id is real but summary/severity were not retrieved."
+    )
+
+
+class AdvisoryPackage(BaseModel):
+    """One distribution's vulnerability verdict."""
+
+    name: str
+    version: str = Field(description="The installed version that was queried.")
+    status: Literal["vulnerable", "clean", "unknown"] = Field(
+        description="'clean' only after a real answer from the advisory database."
+    )
+    worst_severity: str = Field(description="Severity of the worst advisory, or 'none'.")
+    note: str = Field(default="", description="Why the status is what it is.")
+    vulnerabilities: list[AdvisoryVulnerability] = Field(default_factory=list)
+
+
+class AdvisoryAuditResponse(BaseModel):
+    """Body for `POST /stack/advisories` — live vulnerability verdicts from OSV.dev.
+
+    Distinct from `POST /stack/patch-check`, which reports **freshness**: a package can
+    be several releases behind and carry no advisory, and current and carry four.
+    """
+
+    checked_at: str = Field(description="ISO 8601 UTC time the audit ran.")
+    online: bool = Field(
+        description="Whether the advisory database answered for at least one batch."
+    )
+    note: str = Field(description="Honest summary of how to read the results.")
+    source: str = Field(description="The advisory database queried.")
+    passed: bool = Field(
+        description=(
+            "True only when every package got a real answer AND none is vulnerable. "
+            "An audit that could not run does not pass."
+        )
+    )
+    packages_audited: int = 0
+    packages_vulnerable: int = 0
+    packages_unknown: int = 0
+    severity_counts: dict[str, int] = Field(default_factory=dict)
+    packages: list[AdvisoryPackage] = Field(default_factory=list)
 
 
 RiskBand = Literal["low", "medium", "high"]

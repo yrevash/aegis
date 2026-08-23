@@ -1,17 +1,32 @@
 # Learning Aegis, module by module
 
-> All 29 files are written and verified against the running source
-> (2026-08-21). The previous course — three files per module plus HTML
-> twins, 103 files — was removed the same day because it had drifted (it
-> still described Chroma, deleted days earlier) and because the shape was
-> wrong: a reader had to open three files to learn one module. It is
-> recoverable from git history if any of it is wanted back.
+> All 29 files were written against the running source on 2026-08-21 and
+> re-verified against it on **2026-08-23**, after two days that changed a great
+> deal: durable Postgres checkpointing, the graph retrieval arm's entity vectors
+> and chunk KV, notifications over Redis pub/sub and SSE, both guardrail engines
+> running, append-only audit privileges, and a compliance surface. Where a file
+> described the older behaviour it was corrected; where a claim could not be
+> verified it says so rather than repeating itself.
 
 One file per module. Each is a **parent file** — everything about that module in
 one place, written for someone who has never seen it before and read end to end.
 
 There is no second or third file per module. If a thing is worth knowing about
 `aegis.guardrails`, it is in `guardrails.md`.
+
+## The shape every file follows
+
+Read one and you can navigate all of them, because they are all built the same way:
+
+| Section | What it gives you |
+|---|---|
+| **What it is** | The module in plain language, before any code. Jargon is expanded where it first appears |
+| **Why it exists here** | The specific problem in *this* platform that the module answers |
+| **Diagram** | The real flow, using the real names from the source |
+| **The architecture** | The files, with one line each, so you can walk from the doc into the code |
+| **What is actually in Aegis** | The mechanism, with real functions and real measured numbers |
+| **How it runs** | One request through the module, in order |
+| **What is not here** | The absences, stated plainly. This section is the point, not an apology |
 
 ## The rule these files obey
 
@@ -23,6 +38,13 @@ If Aegis uses NeMo Guardrails, the file says which rails are defined and where t
 Each file also carries a **What is not here** section, and that section is the point
 rather than an apology: a learner who cannot tell the implemented parts from the
 intended ones has not learned the system.
+
+The same rule applies to the bugs. Several files spend a paragraph on a defect this
+platform actually shipped — a rail that documented itself as advisory and refused, a
+retrieval arm that was inert by construction, a flag that was decorative. They are
+there because the shape of a real failure teaches the mechanism better than a clean
+description of it does, and because a reader who knows how a control failed once can
+recognise the same failure the next time.
 
 ---
 
@@ -94,4 +116,17 @@ intended ones has not learned the system.
 - [`../module/PIPELINES.md`](../module/PIPELINES.md) — **generated** from
   `aegis.pipelines.spec`, so a stage cannot be documented there and absent in code.
 - [`../security/`](../security/) — the threat model and the OWASP-Agentic mapping.
-- [`../dev_new_docs_v2/install/`](../dev_new_docs_v2/install/) — getting it running.
+- [`../install/`](../install/README.md) — getting it running.
+- [`../architecture/system-architecture.md`](../architecture/system-architecture.md) —
+  the whole platform in one file. Read it first if you want the shape before the parts.
+- [`../compliance/README.md`](../compliance/README.md) — the control-by-control
+  evidence map, and the live surface behind `GET /v1/compliance`.
+
+**Two subsystems have no file here, because they are not `aegis.*` modules.** Both
+live in `backend/src/app/` and are documented in `system-architecture.md`:
+
+- **Notifications** (`backend/src/app/notifications.py`,
+  `backend/src/app/data/notifications.py`) — durable row first, Redis pub/sub second,
+  SSE to the browser. §5 of the architecture doc.
+- **The compliance surface** (`backend/src/app/platform/compliance.py`) — §6, and
+  `../compliance/README.md` in full.

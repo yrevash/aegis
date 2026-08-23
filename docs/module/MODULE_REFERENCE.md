@@ -5,9 +5,9 @@ what "modular" means here, the **Module Contract** every package obeys, the AG-U
 streaming spine they all narrate through, the module map with each module's install
 extra, and the honest debt list.
 
-**Per-module depth lives in [`../teaching/`](../teaching/README.md)** — one folder per
-module, each with a guide, diagrams, and an interview file. This document is the
-contract and the map; the course is the explanation.
+**Per-module depth lives in [`../teaching/`](../teaching/README.md)** — one file per
+module, 29 of them, each read end to end. This document is the contract and the map;
+those files are the explanation.
 
 **The flows those modules compose into live in [`PIPELINES.md`](PIPELINES.md)** — the
 three pipelines (retrieval, agent, ingestion), their stages, the module that owns each
@@ -65,7 +65,7 @@ when the code says otherwise:
 
 - `aegis.memory.recall` / `.cache` / `.vector_ops` import `aegis.retrieval.fusion`,
   `.vectors`, `.models`, `.types`, `.vector_store` — RRF fusion, cosine similarity and
-  the Chroma store, reused rather than duplicated.
+  the Qdrant vector store, reused rather than duplicated.
 - `aegis.governance.enforcement` imports `BudgetExceededError` from `aegis.gateway.types`.
 - `aegis.vision` and `aegis.voice` import `aegis.media` (payload types and hygiene) and
   `aegis.guardrails.media` (the image screen and image-PII redactor).
@@ -171,29 +171,44 @@ graph TD
 
 ## The module map
 
-Eighteen packages. `aegis[extra]` is what `pip install` needs; the last column is where
-the module is taught in depth.
+**Twenty-nine packages.** `aegis[extra]` is what `pip install` needs; the last column is
+one file per module, in depth.
 
-| Module | What it does | `aegis[extra]` | AG-UI `CustomEvent` name(s) | Taught in |
-|---|---|---|---|---|
-| `aegis.core` | The contract: Protocols, shared types, registry, config, health, `AegisEmitter` | none (bare `aegis`) | defines the vocabulary; emits none itself | [`teaching/core`](../teaching/core/10-guide.md) |
-| `aegis.data` | Portable SQLAlchemy base + cross-dialect JSON/vector/UTC column types | `data` | none | [`teaching/data`](../teaching/data/10-guide.md) |
-| `aegis.media` | Typed payloads and payload hygiene for non-text input | `media` (image redaction) | none | [`teaching/media`](../teaching/media/10-guide.md) |
-| `aegis.guardrails` | Input/output rails: schema, PII, injection, media screens | none for the base pipeline; `nemo` (Colang), `pii` (Presidio), `media`, `redis` are optional | `guardrail_verdict` | [`teaching/guardrails`](../teaching/guardrails/10-guide.md) |
-| `aegis.ml` | Prediction + SHAP explanation + conformal intervals | `ml` | `shap_explanation`, `conformal_interval` | [`teaching/ml`](../teaching/ml/10-guide.md) |
-| `aegis.forecast` | Time-series forecasting with measured, calibrated intervals | `forecast` | none | [`teaching/forecast`](../teaching/forecast/10-guide.md) |
-| `aegis.retrieval` | Hybrid vector + graph RAG: chunk, recall, RRF-fuse, rerank (local ONNX cross-encoder, LLM-as-reranker as its loud fallback), spotlight | `retrieval` | `retrieval_citations` | [`teaching/retrieval`](../teaching/retrieval/10-guide.md) |
-| `aegis.gateway` | The LiteLLM chokepoint: routing, cost, budget, fallback | `gateway` | `model_call` | [`teaching/gateway`](../teaching/gateway/10-guide.md) |
-| `aegis.memory` | Working, episodic and semantic memory; recall and consolidation | `data` (no dedicated `memory` extra) | `memory_recall` | [`teaching/memory`](../teaching/memory/10-guide.md) |
-| `aegis.governance` | Tenants, RBAC, RLS, budgets, audit | `governance` | none — a policy/data layer, not a narrator | [`teaching/governance`](../teaching/governance/10-guide.md) |
-| `aegis.evals` | RAGAS-style metrics + an LLM-judge harness | none — installs with bare `pip install aegis` | `eval_result` | [`teaching/evals-ops`](../teaching/evals-ops/10-guide.md) |
-| `aegis.ops` | Diagnose, eval-gated release and promotion | `data` (needs SQLAlchemy) | none | [`teaching/evals-ops`](../teaching/evals-ops/10-guide.md) |
-| `aegis.observability` | OTel/OpenInference span export | `observability` (+ `phoenix` for Arize Phoenix) | none — it is the trace *exporter* | [`teaching/observability`](../teaching/observability/10-guide.md) |
-| `aegis.vision` | Image understanding, with the injection screen ahead of the model | `media` + `gateway` | vision step events | [`teaching/vision`](../teaching/vision/10-guide.md) |
-| `aegis.voice` | Speech to text, guarded by the full text rail before an agent sees it | `gateway` | voice step events | [`teaching/voice`](../teaching/voice/10-guide.md) |
-| `aegis.redteam` | An importable harness that attacks the guardrails and reports what got through | none | none | — (see [`teaching/guardrails`](../teaching/guardrails/50-interview.md)) |
-| `aegis.security` | The security-posture surface: threats mapped to their *wired* controls | none | none | — (see [`../security/overview.md`](../security/overview.md)) |
-| `aegis.agent` | Plan→gate→act→reflect orchestration; composes every module through `AgentDeps` | `agent` | none via `AegisEmitter` — emits through the legacy `StreamEvent` union | [`teaching/agent`](../teaching/agent/10-guide.md) |
+| Module | What it does | `aegis[extra]` | Taught in |
+|---|---|---|---|
+| `aegis.core` | The contract: Protocols, shared types, registry, config, health, `AegisEmitter` | none (bare `aegis`) | [`core`](../teaching/core.md) |
+| `aegis.data` | Portable SQLAlchemy base + cross-dialect JSON/vector/UTC column types | `data` | [`data`](../teaching/data.md) |
+| `aegis.pipelines` | The stage declaration the three pipelines are read from, checked against the code | none | [`pipelines`](../teaching/pipelines.md) |
+| `aegis.governance` | Tenants, RBAC, Postgres RLS, budgets, audit | `governance` | [`governance`](../teaching/governance.md) |
+| `aegis.guardrails` | Input/output rails: schema, PII, injection, topic, content safety, grounding | none for the base pipeline; `nemo` (Colang), `pii` (Presidio), `media`, `redis` optional | [`guardrails`](../teaching/guardrails.md) |
+| `aegis.security` | The security-posture surface: threats mapped to their *wired* controls | none | [`security`](../teaching/security.md) |
+| `aegis.redteam` | A harness that attacks the rails and reports what got through | none | [`redteam`](../teaching/redteam.md) |
+| `aegis.conformance` | The pytest plugin that proves a domain swap is complete | `conformance` | [`conformance`](../teaching/conformance.md) |
+| `aegis.settings` | Prompt versions, seats, per-tenant configuration, the LLM-Ops loop | `data` | [`settings`](../teaching/settings.md) |
+| `aegis.dbadmin` | The read-only database console and the role that cannot write | `data` | [`dbadmin`](../teaching/dbadmin.md) |
+| `aegis.agent` | Plan → gate → act → reflect orchestration; composes every module through `AgentDeps` | `agent` | [`agent`](../teaching/agent.md) |
+| `aegis.memory` | Working, episodic and semantic memory; recall and consolidation | `data` (no dedicated `memory` extra) | [`memory`](../teaching/memory.md) |
+| `aegis.skills` | `SKILL.md` documents an agent can reach for, scoped and versioned | `data` | [`skills`](../teaching/skills.md) |
+| `aegis.ingestion` | Parse → chunk → enrich → embed → index → graph, with the quality gate | `ingestion` | [`ingestion`](../teaching/ingestion.md) |
+| `aegis.retrieval` | Hybrid vector + graph + BM25 recall, RRF fusion, local cross-encoder rerank, spotlight | `retrieval` | [`retrieval`](../teaching/retrieval.md) |
+| `aegis.gateway` | The LiteLLM chokepoint: routing, cost, budget, fallback, the limiter | `gateway` | [`gateway`](../teaching/gateway.md) |
+| `aegis.jobs` | Durable work on Temporal, and what survives a crash | `data` | [`jobs`](../teaching/jobs.md) |
+| `aegis.runs` | The run record, folded from its own append-only event log | `data` | [`runs`](../teaching/runs.md) |
+| `aegis.ml` | Prediction + SHAP explanation + conformal intervals | `ml` | [`ml`](../teaching/ml.md) |
+| `aegis.forecast` | Time-series forecasting with measured, calibrated intervals | `forecast` | [`forecast`](../teaching/forecast.md) |
+| `aegis.evals` | Metrics, IR metrics, gold sets, ablation and an LLM-judge harness | none — bare `pip install aegis` | [`evals`](../teaching/evals.md) |
+| `aegis.analytics` | The `analytics_*` views, their RLS, and the Superset integration | `data` | [`analytics`](../teaching/analytics.md) |
+| `aegis.ops` | Diagnose, eval-gated release, promotion | `data` | [`ops`](../teaching/ops.md) |
+| `aegis.observability` | OTel / OpenInference span export | `observability` (+ `phoenix`) | [`observability`](../teaching/observability.md) |
+| `aegis.reports` | Generated reports and their sourcing | `data` | [`reports`](../teaching/reports.md) |
+| `aegis.media` | Typed payloads and payload hygiene for non-text input | `media` | [`media`](../teaching/media.md) |
+| `aegis.vision` | Image understanding, with the injection screen ahead of the model | `media` + `gateway` | [`vision`](../teaching/vision.md) |
+| `aegis.voice` | Speech to text, guarded by the full text rail before an agent sees it | `gateway` | [`voice`](../teaching/voice.md) |
+| `aegis.websearch` | Reaching outside the tenant's own corpus | `websearch` | [`websearch`](../teaching/websearch.md) |
+
+Two module-level files sit beside the packages: `aegis/runtime.py` (the `Aegis` runtime
+object, `AEGIS_MODE`) and `aegis/adapter.py` (the `DomainAdapter` protocol — the seam a
+new domain is written against).
 
 `reasoning` and `routing` are reserved in `aegis.core.stream_names` for `aegis.agent`'s
 live-thinking and router-decision output. Both fire, but through `aegis.agent`'s own
@@ -214,14 +229,21 @@ None of this breaks anything today; all of it is real.
 - **Agent on the legacy stream** — the marquee module still speaks the old `StreamEvent`
   union rather than `AegisEmitter`. The migration was deferred deliberately, to keep the
   locked frontend SSE contract stable.
-- **Scaffolding not yet wired** — the guardrails injection cache (tested, unused);
-  `AEGIS_MODE` is not yet adopted in the backend boot path; the retrieval `RERANKER` span
-  is not re-wired; `answer_cache.py` is unwired; the ML artifact cold-starts on synthetic
-  data in a fresh clone (by design).
+- **The ML artifact cold-starts on synthetic data in a fresh clone** — by design, and
+  `/ml/explain` returns 503 until `python -m app.ml` has run rather than silently
+  fitting the noise synthesiser.
+
+Three items that were on this list until 2026-08-23 have since been wired and are
+removed rather than left as folklore: the guardrails injection cache (used by
+`aegis.guardrails.pipeline._default_injection_cache`), `AEGIS_MODE` (read by
+`aegis.core.config.CoreSettings` and honoured through `aegis.runtime`), and the answer
+cache (`aegis.agent.graph` reads and writes it, gated on `answer_cache_enabled`, which
+defaults to on).
 
 ---
 
-**Related:** [`../teaching/README.md`](../teaching/README.md) (the course) ·
-[`../learn/10-architecture.md`](../learn/10-architecture.md) (how the modules sit inside
-the whole system) · [`../adr/`](../adr/) (why each big choice was made) ·
+**Related:** [`../teaching/README.md`](../teaching/README.md) (one file per module) ·
+[`../architecture/system-architecture.md`](../architecture/system-architecture.md) (how
+the modules sit inside the whole system) · [`../adr/`](../adr/) (why each big choice was
+made) · [`../../aegis/PUBLIC.md`](../../aegis/PUBLIC.md) (what is promised) ·
 [`../../aegis/README.md`](../../aegis/README.md) (the package's own README).

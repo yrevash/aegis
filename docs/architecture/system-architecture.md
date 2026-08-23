@@ -136,7 +136,7 @@ The console is the marquee surface: it decodes the platform's own AG-UI event st
 live, rendering each sub-agent as a lane that streams its own reasoning as fan-out
 happens — the platform's most distinctive behaviour, made visible rather than left to a
 final answer. A second tab renders the same run as a live graph over the backend's own
-declared topology (`GET /agent/topology` — 17 nodes, 23 edges, entry/terminal/conditional
+declared topology (`GET /v1/agent/topology` — 17 nodes, 23 edges, entry/terminal/conditional
 flags), so a viewer can watch the actual path a run took, including the road not taken.
 
 ### 2.2 API — FastAPI composition root
@@ -150,8 +150,8 @@ database enforces it regardless of what the handler wrote.
 
 The REST/SSE surface is composed from named routers — console, memory, guardrails,
 db (read-only), analytics, pipelines, mcp, redteam, reports, seats, skills, llmops,
-health — plus a dedicated SSE mount for the live ingest log. `GET /platform/capabilities`
-and `GET /about` publish the platform's own capability manifest; the landing page's
+health — plus a dedicated SSE mount for the live ingest log. `GET /v1/platform/capabilities`
+and `GET /v1/about` publish the platform's own capability manifest; the landing page's
 module count is read from that endpoint live, not typed into the page.
 
 ### 2.3 Orchestration — LangGraph, plan → gate → act → reflect
@@ -196,7 +196,7 @@ production-shaped component, not a stub wired only to this repository.
 | **Measurement** | `ml`, `forecast`, `evals`, `analytics`, `ops`, `observability`, `reports` | Prediction + SHAP + conformal intervals; calibrated time-series forecasting; RAGAS-style metrics + an LLM-judge harness; the `analytics_*` views and their Superset integration; eval-gated release/promotion; OTel/OpenInference export; generated, sourced reports. |
 | **Multimodal & outside data** | `media`, `vision`, `voice`, `websearch` | Payload hygiene; image understanding with the injection screen ahead of the model; speech-to-text guarded by the full text rail; reaching outside the tenant's own corpus (Tavily today, behind a swappable Protocol). |
 
-**Two different counts, on purpose.** `GET /platform/capabilities` — the live manifest
+**Two different counts, on purpose.** `GET /v1/platform/capabilities` — the live manifest
 the landing page reads — publishes **15 branded capabilities** (Gateway, Router, Memory,
 Cache, Retrieval, Signal, Voice, Forecast, Guardrails, Evals, Loop, Governance, Trace,
 Vision, Tools/MCP), each with its honest tech underneath. That is a curated,
@@ -212,10 +212,10 @@ the 15-capability manifest is what a tenant is told they are running.
 
 | Store | Owns | Notes |
 |---|---|---|
-| **Postgres** | Relational data, tenant/user/budget rows, the append-only audit log, and every row-level-security policy | `pgvector` was deliberately removed — vector search moved entirely to Qdrant, so Postgres does relational/KV/governance and nothing else. |
+| **Postgres** | Relational data, tenant/user/budget rows, the append-only ledgers, every row-level-security policy, and **LangGraph's checkpoints** | `pgvector` was deliberately removed — vector search moved entirely to Qdrant, so Postgres does relational/KV/governance and nothing else. Append-only is a **privilege**, not a convention: the serving role holds `SELECT, INSERT` and nothing more on `audit_log`, `usage_ledger` and `run_events` (partitions included), so `DELETE FROM audit_log` on a request connection is refused by the database. The owner role can still rewrite the trail — tampering requires that connection, it is not impossible. |
 | **Neo4j** | The knowledge graph — entities and relationships extracted at ingestion | Paired with LightRAG for graph-aware retrieval; relationship questions traverse the graph, similarity questions hit the vector store. |
 | **Qdrant** | **The one vector store**, full stop | Both `aegis.retrieval` and LightRAG's own vector storage write to a single Qdrant node. An earlier embedded-Chroma / NanoVectorDB design was removed rather than demoted — an embedded client's file lock is what breaks multi-worker deployment, and a ceiling you can configure your way back into is not actually gone. |
-| **Redis** | Semantic response cache, optional guardrails cache | Falls back to an explicit, labelled in-memory cache when absent — never a silently-faked Redis. |
+| **Redis** | Semantic response cache, the rate limiter's slot leases, optional guardrails cache, and the **notification fan-out** (pub/sub) | Falls back to an explicit, labelled in-memory cache when absent — never a silently-faked Redis. The notification stream states which mode it is on in its opening frame. |
 | **Temporal** | Durable ingestion workflows | A document ingest survives a crash mid-pipeline; `TEMPORAL_ADDRESS` unreachable fails loud with the exact local fix (`temporal server start-dev`), never a silent degrade to synchronous. |
 
 No store here is optional infrastructure dressed as a detail: `AegisMode` boots in
@@ -234,7 +234,7 @@ routing steps go to a small/cheap tier, hard reasoning steps go to a reasoning-t
 model, main generation goes to a stronger generation-tier model, and embeddings go to a
 dedicated embedding model — each call carries budget enforcement and provider fallback,
 and the resulting **small-model share** is a live, published metric
-(`GET /platform/public-metrics`), not a claim.
+(`GET /v1/platform/public-metrics`), not a claim.
 
 ---
 
@@ -245,6 +245,18 @@ event already carries an OpenInference span kind — so the identical stream tha
 a console lane is also what OpenTelemetry exports as a trace. **Arize Phoenix** is a
 wired, optional exporter for that trace data — present in the code, off by default
 (`PHOENIX_ENABLED`), stated as off rather than silently absent.
+
+**Alerting** is a third track, and it is push rather than pull. Before 2026-08-23 there
+was none: you learned a 100-document ingest had finished by opening a screen. A
+notification is now written to Postgres **first** and published **second** — an alert
+that only ever existed in memory is not an alert — and Redis pub/sub carries it across
+processes, because the event is written by a Temporal worker while the browser is
+attached to a different one. One subscription per process fans out to bounded per-stream
+queues rather than one Redis connection per browser tab, and `GET /v1/notifications/stream`
+delivers it over SSE. Four emit points: ingest terminal, approval enqueued, the SLA
+sweeper's HIGH-risk auto-reject, and budget exhaustion. Degradation is complete rather
+than half — unreachable Redis falls back to in-process delivery with a warning that names
+the consequence, a lost subscription flips the mode back, and the mode is on the wire.
 
 Business analytics runs on a separate track: `aegis.analytics` provisions six
 `analytics_*` Postgres views (approvals, spend, runs, and three more) owned by a
@@ -271,8 +283,20 @@ everything else, not by a second, separately-maintained permission system.
   detection, topic and content-safety rails (programmatic checks plus NeMo Colang rails),
   and grounding checks on generated answers.
 - **Append-only audit log** — every agent action, approval and write is recorded and
-  never mutated after the fact; it is what the console's "chain of custody" visual is
-  actually reading.
+  never mutated after the fact. Since 2026-08-23 that is enforced by Postgres privileges
+  rather than by convention (§3), which is the difference between a claim a reviewer can
+  test and one they have to take on trust.
+- **Durable human-in-the-loop.** A run parked on the approval gate is a real LangGraph
+  `interrupt` checkpointed to Postgres, so it survives a restart: kill the process,
+  approve on the new one, and the run finishes from the interrupted checkpoint without
+  re-running a single pre-gate node. `AGENT_CHECKPOINTER=memory` (the test default) does
+  not, and the difference is invisible until the process dies.
+- **A compliance surface derived from wiring, not asserted.** `GET /v1/compliance` maps
+  114 controls across 12 frameworks — 29 enforced, 58 partial, 22 not implemented, 5 not
+  applicable — where "enforced" requires both a file and a test, and anything less must
+  name what is missing. A public projection (`GET /v1/platform/standards`) carries only
+  the counts, because the guarded body is a control-by-control map of what is *not*
+  implemented and where, which is a target list.
 - **Red-teamed by its own code.** `aegis.redteam` is an importable harness that attacks
   the guardrails above and reports what got through, rather than trusting the rails
   because they exist.
@@ -340,11 +364,15 @@ absent, not invented — three things are worth naming directly:
 - **Arize Phoenix is wired but off by default.** Traces exist; the exporter is a flag.
 - **`aegis.agent` still narrates through the legacy `StreamEvent` union**, not
   `AegisEmitter` directly — a deliberate, recorded migration deferral, not an oversight.
-- **Twenty-one screens across the four non-`platform_admin` portals** have not yet
-  received the same visual/charting pass `platform_admin` has (tracked separately in
-  `docs/dev_new_docs_v2/frontend-redesign/`) — the architecture and the data they read
-  from are complete and live; only the presentation layer on those specific screens is
-  still catching up.
+- **The visual pass across all five portals completed on 2026-08-23**; the per-screen
+  briefs that drove it are kept in `docs/dev_new_docs_v2/frontend-redesign/` as the
+  record of what each pass changed.
+- **Checkpoint storage grows without bound.** Nothing prunes LangGraph's checkpoint
+  tables, and no `audit_log` retention or partitioning is documented either. Both are
+  recorded as owed work rather than described as solved.
+- **DNS is not resolved by the SSRF guard.** MCP peer registration refuses loopback,
+  link-local, private and reserved addresses and non-allowlisted schemes at the registry
+  chokepoint, but a hostname that resolves inward still passes. Stated, not hidden.
 
 **Related documents:** [`module/MODULE_REFERENCE.md`](../module/MODULE_REFERENCE.md)
 (the Module Contract and the package-internal diagram) ·

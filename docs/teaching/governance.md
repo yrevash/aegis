@@ -129,6 +129,40 @@ bootstrap forces the policy even for the owning role — otherwise the policy
 would be silently inert for exactly the connection that runs it in
 production.
 
+### Append-only is a database privilege, not a convention
+
+Until 2026-08-23 the serving role held `SELECT, INSERT, UPDATE, DELETE` on
+**all** tables, `audit_log` among them — `\dp audit_log` read
+`aegis_app=arwd/postgres`. "Append-only" was therefore a property of *today's
+source* (no statement in the codebase mutated one of those rows) rather than of
+the database, and it held only for as long as nobody added such a statement and
+no injection arrived on the connection that already had the privilege. On a
+platform whose product claim **is** the audit trail, that is the first thing a
+reviewer tests.
+
+`aegis.governance.rls._APPEND_ONLY_TABLES` now names three ledgers —
+`audit_log`, `run_events`, `usage_ledger` — and the bootstrap `REVOKE`s
+`UPDATE, DELETE` on each after the bulk grant. Three details are load-bearing:
+
+- **The revoke is expressed as a revoke, not as a narrower grant.** Both
+  instruments that hand the role its DML — `GRANT … ON ALL TABLES IN SCHEMA` and
+  `ALTER DEFAULT PRIVILEGES` — are per-schema and cannot exempt a table.
+  Granting everything and taking two privileges back in the same transaction is
+  the only formulation that converges on the same state whether the table was
+  created by this boot, an earlier one, or the SQL script.
+- **The revoke expands through `pg_inherits`.** Postgres checks privileges on
+  the relation *named*, so without expanding to `run_events`' monthly
+  partitions, `DELETE FROM run_events_2026_08` would still have worked.
+- **Two writers legitimately need `DELETE` and were found by breaking them,
+  not by reasoning.** `memory_write_log` keeps it because revoking it broke the
+  DPDP/GDPR erasure route, which must reach it from a request handler; and
+  `python -m app.demo --wipe` was moved onto the **owner** connection, which is
+  the right home for a command that removes an audit trail.
+
+**What this does not claim:** the owner role still holds full DML, so anyone
+with `POSTGRES_ADMIN_DSN` can rewrite the trail. This makes tampering require
+that connection — not impossible.
+
 ### RBAC — the real ladder
 
 ```
@@ -179,11 +213,21 @@ widens one subsystem's scope silently widens all three.
 
 ## What is not here
 
+- **The append-only revoke is not tamper-proofing.** The owner role keeps full
+  DML; there is no SIEM export, and no documented `audit_log` retention or
+  partitioning (that one is recorded as owed work in
+  `../dev_new_docs_v2/backlog-post-hackathon.md`).
 - **RLS is Postgres-only.** `set_tenant_scope` is a documented no-op on any
   other SQL dialect (e.g. the SQLite test database) — session GUCs and RLS
   policies are Postgres features with no equivalent tested here.
 - **The fail-open predicate is the default**, not fail-closed. A deployment
   that wants the stricter behaviour must explicitly set `RLS_FAIL_CLOSED=true`.
+  Note that until 2026-08-22 that flag was **decorative** — `configure_rls` was
+  reached only from `get_engine()` while startup hits the owner engine's
+  `bootstrap()` first, so the log announced fail-closed and installed fail-open.
+  `bootstrap_rls()` now sets the flavour before the DDL. Any older statement in
+  this repository that fail-closed "had been exercised" predates that fix and
+  should be re-checked rather than believed.
 - **Closing the login-time gap in the fail-open predicate requires a change
   outside this module** — the module's own comment says a `SECURITY
   DEFINER` login lookup would be needed to bind a scope before any tenant is

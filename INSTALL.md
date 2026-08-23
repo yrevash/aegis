@@ -1,14 +1,13 @@
 # INSTALL.md — Setup & Run Guide
 
-> **Setting up a machine for v2?** Follow
-> [`docs/dev_new_docs_v2/install/`](docs/dev_new_docs_v2/install/) — it covers Qdrant,
-> Superset, the demo seeders and the document corpus, none of which existed when the
-> older guide was written. Following the older one alone leaves a platform that boots
-> and shows nothing.
+> **Setting up a machine? Follow [`docs/install/`](docs/install/), not this file.**
+> That is the current, single install path: prerequisites, an ordered runbook with a
+> check after every step, the demo seeders, and the agent-facing context. It covers
+> Qdrant, Neo4j, Superset, the durable checkpointer and the document corpus.
 >
-> **Setting up the hackathon machine (v1 path)?** Follow [`docs/install/`](docs/install/) instead — a
-> four-step runbook with the exact commands, the checks after each one, and the three
-> measurements Phase 3 still needs from that box. This file remains the general reference.
+> This file is the older long-form reference. Parts of it have drifted — it predates
+> the same-origin proxy (do **not** set `NEXT_PUBLIC_API_BASE`), and it names port
+> 8000 where the deployment runs 8110. Where the two disagree, `docs/install/` wins.
 
 > **Bare Windows machine?** `scripts\install-windows.ps1` (elevated) does the whole
 > setup — toolchain, the four native stores, then the app dependencies. Add
@@ -34,8 +33,8 @@
 > **Fastest path (no agent needed):** `scripts\bootstrap.ps1` → `scripts\preflight.ps1`
 > → `scripts\start.ps1 -Mode lite` (Windows; `.sh` twins for mac/Linux). The
 > one-page day-of guide with the fallback ladder is **`docs/operations/runbook.md`**;
-> the system walkthrough starts at **`docs/learn/00-what-aegis-is.md`** and the
-> per-module course at **`docs/teaching/README.md`**. The rest of this file is the
+> the system walkthrough is **`docs/architecture/system-architecture.md`** and the
+> per-module course is **`docs/teaching/README.md`**. The rest of this file is the
 > long-form manual.
 
 Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
@@ -440,5 +439,5 @@ Model routing is **role-based**: override any role with `MODEL_<ROLE>` (e.g.
 | Redis / Memurai | native install | 6379 |
 | Arize Phoenix | in-process (with backend) | 6006 (UI, if enabled) |
 
-See `docs/learn/10-architecture.md` (the whole system), `docs/architecture/backend.md`,
+See `docs/architecture/system-architecture.md` (the whole system),
 `web/README.md` (console context), and `README.md` for architecture.

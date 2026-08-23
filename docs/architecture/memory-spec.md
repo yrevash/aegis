@@ -3,14 +3,18 @@
 > **Vector-layer correction (2026-08-15, ADR 0009).** This spec was written when
 > embeddings were searched with the `pgvector` Postgres extension. They no longer are.
 > Embeddings persist in Postgres as a portable JSON `list[float]` — the durable
-> *source of record* — and ANN search runs in an **embedded vector store**
-> (`aegis.retrieval.vector_store.QdrantVectorStore`, one Qdrant node shared with retrieval).
+> *source of record* — and ANN search runs in **Qdrant**
+> (`aegis.retrieval.vector_store.QdrantVectorStore`, one node shared with retrieval —
+> the embedded tier this note originally described was superseded on 2026-08-19).
 > Wherever the text below says "pgvector top-k" or "`<=>` operator", read "vector-store
 > top-k". The scoring, bitemporal, budget and assembly design is unaffected.
 
-Authoritative spec for the memory subsystem + context engineering. Design-only until
-the critic pass verifies the load-bearing code seams. Core is domain-agnostic
-(`app/memory/*`); all domain meaning via `app/adapter/memory_spec.py` (+ `skills/*.md`).
+The derivation behind the memory subsystem's defaults — the recall blend, the
+consolidation cadence, the context-assembly budget. `aegis/memory/config.py` cites this
+file for exactly that reason. **It is a spec, not a description of the running code**:
+for what memory actually does today, read `../teaching/memory.md`. The core is
+domain-agnostic (`aegis/memory/*`); all domain meaning arrives through
+`backend/src/app/adapter/memory_spec.py` (+ `skills/*.md`).
 On the day, only the adapter changes.
 
 **Thesis:** persist raw turns cheaply → distil durable facts lazily with a cheap model →

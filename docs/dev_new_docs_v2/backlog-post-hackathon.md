@@ -7,7 +7,8 @@ written down for two reasons: so nobody quietly starts one of these before the h
 so nothing that took real research to find gets lost after it.
 
 Each item says what it is, why it waited, and what it unblocks. Day estimates come from the
-deep research in [`plans/`](plans/) and are focused engineer-days.
+deep research in the v2 `plans/` set (deleted 2026-08-23, in git history at `2d8b84d`)
+and are focused engineer-days.
 
 Nothing on this list is cancelled. Several items are better engineering than what shipped.
 They are simply not what has to be true on 30 August.

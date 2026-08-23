@@ -32,7 +32,9 @@ flowchart TD
     E --> EM["embed — genailab-maas-text-embedding-3-large,<br/>3072 dims, batch 64, written to chunks.embedding"]
     EM --> I["index — publishes to Qdrant.<br/>FREE if embed already ran: reads chunks.embedding, no provider call"]
     I --> G["graph — spaCy NER + co-occurrence,<br/>NOT an LLM by default"]
-    G --> DONE[Chunk fully indexed and searchable]
+    G --> G1["project into Neo4j — with source_id on each node<br/>(fatal if it fails: entities that did not land exist nowhere visible)"]
+    G1 --> G2["publish entity + relation vectors and the chunk KV<br/>(non-fatal but never silent: reports 'failed: …', never a fabricated 0)"]
+    G2 --> DONE[Chunk fully indexed, searchable by BOTH arms]
 ```
 
 ## The architecture
@@ -47,12 +49,25 @@ aegis/src/aegis/ingestion/
   tables.py     table→summary policy thresholds
 aegis/src/aegis/retrieval/chunker.py   chunk_sections() — the actual chunking algorithm
 backend/src/app/ingestion/
-  stages.py       the 6 stage handlers (parse/chunk/enrich/embed/index/graph)
-  vector_index.py the narrow re-index path — replay stored embeddings, no provider call
-  reindex.py      the wide re-index path — re-run chunk→graph, skip only parse
-  store.py        DocumentStore — local-disk artifact storage
-  __main__.py     python -m app.ingestion --reindex / --verify CLI
+  stages.py           the 6 stage handlers (parse/chunk/enrich/embed/index/graph)
+  graph_projection.py writes the extraction into Neo4j — and the node's source_id
+  graph_vectors.py    writes the entity/relation vectors and LightRAG's chunk KV
+  chunk_kv.py         LightRAG's chunk key-value table — how an entity resolves to a passage
+  graph_backfill.py   --backfill-graph: rebuilds the two graph indexes from chunks.meta
+  vector_index.py     the narrow re-index path — replay stored embeddings, no provider call
+  reindex.py          the wide re-index path — re-run chunk→graph, skip only parse
+  store.py            DocumentStore — local-disk artifact storage
+  __main__.py         python -m app.ingestion --reindex / --verify / --backfill-graph CLI
 ```
+
+**The `graph` stage has three writes, and they fail differently on purpose.**
+Recording the extraction on `chunks.meta` and projecting it into Neo4j are
+**fatal** — an entity that did not land exists nowhere a person can see. Publishing
+the entity/relation vectors is **not** fatal, because those are an index *over* a
+graph already verified present, so a transient vector-store blip must not discard
+a wholly correct document. It is never silent either: with Qdrant pointed at a
+dead port the stage completes and reports `entity_vectors: null, graph_vectors:
+"failed: Connection refused"` — an honest unknown, not a fabricated zero.
 
 ## What is actually in Aegis
 
@@ -196,3 +211,10 @@ that honestly extracts nothing rather than guessing.
   retrieval path, not ingestion.
 - **Only PDFs are accepted.** Upload validation checks for the PDF magic
   bytes and refuses anything else outright.
+- **`--backfill-graph` is sourced from `chunks.meta`, not from Neo4j** — and it
+  has to be. Neo4j holds the projection *after* merging: no extractor ids,
+  descriptions already rewritten, and no record of which chunk anything came
+  from, so `source_id` could not be rebuilt from it at all.
+- **A whole-corpus `--backfill-graph` can exceed the embedding gateway's
+  per-call timeout on a large document.** The command exits 1 naming that
+  document rather than claiming success; backfilling it alone completes.

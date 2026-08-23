@@ -114,6 +114,31 @@ language cannot express JSON null directly). Postgres RLS is registered as a
 third, independent layer over the same six tables — belt, suspenders, *and*
 a third strap.
 
+### The RLS layer had to survive a commit — the bug, and the fix that was refused
+
+The "third strap" above was thinner than it read until 2026-08-22, and both
+halves of the defect are worth knowing because neither showed up as an error.
+
+**`RLS_FAIL_CLOSED=true` was decorative.** `configure_rls` was reached only from
+`get_engine()`, and startup hits `bootstrap()` — the *owner* engine — first. The
+boot log announced fail-closed while the fail-**open** predicate was installed.
+`bootstrap_rls()` now configures the flavour before the DDL.
+
+**The tenant scope did not survive a commit.** `set_tenant_scope` binds with
+`is_local=true`, so it lives exactly one transaction. `recall._bump_recall_access`
+commits and `working.py` re-reads after it; `consolidate.sweep_pending` commits
+per job and continues. Nine memory statements ran unscoped. That was harmless
+only because the app-level predicates above carried them — under fail-closed they
+return zero rows, so consolidation silently stops marking jobs DONE and recall
+silently empties. Measured: a pre-fix build under fail-closed recalled 4 facts /
+4 messages / ~650 tokens where the fixed one recalls 4 / 16 / 1987.
+
+The scope is now a property of the **session**, re-bound by one `after_begin`
+hook — still `is_local=true`. `SET SESSION` was considered and refused on
+purpose: it would make the scope a property of the *connection*, so a missed
+reset would return a live scope to the pool. That is a cross-tenant read —
+strictly worse than the bug it would have fixed.
+
 ### Why there is no shared-memory bucket — a structural fact, not a policy toggle
 
 This is worth understanding precisely, because it is not "sharing is turned

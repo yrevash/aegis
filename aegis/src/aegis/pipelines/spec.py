@@ -1,7 +1,7 @@
 """What a pipeline *is*, declared once — stages, owners, and what each stage emits.
 
-Aegis runs three pipelines. **Three, not sixteen**: a module is not a pipeline, and the
-sixteen-module course in ``docs/teaching/`` is the explanation of the parts, not a
+Aegis runs three pipelines. **Three, not twenty-nine**: a module is not a pipeline, and the
+twenty-nine-module course in ``docs/teaching/`` is the explanation of the parts, not a
 description of the flows. The flows are:
 
 * ``retrieval`` — a question becomes an answer context (:mod:`aegis.retrieval.pipeline`);

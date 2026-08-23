@@ -1,9 +1,19 @@
 # Phase 9 — Scale and hardening
 
+> **Kept as a record, 2026-08-23.** This phase shipped. It survives the documentation
+> clean-up because `docs/adr/0009` names its §9.1 as the decision that
+> superseded the embedded vector store with Qdrant. The rest of the v2 plan — the
+> master plan, the roadmap, the other phases, six research plans and five technology
+> surveys — was deleted and is in git history (last full set: `2d8b84d`). **Links from
+> here into `plans/` and `research/` are therefore dead**; the bodies are intact, only
+> the cross-references are broken. See [`README.md`](README.md).
+
+
+
 **Last, because it hardens what the earlier phases build.**
 
-Research: [`plans/05-modularity-scale.md`](plans/05-modularity-scale.md) ·
-[`plans/04-enterprise-substrate.md`](plans/04-enterprise-substrate.md) §6 ·
+Research: `plans/05-modularity-scale.md` ·
+`plans/04-enterprise-substrate.md` §6 ·
 [`backlog-post-hackathon.md`](backlog-post-hackathon.md)
 
 ---

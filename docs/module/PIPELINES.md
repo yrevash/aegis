@@ -5,7 +5,7 @@ Regenerate with `python -m aegis.pipelines > docs/module/PIPELINES.md`;
 `aegis/tests/pipelines/test_pipeline_spec.py` fails if this file and the
 declaration disagree.
 
-Aegis runs **three** pipelines. A module is not a pipeline: the sixteen-module
+Aegis runs **three** pipelines. A module is not a pipeline: the twenty-nine-module
 course in [`../teaching/`](../teaching/README.md) explains the parts, and this
 document is the flows they compose into. Each stage below names the module that
 owns it and what it puts on a wire or a row, and each of those claims is bound

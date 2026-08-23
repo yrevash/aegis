@@ -1,4 +1,14 @@
-# security.md — Security Design & How to Show It
+# Security design, and how to show it
+
+> **Where this sits, 2026-08-23.** This is the security *design brief* — what is built,
+> how it maps to standards, and how to demonstrate it. Two neighbours answer different
+> questions and are more current where they overlap:
+> [`../compliance/README.md`](../compliance/README.md) is the control-by-control
+> evidence map (114 controls, every claim resolving to a file, route or test), and
+> [`../teaching/security.md`](../teaching/security.md) explains the live posture surface
+> that reports which controls are wired *in the running process*. Sections 7 and 8 below
+> are implementation checklists from the original build and describe work that has since
+> shipped; read them as history, not as a to-do list.
 
 > Security is a rubric axis ("code quality, maintainability **and security**") AND our biggest differentiator, because in 2026 AI security is a specific, nameable discipline most teams skip. This file defines *what we build*, *how it maps to standards*, and *how to demo and market it*. Nothing heavy runs locally (16 GB, no Docker) — detection is API-based or self-built code.
 
@@ -52,7 +62,7 @@ Security is layers, not one tool. All detection is API-based or pure code — **
 - **PII redaction / content filter.**
 - Streaming caveat: if output streams token-by-token, the output guard can't scan first — either buffer briefly, or scan post-hoc and redact. Coordinate with `frontend.md`.
 
-**Orchestration — two front doors over one policy (both real):** the fast, offline-testable programmatic rails (`app/guardrails/rails.py`) the agent graph calls by default, **and** a **NeMo Guardrails Colang policy** (`app/guardrails/config/*.co`) that is genuinely loaded and executed via `LLMRails` — set `GUARDRAILS_ENGINE=nemo` to make the readable Colang policy the enforcing engine (its custom actions delegate back to the same checks, so the two can't drift). Verified by `tests/guardrails/test_nemo_rails.py`, which runs the real engine and asserts the input/output rails block a jailbreak and redact PII. The Colang file doubles as a human-readable security artifact.
+**Orchestration — two front doors over one policy, and since 2026-08-23 both of them run.** The fast, offline-testable programmatic pipeline lives in `aegis/src/aegis/guardrails/pipeline.py` (the backend keeps a shim at `backend/src/app/guardrails/rails.py`); the declarative **NeMo Guardrails Colang policy** lives in `aegis/src/aegis/guardrails/config/rails/*.co` and is genuinely loaded and executed via `LLMRails`. `GUARDRAILS_ENGINE` takes `programmatic`, `nemo` or **`both`** — and `both`, which this deployment runs, executes the offline pipeline first and then the Colang engine over what the pipeline returned. Verdicts fold strictest-wins and redactions accumulate; an already-blocked payload is never forwarded to the second engine. Its custom actions call the same rail functions, so the two cannot drift. Verified by `tests/guardrails/test_nemo_rails.py`, which runs the real engine and asserts the input/output rails block a jailbreak and redact PII. The Colang file doubles as a human-readable security artifact.
 
 **Pre-deployment red-teaming:** a **real Garak runner** ships at
 `backend/scripts/garak_scan.py` (Garak = NVIDIA's open-source LLM vulnerability
@@ -125,7 +135,7 @@ The unifying line, tied to the trust stack: **"every autonomous action is uncert
 - [ ] Tool allowlists per persona; least-privilege everywhere.
 - [ ] Human-in-the-loop gate wired to high-risk / high-uncertainty.
 - [ ] Azure Spotlighting on retrieved content; validate before graph writes.
-- [x] NeMo Guardrails Colang policy committed **and executed** (`config/*.co` run via `LLMRails`; `GUARDRAILS_ENGINE=nemo`); programmatic twin is the default fast path. Injection defense has a deterministic signature backstop before the model classifier.
+- [x] NeMo Guardrails Colang policy committed **and executed** (`config/rails/*.co` run via `LLMRails`; the deployment runs `GUARDRAILS_ENGINE=both`, so the programmatic pipeline and the Colang engine both judge every payload). Injection defense has a deterministic signature backstop before the model classifier.
 - [ ] Garak runner (`scripts/garak_scan.py`) executed on the day; real report committed to `scripts/garak_reports/` for the demo.
 - [ ] Audit log table populated on every action.
 - [ ] One-page OWASP threat model written.
@@ -135,6 +145,6 @@ The unifying line, tied to the trust stack: **"every autonomous action is uncert
 
 ## 8. Agent directives
 
-- Guardrails orchestration is **decided and wired**: NeMo Guardrails (Colang) is the declarative engine (`GUARDRAILS_ENGINE=nemo`), with the programmatic rails as the default fast twin. NeMo caps `pandas<2.4` (reflected in `pyproject`); the injection rail runs a deterministic signature backstop before the cheap-model classifier.
+- Guardrails orchestration is **decided and wired**: the programmatic pipeline runs first and the NeMo Colang engine runs over its output (`GUARDRAILS_ENGINE=both`). NeMo caps `pandas<2.4` (reflected in `pyproject`); the injection rail runs a deterministic signature backstop before the cheap-model classifier.
 - **Never** introduce a local guardrail *model* (RAM constraint) — use the API classifier + self-built checks.
 - Security wraps **every** model interaction. No unguarded path to the model, ever.

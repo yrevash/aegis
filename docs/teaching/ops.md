@@ -89,6 +89,21 @@ to ACTIVE through `POST /v1/llmops/prompts/versions` and
 rollback was one more `activate` call away, never a manual re-paste of the
 old text.
 
+### Two read routes, and the reason one of them returned `[]` for everyone
+
+`GET /v1/ops/prompts` and `/v1/ops/prompts/active` are the read surface;
+`/v1/llmops/prompts*` is the write surface. Until 2026-08-23 the first returned
+an empty list **for every role** — not a permission error, an empty list, which
+reads as "there are no prompt versions" rather than "you were not allowed to
+see them". The cause was that the governance context is not bound on a `GET`, so
+the scoped query found nothing. The same route also **silently substituted** a
+cross-tenant `tenant_id` rather than refusing it; that is now a `403`.
+
+The general shape is worth remembering, because it recurs: a scoped read that
+returns an empty collection when the scope failed to bind is indistinguishable
+from a correct empty answer, and it is the failure mode this platform's whole
+"stated absence" discipline exists to prevent.
+
 ## How it runs
 
 1. A candidate prompt is written as a new `DRAFT` `PromptVersion`.

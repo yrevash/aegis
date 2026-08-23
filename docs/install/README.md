@@ -1,10 +1,12 @@
-# Installing Aegis v2 — from `git clone` to a demo that works
+# Installing Aegis — from `git clone` to a demo that works
 
-`docs/install/` is the v1 runbook. It predates **Qdrant**, **Superset**, the demo
-seeders and the document corpus, so following it alone leaves you with a platform
-that boots and shows nothing.
+This is the only install path. (An older v1 runbook lived here until 2026-08-23; it
+predated Qdrant, Superset, the demo seeders and the document corpus. Its two pieces
+that still mattered — the non-superuser serving role, and the Neo4j/Memurai/Temporal
+service setup — were folded into the files below, and the rest was deleted. It is in
+git history if you want it.)
 
-This folder is the v2 path. Read in order:
+Read in order:
 
 | | |
 |---|---|

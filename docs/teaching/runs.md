@@ -27,8 +27,8 @@ flowchart TD
     B --> C[node_started / node_finished / tool_call / guardrail / ...]
     C --> D["fold_events(): pure function<br/>events → RunHeader"]
     D --> E["runs.RunHeader — a REGENERABLE PROJECTION<br/>every field is a fold over events, never written directly"]
-    F[Ingest activities] -.also write via ingest_log.py.-> B
-    G["Partition missing?<br/>(a partitioned table with no partitions rejects every write)"] -.after_create hook.-> B
+    F[Ingest activities] -.->|also write via ingest_log| B
+    G["Partition missing?<br/>(a partitioned table with no partitions rejects every write)"] -.->|after_create hook| B
 ```
 
 ## The architecture
@@ -39,8 +39,8 @@ aegis/src/aegis/runs/
   record.py       RunEventRecord, fold_events(), record_events(), read_run_header()
   partitions.py   monthly range-partition creation and pruning
 backend/src/app/jobs/ingest_log.py    writes ingest stage transitions as run_events
-backend/src/app/api/ingest_log.py     GET /documents/{id}/ingest — reads the log back
-backend/src/app/api/routes_health.py  GET /platform/pipeline — aggregates job_runs + run_events
+backend/src/app/api/ingest_log.py     GET /v1/documents/{id}/ingest — reads the log back
+backend/src/app/api/routes_health.py  GET /v1/platform/pipeline — aggregates job_runs + run_events
 ```
 
 ## What is actually in Aegis
@@ -72,6 +72,31 @@ has a bug and is fixed later, `rebuild_run_header`/`reconcile_run_header`
 can regenerate every historical header correctly from the same immutable
 event rows, because the events were never lossy in the first place.
 
+### Cost is metered at the gateway, not folded from what a node returned
+
+`cost_usd` on the header is still a fold over events, but **which** events carry
+usage changed on 2026-08-23, and the old answer was wrong in two ways at once.
+Cost used to be read from LangGraph's reducers, which see only what a node
+*returns* — so guardrail calls, the depth classifier and the grounding check were
+all invisible — and a terminal `BLOCKED` or `ERROR` event passed no usage at all,
+so a refused run reported **$0.0000** against a real $0.036 of spend.
+
+Usage is now recorded at the gateway's own metering chokepoint, which every model
+call passes through by construction, and the reported figures match the
+`usage_ledger` exactly. The general lesson is worth carrying: a total assembled
+from what the *orchestrator* observed will always miss the calls the orchestrator
+did not make itself.
+
+### `run_events` cannot be rewritten by the serving role
+
+Since 2026-08-23 the connection every request arrives on holds `SELECT, INSERT`
+on `run_events` and nothing more — and the revoke is expanded through
+`pg_inherits` to each monthly partition, because Postgres checks privileges on
+the relation *named* and `DELETE FROM run_events_2026_08` would otherwise still
+have worked. Retention is still possible because it is
+`prune_run_event_partitions` dropping a whole expired partition — DDL, already
+owner-only — never a `DELETE`. See `governance.md`.
+
 ### Ingest logging reuses the same substrate
 
 `backend/src/app/jobs/ingest_log.py` writes document-ingest stage
@@ -82,7 +107,8 @@ and one partition scheme.
 
 ### No REST endpoint for runs directly
 
-There is no `GET /runs` or `GET /run-events`. The record surfaces only
+There is no `GET /v1/runs` or `GET /v1/run-events`. (`GET /v1/llmops/runs` is a
+different thing: which prompt *version* served each recent run.) The record surfaces only
 through three purpose-built views: the per-document ingest progress
 endpoint, the platform pipeline health aggregation (which joins `job_runs`
 with `run_events`), and the live SSE stream a conversational run emits in

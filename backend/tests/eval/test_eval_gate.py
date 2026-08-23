@@ -1,6 +1,6 @@
 """The CI quality gate: the offline eval must clear its thresholds on the seed corpus.
 
-This is the Phase-6 quality gate (``docs/learn/10-architecture.md``). It drives the
+This is the Phase-6 quality gate (``docs/architecture/system-architecture.md``). It drives the
 real hybrid retrieval pipeline (vector + graph + BM25 → RRF → rerank) over the fixed
 seed corpus, computes deterministic metrics, and **fails the build** if retrieval
 quality regresses below the bar. It is fully offline — no network, no databases, no keys.

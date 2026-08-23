@@ -8,7 +8,7 @@ the one authoritative procedure); this file is not one of them, it is the interf
 contract. Swapping the domain means editing those pieces and keeping these exports
 stable.
 
-Exposed surface (the domain seam described in ``docs/learn/50-run-and-extend.md``):
+Exposed surface (the domain seam described in ``SKILL.md``):
 
 * **schema** (piece 1) — the :mod:`app.adapter.schema` module + key record types.
 * **ml_spec** (piece 2) — :data:`FEATURES`, :data:`TARGET`, :func:`features_for_request`,

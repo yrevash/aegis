@@ -70,7 +70,12 @@ fabricated `enforced`."* Concretely, the signals this module reads:
   A misconfigured deployment running with the no-op governance hook would
   show this as `False` — meaning the gateway is effectively ungoverned.
 - **Is a strong JWT signing secret in force**, versus the documented
-  development default? Read from `aegis.governance.effective_config()`.
+  development default? Read from `aegis.governance.effective_config()`. The
+  boot-time guard behind it (`backend/src/app/config.py`) used to check only
+  *exact equality* against the dev default, so `JWT_SECRET = "x" * 48` booted
+  production happily. It now checks a **set of known placeholders as
+  substrings** plus a distinct-character floor — padding a placeholder to the
+  length floor does not make it secret.
 - **Is Postgres RLS running fail-closed**, and which PII engine (Presidio
   or regex fallback) is actually active — both read live, not assumed.
 
@@ -100,6 +105,24 @@ the mitigation for that threat is actually switched on right now. The two
 answer different questions and are not meant to be confused: one is "how
 bad would this be", the other is "is the thing that prevents it currently
 running."
+
+### And a third sibling: the compliance surface
+
+Since 2026-08-23 there is a further surface it is easy to confuse with this one.
+`GET /v1/compliance` (built by `backend/src/app/platform/compliance.py`, written
+up in `../compliance/README.md`) maps **114 controls across 12 frameworks** —
+29 enforced, 58 partial, 22 not implemented, 5 not applicable — where every claim
+must resolve to a file, route or test, and 645 tests enforce exactly that,
+including "enforced requires a file **and** a test" and "anything less must name
+what is missing".
+
+Three surfaces, three questions, deliberately not merged:
+
+| Surface | Answers |
+|---|---|
+| `aegis.security.posture` | Is the control **wired in this process right now**? |
+| `aegis.platform`'s risk map | **How bad** would this threat be? (human judgement) |
+| `/v1/compliance` | Does the repository **have evidence** for this control, and what is missing? |
 
 ## How it runs
 

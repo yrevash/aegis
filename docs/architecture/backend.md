@@ -1,6 +1,22 @@
-# backend.md — Backend Context
+# backend.md — Backend Context (historical)
 
-> The backend is the brain of **Aegis**: agent orchestration, retrieval, the ML spine, guardrails, and observability. It must be clean, typed, modular, and fully local-or-API (no Docker, no GPU, 16 GB laptop). Read `hackathon.md` and `security.md` alongside this.
+> ## Read this first — status, 2026-08-23
+>
+> **This is the original backend design brief, written in early August, and it is kept
+> for one reason: source code cites it.** `aegis/retrieval/reranker.py` points here for
+> the two-stage retrieval prescription, which still holds.
+>
+> **The current description of the system is
+> [`system-architecture.md`](system-architecture.md).** Where the two disagree, that one
+> wins. Two things below were true when written and are not now, and are corrected in
+> place: the vector store (Chroma / NanoVectorDB → **Qdrant**, ADR 0009 superseded by
+> phase 9 §9.1), and the module paths (capabilities moved out of `backend/src/app/*`
+> into the importable `aegis.*` packages). Everything framed as a plan — "the critical
+> spike", the quality bar, the agent directives — describes work that has since shipped.
+>
+> The backend is the composition root of **Aegis**: agent orchestration, retrieval, the
+> ML spine, guardrails, and observability. Clean, typed, modular, and fully local-or-API
+> (no Docker, no GPU, 16 GB laptop).
 
 ---
 
@@ -9,16 +25,16 @@
 Every backend capability is a first-class **Aegis module** — a branded name presented
 **with its honest underlying tech** (branding, never hiding). The list below mirrors the
 live, typed manifest in `backend/src/app/capabilities.py`, served at
-`GET /platform/capabilities` (and the identity card `GET /about`). This is the single
+`GET /v1/platform/capabilities` (and the identity card `GET /v1/about`). This is the single
 source of truth also used by the README and the frontend Platform view.
 
 | Aegis module | Tech underneath | Real code path | Status |
 |---|---|---|---|
 | **Aegis Gateway** | LiteLLM | `app.core.llm` | live |
 | **Aegis Router** | LangGraph | `app.agent.router` | live |
-| **Aegis Memory** | Postgres + embedded Chroma | `app.memory` | live |
-| **Aegis Cache** | Redis | `app.retrieval.cache` | live |
-| **Aegis Retrieval** | Neo4j/LightRAG + embedded NanoVectorDB | `app.retrieval.pipeline` | live |
+| **Aegis Memory** | Postgres + Qdrant | `aegis.memory` | live |
+| **Aegis Cache** | Redis | `aegis.retrieval.cache` | live |
+| **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | `aegis.retrieval.pipeline` | live |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | `app.ml.model` | live |
 | **Aegis Guardrails** | programmatic + NeMo Colang | `app.guardrails.rails` | live |
 | **Aegis Evals** | RAGAS-style proxies + LLM judge | `app.eval.harness` | live |
@@ -96,7 +112,7 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 
 - **LightRAG is the pipeline; Neo4j and the embedded vector store are the stores.** LightRAG ingests documents (`insert()`), calls an LLM to extract entities+relationships, builds the graph + embeddings, and retrieves over both at query time. Extraction + embeddings run **via API** (`gpt-4o-mini` + `text-embedding-3-large`), so nothing heavy runs locally.
 - **Why LightRAG (not Microsoft GraphRAG):** it skips the expensive community-summarization step, so indexing is fast and cheap — right for indexing synthetic data on the day. (This is an ADR-worthy decision.)
-- **Stores:** Neo4j (graph, local) + an **embedded vector store** (Chroma for retrieval and memory recall, NanoVectorDB for LightRAG's own internal vectors) + local Postgres (relational, KV, doc-status). No vector server and no `pgvector` extension — see ADR 0009. Graph traversal answers relationship questions; vector search answers similarity questions; LightRAG uses both.
+- **Stores:** Neo4j (graph, local) + **Qdrant** (one node, shared by `aegis.retrieval` and LightRAG's own vector storage) + local Postgres (relational, KV, doc-status). No `pgvector` extension. Graph traversal answers relationship questions; vector search answers similarity questions; LightRAG uses both. *(Corrected: this line named an embedded Chroma/NanoVectorDB tier, per ADR 0009, which phase 9 §9.1 superseded — an embedded store is single-process, so `uvicorn --workers 2` failed in a way that looked like index corruption.)*
 - **Two-stage retrieval:** retrieve a wide candidate set → **rerank** → pass top context to generation.
 - **Semantic cache in front:** embed query → nearest-neighbour lookup in **Redis (local)** → hit returns instantly; miss runs retrieval then writes back. Exact-match tier first, semantic tier on top.
 - **Agentic RAG:** the agent decides *what* to retrieve dynamically — this is the differentiator, not the components.
@@ -118,12 +134,12 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 | Store | Tech (local) | Holds |
 |---|---|---|
 | Knowledge graph | Neo4j (Desktop/Community) | entities + relationships from LightRAG |
-| Vector index | **Embedded Chroma / NanoVectorDB** (on-disk, no server) | chunk + memory embeddings, ANN search |
+| Vector index | **Qdrant**, one node (a zip with a binary — no installer, no service) | chunk + memory embeddings, ANN search |
 | Relational | **PostgreSQL** (no extension needed) | embeddings of record (JSON); users+roles (RBAC); domain records; **audit log**; eval results |
 | Semantic cache | Redis (WSL2 or Memurai) | query-embedding → answer (TTL) |
 | Traces | Arize Phoenix (in-process) | `gen_ai.*` spans |
 
-- **No Supabase, and no `pgvector`.** Install PostgreSQL locally; no server-side extension is required. ANN search lives in the embedded vector store, which is a directory on disk, not a service (ADR 0009).
+- **No Supabase, and no `pgvector`.** Install PostgreSQL locally; no server-side extension is required. ANN search lives in Qdrant.
 - **Audit log is a first-class table:** every autonomous action, the approving human (if any), the model used, and the trace id. This is what makes the system defensible (security + maintainability).
 
 ---

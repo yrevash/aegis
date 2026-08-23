@@ -1,7 +1,7 @@
 """Render the pipeline declarations as Markdown — the fourth consumer.
 
 The gap the user named was never prose: ``docs/teaching/`` is a current, accurate
-sixteen-module course and rewriting it would buy nothing. What was missing is a
+twenty-nine-module course and rewriting it would buy nothing. What was missing is a
 **machine-readable structure** for the flows those modules compose into, and a document
 generated from that structure — so the page describing the ingest pipeline cannot
 describe five stages while the pipeline runs six.
@@ -60,7 +60,7 @@ def render_markdown() -> str:
         "`aegis/tests/pipelines/test_pipeline_spec.py` fails if this file and the",
         "declaration disagree.",
         "",
-        "Aegis runs **three** pipelines. A module is not a pipeline: the sixteen-module",
+        "Aegis runs **three** pipelines. A module is not a pipeline: the twenty-nine-module",
         "course in [`../teaching/`](../teaching/README.md) explains the parts, and this",
         "document is the flows they compose into. Each stage below names the module that",
         "owns it and what it puts on a wire or a row, and each of those claims is bound",

@@ -1,7 +1,7 @@
 """Live trace-eval — grade a completed agent run and persist the scores.
 
 This is the **Eval + Observe** stage of the LLM-Ops closed loop (see
-``docs/learn/40-pipelines.md`` Gap 2 + Gap 4): after a run finishes, an
+``docs/module/PIPELINES.md`` Gap 2 + Gap 4): after a run finishes, an
 async judge grades both the **final answer** and the individual **trajectory
 steps** (the OTel span kinds the graph already stamps — RETRIEVER / TOOL /
 GUARDRAIL / CHAIN), writing one :class:`~aegis.ops.models.EvalResult` row per

@@ -20,14 +20,30 @@ SQLite test path) or duplicate a workaround in every file that needs one.
 module — memory, governance — gets both correctly, on both dialects,
 automatically.
 
+## Diagram
+
+```mermaid
+flowchart LR
+    M["A durable module's model<br/>(memory, governance, runs, settings, …)"] --> B["AegisBase<br/>the one declarative base"]
+    B --> J["JsonB<br/>jsonb on Postgres, JSON elsewhere"]
+    B --> V["VectorColumn<br/>list[float] as JSON, sized to EMBED_DIM"]
+    B --> U["UtcDateTime<br/>tz-aware on both dialects"]
+    J --> PG[(Postgres — production)]
+    V --> PG
+    U --> PG
+    J --> SL[(SQLite — the test suites)]
+    V --> SL
+    U --> SL
+```
+
 ## The architecture
 
 ```
 aegis/src/aegis/data/
-  base.py   AegisBase (the declarative base), JsonB, VectorColumn, EMBED_DIM
+  base.py   AegisBase (the declarative base), JsonB, VectorColumn, UtcDateTime, EMBED_DIM
 ```
 
-That is the whole package — deliberately small.
+That is the whole package — one file, deliberately.
 
 ## What is actually in Aegis
 

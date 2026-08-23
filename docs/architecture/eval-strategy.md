@@ -19,7 +19,7 @@ it uses a **proxy/pattern** rather than the named third-party product.
 | Layer | Job | Reference tool | What Aegis actually ships | Where in the repo |
 |---|---|---|---|---|
 | **1. Metrics** | Score retrieval/answer quality on labelled cases | **RAGAS** (conceptual metrics) | RAGAS-*style* **deterministic proxies** (lexical overlap), no `ragas` lib | `backend/src/app/eval/metrics.py`, `harness.py`, `corpus.py`, `judge.py` |
-| **2. CI regression gate** | Fail the build when quality regresses | **DeepEval** (pytest-native CI/CD) | The DeepEval **pattern**: pytest-native, per-metric thresholds — today via `tests/eval/`, with a dedicated gate module *being added* | `backend/tests/eval/test_eval_gate.py` (live); `backend/src/app/eval/regression.py` (added) |
+| **2. CI regression gate** | Fail the build when quality regresses | **DeepEval** (pytest-native CI/CD) | The DeepEval **pattern**: pytest-native, per-metric thresholds | `backend/tests/eval/test_eval_gate.py`; `backend/src/app/eval/regression.py` and `aegis/src/aegis/evals/regression.py` — both shipped |
 | **3. Production traces** | Grade live runs, keep a glass-box trail | **Arize Phoenix** / **Langfuse** | Per-run + per-step online eval, exported over **OpenTelemetry → Phoenix** | `backend/src/app/ops/trace_eval.py`, `backend/src/app/observability/*` |
 
 The three are complementary, not redundant: **RAGAS = what "good" means** (the metric
@@ -155,7 +155,7 @@ runs.
 | Reference tool | Category | Integrated? | Aegis realisation | File(s) |
 |---|---|---|---|---|
 | **RAGAS** | Conceptual metrics (faithfulness, context precision/recall, answer relevancy) | Proxy only (`ragas` not a dep) | Deterministic lexical proxies + optional LLM-judge for relevance | `app/eval/metrics.py`, `judge.py`, `harness.py`, `corpus.py` |
-| **DeepEval** | Pytest-native CI/CD gate; agent/multi-turn/tool-use eval | Pattern only (`deepeval` not a dep) | Pytest gate today; dedicated regression module being added | `tests/eval/test_eval_gate.py`; `app/eval/regression.py` *(added)* |
+| **DeepEval** | Pytest-native CI/CD gate; agent/multi-turn/tool-use eval | Pattern only (`deepeval` not a dep) | Pytest gate plus a dedicated regression module | `tests/eval/test_eval_gate.py`; `app/eval/regression.py` |
 | **Arize Phoenix** | Production traces + online eval | **Yes** (real dep) | OTel → local Phoenix; per-run/per-step online eval | `app/observability/otel.py`, `semconv.py`; `app/ops/trace_eval.py` |
 | **Langfuse** | Production traces + online eval | No (not integrated) | Droppable OTel alternative to Phoenix | (would attach to `app/observability/*`) |
 | **Patronus AI** | Responsible-AI detectors (hallucination/bias) | **Not currently integrated** | Optional add-on — see below | — |

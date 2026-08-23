@@ -114,7 +114,7 @@ async def list_pipelines(
 ) -> PipelinesResponse:
     """Return every pipeline Aegis runs, its stages, and what each stage emits.
 
-    Three pipelines, not sixteen: a module is not a pipeline. The sixteen-module course
+    Three pipelines, not twenty-nine: a module is not a pipeline. The twenty-nine-module course
     in ``docs/teaching/`` explains the parts; this is the flows they compose into.
 
     The declaration is **verified against the code before it is served** — the ingest
