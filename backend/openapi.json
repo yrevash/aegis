@@ -3326,6 +3326,27 @@
         "title": "EmissionModel",
         "type": "object"
       },
+      "EnforcedControl": {
+        "description": "One control this build **enforces**, named so a reader can check the claim.\n\nTwo fields and no third. ``summary`` is a sentence about the mechanism, ``evidence``\nnames the files, routes and pytest node ids behind it, and ``gap`` is the thing this\nmodule exists to withhold; none of them travel here. What a public reader gets is\nthe framework's own identifier and the framework's own words for it — enough to look\nthe control up in the published standard and ask us about it, and nothing more.\n\n**Why naming these is not the gap map the module refuses to serve.** The rule is\nthat no control is ever named unless its state is ``enforced``: a reader learns what\nAegis *does*, never what it does not. The residue — that a framework's unnamed\ncontrols are the ones not enforced — was already public in ``coverage`` before this\nfield existed (\"5 enforced of 10\" says five are not), and the residue never\ndistinguishes ``partial`` from ``not_implemented``, so it never points at a hole.\nThe inversion that would be a target list is naming the *other* three states, and\nthat is exactly what :func:`build_standards` filters out.",
+        "properties": {
+          "id": {
+            "description": "The framework's own control identifier, e.g. 'Art. 14'.",
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "description": "The control's name, as the framework words it.",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "EnforcedControl",
+        "type": "object"
+      },
       "EnsembleMember": {
         "description": "One fitted member of the soft-voting ensemble, with its voting weight.",
         "properties": {
@@ -3888,6 +3909,14 @@
           "coverage": {
             "$ref": "#/components/schemas/FrameworkCoverage",
             "description": "The four derived state counts for this framework, and its total."
+          },
+          "enforced_controls": {
+            "description": "Every control of this framework whose state is 'enforced', in the order the authority lists them — id and title only. Controls in any other state are absent, as are all summaries, gaps and evidence references. The list length always equals coverage.enforced.",
+            "items": {
+              "$ref": "#/components/schemas/EnforcedControl"
+            },
+            "title": "Enforced Controls",
+            "type": "array"
           },
           "id": {
             "description": "Stable slug — the same id `GET /compliance` uses.",

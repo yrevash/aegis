@@ -12,13 +12,23 @@ the file that would have implemented it" is a target list, and a public page has
 business publishing one.
 
 So this module serves the *summary* projection of exactly the same data: the
-framework names, the jurisdiction each belongs to, and the four derived state counts
-per framework plus the totals. What it deliberately does **not** carry:
+framework names, the jurisdiction each belongs to, the four derived state counts per
+framework plus the totals, and — since the landing page stopped claiming frameworks
+and started naming controls — the id and title of every control whose state is
+``enforced``. What it deliberately does **not** carry:
 
-* no ``controls`` — no control ids, titles, summaries or **gaps**;
+* no control in any state other than ``enforced``. A ``partial``, a
+  ``not_implemented`` or a ``not_applicable`` control is never named here, which is
+  the whole of the gap map and the whole of the reason ``/compliance`` is guarded;
+* no ``summary`` and no **``gap``** on the controls it does name;
 * no ``evidence`` — no file paths, route names or pytest node ids;
 * no ``residency`` — where this deployment's stores resolve is live configuration,
   and the authenticated ``/compliance`` response is the right place for it.
+
+Naming the enforced controls is a claim a reader can check against the published
+standard and hold us to. It is the opposite of a target list — see
+:class:`EnforcedControl` for why the residue it leaves is one ``coverage`` already
+published.
 
 The counts are the point, and they are **derived, never typed**
 -------------------------------------------------------------
@@ -51,11 +61,13 @@ from pydantic import BaseModel, Field
 from app.platform.compliance import (
     DISCLAIMER,
     DOC_REF,
+    ControlState,
     FrameworkCoverage,
     build_compliance,
 )
 
 __all__ = [
+    "EnforcedControl",
     "FrameworkSummary",
     "StandardsResponse",
     "build_standards",
@@ -91,6 +103,29 @@ _MARKS: dict[str, str] = {
 }
 
 
+class EnforcedControl(BaseModel):
+    """One control this build **enforces**, named so a reader can check the claim.
+
+    Two fields and no third. ``summary`` is a sentence about the mechanism, ``evidence``
+    names the files, routes and pytest node ids behind it, and ``gap`` is the thing this
+    module exists to withhold; none of them travel here. What a public reader gets is
+    the framework's own identifier and the framework's own words for it — enough to look
+    the control up in the published standard and ask us about it, and nothing more.
+
+    **Why naming these is not the gap map the module refuses to serve.** The rule is
+    that no control is ever named unless its state is ``enforced``: a reader learns what
+    Aegis *does*, never what it does not. The residue — that a framework's unnamed
+    controls are the ones not enforced — was already public in ``coverage`` before this
+    field existed ("5 enforced of 10" says five are not), and the residue never
+    distinguishes ``partial`` from ``not_implemented``, so it never points at a hole.
+    The inversion that would be a target list is naming the *other* three states, and
+    that is exactly what :func:`build_standards` filters out.
+    """
+
+    id: str = Field(description="The framework's own control identifier, e.g. 'Art. 14'.")
+    title: str = Field(description="The control's name, as the framework words it.")
+
+
 class FrameworkSummary(BaseModel):
     """One framework's public row: what it is called, whose law it is, how far it goes."""
 
@@ -106,6 +141,15 @@ class FrameworkSummary(BaseModel):
     jurisdiction: str = Field(description="'India' or 'International'.")
     coverage: FrameworkCoverage = Field(
         description="The four derived state counts for this framework, and its total."
+    )
+    enforced_controls: list[EnforcedControl] = Field(
+        default_factory=list,
+        description=(
+            "Every control of this framework whose state is 'enforced', in the order the "
+            "authority lists them — id and title only. Controls in any other state are "
+            "absent, as are all summaries, gaps and evidence references. The list length "
+            "always equals coverage.enforced."
+        ),
     )
 
 
@@ -161,6 +205,17 @@ def build_standards() -> StandardsResponse:
                 version=framework.version,
                 jurisdiction=framework.jurisdiction,
                 coverage=framework.coverage,
+                # The one filter that makes naming controls publishable: `state is
+                # ENFORCED`, evaluated here rather than trusted from a caller. A control
+                # that slips out of `enforced` disappears from this list on the next
+                # request, which is what lets the landing page name controls at all —
+                # the page holds ids it wants to show and prints only the ones this
+                # response still carries.
+                enforced_controls=[
+                    EnforcedControl(id=control.id, title=control.title)
+                    for control in framework.controls
+                    if control.state is ControlState.ENFORCED
+                ],
             )
             for framework in full.frameworks
         ],

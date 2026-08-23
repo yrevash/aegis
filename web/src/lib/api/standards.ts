@@ -42,6 +42,16 @@ type Sent<T> = T extends readonly unknown[]
 /** The four derived state counts, and the total they sum to. */
 export type StandardsCoverage = Sent<Schemas['FrameworkCoverage']>
 
+/**
+ * One control this build enforces — its id and its title, and nothing else.
+ *
+ * The endpoint serves these only for `state == "enforced"`. A partial or unimplemented
+ * control is never named, which is why this type has no `state`: there is only one
+ * state it can be in, and a field carrying a constant invites a client to render the
+ * other three.
+ */
+export type EnforcedControl = Sent<Schemas['EnforcedControl']>
+
 /** One framework: what it is called, whose law it is, how far it goes. */
 export type FrameworkSummary = Sent<Schemas['FrameworkSummary']>
 

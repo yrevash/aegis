@@ -8,10 +8,14 @@
  * failed to render. `LivePlatform` hit this first, with an odd module manifest, and
  * fixed it in place for one grid at one breakpoint.
  *
- * This is the same fix generalised, because both new bands have the problem and at two
- * breakpoints each: thirteen technology claims leave one orphan in a three-column grid
- * and one in a two-column grid, and the three India frameworks leave one in the
- * two-column grid. The last cell simply widens to fill its row.
+ * This is the same fix generalised: thirteen technology claims leave one orphan in a
+ * three-column grid and one in a two-column grid. The last cell simply widens to fill
+ * its row.
+ *
+ * The standards band used to be the other caller, when it drew twelve frameworks split
+ * across two jurisdiction grids. It draws three now, in a grid that is one column below
+ * `sm` and three at `sm` — a shape with no orphan at either breakpoint — so it needs no
+ * tail and no longer imports this. `StackBand` is the only caller.
  *
  * The class strings are written out as literals rather than composed, because Tailwind
  * scans source text: a template literal building `sm:col-span-${n}` produces a class

@@ -5622,6 +5622,37 @@ export interface components {
             name: string;
         };
         /**
+         * EnforcedControl
+         * @description One control this build **enforces**, named so a reader can check the claim.
+         *
+         *     Two fields and no third. ``summary`` is a sentence about the mechanism, ``evidence``
+         *     names the files, routes and pytest node ids behind it, and ``gap`` is the thing this
+         *     module exists to withhold; none of them travel here. What a public reader gets is
+         *     the framework's own identifier and the framework's own words for it — enough to look
+         *     the control up in the published standard and ask us about it, and nothing more.
+         *
+         *     **Why naming these is not the gap map the module refuses to serve.** The rule is
+         *     that no control is ever named unless its state is ``enforced``: a reader learns what
+         *     Aegis *does*, never what it does not. The residue — that a framework's unnamed
+         *     controls are the ones not enforced — was already public in ``coverage`` before this
+         *     field existed ("5 enforced of 10" says five are not), and the residue never
+         *     distinguishes ``partial`` from ``not_implemented``, so it never points at a hole.
+         *     The inversion that would be a target list is naming the *other* three states, and
+         *     that is exactly what :func:`build_standards` filters out.
+         */
+        EnforcedControl: {
+            /**
+             * Id
+             * @description The framework's own control identifier, e.g. 'Art. 14'.
+             */
+            id: string;
+            /**
+             * Title
+             * @description The control's name, as the framework words it.
+             */
+            title: string;
+        };
+        /**
          * EnsembleMember
          * @description One fitted member of the soft-voting ensemble, with its voting weight.
          */
@@ -6018,6 +6049,11 @@ export interface components {
         FrameworkSummary: {
             /** @description The four derived state counts for this framework, and its total. */
             coverage: components["schemas"]["FrameworkCoverage"];
+            /**
+             * Enforced Controls
+             * @description Every control of this framework whose state is 'enforced', in the order the authority lists them — id and title only. Controls in any other state are absent, as are all summaries, gaps and evidence references. The list length always equals coverage.enforced.
+             */
+            enforced_controls?: components["schemas"]["EnforcedControl"][];
             /**
              * Id
              * @description Stable slug — the same id `GET /compliance` uses.

@@ -1,59 +1,50 @@
-> **This is the v1 runbook.** It predates Qdrant, Superset, the demo seeders and the
-> document corpus. For a v2 machine follow
-> [`../dev_new_docs_v2/install/`](../dev_new_docs_v2/install/) instead; this remains
-> accurate for Postgres and the base services.
+# Installing Aegis v2 — from `git clone` to a demo that works
 
-# Install — the hackathon machine
+`docs/install/` is the v1 runbook. It predates **Qdrant**, **Superset**, the demo
+seeders and the document corpus, so following it alone leaves you with a platform
+that boots and shows nothing.
 
-Follow these in order on the Windows box. Each file is a runbook you work through top to
-bottom; each ends with a check that either passes or tells you what is wrong.
+This folder is the v2 path. Read in order:
 
-| # | File | What it sets up |
-|---|---|---|
-| 1 | [`01-postgres.md`](01-postgres.md) | PostgreSQL 17 **and the non-superuser serving role** |
-| 2 | [`02-services.md`](02-services.md) | Memurai, Neo4j Desktop, Temporal |
-| 3 | [`03-app.md`](03-app.md) | Python + Node dependencies, schema bootstrap, seed |
-| 4 | [`04-verify.md`](04-verify.md) | The full check, and the numbers Phase 3 still needs |
+| | |
+|---|---|
+| [`01-prerequisites.md`](01-prerequisites.md) | what to install, and the versions this was built against |
+| [`02-bootstrap.md`](02-bootstrap.md) | the ordered runbook, with the check that proves each step |
+| [`03-demo-data.md`](03-demo-data.md) | what each seeder writes, and **how to remove it before the hackathon** |
+| [`AGENT-CONTEXT.md`](AGENT-CONTEXT.md) | hand this to a coding agent doing the install |
 
 ---
 
-## Order, and why it is not arbitrary
+## The thing to understand first
 
-**Postgres must be first**, because `scripts\db-roles.ps1` runs against it and everything
-else assumes the serving role exists.
+**Almost none of the demo lives in git.** A clone gives you the code, the four
+corpus PDFs and the Superset asset bundle. It does not give you a working demo.
 
-**The role step is not optional.** Skip it and the app connects as `postgres`, a superuser.
-PostgreSQL skips row-level security **entirely** for a superuser — so all thirteen tenant
-policies install, appear correct in `pg_policies`, and filter nobody. That was a real defect
-in this codebase, found by measurement, and it is the single easiest way to reintroduce it.
+| In git | Only on the machine that built it |
+|---|---|
+| all code · 46 illustrations | Postgres — ~57,000 demo rows, 11 users, 6 documents |
+| `docs/corpus/` — 4 real PDFs + `SOURCES.md` | Qdrant — 113 vectors |
+| `docs/operations/superset/` — the asset bundle | `.superset/` — venv + metadata DB (gitignored, 630 MB) |
+| `scripts/superset.sh` · `app/seed.py` · `app/demo.py` · `app/memory_demo.py` | `backend/.env` — **your API keys** |
 
-Temporal is last only because nothing depends on it during setup. It is already verified
-working on this machine.
+Everything on the right is rebuildable from something on the left. That is the
+whole design, and it has been tested the hard way: the first Superset instance was
+installed into a temp directory and a restart destroyed it — every dataset, chart
+and dashboard. It was rebuilt from the committed bundle in about ten minutes. That
+is why the bundle is committed and why the assembly is a script.
 
----
+## What it costs
 
-## What is already on this box
+One step spends real money: **re-ingesting the four corpus PDFs** calls the
+embedding provider. It is ~76 chunks, so cents rather than dollars, but it is not
+free and it needs a working `AZURE_API_KEY`.
 
-| Component | Where | State |
-|---|---|---|
-| PostgreSQL 17.11 | `Downloads\postgresql-17.11-1-windows-x64.exe` | installer, not run |
-| Memurai 8.2 RC2 | `Downloads\Memurai-for-Redis-v8.2-RC2.msi` | installer, not run |
-| Neo4j Desktop 2.2.1 | `Downloads\neo4j-desktop-2.2.1-x64.exe` | installer, not run |
-| Temporal CLI 1.8.2 | `Downloads\temporal_cli_1.8.2_windows_amd64\temporal.exe` | **verified running** |
+Everything else — seeding, demo data, memory, re-indexing from stored embeddings —
+costs nothing and calls no provider.
 
-Machine: Windows 11 Pro, x64, Intel Core 5 220U, 15.55 GB RAM, Python 3.12.8, no Docker.
+## If you are short of time
 
-**x64 matters.** `temporalio` publishes a `win_amd64` wheel and no `win_arm64` one. This box is
-x64, so that is settled — but if you ever move to an ARM machine, Temporal is off the table and
-the fallback substrate in `phase-03-platform-spine.md`'s git history is what replaces it.
-
----
-
-## Two habits that will save you
-
-**Read the check at the end of each file before starting it.** Every runbook here ends with a
-command whose output tells you whether the step worked. If you know what you are aiming at, a
-wrong turn is obvious immediately rather than three steps later.
-
-**When something says it failed, believe it.** This project's recurring defect is a control
-that reports healthy while doing nothing. If a check prints a warning, it is not noise.
+The platform is usable without Superset (analytics has a native path) and without
+Temporal (retrieval works; only new ingestion needs it). Do steps 1–5 of
+[`02-bootstrap.md`](02-bootstrap.md) and stop. Steps 6–7 add the embedded
+dashboards and the ability to ingest new documents.

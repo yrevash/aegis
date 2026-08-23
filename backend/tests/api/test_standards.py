@@ -98,11 +98,14 @@ async def test_the_public_route_answers_without_a_token(client) -> None:
 
 
 async def test_no_control_detail_travels_to_an_anonymous_reader(client) -> None:
-    """Names, jurisdictions and counts — never a gap, an evidence ref or a residency row.
+    """Names, jurisdictions, counts and enforced ids — never a gap, an evidence ref or a
+    residency row.
 
     ``GET /compliance`` stays guarded because "this control is not implemented, and
     here is the file that would have implemented it" is a map of where to push. The
-    summary must not carry it by accident, so the whole payload is walked rather than
+    summary names the controls that *are* enforced — see
+    ``routes_standards.EnforcedControl`` for why that is the opposite of a target list —
+    and must not carry the rest by accident, so the whole payload is walked rather than
     the top-level keys inspected.
     """
     response = await client.get("/platform/standards")
@@ -123,3 +126,55 @@ async def test_no_control_detail_travels_to_an_anonymous_reader(client) -> None:
 
     walk(body)
     assert not (seen & forbidden), f"control detail leaked into the public band: {seen & forbidden}"
+
+
+async def test_only_enforced_controls_are_ever_named(client) -> None:
+    """The one filter that makes naming controls publishable, asserted against the
+    authority rather than against a list written here.
+
+    The landing page prints these ids on a public marketing surface. A control that
+    slipped out of ``enforced`` while its id kept being served would be the page
+    claiming a mechanism the repository no longer has — the exact failure the derived
+    counts exist to prevent, committed one layer down. So: every id served is enforced
+    in the authority, every enforced control in the authority is served, the list
+    length equals the count beside it, and nothing that is not enforced appears
+    anywhere in the body.
+    """
+    response = await client.get("/platform/standards")
+    assert response.status_code == 200
+    served = {framework["id"]: framework for framework in response.json()["frameworks"]}
+
+    authority = build_compliance()
+    unenforced_ids: set[str] = set()
+
+    for framework in authority.frameworks:
+        enforced = [c for c in framework.controls if c.state is ControlState.ENFORCED]
+        unenforced_ids.update(
+            c.id for c in framework.controls if c.state is not ControlState.ENFORCED
+        )
+        row = served[framework.id]
+
+        assert [c["id"] for c in row["enforced_controls"]] == [c.id for c in enforced], (
+            f"{framework.id}: the served ids are not the authority's enforced ids"
+        )
+        assert [c["title"] for c in row["enforced_controls"]] == [c.title for c in enforced]
+        assert len(row["enforced_controls"]) == row["coverage"]["enforced"], (
+            f"{framework.id}: the named controls and the count beside them disagree"
+        )
+        assert all(set(c) == {"id", "title"} for c in row["enforced_controls"]), (
+            "a control carried more than its id and title to an anonymous reader"
+        )
+
+    # An id that is partial, unimplemented or out of scope must not appear anywhere in
+    # the body — not in a control list, not in a label, not in the disclaimer.
+    body_text = response.text
+    leaked = sorted(
+        control_id
+        for control_id in unenforced_ids
+        # An id that is also the id of an enforced control somewhere else cannot be
+        # attributed, so it is not evidence of a leak.
+        if control_id not in {c.id for f in authority.frameworks for c in f.controls
+                              if c.state is ControlState.ENFORCED}
+        and f'"{control_id}"' in body_text
+    )
+    assert not leaked, f"a control that is not enforced was named publicly: {leaked}"

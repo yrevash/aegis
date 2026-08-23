@@ -3,39 +3,59 @@
 import { ShieldAlert } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
-import { Figure } from '@/components/primitives/Figure'
 import { Absence, Receipt } from '@/components/primitives/Receipt'
-import { getStandards, type FrameworkSummary, type StandardsResponse } from '@/lib/api/standards'
+import { API_BASE } from '@/lib/api/config'
+import { getStandards, type StandardsResponse } from '@/lib/api/standards'
 import { cn } from '@/lib/utils'
 
-import { gridTail } from './gridTail'
 import { LandingSection } from './LandingSection'
-import { byJurisdiction, segments, type Segment } from './standardsSummary'
+import { resolveGroups, shownCount, type ResolvedGroup } from './standardsSummary'
 
 /**
- * The standards band: which published frameworks Aegis is built to, and how far.
+ * The standards band: the controls Aegis enforces in full, named one by one.
+ *
+ * **The unit is a control, not a framework, and that is the whole design.** This band
+ * used to be a wall of framework wordmarks with a four-state strip under each. It could
+ * not survive the only question a reviewer asks — *which of these are you compliant
+ * with?* — because no framework here is fully enforced, and a wordmark grid invites a
+ * reader to hear otherwise. So the page stopped claiming frameworks. It names controls:
+ * `Art. 14 — Human oversight`, `LLM06 — Excessive Agency`, `s.12(3) — Right to
+ * erasure`. Each one is checkable against the published standard, and each one is a
+ * claim held in full.
+ *
+ * **Only `enforced` reaches this page.** `enforced` in the compliance table means a
+ * mechanism in this repository *and* a test that fails when the mechanism is removed.
+ * The endpoint serves control ids for that state and no other, so a control slipping to
+ * `partial` disappears from here on the next read rather than becoming a stale boast.
+ * Nothing partial and nothing unimplemented is named on a public page — that map lives
+ * behind `GET /v1/compliance`, which platform staff sign in to read.
+ *
+ * **The denominator is on the face of every card.** A group showing five OWASP-LLM
+ * controls says *five of ten*, because the other five are partial and a card that hid
+ * its denominator would be the whole-framework claim this redesign exists to delete.
  *
  * **The framing is the product here, not the wordmarks.** ISO 27001, SOC 2 and GDPR
  * normally mean *audited and certified by a named body*. Aegis has none of that — no
- * certificate, no report, no conformity assessment, nobody independent has looked. A
- * bare row of framework marks would therefore be a claim a jury can puncture with one
- * question, and it would take the genuinely strong evidence beside it down with it.
- * So the correction is made three times, in three registers a reader cannot miss: the
+ * certificate, no report, no conformity assessment, nobody independent has looked. So
+ * the correction is made three times, in three registers a reader cannot miss: the
  * section's own heading says *certified against none*, a persistent notice sits above
- * the marks rather than inside a tooltip, and the four-state strip draws the gaps at
- * the same weight as the wins.
+ * the controls rather than inside a tooltip, and the disclosure repeats it beside the
+ * frameworks it applies to.
  *
- * **No certification marks, no accreditation seals, no logos.** Every framework is set
- * in type. That is partly the legal line — reproducing a certification body's mark you
- * have not earned is the part that is an actual problem rather than merely an
- * embarrassing one — and partly that twelve wordmarks in one typeface read as a system
- * where twelve sourced-from-anywhere logos read as a clip-art shelf.
+ * **No blended total.** Nothing here averages one group against another. The only
+ * aggregates on screen are counts of things — controls enforced, controls mapped,
+ * frameworks assessed — each one printed beside the thing it counts.
  *
- * **Every number is fetched.** `GET /platform/standards` counts the four states over
- * the real control table on each request; nothing in this file or in
- * {@link ./standardsSummary} writes a total down. The India frameworks are being
- * extended as this ships, so a hardcoded "27 enforced" would have been wrong within
- * the week — on the page whose entire argument is that this platform does not do that.
+ * **No certification marks, no accreditation seals, no logos.** Every framework and
+ * every control is set in type. That is partly the legal line — reproducing a
+ * certification body's mark you have not earned is the part that is an actual problem
+ * rather than merely an embarrassing one — and partly that a page whose argument is
+ * "here are the specific clauses" has no use for a logo shelf.
+ *
+ * **Every number is fetched.** `GET /platform/standards` counts the states over the real
+ * control table on each request, and the numerator of every "N of M" is a count of the
+ * rows this component is about to draw. Nothing in this file or in
+ * {@link ./standardsSummary} writes a count or a control id down.
  *
  * The whole section is removable by one constant: see {@link ./bands.config}.
  */
@@ -60,59 +80,58 @@ export function StandardsBand(): ReactElement | null {
     return (
       <LandingSection
         id="standards"
-        eyebrow="Built to"
-        title="Aligned with published frameworks. Certified against none."
+        eyebrow="Enforced"
+        title="Controls we enforce end to end. Certified against none."
       >
         <NotCertified />
         <Absence
           className="mt-6"
-          figure="The framework coverage"
+          figure="The enforced controls"
           why="the public standards endpoint did not answer"
-          needed="a reachable backend — the counts are derived from the control table on every read, never stored on this page"
+          needed="a reachable backend — every control named here is read from the compliance table on each request, never stored on this page"
         />
       </LandingSection>
     )
   }
 
   const { frameworks, coverage } = state.data
-  const groups = byJurisdiction(frameworks)
+  const groups = resolveGroups(frameworks)
 
   return (
     <LandingSection
       id="standards"
-      eyebrow="Built to"
-      title={`Aligned with ${frameworks.length} published frameworks. Certified against none.`}
+      eyebrow="Enforced"
+      title={`${coverage.enforced} controls we enforce end to end. Certified against none.`}
     >
       <NotCertified />
 
-      <CoverageStrip coverage={coverage} className="mt-8" />
+      {groups.length === 0 ? (
+        <Absence
+          className="mt-6"
+          figure="The enforced controls"
+          why="none of the shortlisted frameworks are currently enforcing a control"
+          needed="a shortlist whose framework ids match the compliance authority — see SHORTLIST in standardsSummary.ts"
+        />
+      ) : (
+        <ul className="mt-8 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+          {groups.map((group) => (
+            <GroupCard key={group.title} group={group} />
+          ))}
+        </ul>
+      )}
 
-      <div className="mt-10 grid gap-x-12 gap-y-8">
-        {groups.map((group) => (
-          <section key={group.jurisdiction} className="min-w-0">
-            <h3 className="eyebrow mb-4">{group.jurisdiction}</h3>
-            <ul className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-              {group.frameworks.map((framework, index) => (
-                <FrameworkCell
-                  key={framework.id}
-                  framework={framework}
-                  className={
-                    index === group.frameworks.length - 1
-                      ? gridTail(group.frameworks.length)
-                      : undefined
-                  }
-                />
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
+      <FullPicture
+        shown={shownCount(groups)}
+        enforced={coverage.enforced}
+        frameworks={frameworks.length}
+        mapped={coverage.total}
+      />
 
       <Meaning className="mt-8" />
 
       <Receipt
         origin="GET /platform/standards"
-        detail="public, unauthenticated · counts derived per request"
+        detail="public, unauthenticated · enforced controls only, read per request"
         className="mt-6"
       />
     </LandingSection>
@@ -123,11 +142,11 @@ export function StandardsBand(): ReactElement | null {
  * The sentence a reader must not be able to leave without.
  *
  * Deliberately not a tooltip, not a footnote and not grey 11px type under the grid: it
- * sits *above* the marks, in the amber the console already reserves for "a human needs
- * to look at this", with the icon and the word the status rule requires (DESIGN.md
- * §2). It is two clauses, because the second one is the part that makes the first
- * credible — a page that only disclaims sounds evasive; a page that disclaims and then
- * says what it *does* have sounds like it knows the difference.
+ * sits *above* the controls, in the amber the console already reserves for "a human
+ * needs to look at this", with the icon and the word the status rule requires
+ * (DESIGN.md §2). It is two clauses, because the second one is the part that makes the
+ * first credible — a page that only disclaims sounds evasive; a page that disclaims and
+ * then says what it *does* have sounds like it knows the difference.
  */
 function NotCertified(): ReactElement {
   return (
@@ -149,129 +168,135 @@ function NotCertified(): ReactElement {
 }
 
 /**
- * The aggregate, drawn before it is described (DESIGN.md §4).
+ * One group: what these controls have in common, how many of the framework they are,
+ * and then the controls themselves.
  *
- * One proportional strip answers *how much of this holds* in the first half-second;
- * the legend under it answers *which*, and carries the four counts as text so the
- * figures are readable by a screen reader and by anyone who cannot separate the hues.
- * The bar itself is `aria-hidden` for exactly that reason — it is a second rendering
- * of the legend, and announcing both would read the same four numbers twice.
+ * **The count sits above the list and carries its denominator**, because that pair is
+ * the honesty of the card: `3 of 10 enforced` under `EU AI Act` says both that we hold
+ * three clauses in full and that the framework has seven more. A group spanning two
+ * frameworks prints one such row per framework rather than adding them up — `2 of 12`
+ * and `2 of 9` do not sum to anything a reader could use.
+ *
+ * **There is no coverage strip here, and its absence is deliberate.** DESIGN.md §4 asks
+ * a status surface to draw its state before describing it, and the old band did exactly
+ * that. But every row on this card is in the *same* state, so a chart of them would be
+ * one bar at 100% — the visual spelling of a claim this page refuses to make. What
+ * varies across the card is which clauses, and a list is the honest drawing of that.
  */
-function CoverageStrip({
-  coverage,
-  className,
-}: {
-  coverage: StandardsResponse['coverage']
-  className?: string
-}): ReactElement {
-  const bands: Segment[] = segments(coverage)
-
+function GroupCard({ group }: { group: ResolvedGroup }): ReactElement {
   return (
-    <div className={cn('min-w-0', className)}>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <Figure size="stat" className="text-foreground">
-          {coverage.total.toLocaleString()}
-        </Figure>
-        <span className="text-[0.9375rem] leading-relaxed text-muted-foreground">
-          mapped controls, in four honest states
-        </span>
-      </div>
+    <li className="min-w-0 bg-surface px-5 py-5">
+      <h3 className="text-pretty text-[0.9375rem] font-semibold tracking-[-0.01em] text-foreground">
+        {group.title}
+      </h3>
 
-      <div aria-hidden className="mt-4 flex h-2.5 w-full overflow-hidden rounded-full bg-surface-2">
-        {bands.map((band) => (
-          <span key={band.state} className={cn('h-full', band.fill)} style={{ width: band.width }} />
-        ))}
-      </div>
+      {/* Each framework owns its count *and* the rows that count describes. The first
+          draft prefixed every row with its framework's mark instead, which printed
+          "GDPR GDPR Art. 16" — the framework already names itself inside its own control
+          ids, and no amount of string surgery on an identifier is worth doing. Nesting
+          removes the repetition without editing anybody's clause number. */}
+      {group.claims.map((claim, index) => (
+        <section
+          key={claim.frameworkId}
+          className={cn('mt-4 min-w-0 border-t border-border pt-4', index > 0 && 'mt-5')}
+        >
+          <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[0.8125rem] leading-6">
+            <span className="min-w-0 truncate font-medium text-foreground">{claim.mark}</span>
+            <span className="text-muted-foreground">
+              <span className="tabular font-mono font-semibold text-ok-ink">
+                {claim.controls.length}
+              </span>{' '}
+              of <span className="tabular font-mono">{claim.mapped}</span> enforced
+            </span>
+          </p>
 
-      <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-10">
-        {bands.map((band) => (
-          <div key={band.state} className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className={cn('size-2.5 shrink-0 rounded-sm', band.fill)} />
-            <dt className="truncate text-[0.8125rem] leading-5 text-muted-foreground">
-              {band.label}
-            </dt>
-            <dd className={cn('tabular font-mono text-[0.8125rem] font-medium', band.ink)}>
-              {band.count}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+          <ul className="mt-2 space-y-2">
+            {claim.controls.map((control) => (
+              <li
+                key={control.id}
+                className="min-w-0 text-[0.8125rem] leading-snug text-muted-foreground"
+              >
+                <span className="tabular font-mono text-[0.75rem] font-medium text-foreground">
+                  {control.id}
+                </span>{' '}
+                <span className="text-pretty">{control.title}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </li>
   )
 }
 
 /**
- * One framework, set as a wordmark rather than shown as a logo.
+ * The one line that keeps trimming the display from becoming a redaction.
  *
- * The cell carries three things and stops: the name, the edition it was read from, and
- * how many of its controls are mapped. The per-control detail — which one is missing
- * and what would close it — is behind the login on purpose; a public gap map is a
- * target list, which is why `GET /compliance` is guarded and this band summarises it.
+ * Twelve controls on screen out of twenty-nine enforced, out of a hundred and fourteen
+ * mapped across twelve frameworks — an editorial choice on a compliance surface has to
+ * name itself or it is a selection bias nobody declared. Every figure is off the wire,
+ * and the link goes to the public endpoint that serves all of them: the same
+ * unauthenticated JSON this band reads, so a reader can check what was left out against
+ * what was not.
  */
-function FrameworkCell({
-  framework,
-  className,
+function FullPicture({
+  shown,
+  enforced,
+  frameworks,
+  mapped,
 }: {
-  framework: FrameworkSummary
-  className?: string
+  shown: number
+  enforced: number
+  frameworks: number
+  mapped: number
 }): ReactElement {
-  const bands = segments(framework.coverage)
-
   return (
-    <li className={cn('min-w-0 bg-surface px-5 py-4', className)}>
-      <p
-        className="truncate text-[0.9375rem] font-semibold tracking-[-0.01em] text-foreground"
-        title={framework.name}
+    <p className="mt-4 min-w-0 text-pretty text-[0.875rem] leading-relaxed text-muted-foreground">
+      {shown} of {enforced} enforced controls shown.{' '}
+      <a
+        href={`${API_BASE}/platform/standards`}
+        className="rounded-sm font-medium text-blue-700 underline decoration-blue-700/40 underline-offset-4 outline-none transition-colors duration-[--dur-fast] hover:decoration-blue-700 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
-        {framework.mark}
-      </p>
-      {/* Truncated rather than wrapped: a version string that grows to two lines would
-          push this cell's strip out of line with its neighbours', and the strip is the
-          thing being compared across the row. The full string stays on hover. */}
-      <p
-        className="tabular truncate font-mono text-[0.7rem] text-muted-foreground"
-        title={framework.version}
-      >
-        {framework.version}
-      </p>
-      <div aria-hidden className="mt-3 flex h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-        {bands.map((band) => (
-          <span key={band.state} className={cn('h-full', band.fill)} style={{ width: band.width }} />
-        ))}
-      </div>
-      <p className="tabular mt-2 font-mono text-[0.7rem] text-blue-700">
-        {framework.coverage.enforced} enforced of {framework.coverage.total}
-      </p>
-    </li>
+        All {frameworks} frameworks and {mapped} mapped controls assessed in full
+      </a>
+      .
+    </p>
   )
 }
 
 /**
  * The detail, in a disclosure — the page's rule for prose (DESIGN.md §4).
  *
- * Three lines, closed by default. A reader who wants the qualification opens it; a
+ * Four lines, closed by default. A reader who wants the qualification opens it; a
  * reader who does not has already been told the one thing that matters, twice, above.
  */
 function Meaning({ className }: { className?: string }): ReactElement {
   return (
     <details className={cn('group min-w-0', className)}>
       <summary className="inline-flex cursor-pointer touch-manipulation items-center rounded-md text-[0.875rem] font-medium text-blue-700 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
-        What &ldquo;built to&rdquo; means here
+        What &ldquo;enforced&rdquo; means here
       </summary>
       <ul className="mt-3 max-w-[68ch] space-y-2 border-l-2 border-border pl-4 text-[0.875rem] leading-relaxed text-muted-foreground">
         <li>
-          <span className="text-foreground">Alignment, not certification.</span> Aegis holds
-          no ISO 27001 or ISO/IEC 42001 certificate, no SOC 2 report and no EU AI Act
-          conformity assessment.
+          <span className="text-foreground">A mechanism and a test.</span> A control is
+          enforced only when something in this repository implements it and a pytest node
+          fails if that something is switched off. The suite resolves every reference
+          against the real filesystem, route table and test files on each run.
         </li>
         <li>
-          <span className="text-foreground">Every claim resolves.</span> Each control names
-          a file, a served route or a pytest node id, and the suite resolves every one of
-          them against the real filesystem, route table and test files on each run.
+          <span className="text-foreground">Alignment, not certification.</span> Aegis holds
+          no ISO 27001 or ISO/IEC 42001 certificate, no SOC 2 report and no EU AI Act
+          conformity assessment. No framework here is enforced in every clause, which is
+          why the count beside each group carries its denominator.
+        </li>
+        <li>
+          <span className="text-foreground">Only enforced controls are named.</span> Nothing
+          partial and nothing unimplemented appears on this page, in any group or in the
+          endpoint it reads.
         </li>
         <li>
           <span className="text-foreground">The full map is not public.</span> The
-          control-by-control table lives in{' '}
+          control-by-control table, gaps included, lives in{' '}
           <code className="tabular font-mono text-[0.8125rem] text-blue-700">
             docs/compliance/README.md
           </code>{' '}
