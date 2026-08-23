@@ -96,3 +96,9 @@ vector_storage/
 
 # LightRAG runtime cache — regenerated on every ingest, never source.
 backend/rag_storage/
+
+# Audit evidence — screenshots, probe scripts and raw captures from the platform
+# audits. Deliberately NOT committed: ~81MB of PNGs that git would keep forever, and
+# the captures carry live bearer tokens and the Postgres DSN. The findings live in the
+# commit messages; the evidence is reproducible by re-running the audit.
+testdata/audit/
