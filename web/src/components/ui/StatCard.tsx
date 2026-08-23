@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 
-import { Figure } from '@/components/primitives/Figure'
+import { Figure, type FigureSize } from '@/components/primitives/Figure'
 import { MiniTrend } from '@/components/shared/MiniTrend'
 import { Receipt } from '@/components/primitives/Receipt'
 import { SIGNALS, type Signal } from '@/config/signals'
@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 export function StatCard({
   label,
   value,
+  valueSize = 'display',
   icon: Icon,
   tone = 'neutral',
   delta,
@@ -32,6 +33,14 @@ export function StatCard({
   label: string
   /** The already-formatted figure. This tile sets type; it never formats. */
   value: string
+  /**
+   * The type step for the value. `display` (default) is the hero numeral this tile
+   * exists for; `stat` is for a tile whose value is an **identifier** rather than a
+   * number — a node name, a model id. Mono at 1.75rem is ~20px a glyph, so an
+   * eleven-character id is 223px of unbreakable text and no KPI tile in a five-up row
+   * is that wide. Setting the step is the honest fix; ellipsising a name is not.
+   */
+  valueSize?: FigureSize
   icon?: LucideIcon
   tone?: Signal
   delta?: { value: string; direction: 'up' | 'down' }
@@ -67,17 +76,33 @@ export function StatCard({
           <Icon className="size-5" aria-hidden />
         </div>
       ) : null}
-      <div className={cn('flex items-end justify-between gap-3', Icon && 'mt-5')}>
+      {/* `flex-wrap`, because the delta chip does not shrink. Two-up at 390 and one step
+          of text size, and this row had 108px for a 79px chip: the label column was
+          crushed to **14px** and "Cost saved vs frontier" came out one broken glyph wide
+          and 100px tall. The chip takes its own line when the pair will not fit. */}
+      <div
+        className={cn('flex flex-wrap items-end justify-between gap-x-3 gap-y-2', Icon && 'mt-5')}
+      >
+        {/* The last line of defence, not the plan: a value is meant to fit its tile
+            (see `valueSize`). But this tile takes an arbitrary string and is drawn five
+            across, so a value that does not fit must ellipsise inside its own card
+            rather than paint over the border and push the page sideways — which is what
+            a `guard_input` did at 1440, for eleven pixels of document overflow. */}
         <div className="min-w-0">
           <p className="text-sm text-muted-foreground">{label}</p>
-          <Figure size="display" className="mt-2 text-foreground">
-            {value}
-          </Figure>
+          <span className="mt-2 block min-w-0" title={value}>
+            <Figure truncate size={valueSize} className="text-foreground">
+              {value}
+            </Figure>
+          </span>
         </div>
         {delta ? (
           <span
             className={cn(
-              'tabular flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-xs font-medium',
+              // `shrink-0` so the row wraps rather than crushing the label beside it;
+              // `max-w-full` so that once it is on its own line it still cannot be wider
+              // than the tile it sits in.
+              'tabular flex max-w-full shrink-0 items-center gap-1 rounded-md px-2 py-0.5 font-mono text-xs font-medium',
               // Both chips wear the *ink* step, not the fill step. `--danger`
               // `#f04438` is a fill-weight red and measured **2.94:1** on its own
               // `bg-block/25` wash — the same defect the badge tones carried, in a

@@ -112,7 +112,7 @@ function ProposedActions({
         <ul className="mt-1.5 flex flex-col gap-1">
           {calls.map((call) => (
             <li key={call.call_id} className="flex min-w-0 items-center gap-2">
-              <Figure className="min-w-0 flex-1 truncate font-medium text-foreground">
+              <Figure truncate className="min-w-0 flex-1 font-medium text-foreground">
                 {call.tool}
               </Figure>
               <Badge tone={riskVariant(call.risk)} className="shrink-0 uppercase">

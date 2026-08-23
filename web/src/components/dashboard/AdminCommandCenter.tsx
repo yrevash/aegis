@@ -661,8 +661,17 @@ function AdminCommandCenter(): ReactElement {
                     >
                       <span className="shrink-0 text-sm font-medium text-foreground">{role}</span>
                       <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                      <span className="min-w-0 truncate" title={model}>
-                        <Figure className="text-[0.78rem] text-muted-foreground">{model}</Figure>
+                      {/* The clip has to be *inside* the Figure. This span carried
+                          `truncate`, but the Figure it wraps is an `inline-flex`, and
+                          `text-overflow` does not cross a flex formatting context — so
+                          the model id was cut mid-glyph with no ellipsis and no
+                          measurable document overflow (`DeepSeek-V4-Fl`,
+                          `Llama-3.2-90B-Visi`). `block` so `max-w-full` resolves against
+                          this slot rather than the whole row. */}
+                      <span className="block min-w-0" title={model}>
+                        <Figure truncate className="text-[0.78rem] text-muted-foreground">
+                          {model}
+                        </Figure>
                       </span>
                     </li>
                   ))}

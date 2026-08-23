@@ -5,13 +5,14 @@ import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
-import { SIGNALS, type Signal } from '@/config/signals'
+import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 
 import { ActivityRail } from './ActivityRail'
 import { deriveActivity, deriveAgentPanel, isFailure } from './agentLanes'
 import { deriveTiming, formatDuration, isGuardStage, type Stage } from './stageTimeline'
+import { TRUST_CHECKS } from './trustChecks'
 
 /** How often the live counters tick. Fast enough to read as live, slow enough to read. */
 const TICK_MS = 100
@@ -59,56 +60,15 @@ function HeadFigure({
   )
 }
 
-// ── The trust stack, as four checks in the run header ─────────────────────────
-
 /**
- * The four claims the product makes, each decidable from the run's own events.
+ * The trust stack, as four checks in the run header.
  *
- * "Every autonomous action is grounded, guarded, approved, and fully traced." These were
- * a bordered bar of four lit chips sitting between the question and the run — a fifth
- * animating hierarchy on a screen that already had four. They are the same four
- * predicates, reduced to four checks inside the run header, because a summary of what
- * the run will have proved belongs *on* the run rather than above it.
+ * These were a bordered bar of four lit chips sitting between the question and the run —
+ * a fifth animating hierarchy on a screen that already had four. They are the same four
+ * predicates, reduced to four checks inside the run header, because a summary of what the
+ * run will have proved belongs *on* the run rather than above it. The predicates
+ * themselves are {@link TRUST_CHECKS}.
  */
-interface TrustCheck {
-  key: string
-  label: string
-  signal: Signal
-  done: (s: RunState) => boolean
-}
-
-const TRUST_CHECKS: readonly TrustCheck[] = [
-  {
-    key: 'grounded',
-    label: 'Grounded',
-    signal: 'graph',
-    // An answer is what gets grounded, so there must be one. A run stopped at the input
-    // rail retrieved nothing and generated nothing, yet this lit whenever a provenance
-    // record existed — so "Grounded" appeared directly above "Blocked by the input rail
-    // — no answer generated". Claiming an assurance about a thing that does not exist is
-    // the one failure this row of chips must never have.
-    done: (s) =>
-      s.answer.length > 0 && (s.retrievalScores.length > 0 || s.provenance != null),
-  },
-  {
-    key: 'guarded',
-    label: 'Guarded',
-    signal: 'block',
-    done: (s) => s.guardrails.some((g) => g.stage === 'output') || s.finishedStatus === 'blocked',
-  },
-  {
-    key: 'approved',
-    label: 'Human-approved',
-    signal: 'risk',
-    // Only lights when the run actually paused at the gate AND a human approval let a
-    // tool succeed — a rejected action (tool_result ok=false) stays dark.
-    done: (s) => s.awaitedApproval && s.toolResults.some((r) => r.ok),
-  },
-  // `traced` stays true for a blocked run on purpose: the run *was* fully recorded, and
-  // that a refusal is traceable is exactly the claim worth making about it.
-  { key: 'traced', label: 'Fully traced', signal: 'agent', done: (s) => s.finishedStatus != null },
-]
-
 function TrustChecks({ state }: { state: RunState }): ReactElement {
   return (
     <ul aria-label="Trust stack" className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">

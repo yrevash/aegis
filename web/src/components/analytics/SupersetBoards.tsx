@@ -408,7 +408,7 @@ function SingleFigures({
       ))}
       <p className="flex min-w-0 flex-col">
         <span className="text-[0.68rem] text-muted-foreground">{dimension}</span>
-        <Figure className="truncate text-foreground">{row.label}</Figure>
+        <Figure truncate className="text-foreground">{row.label}</Figure>
       </p>
     </div>
   )

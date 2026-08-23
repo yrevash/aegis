@@ -421,9 +421,19 @@ function GraphView({ role }: { role: Role }): ReactElement {
                   <span className="min-w-0 flex-1 truncate font-medium text-foreground">
                     {nodeLabel(nodeId(e.source))}
                   </span>
-                  <span className="flex shrink-0 items-center gap-1 font-mono text-[0.68rem] text-blue-600">
-                    <ArrowRight className="size-3" aria-hidden />
-                    {e.relation}
+                  {/* The relation phrase is extracted text, not a code — it can be a
+                      whole sentence ("enters after fifteen minutes without a request"),
+                      and this span was `shrink-0` with no `truncate`. So it set the row's
+                      min-content width, ran 361px past its own card and 290px past a
+                      1440 viewport, and took the target label out with it — every
+                      ancestor being `overflow-x: visible`, nothing clipped it. It shrinks
+                      and ellipsises now, and the full phrase is on the row's `title`. */}
+                  <span
+                    className="flex min-w-0 shrink items-center gap-1 font-mono text-[0.68rem] text-blue-600"
+                    title={e.relation}
+                  >
+                    <ArrowRight className="size-3 shrink-0" aria-hidden />
+                    <span className="min-w-0 truncate">{e.relation}</span>
                   </span>
                   <span className="min-w-0 flex-1 truncate text-right font-medium text-foreground">
                     {nodeLabel(nodeId(e.target))}

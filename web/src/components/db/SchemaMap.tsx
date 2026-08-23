@@ -385,7 +385,7 @@ function TableNode({
       )}
     >
       <span className="flex items-center gap-1">
-        <Figure className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+        <Figure truncate className="min-w-0 flex-1 text-xs font-medium text-foreground">
           {table.name}
         </Figure>
         {table.withheldColumns.length > 0 ? (
@@ -713,7 +713,9 @@ function NeighbourNode({
         table.tenantScoped ? 'border-l-blue-400' : 'border-l-muted-foreground/45',
       )}
     >
-      <Figure className="truncate text-xs font-medium text-foreground">{table.name}</Figure>
+      <Figure truncate className="text-xs font-medium text-foreground">
+        {table.name}
+      </Figure>
       <span className="truncate font-mono text-[0.6rem] leading-3 text-muted-foreground">
         {side} · {table.tenantScoped ? 'tenant' : 'platform'} ·{' '}
         {table.rowEstimate > 0 ? `~${table.rowEstimate.toLocaleString()}` : 'no estimate'}
@@ -738,7 +740,7 @@ function Entity({ table }: { table: DbTable }): ReactElement {
         style={{ height: ENTITY_HEAD }}
       >
         <Table2 className="size-3.5 shrink-0 text-blue-700" aria-hidden />
-        <Figure className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+        <Figure truncate className="min-w-0 flex-1 text-sm font-semibold text-foreground">
           {table.name}
         </Figure>
         <Badge tone={table.tenantScoped ? 'graph' : 'neutral'}>
@@ -757,7 +759,7 @@ function Entity({ table }: { table: DbTable }): ReactElement {
             ) : (
               <span aria-hidden className="size-3 shrink-0" />
             )}
-            <Figure className="min-w-0 flex-1 truncate text-[0.7rem] text-foreground">
+            <Figure truncate className="min-w-0 flex-1 text-[0.7rem] text-foreground">
               {column.name}
             </Figure>
             <span className="shrink-0 truncate font-mono text-[0.62rem] text-muted-foreground">
@@ -780,7 +782,7 @@ function Entity({ table }: { table: DbTable }): ReactElement {
             style={{ height: ENTITY_ROW }}
           >
             <Lock className="size-3 shrink-0 text-[color:var(--risk-ink)]" aria-hidden />
-            <Figure className="min-w-0 flex-1 truncate text-[0.7rem] text-[color:var(--risk-ink)]">
+            <Figure truncate className="min-w-0 flex-1 text-[0.7rem] text-[color:var(--risk-ink)]">
               {name}
             </Figure>
             <span className="shrink-0 font-mono text-[0.62rem] text-[color:var(--risk-ink)]">

@@ -1,6 +1,7 @@
 'use client'
 
-import { MessageSquareText, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { Eraser, Flag, MessageSquareText, ShieldAlert, ShieldCheck } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
@@ -11,6 +12,7 @@ import type { RunState } from '@/state/runReducer'
 
 import { AnswerBody } from './AnswerBody'
 import { answerAbsence } from './answerAbsence'
+import { outputVerdict } from './outputVerdict'
 import { readSources } from './sources'
 import { useRevealedText } from './useRevealedText'
 
@@ -62,6 +64,18 @@ function StandsOn({
 }
 
 /**
+ * The icon per output verdict. `flag` is a note, `redact` is an erasure, `block` is a
+ * refusal — the shapes differ because the facts do, and because the status tones alone
+ * do not separate under CVD (DESIGN.md §2).
+ */
+const VERDICT_ICON: Record<string, LucideIcon | undefined> = {
+  pass: ShieldCheck,
+  flag: Flag,
+  redact: Eraser,
+  block: ShieldAlert,
+}
+
+/**
  * The streamed final answer. Renders answer chunks as they arrive with a live
  * cursor, and surfaces the output-check verdict as a compact chip.
  *
@@ -109,9 +123,9 @@ export function AnswerPanel({
    */
   onSeeSources?: () => void
 }): ReactElement {
-  const outputGuard = state.guardrails.find((g) => g.stage === 'output')
+  const verdict = outputVerdict(state.guardrails)
   const absence = answerAbsence(state)
-  const passed = outputGuard?.verdict === 'pass'
+  const VerdictIcon = verdict === null ? null : (VERDICT_ICON[verdict.verdict] ?? ShieldAlert)
   // A run still in flight keeps typing; a settled turn renders whole, so scrolling back
   // through a thread never re-types an answer somebody has already read.
   const revealed = useRevealedText(state.answer, state.running)
@@ -133,14 +147,10 @@ export function AnswerPanel({
           </span>
         }
         actions={
-          outputGuard ? (
-            <Badge tone={passed ? 'ok' : 'block'} className="gap-1">
-              {passed ? (
-                <ShieldCheck aria-hidden className="size-3" />
-              ) : (
-                <ShieldAlert aria-hidden className="size-3" />
-              )}
-              {passed ? 'output checked' : 'output blocked'}
+          verdict !== null && VerdictIcon !== null ? (
+            <Badge tone={verdict.tone} className="gap-1">
+              <VerdictIcon aria-hidden className="size-3 shrink-0" />
+              {verdict.label}
             </Badge>
           ) : null
         }

@@ -39,6 +39,27 @@ interface FigureProps {
    * `1.2k`, `p95`, a truncated run id.
    */
   label?: string
+  /**
+   * Ellipsise an identifier too long for its slot.
+   *
+   * **This has to be a prop, and `className="truncate"` on a `Figure` silently does
+   * nothing.** `truncate` is `overflow:hidden; text-overflow:ellipsis;
+   * white-space:nowrap`, and `text-overflow` applies to a *block container's* own inline
+   * content — it does not cross into a flex formatting context. This element is an
+   * `inline-flex`, so the class landed on the wrong box: the text clipped mid-glyph with
+   * no ellipsis, at no measurable document overflow, which is exactly why an
+   * overflow-only sweep never saw it. Three call sites had written it that way — a KPI
+   * value, a node id and a model id, the last of which cut `Llama-3.2-90B-Visi` in half
+   * on a phone.
+   *
+   * Setting it puts the clip on an inner box that *is* blockified (a flex item), where
+   * the ellipsis renders. `tests/design/figureTruncate.test.mjs` fails the build if the
+   * class is ever written on a `Figure` again.
+   *
+   * Pair it with a `title` on the wrapper: an ellipsis without a way to read the whole
+   * value is a fact the console has taken away.
+   */
+  truncate?: boolean
   className?: string
 }
 
@@ -66,15 +87,23 @@ export function Figure({
   size = 'body',
   unit,
   label,
+  truncate = false,
   className,
 }: FigureProps): ReactElement {
   return (
     <span
       data-slot="figure"
       aria-label={label}
-      className={cn('tabular inline-flex items-baseline gap-1 font-mono', SIZE[size], className)}
+      className={cn(
+        'tabular inline-flex items-baseline gap-1 font-mono',
+        SIZE[size],
+        // Without a ceiling the inline-flex box takes its max-content width and simply
+        // paints past its tile; the clip below would then never engage.
+        truncate && 'max-w-full',
+        className,
+      )}
     >
-      {children}
+      {truncate ? <span className="min-w-0 truncate">{children}</span> : children}
       {unit == null ? null : (
         <span className="text-[0.75em] font-normal text-muted-foreground">{unit}</span>
       )}

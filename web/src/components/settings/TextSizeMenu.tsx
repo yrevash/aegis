@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactElement } fr
 
 import { cn } from '@/lib/utils'
 
+import { shouldCloseOnBlur, shouldCloseOnPointerDown } from './menuDismiss'
 import { TextSizeChoice } from './TextSizeChoice'
 import { useTextScale } from './useTextScale'
 
@@ -19,6 +20,9 @@ import { useTextScale } from './useTextScale'
  *
  * A disclosure, not a modal: `Escape` closes it and returns the caret to the trigger, a
  * click outside closes it, and tabbing out of it closes it and carries on down the page.
+ * Which of those a given event is, is {@link shouldCloseOnBlur} /
+ * {@link shouldCloseOnPointerDown}'s decision — see that file for why a blur naming
+ * nothing used to unmount this panel under the user's own finger.
  */
 export function TextSizeMenu(): ReactElement {
   const [scale] = useTextScale()
@@ -32,13 +36,19 @@ export function TextSizeMenu(): ReactElement {
     triggerRef.current?.focus()
   }, [])
 
+  // Pointer dismissal. `pointerdown` rather than `mousedown` so a touch is dismissed by
+  // the touch itself rather than by the synthetic mouse event a phone fires ~300ms later.
   useEffect(() => {
     if (!open) return
-    const onPointerDown = (event: MouseEvent): void => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
+    const onPointerDown = (event: PointerEvent): void => {
+      const wrap = wrapRef.current
+      if (wrap === null) return
+      if (shouldCloseOnPointerDown(true, event.target as Node | null, (n) => wrap.contains(n))) {
+        setOpen(false)
+      }
     }
-    document.addEventListener('mousedown', onPointerDown)
-    return () => document.removeEventListener('mousedown', onPointerDown)
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [open])
 
   return (
@@ -52,7 +62,8 @@ export function TextSizeMenu(): ReactElement {
         }
       }}
       onBlur={(event) => {
-        if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        const wrap = event.currentTarget
+        if (shouldCloseOnBlur(open, event.relatedTarget as Node | null, (n) => wrap.contains(n))) {
           setOpen(false)
         }
       }}

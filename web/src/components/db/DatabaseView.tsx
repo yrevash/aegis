@@ -275,8 +275,9 @@ function Catalog({
         >
           <span className="flex w-full items-baseline justify-between gap-2">
             <Figure
+              truncate
               className={cn(
-                'min-w-0 truncate text-xs',
+                'min-w-0 text-xs',
                 active ? 'font-medium text-foreground' : 'text-muted-foreground',
               )}
             >

@@ -82,7 +82,7 @@ export function PostureMatrix({ entries }: { entries: PostureEntry[] }): ReactEl
                   )}
                 >
                   <Icon className="size-3.5 shrink-0" aria-hidden />
-                  <Figure className="w-full truncate font-semibold uppercase">
+                  <Figure truncate className="w-full font-semibold uppercase">
                     {entry.threat_id}
                   </Figure>
                   <span className="sr-only">

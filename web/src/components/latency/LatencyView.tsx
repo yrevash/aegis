@@ -157,7 +157,7 @@ function TimeComposition({ nodes, source }: { nodes: NodeLatency[]; source: stri
               {fmtMs(total) ?? 'no reading'}
             </Figure>
             <span>all of it in</span>
-            <Figure className="min-w-0 truncate text-foreground">{leader?.node}</Figure>
+            <Figure truncate className="min-w-0 text-foreground">{leader?.node}</Figure>
             <span>— one timed node, so there is no split to draw.</span>
           </p>
         ) : (
@@ -330,7 +330,12 @@ function LatencyView(): ReactElement {
       ) : (
         <>
           {/* ── Run-latency summary tiles ─────────────────────────────────────── */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5 [&>*]:min-w-0">
+          {/* Three across at desktop, not five. Four of these tiles hold a duration and
+              the fifth holds a **node name**, and a five-up row at 1440 leaves each tile
+              143px of inner width — narrower than `guard_input` set in mono at any
+              headline step. The row that fits its own widest value is the row that never
+              paints over its own border. Five-up returns at 2xl, where there is room. */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 [&>*]:min-w-0">
             <StatCard
               label="Run p50"
               value={fmtMs(data.run_p50_ms) ?? 'no reading'}
@@ -353,6 +358,9 @@ function LatencyView(): ReactElement {
             <StatCard
               label="Slowest node"
               value={data.slowest_node ?? 'no node timed'}
+              // An identifier, not a figure — set at the stat step so the name reads
+              // whole. See {@link StatCard}'s `valueSize`.
+              valueSize="stat"
               icon={Timer}
             />
           </div>

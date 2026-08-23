@@ -66,7 +66,14 @@ export function NodeRangeBars({ nodes }: { nodes: NodeLatency[] }): ReactElement
               key={node.node}
               className="grid grid-cols-[minmax(0,1fr)_2fr_auto] items-center gap-3"
             >
-              <Figure className="min-w-0 truncate text-foreground">{node.node}</Figure>
+              {/* `block`, not a bare inline span: `max-w-full` inside the Figure resolves
+                  against its nearest block container, which for an inline wrapper would
+                  be the whole row rather than this 1fr track. */}
+              <span className="block min-w-0" title={node.node}>
+                <Figure truncate className="text-foreground">
+                  {node.node}
+                </Figure>
+              </span>
 
               <div
                 aria-hidden
