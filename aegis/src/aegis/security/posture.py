@@ -33,6 +33,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from aegis.security.extraction import DEFAULT_THRESHOLDS
+
 __all__ = [
     "PostureEntry",
     "PostureSignals",
@@ -421,6 +423,34 @@ def security_posture(signals: PostureSignals | None = None) -> list[PostureEntry
             refs=[
                 "aegis.core.types:RiskLevel",
                 "aegis.agent:AgentConfig",
+            ],
+        ),
+        PostureEntry(
+            threat_id="AGENTIC-EXTRACTION",
+            name="Model extraction / membership inference by query volume",
+            control="Per-principal, tenant-scoped query-pattern analysis",
+            module="aegis.security.extraction",
+            mechanism=(
+                "ExtractionMonitor.screen — template enumeration and subject breadth "
+                f"over a {int(DEFAULT_THRESHOLDS.window_seconds)}s sliding window"
+            ),
+            status=PostureStatus.PARTIAL,
+            detail=(
+                "A real detector, and pure code: every rail beside it screens a payload, "
+                "and this one screens a principal over a window, which is the only shape "
+                "in which extraction by query volume is visible at all. Honestly "
+                "partial for two reasons that are properties of the design rather than "
+                "of the configuration. The window is **in-process and non-durable** — a "
+                "restart clears it, and a multi-process deployment observes each "
+                "principal at a fraction of their true rate. And it is rate-shaped, so "
+                "a sweep paced under the floor completes unseen; the red-team battery "
+                "carries that as a declared leak (``exfil-06`` / ``exfil-07``) rather "
+                "than leaving it to a footnote."
+            ),
+            refs=[
+                "aegis.security.extraction:ExtractionMonitor",
+                "aegis.security.extraction:query_signature",
+                "aegis.guardrails.schema:exfiltration_channel",
             ],
         ),
     ]

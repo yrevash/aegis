@@ -335,7 +335,10 @@ async def test_an_unchecked_refusal_is_not_stored_as_a_block(client, db):
 
     import app.api.routes_redteam as mod
 
-    async def _dead_rail(text, **_kwargs):
+    async def _dead_rail(payload, **_kwargs):
+        # The sequence stage hands a rail a QueryBurst rather than a string, so a
+        # stand-in for that rail has to accept one.
+        text = payload if isinstance(payload, str) else payload.queries[-1]
         return GuardResult(
             verdict=GuardVerdict.BLOCK,
             reason="Request refused unchecked — the prompt-injection screen is unavailable",
@@ -353,6 +356,10 @@ async def test_an_unchecked_refusal_is_not_stored_as_a_block(client, db):
             # five ingest probes were genuinely blocked by it — so the assertion below
             # measured a partial outage while claiming a total one.
             check_ingest=_dead_rail,
+            # And neither is the fifth, for the identical reason: a real query-pattern
+            # monitor left underneath would block the two extraction bursts and this
+            # test would again be claiming a total outage it had not arranged.
+            check_sequence=_dead_rail,
         )
 
     original = mod._rails_for

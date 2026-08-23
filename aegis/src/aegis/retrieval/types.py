@@ -10,7 +10,7 @@ them — see the backend's strangler shim over its schema module.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
@@ -21,6 +21,7 @@ __all__ = [
     "ALL_TENANTS",
     "TENANT_METADATA_KEY",
     "AllTenants",
+    "CrossTenantLeakError",
     "FusionMethod",
     "GraphEdge",
     "GraphNode",
@@ -35,6 +36,7 @@ __all__ = [
     "tenant_collection_name",
     "tenant_filter",
     "tenant_metadata_value",
+    "verify_rows_in_scope",
 ]
 
 #: The single metadata key under which a row's owning tenant is recorded — on a
@@ -110,6 +112,99 @@ class UntenantedPrincipalError(UnresolvedTenantScopeError):
     search", and both must fail closed rather than widen. It is a distinct class only so
     a host can map it to its own 403 while leaving the retrieval-side refusal a 500.
     """
+
+
+class CrossTenantLeakError(RuntimeError):
+    """A row that reached the caller records an owner the requesting scope may not read.
+
+    This is not the same fact as :class:`UnresolvedTenantScopeError`, and the two must
+    not be collapsed. "I do not know whose partition to search" is a request that never
+    ran; **this** is a search that ran, returned, and handed back a row belonging to
+    somebody else. By the time it is raised the isolation has already failed somewhere
+    upstream — a collection the row should not have been written into, a predicate that
+    was not applied, a filter builder that returned nothing — and the only safe response
+    is to destroy the whole result rather than to quietly drop the offending row.
+
+    **Why it raises rather than filters.** Silently removing the foreign row would make
+    this a third filter, and a third filter fails in the same direction as the first two:
+    the request still succeeds, the user still gets an answer, and nothing anywhere
+    records that two independent tenant boundaries were breached on the way. A raise is
+    the only outcome an operator finds out about. It is deliberately a ``RuntimeError``
+    and not a ``LookupError``: nothing in this package catches it, and nothing should.
+    """
+
+
+def verify_rows_in_scope(
+    rows: Iterable[tuple[object, Mapping[str, object]]],
+    scope: RetrievalScope,
+    *,
+    arm: str,
+) -> None:
+    """Re-check, independently, that every returned row belongs to ``scope``.
+
+    The **second, fail-closed** half of the vector tier's tenant isolation, and the one
+    that does not depend on the query having been built correctly. Every mechanism ahead
+    of it acts *before* the search — the collection the scope resolves to
+    (:func:`tenant_collection_name`), the payload predicate handed to the store — and
+    each of them fails **open** when it is wrong: a missing predicate on a shared
+    collection matches everything, and a partition name derived from the request in
+    flight rather than from the row's owner writes foreign rows where they will be read.
+    This runs *after* the search, over the rows themselves, and fails **closed**.
+
+    **What makes it independent.** It re-derives the permitted owner set here from
+    :meth:`RetrievalScope.resolved_tenant_id` and :func:`tenant_metadata_value`, rather
+    than calling :meth:`RetrievalScope.visible_tenant_values` — the method the filters and
+    the collection routing are built from. That duplication is the point: a defence that
+    shares its policy statement with the thing it is defending goes wrong at the same
+    moment it does. The two statements are held together by
+    ``test_visible_tenant_values_never_widen_a_null_scope`` and by the tests below it.
+
+    The null-tenant semantics are exactly the package's, restated and not relaxed: a row
+    with a ``None`` owner is a **shared-corpus** row and is a positive match for every
+    scope; a scope whose own tenant is ``None`` may read shared rows and *nothing else*,
+    because a null tenant is not a wildcard. An owner that is absent, or that is not a
+    string token this package minted, is **unknown** rather than shared — nothing proves
+    it is unowned — so it is refused.
+
+    Args:
+        rows: ``(row id, payload)`` pairs as they came back from the store, where the
+            payload records its owner under :data:`TENANT_METADATA_KEY`. Row ids are only
+            used to name the offender in the message.
+        scope: The scope the caller asked for. The expectation, not the query.
+        arm: The retrieval arm being checked, named in the message so an operator reading
+            it knows which boundary failed.
+
+    Raises:
+        CrossTenantLeakError: If any row's recorded owner is outside ``scope``, or cannot
+            be established at all.
+        UnresolvedTenantScopeError: If ``scope``'s tenant does not resolve — the check
+            itself refuses to run against a scope that names no partition, rather than
+            waving the rows through.
+    """
+    own = tenant_metadata_value(scope.resolved_tenant_id())
+    for row_id, payload in rows:
+        owner = payload.get(TENANT_METADATA_KEY, _NO_OWNER_RECORDED)
+        if owner is None or (isinstance(owner, str) and owner == own):
+            continue
+        recorded = (
+            "no owner at all"
+            if owner is _NO_OWNER_RECORDED
+            else f"owner {owner!r} ({type(owner).__name__})"
+        )
+        raise CrossTenantLeakError(
+            f"the {arm} returned row {row_id!r} recording {recorded}, which "
+            f"{scope!r} may not read (permitted: its own rows"
+            f"{'' if own is None else f' ({own!r})'} and the shared, tenant-less "
+            "corpus). The tenant predicate ahead of this check did not hold, so the "
+            "whole result is refused rather than filtered: a cross-tenant row that "
+            "reached this point means two independent boundaries were already crossed."
+        )
+
+
+#: Sentinel for "this payload records no owner", kept distinct from a recorded ``None``.
+#: A missing key is not evidence of a shared row — it is evidence of nothing — and the
+#: two must not collapse onto the one value every scope is allowed to read.
+_NO_OWNER_RECORDED: Final = object()
 
 
 def principal_tenant_scope(

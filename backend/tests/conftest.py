@@ -454,6 +454,13 @@ async def client():
     too. Without this, a test that asserts the honest empty state (``p95_latency_ms``
     is ``None``) passes alone and fails in a full run, because an earlier test's run
     left samples behind: an order-dependent false failure, not an endpoint defect.
+
+    The extraction monitor is the second such store and is cleared for the same reason,
+    with a sharper consequence: it accumulates a *rate* per principal, deliberately
+    outliving any one request, so a run of tests that all post similar queries as the
+    same seeded user would eventually be refused with a 429 — in whichever test happened
+    to be thirtieth. Its window is per process and there is nothing to inject, so it is
+    reset here rather than made per-request, which would delete the control.
     """
     import httpx
     from aegis.observability import reset_latency_window
@@ -462,6 +469,7 @@ async def client():
     from app.main import app
 
     reset_latency_window()
+    api_routes._EXTRACTION_MONITOR.reset()
     graph_store = api_routes.GraphStore()
     metrics_store = api_routes.MetricsStore()
     app.dependency_overrides[api_routes.get_graph_store] = lambda: graph_store

@@ -44,6 +44,11 @@ _EXPECTED_THREATS = {
     "AGENTIC-IDENTITY",
     "AGENTIC-TRACEABILITY",
     "AGENTIC-TOOL-MISUSE",
+    # MITRE ATLAS AML.T0024's second half. It is not an OWASP row and it is not a
+    # payload rail, which is exactly why it needs its own line on this surface: a
+    # reviewer scanning the table for "can one principal enumerate our corpus" would
+    # otherwise find nothing, and find nothing whether or not the control existed.
+    "AGENTIC-EXTRACTION",
 }
 
 

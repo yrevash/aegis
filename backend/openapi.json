@@ -6989,7 +6989,7 @@
         "type": "object"
       },
       "ModelCard": {
-        "description": "Honest, measured metadata for one fitted spine — the MLOps UI's data source.\n\nEvery field is read off the *actual* fitted model (its ensemble members,\nencoded matrix, calibrated conformal predictor and stored split sizes), never\nhardcoded. ``data_source`` labels how the training frame was obtained so a\nsynthetic-fallback model is never mistaken for a real domain-trained one.",
+        "description": "Honest, measured metadata for one fitted spine — the MLOps UI's data source.\n\nEvery field is read off the *actual* fitted model (its ensemble members,\nencoded matrix, calibrated conformal predictor and stored split sizes), never\nhardcoded. ``data_source`` labels how the training frame was obtained so a\nsynthetic-fallback model is never mistaken for a real domain-trained one, and\n``dataset_digest`` names *which* frame that was.",
         "properties": {
           "calibration_size": {
             "description": "Rows in the disjoint calibration split.",
@@ -7035,6 +7035,18 @@
             "description": "'provided' | 'spec_provider' | 'synthetic' — how data was sourced.",
             "title": "Data Source",
             "type": "string"
+          },
+          "dataset_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'sha256:<hex>' content digest of the exact feature+target columns this model was fitted on. Provenance and tamper-EVIDENCE, not prevention: it names which data produced this model so a poisoned fit is attributable and detectable afterwards; it does not stop a poisoned frame being supplied. Invariant to column order and to the index; sensitive to any cell value, to row order, to dtypes and to added/removed columns. None only on a legacy artifact fitted before digests existed.",
+            "title": "Dataset Digest"
           },
           "encoded_feature_count": {
             "description": "Column count of the encoded matrix the estimator is fitted on.",
@@ -10073,6 +10085,12 @@
             "title": "Attacks",
             "type": "integer"
           },
+          "beyondRails": {
+            "default": 0,
+            "description": "Probes no rail here catches in any configuration — offline or live. Kept apart from semanticOnly because that column promises a completer would close the gap, and for these it would not.",
+            "title": "Beyondrails",
+            "type": "integer"
+          },
           "categories": {
             "items": {
               "type": "string"
@@ -10122,7 +10140,7 @@
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "Probe count per rail stage (input/output/tool_result).",
+            "description": "Probe count per rail stage (input/output/tool_result/ingest/sequence).",
             "title": "Stages",
             "type": "object"
           },
@@ -17892,7 +17910,7 @@
     },
     "/v1/redteam/suites": {
       "get": {
-        "description": "Return the battery catalogue, with the cost of running each suite live.\n\nThe counts are read off the battery itself rather than restated here, so a probe\nadded to :data:`aegis.redteam.battery.ATTACK_BATTERY` shows up in the picker with\nno edit on this side. ``semanticOnly`` is the honest column: those probes have no\ndeterministic signature by design and *will* appear as leaks in an offline run.",
+        "description": "Return the battery catalogue, with the cost of running each suite live.\n\nThe counts are read off the battery itself rather than restated here, so a probe\nadded to :data:`aegis.redteam.battery.ATTACK_BATTERY` shows up in the picker with\nno edit on this side. ``semanticOnly`` and ``beyondRails`` are the honest columns,\nand they are two columns because they promise different things: a semantic-only\nprobe has no deterministic signature and will appear as a leak in an *offline* run,\nwhile a ``beyondRails`` probe — an extraction sweep paced under the query-pattern\nmonitor's window — leaks in every run there is, because nothing here is asked about\nit. A single column would let a reader conclude that wiring a completer closes both.",
         "operationId": "redteam_suites_v1_redteam_suites_get",
         "responses": {
           "200": {

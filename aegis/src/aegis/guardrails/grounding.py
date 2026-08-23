@@ -8,8 +8,25 @@ asserts facts not present in (or contradicted by) the contexts is *ungrounded* �
 a likely hallucination.
 
 Design mirrors :mod:`aegis.guardrails.content_safety` / :mod:`classifier`: an
-injected-``ChatCompleter`` self-check returning a small verdict dataclass. There
-is no deterministic backstop — groundedness is a semantic entailment judgement.
+injected-``ChatCompleter`` self-check returning a small verdict dataclass.
+
+**There is one deterministic backstop, and it is about citations rather than
+entailment.** Groundedness itself is a semantic judgement and needs a model. Whether an
+answer's *citation* points at a passage that was actually retrieved does not: the answer
+context this platform builds numbers every passage it hands the model
+(:func:`aegis.retrieval.spotlight.build_spotlighted_context` writes ``[source 1]``,
+``[source 2]``, …), so the set of source labels a truthful answer may cite is known
+exactly, from our own generated text, with no model in the loop.
+:func:`check_citation_integrity` compares the two sets and reports every citation the run
+cannot support. That is what keeps this rail worth something with no completer wired —
+see :func:`aegis.guardrails.pipeline.Guardrails._screen_grounding`, which blocks on it.
+
+What it catches is a **false attribution**: an answer telling a reader that a claim came
+from a passage that does not exist. It does not catch a fabricated claim carrying no
+citation, and it does not catch a real citation used to support something it does not
+say — :mod:`aegis.retrieval.citations` checks *quotes* against the chunk they name, and
+the model rail below judges entailment. Three different questions, three mechanisms, and
+only this one runs offline.
 
 **Two findings, not one, because they deserve different answers.** "Unsupported"
 and "contradicted" were a single boolean here, and collapsing them is what forced
@@ -43,12 +60,21 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 from aegis.core.interfaces import ChatCompleter
 from aegis.guardrails.verdict_parsing import parse_bool_field
 
 logger = logging.getLogger(__name__)
+
+#: The source label :mod:`aegis.retrieval.spotlight` writes above every retrieved passage,
+#: and therefore the only citation form an answer can have read off its own context. It is
+#: matched here rather than guessed at: this is a format **this codebase emits**, not a
+#: heuristic for prose, which is the difference between a deterministic check and a
+#: fragile one. Case and inner spacing are tolerated because a model re-typing the label
+#: is still citing it; nothing else is.
+_SOURCE_LABEL = re.compile(r"\[\s*source\s+(\d+)\s*\]", re.IGNORECASE)
 
 _GROUNDING_SYSTEM_PROMPT = (
     "You are a groundedness checker for a retrieval-augmented enterprise "
@@ -90,6 +116,109 @@ class GroundingVerdict:
     #: never defaulted to True — a checker that could not answer has not found a
     #: contradiction, and the caller hard-blocks on this flag in every mode.
     contradicted: bool = False
+
+
+@dataclass(frozen=True)
+class CitationVerdict:
+    """What :func:`check_citation_integrity` found, deterministically.
+
+    Attributes:
+        fabricated: Every source number the answer cited that this run did not retrieve,
+            ascending. Empty means nothing was fabricated — which is *not* the same as
+            "the answer is well cited"; an answer citing nothing also lands here.
+        cited: Every source number the answer cited at all. Carried so a caller can tell
+            "cited nothing" from "cited only real passages".
+        retrieved: The source numbers this run actually had. Empty when the run retrieved
+            nothing, which is what makes any citation at all a fabrication.
+    """
+
+    fabricated: tuple[int, ...] = ()
+    cited: tuple[int, ...] = ()
+    retrieved: tuple[int, ...] = ()
+
+    #: Set when the check ran; a caller that sees ``False`` knows nothing was measured.
+    ran: bool = field(default=True)
+
+    @property
+    def ok(self) -> bool:
+        """Whether every citation in the answer points at a passage that was retrieved."""
+        return not self.fabricated
+
+    def reason(self) -> str:
+        """A sentence naming the offending citations and what the run actually had."""
+        cited = ", ".join(f"[source {n}]" for n in self.fabricated)
+        if not self.retrieved:
+            return (
+                f"the answer cites {cited}, but this run retrieved no passages at all, "
+                "so there is no source of that name for it to have come from"
+            )
+        have = ", ".join(f"[source {n}]" for n in self.retrieved)
+        return (
+            f"the answer cites {cited}, which this run did not retrieve; the passages "
+            f"it was given were {have}"
+        )
+
+
+def retrieved_source_labels(contexts: list[str] | None) -> set[int]:
+    """Return the source numbers this run genuinely had, from the context it built.
+
+    Two shapes of ``contexts`` reach the output rail and both are read here, because
+    guessing wrong in the strict direction would block a legitimate answer:
+
+    * **one assembled context** — what the agent passes (``[state["context"]]``, built by
+      :func:`aegis.retrieval.spotlight.build_spotlighted_context`). Its ``[source N]``
+      labels are the authoritative list, and they are parsed out.
+    * **a list of raw passages** — what a caller wiring the rail directly hands it. There
+      are no labels to parse, so the numbers a model could legitimately use are the
+      ordinals ``1..len(passages)``, matching how the assembler would have numbered them.
+
+    The two are **unioned** rather than chosen between. A caller who supplies both shapes
+    at once, or an assembler whose numbering later changes, then widens the permitted set
+    rather than narrowing it — the right direction for a check whose finding blocks.
+
+    Args:
+        contexts: The retrieved passages the answer was given, in either shape.
+
+    Returns:
+        The source numbers that may legitimately be cited. Empty when nothing was
+        retrieved.
+    """
+    passages = [c for c in (contexts or []) if isinstance(c, str) and c.strip()]
+    labels = {int(n) for c in passages for n in _SOURCE_LABEL.findall(c)}
+    return labels | set(range(1, len(passages) + 1))
+
+
+def check_citation_integrity(answer: str, contexts: list[str] | None) -> CitationVerdict:
+    """Check every source label the answer cites against the ones this run retrieved.
+
+    Fully deterministic and offline: no model, no network, no configuration. It is the
+    reason this rail is worth something on a deployment with no completer wired, and it
+    is the machine-checkable half of the failure that motivated the rail — an audited run
+    that retrieved nothing and answered by citing a document id that exists in no corpus.
+
+    A citation to a passage that does not exist is not extrapolation and not a matter of
+    degree. The answer is telling a reader where a claim came from, and the place does not
+    exist; there is no legitimate turn of that shape, which is why the caller treats this
+    finding the way it treats a contradiction rather than the way it treats "unsupported".
+
+    Args:
+        answer: The generated answer.
+        contexts: The retrieved passages it was given (see
+            :func:`retrieved_source_labels` for the two shapes).
+
+    Returns:
+        A :class:`CitationVerdict`. ``ok`` is ``True`` for an answer that cites nothing,
+        because citing nothing is a different finding — the grounding rail's, not this
+        one's — and this check must not become a rule that answers have to carry
+        citations.
+    """
+    cited = sorted({int(n) for n in _SOURCE_LABEL.findall(answer or "")})
+    retrieved = retrieved_source_labels(contexts)
+    return CitationVerdict(
+        fabricated=tuple(n for n in cited if n not in retrieved),
+        cited=tuple(cited),
+        retrieved=tuple(sorted(retrieved)),
+    )
 
 
 def _parse_verdict(raw: str, *, fail_closed: bool) -> GroundingVerdict:

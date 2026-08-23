@@ -233,7 +233,18 @@ function InFullRow({ claim }: { claim: ResolvedClaim }): ReactElement {
           <span className="tabular font-mono font-semibold text-ok-ink">
             {claim.controls.length}
           </span>{' '}
-          of <span className="tabular font-mono">{claim.mapped}</span> enforced
+          of <span className="tabular font-mono">{claim.mapped}</span>
+          {claim.notApplicable ? ' applicable' : ''} enforced
+          {/* The set-aside count is printed, never absorbed. A claim made on an
+              applicable-controls denominator has to show what it set aside, or the
+              denominator is doing quiet work — see standardsSummary's rule. */}
+          {claim.notApplicable ? (
+            <>
+              {' · '}
+              <span className="tabular font-mono">{claim.notApplicable}</span> not
+              applicable
+            </>
+          ) : null}
         </span>
       </p>
       <p className="mt-1 min-w-0 text-pretty font-mono text-[0.75rem] leading-6 text-muted-foreground">

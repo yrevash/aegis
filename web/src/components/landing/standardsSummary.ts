@@ -107,10 +107,29 @@ export const SHORTLIST: readonly ControlGroup[] = [
  * ## Frameworks enforced in their entirety
  *
  * The band leads with these, and **the list is derived, never authored**. A framework
- * qualifies when the endpoint says every control it maps is `enforced` — that is the whole
- * rule, and it is the strictest reading available: `not_applicable` counts against a
- * framework here, because "we enforce all of it" and "we enforce all of the parts that
- * applied" are different claims and only the first is worth leading with.
+ * qualifies when every control it maps that *can* apply is `enforced` — nothing partial,
+ * nothing unimplemented, and `not_applicable` set aside rather than counted against.
+ *
+ * ### Why not-applicable is set aside, and why that is not a loophole
+ *
+ * The rule used to be `enforced === total`, which reads as the safer choice and is not.
+ * MITRE ATLAS maps `AML.T0018 Backdoor ML Model`, and the reason it does not apply here is
+ * structural: the only fitted model is trained in-process from the host's own frame, so
+ * there is no downloaded artefact that could have been backdoored. Counting that as a
+ * shortfall says a risk we cannot have is a gap we failed to close — which is not a
+ * stricter claim, it is a false one, and it made the row unreachable no matter how much
+ * work landed.
+ *
+ * Three things keep it from becoming an escape hatch, and all three are mechanical:
+ *
+ * - **The count is shown, never absorbed.** A framework claimed on this basis prints
+ *   "N of N applicable" *and* its not-applicable count, so a reader sees exactly what was
+ *   set aside and can go and argue with it.
+ * - **Every not-applicable control must say why.** `GET /v1/compliance` is where those
+ *   reasons live, and a test asserts each one is substantive — a bare state with no
+ *   justification fails the suite, so the cheap way to manufacture a claim does not work.
+ * - **Partial and unimplemented still disqualify outright.** This widens what counts as
+ *   *complete*; it does not soften what counts as *enforced*.
  *
  * Nothing names a framework. A framework that reaches completeness joins this group on the
  * next read with no edit in this file, and one that loses a control drops out of it the
@@ -123,16 +142,21 @@ export function completeFrameworks(
   frameworks: readonly FrameworkSummary[],
 ): ResolvedClaim[] {
   return frameworks
-    .filter(
-      (framework) =>
-        framework.coverage.total > 0 &&
-        framework.coverage.enforced === framework.coverage.total,
-    )
+    .filter((framework) => {
+      const applicable = framework.coverage.total - framework.coverage.not_applicable
+      return (
+        applicable > 0 &&
+        framework.coverage.enforced === applicable &&
+        framework.coverage.partial === 0 &&
+        framework.coverage.not_implemented === 0
+      )
+    })
     .map((framework) => ({
       frameworkId: framework.id,
       mark: framework.mark,
       controls: [...framework.enforced_controls],
-      mapped: framework.coverage.total,
+      mapped: framework.coverage.total - framework.coverage.not_applicable,
+      notApplicable: framework.coverage.not_applicable,
     }))
 }
 
@@ -143,8 +167,14 @@ export interface ResolvedClaim {
   mark: string
   /** The controls this framework currently enforces, id and title, off the wire. */
   controls: EnforcedControl[]
-  /** How many controls of this framework are mapped in total — the denominator. */
+  /**
+   * The denominator this claim is made against: how many of the framework's mapped
+   * controls can apply here. Excludes `not_applicable`, which is reported separately
+   * rather than folded away.
+   */
   mapped: number
+  /** How many mapped controls do not apply to this deployment, shown beside the claim. */
+  notApplicable?: number
 }
 
 /** One group, resolved against a live payload. */

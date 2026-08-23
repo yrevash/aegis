@@ -14,6 +14,15 @@ Standalone usage::
 
 from __future__ import annotations
 
+from aegis.security.extraction import (
+    EXTRACTION_LAYER,
+    ExtractionFinding,
+    ExtractionMonitor,
+    ExtractionSignal,
+    ExtractionThresholds,
+    QuerySignature,
+    query_signature,
+)
 from aegis.security.posture import (
     PostureEntry,
     PostureSignals,
@@ -24,9 +33,16 @@ from aegis.security.posture import (
 )
 
 __all__ = [
+    "EXTRACTION_LAYER",
+    "ExtractionFinding",
+    "ExtractionMonitor",
+    "ExtractionSignal",
+    "ExtractionThresholds",
     "PostureEntry",
     "PostureSignals",
     "PostureStatus",
+    "QuerySignature",
+    "query_signature",
     "read_signals",
     "resolve_symbol",
     "security_posture",

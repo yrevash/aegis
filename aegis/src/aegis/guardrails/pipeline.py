@@ -35,7 +35,7 @@ from aegis.guardrails.classifier import (
     deterministic_injection,
 )
 from aegis.guardrails.content_safety import screen_content
-from aegis.guardrails.grounding import check_grounding
+from aegis.guardrails.grounding import check_citation_integrity, check_grounding
 from aegis.guardrails.media import MediaScreen, call_rail
 from aegis.guardrails.media.audio import Transcriber
 from aegis.guardrails.media.types import MediaGuardResult
@@ -1034,9 +1034,40 @@ class Guardrails:
         blocking those would make the strict posture unusable and teach operators to
         turn the rail off. An empty answer still returns ``None`` — there is no claim to
         be ungrounded.
+
+        **Ahead of both of those sits the one finding that needs no model.** Everything
+        below this point is a semantic entailment judgement, so on a deployment with no
+        ``ChatCompleter`` wired the rail could only ever report the zero-retrieval case,
+        and this control was worth close to nothing.
+        :func:`~aegis.guardrails.grounding.check_citation_integrity` closes that: the
+        answer context numbers its passages ``[source 1]``, ``[source 2]``, … , so a
+        citation naming a source this run does not have is provably false, offline, every
+        time. It **BLOCKs**, on the same reasoning as ``contradicted`` rather than the
+        reasoning behind ``unsupported``: a false attribution is not a claim that reaches
+        past its evidence, it is a claim about where the evidence *is*, and handing a
+        reader a citation that resolves to nothing is worse than refusing.
+
+        **It does not reverse the zero-retrieval decision, and it must not be read as
+        doing so.** A turn that retrieves nothing and answers anyway is still a FLAG, and
+        legitimate ones stay unblocked, because they do not cite a passage. The block
+        fires on the narrower, deterministic fact — this answer *claims a source that
+        does not exist* — which is a different sentence from "this answer has no
+        support".
         """
         if not self._ground_answers:
             return None
+        citations = check_citation_integrity(text, contexts)
+        if not citations.ok:
+            return GuardResult(
+                verdict=GuardVerdict.BLOCK,
+                reason=(
+                    f"Fabricated citation blocked: {citations.reason()}. A citation is a "
+                    "claim about where a fact came from; one that resolves to no "
+                    "retrieved passage is false regardless of whether the fact is."
+                ),
+                text=text,
+                layer="grounding",
+            )
         if not contexts:
             if not text.strip():
                 return None

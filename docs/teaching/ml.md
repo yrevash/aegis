@@ -79,6 +79,29 @@ The card returned alongside a prediction reports real, measured facts about
 the model that produced it — not a static description written once and
 never revisited.
 
+### `dataset_digest` — which data produced this model
+
+`data_source` says *how* the training frame arrived (`provided`,
+`spec_provider`, `synthetic`). It never said *which frame it was*, so two
+spines fitted from different data — one of them poisoned — had identical
+cards and were indistinguishable after the fact.
+
+`dataset_digest` is a `sha256:<hex>` content digest over exactly the feature
+and target columns the fit consumed, computed in
+`TrustworthyModel.train()` and carried on the model, through the joblib
+artifact, onto the card and out of `/v1/ml/model-card`. Its determinism
+contract, stated rather than assumed:
+
+- **Same digest** when columns are reordered (the spine selects by name) and
+  when the index changes (the splits are positional). Same frame, same
+  digest, in any process on any machine.
+- **Different digest** for any changed cell, any reordered *row* (the fit is
+  not row-order invariant either), any added, dropped or renamed column, any
+  dtype change, and any NaN that appears or disappears.
+
+To check a served model against data you trust, rehash it:
+`frame_digest(df, columns=[*spec.features, spec.target]) == card.dataset_digest`.
+
 ## How it runs
 
 1. `python -m app.ml` trains on the domain adapter's real data provider (or
@@ -100,3 +123,8 @@ never revisited.
 - **No fallback to a lesser but real model** — the refusal is total until a
   real artifact exists; there is no intermediate "degraded but honest"
   prediction mode.
+- **No screening of the training frame.** `dataset_digest` is provenance and
+  tamper-**evidence**, not tamper-prevention: nothing inspects or refuses a
+  poisoned frame, and a caller who supplies one still gets a fitted model —
+  one that now carries the poison's fingerprint. Detection is after the fact
+  and needs a reference digest recorded while the data was still trusted.

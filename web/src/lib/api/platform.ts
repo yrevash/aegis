@@ -39,6 +39,14 @@ export interface ModelCardResponse {
   training_size: number
   /** 'provided' | 'spec_provider' | 'synthetic' — how the training frame was sourced. */
   data_source: string
+  /**
+   * `sha256:<hex>` content digest of the exact feature+target columns this model was
+   * fitted on — *which* frame produced it, where `data_source` says only how it
+   * arrived. Provenance and tamper-EVIDENCE, not prevention: it makes a poisoned fit
+   * attributable and detectable afterwards, and stops nothing at fit time. Null only
+   * on a legacy artifact fitted before digests existed.
+   */
+  dataset_digest?: string | null
   /** Rows held out from both the fit and the calibration; 0 when none was held out. */
   test_size?: number
   /**

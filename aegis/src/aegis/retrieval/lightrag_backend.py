@@ -79,6 +79,7 @@ from aegis.retrieval.types import (
     chunk_source_id,
     scoped_graph,
     tenant_metadata_value,
+    verify_rows_in_scope,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps sqlalchemy out of the import
@@ -883,6 +884,18 @@ class LightRAGBackend:
             top_k: Candidate breadth.
             scope: The request's retrieval scope.
 
+        **The filter is checked, not trusted.** Because it is the *only* boundary on this
+        path there is nothing behind it, so the row-level check that follows it is a
+        second reading of the same rows by different code: :func:`_scoped_recall` decides
+        what to keep, and :func:`~aegis.retrieval.types.verify_rows_in_scope` then asks
+        every survivor to prove its own ownership against the scope, deriving what is
+        permitted from :meth:`~aegis.retrieval.types.RetrievalScope.resolved_tenant_id`
+        rather than from the ``visible`` list the filter was built from. Deleting the
+        filter, or breaking its loop, no longer produces a leak — it produces a
+        :class:`~aegis.retrieval.types.CrossTenantLeakError`. It runs only for
+        tenant-scoped requests, because an unscoped run on this backend has no boundary to
+        cross and its recall deliberately passes through whole.
+
         Returns:
             The recall with every candidate the scope may not read removed.
         """
@@ -901,7 +914,14 @@ class LightRAGBackend:
                 "cannot be attributed from it and will be refused"
             )
             raw = await rag.aquery(query, param=param)  # type: ignore[attr-defined]
-        return _scoped_recall(_to_recall(raw), scope)
+        recall = _scoped_recall(_to_recall(raw), scope)
+        if scope.resolved_tenant_id() is not None:
+            verify_rows_in_scope(
+                ((c.id, c.metadata) for c in recall.candidates),
+                scope,
+                arm=f"LightRAG {mode} arm",
+            )
+        return recall
 
 
 async def _graph_counts(rag: object) -> tuple[int | None, int | None]:

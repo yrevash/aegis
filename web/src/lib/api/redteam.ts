@@ -46,7 +46,15 @@ export interface RedteamSuite {
   controls: number
   /** Probes no deterministic signature can catch; they leak offline by design. */
   semanticOnly: number
-  /** Probe count per rail stage: `input` / `output` / `tool_result`. */
+  /**
+   * Probes no rail catches in *any* configuration — a completer does not close these.
+   * Separate from `semanticOnly`, which promises exactly that it would.
+   */
+  beyondRails: number
+  /**
+   * Probe count per rail stage: `input` / `output` / `tool_result` / `ingest` /
+   * `sequence`.
+   */
   stages: Record<string, number>
   offlineFloor: number
   liveFloor: number
@@ -71,8 +79,16 @@ export interface RedteamProbe {
   owasp: string
   prompt: string
   expects: string
-  /** Which rail screened it: `input` | `output` | `tool_result`. */
+  /**
+   * Which rail screened it: `input` | `output` | `tool_result` | `ingest` |
+   * `sequence`. A `sequence` probe's `prompt` is one representative query out of a
+   * burst — see `burstQueries`.
+   */
   stage: string
+  /** Queries in this probe's burst; `0` for every stage whose probe is one payload. */
+  burstQueries?: number
+  /** Simulated seconds between those queries; `0` means they all land in one window. */
+  burstIntervalSeconds?: number
   description: string
   needsLlm: boolean
   verdict: string

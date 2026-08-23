@@ -76,6 +76,37 @@ async def test_model_card_returns_measured_shape(client, db, fitted_spine):
     assert body["data_source"] == "provided"
 
 
+async def test_model_card_names_the_data_that_produced_the_model(
+    client, db, fitted_spine
+):
+    """Provenance reaches the wire, and it is the digest of the frame actually used.
+
+    ``data_source`` above says only *how* the frame arrived. This is the field that
+    says *which frame it was*: strip ``dataset_digest`` from ``ModelCard`` (or stop
+    setting it in ``TrustworthyModel.train``) and this fails.
+
+    The rehash is the point — an assertion that the key merely exists would pass on a
+    digest of the wrong thing. Note what the test does **not** claim: nothing here
+    prevented a poisoned frame. The digest is evidence, checked after the fact
+    against data someone trusted.
+    """
+    from aegis.ml.provenance import frame_digest
+
+    from app.adapter import training_frame
+    from app.ml.spec import resolve_spec
+
+    r = await client.get("/ml/model-card", headers=await login_as(client, "ai"))
+    assert r.status_code == 200
+    digest = r.json()["dataset_digest"]
+    assert digest and digest.startswith("sha256:")
+
+    spec = resolve_spec()
+    expected = frame_digest(
+        training_frame(num_records=200), columns=[*spec.features, spec.target]
+    )
+    assert digest == expected, "the card names a frame the model was not fitted on"
+
+
 async def test_model_card_is_503_when_no_model_has_been_trained(
     client, db, no_ml_artifact
 ):

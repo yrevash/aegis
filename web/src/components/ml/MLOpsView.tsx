@@ -102,6 +102,25 @@ function pct(value: number): string {
   return PERCENT.format(value)
 }
 
+/** Hex characters of the digest shown before the ellipsis. */
+const DIGEST_HEAD = 16
+
+/**
+ * Shorten a `sha256:<64 hex>` digest to something a person can read off a screen
+ * and compare by eye, keeping the algorithm name.
+ *
+ * Truncation is for the *display* only — the full digest stays in the `title`, so
+ * nothing a reader might need to paste into a comparison is lost.
+ */
+function shortDigest(digest: string): string {
+  const [algorithm, hex] = digest.includes(':')
+    ? [digest.slice(0, digest.indexOf(':')), digest.slice(digest.indexOf(':') + 1)]
+    : ['', digest]
+  const head = hex.slice(0, DIGEST_HEAD)
+  const prefix = algorithm ? `${algorithm}:` : ''
+  return hex.length > DIGEST_HEAD ? `${prefix}${head}…` : `${prefix}${hex}`
+}
+
 /** One fact on the model card — a mono label over a value with an optional detail. */
 function Fact({
   label,
@@ -429,6 +448,32 @@ function MLOpsView(): ReactElement {
                 label="numeric"
                 value={String(card.numeric_features.length)}
                 detail={card.numeric_features.join(', ') || '—'}
+              />
+            </div>
+
+            {/*
+              Training-data provenance. `data_source` (the badge above the ensemble
+              table) says how the frame arrived; this says *which* frame it was —
+              the fact that was missing, and without which two models fitted from
+              different data, one of them poisoned, produced identical cards.
+            */}
+            <div className="mt-3 space-y-3">
+              {card.dataset_digest ? (
+                <Fact
+                  label="training data · digest"
+                  value={shortDigest(card.dataset_digest)}
+                  detail={card.dataset_digest}
+                />
+              ) : (
+                <Absence
+                  figure="Training-data digest"
+                  why="This artifact was fitted before the spine recorded one."
+                  needed="A refit."
+                />
+              )}
+              <Receipt
+                origin="model_card · dataset_digest"
+                detail="SHA-256 over the feature and target columns the fit consumed. It records which data produced this model, so a poisoned fit is attributable and detectable against a digest taken while the data was trusted. It prevents nothing: no frame is screened or refused."
               />
             </div>
           </CardBody>

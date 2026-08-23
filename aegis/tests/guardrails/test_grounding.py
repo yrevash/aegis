@@ -5,8 +5,17 @@ from __future__ import annotations
 import pytest
 
 from aegis.core.types import GuardVerdict
-from aegis.guardrails.grounding import GroundingVerdict, check_grounding
+from aegis.guardrails.grounding import (
+    GroundingVerdict,
+    check_citation_integrity,
+    check_grounding,
+    retrieved_source_labels,
+)
 from aegis.guardrails.pipeline import Guardrails
+from aegis.retrieval.spotlight import (
+    build_spotlighted_context,
+    spotlight_system_instruction,
+)
 
 
 def completer_returning(raw: str):
@@ -331,3 +340,132 @@ async def test_prefix_shaped_yes_is_not_a_grounded_verdict():
 async def test_unambiguous_grounding_fallback_still_parses(raw, grounded):
     v = await check_grounding("a", CONTEXTS, completer=completer_returning(raw), block=True)
     assert v.grounded is grounded
+
+
+# ── citation integrity: the deterministic backstop that needs no model ──
+
+
+#: Built by the real assembler, so this test breaks if the label format the model
+#: actually reads ever changes. A hand-written "[source 1]" would keep passing while
+#: production stopped matching, which is the failure mode a deterministic check has.
+_TWO_SOURCES = build_spotlighted_context(
+    ["Closures are approved within 5 business days.", "Premium plans renew monthly."]
+)
+
+
+def test_the_retrieved_labels_are_read_from_the_assembled_context():
+    """The permitted set comes off the context the model was actually given."""
+    assert retrieved_source_labels([_TWO_SOURCES]) == {1, 2}
+
+
+def test_raw_passages_are_numbered_the_way_the_assembler_would_have_numbered_them():
+    """A caller wiring the rail directly passes bare passages; those imply 1..N."""
+    assert retrieved_source_labels(CONTEXTS) == {1, 2}
+    assert retrieved_source_labels([]) == set()
+    assert retrieved_source_labels(None) == set()
+
+
+def test_an_answer_that_cites_nothing_is_not_a_citation_failure():
+    """This check must never become a rule that answers have to carry citations."""
+    verdict = check_citation_integrity("Closures take five business days.", [_TWO_SOURCES])
+    assert verdict.ok and verdict.cited == ()
+
+
+def test_a_citation_beyond_what_was_retrieved_is_found_with_no_model():
+    verdict = check_citation_integrity("Closures take 5 days [source 5].", [_TWO_SOURCES])
+    assert verdict.fabricated == (5,)
+    assert verdict.retrieved == (1, 2)
+    assert "[source 5]" in verdict.reason()
+
+
+@pytest.mark.asyncio
+async def test_a_fabricated_citation_is_blocked_with_no_completer_wired_at_all():
+    """The load-bearing test: this control has to be worth something with no model.
+
+    ``completer=None`` is the deployment the recorded gap was about — the grounding rail
+    is a semantic entailment judgement, so with nothing to judge with it was a no-op and
+    the whole control was worth nothing. The answer below cites ``[source 4]`` when the
+    run retrieved two passages; that is false, and it is provably false with arithmetic.
+
+    Remove the ``check_citation_integrity`` call from ``Guardrails._screen_grounding``
+    and this returns PASS.
+    """
+    guard = Guardrails(completer=None, ground_answers=True)
+
+    res = await guard.check_output(
+        "Closures are approved within five business days [source 4].", [_TWO_SOURCES]
+    )
+
+    assert res.verdict is GuardVerdict.BLOCK
+    assert res.layer == "grounding"
+    assert "Fabricated citation blocked" in res.reason
+    assert "[source 4]" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_a_citation_the_run_really_retrieved_is_not_blocked():
+    """The positive control: a correct citation must cost nothing.
+
+    Without this the test above is satisfied by a rail that blocks every cited answer,
+    which would be a worse deployment than no rail at all.
+    """
+    guard = Guardrails(completer=None, ground_answers=True)
+
+    res = await guard.check_output(
+        "Closures are approved within five business days [source 1].", [_TWO_SOURCES]
+    )
+
+    assert res.verdict is not GuardVerdict.BLOCK
+    assert "Fabricated citation" not in res.reason
+
+
+@pytest.mark.asyncio
+async def test_a_zero_retrieval_answer_without_a_citation_is_still_only_flagged():
+    """The deliberate FLAG-never-BLOCK decision, guarded against this addition.
+
+    Plenty of legitimate turns answer with no passages — a refusal, a question about the
+    conversation itself — and blocking them withheld legitimate refusals. Adding a
+    citation check must not quietly re-block that branch, so it is asserted here with
+    ``grounding_block`` on, which is the strictest posture a deployment can run.
+    """
+    guard = Guardrails(completer=None, ground_answers=True, grounding_block=True)
+
+    res = await guard.check_output("I cannot help with that.", None)
+
+    assert res.verdict is GuardVerdict.FLAG
+    assert res.layer == "grounding"
+
+
+@pytest.mark.asyncio
+async def test_a_zero_retrieval_answer_that_cites_a_source_is_blocked():
+    """The audited failure, in the half a machine can check.
+
+    The run that started this retrieved nothing and answered by citing ``DOC-REF-001``,
+    a document id in no corpus, under a clean output-rail verdict. Retrieving nothing is
+    still only a FLAG (above); *claiming a source while having none* is a different
+    sentence and a provable falsehood, and it stops here.
+    """
+    guard = Guardrails(completer=None, ground_answers=True)
+
+    res = await guard.check_output("The policy is 30 days [source 1].", None)
+
+    assert res.verdict is GuardVerdict.BLOCK
+    assert res.layer == "grounding"
+    assert "retrieved no passages at all" in res.reason
+
+
+def test_the_model_is_told_to_cite_exactly_the_labels_this_check_verifies():
+    """The prompt and the checker must name one format, or neither of them is a control.
+
+    A deterministic check is only worth something if the thing it checks is something
+    the model was asked to produce. ``spotlight_system_instruction`` declares the
+    ``[source N]`` labels as the citation vocabulary and forbids citing one that is not
+    present; this asserts the two halves still agree, so a reworded prompt cannot quietly
+    turn the backstop into a check on a format nobody uses.
+    """
+    instruction = spotlight_system_instruction()
+    assert "[source N]" in instruction
+    assert "never cite" in instruction.lower()
+
+    # The label shape the instruction describes is the label shape the checker reads.
+    assert check_citation_integrity("as stated in [source 2]", [_TWO_SOURCES]).cited == (2,)

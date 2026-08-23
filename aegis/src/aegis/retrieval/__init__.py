@@ -70,6 +70,7 @@ from aegis.retrieval.types import (
     ALL_TENANTS,
     TENANT_METADATA_KEY,
     AllTenants,
+    CrossTenantLeakError,
     FusionMethod,
     GraphEdge,
     GraphNode,
@@ -80,6 +81,7 @@ from aegis.retrieval.types import (
     UntenantedPrincipalError,
     principal_tenant_scope,
     tenant_filter,
+    verify_rows_in_scope,
 )
 from aegis.retrieval.vector_store import (
     EmbeddedVectorStoreMultiprocessError,
@@ -110,6 +112,7 @@ __all__ = [
     "Citation",
     "CitationCheck",
     "CitationStatus",
+    "CrossTenantLeakError",
     "FusionMethod",
     "GraphDelta",
     "GraphEdge",
@@ -139,4 +142,5 @@ __all__ = [
     "span_present",
     "tenant_filter",
     "verify_citations",
+    "verify_rows_in_scope",
 ]

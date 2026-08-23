@@ -2904,8 +2904,12 @@ export interface paths {
          *
          *     The counts are read off the battery itself rather than restated here, so a probe
          *     added to :data:`aegis.redteam.battery.ATTACK_BATTERY` shows up in the picker with
-         *     no edit on this side. ``semanticOnly`` is the honest column: those probes have no
-         *     deterministic signature by design and *will* appear as leaks in an offline run.
+         *     no edit on this side. ``semanticOnly`` and ``beyondRails`` are the honest columns,
+         *     and they are two columns because they promise different things: a semantic-only
+         *     probe has no deterministic signature and will appear as a leak in an *offline* run,
+         *     while a ``beyondRails`` probe — an extraction sweep paced under the query-pattern
+         *     monitor's window — leaks in every run there is, because nothing here is asked about
+         *     it. A single column would let a reader conclude that wiring a completer closes both.
          */
         get: operations["redteam_suites_v1_redteam_suites_get"];
         put?: never;
@@ -7781,7 +7785,8 @@ export interface components {
          *     Every field is read off the *actual* fitted model (its ensemble members,
          *     encoded matrix, calibrated conformal predictor and stored split sizes), never
          *     hardcoded. ``data_source`` labels how the training frame was obtained so a
-         *     synthetic-fallback model is never mistaken for a real domain-trained one.
+         *     synthetic-fallback model is never mistaken for a real domain-trained one, and
+         *     ``dataset_digest`` names *which* frame that was.
          */
         ModelCard: {
             /**
@@ -7819,6 +7824,11 @@ export interface components {
              * @description 'provided' | 'spec_provider' | 'synthetic' — how data was sourced.
              */
             data_source: string;
+            /**
+             * Dataset Digest
+             * @description 'sha256:<hex>' content digest of the exact feature+target columns this model was fitted on. Provenance and tamper-EVIDENCE, not prevention: it names which data produced this model so a poisoned fit is attributable and detectable afterwards; it does not stop a poisoned frame being supplied. Invariant to column order and to the index; sensitive to any cell value, to row order, to dtypes and to added/removed columns. None only on a legacy artifact fitted before digests existed.
+             */
+            dataset_digest?: string | null;
             /**
              * Encoded Feature Count
              * @description Column count of the encoded matrix the estimator is fitted on.
@@ -9535,6 +9545,12 @@ export interface components {
              * @description Adversarial probes in this suite.
              */
             attacks: number;
+            /**
+             * Beyondrails
+             * @description Probes no rail here catches in any configuration — offline or live. Kept apart from semanticOnly because that column promises a completer would close the gap, and for these it would not.
+             * @default 0
+             */
+            beyondRails: number;
             /** Categories */
             categories?: string[];
             /**
@@ -9566,7 +9582,7 @@ export interface components {
             semanticOnly: number;
             /**
              * Stages
-             * @description Probe count per rail stage (input/output/tool_result).
+             * @description Probe count per rail stage (input/output/tool_result/ingest/sequence).
              */
             stages?: {
                 [key: string]: number;

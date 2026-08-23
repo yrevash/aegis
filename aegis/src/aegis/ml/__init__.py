@@ -44,6 +44,17 @@ Bring-your-own spec (the hackathon path — inject *what* to predict)::
     model = TrustworthyModel.train(spec, frame=my_dataframe, path=None)
     resp = model.predict_explain({"age": 41, "region": "emea", "tenure": 3})
     card = model.model_card()    # honest, measured metadata for the MLOps UI
+    card.dataset_digest          # 'sha256:…' — WHICH frame produced this model
+
+To check a served model against data you trust, rehash that data and compare::
+
+    from aegis.ml import frame_digest
+
+    frame_digest(my_dataframe, columns=[*spec.features, spec.target]) == card.dataset_digest
+
+That is tamper-**evidence**: a mismatch proves the served model was not fitted on
+the frame you believe it was. It is not tamper-*prevention* — nothing screens or
+refuses a poisoned frame, it is simply fingerprinted on the way in.
 
 ``ResolvedSpec`` is the concrete, constructible spec; :class:`MLSpec` is the
 structural Protocol any adapter-shaped object can satisfy instead (read leniently
@@ -82,6 +93,7 @@ __all__ = [
     "ShapFeature",
     "TaskType",
     "TrustworthyModel",
+    "frame_digest",
     "get_model",
     "load",
     "predict_explain",
@@ -111,6 +123,10 @@ def __getattr__(name: str) -> object:
         from aegis.ml.model import TrustworthyModel
 
         return TrustworthyModel
+    if name == "frame_digest":
+        from aegis.ml.provenance import frame_digest
+
+        return frame_digest
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)
 

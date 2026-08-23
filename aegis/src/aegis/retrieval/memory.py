@@ -27,6 +27,15 @@ that resolves to a collection nobody wrote returns nothing. A request whose tena
 not resolve at all raises :class:`~aegis.retrieval.types.UnresolvedTenantScopeError`
 before any search runs — it is never widened into an unscoped one.
 
+**And every hit is re-checked on the way out.** The collection and the payload filter
+both act *before* the search, and both fail open when they are wrong. So
+:func:`~aegis.retrieval.types.verify_rows_in_scope` re-reads each returned payload's
+recorded owner against the caller's scope, by code that goes through neither the
+collection routing nor the filter builder. A row belonging to another tenant **raises**
+:class:`~aegis.retrieval.types.CrossTenantLeakError` rather than being dropped: two
+independent boundaries have to have failed already for it to fire, and when it does the
+honest answer is no answer.
+
 Embeddings come from an **injected** embedder (:class:`~aegis.retrieval.protocols.EmbedFn`),
 exactly as the production path — only the *store* is local. When no embedder is injected
 (offline evals/tests/seed corpora), the backend falls back to :func:`_local_embed`, a
@@ -74,6 +83,7 @@ from aegis.retrieval.types import (
     RetrievalScope,
     UnresolvedTenantScopeError,
     tenant_collection_name,
+    verify_rows_in_scope,
 )
 from aegis.retrieval.vector_store import QdrantVectorStore, new_default_store
 
@@ -631,6 +641,17 @@ class InMemoryKnowledgeBackend:
         embedder. The sort is stable and the caller's own partition is searched first, so
         a tie between an own row and a shared row keeps the tenant's own row ahead.
 
+        **Both of those act before the search, and both fail open when they are wrong.**
+        A predicate that was not applied matches everything; a partition name derived
+        from the request rather than from the row's own owner puts foreign rows where
+        they will be read. So the hits are re-checked against ``scope`` on the way out by
+        :func:`~aegis.retrieval.types.verify_rows_in_scope`, which reads each returned
+        payload's recorded owner and re-derives what this scope may read without going
+        through the collection routing or the filter builder. A row outside the scope
+        **raises** :class:`~aegis.retrieval.types.CrossTenantLeakError` and the whole
+        result is refused — it is not quietly dropped, because a third silent filter
+        fails in the same direction as the first two.
+
         No brute-force dict scan is involved anywhere.
         """
         collections = self._readable_collections(scope)
@@ -657,6 +678,13 @@ class InMemoryKnowledgeBackend:
             )
         )
         hits = [hit for collection_hits in per_collection for hit in collection_hits]
+        # The fail-closed half, run over everything the store returned rather than over
+        # the truncated top_k: a foreign row that ranked 11th is the same breach as one
+        # that ranked 1st, and only checking the survivors would make the refusal depend
+        # on the score.
+        verify_rows_in_scope(
+            ((hit.id, hit.payload) for hit in hits), scope, arm="lite vector arm"
+        )
         hits.sort(key=lambda hit: hit.score, reverse=True)
         candidates = [
             Candidate(

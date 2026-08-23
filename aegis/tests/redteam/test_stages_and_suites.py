@@ -40,20 +40,23 @@ def _pin_regex_pii(monkeypatch):
 def test_the_battery_probes_every_rail():
     """A battery that only calls check_input reports on a fraction of the product.
 
-    Four stages now, not three: ``INGEST`` is the write-time content gate, the only
-    rail a corpus-poisoning attack ever meets. Equality rather than a subset, so a
-    stage added to the enum without probes behind it fails here.
+    Five stages now, not four: ``INGEST`` is the write-time content gate, the only rail
+    a corpus-poisoning attack ever meets, and ``SEQUENCE`` is the per-principal
+    query-pattern monitor, the only rail an extraction-by-volume attack ever meets.
+    Equality rather than a subset, so a stage added to the enum without probes behind
+    it fails here.
     """
     assert {a.stage for a in ATTACK_BATTERY} == set(Stage)
 
 
 async def test_each_probe_is_screened_by_the_rail_its_stage_names():
     """The runner dispatches on the stage rather than sending everything inbound."""
-    seen: dict[Stage, list[str]] = {stage: [] for stage in Stage}
+    seen: dict[Stage, list[object]] = {stage: [] for stage in Stage}
 
     def recorder(stage: Stage):
-        async def check(text, *, completer=None):
-            seen[stage].append(text)
+        async def check(payload, *, completer=None):
+            seen[stage].append(payload)
+            text = payload if isinstance(payload, str) else payload.queries[-1]
             return GuardResult(verdict=GuardVerdict.PASS, reason="stub", text=text)
 
         return check
@@ -64,17 +67,26 @@ async def test_each_probe_is_screened_by_the_rail_its_stage_names():
             check_output=recorder(Stage.OUTPUT),
             check_tool_result=recorder(Stage.TOOL_RESULT),
             check_ingest=recorder(Stage.INGEST),
+            check_sequence=recorder(Stage.SEQUENCE),
         )
     )
     for stage in Stage:
-        expected = [a.prompt for a in ATTACK_BATTERY if a.stage is stage]
+        # A sequence probe's payload is its whole burst, not its representative prompt
+        # — asserting the prompt here would pass while the rail received one query of
+        # forty, which is the exact defect the stage exists to prevent.
+        expected = [
+            a.burst if a.stage is Stage.SEQUENCE else a.prompt
+            for a in ATTACK_BATTERY
+            if a.stage is stage
+        ]
         assert seen[stage] == expected, f"the {stage.value} rail saw the wrong probes"
 
 
 async def test_a_single_injected_checker_still_answers_for_every_stage():
     """One fake means one fake: no real rail underneath supplying verdicts."""
 
-    async def always_pass(text, *, completer=None):
+    async def always_pass(payload, *, completer=None):
+        text = payload if isinstance(payload, str) else payload.queries[-1]
         return GuardResult(verdict=GuardVerdict.PASS, reason="stub", text=text)
 
     report = await run_redteam(check=always_pass)

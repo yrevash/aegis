@@ -81,6 +81,7 @@ __all__ = [
     "mark_all_read",
     "mark_read",
     "notify_budget_exceeded",
+    "notify_extraction_detected",
     "scope_predicate",
     "to_wire",
     "visible_to",
@@ -400,6 +401,68 @@ async def notify_budget_exceeded(
             user_id,
             because,
         )
+
+
+#: The screen that shows the security posture and the audit trail — where somebody goes
+#: after reading an extraction alert.
+_SECURITY_TARGET = "governance"
+
+
+async def notify_extraction_detected(
+    *,
+    tenant_id: int | None,
+    principal_id: str,
+    reason: str,
+    user_id: int | None = None,
+) -> None:
+    """Tell a tenant that one of their principals was refused for query enumeration.
+
+    The alert half of MITRE ATLAS AML.T0024's extraction control
+    (:class:`aegis.security.ExtractionMonitor`). The refusal already reached the caller
+    as a 429; this reaches the **administrator**, who is the only person who can decide
+    whether that principal is an attacker, a compromised account, or an integration
+    somebody wired up on Friday. A detector nobody can see is not a control.
+
+    Rate-limited exactly the way :func:`notify_budget_exceeded` is, and for the same
+    reason: a sweeping principal is refused on every subsequent query, so an unlimited
+    emitter would write one row per refused query and bury the bell under the alert it
+    was trying to raise. The dedupe key carries the tenant, the principal and the hour,
+    and the unique index does the rate-limiting in SQL — so a principal sweeping for
+    twenty minutes produces one alert, and a *different* principal in the same tenant
+    still produces its own.
+
+    ``severity`` is ``warning`` and not ``critical``. ``critical`` in this platform means
+    "this stopped work" — a budget cap that halted a tenant's whole pipeline. This
+    stopped one principal, on a heuristic, and it decays by itself; calling that critical
+    would train the reader to discount the level that actually matters.
+
+    Args:
+        tenant_id: The tenant the principal belongs to. The alert is scoped to them and
+            to nobody else — a query pattern is one tenant's operational detail.
+        principal_id: The principal that was refused, named so the alert is actionable.
+        reason: The monitor's own sentence — what it observed, over what window.
+        user_id: The acting user id where known. Recorded in the log line and **not**
+            used to narrow the audience: the person who can act on this is an
+            administrator, not the principal that was refused.
+    """
+    hour = _now().strftime("%Y-%m-%dT%H")
+    await emit(
+        tenant_id=tenant_id,
+        kind="security.extraction_detected",
+        severity=NotificationSeverity.WARNING,
+        title="Query enumeration refused",
+        body=f"Principal {principal_id!r} was refused. {reason}",
+        entity_ref=f"principal:{principal_id}",
+        href=_SECURITY_TARGET,
+        dedupe_key=f"security.extraction:{tenant_id}:{principal_id}:{hour}",
+    )
+    logger.warning(
+        "Extraction pattern refused for tenant %s principal %s (user %s): %s",
+        tenant_id,
+        principal_id,
+        user_id,
+        reason,
+    )
 
 
 async def _insert_once(session: AsyncSession, values: dict[str, Any]) -> bool:

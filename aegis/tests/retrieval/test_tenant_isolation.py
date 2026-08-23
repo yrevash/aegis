@@ -10,7 +10,10 @@ passages. Each test below pins one link of the chain that now prevents that:
 * the backend's vector, keyword and graph arms all apply the same tenant predicate;
 * a null tenant reads the shared corpus and is never a wildcard;
 * each tenant's vectors live in a collection of their own, so a forgotten filter
-  returns nothing rather than everything, and an unresolvable tenant raises.
+  returns nothing rather than everything, and an unresolvable tenant raises;
+* and — the last section — every row that *did* come back is re-checked against the
+  caller's scope afterwards, so the two mechanisms above both failing is still not a
+  leak.
 """
 
 from __future__ import annotations
@@ -19,18 +22,22 @@ import inspect
 
 import pytest
 
+from aegis.retrieval import lightrag_backend as lightrag_module
 from aegis.retrieval.cache import SemanticCache
 from aegis.retrieval.corpus import bump_corpus_version, corpus_version, reset_corpus_versions
+from aegis.retrieval.lightrag_backend import LightRAGBackend
 from aegis.retrieval.memory import InMemoryKnowledgeBackend
 from aegis.retrieval.models import RetrievalResult, Source
 from aegis.retrieval.pipeline import RetrievalConfig, Retriever
 from aegis.retrieval.types import (
     TENANT_METADATA_KEY,
+    CrossTenantLeakError,
     RetrievalOrigin,
     RetrievalScope,
     UnresolvedTenantScopeError,
     tenant_collection_name,
     tenant_metadata_value,
+    verify_rows_in_scope,
 )
 from aegis.retrieval.vector_store import QdrantVectorStore
 
@@ -649,3 +656,203 @@ async def test_the_pipeline_refuses_an_unresolvable_scope_before_the_cache():
     retriever = _retriever()
     with pytest.raises(UnresolvedTenantScopeError):
         await retriever.retrieve("why is the sky blue?", scope=RetrievalScope(tenant_id="7"))
+
+
+# ────────────────────────────── the fail-closed post-check (defence in depth)
+
+
+#: The foreign passage every test in this section tries to reach. It exists nowhere else
+#: in this repository, so an assertion that it did not come back is an assertion about
+#: this path rather than about a coincidence of wording.
+_FOREIGN = "Globex board pack: the AUDITA-SERVAL-3307 acquisition closes in March."
+
+
+def _neuter_the_predicate(backend: InMemoryKnowledgeBackend) -> None:
+    """Simulate the payload predicate being forgotten, without deleting the code.
+
+    ``{}`` is what a filter builder that lost its conditions returns, and
+    :meth:`~aegis.retrieval.vector_store.QdrantVectorStore._build_filter` turns it into
+    ``query_filter=None`` — an unfiltered search, which is the exact shape of the bug
+    this section exists for. Patching the builder rather than editing it means the test
+    describes the *failure*, not a second implementation of the code under test.
+    """
+    backend._scope_filter = lambda tenant_value: {}  # type: ignore[assignment]
+
+
+async def _poison(
+    backend: InMemoryKnowledgeBackend, collection: str, owner: str | None, **payload: object
+) -> list[float]:
+    """Write a row directly into ``collection``, bypassing the owner-based routing.
+
+    This is the first of the two boundaries failing: a repair script, a restore of an
+    older payload shape, or a writer that picks the partition from the request in flight
+    instead of from the row's own owner. It returns the query vector it indexed the row
+    at, so the caller can prove the row really is a hit.
+    """
+    q_vec = (await backend._embed([_QUERY]))[0]
+    body: dict[str, object] = {"doc": "globex", "text": _FOREIGN, **payload}
+    if owner is not _UNSET:
+        body[TENANT_METADATA_KEY] = owner
+    backend._vector_store.upsert(collection, ids=["mis-routed"], vectors=[q_vec], payloads=[body])
+    return q_vec
+
+
+#: Distinguishes "write a ``None`` owner" from "write no owner key at all".
+_UNSET = object()
+
+
+async def test_a_forgotten_vector_predicate_raises_rather_than_returning_a_foreign_chunk():
+    """Both pre-search boundaries fail, and the caller still cannot see the other tenant.
+
+    This is the whole claim of the post-check, so both boundaries are broken deliberately
+    and at the same time:
+
+    1. the **collection** stops being the boundary — the foreign row is written straight
+       into tenant 1's partition, the way a backfill script or a restore can;
+    2. the **predicate** stops being applied — ``_scope_filter`` is patched to return
+       nothing, which is what a filter builder that lost its conditions produces and what
+       :meth:`QdrantVectorStore._build_filter` renders as ``query_filter=None``.
+
+    With both gone the search genuinely returns tenant 2's passage — asserted below
+    before the call, so this test cannot pass vacuously. What must not happen is that it
+    reaches the caller, and it must not be silently dropped either: a third quiet filter
+    fails in the same direction as the first two.
+    """
+    backend = await _lite_backend()
+    q_vec = await _poison(backend, tenant_collection_name("aegis_chunks", "t1"), "t2")
+    _neuter_the_predicate(backend)
+
+    # Non-vacuity: with no predicate, tenant 1's own collection really does hand back
+    # tenant 2's row. Everything after this is about the post-check and nothing else.
+    unfiltered = backend._vector_store.search(
+        tenant_collection_name("aegis_chunks", "t1"), q_vec, 10, filter=None
+    )
+    assert _FOREIGN in {str(h.payload.get("text")) for h in unfiltered}
+
+    with pytest.raises(CrossTenantLeakError) as raised:
+        await backend.recall_ranked(_QUERY, top_k=10, scope=_ACME)
+
+    message = str(raised.value)
+    assert "mis-routed" in message, "the refusal must name the row that broke the scope"
+    assert "t2" in message
+    assert _FOREIGN not in message, "the refusal must not itself carry the foreign text"
+
+
+async def test_the_post_check_lets_a_scope_read_its_own_rows_and_the_shared_corpus():
+    """The positive control: with the predicate gone but nothing mis-filed, nothing raises.
+
+    Without this the test above is satisfied by a check that raises on everything, which
+    would be a broken retriever rather than a defence. It also pins the null-tenant
+    semantics from the other side — the shared corpus is a *positive match*, not a row
+    the post-check has to tolerate.
+    """
+    backend = await _lite_backend()
+    _neuter_the_predicate(backend)
+
+    ranked = await backend.recall_ranked(_QUERY, top_k=10, scope=_ACME)
+    docs = {c.metadata.get("doc") for lst in ranked.lists for c in lst.candidates}
+
+    assert "acme" in docs and "handbook" in docs
+    assert "globex" not in docs
+
+
+async def test_the_post_check_is_not_a_wildcard_for_a_null_tenant():
+    """An unscoped caller reads the shared corpus, and a tenant's row inside it still raises.
+
+    "No tenant" must not become "any tenant" at this layer either. The row is mis-filed
+    into the *shared* partition — the one an unscoped request is entitled to read — and
+    the predicate is gone, so the only thing left saying no is the owner recorded on the
+    row itself.
+    """
+    backend = await _lite_backend()
+    await _poison(backend, tenant_collection_name("aegis_chunks", None), "t2")
+    _neuter_the_predicate(backend)
+
+    with pytest.raises(CrossTenantLeakError):
+        await backend.recall_ranked(_QUERY, top_k=10, scope=_SHARED)
+
+
+async def test_a_row_that_records_no_owner_is_refused_rather_than_read_as_shared():
+    """A missing owner is unknown, not unowned — and unknown fails closed.
+
+    The distinction is the one that let an untagged row be readable by every tenant at
+    once: ``payload.get(TENANT_METADATA_KEY)`` returns ``None`` for a key that is absent
+    *and* for a row genuinely owned by nobody, and only one of those two is safe to serve.
+    """
+    backend = await _lite_backend()
+    await _poison(backend, tenant_collection_name("aegis_chunks", "t1"), _UNSET)
+    _neuter_the_predicate(backend)
+
+    with pytest.raises(CrossTenantLeakError, match="no owner at all"):
+        await backend.recall_ranked(_QUERY, top_k=10, scope=_ACME)
+
+
+def test_the_post_check_refuses_an_unresolvable_scope_instead_of_waving_rows_through():
+    """A checker that cannot resolve the caller's scope must not become a no-op."""
+    rows = [("r1", {TENANT_METADATA_KEY: None})]
+    with pytest.raises(UnresolvedTenantScopeError):
+        verify_rows_in_scope(rows, RetrievalScope(tenant_id="7"), arm="unit")
+
+
+# ───────────────────────────────── the same net under the LightRAG production path
+
+
+class _RagHoldingTwoTenants:
+    """A LightRAG whose one shared index holds both tenants' chunks.
+
+    That is the real shape of the production path: one instance means one vector index
+    and one Neo4j graph for every tenant in the process, LightRAG exposes no per-query
+    metadata predicate, and so the tenant boundary there is a filter applied on the way
+    out rather than a partition. A filter is the only thing standing between these two
+    rows and the caller, which is precisely why it needs something behind it.
+    """
+
+    async def aquery_data(self, query: str, param: object) -> dict:
+        return {
+            "status": "success",
+            "data": {
+                "chunks": [
+                    {"id": "a1", "content": "Acme's own closure policy.",
+                     "file_path": "t1::terms.pdf"},
+                    {"id": "b1", "content": _FOREIGN, "file_path": "t2::board-pack.pdf"},
+                ],
+                "entities": [],
+                "relationships": [],
+            },
+        }
+
+
+def _lightrag_backend() -> LightRAGBackend:
+    backend = LightRAGBackend(
+        complete=RecordingComplete("{}"), embed=SequenceEmbed([1.0, 0.0])
+    )
+    backend._rag = _RagHoldingTwoTenants()  # the real seam _ensure() fills
+    return backend
+
+
+async def test_the_lightrag_filter_keeps_the_foreign_chunk_out():
+    """The control: with the filter in place, tenant 1 sees its own chunk and no other."""
+    recall = await _lightrag_backend().recall("closures", top_k=10, scope=_ACME)
+    assert [c.id for c in recall.candidates] == ["a1"]
+
+
+async def test_a_lightrag_recall_that_lost_its_filter_raises_rather_than_leaking(monkeypatch):
+    """Delete the only boundary on the production path and the row-check still refuses.
+
+    ``_scoped_recall`` is replaced with the identity — the shape of "why are we filtering
+    twice?", of a refactor that moves the call, and of a ``visible`` list that comes back
+    wrong. Before the post-check existed this returned tenant 2's board pack to tenant 1
+    with no error anywhere; it now raises.
+    """
+    monkeypatch.setattr(lightrag_module, "_scoped_recall", lambda recall, scope: recall)
+    backend = _lightrag_backend()
+
+    with pytest.raises(CrossTenantLeakError) as raised:
+        await backend.recall("closures", top_k=10, scope=_ACME)
+    assert "b1" in str(raised.value)
+
+    # ...and an unscoped run is unchanged: this backend has no boundary to cross there,
+    # and inventing one would break the offline eval path rather than close a leak.
+    monkeypatch.setattr(lightrag_module, "_scoped_recall", lambda recall, scope: recall)
+    unscoped = await backend.recall("closures", top_k=10, scope=_SHARED)
+    assert {c.id for c in unscoped.candidates} == {"a1", "b1"}

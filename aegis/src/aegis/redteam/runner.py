@@ -40,8 +40,16 @@ from aegis.core.interfaces import ChatCompleter
 from aegis.core.types import GuardResult, GuardVerdict
 from aegis.guardrails import check_input, check_output, check_tool_result
 from aegis.guardrails.pipeline import INJECTION_UNAVAILABLE_LAYER
-from aegis.redteam.battery import ATTACK_BATTERY, Attack, Category, Expectation, Stage
+from aegis.redteam.battery import (
+    ATTACK_BATTERY,
+    Attack,
+    Category,
+    Expectation,
+    QueryBurst,
+    Stage,
+)
 from aegis.retrieval.validation import validate_content
+from aegis.security.extraction import ExtractionMonitor
 
 #: A guardrail checker: ``check(text, *, completer=...) -> GuardResult``.
 #: :func:`aegis.guardrails.check_input` satisfies it; tests inject fakes with the
@@ -79,7 +87,16 @@ _MODEL_LAYERS_PER_STAGE: dict[Stage, int] = {
     # The write-time gate is pure code and calls nothing, live or offline. A zero
     # here is a measurement, not a rounding-down.
     Stage.INGEST: 0,
+    # So is the per-principal query-pattern monitor: a hash and a walk over a deque.
+    Stage.SEQUENCE: 0,
 }
+
+#: The tenant and principal a battery burst is attributed to. Synthetic, and named
+#: rather than left as a bare string in the adapter, because the monitor is keyed on
+#: ``(tenant, principal)`` and a probe run under a *real* tenant's key would push that
+#: tenant's own window towards a threshold on their behalf.
+REDTEAM_TENANT = "redteam"
+REDTEAM_PRINCIPAL = "redteam-probe"
 
 
 async def check_ingest(text: str, *, completer: ChatCompleter | None = None) -> GuardResult:
@@ -119,11 +136,64 @@ async def check_ingest(text: str, *, completer: ChatCompleter | None = None) -> 
     )
 
 
+async def check_sequence(
+    burst: QueryBurst, *, completer: ChatCompleter | None = None
+) -> GuardResult:
+    """Screen a burst of queries from one principal, in :class:`GuardResult` terms.
+
+    The sibling of :func:`check_ingest`, and it exists for the same reason: the rail an
+    extraction-by-volume attack meets is not one of the three request-path text rails.
+    It is :class:`aegis.security.ExtractionMonitor`, which judges a *principal over a
+    window* rather than a payload, and there is no way to point a single-prompt probe at
+    it — feeding it one of the forty queries measures nothing, because one query is
+    exactly what the attack is designed to look like.
+
+    **A fresh monitor per probe.** Each call builds its own, so one probe's burst can
+    never carry another probe's window over the threshold and the ordering of the
+    battery cannot change a verdict. The clock is a counter advanced by the burst's own
+    ``interval_seconds``, which is what lets the battery assert the *pacing* property —
+    that thirty-six lookups an hour apart are not a finding — without a test that sleeps.
+
+    ``completer`` is accepted and ignored: the monitor is pure code and calls no model,
+    which is why these probes cost nothing in the run estimate.
+
+    Args:
+        burst: The queries and their pacing.
+        completer: Unused; present so this satisfies :data:`InputChecker`.
+
+    Returns:
+        The **first** ``BLOCK`` the monitor produced as the burst was replayed, or the
+        final ``PASS`` when it never fired. First rather than last, because a control
+        that refuses at query thirty and would have refused at thirty-one too is
+        reported by the moment it started refusing.
+    """
+    del completer
+    now = 0.0
+
+    def _clock() -> float:
+        return now
+
+    monitor = ExtractionMonitor(clock=_clock)
+    result = GuardResult(
+        verdict=GuardVerdict.PASS,
+        reason="The burst was empty, so no pattern could be observed.",
+        text="",
+    )
+    for index, query in enumerate(burst.queries):
+        now = index * burst.interval_seconds
+        result = monitor.screen(
+            tenant_id=REDTEAM_TENANT, principal_id=REDTEAM_PRINCIPAL, text=query
+        )
+        if result.verdict is GuardVerdict.BLOCK:
+            return result
+    return result
+
+
 @dataclass(frozen=True)
 class Rails:
-    """The four entry points a battery is aimed at.
+    """The five entry points a battery is aimed at.
 
-    Bundled rather than passed as four keyword arguments because they are one
+    Bundled rather than passed as five keyword arguments because they are one
     decision: a caller either drives the real rails or substitutes fakes for all of
     them, and a mix is how a test ends up quietly measuring the production rail it
     thought it had replaced.
@@ -135,6 +205,10 @@ class Rails:
             :attr:`~aegis.redteam.battery.Stage.TOOL_RESULT`.
         check_ingest: The write-time gate —
             :attr:`~aegis.redteam.battery.Stage.INGEST`.
+        check_sequence: The per-principal query-pattern monitor —
+            :attr:`~aegis.redteam.battery.Stage.SEQUENCE`. Receives a
+            :class:`~aegis.redteam.battery.QueryBurst` rather than a string, because
+            the thing it screens is a run of queries and not a payload.
 
     **No field has a default, and that is the whole design.** Giving ``check_ingest``
     one looked kind to existing three-argument callers and was exactly the "mix" the
@@ -149,6 +223,7 @@ class Rails:
     check_output: InputChecker
     check_tool_result: InputChecker
     check_ingest: InputChecker
+    check_sequence: InputChecker
 
     def for_stage(self, stage: Stage) -> InputChecker:
         """Return the checker that screens ``stage``."""
@@ -158,6 +233,8 @@ class Rails:
             return self.check_tool_result
         if stage is Stage.INGEST:
             return self.check_ingest
+        if stage is Stage.SEQUENCE:
+            return self.check_sequence
         return self.check_input
 
     @classmethod
@@ -174,6 +251,7 @@ class Rails:
             check_output=check,
             check_tool_result=check,
             check_ingest=check,
+            check_sequence=check,
         )
 
 
@@ -183,6 +261,7 @@ DEFAULT_RAILS = Rails(
     check_output=check_output,
     check_tool_result=check_tool_result,
     check_ingest=check_ingest,
+    check_sequence=check_sequence,
 )
 
 
@@ -305,6 +384,12 @@ class AttackResult:
             "prompt": a.prompt,
             "expects": a.expects.value,
             "stage": a.stage.value,
+            # A sequence probe's ``prompt`` is one representative query out of dozens.
+            # Reporting it alone would show a reader a single innocuous question beside
+            # a BLOCK and make the rail look unhinged, so the shape of the burst travels
+            # with it. Zero for every other stage, where the prompt *is* the probe.
+            "burstQueries": len(a.burst.queries) if a.burst is not None else 0,
+            "burstIntervalSeconds": a.burst.interval_seconds if a.burst is not None else 0.0,
             "description": a.description,
             "needsLlm": a.needs_llm,
             "verdict": self.verdict,
@@ -559,6 +644,37 @@ class RedTeamReport:
         return "\n".join(lines)
 
 
+def _payload_for(attack: Attack) -> str | QueryBurst:
+    """Return what this probe's rail should be handed.
+
+    Every stage but one is handed the prompt string. A :attr:`Stage.SEQUENCE` probe is
+    handed its :class:`~aegis.redteam.battery.QueryBurst`, and a sequence probe that
+    carries none is a ``ValueError`` here rather than a silent fallback to its single
+    ``prompt``: that fallback would feed one query of forty to a rail whose entire
+    subject is the forty, score the ``PASS`` it must return, and report a working
+    control as broken (or a broken one as working) with nothing in the output saying
+    which.
+
+    Args:
+        attack: The probe about to run.
+
+    Returns:
+        The prompt, or the burst.
+
+    Raises:
+        ValueError: If a sequence-stage probe carries no burst.
+    """
+    if attack.stage is not Stage.SEQUENCE:
+        return attack.prompt
+    if attack.burst is None:
+        raise ValueError(
+            f"Probe {attack.id!r} is a sequence-stage probe with no QueryBurst. The "
+            "per-principal monitor screens a run of queries; a single prompt is not "
+            "one and cannot be screened by it."
+        )
+    return attack.burst
+
+
 def _score(attack: Attack, result: GuardResult) -> AttackResult:
     """Turn a real :class:`GuardResult` into a scored :class:`AttackResult`."""
     neutralized = result.verdict in _NEUTRALIZING
@@ -613,7 +729,9 @@ async def run_redteam(
     resolved = rails or (Rails.uniform(check) if check is not None else DEFAULT_RAILS)
     results: list[AttackResult] = []
     for attack in battery:
-        result = await resolved.for_stage(attack.stage)(attack.prompt, completer=completer)
+        result = await resolved.for_stage(attack.stage)(
+            _payload_for(attack), completer=completer
+        )
         results.append(_score(attack, result))
     return RedTeamReport(results=tuple(results), thresholds=thresholds)
 
@@ -623,6 +741,7 @@ __all__ = [
     "DEFAULT_THRESHOLDS",
     "AttackResult",
     "check_ingest",
+    "check_sequence",
     "CategoryReport",
     "InputChecker",
     "Rails",

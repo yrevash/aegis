@@ -83,6 +83,7 @@ from aegis.redteam.runner import (
     RedTeamThresholds,
     RunEstimate,
     check_ingest,
+    check_sequence,
     estimate_run,
     run_redteam,
 )
@@ -235,8 +236,18 @@ class RedteamSuiteRow(BaseModel):
         alias="semanticOnly",
         description="Probes no deterministic signature can catch; they leak offline by design.",
     )
+    beyond_rails: int = Field(
+        default=0,
+        alias="beyondRails",
+        description=(
+            "Probes no rail here catches in any configuration — offline or live. Kept "
+            "apart from semanticOnly because that column promises a completer would "
+            "close the gap, and for these it would not."
+        ),
+    )
     stages: dict[str, int] = Field(
-        default_factory=dict, description="Probe count per rail stage (input/output/tool_result)."
+        default_factory=dict,
+        description="Probe count per rail stage (input/output/tool_result/ingest/sequence).",
     )
     offline_floor: float = Field(default=0.0, alias="offlineFloor")
     live_floor: float = Field(default=0.0, alias="liveFloor")
@@ -398,8 +409,12 @@ async def redteam_suites(
 
     The counts are read off the battery itself rather than restated here, so a probe
     added to :data:`aegis.redteam.battery.ATTACK_BATTERY` shows up in the picker with
-    no edit on this side. ``semanticOnly`` is the honest column: those probes have no
-    deterministic signature by design and *will* appear as leaks in an offline run.
+    no edit on this side. ``semanticOnly`` and ``beyondRails`` are the honest columns,
+    and they are two columns because they promise different things: a semantic-only
+    probe has no deterministic signature and will appear as a leak in an *offline* run,
+    while a ``beyondRails`` probe — an extraction sweep paced under the query-pattern
+    monitor's window — leaks in every run there is, because nothing here is asked about
+    it. A single column would let a reader conclude that wiring a completer closes both.
     """
     rows: list[RedteamSuiteRow] = []
     for suite in SUITES:
@@ -418,6 +433,7 @@ async def redteam_suites(
                 attacks=len(attacks),
                 controls=len(probes) - len(attacks),
                 semantic_only=sum(1 for a in attacks if a.needs_llm),
+                beyond_rails=sum(1 for a in attacks if a.beyond_rails),
                 stages=stages,
                 offline_floor=suite.offline_floor,
                 live_floor=suite.live_floor,
@@ -477,7 +493,7 @@ def _target_tenant(req: RedteamRunRequest, auth: AuthContext) -> int | None:
 
 
 async def _rails_for(*, live: bool) -> Rails:
-    """Build the four stage checkers this run will drive.
+    """Build the five stage checkers this run will drive.
 
     ``app.guardrails.tenant_pipeline`` folds the **bound tenant's** four
     ``guardrails.*`` settings onto the platform floor, so a run against a tenant
@@ -501,12 +517,16 @@ async def _rails_for(*, live: bool) -> Rails:
     # The write-time gate is not part of the tenant's guardrail pipeline: it is pure
     # code with no policy and no completer, and a tenant cannot loosen it. So this one
     # is the runner's own adapter over ``validate_content`` rather than a closure over
-    # ``pipeline``, and it behaves identically live and offline.
+    # ``pipeline``, and it behaves identically live and offline. The same is true of the
+    # query-pattern monitor, for the same two reasons and one more: it screens a *burst*
+    # rather than a payload, and each probe gets its own throwaway monitor so a red-team
+    # run can never push a real principal's window towards a threshold.
     return Rails(
         check_input=screen_input,
         check_output=screen_output,
         check_tool_result=screen_tool_result,
         check_ingest=check_ingest,
+        check_sequence=check_sequence,
     )
 
 

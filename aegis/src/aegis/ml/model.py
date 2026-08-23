@@ -75,6 +75,7 @@ from sklearn.preprocessing import OneHotEncoder
 from xgboost import XGBClassifier, XGBRegressor
 
 from aegis.ml.dataset import resolve_training_frame
+from aegis.ml.provenance import frame_digest
 from aegis.ml.spec import ResolvedSpec, TaskType, resolve_spec
 from aegis.ml.types import EnsembleMember, MLExplainResponse, ModelCard, ShapFeature
 
@@ -254,6 +255,15 @@ class TrustworthyModel:
             frame), ``"spec_provider"`` (the spec's own frame provider) or
             ``"synthetic"`` (the built-in fallback synthesiser). Labels a
             synthetic-fallback model so it is never mistaken for a real one.
+        dataset_digest: ``"sha256:…"`` content digest of the exact feature+target
+            columns this model was fitted on (see :func:`aegis.ml.provenance.frame_digest`).
+            ``data_source`` says *how* the frame was obtained; this says **which
+            frame it was**. Provenance and tamper-*evidence* only: it records what
+            was trained on so a poisoned frame is attributable and detectable
+            afterwards, and it prevents nothing — a caller who supplies poisoned
+            data still gets a fitted model, one that now carries the poison's
+            fingerprint. ``None`` only on a legacy artifact pickled before digests
+            existed.
         test_n: Rows in the held-out test split — fitted on by nothing and
             calibrated on by nothing, so the metrics below are honest.
         metric_name: ``"r2"`` (regression) or ``"accuracy"`` (classification);
@@ -280,6 +290,7 @@ class TrustworthyModel:
     training_n: int = 0
     calibration_n: int = 0
     data_source: str = "synthetic"
+    dataset_digest: str | None = None
     test_n: int = 0
     metric_name: str | None = None
     metric_value: float | None = None
@@ -342,6 +353,13 @@ class TrustworthyModel:
         else:
             data_source = "synthetic"
         data = resolve_training_frame(resolved, frame, random_state=random_state)
+
+        # Fingerprint the data *as resolved* — after the provider/synthesiser ran,
+        # before anything is split or encoded — and over exactly the columns the fit
+        # consumes. This is the only moment the whole training frame exists in one
+        # place; recording it here is what lets a later reader say which data this
+        # model came from. It is evidence, not a gate: nothing below branches on it.
+        digest = frame_digest(data, columns=[*resolved.features, resolved.target])
 
         raw_x = data[resolved.features]
         y = data[resolved.target]
@@ -418,6 +436,7 @@ class TrustworthyModel:
             training_n=int(len(x_train)),
             calibration_n=int(len(x_cal)),
             data_source=data_source,
+            dataset_digest=digest,
             test_n=int(len(x_test)),
             metric_name=metric_name,
             metric_value=metric_value,
@@ -856,6 +875,13 @@ class TrustworthyModel:
         split. Reporting the request as the achievement is what makes an audit
         artifact untrustworthy.
 
+        ``dataset_digest`` closes the other half of that: ``data_source`` said how
+        the frame arrived but never *which* frame it was, so two models fitted from
+        different data — one of them poisoned — produced identical cards. The digest
+        is provenance and tamper-**evidence**, not tamper-prevention: it makes a
+        poisoned fit attributable and detectable after the fact; it does not stop
+        anyone supplying a poisoned frame.
+
         Returns:
             A :class:`~aegis.ml.types.ModelCard` snapshot of this model.
         """
@@ -883,6 +909,7 @@ class TrustworthyModel:
             calibration_size=getattr(self, "calibration_n", 0),
             training_size=getattr(self, "training_n", 0),
             data_source=getattr(self, "data_source", "synthetic"),
+            dataset_digest=getattr(self, "dataset_digest", None),
             test_size=getattr(self, "test_n", 0),
             conformal_coverage_empirical=getattr(self, "empirical_coverage", None),
             metric_name=getattr(self, "metric_name", None),

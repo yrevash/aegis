@@ -363,19 +363,39 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
             "store."
         ),
         gap=(
-            "One thing is missing and it is named precisely: the ML spine trains from a "
-            "host-supplied frame that carries no integrity digest, so nothing records "
-            "which frame produced a given fitted model. The corpus half is now attacked "
-            "rather than asserted — six poisoning probes run at a fourth battery stage "
-            "aimed at the write gate itself (MITRE ATLAS AML.T0020) — and five of the "
-            "six are refused before the store. The sixth is the honest limit and it "
-            "leaks: a poisoned *fact* in ordinary policy prose carries no instruction "
-            "for a deterministic gate to match."
+            "Both halves are now attacked rather than asserted, and what leaks is "
+            "named. The ML spine's training frame carries a content digest computed at "
+            "fit time — SHA-256 over the feature and target columns, sensitive to any "
+            "cell, to row order and to dtype, invariant to column order and the index — "
+            "that rides the model through joblib onto the ModelCard and out of "
+            "/v1/ml/model-card, so every fitted model names the exact data that "
+            "produced it. That is provenance and tamper-EVIDENCE, not tamper- "
+            "prevention: nothing screens a training frame, and detection needs a "
+            "reference digest recorded while the data was trusted, which no part of the "
+            "platform yet records or compares automatically. On the corpus half six "
+            "poisoning probes run at a fourth battery stage aimed at the write gate "
+            "itself (MITRE ATLAS AML.T0020) and five of the six are refused before the "
+            "store. The sixth is the honest limit and it leaks: a poisoned *fact* in "
+            "ordinary policy prose carries no instruction for a deterministic gate to "
+            "match."
         ),
         evidence=[
             _f("aegis/src/aegis/retrieval/validation.py", "validate_content — the write-time gate"),
             _f("aegis/src/aegis/redteam/battery.py", "the poisoning probe set, Stage.INGEST"),
-            _f("aegis/src/aegis/ml/dataset.py", "the undigested training frame — the gap itself"),
+            _f(
+                "aegis/src/aegis/ml/provenance.py",
+                "frame_digest — the training-frame content digest",
+            ),
+            _t(
+                "aegis/tests/ml/test_dataset_digest.py"
+                "::test_refitting_on_changed_data_changes_the_digest",
+                "a poisoned frame changes the fingerprint",
+            ),
+            _t(
+                "aegis/tests/ml/test_dataset_digest.py"
+                "::test_refitting_on_the_same_data_reproduces_the_digest",
+                "and an unchanged one does not",
+            ),
             _t(
                 "aegis/tests/redteam/test_atlas_families.py"
                 "::test_poisoned_documents_are_refused_before_the_store",
@@ -471,15 +491,21 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
             "untrusted DATA (Microsoft Spotlighting), and every write is validated first."
         ),
         gap=(
-            "Those two mechanisms are enforced. The vector tier is not, and the "
-            "difference is the failure direction rather than the presence of a "
-            "control. Every retrieval arm applies a tenant predicate and a null tenant "
-            "is a positive match on the shared corpus rather than a wildcard — both "
-            "tested cross-tenant — but the chunks live in ONE shared Qdrant collection "
-            "and the predicate is a payload filter written by application code. Under "
-            "Postgres RLS a query that forgets its tenant clause returns nothing; here "
-            "it returns everything. Per-tenant collections, or a database-enforced "
-            "predicate, is what would close this, and neither exists."
+            "The failure direction is now closed and the partition is not. A foreign "
+            "row that reaches a result RAISES rather than being returned or quietly "
+            "dropped: an independent post-check re-derives the permitted owners from "
+            "the scope itself, deliberately not through the method the filter builder "
+            "uses, so the defence and the thing it defends cannot go wrong together. A "
+            "payload recording no owner is refused as unknown rather than read as "
+            "shared. Proven by neutering the predicate and watching it refuse. What is "
+            "still missing is the partition on the production path: the lite backend "
+            "gives each tenant its own Qdrant collection, but LightRAG owns its "
+            "retrieval internals and exposes no per-query metadata predicate, so its "
+            "dense arm still reads one shared index holding every tenant's vectors and "
+            "declines the foreign ones on the way out. Two independent application-code "
+            "layers must now both fail for a leak; the database still enforces nothing. "
+            "Per-tenant LightRAG instances are the real fix and are a reindex, not a "
+            "config change."
         ),
         evidence=[
             _f(
@@ -489,7 +515,16 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
             _f("aegis/src/aegis/retrieval/validation.py", "validate-before-write"),
             _f(
                 "aegis/src/aegis/retrieval/lightrag_backend.py",
-                "DEFAULT_CHUNK_COLLECTION — one shared collection, the gap itself",
+                "DEFAULT_CHUNK_COLLECTION — one shared index on the production path",
+            ),
+            _f(
+                "aegis/src/aegis/retrieval/types.py",
+                "verify_rows_in_scope — the independent, fail-closed post-check",
+            ),
+            _t(
+                "aegis/tests/retrieval/test_tenant_isolation.py"
+                "::test_a_forgotten_vector_predicate_raises_rather_than_returning_a_foreign_chunk",
+                "neuter the predicate and it refuses instead of leaking",
             ),
             _t(
                 "aegis/tests/retrieval/test_observability.py::test_spotlight_applied_by_default",
@@ -522,12 +557,19 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
             "release on a measured quality drop."
         ),
         gap=(
-            "Both findings need a model layer: the rail is a semantic entailment "
-            "judgement with no deterministic backstop, so with no completer wired it "
-            "is a no-op and this control is worth nothing. The zero-retrieval case is "
-            "reported and deliberately never blocked — plenty of legitimate turns "
-            "answer with no passages — so an answer invented out of the model's own "
-            "knowledge is flagged, not stopped."
+            "The rail now has a deterministic backstop, so it is no longer worth "
+            "nothing without a model: the assembled context numbers its passages "
+            "[source N], the system prompt declares those labels the citation "
+            "vocabulary, and a citation naming a passage this run did not retrieve is a "
+            "provable falsehood that BLOCKS offline with no completer wired. What still "
+            "needs the model layer is entailment itself — an unsupported or "
+            "contradicted claim carrying no citation is caught only by the LLM self- "
+            "check, so on a deployment with no completer those two findings are "
+            "unavailable. The deterministic check also sees only the bracketed labels: "
+            "an answer that fabricates a free-prose document id is not caught, because "
+            "detecting one would need a regex for id-shaped tokens that would false- "
+            "block the clause and part numbers this platform exists to retrieve. The "
+            "zero-retrieval case remains a deliberate FLAG, never a block."
         ),
         evidence=[
             _f(
@@ -1085,28 +1127,44 @@ _ATLAS: tuple[ControlEntry, ...] = (
     ControlEntry(
         id="AML.T0024",
         title="Exfiltration via AI Inference API",
-        state=ControlState.PARTIAL,
+        state=ControlState.ENFORCED,
         summary=(
-            "The *channel* is closed and measured: a new outbound rail blocks an "
-            "answer that carries data out through a URL nobody clicked — an "
-            "auto-loading markdown or HTML image, or a link, pointing at an external "
-            "host with an encoded payload in its query, path or fragment. Three probes "
-            "exercise it and an ordinary documentation link is not a false positive."
+            "Both halves of the technique are refused. The channel is closed by an "
+            "outbound rail that blocks an answer carrying data out through a URL nobody "
+            "clicked — an auto-loading markdown or HTML image, or a link, pointing at "
+            "an external host with an encoded payload in its query, path or fragment. "
+            "The volume half is closed by a per-principal, tenant-scoped query-pattern "
+            "monitor: a query is reduced to a template by masking ids and numbers, and "
+            "a principal running one template over many distinct values, or touching an "
+            "abnormal breadth of subjects, is refused with 429 before the stream opens, "
+            "audited under the masked template so no swept id enters the trail, and "
+            "raised to the tenant's admins as an alert. It blocks rather than flags, "
+            "because a flag that lets query 31 through lets 500 through and this "
+            "technique completes by volume. Four benign controls hold the false- "
+            "positive rate at zero and each is saved by a different clause. What it "
+            "does not catch is named and probed rather than assumed: the detector is "
+            "rate-shaped, so a sweep paced under the threshold completes unobserved, "
+            "and two probes are exactly that — declared leaks carrying beyond_rails "
+            "rather than needs_llm, because no completer closes them either. The window "
+            "is in-process and non-durable, so a restart clears it and a second API "
+            "worker halves what each principal is seen doing; it is keyed per "
+            "principal, so two credentials halve an attacker's observed rate; and there "
+            "is no service-account exemption, so an authorised bulk job is "
+            "behaviourally indistinguishable from enumeration and will be refused."
         ),
-        gap=(
-            "The other half of this technique is extraction by query volume, and it "
-            "leaks. Two probes — model extraction by systematic scoring requests, and "
-            "membership inference over a list of record ids — pass every rail and are "
-            "reported as leaks, because nothing in a text screen can tell the "
-            "five-hundredth probing question from the first legitimate one. What "
-            "bounds them is the gateway's RPM/TPM/USD caps, which is a real control "
-            "claimed under LLM10 and is a bound, not a detection: there is no "
-            "per-principal query-pattern analysis anywhere in this platform."
-        ),
+        gap="",
         evidence=[
             _f(
                 "aegis/src/aegis/guardrails/schema.py",
                 "exfiltration_channel — the outbound channel rail",
+            ),
+            _f(
+                "aegis/src/aegis/security/extraction.py",
+                "the per-principal query-pattern monitor",
+            ),
+            _f(
+                "backend/src/app/api/routes.py",
+                "refuse_if_extracting — wired as the first act of POST /query",
             ),
             _f("aegis/src/aegis/redteam/battery.py", "the inference-exfil probe set"),
             _t(
@@ -1116,8 +1174,23 @@ _ATLAS: tuple[ControlEntry, ...] = (
             ),
             _t(
                 "aegis/tests/redteam/test_atlas_families.py"
+                "::test_extraction_by_query_volume_is_detected_per_principal_and_refused",
+                "and the sweep is really refused",
+            ),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_ordinary_work_that_looks_like_enumeration_is_not_flagged",
+                "while ordinary bulk work is not",
+            ),
+            _t(
+                "backend/tests/api/test_extraction_gate.py"
+                "::test_the_alert_reaches_the_tenants_admin_and_nobody_elses",
+                "the finding reaches a human, tenant-scoped",
+            ),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
                 "::test_model_extraction_and_membership_inference_leak_and_are_declared",
-                "the half that leaks, asserted as leaking",
+                "the paced sweep that still leaks, asserted as leaking",
             ),
         ],
     ),
@@ -1720,7 +1793,18 @@ _ISO_27001: tuple[ControlEntry, ...] = (
         title="Information security for use of cloud services",
         state=ControlState.NOT_APPLICABLE,
         summary="Aegis is deployed natively on a single host.",
-        gap="No Docker, no cloud control plane and no managed service to configure.",
+        gap=(
+            "A.5.23 governs the acquisition, use and exit of cloud services, and this "
+            "deployment consumes none: Postgres, Redis, Qdrant and Neo4j all run as "
+            "local processes on the operator's own machine, installed from INSTALL.md "
+            "with no container runtime, no orchestrator and no managed-service control "
+            "plane to configure or hold credentials for. There is no provider agreement "
+            "to review, no shared-responsibility boundary to draw and no exit plan to "
+            "write, because there is no provider. The one external dependency is the "
+            "model gateway, which is a supplier relationship and is assessed under "
+            "A.5.19-A.5.22 rather than here. Deploy the same code onto managed "
+            "infrastructure and this control applies immediately and is not met."
+        ),
         evidence=[_d("INSTALL.md", "the native, no-Docker install")],
     ),
 )

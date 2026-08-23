@@ -40,6 +40,7 @@ from aegis.retrieval.types import (
     scoped_graph,
     tenant_filter,
 )
+from aegis.security import ExtractionMonitor
 from fastapi import (
     APIRouter,
     Depends,
@@ -845,6 +846,89 @@ async def refuse_if_over_budget(
         ) from exc
 
 
+#: The process-wide query-pattern monitor. **One instance**, because the thing it
+#: measures is a rate and a rate needs a place to accumulate — a monitor rebuilt per
+#: request would observe one query, find no pattern, and report a clean run forever.
+#: It is keyed on ``(tenant, principal)`` internally, so sharing the object shares no
+#: tenant's data with another. In-memory and per-process: see
+#: :mod:`aegis.security.extraction` for exactly what that loses.
+_EXTRACTION_MONITOR = ExtractionMonitor()
+
+
+async def refuse_if_extracting(principal: AuthContext, *, query: str) -> None:
+    """Refuse a query that completes an extraction sweep, and tell somebody.
+
+    **MITRE ATLAS AML.T0024, the half a text rail cannot answer.** The guardrail stack
+    screens payloads; this screens a *principal over a window*. Model extraction by
+    sweeping a scoring parameter and membership inference by walking a list of record
+    ids are both invisible one message at a time — the five-hundredth probing question
+    is word-for-word as legitimate as the first — and are obvious in aggregate. See
+    :class:`aegis.security.ExtractionMonitor` for what is measured and what is not.
+
+    Wired here, at ``POST /query``, because this is the one place where the *inference
+    API* and the *authenticated principal* meet: ``run_agent`` never learns who called
+    it, and the gateway chokepoint sees model calls rather than user questions. A
+    tenanted principal is required — an untenanted or anonymous caller is not tracked at
+    all, which is stated rather than glossed: platform staff querying their own
+    deployment are not the threat model, and keying a window on ``None`` would pool every
+    such caller into one bucket and refuse them collectively.
+
+    Three responses, because a finding that only refuses is invisible to the one person
+    who can act on it:
+
+    * the caller gets a **429** carrying ``X-Admission-Gate: extraction``, refused before
+      the SSE stream opens for the same reason the budget gate is (once the first frame
+      is out the status code is spent);
+    * an ``query.extraction_refused`` row lands in ``audit_log``, scoped to the tenant;
+    * the tenant's administrators get one bell alert an hour per principal.
+
+    Args:
+        principal: The authenticated caller. Supplies both the window's key and the
+            audit row's actor, from one object, so the two cannot disagree.
+        query: The question just asked.
+
+    Raises:
+        HTTPException: 429, carrying ``X-Admission-Gate: extraction``.
+    """
+    tenant_id, user_id = principal.tenant_id, principal.user_id
+    if tenant_id is None or user_id is None:
+        return
+    finding = _EXTRACTION_MONITOR.observe(
+        tenant_id=tenant_id, principal_id=user_id, text=query
+    )
+    if finding is None:
+        return
+    from app.data.notifications import notify_extraction_detected
+
+    await _safe_audit(
+        "query.extraction_refused",
+        principal,
+        payload={
+            "signal": finding.signal.value,
+            "principal_id": finding.principal_id,
+            "queries_in_window": finding.queries,
+            "distinct_values": finding.distinct_values,
+            "window_seconds": finding.window_seconds,
+            # The masked template, never the raw queries: every identifier, number and
+            # email in them has already been replaced by a token, and the audit trail is
+            # read by more people than the transcript is.
+            "template": finding.template,
+        },
+        tenant_id=tenant_id,
+    )
+    await notify_extraction_detected(
+        tenant_id=tenant_id,
+        principal_id=finding.principal_id,
+        reason=finding.reason,
+        user_id=user_id,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=finding.reason,
+        headers={"X-Admission-Gate": "extraction"},
+    )
+
+
 async def _resolve_model_choice(auth: AuthContext) -> str | None:
     """Return the deployment this run must use, or ``None`` for the platform's routing.
 
@@ -1631,6 +1715,12 @@ async def query(
     metrics: MetricsStore = Depends(get_metrics_store),
 ) -> EventSourceResponse:
     """Run a query and stream the agent's step events over SSE."""
+    # Before anything is resolved, spent or streamed: is this principal enumerating?
+    # It runs first because it is the only gate whose evidence is the *request itself* —
+    # every query has to be observed for the window to mean anything, so an early return
+    # anywhere above this line would be a hole in the measurement rather than a
+    # shortcut. See :func:`refuse_if_extracting` (MITRE ATLAS AML.T0024).
+    await refuse_if_extracting(auth, query=req.query)
     persona = _resolve_persona(req.persona, auth)
     # Resolve the adapter-scoped memory subject (app-level isolation key). ``None`` —
     # an anonymous or subject-less principal — keeps memory inert and the stream

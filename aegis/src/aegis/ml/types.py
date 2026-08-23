@@ -91,7 +91,8 @@ class ModelCard(BaseModel):
     Every field is read off the *actual* fitted model (its ensemble members,
     encoded matrix, calibrated conformal predictor and stored split sizes), never
     hardcoded. ``data_source`` labels how the training frame was obtained so a
-    synthetic-fallback model is never mistaken for a real domain-trained one.
+    synthetic-fallback model is never mistaken for a real domain-trained one, and
+    ``dataset_digest`` names *which* frame that was.
     """
 
     task: str = Field(description="'regression' or 'classification'.")
@@ -118,6 +119,18 @@ class ModelCard(BaseModel):
     training_size: int = Field(description="Rows the ensemble was fitted on.")
     data_source: str = Field(
         description="'provided' | 'spec_provider' | 'synthetic' — how data was sourced.",
+    )
+    dataset_digest: str | None = Field(
+        default=None,
+        description=(
+            "'sha256:<hex>' content digest of the exact feature+target columns this "
+            "model was fitted on. Provenance and tamper-EVIDENCE, not prevention: it "
+            "names which data produced this model so a poisoned fit is attributable "
+            "and detectable afterwards; it does not stop a poisoned frame being "
+            "supplied. Invariant to column order and to the index; sensitive to any "
+            "cell value, to row order, to dtypes and to added/removed columns. None "
+            "only on a legacy artifact fitted before digests existed."
+        ),
     )
     test_size: int = Field(
         default=0,
