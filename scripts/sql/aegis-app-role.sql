@@ -77,6 +77,43 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO :"role";
 
+-- 5a. Take UPDATE and DELETE back off the three append-only ledgers, and off every
+--     partition of them. Step 4 granted `arwd` on ALL TABLES and step 5 will do the
+--     same for future ones — both instruments are per-schema and cannot exempt a
+--     table, so the only way to end at SELECT+INSERT on these three is to grant
+--     everything and take two privileges back afterwards. Without this, re-running
+--     this file would silently restore DELETE on the audit trail that the backend's
+--     bootstrap (aegis.governance.rls.grant_serving_role) had removed.
+--
+--     `run_events` is PARTITIONED BY RANGE (ts): PostgreSQL checks privileges on the
+--     relation NAMED in the statement, so revoking on the parent alone leaves
+--     `DELETE FROM run_events_2026_08` working. The pg_inherits arm covers the months.
+--
+--     These three and no others: `runs`, `approvals`, `job_runs`, `notifications` and
+--     the three `checkpoint*` tables are legitimately rewritten in place, and a revoke
+--     there is a `permission denied` in the middle of a request, not a security gain.
+--     `memory_write_log` looks append-only and is deliberately excluded: the
+--     DPDP/GDPR erasure route (POST /v1/memory/forget) must delete from it, and it is
+--     served from a request handler, so the alternative is an RLS-bypassing connection
+--     in the request path. See aegis.governance.rls._APPEND_ONLY_TABLES.
+SELECT format('REVOKE UPDATE, DELETE ON public.%I FROM %I', c.relname, :'role')
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public'
+   AND c.relkind IN ('r', 'p')
+   AND (
+        c.relname IN ('audit_log', 'run_events', 'usage_ledger')
+     OR EXISTS (
+            SELECT 1
+              FROM pg_inherits i
+              JOIN pg_class p ON p.oid = i.inhparent
+             WHERE i.inhrelid = c.oid
+               AND p.relname IN ('audit_log', 'run_events', 'usage_ledger')
+        )
+   )
+ ORDER BY c.relname
+\gexec
+
 -- 6. Prove it. A row here that says `t` for either column means RLS is still inert.
 SELECT rolname       AS serving_role,
        rolsuper      AS is_superuser_MUST_BE_f,

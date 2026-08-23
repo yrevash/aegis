@@ -143,7 +143,43 @@ _INSTRUCTION_NOUN = (
     r"polic(?:y|ies)|directive|configuration)"
 )
 
-_INJECTION_SIGNATURES: tuple[re.Pattern[str], ...] = (
+#: The attack families the deterministic signatures are grouped into, and the sentence
+#: each one is reported to a person with.
+#:
+#: **This grouping is what makes a refusal sayable.** The reason string used to be
+#: ``f"Matched injection signature {pattern.pattern!r}"``, and it was rendered verbatim
+#: to the user: a blocked request came back as three hundred characters of alternation
+#: — ``\b(?:ignore|ignoring|disregard|…)\b(?:\W+\w+){0,3}\W+(?:previous|prior|…)``. That
+#: is a correct block delivered as an evasion map: it hands an attacker the exact word
+#: list to route around, and it is not a sentence an operator can act on. The family id
+#: still names the finding precisely (it is stable, greppable, and lands in the durable
+#: ``run_events`` row); the exact pattern stays in the log line
+#: :func:`deterministic_injection` writes, which is the audit trail and is not sent to
+#: the caller.
+_FAMILY_REASONS: dict[str, str] = {
+    "override_standing_instructions": (
+        "it asks the assistant to set aside or override the instructions it operates "
+        "under"
+    ),
+    "exfiltrate_standing_instructions": (
+        "it asks the assistant to reveal its own system prompt, configuration or "
+        "credentials"
+    ),
+    "impersonate_system": (
+        "it contains text formatted to look like a new system instruction or a "
+        "chat-template control token"
+    ),
+    "remove_restrictions": (
+        "it asks the assistant to adopt an unrestricted persona or to drop its "
+        "operating limits"
+    ),
+    "override_standing_instructions_non_english": (
+        "it asks the assistant, in a language other than English, to ignore or forget "
+        "its previous instructions"
+    ),
+}
+
+_OVERRIDE_SIGNATURES: tuple[re.Pattern[str], ...] = (
     # ── Override / discard the standing instructions ───────────────────────
     re.compile(
         rf"\b(?:ignore|ignoring|disregard|disregarding|forget|override|overriding|"
@@ -158,6 +194,9 @@ _INJECTION_SIGNATURES: tuple[re.Pattern[str], ...] = (
         r"mentioned|stated|instructed|directed|programmed|configured|trained|taught)",
         re.I,
     ),
+)
+
+_EXFILTRATION_SIGNATURES: tuple[re.Pattern[str], ...] = (
     # ── Exfiltrate the standing instructions ───────────────────────────────
     re.compile(
         rf"\b(?:reveal|revealing|print|repeat|show|output|display|echo|disclose|"
@@ -182,6 +221,9 @@ _INJECTION_SIGNATURES: tuple[re.Pattern[str], ...] = (
         re.I,
     ),
     re.compile(r"reveal\s+(?:your\s+)?(?:api[\s_-]*key|secret|credential|token)", re.I),
+)
+
+_IMPERSONATION_SIGNATURES: tuple[re.Pattern[str], ...] = (
     # ── Impersonate the system / restate the instructions ──────────────────
     re.compile(rf"\b(?:new|updated|revised|real|actual|true)\s+(?:system\s+)?"
                rf"{_INSTRUCTION_NOUN}s?\s*:", re.I),
@@ -189,6 +231,9 @@ _INJECTION_SIGNATURES: tuple[re.Pattern[str], ...] = (
     re.compile(r"<\|[a-z0-9_]{2,24}\|>", re.I),
     re.compile(r"\[/?INST\]", re.I),
     re.compile(r"<<\s*/?\s*SYS\s*>>", re.I),
+)
+
+_RESTRICTION_REMOVAL_SIGNATURES: tuple[re.Pattern[str], ...] = (
     # ── Persona / restriction removal ──────────────────────────────────────
     re.compile(r"you\s+are\s+now\s+(?:a|an|in|no longer)", re.I),
     re.compile(r"\byou\s+are\s+(?:no\s+longer|not)\s+(?:bound|restricted|limited)", re.I),
@@ -205,6 +250,16 @@ _INJECTION_SIGNATURES: tuple[re.Pattern[str], ...] = (
     # ``DAN`` is the jailbreak persona, matched case-sensitively so the ordinary
     # given name "Dan" is not a hard block.
     re.compile(r"\bDAN\b"),
+)
+
+#: Every English signature, in the order they are matched. Kept as one flat tuple so
+#: the matching order (and therefore which family a multi-family phrase is reported as)
+#: is byte-identical to before the grouping.
+_INJECTION_SIGNATURES: tuple[re.Pattern[str], ...] = (
+    *_OVERRIDE_SIGNATURES,
+    *_EXFILTRATION_SIGNATURES,
+    *_IMPERSONATION_SIGNATURES,
+    *_RESTRICTION_REMOVAL_SIGNATURES,
 )
 
 #: Non-English override phrasings. This list is **explicitly partial**: it covers
@@ -301,11 +356,33 @@ def _decoded_base64_candidates(text: str) -> list[str]:
     return payloads
 
 
-def _match_signatures(candidate: str) -> re.Pattern[str] | None:
-    """Return the first signature matching ``candidate``, or ``None``."""
-    for pattern in (*_INJECTION_SIGNATURES, *_MULTILINGUAL_SIGNATURES):
-        if pattern.search(candidate):
-            return pattern
+#: Family id → its signatures, in matching order. The flat tuples above are unchanged;
+#: this is the same list with the family each pattern belongs to attached, so a hit can
+#: be reported as a finding a person can read instead of as a regex.
+_SIGNATURE_FAMILIES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
+    ("override_standing_instructions", _OVERRIDE_SIGNATURES),
+    ("exfiltrate_standing_instructions", _EXFILTRATION_SIGNATURES),
+    ("impersonate_system", _IMPERSONATION_SIGNATURES),
+    ("remove_restrictions", _RESTRICTION_REMOVAL_SIGNATURES),
+    ("override_standing_instructions_non_english", _MULTILINGUAL_SIGNATURES),
+)
+
+
+def _match_signatures(candidate: str) -> tuple[str, re.Pattern[str]] | None:
+    """Return the family id and pattern of the first signature matching ``candidate``.
+
+    Args:
+        candidate: One normalised comparison view of the input.
+
+    Returns:
+        ``(family, pattern)`` on a hit — the family names the finding for the person
+        who is refused, the pattern is the exact evidence for the audit log — or
+        ``None`` when no signature matched.
+    """
+    for family, patterns in _SIGNATURE_FAMILIES:
+        for pattern in patterns:
+            if pattern.search(candidate):
+                return family, pattern
     return None
 
 
@@ -350,11 +427,26 @@ def deterministic_injection(text: str) -> InjectionVerdict | None:
         candidates.append(deconfuse(payload))
 
     for candidate in candidates:
-        pattern = _match_signatures(candidate)
-        if pattern is not None:
+        hit = _match_signatures(candidate)
+        if hit is not None:
+            family, pattern = hit
+            # The exact pattern goes HERE — to the operator's log, where the evidence
+            # belongs — and not into the reason, which is rendered to the person who was
+            # refused. See :data:`_FAMILY_REASONS` for the refusal that used to print
+            # the alternation and hand an attacker the word list to route around.
+            logger.info(
+                "Deterministic injection signature matched (family=%s): %r",
+                family,
+                pattern.pattern,
+            )
             return InjectionVerdict(
                 injection=True,
-                reason=f"Matched injection signature {pattern.pattern!r}.",
+                reason=(
+                    f"the request matches a known prompt-injection signature "
+                    f"({family}) — {_FAMILY_REASONS[family]}. Rephrase it as the "
+                    f"question or task you actually want, without instructions about "
+                    f"how the assistant should treat its own rules."
+                ),
             )
     return None
 

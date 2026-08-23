@@ -18,6 +18,40 @@ DEFAULT_JWT_SECRET = "dev-insecure-jwt-secret-change-me-0123456789abcdef"
 # Minimum acceptable length for a production HS256 signing secret (bytes/chars).
 MIN_JWT_SECRET_LEN = 32
 
+# How many DISTINCT characters a signing secret must contain. ``"x" * 48`` cleared the
+# length floor and was accepted — it is 48 characters and one byte of choice, and every
+# token this platform mints is authenticated with it. This is a cheap entropy proxy, not
+# a measure: it catches the shapes a human types when a length check is the only thing in
+# the way (a held-down key, "abababab…", a repeated word) and says nothing about a secret
+# that merely looks random. Twelve is comfortably below what any generator produces —
+# ``secrets.token_urlsafe(32)`` gives ~30 distinct characters — and comfortably above
+# what a person invents by hand.
+MIN_JWT_SECRET_DISTINCT_CHARS = 12
+
+# Secrets that are public knowledge the moment they are used, matched case-insensitively
+# as substrings of the whole value. A placeholder is not made secret by padding it to
+# thirty-two characters, and every one of these appears in a shipped example file, a
+# tutorial or a framework default somewhere — which is precisely what makes it a
+# candidate an attacker tries before anything else. Substring rather than equality
+# because the failure this catches is ``change-me-in-production-1234567890``: a
+# deployment that read the instruction and padded it instead of following it.
+KNOWN_WEAK_JWT_SECRETS: tuple[str, ...] = (
+    "change-me",
+    "changeme",
+    "dev-insecure",
+    "insecure",
+    "your-secret",
+    "your_secret",
+    "supersecret",
+    "super-secret",
+    "topsecret",
+    "please-change",
+    "replace-me",
+    "example-secret",
+    "test-secret",
+    "notsosecret",
+)
+
 
 class InsecureConfigurationError(RuntimeError):
     """Raised at startup when a non-dev deployment carries an insecure secret."""
@@ -467,6 +501,23 @@ class Settings(BaseSettings):
     mcp_client_timeout_seconds: float = Field(
         default=30.0, validation_alias="AEGIS_MCP_CLIENT_TIMEOUT_SECONDS"
     )
+    # Whether a declared peer may point INTO this deployment's own network — loopback,
+    # link-local, RFC1918. Off, because ``POST /mcp/servers`` took a bare ``url: str``
+    # and ``app.mcp.client.connect`` dialed it: a peer declared at
+    # ``http://169.254.169.254/latest/meta-data/`` made Aegis fetch cloud instance
+    # metadata from a network position the caller does not have, and press *test
+    # connection* rendered the answer in the console. Platform-admin-only bounds who can
+    # do it; it does not stop the request being made by the server.
+    #
+    # It is a knob rather than a hard refusal because a sidecar MCP server on the same
+    # host, and this deployment probing its own endpoint over loopback, are both real —
+    # but "my network has one of those on it" is a fact about the topology that the
+    # deployment states, not something a request body may assert for it. See
+    # :func:`app.mcp.client.validate_peer_url` for what the check does and does not
+    # cover (it resolves no DNS, so a hostname pointing inside is not caught).
+    mcp_allow_private_peers: bool = Field(
+        default=False, validation_alias="AEGIS_MCP_ALLOW_PRIVATE_PEERS"
+    )
     # How long ADMITTING one peer's catalogue may take. Discovery is not one call: every
     # description and every schema string the peer wrote is screened on the TOOL_RESULT
     # rail, and each screening is an LLM classification, so the cost scales with the
@@ -579,6 +630,26 @@ class Settings(BaseSettings):
         default="http://localhost:8000", validation_alias="AEGIS_MCP_ISSUER_URL"
     )
 
+    # ── Encryption at rest (§ the compliance audit's "nothing is encrypted") ──
+    # What the OPERATOR says protects this deployment's volumes at rest: "none" (the
+    # default), "volume" (LUKS/FileVault/BitLocker under the data directory and the
+    # document store) or "provider" (a managed service's own storage encryption).
+    #
+    # It is a declaration, not a measurement, and :mod:`app.platform.at_rest` labels it
+    # as one — Aegis runs above the filesystem and cannot see whether the block device
+    # under it is encrypted. The default is "none" rather than "unknown" on purpose: a
+    # compliance surface whose blank means "probably fine" is the failure this exists to
+    # refuse, so an unset control reads as absent until somebody configures it.
+    #
+    # There is no column-level encryption setting because there is no column-level
+    # encryption, by decision. The reasoning — one document comes to rest in eight
+    # places, column encryption reaches three of them, and the two holding the most
+    # content are the two that cannot be encrypted without removing retrieval and
+    # semantic recall — is written out in ``app/platform/at_rest.py``.
+    storage_encryption: str = Field(
+        default="none", validation_alias="AEGIS_STORAGE_ENCRYPTION"
+    )
+
     # ── App ──────────────────────────────────────────────────────────────────
     app_env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
@@ -624,26 +695,67 @@ class Settings(BaseSettings):
     def ensure_secure_secrets(self) -> None:
         """Fail-fast on an insecure JWT signing secret outside dev (§3.3, H4).
 
-        Dev keeps the non-secret fallback so the offline/test path stays quiet. In
-        any other environment a default or too-short ``jwt_secret`` is a hard error
-        at startup — a real deployment MUST set ``JWT_SECRET`` to a strong value.
+        Dev keeps the non-secret fallback so the offline/test path stays quiet. In any
+        other environment a weak ``jwt_secret`` is a hard error at startup rather than a
+        warning the deployment serves through — the asymmetry
+        :func:`app.data.session.verify_rls_enforcement` uses for the same reason: a
+        check that blocks the dev loop gets disabled, and a warning a production boot
+        scrolls past protects nobody.
+
+        **What this now catches that it did not.** The guard checked exactly two things:
+        equality with :data:`DEFAULT_JWT_SECRET`, and length. So
+        ``JWT_SECRET="x" * 48`` booted — 48 characters and one byte of choice, signing
+        every access token the platform issues — and so did
+        ``change-me-in-production-1234567890``, which is the shipped instruction with
+        digits stapled on. Neither is a secret an attacker has to break; both are ones
+        they guess. The three checks below are ordered by how specific the diagnosis is,
+        so the message names the actual problem instead of falling through to "too
+        short".
+
+        The secret itself is never put in the message. It is not printed to a log the
+        way a rejected URL is, because the failure mode of a diagnostic that echoes a
+        credential is that somebody pastes the traceback into an issue.
 
         Raises:
-            InsecureConfigurationError: When ``app_env`` is not ``dev`` and the
-                signing secret is the built-in default or shorter than
-                :data:`MIN_JWT_SECRET_LEN`.
+            InsecureConfigurationError: When ``app_env`` is not ``dev`` and the signing
+                secret is the built-in default, is shorter than
+                :data:`MIN_JWT_SECRET_LEN`, contains a known placeholder
+                (:data:`KNOWN_WEAK_JWT_SECRETS`), or draws on fewer than
+                :data:`MIN_JWT_SECRET_DISTINCT_CHARS` distinct characters.
         """
         if self.is_dev:
             return
-        if self.jwt_secret == DEFAULT_JWT_SECRET:
+        secret = self.jwt_secret
+        remedy = (
+            " Generate one with `python -c \"import secrets; "
+            'print(secrets.token_urlsafe(48))"` and set JWT_SECRET from a secret store.'
+        )
+        if secret == DEFAULT_JWT_SECRET:
             raise InsecureConfigurationError(
-                "JWT_SECRET is the built-in dev default; set a strong secret "
-                f"(>= {MIN_JWT_SECRET_LEN} chars) for a non-dev deployment."
+                "JWT_SECRET is the built-in dev default, which is committed to this "
+                "repository and therefore public: anyone can mint a token for any role "
+                "and any tenant of this deployment." + remedy
             )
-        if len(self.jwt_secret) < MIN_JWT_SECRET_LEN:
+        if len(secret) < MIN_JWT_SECRET_LEN:
             raise InsecureConfigurationError(
-                f"JWT_SECRET is too short ({len(self.jwt_secret)} chars); use at "
-                f"least {MIN_JWT_SECRET_LEN} for a non-dev deployment."
+                f"JWT_SECRET is too short ({len(secret)} chars); use at least "
+                f"{MIN_JWT_SECRET_LEN} for a non-dev deployment." + remedy
+            )
+        lowered = secret.lower()
+        for weak in KNOWN_WEAK_JWT_SECRETS:
+            if weak in lowered:
+                raise InsecureConfigurationError(
+                    f"JWT_SECRET contains the known placeholder {weak!r}, so it is a "
+                    "value an attacker tries first rather than one they break. Padding "
+                    "a placeholder to the length floor does not make it secret." + remedy
+                )
+        distinct = len(set(secret))
+        if distinct < MIN_JWT_SECRET_DISTINCT_CHARS:
+            raise InsecureConfigurationError(
+                f"JWT_SECRET is {len(secret)} characters long but draws on only "
+                f"{distinct} distinct ones, so its real strength is nothing like its "
+                f"length; at least {MIN_JWT_SECRET_DISTINCT_CHARS} are required."
+                + remedy
             )
 
 

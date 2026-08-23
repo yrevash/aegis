@@ -536,8 +536,9 @@ async def test_the_stream_sends_only_what_this_principal_may_see(db):
 
 async def test_an_ingest_alert_targets_that_document_and_names_no_portal(db):
     """``jobs?document=<id>`` — the screen and the thing, resolved by whoever reads it."""
-    from app.jobs.activities import _notify_ingest_finished
     from aegis.jobs import JobStatus
+
+    from app.jobs.activities import _notify_ingest_finished
 
     await _seed()
     await _notify_ingest_finished(

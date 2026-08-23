@@ -38,7 +38,7 @@ from uuid import uuid4
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from aegis.core.run_context import run_scope
+from aegis.core.run_context import run_scope, run_usage
 from aegis.core.types import ApprovalDecision, RiskLevel, RunStatus
 from aegis.gateway.types import BudgetExceededError
 from aegis.observability import get_tracer, semconv
@@ -334,7 +334,16 @@ async def run_agent(
                         logger.info(
                             "Run %s parked awaiting approval %s", run_id, approval_id
                         )
-                        yield emit(events.run_finished(RunStatus.AWAITING_APPROVAL))
+                        # Usage carried here too: a parked run has already retrieved,
+                        # planned and screened, and a header reading $0.0000 while the
+                        # ledger holds its spend is the same fabricated zero the
+                        # blocked/errored paths below used to emit.
+                        yield emit(
+                            events.run_finished(
+                                RunStatus.AWAITING_APPROVAL,
+                                **_terminal_usage(graph, config, run_id=run_id),
+                            )
+                        )
                         return
                 finally:
                     registry.discard(approval_id)
@@ -349,9 +358,9 @@ async def run_agent(
             yield emit(
                 events.run_finished(
                     status,
-                    prompt_tokens=int(final.get("prompt_tokens", 0)),
-                    completion_tokens=int(final.get("completion_tokens", 0)),
-                    cost_usd=float(final.get("cost_usd", 0.0)),
+                    # The ledger's own numbers, not the reducers' — see
+                    # `_terminal_usage` for the measured under-report that motivates it.
+                    **_terminal_usage(graph, config, run_id=run_id),
                     # `answer_cached`, not `cache_hit`. They are different facts that
                     # were sharing a word, and the dashboard read the wrong one.
                     #
@@ -399,7 +408,17 @@ async def run_agent(
                     message=exc.message,
                 )
             )
-            yield emit(events.run_finished(RunStatus.BLOCKED))
+            # A run refused mid-flight still SPENT — it planned, it screened, it may
+            # have fanned out — and these two paths used to emit the terminal event with
+            # no usage kwargs at all, which `events.run_finished` renders as $0.0000. A
+            # blocked run's COST card read $0.0000 while its ledger held $0.036184 over
+            # 22 calls. A fabricated zero on the one card an operator uses to see what a
+            # refusal cost is worse than no card.
+            yield emit(
+                events.run_finished(
+                    RunStatus.BLOCKED, **_terminal_usage(graph, config, run_id=run_id)
+                )
+            )
         except Exception as exc:  # noqa: BLE001 - report any failure as an event
             logger.exception("Agent run %s failed", run_id)
             # Drop the resumable handle exactly as the budget path above does: an errored
@@ -407,7 +426,73 @@ async def run_agent(
             # checkpointer (the whole run state) with nothing left to resume.
             parked_runs.pop(run_id)
             yield emit(events.error(str(exc)))
-            yield emit(events.run_finished(RunStatus.ERROR))
+            yield emit(
+                events.run_finished(
+                    RunStatus.ERROR, **_terminal_usage(graph, config, run_id=run_id)
+                )
+            )
+
+
+def _terminal_usage(
+    graph: Any,  # noqa: ANN401 - CompiledStateGraph
+    config: dict[str, Any],
+    *,
+    run_id: str,
+) -> dict[str, Any]:
+    """Return the usage kwargs for a run's terminal ``run_finished``.
+
+    **The metered accrual first, the graph's own totals only as a fallback**, because
+    the two measure different things and only one of them is the money:
+
+    * :func:`aegis.core.run_context.run_usage` is what the gateway chokepoint metered —
+      the same numbers, call for call, that ``usage_ledger`` is written from. It sees
+      the guardrail screens, the injection classifier, the grounding self-check and the
+      query rewriter, none of which return usage through a graph node.
+    * ``graph.get_state`` returns what LangGraph's ``operator.add`` reducers folded up
+      from node returns. Measured on ``taif_run1``, run ``65480494…``: the reducers said
+      ``$0.0172955`` and the ledger held ``$0.0205096`` over 24 calls, and on a run that
+      ended BLOCKED the reducers said ``$0.0000`` against a ledger holding real spend —
+      because ``events.run_finished(RunStatus.BLOCKED)`` was emitted with no usage at
+      all and :func:`aegis.agent.events.run_finished` defaults every field to zero.
+
+    ``calls == 0`` is why the fallback is kept rather than deleted: it means this
+    process's chokepoint metered nothing for the run — an offline/lite deployment with
+    no gateway, or a test whose ``complete`` is a stub — and in that case the reducers'
+    totals are the only measurement that exists. An unreadable graph state on top of
+    that leaves genuinely nothing to report, which is logged and reported as the
+    schema's zero rather than invented.
+
+    Args:
+        graph: The compiled graph the run drove (read only if nothing was metered).
+        config: Its config, carrying ``thread_id == run_id``.
+        run_id: The run being closed.
+
+    Returns:
+        ``prompt_tokens``/``completion_tokens``/``cost_usd`` kwargs for
+        :func:`aegis.agent.events.run_finished`, or ``{}`` when nothing can be read.
+    """
+    measured = run_usage(run_id)
+    if measured is not None and measured.calls:
+        return {
+            "prompt_tokens": measured.prompt_tokens,
+            "completion_tokens": measured.completion_tokens,
+            "cost_usd": measured.cost_usd,
+        }
+    try:
+        final = graph.get_state(config).values
+    except Exception:  # noqa: BLE001 - a terminal event must still be emitted
+        logger.warning(
+            "Run %s: the gateway metered no call for it and its graph state could not "
+            "be read, so its terminal event carries no usage totals.",
+            run_id,
+            exc_info=True,
+        )
+        return {}
+    return {
+        "prompt_tokens": int(final.get("prompt_tokens", 0)),
+        "completion_tokens": int(final.get("completion_tokens", 0)),
+        "cost_usd": float(final.get("cost_usd", 0.0)),
+    }
 
 
 def _is_interrupt(chunk: Any) -> bool:  # noqa: ANN401 - opaque astream chunk
@@ -476,14 +561,15 @@ def _resumed_terminal(
             "claiming a completion that has not happened.",
             run_id,
         )
-        return events.run_finished(RunStatus.AWAITING_APPROVAL)
+        return events.run_finished(
+            RunStatus.AWAITING_APPROVAL,
+            **_terminal_usage(graph, config, run_id=run_id),
+        )
     try:
         final = dict(graph.get_state(config).values)
         return events.run_finished(
             RunStatus(final.get("status", RunStatus.COMPLETED.value)),
-            prompt_tokens=int(final.get("prompt_tokens", 0)),
-            completion_tokens=int(final.get("completion_tokens", 0)),
-            cost_usd=float(final.get("cost_usd", 0.0)),
+            **_terminal_usage(graph, config, run_id=run_id),
             cache_hit=bool(final.get("cache_hit", False)),
         )
     except Exception:  # noqa: BLE001 - the drive already succeeded; do not undo it

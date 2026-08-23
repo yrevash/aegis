@@ -29,6 +29,9 @@ from types import SimpleNamespace
 import pytest
 
 from aegis.governance.rls import (
+    _APPEND_ONLY_TABLES as APPEND_ONLY_TABLES,  # noqa: PLC2701 - the registry under test
+)
+from aegis.governance.rls import (
     SERVING_ROLE,
     RlsBypassError,
     RlsEnforcement,
@@ -43,6 +46,13 @@ from aegis.governance.rls import (
 #: string that reads like an endorsement of a fixture that is gone.
 _NON_POSTGRES_DIALECT = "mysql"
 
+#: What the catalog read behind the append-only revoke answers with by default: the
+#: ledgers plus one ``run_events`` partition. The partition is in the default, not an
+#: opt-in, because it is the half that is easy to lose — a revoke on the parent alone
+#: leaves ``DELETE FROM run_events_2026_08`` working, and that name is a published
+#: function of the calendar rather than a secret.
+_APPEND_ONLY_RELATIONS: tuple[str, ...] = (*APPEND_ONLY_TABLES, "run_events_2026_08")
+
 
 class _FakeResult:
     """The subset of SQLAlchemy's ``Result`` these functions use."""
@@ -55,6 +65,9 @@ class _FakeResult:
 
     def scalar_one(self):  # noqa: ANN201 - mirrors SQLAlchemy's loose return
         return self._rows[0][0]
+
+    def __iter__(self):  # noqa: ANN204 - a real Result yields row tuples
+        return iter(self._rows)
 
 
 class _FakeConn:
@@ -69,6 +82,11 @@ class _FakeConn:
             return _FakeResult(self._engine.role_rows)
         if "FROM pg_roles WHERE rolname = :role" in sql:
             return _FakeResult([(1,)] if self._engine.role_exists else [])
+        # Before the bare ``current_schema()`` branch: the append-only relation lookup
+        # also mentions it, and answering it with the schema name would silently make
+        # the revokes disappear from the grant.
+        if "pg_inherits" in sql:
+            return _FakeResult([(name,) for name in self._engine.append_only_relations])
         if "current_schema()" in sql:
             return _FakeResult([(self._engine.schema,)])
         self._engine.statements.append(sql)
@@ -94,12 +112,14 @@ class _FakePostgresEngine:
         role_exists: bool = True,
         schema: str = "public",
         dialect: str = "postgresql",
+        append_only_relations: tuple[str, ...] = _APPEND_ONLY_RELATIONS,
     ) -> None:
         self.statements: list[str] = []
         self.role_rows = [(role, superuser, bypassrls, list(escalations))]
         self.role_exists = role_exists
         self.schema = schema
         self.dialect = SimpleNamespace(name=dialect)
+        self.append_only_relations = append_only_relations
 
     def connect(self) -> _FakeConn:
         return _FakeConn(self)
@@ -220,6 +240,100 @@ async def test_grants_are_exactly_the_dml_the_serving_role_needs():
     # Nothing that would let the serving role remove the isolation it is subject to.
     for forbidden in ("TRUNCATE", "TRIGGER", "REFERENCES", "ALL PRIVILEGES"):
         assert forbidden not in joined
+
+
+async def test_the_append_only_ledgers_end_at_select_insert_not_full_dml():
+    """The claim: the serving role cannot rewrite the audit trail.
+
+    The measured symptom this replaces is ``\\dp audit_log`` reading
+    ``aegis_app=arwd/postgres`` — the connection every request arrives on held UPDATE
+    and DELETE on the evidence of what it did. The grant is deliberately still
+    ``ON ALL TABLES``, so what makes the ledgers append-only is the revoke *after* it;
+    losing that revoke is the regression this pins.
+    """
+    engine = _FakePostgresEngine()
+    joined = "\n".join(await grant_serving_role(engine, SERVING_ROLE))
+    for table in APPEND_ONLY_TABLES:
+        assert (
+            f'REVOKE UPDATE, DELETE ON "public"."{table}" FROM "{SERVING_ROLE}"' in joined
+        )
+    # Order matters and is not incidental: the bulk grant hands out UPDATE/DELETE on
+    # every table in the schema, so a revoke issued before it would be undone by it.
+    assert joined.index("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES") < joined.index(
+        "REVOKE"
+    )
+
+
+async def test_the_revoke_reaches_run_events_partitions_not_only_the_parent():
+    """The failure mode: revoking on the parent and calling ``run_events`` protected.
+
+    PostgreSQL checks privileges on the relation **named in the statement**. ``run_events``
+    is ``PARTITIONED BY RANGE (ts)`` and each month is a separately-addressable table that
+    ``GRANT ... ON ALL TABLES`` and ``ALTER DEFAULT PRIVILEGES`` both reach, so a parent-only
+    revoke leaves ``DELETE FROM run_events_2026_08`` working — with a name anyone can derive
+    from a date.
+    """
+    engine = _FakePostgresEngine()
+    joined = "\n".join(await grant_serving_role(engine, SERVING_ROLE))
+    assert (
+        f'REVOKE UPDATE, DELETE ON "public"."run_events_2026_08" FROM "{SERVING_ROLE}"'
+        in joined
+    )
+
+
+async def test_tables_something_legitimately_rewrites_keep_their_dml():
+    """A revoke on a mutated table is a ``permission denied`` 500 inside a request.
+
+    Named individually rather than checked as "not in the list" because each is a
+    concrete writer: the run header moves through its states, an approval decision writes
+    the verdict onto the pending row, and LangGraph's ``PostgresSaver`` upserts the three
+    checkpoint tables on every step under ``AGENT_CHECKPOINTER=postgres`` — where the
+    failure would be a durable-execution outage rather than a visible error.
+    """
+    engine = _FakePostgresEngine()
+    joined = "\n".join(await grant_serving_role(engine, SERVING_ROLE))
+    for kept in (
+        "runs",
+        "approvals",
+        "job_runs",
+        "checkpoints",
+        "checkpoint_blobs",
+        "checkpoint_writes",
+    ):
+        assert f'"public"."{kept}"' not in joined
+        assert kept not in APPEND_ONLY_TABLES
+
+
+def test_memory_write_log_keeps_delete_because_erasure_is_served_from_a_request():
+    """The exclusion that was found by breaking it, not by reasoning about it.
+
+    ``memory_write_log`` reads append-only everywhere — retention documents it as the
+    one memory table never swept, and consolidation supersedes rather than removes — so
+    it was in the tuple. The revoke broke ``POST /v1/memory/forget``, the DPDP/GDPR
+    right-to-erasure route, with ``permission denied for table memory_write_log``
+    surfacing to the caller as a 503 "erasure not performed".
+
+    It keeps ``DELETE`` because the alternative is worse: the table is keyed by
+    ``subject_id``, a lawful erasure has to reach it, and the only way to keep it
+    append-only would be to serve that request handler on the **owner** connection —
+    putting an RLS-bypassing connection in the request path to buy a tamper control.
+    Tamper-evidence for memory writes rests on ``audit_log`` instead, which is
+    append-only here and records every erasure with its row counts.
+    """
+    assert "memory_write_log" not in APPEND_ONLY_TABLES
+
+
+async def test_no_revoke_is_issued_for_a_ledger_the_schema_does_not_have_yet():
+    """``REVOKE`` on a missing relation is an error, and this runs on the first boot too.
+
+    So the statements come from a catalog read, not from :data:`_APPEND_ONLY_TABLES`
+    assumed to exist. An empty answer must produce a clean grant, not a boot that dies
+    on ``relation "audit_log" does not exist`` before the platform ever serves.
+    """
+    engine = _FakePostgresEngine(append_only_relations=())
+    statements = await grant_serving_role(engine, SERVING_ROLE)
+    assert statements
+    assert not any(s.startswith("REVOKE") for s in statements)
 
 
 async def test_grants_are_skipped_and_reported_when_the_role_is_missing(caplog):

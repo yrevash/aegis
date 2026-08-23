@@ -88,6 +88,7 @@ from app.mcp.client import (
     ExternalDiscoveryTimeoutError,
     ExternalServerSpec,
     ExternalToolCollisionError,
+    PeerUrlRefused,
     UnknownExternalServerError,
     credential_fingerprint,
     get_registry,
@@ -355,6 +356,7 @@ async def load_servers() -> int:
     registry = get_registry()
     async with get_sessionmaker()() as session:
         rows = (await session.execute(select(McpServer))).scalars().all()
+    loaded = 0
     for row in rows:
         spec = ExternalServerSpec(
             server_id=row.id,
@@ -365,6 +367,23 @@ async def load_servers() -> int:
         )
         try:
             registry.register_server(spec)
+        except PeerUrlRefused:
+            # A row written before ``validate_peer_url`` existed, or under a
+            # deployment that had ``AEGIS_MCP_ALLOW_PRIVATE_PEERS`` on and no longer
+            # does. It is left in the database (an operator's statement is not deleted
+            # by a boot) and kept OUT of the registry, so nothing dials it — and it is
+            # logged rather than swallowed, because a peer that silently stops existing
+            # is the failure mode this plane's console was built to prevent. One bad
+            # row must not take the platform down with it.
+            logger.error(
+                "MCP peer %r is declared in the database at a URL this deployment "
+                "refuses to dial, so it was NOT loaded and its tools are unavailable. "
+                "Re-point it through the console, or set "
+                "AEGIS_MCP_ALLOW_PRIVATE_PEERS=1 if it really is a local peer.",
+                row.id,
+                exc_info=True,
+            )
+            continue
         except ValueError:
             registry.update_server(
                 row.id,
@@ -373,7 +392,8 @@ async def load_servers() -> int:
                 auth_header=row.auth_header,
                 enabled=row.enabled,
             )
-    return len(rows)
+        loaded += 1
+    return loaded
 
 
 async def _persist(spec: ExternalServerSpec, *, actor: str, secret: str | None) -> None:
@@ -655,10 +675,14 @@ async def create_server(
         The console aggregate, after the write.
 
     Raises:
-        HTTPException: 400 when the id is unusable as a namespace, 409 when it is
-            already declared. Re-pointing an existing id is refused rather than
-            accepted, because it would silently re-aim every grant written against
-            that namespace at a different peer.
+        HTTPException: 400 when the id is unusable as a namespace **or the URL points
+            somewhere Aegis will not dial** (:func:`app.mcp.client.validate_peer_url` —
+            loopback, link-local and private space are refused without the deployment's
+            opt-in, because ``connect`` would otherwise probe this deployment's own
+            network on the caller's behalf); 409 when the id is already declared.
+            Re-pointing an existing id is refused rather than accepted, because it would
+            silently re-aim every grant written against that namespace at a different
+            peer.
     """
     registry = get_registry()
     spec = ExternalServerSpec(
@@ -719,7 +743,11 @@ async def update_server(
         The console aggregate, after the write.
 
     Raises:
-        HTTPException: 404 when the server is not declared.
+        HTTPException: 404 when the server is not declared, 400 when the new ``url``
+            points somewhere Aegis will not dial (:func:`app.mcp.client.
+            validate_peer_url`). The edit route is the same SSRF surface as the declare
+            route — re-pointing a peer at ``http://169.254.169.254/`` reaches exactly
+            what declaring one there would — so both refuse, and neither writes.
     """
     registry = get_registry()
     try:
@@ -735,6 +763,10 @@ async def update_server(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No external MCP server {server_id!r} is declared.",
+        ) from exc
+    except PeerUrlRefused as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
     if body.credential is not None:
         registry.set_credential(server_id, body.credential or None)

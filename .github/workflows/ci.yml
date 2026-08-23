@@ -1,0 +1,170 @@
+# The change-management gate. Until this file existed there was none: every check this
+# repository already owns — ruff, three test suites, the TypeScript compiler and the
+# OpenAPI snapshot — ran only where somebody remembered to run it, so "the tests pass"
+# was a claim about one laptop rather than about the branch. A compliance audit called
+# that the single highest-leverage gap in the repository, because it is one absence that
+# weakens supply chain, change management and software integrity at once: nothing
+# establishes that what was reviewed is what was tested.
+#
+# What this runs is deliberately **what the repository already has**, not a wish list.
+# Every command below is one a developer runs today (scripts/bootstrap.sh installs
+# exactly these extras; scripts/build_openapi.py is the snapshot's own builder), and each
+# was executed against this tree before this file was written. A gate that is red on
+# arrival teaches people to ignore it, so nothing aspirational is gated here.
+#
+# WHAT IS NOT VERIFIED, stated because the honest version of a CI file says so: this
+# workflow has never run on a GitHub Actions runner — none was available to the change
+# that added it. The commands are verified; the runner environment is not. The first run
+# is the real test of this file, and the likeliest thing to need adjusting is install
+# time and the Postgres service's readiness window, not the checks themselves.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run's answer irrelevant, and a queue
+# of stale runs is how a gate becomes something people wait out rather than read.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Set before the first OpenMP library loads, exactly as backend/tests/conftest.py does
+  # and for the same measured reason: this environment holds two OpenMP runtimes (torch's
+  # via Docling and presidio, and xgboost's/scikit-learn's) and one process holding both
+  # deadlocks or segfaults depending on load order. It took the suite down at ~24%.
+  OMP_NUM_THREADS: "1"
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # ruff needs no project install: it reads [tool.ruff] out of each pyproject.toml
+      # and lints the source tree. Kept as its own job so a formatting slip answers in
+      # under a minute instead of behind a full dependency install.
+      #
+      # PINNED to an exact version, not to the pyproject's ``ruff>=0.7``, because a lint
+      # gate that floats decides one day that code nobody touched is now wrong — the
+      # branch goes red on a release rather than on a change, which is the fastest way to
+      # teach people that red means nothing. 0.16.2 is the version this repository was
+      # verified clean under; bumping it is a deliberate commit that fixes whatever the
+      # new version finds.
+      - run: uvx ruff@0.16.2 check backend/src backend/tests
+      - run: uvx ruff@0.16.2 check aegis/src aegis/tests
+
+  python:
+    name: pytest (backend + aegis)
+    runs-on: ubuntu-latest
+    # The suites are the slow half; the ceiling exists so a hung Temporal or database
+    # wait fails visibly rather than burning an hour of runner time in silence.
+    timeout-minutes: 60
+    services:
+      # PostgreSQL is the one dependency these suites never fake, and that is deliberate:
+      # production carries guards shaped like ``if bind.dialect.name != "postgresql"``, so
+      # on SQLite ``set_tenant_scope`` silently did nothing and every test that read like a
+      # proof of tenant isolation proved only the application's own WHERE clause. That is
+      # how ten tenant-scoped tables ended up with no RLS policy while the suite stayed
+      # green. See backend/tests/pgsupport.py.
+      #
+      # The service runs as the superuser ``postgres`` on purpose — pgsupport needs
+      # CREATE ROLE and CREATE DATABASE to mint each scratch database *and* the
+      # NOSUPERUSER NOBYPASSRLS role the assertions actually run as. It never serves the
+      # tests directly.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      AEGIS_PG_TEST_ADMIN_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+      # Turn "no PostgreSQL reachable" from a skip into a failure. A security test that
+      # silently skips is indistinguishable from one that passes, and that is its own
+      # failure mode — pgsupport.py names this variable for exactly this use.
+      AEGIS_REQUIRE_PG_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # One virtualenv serves both packages, which is how they are developed: backend's
+      # [tool.uv.sources] points ``aegis`` at ../aegis as an editable install, and the
+      # aegis suite is run with backend/.venv's interpreter. The extras are the exact
+      # list scripts/bootstrap.sh installs — ``auth`` and ``mcp`` were once missing there
+      # and a fresh box came up without them, so the two lists must not drift.
+      - name: Install backend + aegis
+        working-directory: backend
+        run: |
+          uv venv
+          uv pip install -e ".[data,auth,observability,agent,retrieval,ingestion,ml,guardrails,mcp,dev]"
+
+      # The ML spine is fitted, not shipped: .artifacts/ is gitignored because the model
+      # is regenerated from the adapter's own frame. /ml/explain and /ml/model-card answer
+      # 503 without it — the on-demand training fallback was removed precisely because it
+      # served a model fitted on synthetic noise as domain evidence. Offline, no key, no
+      # database, ~10s. Non-fatal here for the same reason bootstrap.sh tolerates it: the
+      # tests that need it own their own assertion about its absence.
+      - name: Train the ML spine
+        working-directory: backend
+        run: PYTHONPATH="$PWD/../aegis/src:src" .venv/bin/python -m app.ml || true
+
+      # The OpenAPI snapshot, checked before the suites so a stale contract is reported as
+      # a stale contract rather than as thirty confusing test failures. backend/openapi.json
+      # is the document web/src/lib/api/generated/schema.d.ts is generated from, so a drift
+      # here is a drift the frontend compiles against.
+      - name: OpenAPI snapshot is current
+        run: backend/.venv/bin/python scripts/build_openapi.py --check
+
+      - name: Backend suite
+        working-directory: backend
+        run: .venv/bin/python -m pytest tests -q
+
+      # Run with backend's interpreter, not a second environment: the two packages share
+      # one install, and a separate venv here would test a different aegis from the one
+      # the backend suite just exercised.
+      - name: Aegis suite
+        working-directory: aegis
+        run: ../backend/.venv/bin/python -m pytest tests -q
+
+  web:
+    name: tsc + node:test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        working-directory: web
+        run: npm ci
+      # The type check is a real gate here rather than a formality: every API type in
+      # web/src/lib/api/generated/ is derived from backend/openapi.json, so a route whose
+      # response model changed without the frontend following it fails to compile.
+      - name: Type check
+        working-directory: web
+        run: npx tsc --noEmit
+      # Includes web/tests/api/generatedSchema.test.mjs, which regenerates the types from
+      # the committed openapi.json and fails if the checked-in file disagrees — so a
+      # hand-edit of a generated file does not survive this job.
+      - name: Tests
+        working-directory: web
+        run: npm test

@@ -101,7 +101,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 if TYPE_CHECKING:
@@ -1190,7 +1190,115 @@ def report_rls_enforcement(
 #: no ``TRUNCATE``, no ``REFERENCES``, no ``TRIGGER``. The role owns none of these
 #: tables, so it can neither drop a policy nor ``ALTER TABLE ... DISABLE ROW LEVEL
 #: SECURITY`` on them: the isolation it is subject to is not its to remove.
+#:
+#: Four of those tables do not keep all of it — see :data:`_APPEND_ONLY_TABLES`.
 _SERVING_TABLE_PRIVILEGES = "SELECT, INSERT, UPDATE, DELETE"
+
+#: The ledgers the serving role may append to and read, and may **not** rewrite.
+#:
+#: The measured symptom: ``\dp audit_log`` on a bootstrapped database read
+#: ``aegis_app=arwd/postgres`` — the role that serves every request held ``UPDATE`` and
+#: ``DELETE`` on the audit trail. "Append-only" was therefore a property of *today's
+#: source* (no statement in the codebase mutates one of these rows) rather than of the
+#: database, and it held only for as long as nobody added such a statement and no SQL
+#: injection arrived on the connection that already had the privilege. Aegis's product
+#: claim is that every action is attributed and the trail cannot be edited afterwards;
+#: a claim that a ``DELETE FROM audit_log`` would have satisfied is not that claim.
+#:
+#: Each table here was checked for a writer that legitimately mutates a row *before* it
+#: was added, because a revoke on a table something updates does not fail at boot — it
+#: surfaces as a ``permission denied`` 500 in the middle of a request:
+#:
+#: ``audit_log``
+#:     Constructed by :func:`aegis.governance.audit.record_audit` and thereafter only
+#:     read (the audit console, the CSV export, the login-recency join in
+#:     ``routes_reports``). No writer mutates a row.
+#: ``usage_ledger``
+#:     Appended once per LLM call at the gateway's metering chokepoint. Its ``run_id``
+#:     *is* back-filled — by ``app.data.session._backfill_usage_ledger_run_id``, on the
+#:     **owner** connection during bootstrap, on the single boot that adds the column.
+#:     The owner is unaffected by this revoke, so the migration keeps working.
+#: ``run_events``
+#:     Appended by the run recorder inside the transaction that did the work. Retention
+#:     is :func:`aegis.runs.partitions.prune_run_event_partitions`, which ``DROP``s a
+#:     whole expired partition — DDL, already owner-only — never a ``DELETE``.
+#:
+#: The demo corpus wipe (``python -m app.demo --wipe``) deletes from all three and was
+#: moved onto the **owner** connection for it. That is the right home for it: removing
+#: an audit trail should require the owner, and it is a shell command an operator runs,
+#: not something a request can reach.
+#: Deliberately **not** here, each because something legitimately rewrites a row:
+#: ``runs`` (the header moves through its states), ``approvals`` (a decision writes the
+#: verdict onto the pending row), ``job_runs`` (stage progress), ``notifications``
+#: (read/dismissed flags), and — the one that would be silent rather than loud —
+#: ``checkpoints`` / ``checkpoint_blobs`` / ``checkpoint_writes``, which LangGraph's
+#: ``PostgresSaver`` upserts on every step under ``AGENT_CHECKPOINTER=postgres``.
+#:
+#: **``memory_write_log`` is the interesting exclusion**, because everything about it
+#: reads append-only: ``aegis.memory.retention`` documents it as the one memory table
+#: never swept, and consolidation records a ``PRUNE`` as a *new* row rather than
+#: removing the one it supersedes. It was in this tuple, and the revoke broke
+#: ``POST /v1/memory/forget`` — the DPDP/GDPR right-to-erasure route — with
+#: ``permission denied for table memory_write_log`` returned to the caller as a 503
+#: ("erasure not performed"), which is that route behaving correctly about a database
+#: that would not let it erase.
+#:
+#: It keeps ``DELETE``, and the choice is between two real controls rather than an
+#: oversight. This table is keyed by ``subject_id``: it is a per-person record of what
+#: was remembered about them, so a lawful erasure request has to reach it. The only way
+#: to keep it append-only would be to run the erasure on the **owner** connection, the
+#: way the demo wipe now does — and unlike a shell command, erasure is served from a
+#: request handler. That would put an RLS-bypassing connection into the request path,
+#: which is the exact thing the owner/serving split exists to prevent, and would trade a
+#: tamper control for a tenant-isolation hole. Tamper-evidence for memory writes
+#: therefore rests on ``audit_log`` instead, which *is* append-only here and records
+#: every erasure with its row counts (``memory.forget``) — so a deletion from this table
+#: leaves a mark that the serving role cannot remove.
+_APPEND_ONLY_TABLES: tuple[str, ...] = (
+    "audit_log",
+    "run_events",
+    "usage_ledger",
+)
+
+#: What is taken back off :data:`_APPEND_ONLY_TABLES`. Expressed as a revoke *after* the
+#: bulk grant rather than as a narrower grant, because both instruments that hand the
+#: role its DML — ``GRANT ... ON ALL TABLES IN SCHEMA`` and ``ALTER DEFAULT
+#: PRIVILEGES`` — are per-schema and cannot exempt a table. Granting everything and
+#: taking two privileges back in the same transaction is the only formulation that
+#: converges on the same state whether the table was created by this boot, by an
+#: earlier one, or by ``scripts/sql/aegis-app-role.sql`` before either.
+_APPEND_ONLY_REVOKED = "UPDATE, DELETE"
+
+#: The append-only tables that actually exist, **plus their partitions**.
+#:
+#: The partitions are the half that is easy to miss. ``run_events`` is ``PARTITIONED BY
+#: RANGE (ts)``, and PostgreSQL checks privileges on the relation *named in the query*:
+#: revoking on the parent stops ``DELETE FROM run_events``, and does nothing about
+#: ``DELETE FROM run_events_2026_08``, whose name is a published function of the
+#: calendar. Each monthly partition is a table in the schema, so the bulk grant and the
+#: default privileges reach it, and so must the revoke.
+#:
+#: Read from ``pg_inherits`` rather than from a name pattern for the reason
+#: :func:`aegis.runs.partitions.run_event_partitions` gives: the partitions that matter
+#: are the ones a previous process actually attached.
+_APPEND_ONLY_RELATIONS_SQL = """
+SELECT c.relname
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = current_schema()
+   AND c.relkind IN ('r', 'p')
+   AND (
+        c.relname IN :names
+     OR EXISTS (
+            SELECT 1
+              FROM pg_inherits i
+              JOIN pg_class p ON p.oid = i.inhparent
+             WHERE i.inhrelid = c.oid
+               AND p.relname IN :names
+        )
+   )
+ ORDER BY c.relname
+"""
 
 #: ``USAGE`` to reach the schema, and ``CREATE`` because LightRAG's ``PGKVStorage`` /
 #: ``PGDocStatusStorage`` create their own bookkeeping tables at runtime **as the
@@ -1282,16 +1390,54 @@ async def grant_serving_role(engine: AsyncEngine, role: str) -> tuple[str, ...]:
             f'GRANT {_SERVING_TABLE_PRIVILEGES} ON TABLES TO "{role}"',
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{schema}" '
             f'GRANT {_SERVING_SEQUENCE_PRIVILEGES} ON SEQUENCES TO "{role}"',
+            # Last, and in this same transaction: the bulk grant above deliberately
+            # hands out UPDATE and DELETE on every table, so the ledgers are only
+            # append-only once this has run. A boot that failed between the two would
+            # leave the old (rewritable) posture rather than a half-granted one.
+            *await _append_only_revokes(conn, schema=str(schema), role=role),
         )
         for statement in statements:
             await conn.execute(text(statement))
     logger.info(
-        "Granted %s on the tables in schema %s to the serving role %r (owner-issued).",
+        "Granted %s on the tables in schema %s to the serving role %r (owner-issued), "
+        "then revoked %s on the append-only ledgers %s and their partitions.",
         _SERVING_TABLE_PRIVILEGES,
         schema,
         role,
+        _APPEND_ONLY_REVOKED,
+        ", ".join(_APPEND_ONLY_TABLES),
     )
     return statements
+
+
+async def _append_only_revokes(conn: Any, *, schema: str, role: str) -> tuple[str, ...]:  # noqa: ANN401 - AsyncConnection
+    """Return one ``REVOKE UPDATE, DELETE`` per live append-only ledger and partition.
+
+    Reads the catalog rather than assuming :data:`_APPEND_ONLY_TABLES` all exist: a
+    ``REVOKE`` naming a missing relation is an error, and this runs on every boot
+    including the first, where ``create_all`` may have just made some of them and a
+    lite/partial deployment may have none. The catalog read also picks up the monthly
+    ``run_events`` partitions, which the parent's revoke does not cover — see
+    :data:`_APPEND_ONLY_RELATIONS_SQL`.
+
+    Args:
+        conn: The **owner** connection the grant is running on.
+        schema: ``current_schema()``, already validated as a plain identifier.
+        role: The serving role, already validated as a plain identifier.
+
+    Returns:
+        The revoke statements, one per relation, alphabetically. Empty when none of the
+        ledgers exist yet.
+    """
+    result = await conn.execute(
+        text(_APPEND_ONLY_RELATIONS_SQL).bindparams(
+            bindparam("names", value=list(_APPEND_ONLY_TABLES), expanding=True)
+        )
+    )
+    return tuple(
+        f'REVOKE {_APPEND_ONLY_REVOKED} ON "{schema}"."{relname}" FROM "{role}"'
+        for (relname,) in result
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

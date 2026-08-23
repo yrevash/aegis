@@ -404,7 +404,9 @@ async def test_a_csrf_mismatch_is_treated_as_a_stale_session_and_recovers():
 
 async def test_an_ordinary_bad_request_is_still_reported():
     """Only a CSRF 400 is a stale session. A malformed query is a real refusal."""
-    client, fake = _wired(**{GUEST_TOKEN_PATH: FakeResponse(400, {"message": "datasource 7 does not exist"})})
+    client, fake = _wired(
+        **{GUEST_TOKEN_PATH: FakeResponse(400, {"message": "datasource 7 does not exist"})}
+    )
     with pytest.raises(SupersetRejectedError):
         await client.board_data(BOARD, 3)
     # One attempt, not two: this must not be retried.

@@ -18,8 +18,7 @@ import pytest
 from aegis.core.types import RunStatus
 from aegis.runs.record import read_run_header, reconcile_run_header
 
-from app.agent import ApprovalRegistry, decide_approval, get_parked_runs, run_agent
-from app.agent import run_log
+from app.agent import ApprovalRegistry, decide_approval, get_parked_runs, run_agent, run_log
 from app.api.schemas import ApprovalDecision
 from app.data.session import get_sessionmaker, set_tenant_scope
 

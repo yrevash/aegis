@@ -335,7 +335,10 @@ def _is_about_the_system(candidate: FactSchemaLike) -> bool:
     if subject in _NON_SUBJECTS:
         return True
     text = (getattr(candidate, "text", "") or "").strip().lower()
-    names_system = any(f"the {n}" in text or text.startswith(n) for n in ("assistant", "system", "agent", "model"))
+    names_system = any(
+        f"the {n}" in text or text.startswith(n)
+        for n in ("assistant", "system", "agent", "model")
+    )
     return names_system and any(phrase in text for phrase in _CAPABILITY_CLAIM)
 
 

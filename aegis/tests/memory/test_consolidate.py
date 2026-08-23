@@ -690,12 +690,20 @@ def test_a_fact_about_the_assistant_is_never_stored_as_a_fact_about_the_user():
         Candidate("assistant", "The assistant lacks historical reporting tools.")
     )
     assert _is_about_the_system(
-        Candidate("user", "The assistant lacks historical reporting tools and cannot query historical data.")
+        Candidate(
+            "user",
+            "The assistant lacks historical reporting tools and cannot query historical data.",
+        )
     )
     assert _is_about_the_system(Candidate("the system", "Aegis has no tool for that."))
 
     # Kept: a genuine constraint on the person, which reads similarly and is not the same.
     assert not _is_about_the_system(
-        Candidate("user", "The user cannot access the finance dashboard and asks colleagues instead.")
+        Candidate(
+            "user",
+            "The user cannot access the finance dashboard and asks colleagues instead.",
+        )
     )
-    assert not _is_about_the_system(Candidate("user", "The user prefers to be contacted via email."))
+    assert not _is_about_the_system(
+        Candidate("user", "The user prefers to be contacted via email.")
+    )

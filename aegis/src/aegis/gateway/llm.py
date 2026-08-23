@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from aegis.core.models import ModelRole
-from aegis.core.run_context import current_run_id
+from aegis.core.run_context import accrue_run_usage, current_run_id
 from aegis.gateway.limiter import NoSlotLimiter, SlotLimiter
 from aegis.gateway.routing import (
     baseline_role,
@@ -1508,7 +1508,20 @@ async def _record_usage(
     from the widened call is retried once **without** ``run_id`` and reported at
     WARNING — the money is still recorded, the attribution is not, and the log says
     exactly which of the two was lost.
+
+    **The in-process accrual happens first, before the ``ctx is None`` return.** It is
+    the same number this function is about to ledger, kept where the orchestrator can
+    read it without a database round-trip when it closes the run — see
+    :func:`aegis.core.run_context.accrue_run_usage` for the measured under-report it
+    exists to remove. It is deliberately *not* conditional on a governance hook being
+    wired: an offline/lite deployment writes no ledger row and still made the call, and
+    a run header that reported $0.00 for it would be no more honest there than here.
     """
+    accrue_run_usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost_usd=cost_usd,
+    )
     if ctx is None:
         return
     extra: dict[str, Any] = {}

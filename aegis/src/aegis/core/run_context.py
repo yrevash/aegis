@@ -42,11 +42,21 @@ re-exported from :mod:`aegis.runs` so it is still findable where it belongs.
 
 from __future__ import annotations
 
+import dataclasses
+from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 
-__all__ = ["bind_run_id", "current_run_id", "reset_run_id", "run_scope"]
+__all__ = [
+    "RunUsage",
+    "accrue_run_usage",
+    "bind_run_id",
+    "current_run_id",
+    "reset_run_id",
+    "run_scope",
+    "run_usage",
+]
 
 
 #: The process-wide slot holding the in-flight run's id. ``None`` — the default —
@@ -98,7 +108,105 @@ def run_scope(run_id: str | None) -> Iterator[str | None]:
         The bound id, so a caller can log or assert on it.
     """
     token = bind_run_id(run_id)
+    if run_id is not None:
+        _open_usage(run_id)
     try:
         yield run_id
     finally:
         reset_run_id(token)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# What the run actually spent, accrued at the same chokepoint that meters it
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclasses.dataclass
+class RunUsage:
+    """One run's spend as the gateway metered it — the ledger's own numbers.
+
+    Mutable and shared by reference: the chokepoint adds to it from whichever task made
+    the call, and the orchestrator reads the same object when it closes the run.
+
+    Attributes:
+        prompt_tokens: Prompt tokens across every metered call of the run.
+        completion_tokens: Completion tokens across every metered call of the run.
+        cost_usd: What those calls cost.
+        calls: How many metered calls there were. ``0`` is the load-bearing value: it
+            means the metering chokepoint saw nothing for this run (an offline/lite
+            deployment, or a test whose ``complete`` is a stub), which is *not* the
+            same statement as "this run cost nothing" and must not be reported as one.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    calls: int = 0
+
+
+#: How many finished runs' totals stay readable. The orchestrator reads a run's totals
+#: at its terminal event, and a *resumed* run reads them again minutes later from the
+#: same process — so entries cannot be dropped at scope exit. They are bounded instead:
+#: oldest-first eviction, because the run that is going to be resumed is a recent one.
+_MAX_TRACKED_RUNS = 2048
+
+#: run_id → the run's accrued usage. Process-local by design: this is the same number
+#: the durable ``usage_ledger`` row carries (both are written from
+#: ``aegis.gateway.llm._record_usage``), reachable without a database round-trip on the
+#: hot path that closes a run.
+_RUN_USAGE: OrderedDict[str, RunUsage] = OrderedDict()
+
+
+def _open_usage(run_id: str) -> RunUsage:
+    """Return ``run_id``'s accumulator, creating (and LRU-trimming) it if needed."""
+    usage = _RUN_USAGE.get(run_id)
+    if usage is None:
+        usage = RunUsage()
+        _RUN_USAGE[run_id] = usage
+        while len(_RUN_USAGE) > _MAX_TRACKED_RUNS:
+            _RUN_USAGE.popitem(last=False)
+    else:
+        _RUN_USAGE.move_to_end(run_id)
+    return usage
+
+
+def accrue_run_usage(
+    *, prompt_tokens: int, completion_tokens: int, cost_usd: float
+) -> None:
+    """Add one metered model call to the in-flight run's running total.
+
+    Called from :func:`aegis.gateway.llm._record_usage` — the one place a call's cost is
+    known — with the *same* numbers the ``usage_ledger`` row is written from, so the two
+    cannot drift into disagreement the way the graph's per-node accrual did.
+
+    **Why this exists.** The terminal ``run_finished`` event used to report the totals
+    LangGraph's state reducers had folded up, and those miss every model call made
+    outside a node's returned usage — the guardrail screens, the classifier, the
+    grounding self-check. Measured on ``taif_run1``: a completed run reported
+    ``$0.0172955`` against ``$0.0205096`` over 24 ledger rows, and a run that ended
+    BLOCKED or ERROR reported ``$0.0000`` against a ledger that held real spend.
+
+    A call that belongs to no run (a job, an ingest pass, a platform probe) accrues
+    nowhere, which is the same statement its NULL ``usage_ledger.run_id`` makes.
+    """
+    run_id = current_run_id()
+    if run_id is None:
+        return
+    usage = _open_usage(run_id)
+    usage.prompt_tokens += int(prompt_tokens)
+    usage.completion_tokens += int(completion_tokens)
+    usage.cost_usd += float(cost_usd)
+    usage.calls += 1
+
+
+def run_usage(run_id: str | None) -> RunUsage | None:
+    """Return what the gateway metered for ``run_id``, or ``None`` if it is unknown.
+
+    ``None`` means "not measured here" — a run this process never opened a scope for
+    (it was resumed in a different worker, or evicted from the bounded window). It is
+    deliberately distinct from a :class:`RunUsage` with ``calls == 0``, which means the
+    scope was open and the chokepoint metered nothing. Neither is "$0.00".
+    """
+    if run_id is None:
+        return None
+    return _RUN_USAGE.get(run_id)

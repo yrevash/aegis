@@ -48,36 +48,29 @@ def build_agent(
     return _build_agent(deps, checkpointer=checkpointer)
 
 
-# The durable saver is a process-wide singleton: its Postgres connection stays open
-# for the app's lifetime so every compiled graph shares one checkpoint store, and the
-# context manager is retained so the connection is not closed by garbage collection.
-_pg_checkpointer: Any = None
-_pg_keepalive: list[Any] = []
-
-
 def _build_postgres_checkpointer() -> Any:  # noqa: ANN401 - BaseCheckpointSaver
-    """Build (once) the durable ``PostgresSaver`` bound to ``settings.postgres_dsn``.
+    """Build (once) the durable checkpoint store bound to ``settings.postgres_dsn``.
 
-    Lazily imports ``langgraph.checkpoint.postgres`` (so the default memory path never
-    needs Postgres), opens a long-lived connection from the configured DSN, runs
-    ``setup()`` to create the checkpoint tables idempotently, and caches the saver as
-    a process-wide singleton. Each ``interrupt`` then checkpoints durably, so a paused
-    run survives a restart or another worker and resumes by ``thread_id == run_id``.
+    Lazily imports :mod:`app.agent.checkpointer` (which imports
+    ``langgraph.checkpoint.postgres``), so the default ``memory`` path still needs
+    neither Postgres nor the package. The store is a
+    :class:`~app.agent.checkpointer.HybridPostgresSaver` — the stock ``PostgresSaver``
+    with its missing async half delegated to a worker thread — because this app drives
+    the graph with ``astream`` *and* reads it with the sync ``get_state``, and neither
+    shipped saver serves both (see that module's docstring). Each ``interrupt`` then
+    checkpoints durably, so a paused run survives a restart or another worker and
+    resumes by ``thread_id == run_id``.
 
     Returns:
-        A ``PostgresSaver`` bound to ``settings.postgres_dsn``, schema initialised.
+        The process-wide durable saver, its checkpoint tables ensured.
 
     Raises:
         RuntimeError: If ``langgraph-checkpoint-postgres`` is not installed.
     """
-    global _pg_checkpointer
-    if _pg_checkpointer is not None:  # pragma: no cover - prod singleton reuse
-        return _pg_checkpointer
-
     from app.config import get_settings
 
     try:
-        from langgraph.checkpoint.postgres import PostgresSaver
+        from app.agent.checkpointer import build_postgres_checkpointer
     except ImportError as exc:  # pragma: no cover - prod-only (no Postgres in tests)
         raise RuntimeError(
             "agent_checkpointer='postgres' requires the "
@@ -85,11 +78,13 @@ def _build_postgres_checkpointer() -> Any:  # noqa: ANN401 - BaseCheckpointSaver
             "(pip install '.[agent]') or use the default 'memory' saver."
         ) from exc
 
-    # ``from_conn_string`` is a context manager over an open connection; enter it and
-    # retain the CM so the connection lives for the app's lifetime.
-    cm = PostgresSaver.from_conn_string(get_settings().postgres_dsn)  # pragma: no cover
-    saver = cm.__enter__()  # pragma: no cover - prod-only lifecycle
-    saver.setup()  # pragma: no cover - creates checkpoint tables idempotently
-    _pg_keepalive.append(cm)  # pragma: no cover
-    _pg_checkpointer = saver  # pragma: no cover
-    return saver  # pragma: no cover
+    from app.data.session import serving_role_name
+
+    settings = get_settings()
+    return build_postgres_checkpointer(
+        settings.postgres_dsn,
+        # DDL on the owner connection, DML as the serving role — the same split
+        # ``app.data.session.bootstrap`` uses for the app's own tables.
+        admin_dsn=settings.admin_dsn,
+        serving_role=serving_role_name(),
+    )

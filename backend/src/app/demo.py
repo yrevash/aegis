@@ -157,6 +157,7 @@ from aegis.core.models import ModelRole
 from aegis.core.types import RiskLevel, RunStatus
 from aegis.gateway.routing import allowed_deployments, unit_cost
 from aegis.governance.models import AuditLog, UsageLedger
+from aegis.governance.rls import grant_serving_role
 from aegis.governance.types import Role
 from aegis.jobs.models import JobRun, JobStatus
 from aegis.redteam.models import RedTeamRun
@@ -165,6 +166,7 @@ from aegis.runs.partitions import ensure_run_event_partitions
 from aegis.runs.record import RunEventRecord, fold_events
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.adapter import TOOL_REGISTRY, agent_roster, persona_for_role
 from app.data import (
@@ -174,6 +176,7 @@ from app.data import (
     User,
     get_admin_engine,
     get_sessionmaker,
+    serving_role_name,
     set_tenant_scope,
 )
 from app.seed import TENANTS
@@ -1569,6 +1572,16 @@ async def seed_demo(
     await ensure_run_event_partitions(
         get_admin_engine(), moment=end - timedelta(days=days), months_ahead=days // 28 + 1
     )
+    # Those back-months are new tables, and ``ALTER DEFAULT PRIVILEGES`` gives a table
+    # the owner creates the full ``SELECT, INSERT, UPDATE, DELETE`` — including on a
+    # partition of an append-only ledger, addressable by name as
+    # ``run_events_2026_05``. Re-running the grant takes UPDATE/DELETE back off the
+    # partitions this call just attached; without it, seeding the demo corpus would
+    # quietly re-open the hole the boot had closed. Idempotent, and a no-op when there
+    # is no separate serving role to grant to.
+    serving_role = serving_role_name()
+    if serving_role is not None:
+        await grant_serving_role(get_admin_engine(), serving_role)
 
     summary = DemoSummary()
     corpus = build_corpus(scopes, now=end, days=days)
@@ -1626,12 +1639,23 @@ async def wipe_demo() -> WipeSummary:
     platform-wide operation by definition, and a per-tenant scope would leave the
     NULL-tenant slice behind.
 
+    **This runs on the owner/DDL engine**, and that is not an optimisation. Three of the
+    tables it deletes from — ``run_events``, ``usage_ledger``, ``audit_log`` — are the
+    append-only ledgers the serving role deliberately holds no ``DELETE`` on
+    (``aegis.governance.rls._APPEND_ONLY_TABLES``), so on the serving connection this
+    now fails with ``permission denied for table audit_log``. Removing an audit trail is
+    exactly the operation that should require the owner rather than the connection every
+    HTTP request arrives on; the same reasoning already sends
+    :func:`~aegis.runs.partitions.ensure_run_event_partitions` here from ``seed_demo``.
+    ``python -m app.demo --wipe`` is a command an operator runs at a shell with the
+    admin DSN in the environment, not something a request can reach.
+
     Returns:
         The per-table deleted counts.
     """
     summary = WipeSummary()
     targets = (*TAGGED_COLUMN, (RedTeamRun, RedTeamRun.run_id))
-    async with get_sessionmaker()() as session:
+    async with async_sessionmaker(get_admin_engine(), expire_on_commit=False)() as session:
         await set_tenant_scope(session, None)
         for model, column in targets:
             result = await session.execute(

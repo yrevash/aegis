@@ -27,6 +27,8 @@ from starlette.routing import BaseRoute
 from app.api.openapi import API_PREFIX, INFRA_PATHS, build_openapi
 from app.api.routes import router
 from app.api.routes_analytics import mount as _mount_analytics
+from app.api.routes_checkpoints import mount as _mount_checkpoints
+from app.api.routes_compliance import mount as _mount_compliance
 from app.api.routes_db import mount as _mount_db
 from app.api.routes_guardrails import mount as _mount_guardrails
 from app.api.routes_health import mount as _mount_health
@@ -38,6 +40,7 @@ from app.api.routes_pipelines import mount as _mount_pipelines
 from app.api.routes_redteam import mount as _mount_redteam
 from app.api.routes_reports import mount as _mount_reports
 from app.api.routes_skills import mount as _mount_skills
+from app.api.routes_standards import mount as _mount_standards
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -117,6 +120,25 @@ _mount_skills(router)
 # the Redis subscription behind the stream is started by the lifespan below (and lazily
 # by the first publish, so a worker process that never runs a lifespan still gets it).
 _mount_notifications(router)
+
+# The run's LangGraph checkpoint chain (ADR 0005) — the read-only evidence that the
+# human gate parks on a checkpoint and that a resume continues from it rather than
+# re-running the graph. Same shape and the same idempotent mount; it reads the shared
+# checkpoint store and returns structure only, never the state a checkpoint holds.
+_mount_checkpoints(router)
+
+# The compliance-readiness map — nine published frameworks, a four-valued state per
+# control, and the file / route / test behind every claim. Same shape and the same
+# idempotent mount. Pure data assembly grounded in ``docs/compliance/README.md``: it
+# reads no database, dials nothing, and carries its "readiness, not certification"
+# disclaimer on every response.
+_mount_compliance(router)
+
+# The public standards summary — the same control table as above, counted and stripped
+# to names, jurisdictions and the four state totals. Public because the landing page is
+# public; free of control detail because a control-by-control gap map is a target list.
+# Same shape and the same idempotent mount.
+_mount_standards(router)
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +432,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 - the database is optional; degrade cleanly
             logger.warning("DB bootstrap skipped — database unreachable.", exc_info=True)
 
+    # Build the agent's checkpoint store now rather than on the first run. With
+    # ``AGENT_CHECKPOINTER=postgres`` this is where the checkpoint tables are migrated
+    # and the serving role granted, and a failure there (bad DSN, no CREATE rights)
+    # belongs in the boot log — lazily, it would surface as a 500 in the middle of the
+    # first run, after the user had already asked a question. The ``memory`` default
+    # builds an ``InMemorySaver`` and touches nothing.
+    try:
+        from app.data.session import get_agent_checkpointer
+
+        logger.info(
+            "Agent checkpointer: %s (%s)",
+            settings.agent_checkpointer,
+            type(get_agent_checkpointer()).__name__,
+        )
+    except Exception:  # noqa: BLE001 - a checkpointer is required; say so and stop
+        logger.critical(
+            "Agent checkpointer FAILED to initialise. Refusing to serve — every run "
+            "needs a checkpoint store, and the human gate's interrupt/resume needs a "
+            "durable one.",
+            exc_info=True,
+        )
+        raise
+
     # Is the tenant-isolation control actually ON? Postgres skips row security entirely
     # for a SUPERUSER/BYPASSRLS role, so serving requests as ``postgres`` leaves every
     # tenant_isolation policy installed and enforced against nobody — which is how this
@@ -422,6 +467,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.data.session import verify_rls_enforcement
 
         await verify_rls_enforcement()
+
+    # State the at-rest posture where an operator actually looks, for the reason
+    # ``verify_rls_enforcement`` logs its verdict: a control whose absence is only
+    # visible to somebody who goes looking is one nobody finds until an auditor does.
+    # Never fatal — unlike an inert RLS policy this is a fact about the host's storage,
+    # which the process cannot fix by refusing to start.
+    from app.platform.at_rest import at_rest_summary  # noqa: PLC0415 - startup-only
+
+    logger.info("%s", at_rest_summary(settings))
 
     # Load every ACTIVE prompt version into the LLM-Ops registry's process-wide cache
     # so the harness reads a live, promoted system prompt synchronously on the hot path

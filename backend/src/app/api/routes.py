@@ -3163,12 +3163,32 @@ def _iso_ts(ts: object) -> str | None:
 @router.get("/ops/prompts", response_model=OpsPromptsResponse, tags=["ops"])
 async def ops_prompts(
     prompt_key: str,
+    tenant_id: int | None = None,
     auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsPromptsResponse:
     """List every versioned system prompt for ``prompt_key``, newest version first.
 
+    **The scope comes from the token, explicitly.** This route used to let
+    ``app.ops.registry`` default the tenant from the sealed *governance* context — which
+    is bound on ``POST /query`` and the chat surfaces and on no plain GET, so every call
+    here resolved to ``None``, the PLATFORM scope, and read ``tenant_id IS NULL``.
+    Measured on ``taif_run1``: the default persona's prompt key returned ``{"rows": []}``
+    for an analyst, a tenant admin *and* platform staff, while ``prompt_versions`` held
+    two rows for tenant 1 and ``GET /llmops/prompts`` — which resolves its scope from
+    the principal — reported ``activeVersion: 2`` for the same key. The LLMOps screen
+    reads both and rendered "No version of this prompt has been recorded" directly above
+    the list of them.
+
+    ``tenant_id`` follows the same rule as every other scoped read
+    (:func:`_scope_tenant`): platform staff may name a tenant, anyone else naming one
+    other than their own is refused rather than quietly served their own.
+
     Degrades to an empty list when the stores are off (lite/offline mode).
+
+    Raises:
+        HTTPException: 403 on a cross-tenant ``tenant_id``.
     """
+    scoped = _scope_tenant(auth, tenant_id)
     if not _stores_on():
         return OpsPromptsResponse(prompt_key=prompt_key, rows=[])
     from app.data.session import get_sessionmaker
@@ -3176,7 +3196,7 @@ async def ops_prompts(
 
     try:
         async with get_sessionmaker()() as session:
-            versions = await registry.list_versions(session, prompt_key)
+            versions = await registry.list_versions(session, prompt_key, scoped)
     except Exception:  # noqa: BLE001 - stores are optional; degrade to empty
         logger.debug("ops_prompts read failed — degrading to empty.", exc_info=True)
         return OpsPromptsResponse(prompt_key=prompt_key, rows=[])
@@ -3200,21 +3220,32 @@ async def ops_prompts(
 @router.get("/ops/prompts/active", response_model=OpsActivePromptResponse, tags=["ops"])
 async def ops_prompts_active(
     prompt_key: str,
+    tenant_id: int | None = None,
     auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsActivePromptResponse:
     """Return the single live version for ``prompt_key`` (DB), else the cached one.
 
+    Scoped from the token by :func:`_scope_tenant` for the same reason its sibling
+    ``GET /ops/prompts`` is: the governance context this used to inherit the tenant from
+    is not bound on a plain GET, so every call read the platform scope and reported no
+    active prompt for a tenant that has one.
+
     Falls back to the process-wide active cache (``registry.get_cached_active``) when the
-    DB has no active row or is unreachable — the same synchronous seam the harness reads.
+    DB has no active row or is unreachable — the same synchronous seam the harness reads,
+    and read in the same scope.
+
+    Raises:
+        HTTPException: 403 on a cross-tenant ``tenant_id``.
     """
     from app.ops import registry
 
+    scoped = _scope_tenant(auth, tenant_id)
     if _stores_on():
         from app.data.session import get_sessionmaker
 
         try:
             async with get_sessionmaker()() as session:
-                active = await registry.get_active(session, prompt_key)
+                active = await registry.get_active(session, prompt_key, scoped)
             if active is not None:
                 return OpsActivePromptResponse(
                     prompt_key=prompt_key,
@@ -3229,7 +3260,7 @@ async def ops_prompts_active(
         except Exception:  # noqa: BLE001 - fall through to the cache/empty path
             logger.debug("ops_prompts_active DB read failed.", exc_info=True)
 
-    cached = registry.get_cached_active(prompt_key)
+    cached = registry.get_cached_active(prompt_key, scoped)
     if cached is not None:
         system_prompt, config, version = cached
         return OpsActivePromptResponse(
@@ -3248,6 +3279,7 @@ async def ops_evals(
     prompt_key: str | None = None,
     run_id: str | None = None,
     limit: int = 50,
+    tenant_id: int | None = None,
     auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> OpsEvalsResponse:
     """Return recent persisted trace-eval rows (the eval trend / per-step scores).
@@ -3267,7 +3299,20 @@ async def ops_evals(
 
     Both halves are needed. The guard alone would still hand one tenant's admin another
     tenant's rows; the clause alone would still expose the surface to a ``client``.
+
+    **``tenant_id`` is declared rather than ignored, and that is the third half.** The
+    route took no such parameter, so FastAPI dropped an unknown query string on the
+    floor: ``GET /ops/evals?tenant_id=2`` as ``northwind.analyst`` (tenant 1) returned
+    **200 with tenant 1's rows**. No leak — but a caller who names a scope and is served
+    a different one silently has no way to learn that, and a screen built on it will
+    caption another tenant's number with the tenant it asked for. Declaring the
+    parameter and putting it through :func:`_scope_tenant` makes the two outcomes the
+    only outcomes: honoured within the caller's authority, or 403.
+
+    Raises:
+        HTTPException: 403 on a cross-tenant ``tenant_id``.
     """
+    scoped = _scope_tenant(auth, tenant_id)
     if not _stores_on():
         return OpsEvalsResponse(rows=[])
     capped = max(1, min(limit, _OPS_EVALS_LIMIT_MAX))
@@ -3282,8 +3327,9 @@ async def ops_evals(
             # tenant) and the caller's own id otherwise. `is_(None)` for the platform
             # case rather than "no clause": `aegis.ops.diagnose._tenant_clause`
             # documents why — `if tenant_id is not None` makes None mean *every*
-            # tenant, which is the bug this route already shipped once.
-            scoped = _scope_tenant(auth, None)
+            # tenant, which is the bug this route already shipped once. `scoped` is
+            # resolved above, before the stores check, so a refusal is a 403 rather than
+            # an empty list on a deployment with the stores off.
             stmt = select(EvalResult)
             if scoped is not None:
                 stmt = stmt.where(EvalResult.tenant_id == scoped)

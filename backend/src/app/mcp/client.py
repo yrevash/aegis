@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -106,6 +107,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import Any
+from urllib.parse import urlsplit
 
 from aegis.core.types import GuardResult, GuardVerdict
 
@@ -129,6 +131,7 @@ __all__ = [
     "ExternalToolCollisionError",
     "ExternalToolRegistry",
     "MCP_EXTERNAL_ACTOR",
+    "PeerUrlRefused",
     "ProbeResult",
     "UnknownExternalServerError",
     "credential_fingerprint",
@@ -142,6 +145,7 @@ __all__ = [
     "qualify",
     "reset_registry",
     "run_external_tool",
+    "validate_peer_url",
 ]
 
 
@@ -293,6 +297,145 @@ class ExternalServerSpec:
     label: str = ""
     auth_header: str = "Authorization"
     enabled: bool = True
+
+
+#: The only schemes a declared peer may carry. Streamable HTTP *is* an HTTP transport,
+#: so anything else is a category error rather than an exotic peer — and the category
+#: errors are the dangerous ones: ``file://`` reads this host's disk through the same
+#: code path, and ``gopher://``/``dict://`` are the classic request-smuggling
+#: primitives. A URL with no scheme at all is worse than either, because httpx does not
+#: refuse it; it treats it as a relative path and dials whatever base it has.
+_PEER_URL_SCHEMES = frozenset({"http", "https"})
+
+#: Names that mean "this machine" without being an IP literal. The literal check below
+#: never sees them — ``urlsplit("http://localhost:5432").hostname`` is a string, not an
+#: address — so they are listed. ``.localhost`` is reserved to the loopback interface by
+#: RFC 6761 §6.3, which is why the suffix is matched and not only the bare name.
+_LOCAL_HOSTNAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
+
+
+class PeerUrlRefused(ValueError):
+    """A declared peer's URL points somewhere a peer is not allowed to point.
+
+    A ``ValueError`` subclass because :meth:`ExternalToolRegistry.register_server`
+    already contracts to raise ``ValueError`` for a declaration it will not accept, and
+    the console maps that to a 400 with the message shown to the operator. The distinct
+    type exists so a caller that wants to tell "bad URL" from "id already declared" can,
+    without matching on the sentence.
+    """
+
+
+def validate_peer_url(url: str, *, allow_private: bool) -> str:
+    """Return ``url`` unchanged, or refuse it as an outbound request Aegis will not make.
+
+    **The hole this closes.** ``POST /mcp/servers`` took ``url: str`` with no validation
+    at all and :func:`connect` dialed it. A platform admin — or anything that reaches
+    that route with a platform-admin token — could declare a peer at
+    ``http://169.254.169.254/latest/meta-data/`` and press *test connection*, and Aegis
+    would fetch the cloud instance-metadata endpoint from inside the deployment's own
+    network and render the answer in the console. ``http://localhost:5432`` is the same
+    move aimed at this host's Postgres. Being platform-admin-only makes it a smaller
+    blast radius, not a different bug: the whole value of an SSRF is that the *server*
+    makes the request, from a network position the caller does not have.
+
+    **What is checked**, in the order a reader would ask it:
+
+    1. The scheme is ``http`` or ``https`` (:data:`_PEER_URL_SCHEMES`). A missing scheme
+       is refused explicitly rather than defaulted, because a bare ``169.254.169.254``
+       parses with an empty scheme and an empty host and would otherwise sail through
+       every later check.
+    2. There is a host at all.
+    3. The host is not a loopback/link-local/private/reserved **IP literal**, and not one
+       of :data:`_LOCAL_HOSTNAMES`, unless ``allow_private``. The ranges come from
+       :mod:`ipaddress` rather than a hand-written list of prefixes, so IPv6 and the
+       IPv4-mapped forms (``::ffff:169.254.169.254``) are covered by the same rule that
+       covers ``10.0.0.0/8``.
+
+    **What this does NOT protect against, stated plainly.** It resolves nothing, so a
+    peer declared as ``http://metadata.attacker.example/`` whose DNS answer is
+    ``169.254.169.254`` is accepted here and dialed. Catching that needs resolution at
+    *connect* time with the resolved address pinned for the life of the connection —
+    anything checked at declare time is a TOCTOU window against DNS rebinding, which is
+    why this does not pretend to close it. It is also not an egress control: a peer at a
+    public address that proxies back into the network is a public address to this
+    function. The control that bounds both is network egress policy around the
+    deployment, and that is where the residual risk is documented.
+
+    Args:
+        url: The declared endpoint. ``""`` is always accepted — it means the peer is
+            supplied in process (the test seam, and a peer a deployment composes
+            itself), so nothing is dialed and there is no destination to validate.
+        allow_private: The deployment's explicit opt-in
+            (``AEGIS_MCP_ALLOW_PRIVATE_PEERS``). A sidecar MCP server on the same host
+            or the deployment probing its own endpoint over loopback are real
+            arrangements; they are configuration, not something a request may assert.
+
+    Returns:
+        ``url``, unchanged, when it is acceptable.
+
+    Raises:
+        PeerUrlRefused: When it is not. The message names the specific reason, because
+            an operator reading "invalid URL" cannot tell a typo from a policy.
+    """
+    if not url:
+        return url
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    if scheme not in _PEER_URL_SCHEMES:
+        raise PeerUrlRefused(
+            f"MCP peer URL {url!r} has scheme {parts.scheme or '(none)'!r}; only "
+            f"{', '.join(sorted(_PEER_URL_SCHEMES))} are dialable. An MCP peer speaks "
+            "Streamable HTTP, so a URL that is not HTTP(S) is not a peer — and a "
+            "scheme like file:// would be read by this host, not by a server."
+        )
+    try:
+        host = parts.hostname
+    except ValueError as exc:  # malformed IPv6 literal, e.g. http://[::1
+        raise PeerUrlRefused(f"MCP peer URL {url!r} has an unparseable host.") from exc
+    if not host:
+        raise PeerUrlRefused(
+            f"MCP peer URL {url!r} names no host. Give the peer's full Streamable HTTP "
+            "endpoint, e.g. https://peer.example.com/mcp."
+        )
+    if allow_private:
+        return url
+    lowered = host.lower().rstrip(".")
+    if lowered in _LOCAL_HOSTNAMES or lowered.endswith(".localhost"):
+        raise PeerUrlRefused(_private_refusal(url, lowered, "names this machine"))
+    try:
+        address = ipaddress.ip_address(lowered)
+    except ValueError:
+        # Not an IP literal — a DNS name, which this function deliberately does not
+        # resolve. See the docstring: resolution here would be a TOCTOU window, not a
+        # control.
+        return url
+    mapped = getattr(address, "ipv4_mapped", None) or address
+    if (
+        mapped.is_loopback
+        or mapped.is_link_local
+        or mapped.is_private
+        or mapped.is_reserved
+        or mapped.is_unspecified
+    ):
+        raise PeerUrlRefused(
+            _private_refusal(url, str(address), "is a loopback, link-local, private or "
+            "reserved address")
+        )
+    return url
+
+
+def _private_refusal(url: str, host: str, why: str) -> str:
+    """Return the refusal sentence, with the opt-in named so it is actionable."""
+    return (
+        f"MCP peer URL {url!r} is refused: its host {host!r} {why}, so dialing it would "
+        "make Aegis probe its own network on a caller's behalf — the cloud "
+        "instance-metadata endpoint (169.254.169.254) and this host's own database "
+        "ports are reachable from here and not from the caller. If this deployment "
+        "really does compose a peer on the local network (a sidecar MCP server, or the "
+        "deployment probing its own endpoint), set AEGIS_MCP_ALLOW_PRIVATE_PEERS=1: "
+        "that is a deployment's statement about its own topology, which is not "
+        "something a request is allowed to assert for it."
+    )
 
 
 @dataclass(frozen=True)
@@ -686,6 +829,12 @@ class ExternalToolRegistry:
     discovery_timeout_seconds: float = 60.0
     #: How many rail screenings :meth:`discover` may have in flight at once.
     discovery_concurrency: int = 16
+    #: Whether a declared peer may point at loopback, link-local or private address
+    #: space (``AEGIS_MCP_ALLOW_PRIVATE_PEERS``). Off by default, and a *deployment*
+    #: setting rather than a per-declaration field, because "this network has a sidecar
+    #: MCP server on it" is a fact about the topology that a request cannot assert on
+    #: the deployment's behalf. See :func:`validate_peer_url`.
+    allow_private_peers: bool = False
     _servers: dict[str, ExternalServerSpec] = field(default_factory=dict)
     _tools: dict[str, ExternalTool] = field(default_factory=dict)
     _grants: dict[str, ExternalGrant] = field(default_factory=dict)
@@ -710,7 +859,13 @@ class ExternalToolRegistry:
                 declared. Both are refusals rather than overwrites: re-registering an
                 id under a new URL would silently re-point every grant already written
                 against that namespace at a different peer.
+            PeerUrlRefused: When the URL is not one Aegis will dial — see
+                :func:`validate_peer_url`. Checked here rather than in the route so
+                that every path that can put a peer into this registry goes through it:
+                the console write, the ``AEGIS_MCP_CLIENT_SERVERS`` parse, and
+                ``load_servers`` re-hydrating a row that predates this check.
         """
+        validate_peer_url(spec.url, allow_private=self.allow_private_peers)
         if not _SERVER_ID_RE.match(spec.server_id):
             raise ValueError(
                 f"External MCP server id {spec.server_id!r} is not usable as a tool "
@@ -749,7 +904,13 @@ class ExternalToolRegistry:
 
         Raises:
             UnknownExternalServerError: When the id is not declared.
+            PeerUrlRefused: When ``url`` is not one Aegis will dial. The edit route is
+                the same SSRF surface as the declare route — re-pointing an existing
+                peer at ``http://169.254.169.254/`` reaches exactly what declaring one
+                there would — so the check is on both and not only the first.
         """
+        if url is not None:
+            validate_peer_url(url, allow_private=self.allow_private_peers)
         spec = self.server(server_id)
         updated = replace(
             spec,
@@ -1571,6 +1732,9 @@ def get_registry() -> ExternalToolRegistry:
             ),
             discovery_concurrency=int(
                 getattr(settings, "mcp_discovery_concurrency", 16)
+            ),
+            allow_private_peers=bool(
+                getattr(settings, "mcp_allow_private_peers", False)
             ),
         )
         for entry in _configured_servers():

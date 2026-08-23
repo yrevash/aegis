@@ -139,6 +139,13 @@ class SharedRetrievalPool:
 
     A retrieval failure degrades to empty context and is logged: agents without the
     corpus are worse agents, but a failed pool must not be a failed run.
+
+    **The whole result is kept, not just the context string.** The pool used to reduce
+    the retrieval to ``answer_context`` and drop everything else on the floor, so a
+    fan-out's sources, scores, provenance and graph delta existed for the length of one
+    expression and were never reported — which is why a team run emitted no ``retrieval``
+    event and the console told the user the answer was grounded in nothing. The lanes
+    still consume only the context; :attr:`result` is what the caller reports from.
     """
 
     def __init__(self, deps: AgentDeps, query: str, scope: Any) -> None:  # noqa: ANN401 - RetrievalScope
@@ -148,6 +155,11 @@ class SharedRetrievalPool:
         self._scope = scope
         self._lock = asyncio.Lock()
         self._context: str | None = None
+        #: The retrieval this run performed, or ``None`` if it has not run yet or
+        #: failed. ``None`` is the signal NOT to emit a retrieval event: a ``done``
+        #: carrying zeroes would claim we looked and found nothing, which is a
+        #: different (and false) statement from "the retrieval never completed".
+        self.result: Any = None
         self.calls = 0
 
     async def context(self) -> str:
@@ -164,6 +176,7 @@ class SharedRetrievalPool:
                     timeout=_POOL_TIMEOUT_S,
                 )
                 self._context = str(getattr(result, "answer_context", "") or "")
+                self.result = result
             except Exception:  # noqa: BLE001 - a degraded pool is not a failed run
                 logger.warning(
                     "Shared retrieval pool unavailable; agents run context-free",

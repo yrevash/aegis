@@ -152,6 +152,16 @@ SPECIALIST_NODES: dict[str, str] = {
     "team": "plan_team",
 }
 
+#: What the user is told when a human declined the gated action AND the model call that
+#: would have phrased that decision could not be made. Deterministic on purpose: it is
+#: the one sentence in the run that must not depend on a provider being willing to
+#: produce it. See the ``generate`` node for the three ERROR runs this exists to stop.
+_REFUSAL_ANSWER = (
+    "The action was not carried out: a human reviewer declined it at the approval "
+    "gate. Nothing was changed. If it should go ahead, ask the reviewer to approve it "
+    "and run the request again."
+)
+
 #: The role used when the roster names one the graph cannot dispatch.
 _FALLBACK_ROLE = "qa"
 
@@ -560,6 +570,13 @@ def build_agent(
 
         Every HIGH-risk thing any lane wanted arrives as ``tool_calls`` and flows into
         the graph's ONE ``gate → approval → act`` path. No lane executed any of it.
+
+        **It also reports the run's retrieval**, which is not extra work — it is the one
+        the shared pool was already doing. The pool is primed HERE rather than lazily
+        inside the first lane so the ``retrieval`` events land in the trace where the
+        single-lane path puts them (before the work that consumes them) instead of
+        interleaved with four concurrent lanes' output. The retrieval count is unchanged:
+        the pool still performs exactly one, and the lanes still read it from the cache.
         """
         writer = get_stream_writer()
         planned = list(state.get("team_tasks") or [])
@@ -575,6 +592,21 @@ def build_agent(
         # ONE retrieval for the run, shared by every lane (Amendment A's supply-side
         # rule): four agents must not retrieve the tenant's chunks four times.
         pool = SharedRetrievalPool(deps, state["query"], _retrieval_scope(state))
+        writer(events.retrieval("started"))
+        await pool.context()
+        graph_nodes: list[dict[str, Any]] = []
+        graph_edges: list[dict[str, Any]] = []
+        if pool.result is not None:
+            graph_nodes, graph_edges = _emit_retrieval(writer, pool.result)
+        else:
+            # Nothing is emitted beyond ``started``, deliberately. The pool degraded to
+            # empty context (it logged why), and a ``done`` event with zero candidates
+            # would tell the console we searched the corpus and it held nothing — a
+            # claim about the tenant's documents, made on the strength of our own
+            # failure. The lanes still run, context-free, exactly as before.
+            logger.warning(
+                "Team run retrieved nothing; no retrieval result to report for this run"
+            )
         outcome = await run_team(
             tasks,
             deps=deps,
@@ -595,6 +627,11 @@ def build_agent(
         return {
             "team_results": [r.as_dict() for r in outcome.results],
             "tool_calls": outcome.proposed_actions,
+            # The same two state keys the single-lane ``retrieve`` node writes, from the
+            # same shape of delta, so the Graph screen's "N/226 traversed" counts a
+            # fan-out's traversal instead of reporting 0 on every run.
+            "graph_nodes": graph_nodes,
+            "graph_edges": graph_edges,
             # The SAME numbers, twice on purpose and never double-counted: the plain keys
             # are the one summed delta the ``operator.add`` reducers fold into the run,
             # and ``_telemetry`` is popped by ``_timed`` (never written to state) so the
@@ -826,42 +863,7 @@ def build_agent(
                     f"(first round judged insufficient); follow-up queries: {followups}"
                 )
             )
-        nodes = [n.model_dump() for n in result.graph_delta.nodes]
-        edges = [e.model_dump() for e in result.graph_delta.edges]
-        # ``file_path`` is the document a citation points at, and it is carried here
-        # because the console had no way to name one. Retrieval has had it all along —
-        # every arm writes it into ``Candidate.metadata`` (the dense arm parses it back
-        # off the tenant-tagged path, the lexical arm reads the chunk's own source, else
-        # the document's filename) — but the wire event carried only id/label/score, so
-        # a run grounded in a real PDF rendered as three opaque hashes. ``None`` when the
-        # source genuinely carries no path: a chunk whose provenance was never recorded
-        # renders with no provenance, rather than with a filename we picked for it.
-        scored = [
-            {
-                "id": s.id,
-                "label": _snippet(s.text),
-                "score": s.score,
-                "file_path": s.metadata.get("file_path"),
-            }
-            for s in result.sources
-        ]
-        # Wide-recall pool size (N recalled), then the reranked, scored survivors
-        # (K). num_candidates is the honest pre-rerank count, not len(sources).
-        writer(events.retrieval("candidates", num_candidates=result.num_candidates))
-        writer(events.retrieval("reranked", scored_sources=scored))
-        writer(
-            events.retrieval(
-                "done",
-                num_candidates=result.num_candidates,
-                scored_sources=scored,
-                nodes=nodes,
-                edges=edges,
-            )
-        )
-        # Honest provenance (§4.3): emit where the context came from. The Retrieval
-        # agent populates ``result.provenance`` in parallel; an empty default here is
-        # fine until it does.
-        writer(events.provenance(result.provenance, cache_hit=result.cache_hit))
+        nodes, edges = _emit_retrieval(writer, result)
         return {
             "context": result.answer_context,
             "cache_hit": result.cache_hit,
@@ -1303,7 +1305,25 @@ def build_agent(
         return {"reflect_retry": will_retry}
 
     async def generate(state: AgentState) -> dict[str, Any]:
-        """Compose the final answer from context and any tool results."""
+        """Compose the final answer from context and any tool results.
+
+        **On the refusal path this call is cosmetic, so it is not allowed to decide the
+        run's outcome.** When a human declines a gated action the work is already
+        finished: nothing ran, and ``stream_answer`` will close the run ``rejected``.
+        All that is left is to say so in a sentence. Measured on ``taif_run1``: three
+        runs whose ``approvals`` row reads ``REJECTED``, decided by ``northwind.admin``,
+        ended as ``status = ERROR`` — the provider's own filter refused this very call
+        (``finish_reason: content_filter``, "Response content blocked by label
+        'Jailbreak'", which is what a transcript containing a refused jailbreak attempt
+        looks like to it), the exception escaped the node, and the orchestrator's
+        terminal handler wrote ``error`` over a decided outcome. A person declining an
+        action is not a fault, and the record must not depend on whether the paragraph
+        describing their decision could be generated.
+
+        So the refusal path degrades to a plain, deterministic sentence instead. A
+        generation failure on any OTHER path still raises: there the answer *is* the
+        run's product, and a run that could not produce one genuinely did fail.
+        """
         if state.get("answer") and not state.get("tool_results"):
             return {}  # planner already answered (pure Q&A, no actions).
 
@@ -1311,7 +1331,8 @@ def build_agent(
         outcome_lines = "\n".join(
             f"- {r['summary']}" for r in state.get("tool_results", [])
         )
-        if state.get("gated") and not state.get("approved"):
+        refused = bool(state.get("gated")) and not state.get("approved")
+        if refused:
             outcome_lines = "The proposed action was NOT approved by the human gate."
         messages = [
             {
@@ -1331,7 +1352,17 @@ def build_agent(
                 ),
             },
         ]
-        result = await deps.complete(ModelRole.GENERATION, messages)
+        try:
+            result = await deps.complete(ModelRole.GENERATION, messages)
+        except Exception:
+            if not refused:
+                raise
+            logger.warning(
+                "Composing the refusal text failed; reporting the human's decision "
+                "plainly instead. The decision itself stands and the action did not run",
+                exc_info=True,
+            )
+            return {"answer": _REFUSAL_ANSWER}
         return {
             "answer": result.content,
             "_telemetry": _telemetry(result),
@@ -1825,6 +1856,71 @@ def _snippet(text: str, *, limit: int = 80) -> str:
     """Return a short, single-line snippet of ``text`` for a scored-source label."""
     collapsed = " ".join(text.split())
     return collapsed if len(collapsed) <= limit else collapsed[: limit - 1] + "…"
+
+
+def _emit_retrieval(
+    writer: Any,  # noqa: ANN401 - langgraph stream writer
+    result: Any,  # noqa: ANN401 - aegis.retrieval.types.RetrievalResult
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Stream one retrieval's funnel + provenance, and return its graph delta.
+
+    **Extracted so a fan-out emits the same events a single-lane run does.** The
+    ``retrieve`` node had these emissions inlined, and the team path (which retrieves
+    exactly once, into a :class:`~aegis.agent.team.SharedRetrievalPool`) had none: on
+    ``taif_run1``, ``select event_type, count(*) from run_events`` for a completed team
+    run returned eleven event types and no ``retrieval`` row at all. The console read
+    that as fact and said "This run retrieved nothing, so the answer is not grounded in
+    a document" above an answer quoting a real policy, and the Graph screen — which
+    always routes to a team — reported "0/226 traversed" on every run, because
+    ``_update_dashboards`` merges the live graph slice from ``touched_nodes`` on exactly
+    this event. One emitter, two call sites, so the two paths cannot drift again.
+
+    Args:
+        writer: The node's stream writer.
+        result: The retrieval result to report — never a fabricated one. A caller whose
+            retrieval failed has no result and must emit nothing rather than a ``done``
+            with zeroes, which would read as "we looked and found nothing".
+
+    Returns:
+        ``(nodes, edges)`` — the graph delta as plain dicts, for the state update.
+    """
+    nodes = [n.model_dump() for n in result.graph_delta.nodes]
+    edges = [e.model_dump() for e in result.graph_delta.edges]
+    # ``file_path`` is the document a citation points at, and it is carried here
+    # because the console had no way to name one. Retrieval has had it all along —
+    # every arm writes it into ``Candidate.metadata`` (the dense arm parses it back
+    # off the tenant-tagged path, the lexical arm reads the chunk's own source, else
+    # the document's filename) — but the wire event carried only id/label/score, so
+    # a run grounded in a real PDF rendered as three opaque hashes. ``None`` when the
+    # source genuinely carries no path: a chunk whose provenance was never recorded
+    # renders with no provenance, rather than with a filename we picked for it.
+    scored = [
+        {
+            "id": s.id,
+            "label": _snippet(s.text),
+            "score": s.score,
+            "file_path": s.metadata.get("file_path"),
+        }
+        for s in result.sources
+    ]
+    # Wide-recall pool size (N recalled), then the reranked, scored survivors
+    # (K). num_candidates is the honest pre-rerank count, not len(sources).
+    writer(events.retrieval("candidates", num_candidates=result.num_candidates))
+    writer(events.retrieval("reranked", scored_sources=scored))
+    writer(
+        events.retrieval(
+            "done",
+            num_candidates=result.num_candidates,
+            scored_sources=scored,
+            nodes=nodes,
+            edges=edges,
+        )
+    )
+    # Honest provenance (§4.3): emit where the context came from. The Retrieval
+    # agent populates ``result.provenance`` in parallel; an empty default here is
+    # fine until it does.
+    writer(events.provenance(result.provenance, cache_hit=result.cache_hit))
+    return nodes, edges
 
 
 def _stamp_guardrail(stage: GuardStage, result: Any) -> None:  # noqa: ANN401 - GuardResult

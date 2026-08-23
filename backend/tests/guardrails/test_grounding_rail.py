@@ -66,7 +66,11 @@ async def test_an_answer_with_no_contexts_is_flagged_not_passed(monkeypatch):
     _mock_output_completer(monkeypatch, grounded=False)
     answer = "Closures take 30 days and cost a fee."
     for contexts in (None, []):
-        result = await check_output(answer) if contexts is None else await check_output(answer, contexts)
+        result = (
+            await check_output(answer)
+            if contexts is None
+            else await check_output(answer, contexts)
+        )
         assert result.verdict is GuardVerdict.FLAG
         assert result.layer == "grounding"
         assert result.text == answer, "advisory: the answer is not withheld"

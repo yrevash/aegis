@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from aegis.gateway.llm import baseline_token_cost
 from aegis.governance.enforcement import savings_buckets
 from aegis.retrieval.types import AllTenants
+
 from app.api.schemas import SavingsBreakdownRow, SavingsResponse
 
 _NOTE = (
