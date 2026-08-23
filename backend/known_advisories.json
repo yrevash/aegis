@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Advisories this repository has looked at, decided about, and cannot currently fix.",
+    "",
+    "This file exists so the CI gate can be a gate. `python -m app.platform.advisories`",
+    "fails on ANY advisory against an installed version; without a way to record a",
+    "decision, the two upstream-pinned findings below would keep the branch red for",
+    "reasons nobody on it can act on, and a permanently-red gate is one people learn to",
+    "ignore. So an id listed here stops the CI gate failing, and NOTHING ELSE:",
+    "",
+    "  * POST /stack/advisories still reports the package as `vulnerable`, with the CVE.",
+    "  * AdvisoryAudit.passed is still False.",
+    "  * The compliance surface still counts it.",
+    "",
+    "An acknowledgement is therefore a statement about the build, never about the risk.",
+    "Every entry must name what pins the vulnerable version and what would release it —",
+    "an entry whose `blocked_by` has been resolved is a line to delete, not to keep.",
+    "",
+    "Any advisory NOT listed here fails CI. That is the property this file buys."
+  ],
+  "acknowledged": [
+    {
+      "package": "cryptography",
+      "ids": [
+        "GHSA-g6cj-pr64-35w5",
+        "GHSA-jwv3-5hgf-82ww",
+        "GHSA-m2h6-j472-rp4c",
+        "PYSEC-2026-3552",
+        "PYSEC-2026-3553",
+        "PYSEC-2026-3554"
+      ],
+      "recorded": "2026-08-23",
+      "blocked_by": "presidio-anonymizer requires cryptography>=48.0.1,<49.0.0; the fixes land in 49.0.0 and 50.0.0.",
+      "assessment": "Not reachable from any Aegis code path: the platform uses cryptography only transitively for JWT/TLS primitives, never for PKCS#7 EnvelopedData decryption (GHSA-g6cj) and never for X.509 path building against attacker-supplied intermediates (GHSA-jwv3, GHSA-m2h6). Aegis mints and verifies HS256 tokens, which do not touch either surface.",
+      "fix": "Upgrade presidio-anonymizer to a release that relaxes the cryptography ceiling, then unpin. Tracked as the PII engine's own upgrade, because dropping presidio changes which PII entities the rail detects."
+    },
+    {
+      "package": "strawberry-graphql",
+      "ids": [
+        "GHSA-fr49-mhgj-crfc",
+        "GHSA-qfwv-87qj-98xq",
+        "GHSA-x97m-qp5c-w9xj",
+        "PYSEC-2026-2282",
+        "PYSEC-2026-2283",
+        "PYSEC-2026-2284"
+      ],
+      "recorded": "2026-08-23",
+      "blocked_by": "arize-phoenix pins strawberry-graphql==0.314.3 exactly; the fixes land in 0.315.4 and 0.315.7.",
+      "assessment": "All three are GraphQL query-complexity or GraphiQL issues (alias-limit bypass, circular-fragment DOS, headers in a GraphiQL URL) reachable only through the Phoenix trace UI, which is an operator-facing observability surface and is not part of the Aegis API. No Aegis route is served by strawberry, and no untrusted party submits GraphQL to this deployment.",
+      "fix": "Upgrade arize-phoenix once it moves its pin. Aegis does not depend on strawberry directly and has nothing to change itself."
+    }
+  ]
+}

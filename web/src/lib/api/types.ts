@@ -225,6 +225,15 @@ export type PatchResult = Sent<Schemas['PatchResult']>
 /** Response from `GET /platform/patches`. */
 export type PatchCheckResponse = Sent<Schemas['PatchCheckResponse']>
 
+/** One published advisory against one installed version. */
+export type AdvisoryVulnerability = Sent<Schemas['AdvisoryVulnerability']>
+
+/** One distribution's vulnerability verdict — a verdict, not a freshness reading. */
+export type AdvisoryPackage = Sent<Schemas['AdvisoryPackage']>
+
+/** Response from `POST /stack/advisories` — live OSV.dev verdicts. */
+export type AdvisoryAuditResponse = Sent<Schemas['AdvisoryAuditResponse']>
+
 /** One risk in the platform risk map. */
 export type RiskEntry = Sent<Schemas['RiskEntry']>
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -424,6 +424,113 @@ def is_routable_role(role: ModelRole | None) -> bool:
     pre-existing metric exactly for every chat call site.
     """
     return role is None or role in _ROUTABLE_ROLES
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingRealisation:
+    """Whether small-model routing is *realised* on the configured fleet, or projected.
+
+    The savings figure is ``baseline − actual``, where the baseline prices a call's
+    tokens at :func:`baseline_role`'s band and the actual prices them at the band of
+    the role the router chose. That subtraction describes a **cheaper model serving
+    the call** only while the roles resolve to different deployments. Point every
+    routable role at one deployment — which is what a single-deployment gateway
+    forces — and the two bands are two prices for the *same* model: the router's
+    choice is still real and still logged, but no call was answered by anything
+    cheaper, and reporting the difference as money saved would be claiming a
+    mechanism that did not run.
+
+    So the condition is measured rather than assumed, and the endpoint says which
+    of the two it is. Restoring a multi-deployment fleet flips it back with no code
+    change, because the answer is read from the environment on every call.
+    """
+
+    #: Routable role *name* → the deployment id it resolves to right now. Configuration:
+    #: what the router *could* choose between, which is not evidence that it did.
+    role_deployments: Mapping[str, str]
+    #: The deployment the frontier baseline is priced from.
+    baseline_deployment: str
+    #: Routable deployments carrying no :data:`_FLEET` price declaration, so their
+    #: ledger cost comes from the role band rather than from the model's own rate.
+    undeclared_deployments: tuple[str, ...]
+    #: The deployments that **actually answered** the calls being priced, from the
+    #: ledger. Empty when the caller has no observations (nothing has been spent, or
+    #: the caller is asking about configuration alone).
+    observed_deployments: tuple[str, ...] = ()
+
+    @property
+    def distinct_deployments(self) -> tuple[str, ...]:
+        """The distinct deployments the routable roles resolve to, sorted."""
+        return tuple(sorted(set(self.role_deployments.values())))
+
+    @property
+    def realised(self) -> bool:
+        """Whether a model other than the baseline's actually served the priced calls.
+
+        **Measured from the ledger, not from the routing table.** A role may point at
+        a deployment that is configured but unreachable — a fleet half-migrated, a
+        deployment deleted upstream — and every call still falls back to the baseline
+        model. Config says what *could* have happened; only the ledger says what did,
+        so an observation always wins over the table when there is one.
+
+        With no observations the answer falls back to configuration, which is the
+        right default for an empty ledger: nothing has been claimed yet either way.
+        """
+        if self.observed_deployments:
+            return any(
+                deployment != self.baseline_deployment
+                for deployment in self.observed_deployments
+            )
+        return any(
+            deployment != self.baseline_deployment
+            for deployment in self.role_deployments.values()
+        )
+
+
+def nonroutable_deployments() -> frozenset[str]:
+    """Return the deployments bound to roles small-model routing never chooses between.
+
+    Embeddings and transcription have one deployment and no cheaper tier (see
+    :data:`_ROUTABLE_ROLES`), so their spend has no frontier alternative to be priced
+    against. A caller pricing a baseline uses this to keep that work out of the
+    comparison instead of booking a saving against a choice nobody could have made.
+
+    Resolved through :func:`model_for`, so an env override is reflected; a deployment
+    that a routable role *also* points at is excluded, because on a single-deployment
+    fleet every role collapses onto one id and treating it as non-routable would
+    silently empty the comparison.
+    """
+    routable = {model_for(role) for role in _ROUTABLE_ROLES}
+    return frozenset(
+        model_for(role)
+        for role in ModelRole
+        if role not in _ROUTABLE_ROLES and model_for(role) not in routable
+    )
+
+
+def routing_realisation(observed: Collection[str] = ()) -> RoutingRealisation:
+    """Return whether small-model routing was realised on the calls being priced.
+
+    Reads the live environment (``MODEL_<ROLE>`` / ``GATEWAY_BASELINE_ROLE``), so a
+    caller never caches the answer across a fleet change.
+
+    Args:
+        observed: The deployment ids that actually served the calls in question,
+            typically the distinct ``usage_ledger.model`` values for the rows being
+            priced. Supplying them is what turns this from a statement about the
+            config into a statement about the spend.
+    """
+    role_deployments = {
+        role.name: model_for(role)
+        for role in sorted(_ROUTABLE_ROLES, key=lambda r: r.name)
+    }
+    candidates = set(role_deployments.values()) | set(observed)
+    return RoutingRealisation(
+        role_deployments=role_deployments,
+        baseline_deployment=model_for(baseline_role()),
+        undeclared_deployments=tuple(sorted(d for d in candidates if d not in _FLEET)),
+        observed_deployments=tuple(sorted(set(observed))),
+    )
 
 
 # Per-role pricing, ``(input_rate, output_rate)``, used ONLY as a fallback when a

@@ -2583,7 +2583,7 @@ export interface paths {
          * List Pipelines
          * @description Return every pipeline Aegis runs, its stages, and what each stage emits.
          *
-         *     Three pipelines, not sixteen: a module is not a pipeline. The sixteen-module course
+         *     Three pipelines, not twenty-nine: a module is not a pipeline. The twenty-nine-module course
          *     in ``docs/teaching/`` explains the parts; this is the flows they compose into.
          *
          *     The declaration is **verified against the code before it is served** — the ingest
@@ -3412,6 +3412,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/stack/advisories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stack Advisories
+         * @description Audit the installed distributions against OSV.dev (admin/devops).
+         *
+         *     This is the **vulnerability verdict** that ``POST /stack/patch-check`` is not: a
+         *     package can be three releases behind and carry no advisory, and on the newest
+         *     release and carry four. Versions come from ``importlib.metadata``; advisories come
+         *     from a live OSV.dev query (the aggregator behind ``pip-audit`` — GHSA, PYSEC, NVD).
+         *
+         *     The same honesty rule the patch check holds: a package is ``clean`` only after OSV
+         *     actually answered for it, and ``passed`` is ``False`` whenever any package is
+         *     vulnerable **or** any package could not be asked, so an audit that did not run can
+         *     never read as an audit that found nothing.
+         */
+        post: operations["stack_advisories_v1_stack_advisories_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/stack/patch-check": {
         parameters: {
             query?: never;
@@ -3434,6 +3464,37 @@ export interface paths {
          *     cached last-successful set), never a fabricated clean bill of health.
          */
         post: operations["stack_patch_check_v1_stack_patch_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/stack/sbom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stack Sbom
+         * @description Export the live bill of materials as a standard SBOM document (admin/devops).
+         *
+         *     ``GET /stack`` answers the same question for a human reading the console; this
+         *     answers it for a **machine somebody else owns**. Both documents are generated from
+         *     one pass over the running interpreter's installed distributions, so they cannot
+         *     describe different machines, and every component carries a PURL — the key an
+         *     advisory database joins on.
+         *
+         *     The response is served with the format's own media type so a scanner can consume it
+         *     directly. Neither document is signed and neither carries SLSA/in-toto provenance;
+         *     the integrity evidence that does exist (the lockfiles' sha256 pin count) is recorded
+         *     in the document's own metadata rather than implied.
+         */
+        get: operations["stack_sbom_v1_stack_sbom_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3783,6 +3844,137 @@ export interface components {
              * @description Why the job was refused, in one renderable sentence.
              */
             detail: string;
+        };
+        /**
+         * AdvisoryAuditResponse
+         * @description Body for `POST /stack/advisories` — live vulnerability verdicts from OSV.dev.
+         *
+         *     Distinct from `POST /stack/patch-check`, which reports **freshness**: a package can
+         *     be several releases behind and carry no advisory, and current and carry four.
+         */
+        AdvisoryAuditResponse: {
+            /**
+             * Checked At
+             * @description ISO 8601 UTC time the audit ran.
+             */
+            checked_at: string;
+            /**
+             * Note
+             * @description Honest summary of how to read the results.
+             */
+            note: string;
+            /**
+             * Online
+             * @description Whether the advisory database answered for at least one batch.
+             */
+            online: boolean;
+            /** Packages */
+            packages?: components["schemas"]["AdvisoryPackage"][];
+            /**
+             * Packages Audited
+             * @default 0
+             */
+            packages_audited: number;
+            /**
+             * Packages Unknown
+             * @default 0
+             */
+            packages_unknown: number;
+            /**
+             * Packages Vulnerable
+             * @default 0
+             */
+            packages_vulnerable: number;
+            /**
+             * Passed
+             * @description True only when every package got a real answer AND none is vulnerable. An audit that could not run does not pass.
+             */
+            passed: boolean;
+            /** Severity Counts */
+            severity_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Source
+             * @description The advisory database queried.
+             */
+            source: string;
+        };
+        /**
+         * AdvisoryPackage
+         * @description One distribution's vulnerability verdict.
+         */
+        AdvisoryPackage: {
+            /** Name */
+            name: string;
+            /**
+             * Note
+             * @description Why the status is what it is.
+             * @default
+             */
+            note: string;
+            /**
+             * Status
+             * @description 'clean' only after a real answer from the advisory database.
+             * @enum {string}
+             */
+            status: "vulnerable" | "clean" | "unknown";
+            /**
+             * Version
+             * @description The installed version that was queried.
+             */
+            version: string;
+            /** Vulnerabilities */
+            vulnerabilities?: components["schemas"]["AdvisoryVulnerability"][];
+            /**
+             * Worst Severity
+             * @description Severity of the worst advisory, or 'none'.
+             */
+            worst_severity: string;
+        };
+        /**
+         * AdvisoryRequest
+         * @description Body for `POST /stack/advisories` — optionally narrow to a subset of packages.
+         */
+        AdvisoryRequest: {
+            /**
+             * Packages
+             * @description Distribution names to audit; omit/null to audit every installed distribution.
+             */
+            packages?: string[] | null;
+        };
+        /**
+         * AdvisoryVulnerability
+         * @description One published advisory against one installed version.
+         */
+        AdvisoryVulnerability: {
+            /**
+             * Aliases
+             * @description Other ids for the same advisory — the CVE usually lives here.
+             */
+            aliases?: string[];
+            /**
+             * Detail Fetched
+             * @description False ⇒ the id is real but summary/severity were not retrieved.
+             */
+            detail_fetched: boolean;
+            /**
+             * Id
+             * @description The OSV identifier, e.g. 'GHSA-…' or 'PYSEC-…'.
+             */
+            id: string;
+            /**
+             * Severity
+             * @description The publisher's own rating; 'unknown' when detail was not fetched.
+             * @enum {string}
+             */
+            severity: "critical" | "high" | "moderate" | "low" | "unknown";
+            /**
+             * Summary
+             * @description One-line description, as OSV wrote it.
+             * @default
+             */
+            summary: string;
         };
         /**
          * AegisModuleRow
@@ -9966,6 +10158,12 @@ export interface components {
             actual_cost_usd: number;
             /** Baseline Cost Usd */
             baseline_cost_usd: number;
+            /**
+             * Baseline Model
+             * @description The deployment the frontier baseline is priced from.
+             * @default
+             */
+            baseline_model: string;
             /** Breakdown */
             breakdown?: components["schemas"]["SavingsBreakdownRow"][];
             /**
@@ -9974,10 +10172,27 @@ export interface components {
              */
             generated_at: string;
             /**
+             * Models Observed
+             * @description Deployments the ledger shows serving this scope's routable work.
+             */
+            models_observed?: string[];
+            /**
              * Note
              * @description Honest framing of the figure (flags any estimate).
              */
             note: string;
+            /**
+             * Projected Usd
+             * @description The same gap when it is NOT realised: what the router's role assignments would save on a fleet with more than one deployment to route between. Zero whenever saved_usd is non-zero; the two are never both populated.
+             * @default 0
+             */
+            projected_usd: number;
+            /**
+             * Routing Realised
+             * @description Whether a model other than the baseline's actually served the priced calls. Read from usage_ledger, not from the routing table.
+             * @default true
+             */
+            routing_realised: boolean;
             /**
              * Saved Pct
              * @description Fraction saved vs baseline, 0..1.
@@ -9985,7 +10200,7 @@ export interface components {
             saved_pct: number;
             /**
              * Saved Usd
-             * @description baseline − actual.
+             * @description Money actually saved: baseline − actual, but ONLY when the ledger shows a deployment other than the baseline's serving the work. Zero when routing is not realised on this fleet — see projected_usd.
              */
             saved_usd: number;
         };
@@ -14887,6 +15102,39 @@ export interface operations {
             };
         };
     };
+    stack_advisories_v1_stack_advisories_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AdvisoryRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdvisoryAuditResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     stack_patch_check_v1_stack_patch_check_post: {
         parameters: {
             query?: never;
@@ -14907,6 +15155,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PatchCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stack_sbom_v1_stack_sbom_get: {
+        parameters: {
+            query?: {
+                /** @description cyclonedx (1.6) for scanners, spdx (2.3) for procurement. */
+                format?: "cyclonedx" | "spdx";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

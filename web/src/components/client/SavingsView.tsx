@@ -117,6 +117,14 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
   const rec = reconcile(d)
   const sample = isSample(d.note)
 
+  // The endpoint reports a gap it has *not* banked when every priced call was
+  // answered by the same deployment the baseline is priced from — one model, two
+  // price bands, no cheaper model in play. The figure is still worth showing; the
+  // word "saved" is not, so the hero switches what it names rather than colouring a
+  // caveat onto a number that already read as money in the bank.
+  const realised = d.routing_realised !== false
+  const headline = realised ? d.saved_usd : d.projected_usd
+
   // A donut needs at least two slices to be a composition; one slice is a ring
   // that encodes nothing. Below that the card is not drawn at all, so the table
   // takes the full width rather than sitting beside dead space.
@@ -133,19 +141,28 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
           // — 120px of empty card under a two-line figure, which is the dead space
           // `items-start` was there to prevent.
           className="col-span-12 h-auto min-w-0 lg:col-span-5"
-          label="Saved vs frontier"
-          value={d.saved_usd}
+          label={realised ? 'Saved vs frontier' : 'Projected vs frontier'}
+          value={headline}
           format={formatUsdAuto}
-          delta={{ value: savedPct, direction: 'up', tone: 'good', suffix: '% of baseline' }}
-          signal="ok"
+          delta={{
+            value: savedPct,
+            direction: 'up',
+            tone: realised ? 'good' : 'neutral',
+            suffix: '% of baseline',
+          }}
+          signal={realised ? 'ok' : 'neutral'}
           sample={sample}
-          info="Baseline is the same workload priced on the frontier model; actual is what this stack spent. The gap is the saving."
+          info={
+            realised
+              ? 'Baseline is the same workload priced on the frontier model; actual is what this stack spent. The gap is the saving.'
+              : `Not banked. Every priced call was answered by ${d.baseline_model || 'one deployment'}, which is also the model the baseline is priced from — so this gap is two price bands for one model, not a cheaper model doing the work. It is what the router’s role assignments would save on a fleet with a second deployment to route to.`
+          }
         />
         <BaselineSplit
           className="col-span-12 min-w-0 lg:col-span-7"
           baseline={d.baseline_cost_usd}
           actual={d.actual_cost_usd}
-          saved={d.saved_usd}
+          saved={headline}
         />
       </div>
 

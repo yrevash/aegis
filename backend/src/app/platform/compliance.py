@@ -220,7 +220,7 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
             "A deterministic signature backstop plus a fail-closed model classifier run "
             "at all three rails — input, output and tool result — so indirect injection "
             "is screened where it would actually arrive. With no model completer wired "
-            "this degrades to partial and the live posture says so: five battery probes "
+            "this degrades to partial and the live posture says so: ten battery probes "
             "are semantic-only and leak offline by design, reported rather than curated "
             "out. Injection is never marked solved anywhere on this platform."
         ),
@@ -233,7 +233,7 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
                 "aegis/src/aegis/guardrails/pipeline.py",
                 "check_input / check_output / check_tool_result",
             ),
-            _f("aegis/src/aegis/redteam/battery.py", "11 of 28 attack probes tagged LLM01"),
+            _f("aegis/src/aegis/redteam/battery.py", "16 of 48 attack probes tagged LLM01"),
             _r("GET /security/posture", "live status, derived from wiring"),
             _t(
                 "aegis/tests/redteam/test_stages_and_suites.py"
@@ -274,32 +274,74 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
     ControlEntry(
         id="LLM03",
         title="Supply Chain",
-        state=ControlState.PARTIAL,
+        state=ControlState.ENFORCED,
         summary=(
-            "Fully hash-pinned lockfiles, a live SBOM resolved from the actually "
-            "installed distributions at request time, and registry-verified freshness "
-            "that refuses to report 'current' without a real answer from PyPI."
-        ),
-        gap=(
-            "No CVE/OSV advisory feed — this is patch freshness, not a vulnerability "
-            "verdict. No CycloneDX/SPDX export, and no signature or provenance "
-            "attestation. CI exists (.github/workflows/ci.yml) and gates lint and the "
-            "three test suites, but it scans no dependency and produces no provenance."
+            "Inventory, verdict and gate, each resolved from the running system rather "
+            "than a maintained list: a live SBOM from the installed distributions, "
+            "exported as CycloneDX 1.6 and SPDX 2.3 so a buyer's own scanner can read "
+            "it; a live OSV.dev query giving each installed version a vulnerability "
+            "verdict, which is the question patch freshness does not answer; and a CI "
+            "step that fails the build on any advisory not recorded in "
+            "backend/known_advisories.json, and on any package the feed could not be "
+            "asked about. Artefact integrity is 6,367 sha256 pins across the two "
+            "lockfiles — uv refuses a file whose digest does not match, which is the "
+            "question a package signature would answer, answered per file. The tree "
+            "currently carries two acknowledged advisories, both pinned by upstream "
+            "libraries (presidio-anonymizer holds cryptography under 49; arize-phoenix "
+            "pins strawberry-graphql exactly); the surface reports them as vulnerable "
+            "rather than suppressing them, and the acknowledgement names what would "
+            "release each. No in-toto/SLSA build provenance, which is the one "
+            "assurance here that hash pinning does not substitute for."
         ),
         evidence=[
-            _f("backend/uv.lock", "319 distributions, 4219 sha256 digests"),
-            _f("aegis/uv.lock", "129 distributions, hash-pinned"),
+            _f("backend/uv.lock", "hash-pinned; 6,367 sha256 digests across both lockfiles"),
+            _f("aegis/uv.lock", "the aegis half of the same pinning"),
             _f(
                 "backend/src/app/platform/stack.py",
                 "SBOM from importlib.metadata, never a hand-written pin list",
             ),
             _f(
-                "backend/src/app/platform/patches.py",
-                "live PyPI check; no clean bill of health without a real answer",
+                "backend/src/app/platform/sbom.py",
+                "CycloneDX 1.6 + SPDX 2.3 from one inventory pass",
             ),
+            _f(
+                "backend/src/app/platform/advisories.py",
+                "OSV.dev verdicts; never 'clean' without a real answer",
+            ),
+            _f(
+                "backend/src/app/platform/patches.py",
+                "live PyPI check; freshness, kept distinct from the verdict",
+            ),
+            _f(
+                "backend/known_advisories.json",
+                "the two upstream-pinned advisories, with what would release each",
+            ),
+            _f(".github/workflows/ci.yml", "the build gate that runs the audit"),
             _r("GET /stack", "the live bill of materials"),
+            _r("GET /stack/sbom", "CycloneDX 1.6 / SPDX 2.3 export"),
+            _r("POST /stack/advisories", "the vulnerability verdict, per package"),
             _r("POST /stack/patch-check", "installed vs latest, per package"),
             _d("docs/adr/0001-litellm-as-gateway.md", "one vetted gateway, not many provider SDKs"),
+            _t(
+                "backend/tests/api/test_supply_chain.py"
+                "::test_an_audit_that_could_not_run_does_not_pass",
+                "an unreachable feed is never a clean bill of health",
+            ),
+            _t(
+                "backend/tests/api/test_supply_chain.py"
+                "::test_the_cli_gate_exits_nonzero_on_a_finding",
+                "the CI gate actually fails",
+            ),
+            _t(
+                "backend/tests/api/test_supply_chain.py"
+                "::test_an_acknowledged_advisory_unblocks_the_build_and_nothing_else",
+                "an acknowledgement is about the build, never about the risk",
+            ),
+            _t(
+                "backend/tests/api/test_supply_chain.py"
+                "::test_cyclonedx_is_well_formed_and_every_component_carries_a_purl",
+                "the export is joinable, not decorative",
+            ),
             _t(
                 "backend/tests/api/test_platform_surfaces.py::test_stack_shape_and_real_versions",
                 "versions are real, not literals",
@@ -321,14 +363,29 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
             "store."
         ),
         gap=(
-            "Scope note: /security/posture reports LLM04 enforced for the ingestion gate, "
-            "which is correct for the control it names. The framework's control is wider — "
-            "the ML spine trains from a host-supplied frame with no provenance attestation "
-            "and no dataset integrity hash."
+            "One thing is missing and it is named precisely: the ML spine trains from a "
+            "host-supplied frame that carries no integrity digest, so nothing records "
+            "which frame produced a given fitted model. The corpus half is now attacked "
+            "rather than asserted — six poisoning probes run at a fourth battery stage "
+            "aimed at the write gate itself (MITRE ATLAS AML.T0020) — and five of the "
+            "six are refused before the store. The sixth is the honest limit and it "
+            "leaks: a poisoned *fact* in ordinary policy prose carries no instruction "
+            "for a deterministic gate to match."
         ),
         evidence=[
             _f("aegis/src/aegis/retrieval/validation.py", "validate_content — the write-time gate"),
-            _f("aegis/src/aegis/ml/dataset.py", "the unattested training frame — the gap itself"),
+            _f("aegis/src/aegis/redteam/battery.py", "the poisoning probe set, Stage.INGEST"),
+            _f("aegis/src/aegis/ml/dataset.py", "the undigested training frame — the gap itself"),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_poisoned_documents_are_refused_before_the_store",
+                "the gate is measured, not asserted",
+            ),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_a_poisoned_fact_carrying_no_instruction_gets_through_and_is_declared",
+                "the leak is declared, not curated out",
+            ),
             _t(
                 "backend/tests/api/test_memory_control.py"
                 "::test_a_correction_carrying_an_injection_is_refused",
@@ -414,9 +471,15 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
             "untrusted DATA (Microsoft Spotlighting), and every write is validated first."
         ),
         gap=(
-            "Scope note: those two mechanisms are enforced. The vector tier itself is a "
-            "shared Qdrant node outside Postgres RLS, so tenant separation there is "
-            "application-scoped rather than database-enforced."
+            "Those two mechanisms are enforced. The vector tier is not, and the "
+            "difference is the failure direction rather than the presence of a "
+            "control. Every retrieval arm applies a tenant predicate and a null tenant "
+            "is a positive match on the shared corpus rather than a wildcard — both "
+            "tested cross-tenant — but the chunks live in ONE shared Qdrant collection "
+            "and the predicate is a payload filter written by application code. Under "
+            "Postgres RLS a query that forgets its tenant clause returns nothing; here "
+            "it returns everything. Per-tenant collections, or a database-enforced "
+            "predicate, is what would close this, and neither exists."
         ),
         evidence=[
             _f(
@@ -424,6 +487,10 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
                 "build_spotlighted_context — delimiting + datamarking",
             ),
             _f("aegis/src/aegis/retrieval/validation.py", "validate-before-write"),
+            _f(
+                "aegis/src/aegis/retrieval/lightrag_backend.py",
+                "DEFAULT_CHUNK_COLLECTION — one shared collection, the gap itself",
+            ),
             _t(
                 "aegis/tests/retrieval/test_observability.py::test_spotlight_applied_by_default",
                 "on by default, not opt-in",
@@ -433,6 +500,11 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
                 "::test_a_span_survives_the_spotlight_datamarking",
                 "datamarking does not corrupt the span",
             ),
+            _t(
+                "aegis/tests/retrieval/test_tenant_isolation.py"
+                "::test_vector_arm_filters_by_tenant_in_the_qdrant_query",
+                "the predicate is real — and it is a filter, which is the gap",
+            ),
         ],
     ),
     ControlEntry(
@@ -440,19 +512,42 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
         title="Misinformation",
         state=ControlState.PARTIAL,
         summary=(
-            "A grounding self-check exists alongside conformal abstention bands and a "
-            "per-metric eval regression gate that fails on a quality drop."
+            "The grounding rail now returns two findings rather than one, because they "
+            "deserve different answers. An answer the retrieved passages CONTRADICT — "
+            "retrieval found the fact and the answer says the opposite — is blocked by "
+            "default, grounding_block or not; there is no legitimate turn of that "
+            "shape. An answer that is merely unsupported stays an advisory flag, "
+            "because most of those are fine and a rail that blocks them is one an "
+            "operator switches off. A per-metric eval regression gate fails the "
+            "release on a measured quality drop."
         ),
         gap=(
-            "The grounding rail is opt-in and advisory by default — it flags, it does not "
-            "block, unless a deployment sets grounding_block."
+            "Both findings need a model layer: the rail is a semantic entailment "
+            "judgement with no deterministic backstop, so with no completer wired it "
+            "is a no-op and this control is worth nothing. The zero-retrieval case is "
+            "reported and deliberately never blocked — plenty of legitimate turns "
+            "answer with no passages — so an answer invented out of the model's own "
+            "knowledge is flagged, not stopped."
         ),
         evidence=[
-            _f("aegis/src/aegis/guardrails/grounding.py", "check_grounding — advisory by default"),
+            _f(
+                "aegis/src/aegis/guardrails/grounding.py",
+                "check_grounding — grounded and contradicted, judged separately",
+            ),
+            _f(
+                "aegis/src/aegis/guardrails/pipeline.py",
+                "_screen_grounding — contradiction blocks in either mode",
+            ),
             _f("aegis/src/aegis/evals/regression.py", "declarative per-metric thresholds"),
-            _d(
-                "docs/adr/0007-conformal-autonomy-bands.md",
-                "abstain rather than act over-confidently",
+            _t(
+                "aegis/tests/guardrails/test_grounding.py"
+                "::test_a_contradicted_answer_blocks_without_the_strict_posture",
+                "the contradiction really blocks by default",
+            ),
+            _t(
+                "aegis/tests/guardrails/test_grounding.py"
+                "::test_a_checker_that_could_not_answer_never_manufactures_a_contradiction",
+                "a downed checker never hard-blocks a working deployment",
             ),
             _t(
                 "aegis/tests/security/test_posture.py::test_misinformation_is_honestly_partial",
@@ -463,21 +558,41 @@ _OWASP_LLM: tuple[ControlEntry, ...] = (
     ControlEntry(
         id="LLM10",
         title="Unbounded Consumption",
-        state=ControlState.PARTIAL,
+        state=ControlState.ENFORCED,
         summary=(
-            "The self-repair loop is always hard-capped, and token/USD/RPM/TPM caps are "
-            "enforced before spend at the single gateway chokepoint."
-        ),
-        gap=(
-            "Spend caps bind only when the host injects a governance hook at the gateway; "
-            "GATEWAY_BUDGET_FAIL_OPEN=true lets a governance read failure through. The "
-            "live posture reports both rather than hiding them."
+            "The self-repair loop is always hard-capped, and token/USD/RPM/TPM caps "
+            "are enforced before spend at the single gateway chokepoint. A budget "
+            "control that fails open is not a control, so both ways it could fail to "
+            "bind are now refused at boot outside dev, on the same asymmetry the JWT "
+            "guard uses: BUDGET_FAIL_OPEN=true will not start, and neither will a "
+            "deployment whose composition root has lost the governance hook at the "
+            "gateway — the seam a cap binds at. The refusal names that variable rather "
+            "than GATEWAY_BUDGET_FAIL_OPEN, which is the standalone gateway's own knob "
+            "and is inert here because this platform injects a config. Dev keeps "
+            "both, because dev is not the thing being protected and a guard that "
+            "blocks the local loop is one somebody deletes. The live posture still "
+            "reports a fail-open dev box as partial rather than green."
         ),
         evidence=[
             _f("aegis/src/aegis/governance/enforcement.py", "enforce_governance — before spend"),
+            _f(
+                "backend/src/app/config.py",
+                "ensure_spend_caps_bind — refuses to boot uncapped outside dev",
+            ),
+            _f("backend/src/app/main.py", "called at the composition root, before the app exists"),
             _t(
                 "aegis/tests/governance/test_enforcement.py::test_over_token_budget_raises",
                 "the cap actually refuses",
+            ),
+            _t(
+                "backend/tests/core/test_startup_guard.py"
+                "::test_non_dev_refuses_to_boot_with_budgets_failing_open",
+                "fail-open cannot reach production",
+            ),
+            _t(
+                "backend/tests/core/test_startup_guard.py"
+                "::test_non_dev_refuses_to_boot_with_no_governance_hook_at_the_gateway",
+                "an unwired chokepoint cannot reach production either",
             ),
             _t(
                 "aegis/tests/security/test_posture.py"
@@ -792,6 +907,12 @@ _OWASP_WEB: tuple[ControlEntry, ...] = (
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. MITRE ATLAS — only what the battery actually exercises
+#
+# Four families were added because four of these rows said, in writing, that nothing
+# tested them. Each is a real attack with a real verdict from the rail it is aimed at,
+# each runs inside ``owasp-full`` so its leaks are in the headline block rate, and each
+# has probes that deliberately get through — a family whose every probe passes is a
+# family that was written to pass.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _ATLAS: tuple[ControlEntry, ...] = (
@@ -883,38 +1004,164 @@ _ATLAS: tuple[ControlEntry, ...] = (
     ControlEntry(
         id="AML.T0053",
         title="LLM Plugin Compromise",
-        state=ControlState.PARTIAL,
+        state=ControlState.ENFORCED,
         summary=(
-            "Three excessive-agency probes plus the real control: an external MCP tool is "
-            "HIGH risk and stops at the human gate until a platform admin lowers a named one."
+            "A hostile peer is stood up and the platform is made to refuse it, end to "
+            "end: a real in-process MCP server over the SDK's own transport, whose "
+            "tool description, argument schema and return value each carry an attack, "
+            "screened by the real TOOL_RESULT rail rather than by an injected stub. "
+            "The poisoned tool is dropped at discovery so its text never reaches the "
+            "planner's prompt; the poisoned result is withheld from the agent's "
+            "context and does not appear in the audit row either. The four battery "
+            "probes carry the same constants the peer serves, so the suite and the "
+            "end-to-end test cannot describe different attacks. The fourth probe is "
+            "the finding: a compromised peer that simply returns a plausible wrong "
+            "answer — a well-formed invoice with the attacker's beneficiary — passes "
+            "the rail, and what stops it is the tier, not the text. An external tool "
+            "is HIGH until a platform admin lowers a named one, and the allowlist is "
+            "checked before the connection opens."
         ),
-        gap="The probes test the rail's refusal, not a compromised peer end to end.",
         evidence=[
             _f("backend/src/app/mcp/server.py", "external tools gated HIGH by default"),
-            _f("aegis/src/aegis/redteam/battery.py", "the _AGENCY probe set"),
+            _f(
+                "backend/src/app/mcp/client.py",
+                "the TOOL_RESULT rail at the network boundary, on results and schemas",
+            ),
+            _f("aegis/src/aegis/redteam/battery.py", "the plugin-compromise probe set"),
+            _t(
+                "backend/tests/mcp/test_hostile_peer.py"
+                "::test_a_compromised_peers_return_value_is_withheld_from_the_agent",
+                "a real peer, a real rail, a real refusal",
+            ),
+            _t(
+                "backend/tests/mcp/test_hostile_peer.py"
+                "::test_a_hostile_peers_poisoned_tool_never_reaches_the_planner",
+                "the injection that never looks like a result",
+            ),
+            _t(
+                "backend/tests/mcp/test_hostile_peer.py"
+                "::test_a_plausible_wrong_answer_passes_the_rail_and_this_is_reported",
+                "the attack the rail does not stop, reported rather than omitted",
+            ),
+            _t(
+                "backend/tests/mcp/test_hostile_peer.py"
+                "::test_the_battery_probes_carry_the_payloads_this_peer_actually_serves",
+                "the suite and the end-to-end test cannot drift apart",
+            ),
         ],
     ),
     ControlEntry(
         id="AML.T0020",
         title="Poison Training Data",
-        state=ControlState.NOT_IMPLEMENTED,
-        summary="No training-data attack is exercised.",
-        gap="The battery has no poisoning probe; see LLM04 for the same gap from the other side.",
-        evidence=[_f("aegis/src/aegis/ml/dataset.py", "the unattested training frame")],
+        state=ControlState.ENFORCED,
+        summary=(
+            "Six poisoning probes at a fourth battery stage aimed at the write-time "
+            "gate — the only rail a poisoning attack ever meets, since it arrives as a "
+            "document months before the question it is meant to answer. An override in "
+            "a handbook page, a forged SYSTEM turn in a KB article, a stored macro "
+            "instructing a later exfiltration, an oversized blob and a non-printable "
+            "one are all refused before the store. The sixth is the honest limit and "
+            "it leaks: a poisoned *fact* in ordinary policy prose carries no "
+            "instruction to match. It is marked semantic-only, it is in the report, "
+            "and the suite's floor is set at the reach the gate actually has."
+        ),
+        evidence=[
+            _f("aegis/src/aegis/retrieval/validation.py", "validate_content — the gate"),
+            _f("aegis/src/aegis/redteam/battery.py", "the poisoning probe set, Stage.INGEST"),
+            _f("aegis/src/aegis/redteam/runner.py", "check_ingest — the fourth rail"),
+            _r("POST /redteam/runs", "run it and read the verdicts"),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_poisoned_documents_are_refused_before_the_store",
+                "each probe blocked by the ingest rail, not by a neighbour",
+            ),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_the_poisoning_probes_go_to_the_ingest_rail_not_the_input_rail",
+                "aimed at the right rail",
+            ),
+        ],
     ),
     ControlEntry(
         id="AML.T0024",
         title="Exfiltration via AI Inference API",
-        state=ControlState.NOT_IMPLEMENTED,
-        summary="No model-extraction or membership-inference probes.",
-        gap="Nothing in the battery attacks the inference API for the model itself.",
+        state=ControlState.PARTIAL,
+        summary=(
+            "The *channel* is closed and measured: a new outbound rail blocks an "
+            "answer that carries data out through a URL nobody clicked — an "
+            "auto-loading markdown or HTML image, or a link, pointing at an external "
+            "host with an encoded payload in its query, path or fragment. Three probes "
+            "exercise it and an ordinary documentation link is not a false positive."
+        ),
+        gap=(
+            "The other half of this technique is extraction by query volume, and it "
+            "leaks. Two probes — model extraction by systematic scoring requests, and "
+            "membership inference over a list of record ids — pass every rail and are "
+            "reported as leaks, because nothing in a text screen can tell the "
+            "five-hundredth probing question from the first legitimate one. What "
+            "bounds them is the gateway's RPM/TPM/USD caps, which is a real control "
+            "claimed under LLM10 and is a bound, not a detection: there is no "
+            "per-principal query-pattern analysis anywhere in this platform."
+        ),
+        evidence=[
+            _f(
+                "aegis/src/aegis/guardrails/schema.py",
+                "exfiltration_channel — the outbound channel rail",
+            ),
+            _f("aegis/src/aegis/redteam/battery.py", "the inference-exfil probe set"),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_an_answer_that_is_a_channel_is_blocked_on_the_way_out",
+                "the channel is really closed",
+            ),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_model_extraction_and_membership_inference_leak_and_are_declared",
+                "the half that leaks, asserted as leaking",
+            ),
+        ],
     ),
     ControlEntry(
         id="AML.T0043",
         title="Craft Adversarial Data",
-        state=ControlState.NOT_IMPLEMENTED,
-        summary="No evasion or perturbation probes against the ML spine.",
-        gap="Adversarial robustness of the conformal ensemble is unmeasured.",
+        state=ControlState.ENFORCED,
+        summary=(
+            "The model an attacker actually crafts data against here is the injection "
+            "detector on the request path, and it is attacked: five evasion probes "
+            "take one override and perturb it until the signature layer stops matching "
+            "— hex, percent-encoding, ROT13, plain reversal — each of which walked "
+            "straight through before the rail learned to decode and screen it as the "
+            "instruction it carries. The fifth is a paraphrase; it leaks, it is marked "
+            "semantic-only, and it is the boundary between the deterministic layer and "
+            "the model one. Base32, Morse and a separator-spelled instruction are "
+            "named as remaining misses and asserted as such rather than left to be "
+            "assumed covered. The forecasting ensemble is a different model and not a "
+            "security control: its inputs are the host's own records, and its quality "
+            "is gated by the eval regression thresholds rather than by a red-team probe."
+        ),
+        evidence=[
+            _f(
+                "aegis/src/aegis/guardrails/classifier.py",
+                "_decoded_candidates — four encodings, decoded then screened",
+            ),
+            _f("aegis/src/aegis/guardrails/normalize.py", "the character-level fold it sits on"),
+            _f("aegis/src/aegis/redteam/battery.py", "the adversarial-evasion probe set"),
+            _t(
+                "aegis/tests/guardrails/test_injection_evasion.py"
+                "::test_an_encoded_instruction_is_screened_as_the_instruction",
+                "one case per encoding; deleting a branch fails its case",
+            ),
+            _t(
+                "aegis/tests/guardrails/test_injection_evasion.py"
+                "::test_documented_coverage_limits_are_honest",
+                "what is still missed, asserted rather than implied",
+            ),
+            _t(
+                "aegis/tests/redteam/test_atlas_families.py"
+                "::test_every_encoded_perturbation_is_screened_as_the_instruction",
+                "caught by the detector under attack, not by a neighbouring rail",
+            ),
+        ],
     ),
     ControlEntry(
         id="AML.T0018",
@@ -938,37 +1185,62 @@ _NIST: tuple[ControlEntry, ...] = (
     ControlEntry(
         id="GOVERN",
         title="Govern — policies, accountability, culture",
-        state=ControlState.PARTIAL,
+        state=ControlState.ENFORCED,
         summary=(
-            "Nine ADRs recording each decision and its rejected alternatives, a written "
-            "threat model, and a per-tenant policy catalogue stating who may write each "
-            "setting and how scopes merge."
+            "This function is documentation and process, which is the form the framework "
+            "asks for, so the artefacts are the control: an AI policy whose every clause "
+            "names the mechanism enforcing it, a role register mapping the five roles the "
+            "software actually guards to a named owner, an incident-response plan keyed to "
+            "signals this system emits, and a review cadence a two-person team can keep — "
+            "over nine ADRs, a written threat model and a per-tenant policy catalogue whose "
+            "merge rules let a tenant tighten a control and never loosen one."
         ),
-        gap=(
-            "No written AI policy, no accountable-role register, no incident-response plan, "
-            "no review cadence. This function is documentation, not process."
-        ),
+        gap="",
         evidence=[
+            _d("docs/governance/ai-policy.md", "purpose, prohibited use, sourcing, oversight"),
+            _d("docs/governance/accountable-roles.md", "an owner per role the code enforces"),
+            _d("docs/governance/incident-response.md", "detect, triage, contain, notify, review"),
+            _d("docs/governance/review-cadence.md", "who reviews what, and on which trigger"),
+            _d("docs/security/threat-model.md", "the threat model the policy is written over"),
             _d("docs/adr/0008-multi-tenant-rls-governance.md", "a recorded decision"),
-            _d("docs/security/threat-model.md", "the threat model"),
             _f("aegis/src/aegis/settings/spec.py", "the policy catalogue and its merge rules"),
+            _t(
+                "backend/tests/api/test_governance_docs.py"
+                "::test_every_repository_path_a_governance_document_cites_exists",
+                "a clause cannot outlive the mechanism it names",
+            ),
+            _t(
+                "backend/tests/api/test_governance_docs.py"
+                "::test_the_review_cadence_names_a_period_and_an_owner_for_every_artefact",
+                "a cadence with no owner is theatre",
+            ),
         ],
     ),
     ControlEntry(
         id="MAP",
         title="Map — context, risks, capabilities",
-        state=ControlState.PARTIAL,
+        state=ControlState.ENFORCED,
         summary=(
             "Each agentic risk carries an inherent and a residual position with the control "
             "that moved it and a control_ref naming a real file; the stack is the inventory; "
-            "the model card states task, features, data source, calibration and training sizes."
+            "the model card states task, features, data source, calibration and training "
+            "sizes; and a written context-of-use analysis names the people affected — a "
+            "tenant's end customers, whose service requests and documents this system reads "
+            "— with thirteen harms, the mechanism that reduces each, and four marked as "
+            "having no mitigation at all."
         ),
-        gap="No context-of-use analysis and no assessment of impact on affected individuals.",
+        gap="",
         evidence=[
             _r("GET /risk-map", "inherent and residual, per risk"),
             _r("GET /stack", "the system inventory"),
             _r("GET /ml/model-card", "honest, measured model metadata"),
             _f("backend/src/app/platform/risk_map.py", "grounded verbatim in the security doc"),
+            _d("docs/governance/context-and-impact.md", "context of use and impact on people"),
+            _t(
+                "backend/tests/api/test_governance_docs.py"
+                "::test_the_impact_assessment_pairs_every_harm_with_a_mitigation_or_says_there_is_none",
+                "a harm table with no gaps is one nobody checked",
+            ),
         ],
     ),
     ControlEntry(
@@ -1006,9 +1278,8 @@ _NIST: tuple[ControlEntry, ...] = (
         state=ControlState.ENFORCED,
         summary=(
             "A consequential action cannot execute alone: a durable human gate with SLA "
-            "deadlines and fail-safe auto-rejection, a conformal abstain band that declines "
-            "rather than acting on a degenerate prediction, budget refusal as a clean "
-            "terminal event, and a tiered release path with rollback."
+            "deadlines and fail-safe auto-rejection, budget refusal as a clean terminal "
+            "event, and a tiered release path with rollback."
         ),
         gap="",
         evidence=[
@@ -1155,13 +1426,24 @@ _ISO_42001: tuple[ControlEntry, ...] = (
         title="Use of AI systems",
         state=ControlState.PARTIAL,
         summary=(
-            "Human gate, conformal autonomy bands, per-persona tool allowlists, and "
-            "per-tenant settings that show which scope decided each value."
+            "Human gate, per-persona tool allowlists, a written intended-use and "
+            "prohibited-use policy, and per-tenant settings that show which scope decided "
+            "each value."
         ),
-        gap="No stated intended-use or prohibited-use documentation per deployment.",
+        gap=(
+            "The policy states seven prohibited uses, and only some are mechanically "
+            "prevented; the rest are labelled process-only in the document itself. There "
+            "is no per-deployment addendum — one policy covers every tenant on this "
+            "installation."
+        ),
         evidence=[
-            _d("docs/adr/0007-conformal-autonomy-bands.md", "autonomous / defer / abstain"),
+            _d("docs/governance/ai-policy.md", "intended use, and seven prohibited uses"),
             _f("aegis/src/aegis/agent/graph.py", "the gate"),
+            _t(
+                "backend/tests/api/test_governance_docs.py"
+                "::test_the_ai_policy_states_a_use_boundary_a_sourcing_position_and_oversight",
+                "the policy must state a use boundary, not merely exist",
+            ),
         ],
     ),
     ControlEntry(
@@ -1543,8 +1825,8 @@ _EU_AI_ACT: tuple[ControlEntry, ...] = (
         summary=(
             "A consequential action cannot execute alone: the graph interrupts and waits for "
             "a named person, the inbox shows what approving would run and why the gate fired, "
-            "the SLA sweeper auto-rejects on timeout, and the abstain band declines rather "
-            "than acting on a degenerate prediction."
+            "and the SLA sweeper auto-rejects on timeout so silence is a refusal rather "
+            "than consent."
         ),
         gap="",
         evidence=[
@@ -2351,7 +2633,7 @@ _INDIA_SECTORAL: tuple[ControlEntry, ...] = (
             "against the deepfake and synthetic-content harms the Guidelines emphasise."
         ),
         evidence=[
-            _f("aegis/src/aegis/redteam/battery.py", "28 attacks and 8 benign controls"),
+            _f("aegis/src/aegis/redteam/battery.py", "48 attacks and 11 benign controls"),
             _f("backend/src/app/platform/risk_map.py", "inherent and residual, per risk"),
             _t(
                 "aegis/tests/redteam/test_redteam.py"

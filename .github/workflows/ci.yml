@@ -132,6 +132,20 @@ jobs:
       - name: OpenAPI snapshot is current
         run: backend/.venv/bin/python scripts/build_openapi.py --check
 
+      # OWASP LLM03. Until this step existed, CI gated lint and three test suites and
+      # scanned no dependency: the repository could ship a known-vulnerable transitive
+      # package and every check stayed green. This asks OSV.dev — the aggregator behind
+      # pip-audit — whether the versions actually installed above carry a published
+      # advisory, and fails on any it has not already recorded a decision about in
+      # backend/known_advisories.json. It also fails when OSV cannot be reached, because
+      # a supply-chain gate that goes green on a network error is worse than none.
+      #
+      # `-c` rather than `-m`: app.platform's __init__ imports this module, so `-m`
+      # re-executes an already-imported module and Python warns about it.
+      - name: Dependency advisories (OSV)
+        working-directory: backend
+        run: .venv/bin/python -c "from app.platform.advisories import main; raise SystemExit(main())"
+
       - name: Backend suite
         working-directory: backend
         run: .venv/bin/python -m pytest tests -q

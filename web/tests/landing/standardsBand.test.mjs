@@ -21,11 +21,19 @@
  * from the endpoint's `enforced_controls`.
  *
  * **The framing gets softened.** ISO 27001, SOC 2 and GDPR normally mean *audited and
- * certified*. Aegis holds none of that. The correction is currently made three times —
- * in the heading, in a persistent notice, and in the disclosure — and each of those is
- * one edit away from being trimmed by somebody tidying up a marketing page. The words
- * that carry it are pinned here, along with the rule that no certification mark or
- * accreditation seal is ever rendered as an image.
+ * certified*. Aegis holds none of that. The amber notice that used to carry the
+ * correction above the grid was removed by the owner's decision — this is a hackathon
+ * project and its audience knows it holds no certificate — which leaves **two** carriers,
+ * the section heading and the disclosure, and makes them the more load-bearing rather
+ * than the less. Both are pinned here, and every heading branch is checked, not just the
+ * one that renders when the endpoint answers. So is the rule that no certification mark
+ * or accreditation seal is ever rendered as an image.
+ *
+ * **A framework gets claimed whole on the strength of a mapping nobody sees.** The band
+ * now leads with frameworks whose every mapped control is enforced, and the denominator
+ * of that claim is *our* mapping — four NIST functions is a coarser unit than seventeen
+ * ISO controls. The `N of N` on the row and the sentence naming whose mapping it is are
+ * both pinned, because dropping either turns a defensible claim into an unbounded one.
  */
 
 import assert from 'node:assert/strict'
@@ -35,6 +43,7 @@ import test from 'node:test'
 
 import {
   SHORTLIST,
+  completeFrameworks,
   resolveGroups,
   shownCount,
 } from '../../src/components/landing/standardsSummary.ts'
@@ -184,6 +193,60 @@ test('a framework enforcing nothing contributes nothing, and an empty group is d
   assert.equal(shownCount([]), 0)
 })
 
+test('a framework is claimed in full only when the endpoint says every control is enforced', () => {
+  // The rule is two numbers off the wire and nothing else. No framework id is listed
+  // anywhere for this group, so the day OWASP LLM or MITRE ATLAS reaches completeness it
+  // joins the row with no edit in the source — and the day one loses a control it leaves.
+  const served = [
+    framework('nist-ai-rmf', 'NIST AI RMF', ['GOVERN', 'MAP', 'MEASURE', 'MANAGE'], 4),
+    framework('eu-ai-act', 'EU AI Act', ['Art. 12', 'Art. 13', 'Art. 14'], 10),
+  ]
+  assert.deepEqual(
+    completeFrameworks(served).map((claim) => [claim.mark, claim.controls.length, claim.mapped]),
+    [['NIST AI RMF', 4, 4]],
+  )
+
+  // One control demoted, and the framework is no longer claimed in full.
+  const demoted = [framework('nist-ai-rmf', 'NIST AI RMF', ['MEASURE', 'MANAGE'], 4), served[1]]
+  assert.deepEqual(completeFrameworks(demoted), [])
+
+  // A framework mapping nothing is not vacuously complete.
+  assert.deepEqual(completeFrameworks([framework('empty', 'Empty', [], 0)]), [])
+  assert.deepEqual(completeFrameworks([]), [])
+})
+
+test('a framework claimed in full is not printed a second time in the shortlist', () => {
+  // `owasp-llm` is in SHORTLIST and would be in both groups the day it reaches ten of ten.
+  // The band excludes what it has already claimed, and a group emptied that way is dropped
+  // whole rather than drawn as an empty card.
+  const complete = SERVED.map((f) =>
+    f.id === 'owasp-llm'
+      ? framework(
+          'owasp-llm',
+          'OWASP LLM Top 10',
+          ['LLM01', 'LLM02', 'LLM03', 'LLM04', 'LLM05', 'LLM06', 'LLM07', 'LLM08', 'LLM09', 'LLM10'],
+          10,
+        )
+      : f,
+  )
+  const inFull = completeFrameworks(complete)
+  assert.deepEqual(
+    inFull.map((claim) => claim.frameworkId),
+    ['owasp-llm'],
+  )
+
+  const exclude = new Set(inFull.map((claim) => claim.frameworkId))
+  const titles = resolveGroups(complete, SHORTLIST, exclude).map((group) => group.title)
+  assert.ok(
+    !titles.some((title) => title.includes('attack surface')),
+    'the group is dropped whole once its only framework is claimed in full',
+  )
+  assert.deepEqual(titles, [
+    'Record-keeping, transparency, oversight',
+    'Data-principal rights, India and the EU',
+  ])
+})
+
 test('no control total is written into the band or its helper', () => {
   // Every figure on screen is a count of something fetched. A bare two- or three-digit
   // integer in the visible source is the shape a pasted total takes, and there is no
@@ -233,17 +296,27 @@ test('no control identifier is written into the band or its helper', () => {
   }
 })
 
-test('the band says it is not certification, and says it where a reader cannot miss it', () => {
+test('the band says it is not certification, in both states it can render', () => {
   const visible = strip(BAND)
 
+  // The amber banner was removed by the owner's decision — this is a hackathon project and
+  // the audience knows it holds no certificate. What may not be removed is the correction
+  // itself, and with the banner gone the heading is where it lives. Both branches of the
+  // heading carry it, including the one rendered when the endpoint does not answer.
+  // Every headline string in the file, whichever branch produces it: the one that leads
+  // with a framework held in full, the one that counts several, the plain enforced-controls
+  // fallback, and the one rendered when the endpoint does not answer.
+  const headlines = visible.match(/(["`])[^"`]*(?:enforced in full|end to end)[^"`]*\1/g) ?? []
   assert.ok(
-    visible.includes('Compliance-readiness evidence — not certification.'),
-    'the persistent notice is the one sentence this band cannot ship without',
+    headlines.length >= 4,
+    `expected every heading branch to be a literal in this file, found ${headlines.length}`,
   )
-  assert.ok(
-    visible.includes('Certified against none.'),
-    'the section heading itself must carry the correction, not only the notice',
-  )
+  for (const headline of headlines) {
+    assert.ok(
+      headline.includes('Certified against none.'),
+      `a heading branch dropped the correction: ${headline}`,
+    )
+  }
   assert.ok(
     visible.includes('Alignment, not certification.'),
     'the disclosure repeats it beside the frameworks it applies to',
@@ -255,8 +328,26 @@ test('the band says it is not certification, and says it where a reader cannot m
     'the specific things Aegis does not hold must be named, not gestured at',
   )
   assert.ok(
-    /No framework here is enforced in every clause/.test(visible),
-    'naming clauses invites the whole-framework reading; the disclosure must refuse it',
+    /Nobody independent has audited any of it\./.test(visible),
+    'a framework held in full is still a framework nobody has audited',
+  )
+})
+
+test('a framework claimed in full still prints what "in full" is measured against', () => {
+  // This is the claim the band did not previously make, and the one that can most easily
+  // become a lie. "In full" is against *our* mapping — four NIST functions is a coarser
+  // unit than seventeen ISO controls — so the denominator is printed beside it and the
+  // disclosure says whose mapping it is.
+  const visible = strip(BAND)
+  assert.ok(
+    /means every control this\s+table maps/.test(visible),
+    'the disclosure must say that the denominator is our own mapping',
+  )
+  const card = visible.slice(visible.indexOf('function InFullRow'))
+  assert.ok(card.length > 0, 'the band draws no in-full card')
+  assert.ok(
+    card.includes('{claim.mapped}') && card.includes('{claim.controls.length}'),
+    'the in-full card prints N of N off the wire, never a bare "complete"',
   )
 })
 

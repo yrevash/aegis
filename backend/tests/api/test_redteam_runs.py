@@ -345,7 +345,14 @@ async def test_an_unchecked_refusal_is_not_stored_as_a_block(client, db):
 
     async def _all_rails_down(*, live: bool):
         return Rails(
-            check_input=_dead_rail, check_output=_dead_rail, check_tool_result=_dead_rail
+            check_input=_dead_rail,
+            check_output=_dead_rail,
+            check_tool_result=_dead_rail,
+            # The fourth rail is not optional. Omitting it left a *real* write-time
+            # gate under a test whose whole premise is that nothing is running, and
+            # five ingest probes were genuinely blocked by it — so the assertion below
+            # measured a partial outage while claiming a total one.
+            check_ingest=_dead_rail,
         )
 
     original = mod._rails_for

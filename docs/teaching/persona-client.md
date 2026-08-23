@@ -34,14 +34,13 @@ below, because a jury doing exactly this comparison will land on Overview first.
 
 ### The nav, as rendered
 
-The portal groups its eleven sections into two headings:
+The portal groups its ten sections into two headings:
 
-- **Workspace** — Console, Overview, Documents, Analytics, Savings, Forecast, Memory,
-  Access demo
+- **Workspace** — Console, Overview, Documents, Analytics, Savings, Forecast, Memory
 - **Governance** — Approvals, Risk Map, Settings
 
 (The catalogue order in `web/src/lib/portal.ts` is `console, dashboard, documents,
-analytics, approvals, savings, forecast, risk, memory, simulation, settings`; the nav
+analytics, approvals, savings, forecast, risk, memory, settings`; the nav
 regroups it. Either order is fine to walk — this guide follows the catalogue.)
 
 ### Two things you must know before a jury finds them
@@ -49,10 +48,11 @@ regroups it. Either order is fine to walk — this guide follows the catalogue.)
 1. **Overview's top figures are platform-wide, not this tenant's.** Verified by calling
    `GET /v1/metrics` as both clients: the responses are byte-identical. Details and the
    honest answer are in [§2](#2-overview).
-2. **The Access demo's operations-lead lane cannot run from this portal.** It returns
-   403 by design and the panel shows an error. Details in [§10](#10-access-demo).
+2. **There is no Access demo on this portal any more**, and that is the fix, not a gap —
+   a client cannot drive the operator lane it compares against. Details in
+   [§10](#10-access-demo--not-on-this-portal-on-purpose).
 
-Neither is fatal. Both are much worse if a jury finds them first.
+The first is not fatal, and is much worse if a jury finds it first.
 
 ---
 
@@ -547,49 +547,62 @@ minute:
 
 | | Northwind (tenant 1) | Vertex (tenant 2) |
 |---|---|---|
-| Saved vs frontier | **$8.70** | **$0.51** |
-| Share of baseline | 59 % | 57 % |
-| Frontier baseline | $15 (`14.759622`) | $0.90 (`0.90326`) |
-| Actual spend | $6.06 (`6.062513`) | $0.39 (`0.392598`) |
+| **Projected** vs frontier | **$8.61** | **$0.52** |
+| Saved (banked) | **$0.00** | **$0.00** |
+| Share of baseline | 59 % | 56 % |
+| Frontier baseline | $14.70 (`14.697900`) | $0.93 (`0.925400`) |
+| Actual spend | $6.08 (`6.083300`) | $0.41 (`0.408000`) |
+
+**Read the tile label.** It says *Projected vs frontier*, not *Saved*, and the banked
+figure is zero. That is deliberate and it is the interesting part of this screen — see
+"what a jury might ask" below.
 
 **What this figure leaves out.** `2 of 3 sources at $0` — *"Reported at zero rather than
 estimated — each row carries its own reason."*
 
 **Where the savings come from**, marked *Adds up to the total*:
 
-| Source | Northwind | Share |
+| Source | Northwind | Why |
 |---|---|---|
-| Small-model routing | $8.70 | 100 % |
-| Semantic retrieval cache | $0.00 | 0 % |
-| Answer cache | $0.00 | 0 % |
+| Small-model routing | $0.00 | Not realised on this fleet — see below |
+| Semantic retrieval cache | $0.00 | A cache hit never reaches the ledger |
+| Answer cache | $0.00 | Same |
+
+All three rows are $0, and each says why on its own line. The card beside the table reads
+*3 of 3 sources at $0*.
 
 Source line: `gateway usage ledger · computed 23 Aug 2026, 18:51`.
 
 The API carries the reason for the two zeros:
 
-> *`saved_usd` is the measured gap between an all-frontier-model baseline and actual
-> gateway spend, taken straight from the usage ledger — attributable in full to
-> small-model routing, which is metered exactly. Semantic- and answer-cache hits also
-> save, but **a cache hit bypasses the model and never enters this ledger**, so they are
-> shown at $0 here.*
+> *`saved_usd` is $0 because no saving was realised on this fleet. Every priced call was
+> answered by DeepSeek-V4-Flash, which is also the deployment the frontier baseline is
+> priced from — so the gap below compares two price bands for the same model, not a
+> cheaper model against a dearer one. The router's per-turn role assignments are real and
+> logged; what is missing is a second deployment to route to. `projected_usd` is what
+> those same assignments would save on a fleet that has one.*
 
 ### What to say when demoing it
 
 Do it as a side-by-side. Two browser windows, two accounts, same screen.
 
-> "Northwind saved eight dollars seventy against a fifteen-dollar frontier baseline.
-> Vertex saved fifty-one cents against ninety. Same platform, same minute, same endpoint
-> — and a query I run as Northwind does not move Vertex's number by a cent. This is not
-> a filter in the browser: `GET /savings` reads the usage ledger narrowed to the caller's
-> tenant, and the tables underneath carry `FORCE ROW LEVEL SECURITY` with a serving role
-> that cannot bypass it."
+> "Northwind projects eight dollars sixty against a fourteen-seventy frontier baseline.
+> Vertex projects fifty-two cents against ninety-three. Same platform, same minute, same
+> endpoint — and a query I run as Northwind does not move Vertex's number by a cent. This
+> is not a filter in the browser: `GET /savings` reads the usage ledger narrowed to the
+> caller's tenant, and the tables underneath carry `FORCE ROW LEVEL SECURITY` with a
+> serving role that cannot bypass it."
 
 Then the two zeros:
 
-> "And read the breakdown. Two of the three savings sources report zero, and the reason
-> is on the page: a cache hit bypasses the model, so it never enters the ledger this
-> figure is computed from. It would be trivial to estimate what those hits saved. It
-> would also be a made-up number, so the row says zero and says why."
+> "And read the breakdown — all three rows are zero, each for its own reason. Two are
+> cache hits, which bypass the model entirely and so never enter the ledger this figure
+> is computed from. The third is the one worth your attention: our router assigns a cheap
+> tier or a frontier tier per turn, and it really does — but this gateway has exactly one
+> text deployment, so both tiers resolve to the same model. Subtracting one price band
+> from the other would have booked nine dollars of savings that nobody banked. The
+> endpoint checks the ledger for which deployments actually answered, finds one, and
+> refuses to call it a saving. It shows the projection instead, labelled."
 
 ### What a jury might ask
 
@@ -598,13 +611,21 @@ tenant's ledger repriced at the baseline model and role — `generation` /
 DeepSeek-V4-Flash, named on the AI-team portal's Token opt screen along with the unit
 costs for every role. Same ledger, one substitution.
 
-**"You said small-model routing but the model mix says 0 % small model."** Correct, and
-worth stating rather than dodging. This deployment's fleet offers one text deployment, so
-every role resolves to DeepSeek-V4-Flash; the saving comes from the *role price band* a
-call is billed at (cheap-tier input is 25× cheaper than generation-tier). The routing,
-the fallback chains and the repricing are all real; a genuinely smaller model is not
-available on this fleet. The label "small-model routing" overstates what is happening
-here — flag it as wording you would tighten.
+**"You said small-model routing but the model mix says 0 % small model."** Correct — and
+the endpoint says so before you do. This gateway offers one text deployment, so
+`MODEL_CHEAP`, `MODEL_GENERATION` and `MODEL_REASONING` all resolve to DeepSeek-V4-Flash.
+The router still assigns a role per turn and those assignments are logged, but a role is
+priced from its own band, so subtracting one band from the other prices *the same model*
+two ways. `GET /savings` reads `usage_ledger` for the deployments that actually answered,
+sees one, and books `saved_usd = 0` with the figure moved to `projected_usd`. Restore a
+multi-deployment fleet and it flips back with no code change, because both sides are read
+at request time. The honest sentence is: *the mechanism runs, the saving is not yet
+banked, and the platform is the one telling you that.*
+
+**"Then why show the projection at all?"** Because it is the measured value of a real
+decision under a fleet that has more than one model — which is the fleet this runs on at
+the hackathon. Showing it under the word "saved" would be the lie; showing it labelled is
+just a forecast with its assumption named.
 
 **"This was a real bug?"** Yes — cross-tenant figures on this surface was a defect that
 was found and fixed, which is exactly why it is now the demo to run. Say so; a fixed bug
@@ -871,96 +892,27 @@ their tenant. Telling the user is the point.
 
 ---
 
-## 10. Access demo
+## 10. Access demo — not on this portal, on purpose
 
-`/app/client/simulation` · nav label **Access demo** · hint `RBAC scope`
+`web/src/lib/portal.ts` no longer lists `simulation` for `client`, so there is no such
+section and no such nav entry. This heading is kept because the screen *was* here, and
+because why it left is a better answer than the screen ever was.
 
-### What this screen is for
+The Access demo runs one question as two roles at once and compares what each was allowed
+to retrieve and to do. A `client` principal cannot drive the operations-lead lane:
+`_resolve_persona` (`backend/src/app/api/routes.py`) refuses an operator-scoped persona to
+the self-scoped `client` role, and returns 403 before the stream opens. That refusal is
+the platform working exactly as designed. What did not work was the screen: half of a
+two-lane comparison 403s every time, so the section drew an error where it promised a
+control — the shape `portal.ts` calls out in its own doctrine and already refuses for
+`jobs` on `devops`.
 
-One question, two roles, run live side by side, so you can see what each role was allowed
-to retrieve and allowed to do.
+**Where to demo it:** the AI-team portal (`/app/ai_team/simulation`), whose principal can
+drive both lanes. See `persona-ai-team.md`.
 
-### Read this before you click it
-
-**From the client portal, the operations-lead lane cannot run.** Verified on both
-`northwind.client` and `vertex.client`: that lane returns a single event —
-
-```
-Operations lead    Event log  1 events
-  Error   #-1   This sign-in is not allowed to read that.
-  Answer        The run stopped before an answer was generated.
-```
-
-The cause is in `_resolve_persona` (`backend/src/app/api/routes.py`):
-
-> *Only the self-scoped `client` role is barred from an operator-scoped persona; the
-> operational roles (admin / ai_team / devops) may drive the full persona.*
-> → HTTP 403, *"Persona `operations_lead` is not permitted for your role."*
-
-So the refusal is correct — a client must not be able to run a query as a higher-privileged
-persona. But **the section is still mounted in the client portal and still offers the
-button**, which is the same shape of failure `web/src/lib/portal.ts` calls out in its own
-doctrine (*"a portal must not offer a control the backend guard makes impossible"*) and
-which was already fixed once, for Cache on the AI-team portal.
-
-### What is on it, as a client, in practice
-
-Four indicators (`Role-based access`, `Retrieval scope`, `Tool allowlist`, `Human gate`),
-then a comparison table with the operations-lead column mostly em-dashes:
-
-| | Operations lead | Client |
-|---|---|---|
-| Retrieval scope | Full account history | Own account only · **64 sources** |
-| Status change | Permitted for this role | Not permitted for this role |
-| Action taken | — | — |
-| Human gate | Human approval | Not reached |
-| Node time | — | 18,899 ms |
-| Run cost | — | $0.0161 |
-
-Per-lane glass-box tables (the ops lead's says *"No node has finished in this lane yet —
-**TO MEASURE IT** A completed graph node."*), a per-role ranked-source comparison
-(*"6 only the client could rank"*, with the ops lead's side reading *"This lane's
-retrieval returned no scored source. **TO MEASURE IT** A rerank step that reaches at
-least one document this role may read."*), and the client lane's full event log.
-
-The client lane itself is genuine and good: 86 events, agentic retrieval running two
-rounds with the follow-up query printed, and the tool allowlist refusing by name.
-
-### What to say when demoing it
-
-**Option A — do not demo it from this portal.** Run the Access demo from the AI-team
-portal, where both lanes complete, and use this portal for Savings and Documents instead.
-That is the recommendation.
-
-**Option B — demo it and own it.**
-
-> "Notice the operations-lead column is empty and the lane says 'this sign-in is not
-> allowed to read that'. That is the backend refusing, correctly — a client account must
-> not be able to run a query as an operator persona, and it returns a 403 before the
-> stream ever opens. What is wrong is that this portal still offers the button. We
-> already fixed exactly this shape once — the Cache section is removed from a
-> tenant-pinned analyst's navigation for the same reason — and this section should be
-> removed from the client portal the same way."
-
-### What a jury might ask
-
-**"So the demo is broken?"** The refusal is the system working. The *screen* is wrong to
-offer it. Those are different sentences and you should say both.
-
-**"Sometimes the operations lead shows a smaller candidate set than the client."** That
-has been reported. It could not be checked here because the ops-lead lane does not run
-from this portal; on the AI-team portal the ops lead saw **more** (62 vs 55) on the run
-captured for the sibling guide. Counts vary run to run because agentic retrieval issues
-different follow-up queries each time. If it inverts in front of a jury, say it looks like
-a scoping defect one layer down and that you have not root-caused it.
-
-### Deliberately absent
-
-- Both ops-lead panels name what would fill them (`a completed graph node`, `a rerank step
-  that reaches at least one document this role may read`) rather than drawing an empty
-  chart.
-
----
+**If a jury asks why a client cannot see it:** because the comparison needs an operator,
+and this account is not one. The isolation the demo illustrates is the same isolation that
+stops this account from running it — which is a better sentence than any screen.
 
 ## 11. Settings
 
@@ -1068,7 +1020,7 @@ in the trace. It is a visible tool call, not an invisible prompt injection point
 
 ## Why this portal is the narrowest, and how to say it
 
-A jury will notice that Client has eleven sections where Platform admin has twelve and AI
+A jury will notice that Client has ten sections where Platform admin has twelve and AI
 team sixteen, and that several of the eleven are read-only. Get in front of it.
 
 > "The client portal is deliberately the narrowest surface in the product. Its job is
@@ -1111,11 +1063,11 @@ Reported, not fixed.
    `P95` and `CACHE HIT` read as the client's own. Only `YOUR SPEND` differs. A jury
    comparing two tenants will land here first.
 
-2. **The Access demo's operations-lead lane cannot run from this portal.** 403 by design
-   (`_resolve_persona` bars a `client` from an operator-scoped persona), but the section
-   is still mounted and still offers the button, producing a comparison table with an
-   error in one column. Same shape as the Cache/analyst defect that was already fixed
-   elsewhere.
+2. ~~The Access demo's operations-lead lane cannot run from this portal.~~ **Fixed.**
+   `simulation` was removed from `client` in `web/src/lib/portal.ts`: a `client` cannot
+   drive the operator lane the screen exists to compare against, so half the comparison
+   403'd every time. It lives on the AI-team portal, where both lanes run. See
+   [§10](#10-access-demo--not-on-this-portal-on-purpose).
 
 3. **Approvals will almost always be empty for a client seat.** The `client` persona holds
    one tool, `add_case_note`, at low risk; the gate floor is `high`. A client seat cannot
@@ -1128,11 +1080,14 @@ Reported, not fixed.
    `· RRF` with no arms). If you plan to demo *anything* retrieval-shaped as Vertex,
    ingest something first.
 
-5. **"Small-model routing" overstates what is happening.** The Savings breakdown
-   attributes 100 % of the saving to small-model routing, while the Overview says
-   `Small-model share 0%` and Token opt says every role resolves to DeepSeek-V4-Flash at
-   `MODEL TIER: frontier`. The saving is real repricing across role price *bands*; the
-   label is misleading.
+5. ~~"Small-model routing" overstates what is happening.~~ **Fixed.** The Savings
+   breakdown used to attribute 100 % of the gap to small-model routing while the Overview
+   said `Small-model share 0%`. `GET /savings` now reads `usage_ledger` for the
+   deployments that actually answered; finding only the baseline's own model, it books
+   `saved_usd = 0` and reports the figure as `projected_usd` with the tile relabelled
+   *Projected vs frontier*. Embeddings were also being priced at the chat baseline — half
+   a million embedding tokens valued as if a chat model could have embedded them — and no
+   longer are. See [§6](#6-savings).
 
 6. **Northwind's corpus is full of test uploads.** `notif-live-*`, `audit-probe-*`,
    `zz-markall-*`, `singleread`, `dl`, `dl2`, plus a robotics paper. These are the
@@ -1163,5 +1118,5 @@ Reported, not fixed.
 | Forecast | Asked for 90 % coverage, measured 67 %, printed the 67. |
 | Risk Map | Nine risks moved; the two that moved least are the two nobody has solved. |
 | Memory | Four rows say exactly who can reach this record, and there is an erase button. |
-| Access demo | The client cannot run an operator persona — correct refusal, wrong screen to offer it on. |
+| Access demo | Not on this portal — a client cannot drive the operator lane. Demo it from AI team. |
 | Settings | One tool of four, and that is why the console said what it said. |

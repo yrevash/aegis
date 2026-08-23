@@ -1013,8 +1013,10 @@ class Guardrails:
         """Run the grounding rail; return a BLOCK/FLAG GuardResult, or None when off.
 
         Advisory by default (an ungrounded answer is a non-blocking FLAG); a hard
-        BLOCK when ``grounding_block`` is set. Returns None when grounding is
-        disabled or the answer is judged grounded.
+        BLOCK when ``grounding_block`` is set, **and** a hard BLOCK in either mode
+        when the checker reports the retrieved passages state the opposite of a claim
+        in the answer. Returns None when grounding is disabled or the answer is judged
+        grounded.
 
         **An answer with no retrieved contexts is the case this rail most needs to
         speak on, and it was the one case it stayed silent for.** ``not contexts``
@@ -1054,9 +1056,23 @@ class Guardrails:
         )
         if verdict.grounded:
             return None
-        blocking = self._grounding_block
+        # **Contradicted is not a stronger flavour of unsupported, and it does not get
+        # the same answer.** Unsupported means the passages are silent — extrapolation,
+        # a summary that reaches slightly past its source — and a rail that blocks those
+        # is a rail operators switch off, which is why it stays advisory by default.
+        # Contradicted means retrieval *found* the fact and the answer says the
+        # opposite: the corpus is right there, disagreeing, and shipping that to a
+        # person with a citation attached is worse than refusing. There is no
+        # legitimate turn of that shape, so it blocks whether or not the deployment
+        # asked for a blocking rail.
+        blocking = verdict.contradicted or self._grounding_block
         outcome = GuardVerdict.BLOCK if blocking else GuardVerdict.FLAG
-        prefix = "Ungrounded answer blocked" if blocking else "Ungrounded answer flagged"
+        if verdict.contradicted:
+            prefix = "Contradicted answer blocked"
+        elif blocking:
+            prefix = "Ungrounded answer blocked"
+        else:
+            prefix = "Ungrounded answer flagged"
         return GuardResult(
             verdict=outcome,
             reason=f"{prefix}: {verdict.reason}",
@@ -1098,6 +1114,19 @@ class Guardrails:
         if not filtered.ok:
             return GuardResult(
                 verdict=GuardVerdict.BLOCK, reason=filtered.reason, text=text, layer="content"
+            )
+        # MITRE ATLAS AML.T0024. Every other rail here asks whether the words are
+        # safe; this one asks whether the answer is a *channel*. It runs before the
+        # PII rail on purpose: redacting an SSN out of the visible prose does nothing
+        # about the copy already base64'd into an image URL the reader's browser is
+        # about to fetch, and a REDACT verdict there would have let the answer ship.
+        exfil = schema.exfiltration_channel(text)
+        if not exfil.ok:
+            return GuardResult(
+                verdict=GuardVerdict.BLOCK,
+                reason=exfil.reason,
+                text=text,
+                layer="exfiltration",
             )
         for check in (
             schema.denied_term(text, self._denylist_terms),

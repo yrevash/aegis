@@ -106,5 +106,6 @@ testdata/audit/
 # Agent scratch output — screenshots and probe artefacts from verification runs.
 .scratch-checkpoints/
 .screenshots/
+.screenshots-*/
 .shots/
 .console-shots/

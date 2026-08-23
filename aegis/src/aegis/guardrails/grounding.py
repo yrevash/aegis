@@ -11,13 +11,32 @@ Design mirrors :mod:`aegis.guardrails.content_safety` / :mod:`classifier`: an
 injected-``ChatCompleter`` self-check returning a small verdict dataclass. There
 is no deterministic backstop — groundedness is a semantic entailment judgement.
 
-**Default posture is advisory (FLAG)** — an ungrounded answer surfaces a "this
-may not be grounded in the retrieved sources" advisory in the trace without
-withholding the answer; a ``block`` knob lets an enterprise hard-block instead.
-When ``block`` is True the rail **fails closed** (an unavailable/unparseable
-checker treats the answer as ungrounded); the default advisory mode fails *open*
-(a downed checker never manufactures a spurious advisory). With no ``contexts``
-the rail is a no-op PASS (nothing to ground against).
+**Two findings, not one, because they deserve different answers.** "Unsupported"
+and "contradicted" were a single boolean here, and collapsing them is what forced
+the whole rail to be advisory:
+
+* **Unsupported** — the answer asserts something the passages neither state nor
+  deny. Extrapolation, a summary that reaches slightly past its source, a sentence
+  of framing. Blocking these is what makes a grounding rail unusable, because a
+  large share of them are fine, and an operator who cannot ship switches the rail
+  off. So this stays **advisory (FLAG)** by default; a ``block`` knob lets an
+  enterprise hard-block instead.
+* **Contradicted** — the passages say the opposite. Retrieval found the answer and
+  the model said something else. There is no legitimate turn of that shape: it is
+  the case where the corpus is *right there* and the answer disagrees with it, and
+  handing it to a person with a citation attached is worse than refusing. This
+  **BLOCKs by default**, ``block`` knob or not.
+
+Fail directions are set by which of the two is at stake. When ``block`` is True the
+rail fails closed on *unsupported* (an unavailable/unparseable checker treats the
+answer as ungrounded); the default advisory mode fails open there. ``contradicted``
+never fails closed in either mode — a checker that could not answer has not found a
+contradiction, and manufacturing one would hard-block a working deployment the
+moment its gateway hiccuped.
+
+With no ``contexts`` the rail reports ungrounded but the caller deliberately never
+blocks on it — see
+:meth:`aegis.guardrails.pipeline.Guardrails._screen_grounding`.
 """
 
 from __future__ import annotations
@@ -33,13 +52,17 @@ logger = logging.getLogger(__name__)
 
 _GROUNDING_SYSTEM_PROMPT = (
     "You are a groundedness checker for a retrieval-augmented enterprise "
-    "assistant. You are given CONTEXT passages and an ANSWER. Judge whether every "
-    "factual claim in the ANSWER is supported by (entailed by) the CONTEXT. If the "
-    "ANSWER asserts facts that are not present in, or are contradicted by, the "
-    "CONTEXT, it is NOT grounded. General acknowledgements, refusals, and requests "
-    "for clarification that make no factual claims ARE grounded. Respond with a "
-    "single JSON object and nothing else: "
-    '{"grounded": <true|false>, "reason": "<short; name the unsupported claim>"}.'
+    "assistant. You are given CONTEXT passages and an ANSWER. Judge two separate "
+    "things. (1) grounded: is every factual claim in the ANSWER supported by "
+    "(entailed by) the CONTEXT? An ANSWER asserting facts the CONTEXT does not "
+    "state is NOT grounded. General acknowledgements, refusals, and requests for "
+    "clarification that make no factual claims ARE grounded. (2) contradicted: does "
+    "the CONTEXT state the OPPOSITE of a claim in the ANSWER — a different number, "
+    "date, name, limit, or an explicit denial? Merely being absent from the CONTEXT "
+    "is NOT a contradiction; only set contradicted when the CONTEXT positively "
+    "conflicts with the ANSWER. Respond with a single JSON object and nothing else: "
+    '{"grounded": <true|false>, "contradicted": <true|false>, '
+    '"reason": "<short; name the claim and, if contradicted, what the CONTEXT says>"}.'
 )
 
 
@@ -61,6 +84,12 @@ class GroundingVerdict:
     grounded: bool
     #: Human-readable rationale — names the unsupported claim when ungrounded.
     reason: str = ""
+    #: True only when the retrieved passages state the **opposite** of a claim in
+    #: the answer. Strictly stronger than ``not grounded``: absence from the context
+    #: is unsupported, presence of the opposite is contradicted. Never inferred and
+    #: never defaulted to True — a checker that could not answer has not found a
+    #: contradiction, and the caller hard-blocks on this flag in every mode.
+    contradicted: bool = False
 
 
 def _parse_verdict(raw: str, *, fail_closed: bool) -> GroundingVerdict:
@@ -74,8 +103,14 @@ def _parse_verdict(raw: str, *, fail_closed: bool) -> GroundingVerdict:
     try:
         data = json.loads(text)
         if isinstance(data, dict) and "grounded" in data:
+            grounded = bool(data["grounded"])
+            # A contradiction is only meaningful against an ungrounded answer, and a
+            # checker that says both "grounded" and "contradicted" has contradicted
+            # itself — the conjunction is dropped rather than resolved in favour of
+            # the harsher reading, because this flag hard-blocks.
             return GroundingVerdict(
-                grounded=bool(data["grounded"]),
+                grounded=grounded,
+                contradicted=bool(data.get("contradicted", False)) and not grounded,
                 reason=str(data.get("reason", "")) or "Checker returned no reason.",
             )
     except (json.JSONDecodeError, ValueError, TypeError):
@@ -117,8 +152,9 @@ async def check_grounding(
             when False (default) it is advisory and fails open.
 
     Returns:
-        A :class:`GroundingVerdict`; ``grounded=False`` is a FLAG (or BLOCK when
-        ``block``) in the pipeline mapping.
+        A :class:`GroundingVerdict`. ``grounded=False`` is a FLAG (or BLOCK when
+        ``block``) in the pipeline mapping; ``contradicted=True`` is a BLOCK in
+        either mode.
     """
     passages = [c for c in (contexts or []) if isinstance(c, str) and c.strip()]
     if not passages:

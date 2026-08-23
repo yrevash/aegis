@@ -1669,8 +1669,36 @@ class SavingsResponse(BaseModel):
     generated_at: str = Field(description="ISO 8601 UTC time the figures were computed.")
     baseline_cost_usd: float
     actual_cost_usd: float
-    saved_usd: float = Field(description="baseline − actual.")
+    saved_usd: float = Field(
+        description=(
+            "Money actually saved: baseline − actual, but ONLY when the ledger shows a "
+            "deployment other than the baseline's serving the work. Zero when routing "
+            "is not realised on this fleet — see projected_usd."
+        )
+    )
     saved_pct: float = Field(description="Fraction saved vs baseline, 0..1.")
+    projected_usd: float = Field(
+        default=0.0,
+        description=(
+            "The same gap when it is NOT realised: what the router's role assignments "
+            "would save on a fleet with more than one deployment to route between. "
+            "Zero whenever saved_usd is non-zero; the two are never both populated."
+        ),
+    )
+    routing_realised: bool = Field(
+        default=True,
+        description=(
+            "Whether a model other than the baseline's actually served the priced "
+            "calls. Read from usage_ledger, not from the routing table."
+        ),
+    )
+    models_observed: list[str] = Field(
+        default_factory=list,
+        description="Deployments the ledger shows serving this scope's routable work.",
+    )
+    baseline_model: str = Field(
+        default="", description="The deployment the frontier baseline is priced from."
+    )
     note: str = Field(description="Honest framing of the figure (flags any estimate).")
     breakdown: list[SavingsBreakdownRow] = Field(default_factory=list)
 

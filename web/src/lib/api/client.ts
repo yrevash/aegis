@@ -27,6 +27,7 @@ import type {
   MLExplainRequest,
   MLExplainResponse,
   MetricsResponse,
+  AdvisoryAuditResponse,
   PatchCheckResponse,
   PublicMetricsResponse,
   RiskMapResponse,
@@ -592,6 +593,37 @@ export async function checkPatches(
     { method: 'POST', body: JSON.stringify({ packages: packages ?? null }) },
     token,
   )
+}
+
+/**
+ * Ask the advisory database whether the installed versions carry a published
+ * vulnerability. Deliberately a separate call from {@link checkPatches}: freshness
+ * and vulnerability are different questions, and a package can be several releases
+ * behind with no advisory against it, or current with four.
+ */
+export async function getAdvisories(
+  packages?: string[],
+  token: string | null = null,
+): Promise<AdvisoryAuditResponse> {
+  return request<AdvisoryAuditResponse>(
+    '/stack/advisories',
+    { method: 'POST', body: JSON.stringify({ packages: packages ?? null }) },
+    token,
+  )
+}
+
+/**
+ * Fetch the live bill of materials as a standard SBOM document — CycloneDX 1.6 for
+ * a scanner, SPDX 2.3 for procurement. Returned as text rather than parsed: the
+ * caller hands it to the browser as a download, and re-serialising a document a
+ * reviewer will diff is a way to change it.
+ */
+export async function getSbom(
+  format: 'cyclonedx' | 'spdx' = 'cyclonedx',
+  token: string | null = null,
+): Promise<string> {
+  const body = await request<unknown>(`/stack/sbom?format=${format}`, { method: 'GET' }, token)
+  return JSON.stringify(body, null, 2)
 }
 
 // ── Client: risk map + savings ───────────────────────────────────────────────

@@ -208,7 +208,9 @@ def security_posture(signals: PostureSignals | None = None) -> list[PostureEntry
         consumption_status = PostureStatus.PARTIAL
         consumption_detail = (
             f"Loop hard-capped at max_plan_iterations={s.max_plan_iterations}, but "
-            "GATEWAY_BUDGET_FAIL_OPEN=true — a governance read failure lets the call through."
+            "budgets are configured fail-OPEN — a governance read failure lets the call "
+            "through. The knob is the host's: BUDGET_FAIL_OPEN in this platform, "
+            "GATEWAY_BUDGET_FAIL_OPEN for a host that injects no gateway config."
         )
     else:
         consumption_status = PostureStatus.PARTIAL
@@ -346,13 +348,17 @@ def security_posture(signals: PostureSignals | None = None) -> list[PostureEntry
         PostureEntry(
             threat_id="LLM09",
             name="Misinformation / ungrounded answer",
-            control="Grounding self-check (opt-in) + retrieval provenance + ML abstention",
+            control="Grounding self-check (contradiction blocks, unsupported flags)",
             module="aegis.guardrails.grounding",
-            mechanism="check_grounding (advisory FLAG by default; block when grounding_block)",
+            mechanism="check_grounding (BLOCK on contradicted; advisory FLAG on unsupported)",
             status=PostureStatus.PARTIAL,
             detail=(
-                "A grounding rail exists but is opt-in and advisory by default (flags, does not "
-                "block) — honestly partial. Enterprises can hard-block via grounding_block."
+                "An answer the retrieved passages CONTRADICT is blocked in either mode — there "
+                "is no legitimate turn of that shape. An answer that is merely unsupported "
+                "stays advisory, because blocking those is how a rail gets switched off. Still "
+                "honestly partial: both findings are semantic entailment judgements with no "
+                "deterministic backstop, so with no completer wired the rail is a no-op, and "
+                "a run that retrieved nothing is reported but deliberately never blocked."
             ),
             refs=["aegis.guardrails.grounding:check_grounding"],
         ),

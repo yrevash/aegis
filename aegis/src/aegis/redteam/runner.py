@@ -41,6 +41,7 @@ from aegis.core.types import GuardResult, GuardVerdict
 from aegis.guardrails import check_input, check_output, check_tool_result
 from aegis.guardrails.pipeline import INJECTION_UNAVAILABLE_LAYER
 from aegis.redteam.battery import ATTACK_BATTERY, Attack, Category, Expectation, Stage
+from aegis.retrieval.validation import validate_content
 
 #: A guardrail checker: ``check(text, *, completer=...) -> GuardResult``.
 #: :func:`aegis.guardrails.check_input` satisfies it; tests inject fakes with the
@@ -75,14 +76,54 @@ _MODEL_LAYERS_PER_STAGE: dict[Stage, int] = {
     Stage.INPUT: 3,
     Stage.OUTPUT: 2,
     Stage.TOOL_RESULT: 3,
+    # The write-time gate is pure code and calls nothing, live or offline. A zero
+    # here is a measurement, not a rounding-down.
+    Stage.INGEST: 0,
 }
+
+
+async def check_ingest(text: str, *, completer: ChatCompleter | None = None) -> GuardResult:
+    """Screen a document on its way into the corpus, in :class:`GuardResult` terms.
+
+    The write-time gate (:func:`aegis.retrieval.validation.validate_content`) is the
+    only rail a **poisoning** attack ever meets, and it does not speak the guardrail
+    pipeline's vocabulary because it is not one of the three request-path rails: it
+    runs during ingestion, months before the question its payload is meant to answer.
+    This adapter is what lets the battery point a probe at it and score the verdict
+    beside the others — the same argument that put ``Stage.TOOL_RESULT`` in the
+    battery rather than pasting indirect injections into the input rail.
+
+    ``completer`` is accepted and ignored: the gate is pure code and calls no model,
+    which is why the ingest probes cost nothing in the run estimate.
+
+    Args:
+        text: The candidate document chunk.
+        completer: Unused; present so this satisfies :data:`InputChecker`.
+
+    Returns:
+        A :class:`GuardResult` — ``BLOCK`` with ``layer="ingest"`` when the gate
+        rejects the chunk, ``PASS`` otherwise.
+    """
+    verdict = validate_content(text)
+    if verdict.ok:
+        return GuardResult(
+            verdict=GuardVerdict.PASS,
+            reason="The write-time content gate accepted this document.",
+            text=text,
+        )
+    return GuardResult(
+        verdict=GuardVerdict.BLOCK,
+        reason=f"Refused before the store: {verdict.reason}.",
+        text=text,
+        layer="ingest",
+    )
 
 
 @dataclass(frozen=True)
 class Rails:
-    """The three guardrail entry points a battery is aimed at.
+    """The four entry points a battery is aimed at.
 
-    Bundled rather than passed as three keyword arguments because they are one
+    Bundled rather than passed as four keyword arguments because they are one
     decision: a caller either drives the real rails or substitutes fakes for all of
     them, and a mix is how a test ends up quietly measuring the production rail it
     thought it had replaced.
@@ -92,11 +133,22 @@ class Rails:
         check_output: The outbound rail — :attr:`~aegis.redteam.battery.Stage.OUTPUT`.
         check_tool_result: The tool-result rail —
             :attr:`~aegis.redteam.battery.Stage.TOOL_RESULT`.
+        check_ingest: The write-time gate —
+            :attr:`~aegis.redteam.battery.Stage.INGEST`.
+
+    **No field has a default, and that is the whole design.** Giving ``check_ingest``
+    one looked kind to existing three-argument callers and was exactly the "mix" the
+    paragraph above warns about: the test that drives the route with every rail
+    substituted for a dead one kept a *real* write-time gate underneath, blocked five
+    probes with it, and asserted a property about an outage that was not happening.
+    A missing rail is now a ``TypeError`` at the construction site, where it is one
+    line to fix and impossible to miss.
     """
 
     check_input: InputChecker
     check_output: InputChecker
     check_tool_result: InputChecker
+    check_ingest: InputChecker
 
     def for_stage(self, stage: Stage) -> InputChecker:
         """Return the checker that screens ``stage``."""
@@ -104,6 +156,8 @@ class Rails:
             return self.check_output
         if stage is Stage.TOOL_RESULT:
             return self.check_tool_result
+        if stage is Stage.INGEST:
+            return self.check_ingest
         return self.check_input
 
     @classmethod
@@ -115,7 +169,12 @@ class Rails:
         and it must not have a second, real rail underneath it producing verdicts the
         test never supplied.
         """
-        return cls(check_input=check, check_output=check, check_tool_result=check)
+        return cls(
+            check_input=check,
+            check_output=check,
+            check_tool_result=check,
+            check_ingest=check,
+        )
 
 
 #: The real rails. :func:`run_redteam` uses these unless a caller injects its own.
@@ -123,6 +182,7 @@ DEFAULT_RAILS = Rails(
     check_input=check_input,
     check_output=check_output,
     check_tool_result=check_tool_result,
+    check_ingest=check_ingest,
 )
 
 
@@ -562,6 +622,7 @@ __all__ = [
     "DEFAULT_RAILS",
     "DEFAULT_THRESHOLDS",
     "AttackResult",
+    "check_ingest",
     "CategoryReport",
     "InputChecker",
     "Rails",

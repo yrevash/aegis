@@ -415,7 +415,13 @@ export const SECTIONS: Record<string, Section> = {
  *     write, the correction and the forget exist — a memory screen you cannot correct is
  *     a report, and it is not one any more.
  *   - `simulation` stays where it tells the isolation story and is not propagated: it
- *     is a demo artefact, not an operator tool.
+ *     is a demo artefact, not an operator tool. It was also on `client`, and could not
+ *     work there: the screen runs the *same* query as two roles at once, and
+ *     `_resolve_persona` refuses a `client` principal an operator-scoped persona — so
+ *     one of the two lanes 403s every time, which is the isolation story working and
+ *     the screen failing. A comparison you can only ever run half of is not a
+ *     comparison, and offering the button anyway is the shape this list exists to
+ *     forbid. It lives on `ai_team`, whose principal can drive both lanes.
  *
  * `analytics` is on the three portals whose principals *act* on it, and the acting is
  * real: an operator chooses the board and the window, and — where the deployment has
@@ -431,7 +437,7 @@ export const ROLE_SECTIONS: Record<Portal, string[]> = {
   tenant_admin: ['dashboard', 'analytics', 'documents', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
   devops: ['dashboard', 'stack', 'patch', 'security', 'compliance', 'redteam', 'cache', 'latency', 'audit', 'settings'],
-  client: ['console', 'dashboard', 'documents', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'memory', 'simulation', 'settings'],
+  client: ['console', 'dashboard', 'documents', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'memory', 'settings'],
 }
 
 /**

@@ -23,7 +23,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from aegis.gateway.routing import (
     DeploymentNotAllowedError,
@@ -66,6 +66,8 @@ from app.api.schemas import (
     AdminUserRow,
     AdminUsersResponse,
     AdmissionRefusedResponse,
+    AdvisoryAuditResponse,
+    AdvisoryRequest,
     AegisModuleRow,
     AgentTopologyResponse,
     ApprovalDecisionRequest,
@@ -196,8 +198,11 @@ from app.data import (
     user_tenant_id,
 )
 from app.platform import (
+    audit_dependencies,
+    build_cyclonedx,
     build_risk_map,
     build_savings,
+    build_spdx,
     build_stack,
     patch_check,
 )
@@ -1522,6 +1527,58 @@ async def stack_patch_check(
     """
     packages = req.packages if req is not None else None
     return patch_check(packages)
+
+
+@router.post("/stack/advisories", response_model=AdvisoryAuditResponse, tags=["platform"])
+async def stack_advisories(
+    req: AdvisoryRequest | None = None,
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> AdvisoryAuditResponse:
+    """Audit the installed distributions against OSV.dev (admin/devops).
+
+    This is the **vulnerability verdict** that ``POST /stack/patch-check`` is not: a
+    package can be three releases behind and carry no advisory, and on the newest
+    release and carry four. Versions come from ``importlib.metadata``; advisories come
+    from a live OSV.dev query (the aggregator behind ``pip-audit`` — GHSA, PYSEC, NVD).
+
+    The same honesty rule the patch check holds: a package is ``clean`` only after OSV
+    actually answered for it, and ``passed`` is ``False`` whenever any package is
+    vulnerable **or** any package could not be asked, so an audit that did not run can
+    never read as an audit that found nothing.
+    """
+    packages = req.packages if req is not None else None
+    return AdvisoryAuditResponse.model_validate(audit_dependencies(packages).as_dict())
+
+
+@router.get("/stack/sbom", tags=["platform"])
+async def stack_sbom(
+    fmt: Literal["cyclonedx", "spdx"] = Query(
+        default="cyclonedx",
+        alias="format",
+        description="cyclonedx (1.6) for scanners, spdx (2.3) for procurement.",
+    ),
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> JSONResponse:
+    """Export the live bill of materials as a standard SBOM document (admin/devops).
+
+    ``GET /stack`` answers the same question for a human reading the console; this
+    answers it for a **machine somebody else owns**. Both documents are generated from
+    one pass over the running interpreter's installed distributions, so they cannot
+    describe different machines, and every component carries a PURL — the key an
+    advisory database joins on.
+
+    The response is served with the format's own media type so a scanner can consume it
+    directly. Neither document is signed and neither carries SLSA/in-toto provenance;
+    the integrity evidence that does exist (the lockfiles' sha256 pin count) is recorded
+    in the document's own metadata rather than implied.
+    """
+    if fmt == "spdx":
+        return JSONResponse(
+            content=build_spdx(), media_type="application/spdx+json"
+        )
+    return JSONResponse(
+        content=build_cyclonedx(), media_type="application/vnd.cyclonedx+json"
+    )
 
 
 @router.get("/risk-map", response_model=RiskMapResponse, tags=["platform"])

@@ -758,6 +758,60 @@ class Settings(BaseSettings):
                 + remedy
             )
 
+    def ensure_spend_caps_bind(self) -> None:
+        """Fail-fast when a non-dev deployment would boot with spend caps unbound.
+
+        **A budget control that fails open is not a control.** ``budget_fail_open``
+        turns every token/USD/RPM/TPM ceiling into a suggestion the moment the
+        enforcement read errors: one database blip and an agent loop that would have
+        been refused at the cap runs to whatever the provider will sell it. The knob
+        exists because there are deployments that would rather serve than stop, and it
+        is a legitimate choice — in dev, where nothing is being spent, and where an
+        offline demo box has no ``budgets`` table to read.
+
+        Outside dev it is refused at boot, on the same asymmetry
+        :meth:`ensure_secure_secrets` uses: a check that blocks the dev loop gets
+        switched off, and a warning a production boot scrolls past protects nobody.
+        The second half of the same guarantee is checked here too — the *hook*. A cap
+        is enforced at exactly one place, :func:`aegis.gateway.llm.complete`'s
+        governance seam, and a host that never injects a hook there leaves the gateway
+        ungoverned however carefully its budgets are configured. ``app.core.llm``
+        injects one at import time, so this asserts what the composition root actually
+        wired rather than trusting that it did: the failure mode being closed is a
+        refactor that stops importing that shim and silently uncaps the fleet.
+
+        Raises:
+            InsecureConfigurationError: When ``app_env`` is not ``dev`` and either
+                ``budget_fail_open`` is set or no governance hook is wired at the
+                gateway chokepoint.
+        """
+        if self.is_dev:
+            return
+        if self.budget_fail_open:
+            raise InsecureConfigurationError(
+                "BUDGET_FAIL_OPEN=true refuses to boot outside dev: a spend cap that "
+                "lets the call through when its own enforcement read fails is not a "
+                "cap. Unset it (the default is fail-closed), or run this deployment "
+                "with APP_ENV=dev and accept that it is not governed. Note the "
+                "variable name: the standalone gateway reads GATEWAY_BUDGET_FAIL_OPEN "
+                "for a host that injects no config, but this platform injects one "
+                "(app.core.llm), so BUDGET_FAIL_OPEN is the knob that binds here and "
+                "GATEWAY_BUDGET_FAIL_OPEN is inert."
+            )
+        # Import here, not at module scope: ``app.core.llm`` imports ``app.config``,
+        # and reading the wired hook is a boot-time question, not an import-time one.
+        from aegis.gateway import llm as gateway_llm
+
+        import app.core.llm  # noqa: F401 - imported for its configure() side effect
+
+        if isinstance(gateway_llm._governance, gateway_llm._NoOpGovernance):
+            raise InsecureConfigurationError(
+                "No budget-governance hook is wired at the model gateway, so token, "
+                "USD, RPM and TPM caps bind nothing and spend is unbounded. The "
+                "composition root injects one by importing ``app.core.llm``; a "
+                "deployment reaching this line has lost that wiring."
+            )
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -232,9 +232,25 @@ async def test_a_missing_adapter_member_is_named_before_anything_is_wired() -> N
 
 
 # ─────────────────────────────── 3. missing environment, named and refused ──
-async def test_full_mode_names_the_unset_backend_variable() -> None:
-    """``AEGIS_MODE=full`` with no Qdrant URL names the variable, not "config error"."""
+async def test_full_mode_names_the_unset_backend_variable(monkeypatch) -> None:
+    """``AEGIS_MODE=full`` with no Qdrant URL names the variable, not "config error".
+
+    Both spellings are cleared, and that is the point rather than housekeeping. The
+    setting answers to ``QDRANT_URL`` as well as ``AEGIS_VECTOR_STORE_URL``
+    (``aegis.core.config``, deliberately — ``QDRANT_URL`` is the name LightRAG's own
+    storage reads), and ``aegis.retrieval.lightrag_backend`` ``os.environ.setdefault``\\s
+    ``QDRANT_URL`` into the **process** environment so LightRAG's storage can find it.
+
+    So any earlier test that builds a LightRAG backend leaves this test's premise false
+    for the rest of the session: the variable is set, ``full`` mode stops complaining
+    about it, and this assertion passes on a message listing the *other* two variables
+    while proving nothing. It failed exactly that way when the retrieval suite ran first
+    — and passed alone, which is the signature of a test reading ambient state. A test
+    that asserts "unset" has to establish it.
+    """
     _fake_adapter("fake_widgets_adapter")
+    monkeypatch.delenv("AEGIS_VECTOR_STORE_URL", raising=False)
+    monkeypatch.delenv("QDRANT_URL", raising=False)
     with pytest.raises(RuntimeError, match="AEGIS_VECTOR_STORE_URL"):
         await Aegis.from_env(adapter="fake_widgets_adapter", mode="full")
 

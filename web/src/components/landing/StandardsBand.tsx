@@ -1,6 +1,5 @@
 'use client'
 
-import { ShieldAlert } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 
 import { Absence, Receipt } from '@/components/primitives/Receipt'
@@ -9,7 +8,13 @@ import { getStandards, type StandardsResponse } from '@/lib/api/standards'
 import { cn } from '@/lib/utils'
 
 import { LandingSection } from './LandingSection'
-import { resolveGroups, shownCount, type ResolvedGroup } from './standardsSummary'
+import {
+  completeFrameworks,
+  resolveGroups,
+  shownCount,
+  type ResolvedClaim,
+  type ResolvedGroup,
+} from './standardsSummary'
 
 /**
  * The standards band: the controls Aegis enforces in full, named one by one.
@@ -17,8 +22,9 @@ import { resolveGroups, shownCount, type ResolvedGroup } from './standardsSummar
  * **The unit is a control, not a framework, and that is the whole design.** This band
  * used to be a wall of framework wordmarks with a four-state strip under each. It could
  * not survive the only question a reviewer asks — *which of these are you compliant
- * with?* — because no framework here is fully enforced, and a wordmark grid invites a
- * reader to hear otherwise. So the page stopped claiming frameworks. It names controls:
+ * with?* — because for most of these frameworks the answer is a fraction, and a wordmark
+ * grid invites a reader to hear a whole. So the page stopped claiming frameworks except
+ * where the endpoint says every mapped control is enforced. It names controls:
  * `Art. 14 — Human oversight`, `LLM06 — Excessive Agency`, `s.12(3) — Right to
  * erasure`. Each one is checkable against the published standard, and each one is a
  * claim held in full.
@@ -34,13 +40,23 @@ import { resolveGroups, shownCount, type ResolvedGroup } from './standardsSummar
  * controls says *five of ten*, because the other five are partial and a card that hid
  * its denominator would be the whole-framework claim this redesign exists to delete.
  *
+ * **Frameworks held in full lead, and that group is derived.** A framework appears in the
+ * first row only when the endpoint says every control it maps is enforced —
+ * `completeFrameworks` compares two numbers off the wire and nothing in this file names a
+ * framework. One reaching completeness joins that row on the next read; one losing a
+ * control falls back into the shortlist below, or off the page. The denominator is printed
+ * there too, because *in full* means every control **this table maps**, and the mapping is
+ * ours: four functions of NIST AI RMF is a coarser unit than seventeen ISO controls, and a
+ * reader is owed that rather than left to infer it.
+ *
  * **The framing is the product here, not the wordmarks.** ISO 27001, SOC 2 and GDPR
  * normally mean *audited and certified by a named body*. Aegis has none of that — no
- * certificate, no report, no conformity assessment, nobody independent has looked. So
- * the correction is made three times, in three registers a reader cannot miss: the
- * section's own heading says *certified against none*, a persistent notice sits above
- * the controls rather than inside a tooltip, and the disclosure repeats it beside the
- * frameworks it applies to.
+ * certificate, no report, no conformity assessment, nobody independent has looked. The
+ * amber banner that used to carry that correction is gone by the owner's decision — this
+ * is a hackathon project and the audience knows it holds no certificate — but the
+ * correction itself is not: the section heading still says *certified against none*, and
+ * the disclosure repeats it beside the frameworks it applies to. The page must never
+ * *assert* certification, and `certified: false` stays on the wire.
  *
  * **No blended total.** Nothing here averages one group against another. The only
  * aggregates on screen are counts of things — controls enforced, controls mapped,
@@ -83,9 +99,7 @@ export function StandardsBand(): ReactElement | null {
         eyebrow="Enforced"
         title="Controls we enforce end to end. Certified against none."
       >
-        <NotCertified />
         <Absence
-          className="mt-6"
           figure="The enforced controls"
           why="the public standards endpoint did not answer"
           needed="a reachable backend — every control named here is read from the compliance table on each request, never stored on this page"
@@ -95,33 +109,60 @@ export function StandardsBand(): ReactElement | null {
   }
 
   const { frameworks, coverage } = state.data
-  const groups = resolveGroups(frameworks)
+  const inFull = completeFrameworks(frameworks)
+  const groups = resolveGroups(
+    frameworks,
+    undefined,
+    new Set(inFull.map((claim) => claim.frameworkId)),
+  )
 
   return (
     <LandingSection
       id="standards"
       eyebrow="Enforced"
-      title={`${coverage.enforced} controls we enforce end to end. Certified against none.`}
+      title={headline(inFull, coverage.enforced)}
     >
-      <NotCertified />
+      {inFull.length > 0 && (
+        <>
+          <h3 className="text-[0.8125rem] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            Every mapped control enforced
+          </h3>
+          <ul className="mt-3 min-w-0 divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
+            {inFull.map((claim) => (
+              <InFullRow key={claim.frameworkId} claim={claim} />
+            ))}
+          </ul>
+        </>
+      )}
 
       {groups.length === 0 ? (
-        <Absence
-          className="mt-6"
-          figure="The enforced controls"
-          why="none of the shortlisted frameworks are currently enforcing a control"
-          needed="a shortlist whose framework ids match the compliance authority — see SHORTLIST in standardsSummary.ts"
-        />
+        inFull.length === 0 && (
+          <Absence
+            figure="The enforced controls"
+            why="none of the shortlisted frameworks are currently enforcing a control"
+            needed="a shortlist whose framework ids match the compliance authority — see SHORTLIST in standardsSummary.ts"
+          />
+        )
       ) : (
-        <ul className="mt-8 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
-          {groups.map((group) => (
-            <GroupCard key={group.title} group={group} />
-          ))}
-        </ul>
+        <>
+          <h3
+            className={cn(
+              'text-[0.8125rem] font-medium uppercase tracking-[0.08em] text-muted-foreground',
+              inFull.length > 0 && 'mt-8',
+            )}
+          >
+            Individual controls, elsewhere
+          </h3>
+          <ul className="mt-3 grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+            {groups.map((group) => (
+              <GroupCard key={group.title} group={group} />
+            ))}
+          </ul>
+        </>
       )}
 
       <FullPicture
-        shown={shownCount(groups)}
+        shown={shownCount(groups) + inFull.reduce((sum, claim) => sum + claim.controls.length, 0)}
         enforced={coverage.enforced}
         frameworks={frameworks.length}
         mapped={coverage.total}
@@ -139,31 +180,66 @@ export function StandardsBand(): ReactElement | null {
 }
 
 /**
- * The sentence a reader must not be able to leave without.
+ * The section heading, which is now also where the certification correction lives.
  *
- * Deliberately not a tooltip, not a footnote and not grey 11px type under the grid: it
- * sits *above* the controls, in the amber the console already reserves for "a human
- * needs to look at this", with the icon and the word the status rule requires
- * (DESIGN.md §2). It is two clauses, because the second one is the part that makes the
- * first credible — a page that only disclaims sounds evasive; a page that disclaims and
- * then says what it *does* have sounds like it knows the difference.
+ * **Three branches, and every one of them ends in the same four words.** The amber notice
+ * that used to carry *not certification* above the grid is gone by the owner's decision;
+ * with it gone, the heading is one of two places a reader meets the correction at all, and
+ * a branch that dropped it would be a page asserting a certificate by omission. The test
+ * checks every headline string in this file for those words rather than the one that
+ * happens to render.
+ *
+ * **The single-framework branch names the framework rather than counting to one.** The
+ * mark comes off the wire like everything else here, so this is not a framework written
+ * into the page — it is the page printing the one the endpoint says is complete. "NIST AI
+ * RMF enforced in full" is the claim; "1 framework enforced in full" is a sentence about
+ * arithmetic.
  */
-function NotCertified(): ReactElement {
+function headline(inFull: readonly ResolvedClaim[], enforced: number): string {
+  if (inFull.length === 1) return `${inFull[0].mark} enforced in full. Certified against none.`
+  if (inFull.length > 1) {
+    return `${inFull.length} frameworks enforced in full. Certified against none.`
+  }
+  return `${enforced} controls we enforce end to end. Certified against none.`
+}
+
+/**
+ * A framework whose every mapped control is enforced — one full-width row.
+ *
+ * **A row and not a card in the three-column grid below**, because this group has as many
+ * members as the compliance table currently gives it: one today, three if the OWASP and
+ * MITRE work lands. A three-column grid holding one card draws two empty cells, and an
+ * empty cell on a compliance surface reads as something withheld. Rows grow and shrink
+ * without a layout that has an opinion about the count.
+ *
+ * **The denominator is printed here too**, and `N of N` rather than a bare "complete" is
+ * the honesty of the row: it says what the claim is measured against, and lets a reader
+ * see that four functions of one framework and seventeen controls of another are not the
+ * same size of claim.
+ *
+ * The controls are bare identifiers rather than id-and-title rows. A framework in full
+ * contributes every control it has, and ten titled rows per framework is a wall of prose
+ * where a checkable list is wanted — the titles are one request away at the endpoint this
+ * section links to, and the id is what a reader looks up in the published standard.
+ */
+function InFullRow({ claim }: { claim: ResolvedClaim }): ReactElement {
   return (
-    <p className="flex min-w-0 items-start gap-2.5 rounded-lg border border-risk bg-risk/15 px-4 py-3">
-      <ShieldAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-risk-ink" strokeWidth={2} />
-      <span className="min-w-0 text-pretty text-[0.875rem] leading-relaxed text-foreground">
-        <strong className="font-semibold">
-          Compliance-readiness evidence — not certification.
-        </strong>{' '}
-        <span className="text-muted-foreground">
-          {/* Not "each control below": the notice is rendered in the unreachable-backend
-              state too, where there is nothing below it. */}
-          No certificate held, no independent audit, no attestation. Each control maps to
-          a file, a route or a test in this repository.
+    <li className="min-w-0 px-5 py-4">
+      <p className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span className="min-w-0 text-[0.9375rem] font-semibold tracking-[-0.01em] text-foreground">
+          {claim.mark}
         </span>
-      </span>
-    </p>
+        <span className="text-[0.8125rem] leading-6 text-muted-foreground">
+          <span className="tabular font-mono font-semibold text-ok-ink">
+            {claim.controls.length}
+          </span>{' '}
+          of <span className="tabular font-mono">{claim.mapped}</span> enforced
+        </span>
+      </p>
+      <p className="mt-1 min-w-0 text-pretty font-mono text-[0.75rem] leading-6 text-muted-foreground">
+        {claim.controls.map((control) => control.id).join(' · ')}
+      </p>
+    </li>
   )
 }
 
@@ -267,8 +343,8 @@ function FullPicture({
 /**
  * The detail, in a disclosure — the page's rule for prose (DESIGN.md §4).
  *
- * Four lines, closed by default. A reader who wants the qualification opens it; a
- * reader who does not has already been told the one thing that matters, twice, above.
+ * Five lines, closed by default. A reader who wants the qualification opens it; a reader
+ * who does not has already been told the one thing that matters, in the heading.
  */
 function Meaning({ className }: { className?: string }): ReactElement {
   return (
@@ -286,8 +362,13 @@ function Meaning({ className }: { className?: string }): ReactElement {
         <li>
           <span className="text-foreground">Alignment, not certification.</span> Aegis holds
           no ISO 27001 or ISO/IEC 42001 certificate, no SOC 2 report and no EU AI Act
-          conformity assessment. No framework here is enforced in every clause, which is
-          why the count beside each group carries its denominator.
+          conformity assessment. Nobody independent has audited any of it.
+        </li>
+        <li>
+          <span className="text-foreground">&ldquo;In full&rdquo; means every control this
+          table maps.</span> The mapping is ours and the frameworks are not all mapped at the
+          same grain, so the denominator is printed beside every claim — including the ones
+          held in full.
         </li>
         <li>
           <span className="text-foreground">Only enforced controls are named.</span> Nothing

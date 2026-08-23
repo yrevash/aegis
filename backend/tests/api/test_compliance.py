@@ -306,22 +306,60 @@ def test_the_residency_inventory_travels_with_the_map() -> None:
     assert "backend/src/app/platform/residency.py" in cited
 
 
-def test_the_supply_chain_row_exists_and_is_honest() -> None:
-    """LLM03 had zero references anywhere before this surface; it must not regress.
+def test_the_supply_chain_row_names_a_verdict_and_a_gate_not_just_an_inventory() -> None:
+    """The guard on LLM03, rewritten because the thing it guarded against was built.
 
-    The SBOM, the hash-pinned lockfiles and the registry patch-check were all real and
-    none of them was labelled as supply-chain assurance. Labelling it is the whole
-    point — and it must stay ``partial``, because inventory plus freshness is not
-    vulnerability management, and an ``enforced`` here would be exactly the unearned
-    green this page exists to refuse.
+    It used to assert ``state is PARTIAL``, on the reasoning that *inventory plus
+    freshness is not vulnerability management* — which was true, and is the right
+    thing to have refused. What changed is not the standard: an OSV advisory feed, a
+    CycloneDX/SPDX export and a CI step that fails the build now exist, so the
+    sentence the old assertion was defending is no longer the sentence being claimed.
+
+    Deleting the guard would be the wrong response, because the row is still the most
+    forgeable on this page — "we have an SBOM" reads exactly like "we manage our
+    supply chain". So the guard now pins the three things that make ``enforced``
+    earned rather than the state it may not reach. Take any of them away and this
+    fails:
+
+    * a **verdict** — the advisory feed, and its rule that an audit which could not
+      run does not pass;
+    * an **export** a third party can read without a bespoke parser;
+    * a **gate** — CI, which fails the build on an advisory nobody recorded a
+      decision about.
+
+    Freshness is still cited, and is still not the verdict.
     """
     llm = next(f for f in _MAP.frameworks if f.id == "owasp-llm")
     row = next(c for c in llm.controls if c.id == "LLM03")
-    assert row.state is ControlState.PARTIAL
-    assert "CVE" in row.gap or "advisory" in row.gap
     refs = {evidence.ref for evidence in row.evidence}
-    assert "backend/uv.lock" in refs
-    assert "POST /stack/patch-check" in refs
+
+    assert "backend/uv.lock" in refs, "the hash pinning is the artefact-integrity claim"
+    assert "POST /stack/patch-check" in refs, "freshness is still reported, separately"
+
+    if row.state is not ControlState.ENFORCED:
+        # Demoted for a real reason: the gap must still name what is absent, which
+        # ``test_anything_short_of_enforced_names_what_is_missing`` already enforces.
+        return
+
+    assert "backend/src/app/platform/advisories.py" in refs, (
+        "LLM03 claims enforced with no vulnerability verdict behind it — that is "
+        "patch freshness wearing the word 'enforced'"
+    )
+    assert "POST /stack/advisories" in refs, "the verdict must be reachable, not internal"
+    assert "backend/src/app/platform/sbom.py" in refs and "GET /stack/sbom" in refs, (
+        "an inventory only this platform's own console can read is not an SBOM export"
+    )
+    assert ".github/workflows/ci.yml" in refs, (
+        "a supply-chain control with no build gate is a report, not a control"
+    )
+    tests = {e.ref for e in row.evidence if e.kind is EvidenceKind.TEST}
+    assert any("does_not_pass" in ref for ref in tests), (
+        "the load-bearing honesty rule — an audit that could not run is not a clean "
+        "bill of health — must be one of the tests this row points at"
+    )
+    # The one absence that hash pinning does not substitute for is still stated. It
+    # lives in the summary because an enforced row may carry no gap sentence.
+    assert "provenance" in row.summary.lower()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

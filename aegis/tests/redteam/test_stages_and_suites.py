@@ -37,13 +37,14 @@ def _pin_regex_pii(monkeypatch):
 # ── The stage seam ───────────────────────────────────────────────────────────
 
 
-def test_the_battery_probes_all_three_rails():
-    """A battery that only calls check_input reports on a third of the product."""
-    assert {a.stage for a in ATTACK_BATTERY} == {
-        Stage.INPUT,
-        Stage.OUTPUT,
-        Stage.TOOL_RESULT,
-    }
+def test_the_battery_probes_every_rail():
+    """A battery that only calls check_input reports on a fraction of the product.
+
+    Four stages now, not three: ``INGEST`` is the write-time content gate, the only
+    rail a corpus-poisoning attack ever meets. Equality rather than a subset, so a
+    stage added to the enum without probes behind it fails here.
+    """
+    assert {a.stage for a in ATTACK_BATTERY} == set(Stage)
 
 
 async def test_each_probe_is_screened_by_the_rail_its_stage_names():
@@ -62,6 +63,7 @@ async def test_each_probe_is_screened_by_the_rail_its_stage_names():
             check_input=recorder(Stage.INPUT),
             check_output=recorder(Stage.OUTPUT),
             check_tool_result=recorder(Stage.TOOL_RESULT),
+            check_ingest=recorder(Stage.INGEST),
         )
     )
     for stage in Stage:

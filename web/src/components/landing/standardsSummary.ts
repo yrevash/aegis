@@ -29,9 +29,13 @@ import type { EnforcedControl, FrameworkSummary } from '@/lib/api/standards'
  *
  * The band used to draw twelve framework wordmarks with a four-state strip under each.
  * That surface cannot answer the only question a reviewer actually asks — *which of
- * these are you compliant with?* — because **no framework here is fully enforced**.
- * Twelve marks, or three, invite a reader to hear "we do ISO 27001", and the honest
- * answer is that we enforce seven of its seventeen mapped controls.
+ * these are you compliant with?* — because for most of these frameworks the honest
+ * answer is a fraction: we enforce seven of ISO 27001's seventeen mapped controls, and a
+ * wordmark grid invites a reader to hear "we do ISO 27001" instead.
+ *
+ * The frameworks where the fraction *is* the whole thing are the exception, and they are
+ * handled by {@link completeFrameworks} — derived from the payload, never listed here.
+ * This shortlist is what the band draws for everything else.
  *
  * So the unit is the control. `enforced` in the compliance table means a real mechanism
  * *and* a test that fails when the mechanism is switched off; a control in any other
@@ -54,18 +58,20 @@ import type { EnforcedControl, FrameworkSummary } from '@/lib/api/standards'
  *   17. One mechanism — memory correction and hard delete, audited — answering the home
  *   regulator and the European one at once. DPDP s.12 is enforced in full.
  *
- * A strong alternative, if one of the above ever stops laying out: `mitre-atlas`, which
- * is five of five on the LLM techniques (direct and indirect injection, jailbreak,
- * meta-prompt extraction, data leakage) and reads as one complete story about the
- * attacks that apply to an LLM platform.
+ * A group whose framework reaches completeness loses it here rather than printing twice:
+ * `resolveGroups` is given the set {@link completeFrameworks} already claimed, and a group
+ * emptied that way is dropped whole. So `owasp-llm` reaching ten of ten does not need an
+ * edit in this file — its card simply moves up into the in-full row.
  *
  * ### What "enforced" does and does not mean
  *
  * It means: a mechanism in this repository, and a test that fails if it is removed. It
  * does **not** mean audited, certified, or attested by anybody — Aegis holds no
- * certificate of any kind, and the band says so three times. It also says nothing about
- * the rest of the framework: a group that shows three of ten controls is a claim about
- * three controls, which is why the denominator is printed beside every count.
+ * certificate of any kind, and the band says so in its heading and again in its
+ * disclosure. It also says nothing about the rest of the framework: a group that shows
+ * three of ten controls is a claim about three controls, which is why the denominator is
+ * printed beside every count — and why a framework claimed *in full* prints its
+ * denominator too.
  *
  * ### Changing it
  *
@@ -97,6 +103,39 @@ export const SHORTLIST: readonly ControlGroup[] = [
   { title: 'Data-principal rights, India and the EU', frameworks: ['dpdp', 'privacy'] },
 ]
 
+/**
+ * ## Frameworks enforced in their entirety
+ *
+ * The band leads with these, and **the list is derived, never authored**. A framework
+ * qualifies when the endpoint says every control it maps is `enforced` — that is the whole
+ * rule, and it is the strictest reading available: `not_applicable` counts against a
+ * framework here, because "we enforce all of it" and "we enforce all of the parts that
+ * applied" are different claims and only the first is worth leading with.
+ *
+ * Nothing names a framework. A framework that reaches completeness joins this group on the
+ * next read with no edit in this file, and one that loses a control drops out of it the
+ * same way — into {@link SHORTLIST}'s groups if it is listed there, and off the page if it
+ * is not. That is what makes the claim safe to make at the top of a public page: the only
+ * way to appear here is for the compliance table to say so, and every `enforced` cell in
+ * that table needs a mechanism *and* a test that fails when the mechanism is removed.
+ */
+export function completeFrameworks(
+  frameworks: readonly FrameworkSummary[],
+): ResolvedClaim[] {
+  return frameworks
+    .filter(
+      (framework) =>
+        framework.coverage.total > 0 &&
+        framework.coverage.enforced === framework.coverage.total,
+    )
+    .map((framework) => ({
+      frameworkId: framework.id,
+      mark: framework.mark,
+      controls: [...framework.enforced_controls],
+      mapped: framework.coverage.total,
+    }))
+}
+
 /** One framework's contribution to a group, with both halves of its count. */
 export interface ResolvedClaim {
   frameworkId: string
@@ -127,10 +166,15 @@ export interface ResolvedGroup {
  * contributes no claim; a group left with no claims is dropped entirely rather than
  * drawn as an empty card. That is the failure mode that matters here: a control losing
  * its enforced state must make the band *smaller*, never make it lie.
+ *
+ * `exclude` carries the frameworks {@link completeFrameworks} has already claimed in full,
+ * so no framework is printed twice under two different headings. It defaults to empty,
+ * which is the plain resolution of a shortlist against a payload.
  */
 export function resolveGroups(
   frameworks: readonly FrameworkSummary[],
   groups: readonly ControlGroup[] = SHORTLIST,
+  exclude: ReadonlySet<string> = new Set(),
 ): ResolvedGroup[] {
   const served = new Map(frameworks.map((framework) => [framework.id, framework]))
 
@@ -138,6 +182,7 @@ export function resolveGroups(
     const claims = group.frameworks.flatMap((id) => {
       const framework = served.get(id)
       if (framework === undefined || framework.enforced_controls.length === 0) return []
+      if (exclude.has(framework.id)) return []
       return [
         {
           frameworkId: framework.id,

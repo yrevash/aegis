@@ -29,6 +29,7 @@ import base64
 import json
 import logging
 import re
+from urllib.parse import unquote
 
 from aegis.core.interfaces import ChatCompleter
 from aegis.core.types import InjectionVerdict
@@ -317,42 +318,98 @@ _MULTILINGUAL_SIGNATURES: tuple[re.Pattern[str], ...] = (
 #: A run of base64 alphabet long enough to carry a real instruction.
 _BASE64_RUN = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
 
-#: Cap on how many base64 candidates are decoded per screen, so a pathological
+#: Cap on how many encoded candidates are decoded per screen, so a pathological
 #: input cannot turn the rail into a CPU sink.
-_MAX_BASE64_CANDIDATES = 12
+_MAX_ENCODED_CANDIDATES = 12
 
 
-def _decoded_base64_candidates(text: str) -> list[str]:
-    """Return plausible UTF-8 payloads hidden in base64 runs inside ``text``.
+#: A run of hex long enough to carry an instruction, even-length so it decodes.
+_HEX_RUN = re.compile(r"(?:[0-9a-fA-F]{2}[\s:]?){16,}")
 
-    Only base64 is decoded. Hex, ROT13, Morse, URL-encoding and every other
-    encoding are **not** covered here and rely on the model classifier layer.
+#: A percent-encoded run — three or more escapes in a row is a payload, not a space
+#: in a filename.
+_PERCENT_RUN = re.compile(r"(?:%[0-9a-fA-F]{2}){8,}")
+
+#: The ROT13 translation table, built once.
+_ROT13 = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm",
+)
+
+
+def _decoded_candidates(text: str) -> list[str]:
+    """Return plausible instruction payloads hidden by an encoding inside ``text``.
+
+    **MITRE ATLAS AML.T0043, Craft Adversarial Data.** The signature layer is a
+    detector, and a detector invites the attacker to perturb the input until it stops
+    matching. The normaliser already answers the *character-level* perturbations —
+    zero-width padding, fullwidth forms, Cyrillic and Greek homoglyphs, whitespace
+    stuffing — so what is left is *encoding* the instruction so the signature has
+    nothing to match on and only the model can see it.
+
+    Four encodings are decoded and screened as the instruction they carry. Each one
+    was chosen because a probe using it got through and is in the battery under
+    :attr:`~aegis.redteam.battery.Category.ADVERSARIAL_EVASION`:
+
+    * **base64**, including a blob broken across lines;
+    * **hex**, with or without separators;
+    * **percent-encoding**, which arrives free in any URL-shaped payload;
+    * **ROT13 and plain reversal**, which are whole-text transforms rather than runs,
+      so they are returned as views of the entire input.
+
+    What is still **not** covered, stated rather than implied: Morse, Braille, Base32,
+    NATO spelling, an instruction split across a numbered list, and any semantic
+    paraphrase at all. Those are the model classifier's job, which is why
+    :func:`detect_injection` never runs this layer alone by choice.
 
     Args:
         text: The user text to scan.
 
     Returns:
-        Decoded strings that looked like text, newest-first order irrelevant.
+        Decoded strings that looked like text. Order is irrelevant; every one is
+        matched against every signature.
     """
     payloads: list[str] = []
     seen: set[str] = set()
+
+    def offer(decoded: str) -> None:
+        """Keep a decoded payload if it looks like text and is not a duplicate."""
+        if len(decoded) >= 8 and decoded.isprintable() and decoded not in seen:
+            seen.add(decoded)
+            payloads.append(decoded)
+
     # Scan the text as written and with whitespace removed, so a blob broken across
     # lines still decodes.
     for haystack in (text, re.sub(r"\s+", "", text)):
         for match in _BASE64_RUN.finditer(haystack):
-            if len(payloads) >= _MAX_BASE64_CANDIDATES:
+            if len(payloads) >= _MAX_ENCODED_CANDIDATES:
                 return payloads
             blob = match.group(0)
-            if blob in seen:
-                continue
-            seen.add(blob)
             padded = blob + "=" * (-len(blob) % 4)
             try:
-                decoded = base64.b64decode(padded, validate=True).decode("utf-8")
+                offer(base64.b64decode(padded, validate=True).decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
                 continue
-            if len(decoded) >= 8 and decoded.isprintable():
-                payloads.append(decoded)
+        for match in _HEX_RUN.finditer(haystack):
+            if len(payloads) >= _MAX_ENCODED_CANDIDATES:
+                return payloads
+            blob = re.sub(r"[\s:]", "", match.group(0))
+            try:
+                offer(bytes.fromhex(blob[: len(blob) - len(blob) % 2]).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+        for match in _PERCENT_RUN.finditer(haystack):
+            if len(payloads) >= _MAX_ENCODED_CANDIDATES:
+                return payloads
+            try:
+                offer(unquote(match.group(0), errors="strict"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+
+    # Whole-text transforms. Cheap, and the two that a person reaches for when a
+    # signature list is in the way and base64 is "too obvious".
+    offer(text.translate(_ROT13))
+    offer(text[::-1])
     return payloads
 
 
@@ -402,16 +459,20 @@ def deterministic_injection(text: str) -> InjectionVerdict | None:
     2. :func:`~aegis.guardrails.normalize.deconfuse` — the fold plus Cyrillic/Greek
        homoglyphs mapped to ASCII. Defeats ``іgnore`` (Cyrillic ``і``). Matched in
        *addition* to view 1 because the mapping mangles genuine Cyrillic prose.
-    3. The same two views of any UTF-8 text recoverable from a base64 run in the
-       input, so an encoded payload is screened as the instruction it decodes to.
+    3. The same two views of any text recoverable from an encoding in the input —
+       base64, hex, percent-encoding, ROT13 and plain reversal — so an encoded
+       payload is screened as the instruction it decodes to. See
+       :func:`_decoded_candidates`.
 
     **Coverage limits, stated rather than implied.** Non-English detection is
     limited to the seven languages listed on :data:`_MULTILINGUAL_SIGNATURES`;
-    encoding coverage is base64 only (not hex, ROT13, Morse or URL-encoding);
-    homoglyph folding covers Cyrillic and Greek but not the full Unicode
-    confusables table; leetspeak (``1gn0re``) is not folded. Everything outside
-    those limits is the model-based classifier's job — which is precisely why
-    :func:`detect_injection` never runs this layer alone by choice.
+    encoding coverage is the five above and **not** Base32, Morse, Braille or an
+    instruction spelled out with separators; homoglyph folding covers Cyrillic and
+    Greek but not the full Unicode confusables table; leetspeak (``1gn0re``) is not
+    folded. Everything outside those limits is the model-based classifier's job —
+    which is precisely why :func:`detect_injection` never runs this layer alone by
+    choice, and why ``aegis/tests/guardrails/test_injection_evasion.py`` asserts each
+    remaining miss rather than letting it become an assumed guarantee.
 
     Args:
         text: The user text to screen.
@@ -422,7 +483,7 @@ def deterministic_injection(text: str) -> InjectionVerdict | None:
     """
     folded = fold_for_matching(text)
     candidates = [folded, deconfuse(text)]
-    for payload in _decoded_base64_candidates(folded):
+    for payload in _decoded_candidates(folded):
         candidates.append(fold_for_matching(payload))
         candidates.append(deconfuse(payload))
 

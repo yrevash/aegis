@@ -22,7 +22,7 @@ from aegis.redteam import (
     RedTeamThresholds,
     run_redteam,
 )
-from aegis.redteam.battery import Attack
+from aegis.redteam.battery import Attack, Stage
 from aegis.redteam.runner import _UNCHECKED_LAYERS, _score
 
 
@@ -212,13 +212,37 @@ async def test_benign_completer_exercises_model_layer_without_new_catches():
 
 
 async def test_flagging_completer_catches_semantic_attacks_but_overblocks():
+    """A model that flags everything catches every probe a *model layer* screens.
+
+    It hard-blocks the benign controls too, so the false-positive rate honestly
+    climbs — that half is the point of the test and has not changed.
+
+    What has changed is that 100% is no longer the right number, and the reason is
+    worth asserting rather than papering over: :attr:`Stage.INGEST` probes go to the
+    write-time content gate, which is pure code and consults no model at all. A
+    perfect classifier cannot rescue the corpus from a poisoned *fact*, because the
+    classifier is never asked. Everything the model layers do see is caught.
+    """
     report = await run_redteam(completer=_AlwaysInjectionCompleter())
-    # A model that flags everything catches the semantic-only attacks the backstops
-    # miss -> 100% block rate; but it also hard-blocks the benign controls -> the
-    # false-positive rate honestly climbs to 100%.
-    assert report.block_rate == 1.0
-    assert report.false_positive_rate == 1.0
-    assert report.leaked == ()
+    model_screened = [r for r in report.attack_results if r.attack.stage is not Stage.INGEST]
+    assert all(r.neutralized for r in model_screened)
+    # The only survivors are ingest probes the deterministic gate could not see.
+    assert {r.attack.id for r in report.leaked} == {"poison-06"}
+    assert all(r.attack.stage is Stage.INGEST for r in report.leaked)
+    # Over-blocking, measured on exactly the controls a model layer looked at. The
+    # ingest controls are untouched for the same reason poison-06 survives: nobody
+    # asked the classifier.
+    screened_controls = [
+        r for r in report.control_results if r.attack.stage is not Stage.INGEST
+    ]
+    assert screened_controls
+    assert all(r.verdict == GuardVerdict.BLOCK.value for r in screened_controls)
+    assert all(
+        r.verdict != GuardVerdict.BLOCK.value
+        for r in report.control_results
+        if r.attack.stage is Stage.INGEST
+    )
+    assert 0.0 < report.false_positive_rate < 1.0
 
 
 # --- verdicts are real / never fabricated -------------------------------------

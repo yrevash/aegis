@@ -4,14 +4,16 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleSlash,
+  Download,
   RefreshCw,
   Search,
+  ShieldAlert,
   ShieldCheck,
   WifiOff,
 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
-import { checkPatches } from '@/lib/api/client'
+import { checkPatches, getAdvisories, getSbom } from '@/lib/api/client'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -26,7 +28,12 @@ import { Scene, SceneState } from '@/components/illustration/Scene'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
-import type { PatchCheckResponse, PatchResult } from '@/lib/api/types'
+import type {
+  AdvisoryAuditResponse,
+  AdvisoryPackage,
+  PatchCheckResponse,
+  PatchResult,
+} from '@/lib/api/types'
 
 import {
   PATCH_STATUS_LABEL,
@@ -251,6 +258,8 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
         </CardBody>
       </Card>
 
+      <Advisories token={token} />
+
       <DataPanel
         eyebrow="installed vs latest"
         title="Every pin, worst first"
@@ -441,5 +450,216 @@ export function PatchMount(): ReactElement {
         <PatchCheck token={session?.token ?? null} />
       </div>
     </BackendGate>
+  )
+}
+
+/**
+ * Published advisories against the versions actually installed — the verdict the
+ * freshness check above is not.
+ *
+ * The distinction is the whole reason this is a second panel rather than a column
+ * in the first one. "Three releases behind" and "carries a published CVE" are
+ * different facts, they move independently, and a screen that renders one of them
+ * where a reader expects the other is how a stack gets signed off as safe because
+ * it was recently updated.
+ *
+ * Two honesty rules travel from the API and are rendered rather than smoothed:
+ *
+ * 1. **A package is `clean` only after the advisory database actually answered.**
+ *    Offline, every row is `unknown` and the panel says so — it never resolves to
+ *    "no known vulnerabilities", because an audit that could not run is not an
+ *    audit that found nothing.
+ * 2. **`passed` is false when anything is unknown**, not only when something is
+ *    vulnerable. That is why the verdict badge has three states and not two.
+ *
+ * The SBOM exports sit here because they answer the same question one step out:
+ * the reader who wants their own scanner's opinion rather than ours.
+ */
+function Advisories({ token }: { token: string | null }): ReactElement {
+  const [state, setState] = useState<
+    | { status: 'idle' }
+    | { status: 'loading' }
+    | { status: 'error'; message: string }
+    | { status: 'ready'; data: AdvisoryAuditResponse }
+  >({ status: 'idle' })
+
+  const audit = useCallback(() => {
+    let alive = true
+    setState({ status: 'loading' })
+    getAdvisories(undefined, token)
+      .then((data) => alive && setState({ status: 'ready', data }))
+      .catch(
+        (e: unknown) =>
+          alive &&
+          setState({
+            status: 'error',
+            message: e instanceof Error ? e.message : 'The advisory audit could not be run.',
+          }),
+      )
+    return () => {
+      alive = false
+    }
+  }, [token])
+
+  useEffect(() => audit(), [audit])
+
+  const download = useCallback(
+    (format: 'cyclonedx' | 'spdx') => {
+      void getSbom(format, token).then((text) => {
+        const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `aegis-sbom.${format}.json`
+        link.click()
+        URL.revokeObjectURL(url)
+      })
+    },
+    [token],
+  )
+
+  const exports = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="outline" onClick={() => download('cyclonedx')}>
+        <Download className="size-3.5" aria-hidden />
+        CycloneDX 1.6
+      </Button>
+      <Button size="sm" variant="outline" onClick={() => download('spdx')}>
+        <Download className="size-3.5" aria-hidden />
+        SPDX 2.3
+      </Button>
+    </div>
+  )
+
+  if (state.status === 'idle' || state.status === 'loading') {
+    return (
+      <Card>
+        <CardBody>
+          <LoadingState rows={3} label="Asking the advisory database…" />
+        </CardBody>
+      </Card>
+    )
+  }
+
+  if (state.status === 'error') {
+    return (
+      <Card>
+        <CardBody className="flex flex-col gap-4">
+          <ErrorState
+            error={state.message}
+            fallback="The advisory audit could not be run."
+            retry={() => audit()}
+          />
+          {exports}
+        </CardBody>
+      </Card>
+    )
+  }
+
+  const data: AdvisoryAuditResponse = state.data
+  const vulnerable: AdvisoryPackage[] = (data.packages ?? []).filter(
+    (p: AdvisoryPackage) => p.status === 'vulnerable',
+  )
+  const unknown = data.packages_unknown ?? 0
+  const tone = data.passed ? 'ok' : vulnerable.length > 0 ? 'risk' : 'neutral'
+  const label = data.passed
+    ? 'no published advisories'
+    : vulnerable.length > 0
+      ? `${COUNT.format(vulnerable.length)} package${vulnerable.length === 1 ? '' : 's'} with a published advisory`
+      : 'unverified — the advisory database did not answer'
+
+  return (
+    <DataPanel
+      eyebrow="aegis · POST /stack/advisories"
+      title="Published advisories, worst first"
+      maxHeight={420}
+      toolbar={
+        <div className="flex flex-wrap items-center gap-3">
+          <Badge tone={tone} className="gap-1.5">
+            {data.passed ? (
+              <ShieldCheck className="size-3 shrink-0" aria-hidden />
+            ) : vulnerable.length > 0 ? (
+              <ShieldAlert className="size-3 shrink-0" aria-hidden />
+            ) : (
+              <WifiOff className="size-3 shrink-0" aria-hidden />
+            )}
+            {label}
+          </Badge>
+          <InfoTip label="Why this is not the freshness check above">
+            A package can be three releases behind with no advisory against it, and on the newest
+            release with four. This asks the advisory database about the exact installed version,
+            and a package is only ever “clean” after it really answered. {data.note}
+          </InfoTip>
+        </div>
+      }
+      actions={exports}
+      footer={
+        <Receipt
+          label="Audited"
+          origin={stamp(data.checked_at)}
+          detail={
+            data.online
+              ? `${COUNT.format(data.packages_audited ?? 0)} distributions against ${data.source}`
+              : 'advisory database unreachable — every verdict is unverified'
+          }
+          className="w-full border-t-0 pt-0"
+        />
+      }
+    >
+      {vulnerable.length === 0 ? (
+        <div className="px-4 py-6">
+          <Absence
+            className="text-left"
+            figure="Published advisories"
+            why={
+              data.online
+                ? `The advisory database answered for ${COUNT.format(data.packages_audited ?? 0)} installed distributions and had nothing against any of them.`
+                : `The advisory database did not answer, so none of the ${COUNT.format(data.packages_audited ?? 0)} installed distributions has a verdict.`
+            }
+            needed={
+              data.online
+                ? 'Nothing — this is the passing state.'
+                : `One reachable call to ${data.source}. ${COUNT.format(unknown)} packages are unverified until then.`
+            }
+          />
+        </div>
+      ) : (
+        <Table className="min-w-[620px]">
+          <THead>
+            <TH className="text-left">Package</TH>
+            <TH className="text-left">Installed</TH>
+            <TH className="text-left">Severity</TH>
+            <TH className="text-left">Advisories</TH>
+          </THead>
+          <TBody>
+            {vulnerable.map((p: AdvisoryPackage) => (
+              <AdvisoryRow key={p.name} pkg={p} />
+            ))}
+          </TBody>
+        </Table>
+      )}
+    </DataPanel>
+  )
+}
+
+/** One vulnerable distribution, with the identifiers a reader recognises. */
+function AdvisoryRow({ pkg }: { pkg: AdvisoryPackage }): ReactElement {
+  // GHSA and PYSEC records alias the same CVE, so the raw list prints one advisory
+  // twice and reads as two. The CVE is the identifier a reader looks up.
+  const ids: string[] = []
+  for (const v of pkg.vulnerabilities ?? []) {
+    const id = (v.aliases ?? []).find((a) => a.startsWith('CVE-')) ?? v.id
+    if (!ids.includes(id)) ids.push(id)
+  }
+  const first = (pkg.vulnerabilities ?? [])[0]
+  return (
+    <TR className="bg-block/5">
+      <TD className="font-medium">{pkg.name}</TD>
+      <TD className="tabular-nums text-muted-foreground">{pkg.version}</TD>
+      <TD className="text-block-ink">{pkg.worst_severity}</TD>
+      <TD className="text-muted-foreground">
+        <span className="font-mono text-[0.8125rem]">{ids.join(', ')}</span>
+        {first?.summary ? <div className="mt-0.5 text-[0.8125rem]">{first.summary}</div> : null}
+      </TD>
+    </TR>
   )
 }

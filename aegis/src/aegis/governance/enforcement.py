@@ -1073,6 +1073,68 @@ async def savings_buckets(tenant_id: int | None = None) -> dict[str, dict[str, f
     return buckets
 
 
+async def token_usage_by_model(tenant_id: int | None = None) -> dict[str, dict[str, float]]:
+    """Return this scope's **token** work broken down by the deployment that served it.
+
+    The evidence :func:`savings_buckets` cannot carry. That function splits the ledger
+    by *billing unit*, which is enough to price a baseline but not enough to justify
+    calling the result a saving: the savings figure subtracts a frontier baseline from
+    actual spend and attributes the difference to small-model routing, and that reading
+    holds only if a model other than the baseline's actually answered some of the
+    calls. Which models answered is a fact about the ledger, so it is read from the
+    ledger rather than inferred from the routing table — a role can point at a
+    deployment that never serves a single call, and on a half-migrated fleet that is
+    the normal case, not the exotic one.
+
+    Naming the model per row also separates work that *has* a cheaper-or-dearer
+    alternative from work that does not. An embedding is token-billed and so lands in
+    the same bucket as a chat turn, but no frontier chat model is an alternative way to
+    embed; pricing its tokens at the chat baseline books a saving against a choice
+    nobody could have made. The caller classifies, because the classification needs the
+    gateway's routing table and this module deliberately does not import it.
+
+    Rows with audio or image units are excluded, as in :func:`savings_buckets`: they
+    are not token work.
+
+    Args:
+        tenant_id: When given, app-scope the read to one tenant (over RLS). ``None``
+            aggregates every tenant and is for platform-wide callers only.
+
+    Returns:
+        ``{deployment_id: {"calls", "prompt_tokens", "completion_tokens", "cost_usd"}}``,
+        empty when the scope has spent nothing. Rows with no recorded model are skipped
+        rather than folded under a placeholder, so a caller never mistakes "unknown"
+        for a distinct model.
+    """
+    async with _session() as session:
+        await _set_tenant_scope(session, tenant_id)
+        stmt = select(
+            UsageLedger.model,
+            func.count(),
+            func.sum(UsageLedger.prompt_tokens),
+            func.sum(UsageLedger.completion_tokens),
+            func.sum(UsageLedger.cost_usd),
+        ).where(
+            UsageLedger.audio_seconds <= 0.0,
+            UsageLedger.images <= 0,
+            UsageLedger.model.is_not(None),
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(UsageLedger.tenant_id == tenant_id)
+        rows = (await session.execute(stmt.group_by(UsageLedger.model))).all()
+
+    return {
+        model: {
+            "calls": float(calls or 0),
+            "prompt_tokens": float(prompt or 0),
+            "completion_tokens": float(completion or 0),
+            "cost_usd": float(cost or 0.0),
+        }
+        for model, calls, prompt, completion, cost in rows
+        if model
+    }
+
+
 async def usage_rollup(
     tenant_id: int | None = None, window: str = "day"
 ) -> tuple[int, int, float, list[UsageByModel], list[UsageSeriesPoint]]:

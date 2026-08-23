@@ -22,13 +22,16 @@ async def _boom(messages, *, response_format=None):  # noqa: ANN001, ARG001
     raise RuntimeError("gateway down")
 
 
-def output_completer(*, unsafe=False, grounded=True):
+def output_completer(*, unsafe=False, grounded=True, contradicted=False):
     """A fake answering the output self-checks (content-safety then grounding)."""
 
     async def _c(messages, *, response_format=None):  # noqa: ANN001, ARG001
         system = messages[0]["content"].lower()
         if "groundedness" in system:
-            return f'{{"grounded": {str(grounded).lower()}, "reason": "test"}}'
+            return (
+                f'{{"grounded": {str(grounded).lower()}, '
+                f'"contradicted": {str(contradicted).lower()}, "reason": "test"}}'
+            )
         return f'{{"unsafe": {str(unsafe).lower()}}}'
 
     return _c
@@ -186,6 +189,105 @@ async def test_pipeline_content_safety_takes_precedence_over_grounding():
     )
     res = await guard.check_output("Here is how to synthesize a bioweapon.", CONTEXTS)
     assert res.verdict is GuardVerdict.BLOCK and res.layer == "content_safety"
+
+
+# ── contradicted: the one grounding finding that blocks by default ──
+
+
+@pytest.mark.asyncio
+async def test_a_contradicted_answer_blocks_without_the_strict_posture():
+    """The case that earns a block, and the reason the rail is not simply advisory.
+
+    Retrieval *found* the fact — five business days — and the answer says thirty. The
+    corpus is right there, disagreeing, and there is no legitimate turn of that shape.
+    So it blocks with ``grounding_block`` unset, which is what the default deployment
+    runs. Remove the ``verdict.contradicted or`` from
+    ``Guardrails._screen_grounding`` and this drops back to a FLAG.
+    """
+    guard = Guardrails(
+        completer=output_completer(grounded=False, contradicted=True),
+        ground_answers=True,
+    )
+    res = await guard.check_output("Closures take 30 business days.", CONTEXTS)
+    assert res.verdict is GuardVerdict.BLOCK, (
+        "an answer the retrieved passages contradict must not be shipped with a citation"
+    )
+    assert res.layer == "grounding"
+    assert "Contradicted answer blocked" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_merely_unsupported_still_only_flags():
+    """The other half of the split, and the reason the rail stays usable.
+
+    Extrapolation and framing are the common case, most of them are fine, and a rail
+    that blocks them is one an operator switches off. If this ever starts blocking,
+    the split has collapsed back into a single boolean.
+    """
+    guard = Guardrails(
+        completer=output_completer(grounded=False, contradicted=False),
+        ground_answers=True,
+    )
+    res = await guard.check_output("Closures are usually quick.", CONTEXTS)
+    assert res.verdict is GuardVerdict.FLAG
+    assert "Ungrounded answer flagged" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_no_contexts_never_reports_a_contradiction():
+    """Nothing retrieved cannot contradict anything, so the block path is unreachable.
+
+    This is what keeps the deliberate FLAG-only branch for the zero-retrieval case
+    from being quietly re-armed by the new flag.
+    """
+    guard = Guardrails(
+        completer=output_completer(grounded=False, contradicted=True),
+        ground_answers=True,
+        grounding_block=True,
+    )
+    res = await guard.check_output("I cannot answer that.")
+    assert res.verdict is GuardVerdict.FLAG
+
+
+@pytest.mark.asyncio
+async def test_a_checker_that_could_not_answer_never_manufactures_a_contradiction():
+    """The fail direction, and it is deliberately not symmetric with ``grounded``.
+
+    A blocking rail treats an unparseable reply as ungrounded — fail closed, as before.
+    It must never treat one as *contradicted*, because that hard-blocks in every mode:
+    one gateway hiccup would take a working deployment's answers offline for a finding
+    nobody made.
+    """
+    for raw in ("", "   ", "Yes and no — hard to say.", "not json at all"):
+        for block in (False, True):
+            verdict = await check_grounding(
+                "Closures take 30 days.", CONTEXTS, completer=completer_returning(raw), block=block
+            )
+            assert verdict.contradicted is False, raw
+
+    # …and the same when the checker is unreachable entirely.
+    for block in (False, True):
+        verdict = await check_grounding(
+            "Closures take 30 days.", CONTEXTS, completer=_boom, block=block
+        )
+        assert verdict.contradicted is False
+
+
+@pytest.mark.asyncio
+async def test_a_checker_claiming_both_grounded_and_contradicted_is_not_a_block():
+    """A self-contradictory verdict is resolved away from the harsher reading.
+
+    This flag hard-blocks, so an inconsistent reply must not be read as the finding
+    that stops an answer. ``grounded=true`` is taken at its word and the conjunction
+    dropped.
+    """
+    verdict = await check_grounding(
+        "Closures take 5 business days.",
+        CONTEXTS,
+        completer=completer_returning('{"grounded": true, "contradicted": true, "reason": "?"}'),
+    )
+    assert verdict.grounded is True
+    assert verdict.contradicted is False
 
 
 def test_grounding_verdict_is_frozen():

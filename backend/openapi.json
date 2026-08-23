@@ -247,6 +247,195 @@
         "title": "AdmissionRefusedResponse",
         "type": "object"
       },
+      "AdvisoryAuditResponse": {
+        "description": "Body for `POST /stack/advisories` — live vulnerability verdicts from OSV.dev.\n\nDistinct from `POST /stack/patch-check`, which reports **freshness**: a package can\nbe several releases behind and carry no advisory, and current and carry four.",
+        "properties": {
+          "checked_at": {
+            "description": "ISO 8601 UTC time the audit ran.",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "note": {
+            "description": "Honest summary of how to read the results.",
+            "title": "Note",
+            "type": "string"
+          },
+          "online": {
+            "description": "Whether the advisory database answered for at least one batch.",
+            "title": "Online",
+            "type": "boolean"
+          },
+          "packages": {
+            "items": {
+              "$ref": "#/components/schemas/AdvisoryPackage"
+            },
+            "title": "Packages",
+            "type": "array"
+          },
+          "packages_audited": {
+            "default": 0,
+            "title": "Packages Audited",
+            "type": "integer"
+          },
+          "packages_unknown": {
+            "default": 0,
+            "title": "Packages Unknown",
+            "type": "integer"
+          },
+          "packages_vulnerable": {
+            "default": 0,
+            "title": "Packages Vulnerable",
+            "type": "integer"
+          },
+          "passed": {
+            "description": "True only when every package got a real answer AND none is vulnerable. An audit that could not run does not pass.",
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "severity_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Severity Counts",
+            "type": "object"
+          },
+          "source": {
+            "description": "The advisory database queried.",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checked_at",
+          "online",
+          "note",
+          "source",
+          "passed"
+        ],
+        "title": "AdvisoryAuditResponse",
+        "type": "object"
+      },
+      "AdvisoryPackage": {
+        "description": "One distribution's vulnerability verdict.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "description": "Why the status is what it is.",
+            "title": "Note",
+            "type": "string"
+          },
+          "status": {
+            "description": "'clean' only after a real answer from the advisory database.",
+            "enum": [
+              "vulnerable",
+              "clean",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "description": "The installed version that was queried.",
+            "title": "Version",
+            "type": "string"
+          },
+          "vulnerabilities": {
+            "items": {
+              "$ref": "#/components/schemas/AdvisoryVulnerability"
+            },
+            "title": "Vulnerabilities",
+            "type": "array"
+          },
+          "worst_severity": {
+            "description": "Severity of the worst advisory, or 'none'.",
+            "title": "Worst Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "status",
+          "worst_severity"
+        ],
+        "title": "AdvisoryPackage",
+        "type": "object"
+      },
+      "AdvisoryRequest": {
+        "additionalProperties": false,
+        "description": "Body for `POST /stack/advisories` — optionally narrow to a subset of packages.",
+        "properties": {
+          "packages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Distribution names to audit; omit/null to audit every installed distribution.",
+            "title": "Packages"
+          }
+        },
+        "title": "AdvisoryRequest",
+        "type": "object"
+      },
+      "AdvisoryVulnerability": {
+        "description": "One published advisory against one installed version.",
+        "properties": {
+          "aliases": {
+            "description": "Other ids for the same advisory — the CVE usually lives here.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "detail_fetched": {
+            "description": "False ⇒ the id is real but summary/severity were not retrieved.",
+            "title": "Detail Fetched",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "The OSV identifier, e.g. 'GHSA-…' or 'PYSEC-…'.",
+            "title": "Id",
+            "type": "string"
+          },
+          "severity": {
+            "description": "The publisher's own rating; 'unknown' when detail was not fetched.",
+            "enum": [
+              "critical",
+              "high",
+              "moderate",
+              "low",
+              "unknown"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "description": "One-line description, as OSV wrote it.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "detail_fetched"
+        ],
+        "title": "AdvisoryVulnerability",
+        "type": "object"
+      },
       "AegisModuleRow": {
         "description": "One Aegis module in the capabilities manifest — branded name + honest tech.\n\nThe API projection of :class:`app.capabilities.AegisModule`. Mirrors it field\nfor field so the manifest is exposed verbatim (no hiding, no renaming). ``tech``\nis always carried alongside ``name`` — the branding never stands without the\nreal technology underneath.\n\n``category`` and ``status`` reuse the source model's own ``Literal`` aliases rather\nthan restating them as ``str``. They are closed sets, and typing them loosely here\npublished them as bare strings: the generated TypeScript client (§8.7) can only be\nas precise as this document, so a projection that widens a closed set hands the\nconsole ``string`` for a field with five legal values — the exact drift generating\nthe client was meant to end.",
         "properties": {
@@ -10780,6 +10969,12 @@
             "title": "Baseline Cost Usd",
             "type": "number"
           },
+          "baseline_model": {
+            "default": "",
+            "description": "The deployment the frontier baseline is priced from.",
+            "title": "Baseline Model",
+            "type": "string"
+          },
           "breakdown": {
             "items": {
               "$ref": "#/components/schemas/SavingsBreakdownRow"
@@ -10792,10 +10987,30 @@
             "title": "Generated At",
             "type": "string"
           },
+          "models_observed": {
+            "description": "Deployments the ledger shows serving this scope's routable work.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Models Observed",
+            "type": "array"
+          },
           "note": {
             "description": "Honest framing of the figure (flags any estimate).",
             "title": "Note",
             "type": "string"
+          },
+          "projected_usd": {
+            "default": 0.0,
+            "description": "The same gap when it is NOT realised: what the router's role assignments would save on a fleet with more than one deployment to route between. Zero whenever saved_usd is non-zero; the two are never both populated.",
+            "title": "Projected Usd",
+            "type": "number"
+          },
+          "routing_realised": {
+            "default": true,
+            "description": "Whether a model other than the baseline's actually served the priced calls. Read from usage_ledger, not from the routing table.",
+            "title": "Routing Realised",
+            "type": "boolean"
           },
           "saved_pct": {
             "description": "Fraction saved vs baseline, 0..1.",
@@ -10803,7 +11018,7 @@
             "type": "number"
           },
           "saved_usd": {
-            "description": "baseline − actual.",
+            "description": "Money actually saved: baseline − actual, but ONLY when the ledger shows a deployment other than the baseline's serving the work. Zero when routing is not realised on this fleet — see projected_usd.",
             "title": "Saved Usd",
             "type": "number"
           }
@@ -17224,7 +17439,7 @@
     },
     "/v1/pipelines": {
       "get": {
-        "description": "Return every pipeline Aegis runs, its stages, and what each stage emits.\n\nThree pipelines, not sixteen: a module is not a pipeline. The sixteen-module course\nin ``docs/teaching/`` explains the parts; this is the flows they compose into.\n\nThe declaration is **verified against the code before it is served** — the ingest\nstage tuple a resume walks, the agent graph's own node labels, and the retrieval\nobservability model's fields — so this endpoint cannot describe a pipeline the\nprocess is not running.\n\nArgs:\n    auth: The authenticated principal. Every role sees the same answer: there is no\n        tenant data in the shape of the product.\n\nReturns:\n    The three declarations plus the channel legend.\n\nRaises:\n    aegis.pipelines.PipelineDriftError: If a declaration and the code it describes\n        have diverged. Deliberately not caught: a 500 naming the exact difference is\n        a better answer than a diagram that is quietly wrong, which is the failure\n        the hardcoded orchestration map shipped for months.",
+        "description": "Return every pipeline Aegis runs, its stages, and what each stage emits.\n\nThree pipelines, not twenty-nine: a module is not a pipeline. The twenty-nine-module course\nin ``docs/teaching/`` explains the parts; this is the flows they compose into.\n\nThe declaration is **verified against the code before it is served** — the ingest\nstage tuple a resume walks, the agent graph's own node labels, and the retrieval\nobservability model's fields — so this endpoint cannot describe a pipeline the\nprocess is not running.\n\nArgs:\n    auth: The authenticated principal. Every role sees the same answer: there is no\n        tenant data in the shape of the product.\n\nReturns:\n    The three declarations plus the channel legend.\n\nRaises:\n    aegis.pipelines.PipelineDriftError: If a declaration and the code it describes\n        have diverged. Deliberately not caught: a 500 naming the exact difference is\n        a better answer than a diagram that is quietly wrong, which is the failure\n        the hardcoded orchestration map shipped for months.",
         "operationId": "list_pipelines_v1_pipelines_get",
         "responses": {
           "200": {
@@ -18781,6 +18996,60 @@
         ]
       }
     },
+    "/v1/stack/advisories": {
+      "post": {
+        "description": "Audit the installed distributions against OSV.dev (admin/devops).\n\nThis is the **vulnerability verdict** that ``POST /stack/patch-check`` is not: a\npackage can be three releases behind and carry no advisory, and on the newest\nrelease and carry four. Versions come from ``importlib.metadata``; advisories come\nfrom a live OSV.dev query (the aggregator behind ``pip-audit`` — GHSA, PYSEC, NVD).\n\nThe same honesty rule the patch check holds: a package is ``clean`` only after OSV\nactually answered for it, and ``passed`` is ``False`` whenever any package is\nvulnerable **or** any package could not be asked, so an audit that did not run can\nnever read as an audit that found nothing.",
+        "operationId": "stack_advisories_v1_stack_advisories_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AdvisoryRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdvisoryAuditResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stack Advisories",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/v1/stack/patch-check": {
       "post": {
         "description": "Compare installed vs latest against the live PyPI registry (admin/devops).\n\nInstalled versions come from ``importlib.metadata``; latest comes from a live PyPI\nJSON query (short timeout, best-effort). Each package is resolved independently: a\npackage is only ever ``current`` after a real registry answer, while one package's\nnetwork failure marks only that row ``unknown`` (never discarding resolved\nneighbours). ``online`` is ``True`` when at least one package got a real answer; only\nwhen *no* package is reachable does the check degrade to ``online=False`` (or the\ncached last-successful set), never a fabricated clean bill of health.",
@@ -18830,6 +19099,59 @@
           }
         ],
         "summary": "Stack Patch Check",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v1/stack/sbom": {
+      "get": {
+        "description": "Export the live bill of materials as a standard SBOM document (admin/devops).\n\n``GET /stack`` answers the same question for a human reading the console; this\nanswers it for a **machine somebody else owns**. Both documents are generated from\none pass over the running interpreter's installed distributions, so they cannot\ndescribe different machines, and every component carries a PURL — the key an\nadvisory database joins on.\n\nThe response is served with the format's own media type so a scanner can consume it\ndirectly. Neither document is signed and neither carries SLSA/in-toto provenance;\nthe integrity evidence that does exist (the lockfiles' sha256 pin count) is recorded\nin the document's own metadata rather than implied.",
+        "operationId": "stack_sbom_v1_stack_sbom_get",
+        "parameters": [
+          {
+            "description": "cyclonedx (1.6) for scanners, spdx (2.3) for procurement.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "cyclonedx",
+              "description": "cyclonedx (1.6) for scanners, spdx (2.3) for procurement.",
+              "enum": [
+                "cyclonedx",
+                "spdx"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stack Sbom",
         "tags": [
           "platform"
         ]

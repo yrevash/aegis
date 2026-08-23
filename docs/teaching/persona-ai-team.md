@@ -1601,10 +1601,15 @@ Reported, not fixed.
 9. **LLMOps `step:tool` reads 1/36 passed** against a 0.000 bar. Watched, not gated —
    but it is a red-looking number on a screen a jury will read.
 
-10. **Every role routes to one model.** `cheap`, `reasoning` and `generation` all resolve
-    to DeepSeek-V4-Flash and every row reads `MODEL TIER: frontier`, with
-    `0 on a small model` in the savings source line. The 67 % saving is real repricing
-    across role *price bands*, not a smaller model. Do not overclaim it.
+10. **Every role routes to one model** — and the platform now says so itself. `cheap`,
+    `reasoning` and `generation` all resolve to DeepSeek-V4-Flash, every row reads
+    `MODEL TIER: frontier`, and the savings source line reads `0 on a small model`. This
+    screen was always honest about it; `GET /savings` was not, and attributed the whole
+    gap to small-model routing. It now reads `usage_ledger` for the deployments that
+    actually answered and, finding only the baseline's own model, books `saved_usd = 0`
+    and reports the figure as `projected_usd`. So the two screens agree, and the
+    repricing-across-price-bands story is on the page rather than something you have to
+    volunteer. Restoring a multi-deployment fleet flips it back with no code change.
 
 ---
 

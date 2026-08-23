@@ -82,6 +82,7 @@ from aegis.redteam.runner import (
     Rails,
     RedTeamThresholds,
     RunEstimate,
+    check_ingest,
     estimate_run,
     run_redteam,
 )
@@ -476,7 +477,7 @@ def _target_tenant(req: RedteamRunRequest, auth: AuthContext) -> int | None:
 
 
 async def _rails_for(*, live: bool) -> Rails:
-    """Build the three stage checkers this run will drive.
+    """Build the four stage checkers this run will drive.
 
     ``app.guardrails.tenant_pipeline`` folds the **bound tenant's** four
     ``guardrails.*`` settings onto the platform floor, so a run against a tenant
@@ -497,10 +498,15 @@ async def _rails_for(*, live: bool) -> Rails:
     async def screen_tool_result(text: str, *, completer: object = None) -> Any:  # noqa: ANN401
         return await pipeline.check_tool_result(text, tool_name="redteam.probe")
 
+    # The write-time gate is not part of the tenant's guardrail pipeline: it is pure
+    # code with no policy and no completer, and a tenant cannot loosen it. So this one
+    # is the runner's own adapter over ``validate_content`` rather than a closure over
+    # ``pipeline``, and it behaves identically live and offline.
     return Rails(
         check_input=screen_input,
         check_output=screen_output,
         check_tool_result=screen_tool_result,
+        check_ingest=check_ingest,
     )
 
 

@@ -708,6 +708,9 @@ def create_app() -> FastAPI:
     settings = get_settings()
     # Fail-fast: refuse to boot a non-dev deployment on an insecure signing secret.
     settings.ensure_secure_secrets()
+    # Fail-fast: refuse to boot a non-dev deployment whose spend caps do not bind —
+    # fail-open budgets, or no governance hook at the gateway chokepoint at all.
+    settings.ensure_spend_caps_bind()
     # Honour the configured LOG_LEVEL knob so the app's log verbosity is actually
     # driven by settings (INFO by default). ``force`` re-points the root handler even
     # if a library already configured logging at import time. An unknown level name
