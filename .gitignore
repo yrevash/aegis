@@ -71,8 +71,21 @@ docs/api/
 # The Markdown is the source of truth; the HTML is a disposable view, and the
 # vendored mermaid bundle is 3.4 MB of third-party code that does not belong in
 # this repo's history.
-docs/teaching/**/*.html
+# The renderer now covers the whole docs/ tree and the package-level Markdown,
+# because a half-converted tree is a broken one: every .md link is rewritten to
+# .html, so any document left unrendered becomes a 404.
+docs/**/*.html
 docs/teaching/_assets/
+/README.html
+/INSTALL.html
+/DESIGN.html
+/AGENTS.html
+/SKILL.html
+/CHANGELOG.html
+aegis/README.html
+aegis/PUBLIC.html
+backend/README.html
+web/README.html
 
 # Phase 4 ingestion fixtures: downloaded by tests/fixtures/pdfs/fetch.sh, not committed
 # (two are arXiv papers whose licence does not clearly permit redistribution — see the README)

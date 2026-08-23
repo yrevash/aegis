@@ -10,16 +10,30 @@
  *
  *   1. Rewrites inter-document links from `.md` to `.html`, so the whole course
  *      is clickable end to end rather than dead-ending on the first link.
- *   2. Renders the mermaid diagrams. Every module folder has a `40-diagrams.md`
- *      that is almost entirely mermaid, so a converter that emits them as code
- *      blocks throws away the most useful file in each folder.
+ *   2. Renders the mermaid diagrams. Every module guide carries one, so a
+ *      converter that emits them as code blocks throws away the single most
+ *      useful thing on the page.
  *   3. Vendors mermaid.min.js locally instead of pulling it from a CDN. The
  *      target machine for this project is a locked-down, sometimes-offline
  *      Windows box; a CDN <script> tag would silently leave every diagram blank
  *      exactly when it matters.
  *
+ * ## Scope: the whole `docs/` tree, not just `docs/teaching/`
+ *
+ * It used to render `docs/teaching/` alone, and the index it wrote linked out to
+ * `../module/MODULE_REFERENCE.html`, `../compliance/README.html` and three more
+ * siblings that were never generated — five dead links on the front page of the
+ * course. Rendering only part of a cross-linked tree cannot work: every `.md`
+ * link is rewritten to `.html`, so any document left unconverted becomes a 404
+ * the moment something points at it.
+ *
+ * So the walk covers `docs/**` plus the root-level Markdown (README, INSTALL,
+ * DESIGN, AGENTS, SKILL), and `rewriteLinks` now has a real target for every
+ * link it rewrites.
+ *
  * Usage:  node scripts/build-teaching-html.mjs [--open]
- * Output: docs/teaching/<...>.html  +  docs/teaching/index.html
+ * Output: a .html sibling for every .md under docs/ and the repo root,
+ *         plus docs/teaching/index.html as the course front page.
  */
 
 import { readdir, readFile, writeFile, copyFile, mkdir } from 'node:fs/promises'
@@ -47,39 +61,92 @@ try {
   process.exit(1)
 }
 
-/* ── the reading order, mirroring docs/teaching/README.md ─────────────────── */
+/* ── the reading order ────────────────────────────────────────────────────────
+ *
+ * `docs/teaching/` is flat — one file per module — and this list is the only
+ * thing that gives it an order. It is written down rather than derived because
+ * alphabetical is not a curriculum: `agent.md` is not where a beginner starts,
+ * and `core.md` reads as trivia until you have seen three modules that depend on
+ * it. A file present on disk but missing from this list still renders and still
+ * gets a page; it simply falls into "Everything else" at the bottom, so adding a
+ * module can never make it unreachable.
+ */
 
-const ORDER = [
-  ['00-foundations', 'Foundations', 'Start here — the vocabulary everything assumes'],
-  ['guardrails', 'Guardrails', 'What decides whether input is allowed in'],
-  ['retrieval', 'Retrieval', 'Finding the evidence to answer with'],
-  ['agent', 'Agent', 'Plan, decide, act, self-repair'],
-  ['gateway', 'Gateway', 'Every model call funnels through here'],
-  ['memory', 'Memory', 'What survives between turns and sessions'],
-  ['data', 'Data', 'The portable ORM foundation'],
-  ['ml', 'ML', 'Calibrated prediction as evidence'],
-  ['governance', 'Governance', 'Tenants, budgets, row-level security'],
-  ['observability', 'Observability', 'The glass box'],
-  ['evals-ops', 'Evals & Ops', 'Measuring quality, gating change'],
-  ['media', 'Media', 'The payload + rail seam'],
-  ['voice', 'Voice', 'Speech in'],
-  ['vision', 'Vision', 'Images in'],
-  ['forecast', 'Forecast', 'Time series'],
-  ['core', 'Core', 'The Module Contract'],
+const SECTIONS = [
+  {
+    label: 'Start here',
+    blurb: 'What Aegis is, and the vocabulary the rest assumes',
+    items: ['core', 'data', 'pipelines'],
+  },
+  {
+    label: 'Walk a portal',
+    blurb: 'Every screen of every persona, explained for a demo',
+    items: [
+      'persona-platform-admin',
+      'persona-tenant-admin',
+      'persona-ai-team',
+      'persona-client',
+    ],
+  },
+  {
+    label: 'The safety perimeter',
+    blurb: 'What decides whether anything is allowed in or out',
+    items: ['guardrails', 'security', 'redteam', 'conformance', 'governance'],
+  },
+  {
+    label: 'Answering a question',
+    blurb: 'Retrieve, plan, decide, act, remember',
+    items: ['retrieval', 'agent', 'memory', 'skills', 'runs'],
+  },
+  {
+    label: 'Getting knowledge in',
+    blurb: 'Documents to chunks to a graph',
+    items: ['ingestion', 'jobs'],
+  },
+  {
+    label: 'Models and money',
+    blurb: 'Every model call funnels through one chokepoint',
+    items: ['gateway', 'ml', 'forecast'],
+  },
+  {
+    label: 'Proving it works',
+    blurb: 'Measuring quality and gating change',
+    items: ['evals', 'ops', 'observability', 'analytics', 'reports'],
+  },
+  {
+    label: 'Other input channels',
+    blurb: 'Images, speech, the open web',
+    items: ['media', 'vision', 'voice', 'websearch'],
+  },
+  {
+    label: 'Operating it',
+    blurb: 'The knobs and the database',
+    items: ['settings', 'dbadmin'],
+  },
+  {
+    label: 'Beyond the course',
+    blurb: 'Architecture, compliance, installation',
+    items: [
+      '../architecture/system-architecture',
+      '../module/MODULE_REFERENCE',
+      '../compliance/README',
+      '../security/overview',
+      '../install/README',
+    ],
+  },
 ]
 
-// Three files per module. The old six-file split (concepts / theory / in-aegis /
-// deep-dive) explained the same idea in three places and taught it in none, so those
-// four are merged into one guide — see docs/teaching/STYLE.md. The legacy stems stay
-// mapped so a folder mid-migration still renders with real labels.
-const FILE_LABEL = {
-  '10-guide': 'Guide',
-  '40-diagrams': 'Diagrams',
-  '50-interview': 'Interview',
-  '00-concepts': 'Concepts',
-  '10-theory': 'Theory',
-  '20-in-aegis': 'In Aegis',
-  '30-deep-dive': 'Deep dive',
+/** Human labels for the pages whose stem does not read as a title. */
+const LABEL = {
+  'persona-platform-admin': 'Platform admin',
+  'persona-tenant-admin': 'Tenant admin',
+  'persona-ai-team': 'AI team',
+  'persona-client': 'Client',
+  '../architecture/system-architecture': 'System architecture',
+  '../module/MODULE_REFERENCE': 'Module reference',
+  '../compliance/README': 'Compliance position',
+  '../security/overview': 'Security overview',
+  '../install/README': 'Install runbook',
 }
 
 /* ── walk ─────────────────────────────────────────────────────────────────── */
@@ -129,36 +196,63 @@ function rewriteLinks(html) {
 
 /* ── page shell ───────────────────────────────────────────────────────────── */
 
-function sidebar(currentRel) {
+function sidebar(currentStem) {
   const parts = []
-  for (const [dir, label, blurb] of ORDER) {
-    const dirPath = join(TEACHING, dir)
-    if (!existsSync(dirPath)) continue
-    const open = currentRel.startsWith(dir + sep) || currentRel.startsWith(dir + '/')
+  for (const { label, blurb, items } of SECTIONS) {
+    const present = items.filter((stem) => pageExists(stem))
+    if (present.length === 0) continue
+    const open = present.includes(currentStem)
     parts.push(
       `<details class="mod"${open ? ' open' : ''}>` +
         `<summary><span class="mod-name">${label}</span>` +
         `<span class="mod-blurb">${blurb}</span></summary><ul>`,
     )
-    parts.push('__FILES__' + dir + '__')
+    for (const stem of present) {
+      const here = stem === currentStem
+      parts.push(
+        `<li><a class="${here ? 'here' : ''}" href="__UP__${stem}.html">` +
+          `${labelFor(stem)}</a></li>`,
+      )
+    }
+    parts.push('</ul></details>')
+  }
+
+  // Anything on disk that no section claims. A module added tomorrow is reachable
+  // today, in the wrong place rather than nowhere.
+  const claimed = new Set(SECTIONS.flatMap((s) => s.items))
+  const orphans = TEACHING_STEMS.filter((s) => !claimed.has(s) && s !== 'README')
+  if (orphans.length > 0) {
+    parts.push(
+      '<details class="mod"><summary><span class="mod-name">Everything else</span>' +
+        '<span class="mod-blurb">On disk, not yet placed in the reading order' +
+        '</span></summary><ul>',
+    )
+    for (const stem of orphans) {
+      const here = stem === currentStem
+      parts.push(
+        `<li><a class="${here ? 'here' : ''}" href="__UP__${stem}.html">` +
+          `${labelFor(stem)}</a></li>`,
+      )
+    }
     parts.push('</ul></details>')
   }
   return parts.join('\n')
 }
 
-async function fileListFor(dir, currentRel, depth) {
-  const dirPath = join(TEACHING, dir)
-  const names = (await readdir(dirPath)).filter((n) => n.endsWith('.md')).sort()
-  const up = '../'.repeat(depth)
-  return names
-    .map((n) => {
-      const stem = n.replace(/\.md$/, '')
-      const rel = `${dir}/${stem}.html`
-      const here = currentRel === `${dir}/${stem}.md`
-      const label = FILE_LABEL[stem] ?? stem.replace(/^\d+-/, '').replace(/-/g, ' ')
-      return `<li><a class="${here ? 'here' : ''}" href="${up}${rel}">${label}</a></li>`
-    })
-    .join('\n')
+/** Every `.md` stem that exists directly in docs/teaching/, sorted. */
+let TEACHING_STEMS = []
+
+/** Whether a sidebar entry names a document that was actually rendered. */
+function pageExists(stem) {
+  if (stem.startsWith('../')) return existsSync(join(TEACHING, `${stem}.md`))
+  return TEACHING_STEMS.includes(stem)
+}
+
+/** The label to print for a sidebar entry. */
+function labelFor(stem) {
+  if (LABEL[stem]) return LABEL[stem]
+  const base = stem.split('/').pop()
+  return base.charAt(0).toUpperCase() + base.slice(1).replace(/-/g, ' ')
 }
 
 const CSS = `
@@ -218,8 +312,12 @@ padding-top:22px;border-top:1px solid var(--line);font-size:.88rem}
 @media (max-width:900px){aside{display:none}main{padding:26px 20px 80px}}
 `
 
-function shell({ title, sidebarHtml, body, depth, srcRel }) {
-  const up = '../'.repeat(depth)
+function shell({ title, sidebarHtml, body, assetPrefix, srcRel }) {
+  // The path back to docs/teaching/ from wherever this page lives. Computed by the
+  // caller with `relative()` rather than counted from the slash depth: pages now
+  // render all over docs/ and at the repo root, so "how many levels up" is not the
+  // same question as "how do I reach the course folder from here".
+  const up = assetPrefix
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -236,7 +334,7 @@ function shell({ title, sidebarHtml, body, depth, srcRel }) {
 </aside>
 <main>
 ${body}
-<p class="src">Source: <code>docs/teaching/${srcRel}</code> — the Markdown is the source of
+<p class="src">Source: <code>${srcRel}</code> — the Markdown is the source of
 truth; this page is generated by <code>scripts/build-teaching-html.mjs</code>.</p>
 </main>
 </div>
@@ -283,16 +381,39 @@ async function main() {
     console.warn('! mermaid.min.js not found in web/node_modules — diagrams will not render')
   }
 
-  const files = (await walk(TEACHING)).sort()
-  const sidebarTemplate = sidebar('')
+  // Every .md under docs/, plus the root-level ones the docs link back to. A
+  // partially-converted tree is a broken tree: `rewriteLinks` turns every .md
+  // href into .html whether or not the target was rendered.
+  const DOCS = join(ROOT, 'docs')
+  // Root-level and per-package Markdown. The package READMEs are here because
+  // docs/ links *out* to them — README.md alone points at four — and a link this
+  // script rewrote to .html with nothing behind it is worse than the .md it
+  // replaced. Every target of a rewritten link must be a target that exists.
+  const OUTSIDE_DOCS = [
+    'README.md',
+    'INSTALL.md',
+    'DESIGN.md',
+    'AGENTS.md',
+    'SKILL.md',
+    'CHANGELOG.md',
+    'aegis/README.md',
+    'aegis/PUBLIC.md',
+    'backend/README.md',
+    'web/README.md',
+  ]
+    .map((n) => join(ROOT, n))
+    .filter((f) => existsSync(f))
+  const files = [...(await walk(DOCS)), ...OUTSIDE_DOCS].sort()
+
+  TEACHING_STEMS = files
+    .filter((f) => dirname(f) === TEACHING)
+    .map((f) => basename(f, '.md'))
+    .sort()
 
   let count = 0
   let diagrams = 0
 
   for (const abs of files) {
-    const srcRel = relative(TEACHING, abs).split(sep).join('/')
-    const depth = srcRel.split('/').length - 1
-
     const md = await readFile(abs, 'utf8')
     const { stripped, blocks } = extractMermaid(md)
     diagrams += blocks.length
@@ -301,40 +422,49 @@ async function main() {
     html = restoreMermaid(html, blocks)
     html = rewriteLinks(html)
 
-    // Build this page's sidebar with the current file marked.
-    let sb = sidebar(srcRel)
-    for (const [dir] of ORDER) {
-      if (!existsSync(join(TEACHING, dir))) continue
-      sb = sb.replace(`__FILES__${dir}__`, await fileListFor(dir, srcRel, depth))
-    }
+    // How far this page sits from docs/teaching/, so the sidebar's links and the
+    // mermaid <script> resolve from wherever it lives.
+    const up = relative(dirname(abs), TEACHING).split(sep).join('/')
+    const prefix = up === '' ? '' : `${up}/`
+    const stem = dirname(abs) === TEACHING ? basename(abs, '.md') : null
+    const sb = sidebar(stem ?? '').replaceAll('__UP__', prefix)
 
     const title =
-      (md.match(/^#\s+(.+)$/m)?.[1] ?? basename(srcRel, '.md')).replace(/[*`_]/g, '')
+      (md.match(/^#\s+(.+)$/m)?.[1] ?? basename(abs, '.md')).replace(/[*`_]/g, '')
 
-    await writeFile(abs.replace(/\.md$/, '.html'), shell({
-      title, sidebarHtml: sb, body: html, depth, srcRel,
-    }))
+    await writeFile(
+      abs.replace(/\.md$/, '.html'),
+      shell({
+        title,
+        sidebarHtml: sb,
+        body: html,
+        assetPrefix: prefix,
+        srcRel: relative(ROOT, abs).split(sep).join('/'),
+      }),
+    )
     count += 1
   }
 
-  // Landing page — reuse README.md's rendering if present, else a plain index.
+  // The course front page is README.md rendered at docs/teaching/index.html, so
+  // the sidebar's `brand` link and every relative href resolve from that folder.
   const readme = join(TEACHING, 'README.md')
   if (existsSync(readme)) {
     const { stripped, blocks } = extractMermaid(await readFile(readme, 'utf8'))
     let html = restoreMermaid(marked.parse(stripped), blocks)
     html = rewriteLinks(html)
-    let sb = sidebar('')
-    for (const [dir] of ORDER) {
-      if (!existsSync(join(TEACHING, dir))) continue
-      sb = sb.replace(`__FILES__${dir}__`, await fileListFor(dir, '', 0))
-    }
     await writeFile(
       join(TEACHING, 'index.html'),
-      shell({ title: 'Aegis — zero to mastery', sidebarHtml: sb, body: html, depth: 0, srcRel: 'README.md' }),
+      shell({
+        title: 'Aegis — zero to mastery',
+        sidebarHtml: sidebar('').replaceAll('__UP__', ''),
+        body: html,
+        assetPrefix: '',
+        srcRel: 'docs/teaching/README.md',
+      }),
     )
   }
 
-  console.log(`✓ ${count} pages + index.html   (${diagrams} mermaid diagrams)`)
+  console.log(`\u2713 ${count} pages + index.html   (${diagrams} mermaid diagrams)`)
   console.log(`  open: docs/teaching/index.html`)
 }
 
