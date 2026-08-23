@@ -296,27 +296,26 @@ test('no control identifier is written into the band or its helper', () => {
   }
 })
 
-test('the band says it is not certification, in both states it can render', () => {
+test('the band says it is not certification, wherever that correction now lives', () => {
   const visible = strip(BAND)
 
-  // The amber banner was removed by the owner's decision — this is a hackathon project and
-  // the audience knows it holds no certificate. What may not be removed is the correction
-  // itself, and with the banner gone the heading is where it lives. Both branches of the
-  // heading carry it, including the one rendered when the endpoint does not answer.
-  // Every headline string in the file, whichever branch produces it: the one that leads
-  // with a framework held in full, the one that counts several, the plain enforced-controls
-  // fallback, and the one rendered when the endpoint does not answer.
-  const headlines = visible.match(/(["`])[^"`]*(?:enforced in full|end to end)[^"`]*\1/g) ?? []
+  // The correction has moved down the page twice by the owner's decision: out of an amber
+  // banner above the grid, then out of the section heading. Both were the owner's call to
+  // make and this test does not re-litigate either — a headline that spends its words on
+  // what the product is not argues against itself, and the audience for a hackathon project
+  // knows it holds no certificate.
+  //
+  // What this test still guarantees is that the correction did not evaporate on the way
+  // down. It must be in the reader's path in the disclosure, it must name the specific
+  // things Aegis does not hold rather than gesturing, and — the part that actually matters —
+  // the page must never ASSERT certification anywhere. That last one is checked below
+  // rather than assumed, because it is the only claim here that could mislead somebody.
+  const CLAIMS_A_CERTIFICATE =
+    /\b(?:we are|is|are)\s+(?:certified|accredited|audited)\b|\bcertification\s+(?:achieved|held|granted)\b/i
   assert.ok(
-    headlines.length >= 4,
-    `expected every heading branch to be a literal in this file, found ${headlines.length}`,
+    !CLAIMS_A_CERTIFICATE.test(visible),
+    'the band asserts a certificate, accreditation or audit it does not hold',
   )
-  for (const headline of headlines) {
-    assert.ok(
-      headline.includes('Certified against none.'),
-      `a heading branch dropped the correction: ${headline}`,
-    )
-  }
   assert.ok(
     visible.includes('Alignment, not certification.'),
     'the disclosure repeats it beside the frameworks it applies to',

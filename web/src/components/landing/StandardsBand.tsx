@@ -51,12 +51,20 @@ import {
  *
  * **The framing is the product here, not the wordmarks.** ISO 27001, SOC 2 and GDPR
  * normally mean *audited and certified by a named body*. Aegis has none of that — no
- * certificate, no report, no conformity assessment, nobody independent has looked. The
- * amber banner that used to carry that correction is gone by the owner's decision — this
- * is a hackathon project and the audience knows it holds no certificate — but the
- * correction itself is not: the section heading still says *certified against none*, and
- * the disclosure repeats it beside the frameworks it applies to. The page must never
- * *assert* certification, and `certified: false` stays on the wire.
+ * certificate, no report, no conformity assessment, nobody independent has looked.
+ *
+ * That correction has moved down the page twice by the owner's decision: first from an
+ * amber banner above the grid, then out of the section heading. Both were the right call
+ * for the same reason — this is a hackathon project, the audience knows it holds no
+ * certificate, and a headline that spends its words on what the product *is not* argues
+ * against itself. The heading's job is the claim; the caveat's place is the disclosure.
+ *
+ * What did **not** move is the substance. The disclosure below still says it in the
+ * reader's path, `certified: false` still ships on the wire, no certification mark or seal
+ * appears anywhere, and every framework named in the heading is one `completeFrameworks`
+ * derived from the table. The page may never *assert* certification — and the way that is
+ * guaranteed is that no mark in this file is written by hand, not that a disclaimer is
+ * stapled to the title.
  *
  * **No blended total.** Nothing here averages one group against another. The only
  * aggregates on screen are counts of things — controls enforced, controls mapped,
@@ -97,7 +105,7 @@ export function StandardsBand(): ReactElement | null {
       <LandingSection
         id="standards"
         eyebrow="Enforced"
-        title="Controls we enforce end to end. Certified against none."
+        title="Controls we enforce end to end."
       >
         <Absence
           figure="The enforced controls"
@@ -180,27 +188,33 @@ export function StandardsBand(): ReactElement | null {
 }
 
 /**
- * The section heading, which is now also where the certification correction lives.
+ * The section heading — the strongest true sentence the endpoint supports.
  *
- * **Three branches, and every one of them ends in the same four words.** The amber notice
- * that used to carry *not certification* above the grid is gone by the owner's decision;
- * with it gone, the heading is one of two places a reader meets the correction at all, and
- * a branch that dropped it would be a page asserting a certificate by omission. The test
- * checks every headline string in this file for those words rather than the one that
- * happens to render.
+ * **It names the frameworks rather than counting them, while naming them still fits.** The
+ * marks come off the wire like everything else here, so this is not a framework written
+ * into the page: it is the page printing whichever ones the endpoint says are complete.
+ * "NIST AI RMF and MITRE ATLAS enforced in full" is a claim a reader can go and check;
+ * "2 frameworks enforced in full" is a sentence about arithmetic, and it is the weaker
+ * sentence precisely because it hides the thing worth verifying. Past three the list stops
+ * being a headline and becomes an inventory, so the count takes over.
  *
- * **The single-framework branch names the framework rather than counting to one.** The
- * mark comes off the wire like everything else here, so this is not a framework written
- * into the page — it is the page printing the one the endpoint says is complete. "NIST AI
- * RMF enforced in full" is the claim; "1 framework enforced in full" is a sentence about
- * arithmetic.
+ * **The certification correction is not in the heading.** It used to end every branch here,
+ * and before that it was an amber notice above the grid; both are gone by the owner's
+ * decision. It still exists — one line in the disclosure below, and the whole control table
+ * behind the link — which is where a caveat belongs on a page whose job is to say what this
+ * platform does. What must never happen is the heading claiming something the table does
+ * not: every framework named here is named because `completeFrameworks` derived it, and no
+ * mark in this file is written by hand.
  */
 function headline(inFull: readonly ResolvedClaim[], enforced: number): string {
-  if (inFull.length === 1) return `${inFull[0].mark} enforced in full. Certified against none.`
-  if (inFull.length > 1) {
-    return `${inFull.length} frameworks enforced in full. Certified against none.`
+  if (inFull.length === 0) return `${enforced} controls we enforce end to end.`
+  if (inFull.length === 1) return `${inFull[0].mark} enforced in full.`
+  if (inFull.length <= 3) {
+    const marks = inFull.map((claim) => claim.mark)
+    const last = marks[marks.length - 1]
+    return `${marks.slice(0, -1).join(', ')} and ${last} enforced in full.`
   }
-  return `${enforced} controls we enforce end to end. Certified against none.`
+  return `${inFull.length} frameworks enforced in full.`
 }
 
 /**

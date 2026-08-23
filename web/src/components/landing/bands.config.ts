@@ -15,7 +15,7 @@
  * `STANDARDS_BAND` → `false` removes, from `web/src/app/page.tsx`, the entire
  * `<StandardsBand />` section:
  *
- * - the section heading, eyebrow and the "Certified against none" line;
+ * - the section heading and eyebrow;
  * - the "Compliance-readiness evidence — not certification" notice;
  * - the four-state coverage strip and its derived counts;
  * - every framework wordmark cell and its per-framework counts;
