@@ -61,7 +61,7 @@ Set-Location $root
 Write-Host "`nDone. Next:" -f Green
 Write-Host "  1) put your key in backend\.env  (GENAILAB_API_KEY=...)"
 Write-Host "  2) .\scripts\preflight.ps1        # see what services are up"
-Write-Host "  3) .\scripts\start.ps1 -Mode lite # run it (no databases needed)"
+Write-Host "  3) .\backend\scripts\start-windows.ps1 # run it"
 Write-Host ""
 Write-Host "  Full mode (Postgres) also needs the serving role, or tenant RLS is bypassed:"
 Write-Host "     .\scripts\db-roles.ps1         # creates aegis_app, repoints backend\.env`n"

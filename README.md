@@ -52,7 +52,7 @@ cd web && npm run dev
 
 # Windows (elevated PowerShell) — toolchain, native stores, dependencies
 .\scripts\install-windows.ps1
-.\scripts\start.ps1 -Mode full
+.\backend\scripts\start-windows.ps1
 ```
 
 Then open **http://localhost:3000**. Seed the accounts first — `cd backend &&

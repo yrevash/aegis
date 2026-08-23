@@ -73,7 +73,7 @@ above:** `./scripts/bootstrap.sh` (macOS/Linux) or `.\scripts\install-windows.ps
 
 Install and run: `./scripts/bootstrap.sh && ./scripts/dev-native.sh`, then
 `cd web && npm run dev`. Windows: `.\scripts\install-windows.ps1` then
-`.\scripts\start.ps1 -Mode full`. There is no Docker, no GPU and no WSL anywhere;
+`.\backend\scripts\start-windows.ps1`. There is no Docker, no GPU and no WSL anywhere;
 every store is a native local install. Full setup is in `INSTALL.md`.
 
 Three run modes so a demo never depends on infrastructure being healthy: `safe`

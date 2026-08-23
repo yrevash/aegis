@@ -95,9 +95,9 @@ if (Test-Path $py) {
 }
 
 Write-Host "`nGuide:" -f Cyan
-Write-Host "  gateway UP  -> lite mode works (real agent, no databases): .\scripts\start.ps1 -Mode lite"
-Write-Host "  all UP      -> full mode:                                    .\scripts\start.ps1 -Mode full"
-Write-Host "  nothing UP  -> demo-safe (mock, always works):               .\scripts\start.ps1 -Mode safe`n"
+Write-Host "  start:  .\backend\scripts\start-windows.ps1"
+Write-Host "  stop:   .\backend\scripts\stop-windows.ps1"
+Write-Host ""
 
 # Service probes above are informational (which run mode is available); the
 # regression gate is a real pass/fail bar, so its result is preflight's exit code.

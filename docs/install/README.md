@@ -1,6 +1,12 @@
 # Installing Aegis — from `git clone` to a demo that works
 
-This is the only install path. (An older v1 runbook lived here until 2026-08-23; it
+This is the ordered runbook, and it is cross-platform. If you are setting up a
+**Windows** machine, read [`../../INSTALL.md`](../../INSTALL.md) first — it covers what
+this file deliberately does not: where each component is downloaded from, that Memurai
+is what Redis is called on Windows, and that Neo4j Desktop needs an instance created by
+hand. Then come back here for the per-step checks and the demo data.
+
+(An older v1 runbook lived here until 2026-08-23; it
 predated Qdrant, Superset, the demo seeders and the document corpus. Its two pieces
 that still mattered — the non-superuser serving role, and the Neo4j/Memurai/Temporal
 service setup — were folded into the files below, and the rest was deleted. It is in

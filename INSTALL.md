@@ -1,57 +1,274 @@
-# INSTALL.md — Setup & Run Guide
+# INSTALL.md — Windows setup, start to finish
 
-> **Setting up a machine? Follow [`docs/install/`](docs/install/), not this file.**
-> That is the current, single install path: prerequisites, an ordered runbook with a
-> check after every step, the demo seeders, and the agent-facing context. It covers
-> Qdrant, Neo4j, Superset, the durable checkpointer and the document corpus.
->
-> This file is the older long-form reference. Parts of it have drifted — it predates
-> the same-origin proxy (do **not** set `NEXT_PUBLIC_API_BASE`), and it names port
-> 8000 where the deployment runs 8110. Where the two disagree, `docs/install/` wins.
+This is the install guide for a **Windows** machine, which is the machine Aegis is
+demonstrated on. Everything is a native install: **no Docker, no WSL, no GPU, no
+compose file.** Sections 0–8 are the guide. Everything from *§9 Long-form reference*
+down is the older cross-platform manual, kept because parts of it are still the only
+written record of a setting — but where the two disagree, this half wins.
 
-> **Bare Windows machine?** `scripts\install-windows.ps1` (elevated) does the whole
-> setup — toolchain, the four native stores, then the app dependencies. Add
-> `-SkipStores` if you only intend to run `-Mode lite`.
->
-> If you downloaded a **ZIP** rather than cloning, Windows marks every file as
-> "from the internet" and PowerShell refuses to run them. Unblock first:
->
-> ```powershell
-> Get-ChildItem -Recurse .\scripts\*.ps1 | Unblock-File
-> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # this session only
-> ```
->
-> Cloning with `git clone` avoids the mark entirely and is the better path.
->
-> **The ML spine must be trained once** before `/ml/explain` or `/ml/model-card`
-> answer: `cd backend && .venv/bin/python -m app.ml` (offline, ~10s, no API key and
-> no database needed). `scripts/bootstrap.sh` and `scripts\bootstrap.ps1` now do this
-> for you. Until the artifact exists those two endpoints return **503** — deliberately,
-> because the old train-on-demand fallback fitted the built-in *noise synthesiser*
-> whenever the domain adapter was unimportable and served it as domain evidence.
->
-> **Fastest path (no agent needed):** `scripts\bootstrap.ps1` → `scripts\preflight.ps1`
-> → `scripts\start.ps1 -Mode lite` (Windows; `.sh` twins for mac/Linux). The
-> one-page day-of guide with the fallback ladder is **`docs/operations/runbook.md`**;
-> the system walkthrough is **`docs/architecture/system-architecture.md`** and the
-> per-module course is **`docs/teaching/README.md`**. The rest of this file is the
-> long-form manual.
+macOS/Linux: the same steps with the `.sh` twin of each script.
 
-Complete, copy-pasteable setup for the TAIF S2 agentic platform. Two paths:
+**This file and [`docs/install/`](docs/install/README.md) are not rivals.** This one is
+Windows-specific and answers *where do I get each piece and how do I run it* — Memurai
+instead of Redis, Neo4j Desktop's manual instance, which service starts which port.
+`docs/install/` is the ordered, cross-platform runbook with a check that proves every
+step, plus what the demo seeders write and how to remove it before the hackathon. Do
+§0–§6 here, then read `docs/install/03-demo-data.md` before you demo anything.
 
-- **Path A — Demo in 2 minutes (no backend, no infra):** the console ships a
-  full in-browser **mock transport**, so you can see the whole UI (streaming
-  agent trace, animated knowledge graph, SHAP + conformal panel, human-approval
-  gate, dashboards) with **zero backend or database**. Best for a quick look or a
-  projector demo.
-- **Path B — Full stack:** FastAPI backend + local stores (Postgres, Neo4j,
-  Redis, Qdrant) + Arize Phoenix, streaming live over SSE. Qdrant is a zip with one
-  binary — no Docker, no installer, no service registration.
+---
 
-> **Environment target:** 16 GB laptop, **no Docker, no GPU**. Everything is a
-> local install or an API call. The only remote calls are the model gateway
-> (`genailab.tcs.in`). Developed on macOS, runs on Windows/Linux — no
-> OS-specific assumptions.
+## 0. Before anything
+
+**Clone, do not download the ZIP.** Windows marks every file extracted from a ZIP as
+"from the internet" and PowerShell refuses to run them. Cloning avoids the mark:
+
+```powershell
+git clone <repo-url> aegis
+cd aegis
+```
+
+If you already have a ZIP, unblock it once:
+
+```powershell
+Get-ChildItem -Recurse .\scripts\*.ps1, .\backend\scripts\*.ps1 | Unblock-File
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass    # this session only
+```
+
+**Use an elevated PowerShell for §1 and §2.** PostgreSQL and Memurai register Windows
+services, and registering a service needs administrator rights. Everything after §2
+works in an ordinary shell.
+
+---
+
+## 1. The scripted path
+
+One command does the whole of §2 and §3:
+
+```powershell
+.\scripts\install-windows.ps1
+```
+
+It installs the toolchain (Python 3.11, Node LTS, Git, uv), then the stores, then the
+Python and Node dependencies, then seeds `backend\.env` and trains the ML spine.
+
+It is **honest about the one thing it cannot do**: Neo4j Desktop needs an instance
+created by hand (§2.5). It will tell you so and carry on, because a missing graph
+degrades one screen rather than stopping the platform.
+
+If it completes cleanly, skip to §4. If any row failed, §2 is that row on its own.
+
+---
+
+## 2. The stores, one at a time
+
+Five components. Four of them Aegis needs; one is optional and says so.
+
+| # | Component | Port | Where to get it | Required? |
+|---|---|---|---|---|
+| 2.1 | Python 3.11 + Node LTS | — | `winget install Python.Python.3.11` · `winget install OpenJS.NodeJS.LTS` | yes |
+| 2.2 | PostgreSQL 16 | 5432 | `winget install PostgreSQL.PostgreSQL.16` | **yes** |
+| 2.3 | Memurai (Redis for Windows) | 6379 | <https://www.memurai.com/get-memurai> · `winget install Memurai.MemuraiDeveloper` | yes |
+| 2.4 | Qdrant | 6333 | <https://github.com/qdrant/qdrant/releases> — `qdrant-x86_64-pc-windows-msvc.zip` | yes |
+| 2.5 | Neo4j Desktop | 7687 | <https://neo4j.com/download/> · `winget install Neo4j.Neo4jDesktop` | optional |
+| 2.6 | Temporal CLI | 7233 | <https://github.com/temporalio/cli/releases> | for ingest |
+
+### 2.2 PostgreSQL — the one that is not optional
+
+Every tenant boundary in this platform is a Postgres **row-level-security policy**.
+That is why there is no SQLite mode and why `start-windows.ps1` refuses to launch the
+API when Postgres is down: a stack that starts against a different database is one
+where the isolation story is not running and nothing on screen says so.
+
+During install, set a password for the `postgres` superuser and keep it — §3 needs it.
+
+### 2.3 Memurai — Redis, under another name
+
+Windows has no maintained Redis server, and this project has no Docker or WSL to fall
+back on. **Memurai is a Redis-compatible server for Windows**: same wire protocol,
+same port, so every `REDIS_URL` in this repo points at it unchanged and no
+application code knows the difference.
+
+Two things do differ, and both have cost people time:
+
+* **its CLI is `memurai-cli`, not `redis-cli`** — `redis-cli ping` will not be found;
+* **its service is `Memurai`**, so it starts on boot and the fix when it is down is
+  `Start-Service Memurai`, not launching a binary.
+
+```powershell
+memurai-cli ping        # expect: PONG
+Get-Service Memurai     # expect: Running
+```
+
+### 2.4 Qdrant — a zip with one binary
+
+No installer, no service. Unzip it somewhere permanent and put that folder on `PATH`;
+`start-windows.ps1` launches it in its own window and `stop-windows.ps1 -Stores` stops
+it. Qdrant is the **one** vector engine — both `aegis.retrieval` and LightRAG read the
+same node, so there is nothing to keep in sync.
+
+```powershell
+curl http://localhost:6333        # expect JSON naming the version
+```
+
+### 2.5 Neo4j Desktop — the step that cannot be scripted
+
+Neo4j Desktop is a GUI that ships its own JDK, and an **instance** is created
+interactively with the password chosen in that dialog. No script can do it, so do it
+once by hand:
+
+1. Open **Neo4j Desktop**
+2. **Local instances → Create instance**
+3. Choose a password — **write it down**, it goes into `backend\.env` in §3
+4. **Start** the instance
+5. Confirm: something is now listening on **7687**
+
+Leave the username as `neo4j` and the bolt port as `7687`; `backend\.env` assumes both.
+
+**If you skip this,** the platform still runs. `GET /v1/graph` degrades and the graph
+screen is empty; retrieval falls back to its vector and keyword arms. Nothing else
+changes. That is a deliberate design property, not a workaround.
+
+### 2.6 Temporal — needed before any document is ingested
+
+Ingestion is a six-stage durable workflow, and the workflow needs a Temporal server.
+Without it the API still answers questions, but an uploaded document sits at
+`pending` forever with no error anywhere — so if documents never leave `pending`,
+check this first.
+
+```powershell
+temporal server start-dev        # start-windows.ps1 does this for you
+```
+
+---
+
+## 3. Configure `backend\.env`
+
+`scripts\bootstrap.ps1` writes this file from the template. Then fill in four things:
+
+```ini
+# The serving DSN. The password is the one you set in 2.2.
+POSTGRES_DSN=postgresql://aegis_app:<password>@localhost:5432/taif
+POSTGRES_ADMIN_DSN=postgresql://postgres:<superuser-password>@localhost:5432/taif
+
+# Neo4j — the password from the Desktop dialog in 2.5.
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<the password you chose>
+
+# Memurai answers on the Redis port under the Redis URL scheme.
+REDIS_URL=redis://localhost:6379/0
+QDRANT_URL=http://localhost:6333
+
+# The model gateway. Without a key the platform runs and refuses to invent answers.
+GATEWAY_BASE_URL=...
+GATEWAY_API_KEY=...
+```
+
+**Never set `NEXT_PUBLIC_API_BASE` in `web\.env.local`.** The start script passes it
+per-run. A value written into that file outlives every port change and is invisible
+from the browser, which is a bad hour to spend.
+
+---
+
+## 4. Database roles and row-level security
+
+This is the step most easily skipped and the one that silently matters most.
+
+```powershell
+.\scripts\db-roles.ps1
+```
+
+It creates `aegis_app` — a **non-superuser, NOBYPASSRLS** serving role. Without it the
+app connects as an owner, every RLS policy installs correctly and **filters nobody**.
+Verify, and accept nothing but `ENFORCED`:
+
+```powershell
+cd backend
+$env:PYTHONPATH="src;..\aegis\src"
+.venv\Scripts\python -m app.data.rls_check
+# ENFORCED    serving role 'aegis_app' is subject to RLS (owner DSN split)
+```
+
+---
+
+## 5. One-time setup
+
+```powershell
+cd backend
+.venv\Scripts\python -m app.seed        # tenants, users, budgets, documents
+.venv\Scripts\python -m app.ml          # trains the ML spine (~10s, offline)
+```
+
+The ML spine must be trained **once** or `/v1/ml/explain` and `/v1/ml/model-card`
+return **503** — deliberately. The old behaviour trained on demand and, when the
+domain adapter was unimportable, quietly fitted the built-in *noise synthesiser* and
+served it as domain evidence.
+
+---
+
+## 6. Start and stop
+
+```powershell
+.\backend\scripts\start-windows.ps1      # stores, then API, then console
+.\backend\scripts\stop-windows.ps1       # API + console only
+```
+
+`start-windows.ps1` starts the Postgres and Memurai **services**, launches Qdrant and
+Temporal in their own windows, reports Neo4j, and only then starts the API — refusing
+if Postgres is down. Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `-Skip Web` | API only, no console |
+| `-NoInfra` | check the stores, never start them |
+| `stop … -Stores` | also stop Qdrant and Temporal |
+| `stop … -Services` | also stop the Postgres and Memurai services (prompts first) |
+
+`stop-windows.ps1` stops **only the API and console by default**, on purpose: those
+services are shared with the rest of your machine, and a stop script that shuts down
+your database because you wanted to restart an API is one nobody runs twice. It finds
+processes by the port they hold, never by image name — `Stop-Process -Name python`
+would also take out your other checkout and the shell doing the killing.
+
+Neo4j Desktop is never stopped from a script. Close it from its own window; killing
+its JVM from underneath it is how an instance ends up needing repair.
+
+---
+
+## 7. Verify
+
+| # | Check | Command | Expect |
+|---|---|---|---|
+| 1 | Stores answering | `.\scripts\preflight.ps1` | every row green except Neo4j if you skipped it |
+| 2 | RLS enforced | `python -m app.data.rls_check` | `ENFORCED` |
+| 3 | API alive | `curl http://127.0.0.1:8000/health` | `{"status":"ok"}` |
+| 4 | Console | open `http://localhost:3000` | the login page |
+| 5 | Backend suite | `cd backend; .venv\Scripts\python -m pytest -q` | all pass |
+
+---
+
+## 8. Windows-specific troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `redis-cli` not recognised | Memurai's CLI is `memurai-cli` | use that name |
+| Redis port dead, no binary to run | Memurai is a **service** | `Start-Service Memurai` |
+| Documents stuck at `pending`, no error | Temporal is not running | `temporal server start-dev` |
+| Graph screen empty, everything else fine | No Neo4j instance | §2.5 — create one in Desktop |
+| `.ps1` refuses to run | ZIP download mark | `Unblock-File` (§0) |
+| Service will not start | Not elevated | reopen PowerShell as administrator |
+| `rls_check` prints anything but `ENFORCED` | App connects as owner | run `db-roles.ps1` (§4) |
+| API starts, tenants see each other's data | Same as above | same as above — this is what §4 prevents |
+
+---
+
+# 9. Long-form reference
+
+Everything below predates the guide above and is kept for the settings it is still the
+only record of. It names port 8000 where some deployments run 8110, and it describes a
+`-Mode lite` that no longer exists — that mode swapped Postgres for SQLite and silently
+disabled every tenant-isolation policy in the platform. **Where the two halves
+disagree, sections 0–8 win.**
 
 ---
 

@@ -25,7 +25,7 @@ ladder. When something is red, the ladder tells you which mode still works.
 # Windows (the hackathon machine)
 .\scripts\bootstrap.ps1          # once: installs everything, makes .env files
 .\scripts\preflight.ps1          # anytime: shows what's UP (gateway / stores)
-.\scripts\start.ps1 -Mode lite   # run it (lite = real agent, NO databases)
+.\backend\scripts\start-windows.ps1   # run it (stores, then API, then console)
 ```
 
 ```bash

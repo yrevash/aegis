@@ -6,7 +6,7 @@
 .DESCRIPTION
   bootstrap.ps1 installs the Python and Node dependencies but assumes the
   toolchain already exists and installs none of the three data stores - yet
-  `start.ps1 -Mode full` needs all three. This script fills that gap:
+  `backend\scripts\start-windows.ps1` needs all three. This script fills that gap:
 
     1. toolchain  - Python 3.11, Node LTS, uv, Git (via winget)
     2. stores     - PostgreSQL, Redis, Neo4j, Qdrant (native, never Docker)
@@ -26,18 +26,18 @@
 
 .PARAMETER SkipStores
   Toolchain + app dependencies only. Use this if you intend to run
-  `start.ps1 -Mode lite`, which needs no databases at all.
+  the toolchain alone, when the stores are managed elsewhere.
 
 .PARAMETER StoresOnly
   Install just the three data stores; skip toolchain and app dependencies.
 
 .EXAMPLE
   .\scripts\install-windows.ps1
-  Full setup, then: .\scripts\start.ps1 -Mode full
+  Full setup, then: .\backend\scripts\start-windows.ps1
 
 .EXAMPLE
   .\scripts\install-windows.ps1 -SkipStores
-  Enough to run: .\scripts\start.ps1 -Mode lite
+  Toolchain and app dependencies only; the stores are installed separately
 
 .NOTES
   Run in an ELEVATED PowerShell - PostgreSQL, Redis and Neo4j register Windows
@@ -315,6 +315,6 @@ if ($Failures.Count -gt 0) {
 }
 Write-Host "  1) put your key in backend\.env   (GENAILAB_API_KEY=...)"
 Write-Host "  2) .\scripts\preflight.ps1        # what is up"
-Write-Host "  3) .\scripts\start.ps1 -Mode full # all stores"
-Write-Host "     .\scripts\start.ps1 -Mode lite # no databases needed"
-Write-Host "     .\scripts\start.ps1 -Mode safe # console only, mock data`n"
+Write-Host "  3) .\backend\scripts\start-windows.ps1 # start everything"
+Write-Host "     .\backend\scripts\stop-windows.ps1  # stop it again`n"
+
