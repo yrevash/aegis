@@ -40,16 +40,25 @@ define flow guardrail input content safety
     bot refuse input
     stop
 
-# 5. Topical / off-topic dialog rail (OWASP LLM01-adjacent). ADVISORY by default:
-#    it screens the query against the host-configured business domain but does NOT
-#    `stop` — an off-topic query is recorded, never blocked, so a legitimate
-#    blind-domain demo is never broken. An enterprise that wants a hard block adds
-#    `bot refuse input` + `stop` under the branch below (matching topical_block in
-#    the programmatic pipeline). Disabled (no-op) when no allowed_topics are wired.
+# 5. Topical / off-topic dialog rail (OWASP LLM01-adjacent). ADVISORY: the check
+#    RUNS and is recorded in the rail log, and it deliberately emits nothing.
+#
+#    It used to end `bot inform off topic`, on the stated intent that an off-topic
+#    query is "recorded, never blocked, so a legitimate blind-domain demo is never
+#    broken". That intent was not what the engine did. A `bot` message inside a rail
+#    makes NeMo record the rail as having STOPPED the turn, which `_stopped_rails`
+#    reads — correctly — as a block. So the flow documented as advisory hard-blocked
+#    every question the domain screen did not recognise: "What is the capital of
+#    France?" came back `run_finished: blocked`, and on a domain the screen has not
+#    been told about, that is every question.
+#
+#    Same defect as the output grounding flow, in the other direction. A rail cannot
+#    annotate; it can only refuse. The advisory finding therefore belongs to the
+#    programmatic pipeline, which records off-topic as a non-blocking flag and runs
+#    on every turn beside this one. An enterprise wanting a hard block adds
+#    `bot refuse input` + `stop` here, which is then deliberate.
 define flow guardrail input topical
   $on_topic = execute self_check_topic
-  if not $on_topic
-    bot inform off topic
 
 # ── Media rails (images + audio) ─────────────────────────────────────────────
 # A payload that is not text arrives on the `media` context variable (Colang can
