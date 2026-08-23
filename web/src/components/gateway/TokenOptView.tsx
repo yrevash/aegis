@@ -164,18 +164,38 @@ function TokenOptView(): ReactElement {
             />
             <CardBody className="@container space-y-4">
               <div className="grid min-w-0 gap-5 @lg:grid-cols-[auto_minmax(0,1fr)] @lg:items-center">
-                {/* `small_model_share` is `number | null`. A null is not a zero — a
-                    gauge at 0% would assert that every call went to the frontier. */}
-                {summary.small_model_share == null ? (
+                {/*
+                  The gauge under a card headed **Savings** is the savings rate, and
+                  nothing else. It used to be `small_model_share`, which on this
+                  deployment is a true `0` — every role routes to a model the price
+                  table does not class as small — sitting one gutter away from
+                  `Cost saved $0.62`. Two measured figures, both correct, rendered as
+                  a flat contradiction: *savings, metered, 0%* beside 62 cents saved.
+
+                  The saving is real and comes from somewhere else — each role's own
+                  cheaper model against the baseline role's price — so the bounded
+                  value the gauge exists for (DESIGN.md §2) is `cost_saved /
+                  baseline_cost`. The small-model share keeps its place in the receipt
+                  below, where "n calls, 0 on a small model" states it without
+                  claiming to be the headline.
+
+                  A baseline of zero is not a 0% saving, it is no denominator — so it
+                  gets the stated absence rather than an arc at nought.
+                */}
+                {!metered || summary.baseline_cost_usd <= 0 ? (
                   <Absence
                     className="max-w-xs"
-                    figure="Small-model share"
-                    why="No call has been routed yet."
+                    figure="Savings rate"
+                    why={
+                      metered
+                        ? 'The baseline priced at zero, so there is no rate to take.'
+                        : 'No call has been routed yet.'
+                    }
                   />
                 ) : (
                   <Gauge
-                    value={summary.small_model_share}
-                    label="small-model share"
+                    value={summary.cost_saved_usd / summary.baseline_cost_usd}
+                    label="saved vs baseline"
                     color="agent"
                     size={148}
                     className="mx-auto"

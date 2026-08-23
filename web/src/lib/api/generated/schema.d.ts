@@ -345,6 +345,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agent/checkpoints/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Checkpoints Route
+         * @description Return one run's LangGraph checkpoint chain, oldest first.
+         *
+         *     Structure only — see this module's docstring for the list of fields deliberately
+         *     withheld, of which the important one is the checkpoint's state payload (the query,
+         *     the retrieved passages, the tool arguments).
+         *
+         *     A run id the caller's tenant does not own answers **404**, not 403: the two are the
+         *     same answer on purpose, so an id cannot be probed for existence.
+         */
+        get: operations["agent_checkpoints_route_v1_agent_checkpoints__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agent/topology": {
         parameters: {
             query?: never;
@@ -676,6 +703,37 @@ export interface paths {
          * @description Authenticate a user (hashed password) and issue a claims-bearing JWT.
          */
         post: operations["login_v1_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/compliance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compliance
+         * @description Return the framework-by-framework compliance-readiness map (platform staff).
+         *
+         *     Nine frameworks — OWASP LLM Top 10 (2025), OWASP Top 10:2025, MITRE ATLAS, NIST AI
+         *     RMF 1.0, ISO/IEC 42001 Annex A, ISO/IEC 27001:2022 Annex A, the EU AI Act, SOC 2
+         *     Trust Services Criteria, and GDPR/DPDP — each control carrying a four-valued state
+         *     and the files, routes and tests that back it.
+         *
+         *     **Not a certification.** ``disclaimer`` says so on every response, and
+         *     ``doc_ref`` names the written authority the payload projects. Every evidence
+         *     reference is resolved against the real filesystem, the real route table and the
+         *     real test files by ``backend/tests/api/test_compliance.py``, so a claim naming a
+         *     file that does not exist fails the suite instead of reaching a reader.
+         */
+        get: operations["compliance_v1_compliance_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1503,10 +1561,14 @@ export interface paths {
          *         The console aggregate, after the write.
          *
          *     Raises:
-         *         HTTPException: 400 when the id is unusable as a namespace, 409 when it is
-         *             already declared. Re-pointing an existing id is refused rather than
-         *             accepted, because it would silently re-aim every grant written against
-         *             that namespace at a different peer.
+         *         HTTPException: 400 when the id is unusable as a namespace **or the URL points
+         *             somewhere Aegis will not dial** (:func:`app.mcp.client.validate_peer_url` —
+         *             loopback, link-local and private space are refused without the deployment's
+         *             opt-in, because ``connect`` would otherwise probe this deployment's own
+         *             network on the caller's behalf); 409 when the id is already declared.
+         *             Re-pointing an existing id is refused rather than accepted, because it would
+         *             silently re-aim every grant written against that namespace at a different
+         *             peer.
          */
         post: operations["create_server_v1_mcp_servers_post"];
         delete?: never;
@@ -1536,7 +1598,11 @@ export interface paths {
          *         The console aggregate, after the write.
          *
          *     Raises:
-         *         HTTPException: 404 when the server is not declared.
+         *         HTTPException: 404 when the server is not declared, 400 when the new ``url``
+         *             points somewhere Aegis will not dial (:func:`app.mcp.client.
+         *             validate_peer_url`). The edit route is the same SSRF surface as the declare
+         *             route — re-pointing a peer at ``http://169.254.169.254/`` reaches exactly
+         *             what declaring one there would — so both refuse, and neither writes.
          */
         put: operations["update_server_v1_mcp_servers__server_id__put"];
         post?: never;
@@ -2261,6 +2327,18 @@ export interface paths {
          *
          *     Both halves are needed. The guard alone would still hand one tenant's admin another
          *     tenant's rows; the clause alone would still expose the surface to a ``client``.
+         *
+         *     **``tenant_id`` is declared rather than ignored, and that is the third half.** The
+         *     route took no such parameter, so FastAPI dropped an unknown query string on the
+         *     floor: ``GET /ops/evals?tenant_id=2`` as ``northwind.analyst`` (tenant 1) returned
+         *     **200 with tenant 1's rows**. No leak — but a caller who names a scope and is served
+         *     a different one silently has no way to learn that, and a screen built on it will
+         *     caption another tenant's number with the tenant it asked for. Declaring the
+         *     parameter and putting it through :func:`_scope_tenant` makes the two outcomes the
+         *     only outcomes: honoured within the caller's authority, or 403.
+         *
+         *     Raises:
+         *         HTTPException: 403 on a cross-tenant ``tenant_id``.
          */
         get: operations["ops_evals_v1_ops_evals_get"];
         put?: never;
@@ -2307,7 +2385,25 @@ export interface paths {
          * Ops Prompts
          * @description List every versioned system prompt for ``prompt_key``, newest version first.
          *
+         *     **The scope comes from the token, explicitly.** This route used to let
+         *     ``app.ops.registry`` default the tenant from the sealed *governance* context — which
+         *     is bound on ``POST /query`` and the chat surfaces and on no plain GET, so every call
+         *     here resolved to ``None``, the PLATFORM scope, and read ``tenant_id IS NULL``.
+         *     Measured on ``taif_run1``: the default persona's prompt key returned ``{"rows": []}``
+         *     for an analyst, a tenant admin *and* platform staff, while ``prompt_versions`` held
+         *     two rows for tenant 1 and ``GET /llmops/prompts`` — which resolves its scope from
+         *     the principal — reported ``activeVersion: 2`` for the same key. The LLMOps screen
+         *     reads both and rendered "No version of this prompt has been recorded" directly above
+         *     the list of them.
+         *
+         *     ``tenant_id`` follows the same rule as every other scoped read
+         *     (:func:`_scope_tenant`): platform staff may name a tenant, anyone else naming one
+         *     other than their own is refused rather than quietly served their own.
+         *
          *     Degrades to an empty list when the stores are off (lite/offline mode).
+         *
+         *     Raises:
+         *         HTTPException: 403 on a cross-tenant ``tenant_id``.
          */
         get: operations["ops_prompts_v1_ops_prompts_get"];
         put?: never;
@@ -2329,8 +2425,17 @@ export interface paths {
          * Ops Prompts Active
          * @description Return the single live version for ``prompt_key`` (DB), else the cached one.
          *
+         *     Scoped from the token by :func:`_scope_tenant` for the same reason its sibling
+         *     ``GET /ops/prompts`` is: the governance context this used to inherit the tenant from
+         *     is not bound on a plain GET, so every call read the platform scope and reported no
+         *     active prompt for a tenant that has one.
+         *
          *     Falls back to the process-wide active cache (``registry.get_cached_active``) when the
-         *     DB has no active row or is unreachable — the same synchronous seam the harness reads.
+         *     DB has no active row or is unreachable — the same synchronous seam the harness reads,
+         *     and read in the same scope.
+         *
+         *     Raises:
+         *         HTTPException: 403 on a cross-tenant ``tenant_id``.
          */
         get: operations["ops_prompts_active_v1_ops_prompts_active_get"];
         put?: never;
@@ -2634,6 +2739,39 @@ export interface paths {
          *     null ``p95_latency_ms`` rather than inventing a number.
          */
         get: operations["platform_public_metrics_v1_platform_public_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/platform/standards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Platform Standards
+         * @description Return the public standards-alignment summary — names, jurisdictions, counts.
+         *
+         *     **Unauthenticated by design.** The public landing page renders this band, so it
+         *     must answer without a bearer token. It carries no tenant, user, usage or
+         *     credential data, and — unlike ``GET /compliance``, which it summarises — no
+         *     control-level gap or evidence reference either.
+         *
+         *     **Alignment, not certification.** ``certified`` is always ``false`` and
+         *     ``disclaimer`` says why on every response. Aegis holds no ISO 27001 certificate,
+         *     no ISO/IEC 42001 certificate, no SOC 2 report and no EU AI Act conformity
+         *     assessment; nothing here has been audited by an independent party.
+         *
+         *     Every count is derived from the control table on each request, so the figure a
+         *     visitor reads is the figure the repository can defend.
+         */
+        get: operations["platform_standards_v1_platform_standards_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4894,6 +5032,12 @@ export interface components {
             tagline: string;
         };
         /**
+         * ChannelRole
+         * @description What the destination does with what reaches it — the half that decides residency.
+         * @enum {string}
+         */
+        ChannelRole: "store" | "process" | "self";
+        /**
          * ChatMessageRow
          * @description One turn of a conversation, as the thread renders it.
          */
@@ -4979,6 +5123,101 @@ export interface components {
             rows: components["schemas"]["ChatSessionRow"][];
         };
         /**
+         * CheckpointHistoryResponse
+         * @description One run's checkpoint chain, oldest first, plus what it proves.
+         */
+        CheckpointHistoryResponse: {
+            /**
+             * Checkpoints
+             * @description Oldest first, so the timeline reads forward.
+             */
+            checkpoints?: components["schemas"]["CheckpointRow"][];
+            /**
+             * Durable
+             * @description Whether the store outlives the process that wrote the checkpoints.
+             */
+            durable: boolean;
+            /**
+             * Entries
+             * @description How many times the graph was entered from the top (checkpoints with source 'input'). 1 after a resume is the evidence that the resume continued the run rather than re-running it.
+             * @default 0
+             */
+            entries: number;
+            /**
+             * Interrupted At
+             * @description The checkpoint id where the approval gate parked, if any.
+             */
+            interrupted_at?: string | null;
+            /**
+             * Resumed From
+             * @description The interrupted checkpoint id, when a later checkpoint names it as parent — i.e. the run was resumed and continued from exactly there. Null while the run is still parked.
+             */
+            resumed_from?: string | null;
+            /**
+             * Run Id
+             * @description The run, which is also the checkpoint thread id.
+             */
+            run_id: string;
+            /**
+             * Store
+             * @description The configured checkpoint store: 'postgres' (durable — survives a restart) or 'memory' (this process only).
+             */
+            store: string;
+            /**
+             * Truncated
+             * @description Whether the chain was longer than 200 checkpoints.
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
+         * CheckpointRow
+         * @description One checkpoint — structure and timing, never the state it snapshotted.
+         */
+        CheckpointRow: {
+            /**
+             * Checkpoint Id
+             * @description LangGraph's checkpoint id (a UUIDv6).
+             */
+            checkpoint_id: string;
+            /**
+             * Created At
+             * @description ISO-8601 timestamp the checkpoint was written.
+             */
+            created_at?: string | null;
+            /**
+             * Interrupted
+             * @description Whether an interrupt is parked at this checkpoint — the human approval gate. The interrupt's payload is deliberately not returned.
+             * @default false
+             */
+            interrupted: boolean;
+            /**
+             * Next Nodes
+             * @description The node(s) pending at this checkpoint. Empty means the graph had finished.
+             */
+            next_nodes?: string[];
+            /**
+             * Parent Checkpoint Id
+             * @description The checkpoint this one continued from. A single unbroken parent chain is what says the run advanced rather than restarted.
+             */
+            parent_checkpoint_id?: string | null;
+            /**
+             * Produced By
+             * @description The node(s) that ran to produce this checkpoint — the parent checkpoint's pending tasks. Empty for the entry checkpoint, which no node produced.
+             */
+            produced_by?: string[];
+            /**
+             * Source
+             * @description LangGraph's checkpoint source: input, loop, update or fork.
+             */
+            source: string;
+            /**
+             * Step
+             * @description LangGraph's super-step counter. -1 is the input checkpoint, 0 the first loop step. Monotonic across a resume — that is the point.
+             */
+            step: number;
+        };
+        /**
          * ColumnOut
          * @description One column of one table, as the console's grants report it.
          */
@@ -4991,6 +5230,36 @@ export interface components {
             name: string;
             /** Nullable */
             nullable: boolean;
+        };
+        /**
+         * ComplianceResponse
+         * @description Body for ``GET /compliance`` — every framework, with its evidence.
+         */
+        ComplianceResponse: {
+            /** @description Totals across every framework. */
+            coverage: components["schemas"]["FrameworkCoverage"];
+            /**
+             * Disclaimer
+             * @description Readiness, not certification. Always present.
+             */
+            disclaimer: string;
+            /**
+             * Doc Ref
+             * @description The written authority this response projects.
+             */
+            doc_ref: string;
+            /**
+             * Frameworks
+             * @description The mapped frameworks.
+             */
+            frameworks: components["schemas"]["Framework"][];
+            /**
+             * Generated At
+             * @description ISO-8601 UTC timestamp of this read.
+             */
+            generated_at: string;
+            /** @description Where this deployment's data actually goes, derived from live configuration. Two India rows depend on it — DPDP s.16 (cross-border transfer) and CERT-In Direction (iv) (logs within Indian jurisdiction) — and both are questions no prose answer settles. */
+            residency: components["schemas"]["ResidencyReport"];
         };
         /**
          * ComponentHealth
@@ -5030,6 +5299,40 @@ export interface components {
             status: "up" | "down" | "degraded" | "unknown" | "not_applicable";
         };
         /**
+         * ControlEntry
+         * @description One framework control, its honest state, and what backs it.
+         */
+        ControlEntry: {
+            /**
+             * Evidence
+             * @description Checkable references backing the claim.
+             */
+            evidence?: components["schemas"]["Evidence"][];
+            /**
+             * Gap
+             * @description What is missing, in plain words. Required for partial, not_implemented and not_applicable; empty only for enforced.
+             * @default
+             */
+            gap: string;
+            /**
+             * Id
+             * @description The framework's own control identifier.
+             */
+            id: string;
+            /** @description enforced / partial / not_implemented / not_applicable. */
+            state: components["schemas"]["ControlState"];
+            /**
+             * Summary
+             * @description What Aegis actually does here. One sentence.
+             */
+            summary: string;
+            /**
+             * Title
+             * @description The control's name, as the framework words it.
+             */
+            title: string;
+        };
+        /**
          * ControlOutcome
          * @description What one control decided — or why it decided nothing.
          *
@@ -5059,6 +5362,12 @@ export interface components {
             outcome: components["schemas"]["ControlOutcome"];
             stage: components["schemas"]["VisionStage"];
         };
+        /**
+         * ControlState
+         * @description How a framework control stands in this repository. Four-valued on purpose.
+         * @enum {string}
+         */
+        ControlState: "enforced" | "partial" | "not_implemented" | "not_applicable";
         /**
          * CorpusModel
          * @description What the document became, counted off `chunks` rather than off the log.
@@ -5251,6 +5560,47 @@ export interface components {
             p95_ms: number;
         };
         /**
+         * EgressChannel
+         * @description One destination this deployment can reach, and what reaches it.
+         */
+        EgressChannel: {
+            /**
+             * Carries
+             * @description What actually travels this channel. One sentence.
+             */
+            carries: string;
+            /**
+             * Code Ref
+             * @description The repository path where the dial happens.
+             */
+            code_ref: string;
+            /**
+             * Destination
+             * @description Scheme and host:port as configured, credentials stripped. Empty when unset.
+             * @default
+             */
+            destination: string;
+            /**
+             * Id
+             * @description Stable slug for the channel.
+             */
+            id: string;
+            /** @description local / external / disabled / unknown. */
+            locality: components["schemas"]["Locality"];
+            /**
+             * Name
+             * @description Human name for the destination.
+             */
+            name: string;
+            /** @description store / process / self. */
+            role: components["schemas"]["ChannelRole"];
+            /**
+             * Setting
+             * @description The Settings field or environment variable that decides it.
+             */
+            setting: string;
+        };
+        /**
          * EmissionModel
          * @description One thing a stage emits, and the channel that decides what may be asked of it.
          */
@@ -5377,6 +5727,30 @@ export interface components {
              */
             source: string;
         };
+        /**
+         * Evidence
+         * @description One checkable reference behind a control claim.
+         */
+        Evidence: {
+            /** @description file / route / test / doc. */
+            kind: components["schemas"]["EvidenceKind"];
+            /**
+             * Label
+             * @description Short human label for the reference.
+             */
+            label: string;
+            /**
+             * Ref
+             * @description The path, route or pytest node id.
+             */
+            ref: string;
+        };
+        /**
+         * EvidenceKind
+         * @description What kind of artefact an evidence reference names — and how it is resolved.
+         * @enum {string}
+         */
+        EvidenceKind: "file" | "route" | "test" | "doc";
         /**
          * ExcludedModel
          * @description A candidate that could not be scored, with the real reason it was dropped.
@@ -5566,6 +5940,109 @@ export interface components {
             referencesColumn: string;
             /** Referencestable */
             referencesTable: string;
+        };
+        /**
+         * Framework
+         * @description One published framework and Aegis's control-by-control position against it.
+         */
+        Framework: {
+            /**
+             * Controls
+             * @description One entry per mapped control.
+             */
+            controls: components["schemas"]["ControlEntry"][];
+            /** @description Derived state counts. */
+            coverage?: components["schemas"]["FrameworkCoverage"];
+            /**
+             * Id
+             * @description Stable slug, e.g. 'owasp-llm'.
+             */
+            id: string;
+            /**
+             * Jurisdiction
+             * @description Which body of law or practice this framework belongs to — 'India' for the home market's own regulation, 'International' for everything else.
+             * @default International
+             */
+            jurisdiction: string;
+            /**
+             * Name
+             * @description The framework's name.
+             */
+            name: string;
+            /**
+             * Scope
+             * @description What part of Aegis this framework governs.
+             */
+            scope: string;
+            /**
+             * Version
+             * @description The edition these controls are taken from.
+             */
+            version: string;
+        };
+        /**
+         * FrameworkCoverage
+         * @description The four counts for one framework. Derived, never hand-authored.
+         */
+        FrameworkCoverage: {
+            /**
+             * Enforced
+             * @default 0
+             */
+            enforced: number;
+            /**
+             * Not Applicable
+             * @default 0
+             */
+            not_applicable: number;
+            /**
+             * Not Implemented
+             * @default 0
+             */
+            not_implemented: number;
+            /**
+             * Partial
+             * @default 0
+             */
+            partial: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /**
+         * FrameworkSummary
+         * @description One framework's public row: what it is called, whose law it is, how far it goes.
+         */
+        FrameworkSummary: {
+            /** @description The four derived state counts for this framework, and its total. */
+            coverage: components["schemas"]["FrameworkCoverage"];
+            /**
+             * Id
+             * @description Stable slug — the same id `GET /compliance` uses.
+             */
+            id: string;
+            /**
+             * Jurisdiction
+             * @description 'India' or 'International'.
+             */
+            jurisdiction: string;
+            /**
+             * Mark
+             * @description Short display label for a wordmark grid. Falls back to the full name for a framework this build has no short mark for.
+             */
+            mark: string;
+            /**
+             * Name
+             * @description The framework's full name.
+             */
+            name: string;
+            /**
+             * Version
+             * @description The edition these controls are taken from.
+             */
+            version: string;
         };
         /**
          * FusionMethod
@@ -6195,6 +6672,12 @@ export interface components {
             /** Window Capacity */
             window_capacity?: number | null;
         };
+        /**
+         * Locality
+         * @description Where a configured destination sits relative to this deployment.
+         * @enum {string}
+         */
+        Locality: "local" | "external" | "disabled" | "unknown";
         /**
          * LogEntryModel
          * @description One chronological line of the log, every run of the document included.
@@ -8999,6 +9482,52 @@ export interface components {
             ticket: string;
         };
         /**
+         * ResidencyReport
+         * @description Every destination, its locality, and the counts a reader wants first.
+         */
+        ResidencyReport: {
+            /**
+             * Channels
+             * @description One entry per configured destination.
+             */
+            channels: components["schemas"]["EgressChannel"][];
+            /**
+             * Disabled
+             * @description Declared channels this deployment has not configured.
+             */
+            disabled: number;
+            /**
+             * External
+             * @description Channels of any role that leave the deployment.
+             */
+            external: number;
+            /**
+             * Generated At
+             * @description ISO-8601 UTC timestamp of this read.
+             */
+            generated_at: string;
+            /**
+             * Local
+             * @description Channels of any role that stay on this host or LAN.
+             */
+            local: number;
+            /**
+             * Note
+             * @description What this report can and cannot establish.
+             */
+            note: string;
+            /**
+             * Stores External
+             * @description Data-at-rest destinations resolving off-host.
+             */
+            stores_external: number;
+            /**
+             * Stores Local
+             * @description Data-at-rest destinations resolving to this host/LAN.
+             */
+            stores_local: number;
+        };
+        /**
          * ResultOut
          * @description One executed read: the rows, the bounds that fired, and what it ran as.
          */
@@ -9999,6 +10528,40 @@ export interface components {
             runs: number;
             /** Stage */
             stage: string;
+        };
+        /**
+         * StandardsResponse
+         * @description Body for ``GET /platform/standards`` — counts and names, never control detail.
+         */
+        StandardsResponse: {
+            /**
+             * Certified
+             * @description Whether any framework below has been independently certified or attested. Always false, and served as a field rather than assumed, so a client cannot render a certification claim by forgetting to read the disclaimer.
+             * @default false
+             */
+            certified: boolean;
+            /** @description Totals across every framework. */
+            coverage: components["schemas"]["FrameworkCoverage"];
+            /**
+             * Disclaimer
+             * @description Readiness, not certification. Always present, always rendered — a summary that travelled without it would be the one defect this surface avoids.
+             */
+            disclaimer: string;
+            /**
+             * Doc Ref
+             * @description The written authority these counts project.
+             */
+            doc_ref: string;
+            /**
+             * Frameworks
+             * @description Every mapped framework, in the served order — India first.
+             */
+            frameworks: components["schemas"]["FrameworkSummary"][];
+            /**
+             * Generated At
+             * @description ISO-8601 UTC timestamp of this read.
+             */
+            generated_at: string;
         };
         /**
          * StreamEvent
@@ -11103,6 +11666,37 @@ export interface operations {
             };
         };
     };
+    agent_checkpoints_route_v1_agent_checkpoints__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     agent_topology_route_v1_agent_topology_get: {
         parameters: {
             query?: never;
@@ -11437,6 +12031,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compliance_v1_compliance_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplianceResponse"];
                 };
             };
         };
@@ -13025,6 +13639,7 @@ export interface operations {
                 prompt_key?: string | null;
                 run_id?: string | null;
                 limit?: number;
+                tenant_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -13076,6 +13691,7 @@ export interface operations {
         parameters: {
             query: {
                 prompt_key: string;
+                tenant_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -13107,6 +13723,7 @@ export interface operations {
         parameters: {
             query: {
                 prompt_key: string;
+                tenant_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -13403,6 +14020,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicMetricsResponse"];
+                };
+            };
+        };
+    };
+    platform_standards_v1_platform_standards_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StandardsResponse"];
                 };
             };
         };

@@ -12,6 +12,7 @@ import { AgentTracePanel } from '@/components/trace/AgentTracePanel'
 import type { GraphResponse, MetricsResponse } from '@/lib/api/types'
 import type { RunState } from '@/state/runReducer'
 
+import { CheckpointTimeline } from './CheckpointTimeline'
 import type { Beat } from './motion'
 
 // The knowledge-graph viz pulls in `react-force-graph-2d` (canvas + d3 forces), so it
@@ -131,6 +132,11 @@ export function TraceTab({ state, graph, metrics, beat }: TraceTabProps): ReactE
       <Decisions state={state} />
 
       <GuardrailReveal guardrails={state.guardrails} />
+
+      {/* Where the graph actually paused, and where the approval picked it back up.
+          It sits with the decisions rather than in its own tab: "how was this produced"
+          is the question this whole panel answers, and durable execution is part of it. */}
+      <CheckpointTimeline runId={state.runId} />
 
       {measured ? (
         <Card>

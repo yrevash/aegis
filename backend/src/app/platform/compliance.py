@@ -1939,7 +1939,10 @@ _DPDP: tuple[ControlEntry, ...] = (
         ),
         evidence=[
             _f("aegis/src/aegis/governance/rls.py", "FORCE RLS + the boot-time bypass audit"),
-            _f("aegis/src/aegis/guardrails/pii.py", "redact / scan on input, output and tool results"),
+            _f(
+                "aegis/src/aegis/guardrails/pii.py",
+                "redact / scan on input, output and tool results",
+            ),
             _f("aegis/src/aegis/governance/security.py", "Argon2id — and the whole of the crypto"),
             _t(
                 "aegis/tests/governance/test_rls_enforcement.py"
@@ -1979,7 +1982,10 @@ _DPDP: tuple[ControlEntry, ...] = (
             "those rows outlives the horizon by design."
         ),
         evidence=[
-            _f("aegis/src/aegis/memory/retention.py", "the one unconditional scheduled hard delete"),
+            _f(
+                "aegis/src/aegis/memory/retention.py",
+                "the one unconditional scheduled hard delete",
+            ),
             _f("aegis/src/aegis/settings/spec.py", "memory.retention_days (90) and its merge rule"),
             _r("GET /memory/retention", "what the horizon would remove, before it removes it"),
             _r("POST /memory/retention/sweep", "the sweep itself"),
@@ -2400,7 +2406,10 @@ _INDIA_SECTORAL: tuple[ControlEntry, ...] = (
             "of those five."
         ),
         evidence=[
-            _f("aegis/src/aegis/governance/rls.py", "the isolation a regulated deployment inherits"),
+            _f(
+                "aegis/src/aegis/governance/rls.py",
+                "the isolation a regulated deployment inherits",
+            ),
             _f("backend/src/app/platform/residency.py", "where the data would sit, derived"),
         ],
     ),

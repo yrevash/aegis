@@ -270,6 +270,113 @@ export interface SecurityPostureResponse {
   signals: PostureSignals
 }
 
+// ── Compliance readiness (`GET /compliance`) ─────────────────────────────────
+
+/**
+ * The four states a framework control can be in.
+ *
+ * Four, not two, and the two extra ones carry most of the honesty: `partial` is a
+ * real control with a named missing layer, `not_implemented` is a plainly stated
+ * absence, and `not_applicable` is a control that governs something Aegis does not
+ * do. Mirrors `ControlState` in `backend/src/app/platform/compliance.py`.
+ */
+export type ControlState = 'enforced' | 'partial' | 'not_implemented' | 'not_applicable'
+
+/** How an evidence reference is resolved: on disk, in the route table, in a test file. */
+export type EvidenceKind = 'file' | 'route' | 'test' | 'doc'
+
+/** One checkable reference behind a control claim. Mirrors `Evidence`. */
+export interface ComplianceEvidence {
+  kind: EvidenceKind | string
+  ref: string
+  label: string
+}
+
+/** One framework control, its honest state, and what backs it. Mirrors `ControlEntry`. */
+export interface ComplianceControl {
+  id: string
+  title: string
+  state: ControlState | string
+  summary: string
+  gap: string
+  evidence: ComplianceEvidence[]
+}
+
+/** Derived state counts for one framework (or for the whole map). */
+export interface ComplianceCoverage {
+  enforced: number
+  partial: number
+  not_implemented: number
+  not_applicable: number
+  total: number
+}
+
+/**
+ * Which body of law or practice a framework belongs to.
+ *
+ * India's frameworks are served first and grouped separately, because for a deployment
+ * in India the DPDP Act and the CERT-In Directions are law while ISO 42001 and the OWASP
+ * lists are practice. Mirrors `JURISDICTION_INDIA` / `JURISDICTION_INTERNATIONAL`.
+ */
+export type Jurisdiction = 'India' | 'International'
+
+/** One published framework and Aegis's position against it. Mirrors `Framework`. */
+export interface ComplianceFramework {
+  id: string
+  name: string
+  version: string
+  jurisdiction: Jurisdiction | string
+  scope: string
+  controls: ComplianceControl[]
+  coverage: ComplianceCoverage
+}
+
+/** Where a configured destination sits relative to this deployment. Mirrors `Locality`. */
+export type Locality = 'local' | 'external' | 'disabled' | 'unknown'
+
+/** What the destination does with what reaches it. Mirrors `ChannelRole`. */
+export type ChannelRole = 'store' | 'process' | 'self'
+
+/**
+ * One destination this deployment can reach, and what reaches it.
+ *
+ * Derived from live configuration on every read rather than written down, which is the
+ * only version of a residency claim worth showing: re-point a store at an outside host
+ * and `locality` flips on the next read.
+ */
+export interface EgressChannel {
+  id: string
+  name: string
+  role: ChannelRole | string
+  locality: Locality | string
+  destination: string
+  setting: string
+  carries: string
+  code_ref: string
+}
+
+/** Where this deployment's data actually goes. Mirrors `ResidencyReport`. */
+export interface ResidencyReport {
+  generated_at: string
+  channels: EgressChannel[]
+  stores_local: number
+  stores_external: number
+  external: number
+  local: number
+  disabled: number
+  note: string
+}
+
+/** Body for `GET /compliance` — readiness evidence, never a certification claim. */
+export interface ComplianceResponse {
+  disclaimer: string
+  doc_ref: string
+  generated_at: string
+  frameworks: ComplianceFramework[]
+  coverage: ComplianceCoverage
+  residency: ResidencyReport
+}
+
 // ── Latency (`GET /latency`) ─────────────────────────────────────────────────
 
 /** Aggregated latency for one node across recorded runs. */

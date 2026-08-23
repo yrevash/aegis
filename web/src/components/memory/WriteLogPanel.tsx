@@ -7,6 +7,7 @@ import { useState, type ReactElement } from 'react'
 import { RevealOnScroll } from '@/components/shared'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { InfoTip } from '@/components/primitives/InfoTip'
+import { TAP_TARGET } from '@/components/primitives/tapTarget'
 import { cn } from '@/lib/utils'
 import type { MemoryWriteRow, MemoryWritesResponse } from '@/lib/api/memory'
 
@@ -105,7 +106,12 @@ function WriteRow({ row }: { row: MemoryWriteRow }): ReactElement {
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-label={`Detail for write #${row.id}`}
-            className="shrink-0 rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={cn(
+              'rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              // 17.5 × 17.5 measured, once per row — the single densest cluster of
+              // under-floor targets in the product.
+              TAP_TARGET,
+            )}
           >
             <ChevronDown
               aria-hidden

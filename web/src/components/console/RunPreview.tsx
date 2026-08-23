@@ -70,7 +70,12 @@ export function RunPreview(): ReactElement {
   return (
     <section aria-label="What happens to a question" className="@container/preview w-full min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-surface-2/40 px-3 py-2">
-        <h2 className="eyebrow flex shrink-0 items-center gap-1.5">
+        {/* `shrink-0` on a heading whose text does not shrink: at 390px and the 125%
+            text setting this row measured 394px of content inside a 390px viewport,
+            and the ⓘ ended 1.4px from the edge — so the 24px pointer target around it
+            (`TAP_TARGET`) had nowhere to go and pushed the document into a horizontal
+            scroll. The heading wraps instead; nothing else on the row moves. */}
+        <h2 className="eyebrow flex min-w-0 flex-wrap items-center gap-1.5">
           Every question takes this path
           <InfoTip label="About the path">
             The four beats are the compiled graph’s own. The middle one stands for whichever

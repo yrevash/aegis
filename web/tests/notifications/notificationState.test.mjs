@@ -98,6 +98,31 @@ test('a replayed id after a reconnect is not counted twice', () => {
   assert.equal(replay.rows.length, 1)
 })
 
+test('a replayed row that has since been read takes the badge down with it', () => {
+  // The drift the audit measured: 13 on the badge over a server reporting 5, with
+  // nine of fourteen rows read and the panel still labelling them "Unread". Deduping
+  // by id stopped the double count but left the count alone when the newer copy said
+  // the row had been read somewhere else — the row's state moved and the number
+  // beside it did not.
+  const live = notificationReducer(EMPTY_NOTIFICATIONS, { type: 'arrived', row: row({ id: 'b' }) })
+  assert.equal(live.unread, 1)
+  const reconciled = notificationReducer(live, {
+    type: 'arrived',
+    row: row({ id: 'b', read_at: '2026-08-23T10:05:00Z' }),
+  })
+  assert.equal(reconciled.unread, 0)
+  assert.equal(reconciled.rows[0].read_at, '2026-08-23T10:05:00Z')
+})
+
+test('a replay that is still unread moves nothing', () => {
+  // The failure mode of the fix: a decrement on every replay would walk the badge to
+  // zero over a flaky socket, which is the same lie pointing the other way.
+  const live = notificationReducer(EMPTY_NOTIFICATIONS, { type: 'arrived', row: row({ id: 'b' }) })
+  const again = notificationReducer(live, { type: 'arrived', row: row({ id: 'b' }) })
+  const third = notificationReducer(again, { type: 'arrived', row: row({ id: 'b' }) })
+  assert.equal(third.unread, 1)
+})
+
 test('reading is idempotent and cannot drive the count negative', () => {
   const loaded = notificationReducer(EMPTY_NOTIFICATIONS, {
     type: 'loaded',

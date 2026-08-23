@@ -207,12 +207,19 @@ function VoiceView(): ReactElement {
     <div className="min-w-0 space-y-6">
       <PageHeader eyebrow="Whisper · rails" title="Voice" />
 
+      {/* The one thing a screen-reader user is told about the finished run, so it
+          must not announce a success the panel below contradicts. `Transcribed.` was
+          unconditional: on a clip the rails refused, this said "Transcribed" over a
+          transcript panel reading "Nothing was transcribed — see the rail verdict for
+          why." The transcript itself is what decides which sentence is true. */}
       <p aria-live="polite" className="sr-only">
         {busy
           ? 'Transcribing the recording.'
           : result == null
             ? ''
-            : `Transcribed. The rails returned ${result.verdict}.`}
+            : result.transcript
+              ? `Transcribed. The rails returned ${result.verdict}.`
+              : `Nothing was transcribed. The rails returned ${result.verdict}.`}
       </p>
 
       <Card className="min-w-0">

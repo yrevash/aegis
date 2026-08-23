@@ -2349,6 +2349,16 @@
         "title": "CapabilitiesResponse",
         "type": "object"
       },
+      "ChannelRole": {
+        "description": "What the destination does with what reaches it — the half that decides residency.",
+        "enum": [
+          "store",
+          "process",
+          "self"
+        ],
+        "title": "ChannelRole",
+        "type": "string"
+      },
       "ChatMessageRow": {
         "description": "One turn of a conversation, as the thread renders it.",
         "properties": {
@@ -2511,6 +2521,152 @@
         "title": "ChatSessionsResponse",
         "type": "object"
       },
+      "CheckpointHistoryResponse": {
+        "additionalProperties": false,
+        "description": "One run's checkpoint chain, oldest first, plus what it proves.",
+        "properties": {
+          "checkpoints": {
+            "description": "Oldest first, so the timeline reads forward.",
+            "items": {
+              "$ref": "#/components/schemas/CheckpointRow"
+            },
+            "title": "Checkpoints",
+            "type": "array"
+          },
+          "durable": {
+            "description": "Whether the store outlives the process that wrote the checkpoints.",
+            "title": "Durable",
+            "type": "boolean"
+          },
+          "entries": {
+            "default": 0,
+            "description": "How many times the graph was entered from the top (checkpoints with source 'input'). 1 after a resume is the evidence that the resume continued the run rather than re-running it.",
+            "title": "Entries",
+            "type": "integer"
+          },
+          "interrupted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The checkpoint id where the approval gate parked, if any.",
+            "title": "Interrupted At"
+          },
+          "resumed_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The interrupted checkpoint id, when a later checkpoint names it as parent — i.e. the run was resumed and continued from exactly there. Null while the run is still parked.",
+            "title": "Resumed From"
+          },
+          "run_id": {
+            "description": "The run, which is also the checkpoint thread id.",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "store": {
+            "description": "The configured checkpoint store: 'postgres' (durable — survives a restart) or 'memory' (this process only).",
+            "title": "Store",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "description": "Whether the chain was longer than 200 checkpoints.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "store",
+          "durable"
+        ],
+        "title": "CheckpointHistoryResponse",
+        "type": "object"
+      },
+      "CheckpointRow": {
+        "additionalProperties": false,
+        "description": "One checkpoint — structure and timing, never the state it snapshotted.",
+        "properties": {
+          "checkpoint_id": {
+            "description": "LangGraph's checkpoint id (a UUIDv6).",
+            "title": "Checkpoint Id",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO-8601 timestamp the checkpoint was written.",
+            "title": "Created At"
+          },
+          "interrupted": {
+            "default": false,
+            "description": "Whether an interrupt is parked at this checkpoint — the human approval gate. The interrupt's payload is deliberately not returned.",
+            "title": "Interrupted",
+            "type": "boolean"
+          },
+          "next_nodes": {
+            "description": "The node(s) pending at this checkpoint. Empty means the graph had finished.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Next Nodes",
+            "type": "array"
+          },
+          "parent_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The checkpoint this one continued from. A single unbroken parent chain is what says the run advanced rather than restarted.",
+            "title": "Parent Checkpoint Id"
+          },
+          "produced_by": {
+            "description": "The node(s) that ran to produce this checkpoint — the parent checkpoint's pending tasks. Empty for the entry checkpoint, which no node produced.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Produced By",
+            "type": "array"
+          },
+          "source": {
+            "description": "LangGraph's checkpoint source: input, loop, update or fork.",
+            "title": "Source",
+            "type": "string"
+          },
+          "step": {
+            "description": "LangGraph's super-step counter. -1 is the input checkpoint, 0 the first loop step. Monotonic across a resume — that is the point.",
+            "title": "Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checkpoint_id",
+          "step",
+          "source"
+        ],
+        "title": "CheckpointRow",
+        "type": "object"
+      },
       "ColumnOut": {
         "description": "One column of one table, as the console's grants report it.",
         "properties": {
@@ -2538,6 +2694,52 @@
           "isPrimaryKey"
         ],
         "title": "ColumnOut",
+        "type": "object"
+      },
+      "ComplianceResponse": {
+        "description": "Body for ``GET /compliance`` — every framework, with its evidence.",
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/FrameworkCoverage",
+            "description": "Totals across every framework."
+          },
+          "disclaimer": {
+            "description": "Readiness, not certification. Always present.",
+            "title": "Disclaimer",
+            "type": "string"
+          },
+          "doc_ref": {
+            "description": "The written authority this response projects.",
+            "title": "Doc Ref",
+            "type": "string"
+          },
+          "frameworks": {
+            "description": "The mapped frameworks.",
+            "items": {
+              "$ref": "#/components/schemas/Framework"
+            },
+            "title": "Frameworks",
+            "type": "array"
+          },
+          "generated_at": {
+            "description": "ISO-8601 UTC timestamp of this read.",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "residency": {
+            "$ref": "#/components/schemas/ResidencyReport",
+            "description": "Where this deployment's data actually goes, derived from live configuration. Two India rows depend on it — DPDP s.16 (cross-border transfer) and CERT-In Direction (iv) (logs within Indian jurisdiction) — and both are questions no prose answer settles."
+          }
+        },
+        "required": [
+          "disclaimer",
+          "doc_ref",
+          "generated_at",
+          "frameworks",
+          "coverage",
+          "residency"
+        ],
+        "title": "ComplianceResponse",
         "type": "object"
       },
       "ComponentHealth": {
@@ -2606,6 +2808,52 @@
         "title": "ComponentHealth",
         "type": "object"
       },
+      "ControlEntry": {
+        "description": "One framework control, its honest state, and what backs it.",
+        "properties": {
+          "evidence": {
+            "description": "Checkable references backing the claim.",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "gap": {
+            "default": "",
+            "description": "What is missing, in plain words. Required for partial, not_implemented and not_applicable; empty only for enforced.",
+            "title": "Gap",
+            "type": "string"
+          },
+          "id": {
+            "description": "The framework's own control identifier.",
+            "title": "Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ControlState",
+            "description": "enforced / partial / not_implemented / not_applicable."
+          },
+          "summary": {
+            "description": "What Aegis actually does here. One sentence.",
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "description": "The control's name, as the framework words it.",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state",
+          "summary"
+        ],
+        "title": "ControlEntry",
+        "type": "object"
+      },
       "ControlOutcome": {
         "description": "What one control decided — or why it decided nothing.\n\n``NOT_RUN`` and ``FAILED_CLOSED`` are deliberately distinct. \"The operator did\nnot enable the image-PII rail\" and \"the injection screen had no completer, so\nthe image was blocked rather than passed\" are different statements about\ncoverage, and collapsing them into one would be the exact dishonesty this\ncodebase bans.",
         "enum": [
@@ -2639,6 +2887,17 @@
         ],
         "title": "ControlReport",
         "type": "object"
+      },
+      "ControlState": {
+        "description": "How a framework control stands in this repository. Four-valued on purpose.",
+        "enum": [
+          "enforced",
+          "partial",
+          "not_implemented",
+          "not_applicable"
+        ],
+        "title": "ControlState",
+        "type": "string"
       },
       "CorpusModel": {
         "description": "What the document became, counted off `chunks` rather than off the log.",
@@ -2985,6 +3244,61 @@
         "title": "DurationSummary",
         "type": "object"
       },
+      "EgressChannel": {
+        "description": "One destination this deployment can reach, and what reaches it.",
+        "properties": {
+          "carries": {
+            "description": "What actually travels this channel. One sentence.",
+            "title": "Carries",
+            "type": "string"
+          },
+          "code_ref": {
+            "description": "The repository path where the dial happens.",
+            "title": "Code Ref",
+            "type": "string"
+          },
+          "destination": {
+            "default": "",
+            "description": "Scheme and host:port as configured, credentials stripped. Empty when unset.",
+            "title": "Destination",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable slug for the channel.",
+            "title": "Id",
+            "type": "string"
+          },
+          "locality": {
+            "$ref": "#/components/schemas/Locality",
+            "description": "local / external / disabled / unknown."
+          },
+          "name": {
+            "description": "Human name for the destination.",
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ChannelRole",
+            "description": "store / process / self."
+          },
+          "setting": {
+            "description": "The Settings field or environment variable that decides it.",
+            "title": "Setting",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "locality",
+          "setting",
+          "carries",
+          "code_ref"
+        ],
+        "title": "EgressChannel",
+        "type": "object"
+      },
       "EmissionModel": {
         "description": "One thing a stage emits, and the channel that decides what may be asked of it.",
         "properties": {
@@ -3157,6 +3471,43 @@
         ],
         "title": "EvalsReportResponse",
         "type": "object"
+      },
+      "Evidence": {
+        "description": "One checkable reference behind a control claim.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/EvidenceKind",
+            "description": "file / route / test / doc."
+          },
+          "label": {
+            "description": "Short human label for the reference.",
+            "title": "Label",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The path, route or pytest node id.",
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ref",
+          "label"
+        ],
+        "title": "Evidence",
+        "type": "object"
+      },
+      "EvidenceKind": {
+        "description": "What kind of artefact an evidence reference names — and how it is resolved.",
+        "enum": [
+          "file",
+          "route",
+          "test",
+          "doc"
+        ],
+        "title": "EvidenceKind",
+        "type": "string"
       },
       "ExcludedModel": {
         "description": "A candidate that could not be scored, with the real reason it was dropped.",
@@ -3445,6 +3796,134 @@
           "referencesColumn"
         ],
         "title": "ForeignKeyOut",
+        "type": "object"
+      },
+      "Framework": {
+        "description": "One published framework and Aegis's control-by-control position against it.",
+        "properties": {
+          "controls": {
+            "description": "One entry per mapped control.",
+            "items": {
+              "$ref": "#/components/schemas/ControlEntry"
+            },
+            "title": "Controls",
+            "type": "array"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/FrameworkCoverage",
+            "description": "Derived state counts."
+          },
+          "id": {
+            "description": "Stable slug, e.g. 'owasp-llm'.",
+            "title": "Id",
+            "type": "string"
+          },
+          "jurisdiction": {
+            "default": "International",
+            "description": "Which body of law or practice this framework belongs to — 'India' for the home market's own regulation, 'International' for everything else.",
+            "title": "Jurisdiction",
+            "type": "string"
+          },
+          "name": {
+            "description": "The framework's name.",
+            "title": "Name",
+            "type": "string"
+          },
+          "scope": {
+            "description": "What part of Aegis this framework governs.",
+            "title": "Scope",
+            "type": "string"
+          },
+          "version": {
+            "description": "The edition these controls are taken from.",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "scope",
+          "controls"
+        ],
+        "title": "Framework",
+        "type": "object"
+      },
+      "FrameworkCoverage": {
+        "description": "The four counts for one framework. Derived, never hand-authored.",
+        "properties": {
+          "enforced": {
+            "default": 0,
+            "title": "Enforced",
+            "type": "integer"
+          },
+          "not_applicable": {
+            "default": 0,
+            "title": "Not Applicable",
+            "type": "integer"
+          },
+          "not_implemented": {
+            "default": 0,
+            "title": "Not Implemented",
+            "type": "integer"
+          },
+          "partial": {
+            "default": 0,
+            "title": "Partial",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "FrameworkCoverage",
+        "type": "object"
+      },
+      "FrameworkSummary": {
+        "description": "One framework's public row: what it is called, whose law it is, how far it goes.",
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/FrameworkCoverage",
+            "description": "The four derived state counts for this framework, and its total."
+          },
+          "id": {
+            "description": "Stable slug — the same id `GET /compliance` uses.",
+            "title": "Id",
+            "type": "string"
+          },
+          "jurisdiction": {
+            "description": "'India' or 'International'.",
+            "title": "Jurisdiction",
+            "type": "string"
+          },
+          "mark": {
+            "description": "Short display label for a wordmark grid. Falls back to the full name for a framework this build has no short mark for.",
+            "title": "Mark",
+            "type": "string"
+          },
+          "name": {
+            "description": "The framework's full name.",
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "description": "The edition these controls are taken from.",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mark",
+          "name",
+          "version",
+          "jurisdiction",
+          "coverage"
+        ],
+        "title": "FrameworkSummary",
         "type": "object"
       },
       "FusionMethod": {
@@ -4659,6 +5138,17 @@
         ],
         "title": "LatencyResponse",
         "type": "object"
+      },
+      "Locality": {
+        "description": "Where a configured destination sits relative to this deployment.",
+        "enum": [
+          "local",
+          "external",
+          "disabled",
+          "unknown"
+        ],
+        "title": "Locality",
+        "type": "string"
       },
       "LogEntryModel": {
         "description": "One chronological line of the log, every run of the document included.",
@@ -9624,6 +10114,66 @@
         "title": "ReportTicketResponse",
         "type": "object"
       },
+      "ResidencyReport": {
+        "description": "Every destination, its locality, and the counts a reader wants first.",
+        "properties": {
+          "channels": {
+            "description": "One entry per configured destination.",
+            "items": {
+              "$ref": "#/components/schemas/EgressChannel"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "disabled": {
+            "description": "Declared channels this deployment has not configured.",
+            "title": "Disabled",
+            "type": "integer"
+          },
+          "external": {
+            "description": "Channels of any role that leave the deployment.",
+            "title": "External",
+            "type": "integer"
+          },
+          "generated_at": {
+            "description": "ISO-8601 UTC timestamp of this read.",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "local": {
+            "description": "Channels of any role that stay on this host or LAN.",
+            "title": "Local",
+            "type": "integer"
+          },
+          "note": {
+            "description": "What this report can and cannot establish.",
+            "title": "Note",
+            "type": "string"
+          },
+          "stores_external": {
+            "description": "Data-at-rest destinations resolving off-host.",
+            "title": "Stores External",
+            "type": "integer"
+          },
+          "stores_local": {
+            "description": "Data-at-rest destinations resolving to this host/LAN.",
+            "title": "Stores Local",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "generated_at",
+          "channels",
+          "stores_local",
+          "stores_external",
+          "external",
+          "local",
+          "disabled",
+          "note"
+        ],
+        "title": "ResidencyReport",
+        "type": "object"
+      },
       "ResultOut": {
         "description": "One executed read: the rows, the bounds that fired, and what it ran as.",
         "properties": {
@@ -11091,6 +11641,53 @@
           "max_ms"
         ],
         "title": "StageTiming",
+        "type": "object"
+      },
+      "StandardsResponse": {
+        "description": "Body for ``GET /platform/standards`` — counts and names, never control detail.",
+        "properties": {
+          "certified": {
+            "default": false,
+            "description": "Whether any framework below has been independently certified or attested. Always false, and served as a field rather than assumed, so a client cannot render a certification claim by forgetting to read the disclaimer.",
+            "title": "Certified",
+            "type": "boolean"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/FrameworkCoverage",
+            "description": "Totals across every framework."
+          },
+          "disclaimer": {
+            "description": "Readiness, not certification. Always present, always rendered — a summary that travelled without it would be the one defect this surface avoids.",
+            "title": "Disclaimer",
+            "type": "string"
+          },
+          "doc_ref": {
+            "description": "The written authority these counts project.",
+            "title": "Doc Ref",
+            "type": "string"
+          },
+          "frameworks": {
+            "description": "Every mapped framework, in the served order — India first.",
+            "items": {
+              "$ref": "#/components/schemas/FrameworkSummary"
+            },
+            "title": "Frameworks",
+            "type": "array"
+          },
+          "generated_at": {
+            "description": "ISO-8601 UTC timestamp of this read.",
+            "title": "Generated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "disclaimer",
+          "doc_ref",
+          "generated_at",
+          "frameworks",
+          "coverage"
+        ],
+        "title": "StandardsResponse",
         "type": "object"
       },
       "StreamEvent": {
@@ -12895,6 +13492,54 @@
         ]
       }
     },
+    "/v1/agent/checkpoints/{run_id}": {
+      "get": {
+        "description": "Return one run's LangGraph checkpoint chain, oldest first.\n\nStructure only — see this module's docstring for the list of fields deliberately\nwithheld, of which the important one is the checkpoint's state payload (the query,\nthe retrieved passages, the tool arguments).\n\nA run id the caller's tenant does not own answers **404**, not 403: the two are the\nsame answer on purpose, so an id cannot be probed for existence.",
+        "operationId": "agent_checkpoints_route_v1_agent_checkpoints__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Agent Checkpoints Route",
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/v1/agent/topology": {
       "get": {
         "description": "Return the agent graph's real node/edge topology (any authenticated caller).\n\nExists so nothing has to *restate* the agent's flow to draw it. The console's\norchestration map used to carry its own hardcoded DAG, which drifted: it showed\nnine nodes instead of the real fifteen and hung the human-approval branch off the\nML step — while :mod:`aegis.agent.graph` gates on **tool risk** in ``gate`` and\ndocuments that ML never gates. :func:`aegis.agent.graph_topology` reads the shape\noff the compiled LangGraph instead, so this endpoint cannot disagree with what\nruns.\n\nRead-only and tenant-independent: the topology is a property of the wiring, not\nof any run, principal or tenant — hence plain ``require_auth`` rather than a\nrole-scoped guard.",
@@ -13569,6 +14214,33 @@
         "summary": "Login",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/v1/compliance": {
+      "get": {
+        "description": "Return the framework-by-framework compliance-readiness map (platform staff).\n\nNine frameworks — OWASP LLM Top 10 (2025), OWASP Top 10:2025, MITRE ATLAS, NIST AI\nRMF 1.0, ISO/IEC 42001 Annex A, ISO/IEC 27001:2022 Annex A, the EU AI Act, SOC 2\nTrust Services Criteria, and GDPR/DPDP — each control carrying a four-valued state\nand the files, routes and tests that back it.\n\n**Not a certification.** ``disclaimer`` says so on every response, and\n``doc_ref`` names the written authority the payload projects. Every evidence\nreference is resolved against the real filesystem, the real route table and the\nreal test files by ``backend/tests/api/test_compliance.py``, so a claim naming a\nfile that does not exist fails the suite instead of reaching a reader.",
+        "operationId": "compliance_v1_compliance_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComplianceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Compliance",
+        "tags": [
+          "platform"
         ]
       }
     },
@@ -14785,7 +15457,7 @@
     },
     "/v1/mcp/servers": {
       "post": {
-        "description": "Declare a peer. Declaring discovers nothing and grants nothing.\n\nArgs:\n    body: The connection. Its ``credential`` is held in this process and never\n        written to the database or returned.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the write.\n\nRaises:\n    HTTPException: 400 when the id is unusable as a namespace, 409 when it is\n        already declared. Re-pointing an existing id is refused rather than\n        accepted, because it would silently re-aim every grant written against\n        that namespace at a different peer.",
+        "description": "Declare a peer. Declaring discovers nothing and grants nothing.\n\nArgs:\n    body: The connection. Its ``credential`` is held in this process and never\n        written to the database or returned.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the write.\n\nRaises:\n    HTTPException: 400 when the id is unusable as a namespace **or the URL points\n        somewhere Aegis will not dial** (:func:`app.mcp.client.validate_peer_url` —\n        loopback, link-local and private space are refused without the deployment's\n        opt-in, because ``connect`` would otherwise probe this deployment's own\n        network on the caller's behalf); 409 when the id is already declared.\n        Re-pointing an existing id is refused rather than accepted, because it would\n        silently re-aim every grant written against that namespace at a different\n        peer.",
         "operationId": "create_server_v1_mcp_servers_post",
         "requestBody": {
           "content": {
@@ -14880,7 +15552,7 @@
         ]
       },
       "put": {
-        "description": "Edit a peer. Disabling it removes its tools from every agent's payload.\n\nArgs:\n    body: The fields to change; ``null`` leaves one alone.\n    server_id: The declared peer.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the write.\n\nRaises:\n    HTTPException: 404 when the server is not declared.",
+        "description": "Edit a peer. Disabling it removes its tools from every agent's payload.\n\nArgs:\n    body: The fields to change; ``null`` leaves one alone.\n    server_id: The declared peer.\n    auth: The authenticated platform admin.\n\nReturns:\n    The console aggregate, after the write.\n\nRaises:\n    HTTPException: 404 when the server is not declared, 400 when the new ``url``\n        points somewhere Aegis will not dial (:func:`app.mcp.client.\n        validate_peer_url`). The edit route is the same SSRF surface as the declare\n        route — re-pointing a peer at ``http://169.254.169.254/`` reaches exactly\n        what declaring one there would — so both refuse, and neither writes.",
         "operationId": "update_server_v1_mcp_servers__server_id__put",
         "parameters": [
           {
@@ -16060,7 +16732,7 @@
     },
     "/v1/ops/evals": {
       "get": {
-        "description": "Return recent persisted trace-eval rows (the eval trend / per-step scores).\n\nTrace-eval rows are keyed by ``run_id`` (one row per graded facet). Filter by\n``run_id`` for a single run's breakdown; ``prompt_key`` narrows to rows whose detail\ncarries it. ``limit`` is clamped to ``[1, 500]``. Degrades to empty when stores off.\n\n**This route leaked every tenant's eval rows to every authenticated account.** It\ncarried only ``require_auth`` while its siblings ``/ops/params`` and\n``/ops/releases/pending`` guard ``admin, ai_team``, and its query had no tenant\nclause. Postgres did not save it: this deployment installs the **fail-open**\n``tenant_isolation`` predicate by default, under which a session that binds no scope\nreads *every* tenant's rows — so a missing clause is a live leak, not an empty list.\nMeasured before the fix: ``vertex.client``, a ``client``-role account in tenant 2,\nread 364 rows of which **274 belonged to tenant 1**.\n\nBoth halves are needed. The guard alone would still hand one tenant's admin another\ntenant's rows; the clause alone would still expose the surface to a ``client``.",
+        "description": "Return recent persisted trace-eval rows (the eval trend / per-step scores).\n\nTrace-eval rows are keyed by ``run_id`` (one row per graded facet). Filter by\n``run_id`` for a single run's breakdown; ``prompt_key`` narrows to rows whose detail\ncarries it. ``limit`` is clamped to ``[1, 500]``. Degrades to empty when stores off.\n\n**This route leaked every tenant's eval rows to every authenticated account.** It\ncarried only ``require_auth`` while its siblings ``/ops/params`` and\n``/ops/releases/pending`` guard ``admin, ai_team``, and its query had no tenant\nclause. Postgres did not save it: this deployment installs the **fail-open**\n``tenant_isolation`` predicate by default, under which a session that binds no scope\nreads *every* tenant's rows — so a missing clause is a live leak, not an empty list.\nMeasured before the fix: ``vertex.client``, a ``client``-role account in tenant 2,\nread 364 rows of which **274 belonged to tenant 1**.\n\nBoth halves are needed. The guard alone would still hand one tenant's admin another\ntenant's rows; the clause alone would still expose the surface to a ``client``.\n\n**``tenant_id`` is declared rather than ignored, and that is the third half.** The\nroute took no such parameter, so FastAPI dropped an unknown query string on the\nfloor: ``GET /ops/evals?tenant_id=2`` as ``northwind.analyst`` (tenant 1) returned\n**200 with tenant 1's rows**. No leak — but a caller who names a scope and is served\na different one silently has no way to learn that, and a screen built on it will\ncaption another tenant's number with the tenant it asked for. Declaring the\nparameter and putting it through :func:`_scope_tenant` makes the two outcomes the\nonly outcomes: honoured within the caller's authority, or 403.\n\nRaises:\n    HTTPException: 403 on a cross-tenant ``tenant_id``.",
         "operationId": "ops_evals_v1_ops_evals_get",
         "parameters": [
           {
@@ -16103,6 +16775,22 @@
               "default": 50,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
             }
           }
         ],
@@ -16168,7 +16856,7 @@
     },
     "/v1/ops/prompts": {
       "get": {
-        "description": "List every versioned system prompt for ``prompt_key``, newest version first.\n\nDegrades to an empty list when the stores are off (lite/offline mode).",
+        "description": "List every versioned system prompt for ``prompt_key``, newest version first.\n\n**The scope comes from the token, explicitly.** This route used to let\n``app.ops.registry`` default the tenant from the sealed *governance* context — which\nis bound on ``POST /query`` and the chat surfaces and on no plain GET, so every call\nhere resolved to ``None``, the PLATFORM scope, and read ``tenant_id IS NULL``.\nMeasured on ``taif_run1``: the default persona's prompt key returned ``{\"rows\": []}``\nfor an analyst, a tenant admin *and* platform staff, while ``prompt_versions`` held\ntwo rows for tenant 1 and ``GET /llmops/prompts`` — which resolves its scope from\nthe principal — reported ``activeVersion: 2`` for the same key. The LLMOps screen\nreads both and rendered \"No version of this prompt has been recorded\" directly above\nthe list of them.\n\n``tenant_id`` follows the same rule as every other scoped read\n(:func:`_scope_tenant`): platform staff may name a tenant, anyone else naming one\nother than their own is refused rather than quietly served their own.\n\nDegrades to an empty list when the stores are off (lite/offline mode).\n\nRaises:\n    HTTPException: 403 on a cross-tenant ``tenant_id``.",
         "operationId": "ops_prompts_v1_ops_prompts_get",
         "parameters": [
           {
@@ -16178,6 +16866,22 @@
             "schema": {
               "title": "Prompt Key",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
             }
           }
         ],
@@ -16216,7 +16920,7 @@
     },
     "/v1/ops/prompts/active": {
       "get": {
-        "description": "Return the single live version for ``prompt_key`` (DB), else the cached one.\n\nFalls back to the process-wide active cache (``registry.get_cached_active``) when the\nDB has no active row or is unreachable — the same synchronous seam the harness reads.",
+        "description": "Return the single live version for ``prompt_key`` (DB), else the cached one.\n\nScoped from the token by :func:`_scope_tenant` for the same reason its sibling\n``GET /ops/prompts`` is: the governance context this used to inherit the tenant from\nis not bound on a plain GET, so every call read the platform scope and reported no\nactive prompt for a tenant that has one.\n\nFalls back to the process-wide active cache (``registry.get_cached_active``) when the\nDB has no active row or is unreachable — the same synchronous seam the harness reads,\nand read in the same scope.\n\nRaises:\n    HTTPException: 403 on a cross-tenant ``tenant_id``.",
         "operationId": "ops_prompts_active_v1_ops_prompts_active_get",
         "parameters": [
           {
@@ -16226,6 +16930,22 @@
             "schema": {
               "title": "Prompt Key",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
             }
           }
         ],
@@ -16660,6 +17380,28 @@
           }
         },
         "summary": "Platform Public Metrics",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v1/platform/standards": {
+      "get": {
+        "description": "Return the public standards-alignment summary — names, jurisdictions, counts.\n\n**Unauthenticated by design.** The public landing page renders this band, so it\nmust answer without a bearer token. It carries no tenant, user, usage or\ncredential data, and — unlike ``GET /compliance``, which it summarises — no\ncontrol-level gap or evidence reference either.\n\n**Alignment, not certification.** ``certified`` is always ``false`` and\n``disclaimer`` says why on every response. Aegis holds no ISO 27001 certificate,\nno ISO/IEC 42001 certificate, no SOC 2 report and no EU AI Act conformity\nassessment; nothing here has been audited by an independent party.\n\nEvery count is derived from the control table on each request, so the figure a\nvisitor reads is the figure the repository can defend.",
+        "operationId": "platform_standards_v1_platform_standards_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Platform Standards",
         "tags": [
           "platform"
         ]

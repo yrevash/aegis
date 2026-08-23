@@ -274,6 +274,20 @@ function CacheView(): ReactElement {
   const { session, hydrated } = useAuth()
   const token = session?.token ?? null
 
+  // The counters are process-wide — one hit rate over every tenant that shared the
+  // worker — so `require_infra_reader` refuses a tenant-pinned principal outright.
+  // `lib/portal.ts` already takes the nav item away for those sessions
+  // (`PLATFORM_ONLY_SECTIONS`), but the route is still reachable by URL, and what it
+  // rendered there was the honest refusal **with a Retry button under it**: the exact
+  // artefact that file's doctrine says the fix existed to remove, since retrying sends
+  // the identical request and collects the identical 403. So the screen does not offer
+  // it, and does not poll a guard that will refuse every tick.
+  //
+  // The gate is the tenant pin, never the role name, for the same reason `jobsPolicy`
+  // gates on the pin: an un-pinned `ai_team` operator is platform staff and keeps the
+  // whole page.
+  const platformWide = session?.tenantId == null
+
   const [data, setData] = useState<CacheStatsResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -294,6 +308,9 @@ function CacheView(): ReactElement {
   useEffect(() => {
     // Wait for the persisted session to hydrate; fetching now would send no bearer.
     if (!hydrated) return
+    // A tenant-pinned principal cannot read these counters. Not firing is the point:
+    // a poll on a 5s timer against a guard that refuses is a 403 every five seconds.
+    if (!platformWide) return
     let alive = true
     const tick = (): void => {
       if (alive) void load()
@@ -307,7 +324,7 @@ function CacheView(): ReactElement {
       alive = false
       clearInterval(timer)
     }
-  }, [hydrated, load])
+  }, [hydrated, load, platformWide])
 
   const rows = data?.caches ?? []
   const lookups = sumReported(rows, (row) => row.lookups)
@@ -327,26 +344,44 @@ function CacheView(): ReactElement {
             miss; the totals are sums of counts, never an average of rates, because the exact-hash
             tiers and the cosine tiers do not decide the same event.
           </InfoTip>
-          <Button variant="outline" onClick={() => void load()}>
-            <RefreshCw
-              aria-hidden
-              className={
-                refreshing ? 'size-4 animate-spin motion-reduce:animate-none' : 'size-4'
-              }
-            />
-            Refresh
-          </Button>
-          {/* The busy announcement is a region of its own: a live region nested
-              inside the control that triggers it is re-announced as part of the
-              button's own accessible name. */}
-          <span className="sr-only" role="status" aria-live="polite">
-            {refreshing ? 'Re-reading the cache counters' : ''}
-          </span>
+          {!platformWide ? null : (
+            <>
+              <Button variant="outline" onClick={() => void load()}>
+                <RefreshCw
+                  aria-hidden
+                  className={
+                    refreshing ? 'size-4 animate-spin motion-reduce:animate-none' : 'size-4'
+                  }
+                />
+                Refresh
+              </Button>
+              {/* The busy announcement is a region of its own: a live region nested
+                  inside the control that triggers it is re-announced as part of the
+                  button's own accessible name. */}
+              <span className="sr-only" role="status" aria-live="polite">
+                {refreshing ? 'Re-reading the cache counters' : ''}
+              </span>
+            </>
+          )}
           </>
         }
       />
 
-      {error ? (
+      {!platformWide ? (
+        /* The refusal, and nothing that offers to repeat it. */
+        <Card>
+          <CardBody>
+            <SceneState name="stores" size="md">
+              <Absence
+                className="text-left"
+                figure="Every cache counter on this page"
+                why="Cache counters are process-wide — one figure over every tenant that shared the worker — so they are not this tenant's to read."
+                needed="A devops or platform-admin account."
+              />
+            </SceneState>
+          </CardBody>
+        </Card>
+      ) : error ? (
         <Card>
           <CardBody>
             <ErrorState error={error} retry={() => void load()} />

@@ -43,9 +43,10 @@ import logging
 from typing import Any
 
 from aegis.retrieval.types import AllTenants
-from app.api.routes import AuthContext, _require_scope, require_auth
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.api.routes import AuthContext, _require_scope, require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -167,8 +168,9 @@ async def _owns_run(run_id: str, auth: AuthContext) -> bool:
     from one that does not exist.
     """
     from aegis.runs.models import Run
-    from app.data.session import get_sessionmaker
     from sqlalchemy import select
+
+    from app.data.session import get_sessionmaker
 
     scope = _require_scope(auth)
     stmt = select(Run.run_id).where(Run.run_id == run_id)

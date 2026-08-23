@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { ControlLadder } from '@/components/vision/ControlLadder'
+import { piiControlRan } from '@/components/vision/piiControl'
 import { ImageDropzone, type PickedImage } from '@/components/vision/ImageDropzone'
 import { PIIOverlay } from '@/components/vision/PIIOverlay'
 import { ScreenVerdictPanel } from '@/components/vision/ScreenVerdict'
@@ -132,6 +133,12 @@ function VisionView(): ReactElement {
   const blocked = analysis?.outcome === 'blocked'
   const usage = analysis?.usage ?? null
   const regions = analysis?.pii_regions ?? []
+  // Did the image-PII control actually look? The ladder already prints "Image PII —
+  // did not run — not reached, injection_screen refused first", and beside it this
+  // screen drew a tile reading "PII regions found 0" with "The image-PII control
+  // found no regions." under it. A control that did not run found nothing; that is
+  // not zero, and the empty `pii_regions` array is its silence, not its answer.
+  const piiRan = piiControlRan(analysis?.controls ?? null)
 
   // Prompt against completion on the one call that was made. Two slices, ranked,
   // so the ramp is sampled at its two ends rather than at two adjacent steps.
@@ -229,12 +236,20 @@ function VisionView(): ReactElement {
                   : 'ok'
             }
           />
-          <StatCard
-            label="PII regions found"
-            value={COUNT.format(regions.length)}
-            icon={Eye}
-            tone={regions.length > 0 ? 'ml' : 'neutral'}
-          />
+          {piiRan ? (
+            <StatCard
+              label="PII regions found"
+              value={COUNT.format(regions.length)}
+              icon={Eye}
+              tone={regions.length > 0 ? 'ml' : 'neutral'}
+            />
+          ) : (
+            <Absence
+              figure="PII regions found"
+              why="The image-PII control did not run on this image, so nothing counted regions."
+              needed="a run that reaches the image-PII stage — see the control ladder"
+            />
+          )}
           {/* `unpriced` means billable work nobody could price. Rendering it as
               `$0.00000` would assert the call was free, which is a different
               statement — so the tile becomes the stated absence in its place. */}
@@ -392,13 +407,25 @@ function VisionView(): ReactElement {
                       eyebrow="analysis.pii_regions"
                       title="Detected PII"
                       actions={
-                        <Badge tone={regions.length > 0 ? 'ml' : 'neutral'} className="font-mono">
-                          {COUNT.format(regions.length)}
+                        <Badge
+                          tone={piiRan && regions.length > 0 ? 'ml' : 'neutral'}
+                          className="font-mono"
+                        >
+                          {piiRan ? COUNT.format(regions.length) : 'did not run'}
                         </Badge>
                       }
                     />
                     <CardBody className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-                      {regions.length === 0 ? (
+                      {!piiRan ? (
+                        /* Not measured. The `SceneState` below is for a control that
+                           looked and found nothing — a different fact, and the one
+                           this branch used to claim on its behalf. */
+                        <Absence
+                          figure="Detected PII"
+                          why="The image-PII control did not run, so nothing on this image was inspected for PII."
+                          needed="a run that reaches the image-PII stage — see the control ladder"
+                        />
+                      ) : regions.length === 0 ? (
                         /* Measured, and the measurement was zero — a scene rather
                            than an `Absence`, which would claim nothing looked. */
                         <SceneState name="empty" size="sm">

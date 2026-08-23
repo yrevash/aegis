@@ -39,6 +39,7 @@ import { SectionHeader } from '@/components/primitives/SectionHeader'
 import { LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { TenantRailPolicy } from '@/components/guardrails/TenantRailPolicy'
+import { nemoState, postureAbsence } from '@/components/guardrail/postureState'
 import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
 
@@ -345,13 +346,29 @@ function RailStack({
   )
 }
 
-/** Engine indicator — programmatic pipeline vs NeMo Colang, both over one rail set. */
+/**
+ * Engine indicator — programmatic pipeline vs NeMo Colang, both over one rail set.
+ *
+ * The Colang badge has **three** states, not two. It read `signals?.nemo_available ??
+ * false`, and `signals` is null for every tenant-pinned principal — `/security/posture`
+ * is platform-only and refuses them — so the fallback turned *"you are not allowed to
+ * read this"* into the flat assertion **NOT INSTALLED**, about a package that is
+ * installed. Two accounts on one deployment disagreed about a fact of the deployment.
+ *
+ * Unknown is not false. It gets its own word, the neutral tone DESIGN.md §4 reserves
+ * for a state this build cannot classify, and the same sentence {@link PostureCoverage}
+ * already prints twelve lines up.
+ */
 function EngineIndicator({
   signals,
+  platformWide,
 }: {
   signals: SecurityPostureResponse['signals'] | null
+  /** Whether this principal may read process-wide facts at all (no tenant pin). */
+  platformWide: boolean
 }): ReactElement {
-  const nemoAvailable = signals?.nemo_available ?? false
+  const nemo = nemoState(signals)
+  const absence = postureAbsence(platformWide)
   return (
     <Card className="rounded-lg">
       <CardBody>
@@ -381,8 +398,8 @@ function EngineIndicator({
           <div className="min-w-0 rounded-lg border border-border bg-surface-2/40 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="min-w-0 font-medium text-foreground">NeMo Colang</span>
-              <Badge tone={nemoAvailable ? 'ok' : 'neutral'} className="uppercase">
-                {nemoAvailable ? 'available' : 'not installed'}
+              <Badge tone={nemo === 'available' ? 'ok' : 'neutral'} className="uppercase">
+                {nemo}
               </Badge>
             </div>
             <p className="mt-1.5 flex items-center gap-1.5">
@@ -394,6 +411,9 @@ function EngineIndicator({
                 <code className="font-mono">check_output</code>.
               </InfoTip>
             </p>
+            {nemo === 'unknown' ? (
+              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{absence.why}</p>
+            ) : null}
           </div>
         </div>
       </CardBody>
@@ -716,12 +736,8 @@ function PostureCoverage({
           <Absence
             className="text-left"
             figure="OWASP coverage"
-            why={
-              platformWide
-                ? 'The posture endpoint did not answer this session.'
-                : 'Posture describes the deployment, not one tenant.'
-            }
-            needed={platformWide ? 'A reachable /security/posture.' : 'A devops or platform-admin account.'}
+            why={postureAbsence(platformWide).why}
+            needed={postureAbsence(platformWide).needed}
           />
         </SceneState>
       ) : (
@@ -884,7 +900,7 @@ function GuardrailsView(): ReactElement {
         </Card>
       </div>
 
-      <EngineIndicator signals={posture?.signals ?? null} />
+      <EngineIndicator signals={posture?.signals ?? null} platformWide={platformWide} />
 
       <TenantRailPolicy />
     </div>

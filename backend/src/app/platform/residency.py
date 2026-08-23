@@ -365,7 +365,10 @@ def _peer_channel(raw: str) -> tuple[str, Locality]:
     parsed = [_split(url) for url in urls]
     labels = ", ".join(label for label, _ in parsed if label)
     order = (Locality.EXTERNAL, Locality.UNKNOWN, Locality.LOCAL, Locality.DISABLED)
-    worst = next((band for band in order if any(loc is band for _, loc in parsed)), Locality.UNKNOWN)
+    worst = next(
+        (band for band in order if any(loc is band for _, loc in parsed)),
+        Locality.UNKNOWN,
+    )
     return labels, worst
 
 

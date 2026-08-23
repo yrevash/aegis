@@ -284,6 +284,15 @@ export const SECTIONS: Record<string, Section> = {
       'Aegis Security posture — every OWASP-Agentic threat mapped to the live Aegis control holding it down, with an honest enforced / partial / not-covered status derived from real wiring signals',
     group: 'Operations',
   },
+  compliance: {
+    id: 'compliance',
+    label: 'Compliance',
+    icon: ScrollText,
+    hint: 'frameworks · evidence',
+    tooltip:
+      'Aegis Compliance readiness — twelve published frameworks, India first (the DPDP Act 2023 and its 2025 Rules, the CERT-In Directions, MeitY/RBI/SEBI/BIS), then OWASP LLM Top 10, OWASP Top 10, MITRE ATLAS, NIST AI RMF, ISO/IEC 42001, ISO/IEC 27001, the EU AI Act, SOC 2 and GDPR — mapped control by control to a file, a route or a test in this repository, with four honest states: enforced, partial, not implemented, not applicable. Plus a data-residency inventory derived from live configuration on every read, so where the data goes is checked rather than claimed. Readiness evidence, never a certification claim — nothing here has been audited by an independent party, the page says so on its face, and a test resolves every reference against the real artefact on each run',
+    group: 'Operations',
+  },
   llmops: {
     id: 'llmops',
     label: 'LLMOps',
@@ -421,7 +430,7 @@ export const ROLE_SECTIONS: Record<Portal, string[]> = {
   platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'database', 'mcp', 'console', 'settings'],
   tenant_admin: ['dashboard', 'analytics', 'documents', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
   ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
-  devops: ['dashboard', 'stack', 'patch', 'security', 'redteam', 'cache', 'latency', 'audit', 'settings'],
+  devops: ['dashboard', 'stack', 'patch', 'security', 'compliance', 'redteam', 'cache', 'latency', 'audit', 'settings'],
   client: ['console', 'dashboard', 'documents', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'memory', 'simulation', 'settings'],
 }
 

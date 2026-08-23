@@ -4,6 +4,7 @@ import { Info } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/primitives/tooltip'
+import { TAP_TARGET } from '@/components/primitives/tapTarget'
 import { cn } from '@/lib/utils'
 
 interface InfoTipProps {
@@ -29,6 +30,10 @@ export function InfoTip({ children, label = 'More information', className }: Inf
         aria-label={label}
         className={cn(
           'inline-grid size-4 place-items-center rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          // The 1rem glyph is the drawing; the pointer target around it is 24px at
+          // every text size. This is the console's commonest small control — a page
+          // of them is a page of misses on the setting chosen to make things easier.
+          TAP_TARGET,
           className,
         )}
       >

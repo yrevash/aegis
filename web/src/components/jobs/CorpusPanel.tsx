@@ -152,7 +152,10 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
                     <button
                       type="button"
                       onClick={() => onOpen?.(row.document_id)}
-                      className={`rounded-sm text-left font-medium text-foreground underline-offset-2 hover:underline ${FOCUS}`}
+                      /* A document titled `dl` is a 15px-wide target. The row's own
+                         label decides the width, so the floor has to be a minimum
+                         rather than an overhang: min-h/min-w 1.5rem = 24px. */
+                      className={`inline-block min-h-6 min-w-6 rounded-sm text-left font-medium text-foreground underline-offset-2 hover:underline ${FOCUS}`}
                     >
                       {row.title ?? row.filename}
                       <span className="sr-only">, open the ingest log</span>

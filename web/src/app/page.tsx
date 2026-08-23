@@ -7,7 +7,10 @@ import { LandingHeader } from '@/components/landing/LandingHeader'
 import { LivePlatform } from '@/components/landing/LivePlatform'
 import { Roadmap } from '@/components/landing/Roadmap'
 import { RunChain } from '@/components/landing/RunChain'
+import { StackBand } from '@/components/landing/StackBand'
+import { StandardsBand } from '@/components/landing/StandardsBand'
 import { TeamSection } from '@/components/landing/TeamSection'
+import { STACK_BAND, STANDARDS_BAND } from '@/components/landing/bands.config'
 
 export const metadata: Metadata = {
   title: 'Aegis — autonomy you can audit',
@@ -35,6 +38,15 @@ export const metadata: Metadata = {
  *
  * Everything that reads a live endpoint renders nothing rather than inventing
  * content when the backend is unreachable — including the hero, which says so.
+ *
+ * **Two sections are switchable, and that is deliberate.** The standards band names
+ * published frameworks on a public page, which is defensible only while the framing
+ * stays exact — so it ships with an off switch the project owns, and the technology
+ * band beside it has its own. Both constants live in
+ * `components/landing/bands.config.ts`, whose docstring says precisely what each one
+ * removes. They are guarded here, at the one place the page is composed, so a
+ * disabled band renders nothing at all rather than an empty section: no heading, no
+ * grid, no reserved space, and — for the standards band — no fetch either.
  */
 export default function Home() {
   return (
@@ -46,6 +58,8 @@ export default function Home() {
         <TeamSection />
         <GovernanceSection />
         <LivePlatform />
+        {STANDARDS_BAND ? <StandardsBand /> : null}
+        {STACK_BAND ? <StackBand /> : null}
         <Roadmap />
       </main>
       <LandingFooter />

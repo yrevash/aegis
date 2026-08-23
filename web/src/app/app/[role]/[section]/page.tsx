@@ -4,6 +4,7 @@ import { AnalyticsMount } from '@/components/analytics/AnalyticsView'
 import { ApprovalsMount } from '@/components/approval/ApprovalInbox'
 import { RolesAccessMount } from '@/components/admin/RolesAccess'
 import { CacheMount } from '@/components/cache/CacheView'
+import { ComplianceMount } from '@/components/compliance/ComplianceView'
 import { RiskMount } from '@/components/client/RiskMap'
 import { DatabaseMount } from '@/components/db/DatabaseView'
 import { DocumentsMount } from '@/components/documents/DocumentsView'
@@ -80,6 +81,7 @@ export default async function SectionPage({
   if (section === 'tokenopt') return <TokenOptMount />
   if (section === 'guardrails') return <GuardrailsMount />
   if (section === 'security') return <SecurityMount />
+  if (section === 'compliance') return <ComplianceMount />
   if (section === 'database') return <DatabaseMount />
   if (section === 'mcp') return <McpConsoleMount />
   if (section === 'redteam') return <RedteamMount />

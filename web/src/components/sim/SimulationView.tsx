@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, Minus, Play, RotateCcw, Shield, ShieldCheck, UserCog, UserRound, X } from 'lucide-react'
+import { Check, GitCompare, Minus, Play, RotateCcw, Shield, ShieldCheck, UserCog, UserRound, X } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
 import { useState } from 'react'
 
@@ -27,7 +27,7 @@ import type { RunState } from '@/state/runReducer'
 import { useRunStream } from '@/state/useRunStream'
 import type { ApprovalDecision } from '@/lib/api/types'
 
-import { gateStatus, isSettled, toolMark, type Mark } from './simLogic'
+import { gateStatus, isSettled, rankedDivergence, toolMark, type Mark } from './simLogic'
 
 /**
  * The single query both roles run at once. It is phrased to require a status
@@ -271,6 +271,15 @@ export function SimulationView(): ReactElement {
 
   const ledgered = ops.nodeLedger.length > 0 || cli.nodeLedger.length > 0
   const ranked = ops.retrievalScores.length > 0 || cli.retrievalScores.length > 0
+  // What the two ranked lists actually differ by, measured from the source ids. The
+  // panel asserted a difference and drew two identical lists; it now says which.
+  const divergence = rankedDivergence(
+    ops.retrievalScores,
+    cli.retrievalScores,
+    ops.candidates,
+    cli.candidates,
+    ['the operations lead', 'the client'],
+  )
 
   /** The two lanes, in the order both small-multiple cards draw them. */
   const columns = [
@@ -313,11 +322,25 @@ export function SimulationView(): ReactElement {
       ),
       diff: settled,
     },
+    /*
+      Two rows where there was one. The single row was headed **Status change** — a
+      write — and filled after settle with `toolMark`, which named whatever call the
+      run reached for first. On the seeded question that is `find_requests`, a read, so
+      the row read "find_requests denied" under a write heading, beside a "Human
+      approval" cell saying the run was still parked at its gate. A permission and an
+      observed outcome are two different propositions and they now sit on two rows.
+    */
     {
       label: 'Status change',
-      a: <Cell mark={settled ? opsTool.mark : 'allow'}>{settled ? opsTool.label : 'Can execute'}</Cell>,
-      b: <Cell mark={settled ? cliTool.mark : 'deny'}>{settled ? cliTool.label : 'Not permitted'}</Cell>,
-      diff: settled,
+      a: <Cell mark="allow">Permitted for this role</Cell>,
+      b: <Cell mark="deny">Not permitted for this role</Cell>,
+      diff: true,
+    },
+    {
+      label: 'Action taken',
+      a: <Cell mark={opsTool.mark}>{opsTool.label}</Cell>,
+      b: <Cell mark={cliTool.mark}>{cliTool.label}</Cell>,
+      diff: settled && opsTool.label !== cliTool.label,
     },
     {
       label: 'Human gate',
@@ -467,17 +490,31 @@ export function SimulationView(): ReactElement {
                     </span>
                   }
                 />
-                <CardBody>
+                <CardBody className="space-y-4">
+                  {/* What the two lists differ by, before either is read. A panel
+                      whose evidence contradicts its own headline is worse than none. */}
+                  <p
+                    className="flex items-start gap-2 rounded-md border border-border bg-surface-2/50 px-3 py-2 text-[0.8rem] leading-relaxed text-foreground"
+                    aria-live="polite"
+                  >
+                    <GitCompare className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <span className="min-w-0">{divergence.note}</span>
+                  </p>
                   <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-                    {columns.map((col) => (
+                    {columns.map((col, i) => (
                       <div key={col.roleId} className="flex min-w-0 flex-col gap-2.5">
-                        <h3>
+                        <h3 className="flex min-w-0 items-center gap-2">
                           <LaneChip
                             title={col.title}
                             roleId={col.roleId}
                             icon={col.icon}
                             accent={col.accent}
                           />
+                          {(i === 0 ? divergence.onlyA : divergence.onlyB) > 0 ? (
+                            <Badge tone="neutral" className="ml-auto shrink-0">
+                              {COUNT.format(i === 0 ? divergence.onlyA : divergence.onlyB)} only here
+                            </Badge>
+                          ) : null}
                         </h3>
                         {col.lane.retrievalScores.length > 0 ? (
                           <RankedBars
@@ -501,7 +538,6 @@ export function SimulationView(): ReactElement {
                     ))}
                   </div>
                   <Receipt
-                    className="mt-4"
                     origin="retrieval · scored_sources"
                     detail={`${COUNT.format(ops.retrievalScores.length)} + ${COUNT.format(
                       cli.retrievalScores.length,

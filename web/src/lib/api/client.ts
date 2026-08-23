@@ -70,6 +70,7 @@ import type {
   OpsRollbackResponse,
 } from '@/lib/api/ops'
 import type {
+  ComplianceResponse,
   EvalsReportResponse,
   GatewayOptimizationResponse,
   GovernanceDashboardResponse,
@@ -669,6 +670,17 @@ export async function getGovernanceDashboard(
 /** Fetch the live threat → control security posture (security; admin/devops). */
 export async function getSecurityPosture(token: string | null): Promise<SecurityPostureResponse> {
   return request<SecurityPostureResponse>('/security/posture', { method: 'GET' }, token)
+}
+
+/**
+ * Fetch the compliance-readiness map (compliance; platform staff).
+ *
+ * Readiness evidence, never a certification claim: the response carries its own
+ * disclaimer and the path of the written document it projects, so the screen can
+ * never quietly become the authority for what Aegis says it complies with.
+ */
+export async function getCompliance(token: string | null): Promise<ComplianceResponse> {
+  return request<ComplianceResponse>('/compliance', { method: 'GET' }, token)
 }
 
 /** Fetch per-node + per-run latency percentiles (latency; admin/devops). */

@@ -80,8 +80,8 @@ const AUTHORITY: Authority[] = [
   {
     id: 'operate',
     label: 'Run the stack',
-    detail: 'Versions, patches, the red team and the latency budget.',
-    sections: ['stack', 'patch', 'security', 'redteam', 'latency'],
+    detail: 'Versions, patches, the security posture and its framework map, the red team and the latency budget.',
+    sections: ['stack', 'patch', 'security', 'compliance', 'redteam', 'latency'],
   },
   {
     id: 'agent',

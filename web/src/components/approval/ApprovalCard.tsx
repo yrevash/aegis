@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, ShieldAlert, X } from 'lucide-react'
+import { Check, CircleSlash, ShieldAlert, X } from 'lucide-react'
 import { useId, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
@@ -9,11 +9,13 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Figure } from '@/components/primitives/Figure'
 import { Receipt } from '@/components/primitives/Receipt'
 import { signalForRisk } from '@/config/signals'
+import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 import type { ApprovalDecision } from '@/lib/api/types'
 import type { ApprovalRequired } from '@/lib/stream'
 
 import { readApproval, type ApprovalView, type AuthorisedAction } from './approvalActions'
+import { liveGateRefusal } from './decisionPolicy'
 
 interface ApprovalCardProps {
   approval: ApprovalRequired
@@ -59,6 +61,12 @@ export function ApprovalCard({
   const riskSignal = signalForRisk(approval.risk)
   const view = readApproval(approval)
   const consentId = useId()
+  // Both decision endpoints are `require_admin`, and this card drew Approve for
+  // whoever was looking. `decisionPolicy` is the browser's copy of the server's one
+  // ownership rule; a principal it refuses is shown the gate and told who decides it,
+  // rather than a button whose only outcome is a 403 over a still-parked run.
+  const { session } = useAuth()
+  const refusal = liveGateRefusal(session)
 
   return (
     <Card
@@ -117,29 +125,38 @@ export function ApprovalCard({
         <div className="rounded-md border border-risk/45 bg-risk/[0.08] p-3">
           <p className="flex items-center gap-1.5 font-mono text-[0.68rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
             <ShieldAlert className="size-3.5 shrink-0" aria-hidden />
-            What approving authorises
+            {refusal === null ? 'What approving authorises' : 'What a decision would authorise'}
           </p>
           <ConsentStatement id={consentId} view={view} className="mt-1.5 text-[0.82rem]" />
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            <Button
-              className="flex-1"
-              aria-describedby={consentId}
-              disabled={resolved}
-              onClick={() => onDecision('approve')}
-            >
-              <Check className="size-4" aria-hidden />
-              {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
-            </Button>
-            <Button
-              variant="outline"
-              className="flex-1 border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
-              aria-describedby={consentId}
-              disabled={resolved}
-              onClick={() => onDecision('reject')}
-            >
-              <X className="size-4" aria-hidden /> Reject
-            </Button>
-          </div>
+          {refusal === null ? (
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <Button
+                className="flex-1"
+                aria-describedby={consentId}
+                disabled={resolved}
+                onClick={() => onDecision('approve')}
+              >
+                <Check className="size-4" aria-hidden />
+                {view.many ? `Approve all ${view.actions.length}` : 'Approve'}
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1 border-block/60 bg-surface text-block-ink hover:bg-block/10 hover:text-block-ink"
+                aria-describedby={consentId}
+                disabled={resolved}
+                onClick={() => onDecision('reject')}
+              >
+                <X className="size-4" aria-hidden /> Reject
+              </Button>
+            </div>
+          ) : (
+            /* The rule stating itself where the controls would have been — the same
+               shape the durable inbox uses for a row it may not decide. */
+            <p className="mt-3 flex items-start gap-2 rounded-md border border-risk/45 bg-surface px-3 py-2 text-[0.8rem] leading-relaxed text-foreground">
+              <CircleSlash className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="min-w-0">{refusal}</span>
+            </p>
+          )}
         </div>
 
         <GateReceipt approvalId={approval.approval_id} view={view} />

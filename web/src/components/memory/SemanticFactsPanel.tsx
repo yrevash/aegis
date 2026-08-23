@@ -6,6 +6,7 @@ import { useState, type ReactElement } from 'react'
 import { BarChart } from '@/components/charts/BarChart'
 import { Figure } from '@/components/primitives/Figure'
 import { Receipt } from '@/components/primitives/Receipt'
+import { TAP_TARGET } from '@/components/primitives/tapTarget'
 import { RevealOnScroll } from '@/components/shared'
 import { Badge } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
@@ -169,7 +170,12 @@ export function SemanticFactsPanel({ state }: Props): ReactElement {
                 type="checkbox"
                 checked={showSuperseded}
                 onChange={(e) => setShowSuperseded(e.target.checked)}
-                className="size-3 accent-[var(--blue-600)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                /* A 0.75rem box is 15px at the largest text setting; the drawn tick
+                   stays that size and the pointer target around it clears 24px. */
+                className={cn(
+                  'size-3 accent-[var(--blue-600)] outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  TAP_TARGET,
+                )}
               />
               superseded
             </label>

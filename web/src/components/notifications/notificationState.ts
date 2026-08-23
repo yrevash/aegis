@@ -21,6 +21,17 @@
  *   guarantee for a stream like this. Arrival is keyed on `id`.
  * - **Reading is idempotent and floored at zero.** Two clicks on one row, or a row that
  *   arrived already-read, must not drive the badge negative.
+ *
+ * And one the count did **not** follow, which is what made it drift upward over a long
+ * session. Deduping by id kept a replayed row from being counted twice but never
+ * re-reconciled the count against what the newer copy said: a row this session had
+ * counted as unread, then read *somewhere else*, came back read and left the badge
+ * where it was. `GET /notifications` is the only authority that ever corrects this —
+ * `/notifications/stream` publishes only what happens while the connection is held and
+ * has no replay, so a read committed in another tab or by another session reaches this
+ * one on the next read of the feed and nowhere else. The badge reached 13 over a
+ * server's 5. `arrived` now moves the count with the row, and `useNotifications`
+ * re-reads the feed rather than trusting one read taken at sign-in to stay true all day.
  */
 
 import type { Signal } from '@/config/signals'
@@ -81,9 +92,19 @@ export function notificationReducer(
       if (seen !== -1) {
         // A replay after a reconnect. Take the newer copy — its `read_at` may have
         // changed on another tab — but do not count it again.
+        //
+        // Taking the copy was not enough: the row's *state* was updated and the count
+        // beside it was left alone, so a replayed row that had since been read swapped
+        // "Unread" for a timestamp in the panel while the badge stayed where it was.
+        // The two have to move together, in both directions, or the badge is a number
+        // about a set the rows no longer describe.
+        const before = state.rows[seen]
+        const wasUnread = before.read_at === null
+        const isUnread = action.row.read_at === null
         const rows = [...state.rows]
         rows[seen] = action.row
-        return { ...state, rows }
+        const delta = wasUnread === isUnread ? 0 : isUnread ? 1 : -1
+        return { ...state, rows, unread: Math.max(0, state.unread + delta) }
       }
       return {
         rows: [action.row, ...state.rows].slice(0, MAX_ROWS),

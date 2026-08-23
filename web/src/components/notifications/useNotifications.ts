@@ -42,6 +42,24 @@ export interface NotificationFeed extends NotificationState {
 const PAGE = 30
 
 /**
+ * How often the feed is re-read while the tab is visible.
+ *
+ * The socket is the only thing that used to update the bell after sign-in, and it
+ * carries **arrivals only** — `/notifications/stream` publishes what happens while the
+ * connection is held and never replays, so a row read in another tab, on another
+ * device, or by a colleague on the same account is invisible here until something
+ * re-reads the feed. Over a console left open all day that is one drift in one
+ * direction: the badge only ever counts up. A reload reconciled it, which is the
+ * clue — this is that reload, on a timer, and `loaded` is the same authoritative
+ * action it dispatches.
+ *
+ * Sixty seconds because the count is an at-a-glance figure, not a live one: the
+ * arrivals that matter still land on the socket in real time, and this only has to
+ * catch reads the socket structurally cannot deliver.
+ */
+const RECONCILE_MS = 60_000
+
+/**
  * The bell's data: one read of the feed, one live socket, and the arithmetic in
  * {@link notificationReducer}.
  *
@@ -73,15 +91,23 @@ export function useNotifications(): NotificationFeed {
   soundRef.current = sound
 
   const reload = useCallback(
-    (bearer: string) => {
-      setLoading(true)
+    /**
+     * @param bearer - The session token.
+     * @param silent - Skip the loading flag. The periodic reconcile passes `true`:
+     *   it is a correction, not a fetch anyone is waiting on, and flipping `loading`
+     *   every minute would blink the panel's skeleton on an empty feed.
+     */
+    (bearer: string, silent = false) => {
+      if (!silent) setLoading(true)
       return getNotifications(bearer, { limit: PAGE })
         .then((data) => {
           dispatch({ type: 'loaded', rows: data.rows, unread: data.unread })
           setError(null)
         })
         .catch((failure: unknown) => setError(errorSentence(failure)))
-        .finally(() => setLoading(false))
+        .finally(() => {
+          if (!silent) setLoading(false)
+        })
     },
     [dispatch],
   )
@@ -107,8 +133,20 @@ export function useNotifications(): NotificationFeed {
         if (alive) setStatus(next)
       },
     })
+    // Re-reconcile against the server, which is the only reader of rows another
+    // session marked read. Paused while the tab is hidden — a background tab polling
+    // a bell it is not showing is cost with no reader — and re-read the moment it
+    // comes back, so returning to the tab shows a true count rather than the one it
+    // was left with.
+    const reconcile = (): void => {
+      if (alive && document.visibilityState === 'visible') void reload(token, true)
+    }
+    const timer = setInterval(reconcile, RECONCILE_MS)
+    document.addEventListener('visibilitychange', reconcile)
     return () => {
       alive = false
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', reconcile)
       subscription.close()
     }
   }, [token, hydrated, reload])
