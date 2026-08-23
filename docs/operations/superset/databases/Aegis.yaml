@@ -1,5 +1,5 @@
 database_name: Aegis
-sqlalchemy_uri: 'postgresql+psycopg2://aegis_superset:REPLACE-ME@localhost:5432/taif'
+sqlalchemy_uri: 'postgresql+psycopg2://aegis_superset:REPLACE-ME@localhost:5432/REPLACE-DB'
 cache_timeout: null
 expose_in_sqllab: false
 allow_run_async: false

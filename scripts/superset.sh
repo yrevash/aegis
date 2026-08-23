@@ -44,12 +44,25 @@ import_assets() {
   local staged; staged="$(mktemp -d)"
   cp -R "$ROOT/docs/operations/superset/"* "$staged/"
   rm -f "$staged/aegis-boards.json"
-  # The committed bundle ships REPLACE-ME rather than a real password.
-  "$VENV/bin/python" - "$staged" "$pw" <<'PY'
+  # Which Postgres the boards read. It MUST be the database the backend serves from:
+  # Superset pointed at a different one is not a broken chart, it is a chart that
+  # renders confidently with another deployment's numbers. That happened — analytics
+  # reported 88.11 spend and 9 red-team runs against a real 4.16 and 7, because this
+  # bundle hardcoded a database name the backend had since moved off. Defaults to the
+  # database in POSTGRES_DSN when it is set, so the two cannot drift by default.
+  local dbname="${AEGIS_SUPERSET_DB_NAME:-}"
+  if [ -z "$dbname" ]; then
+    dbname="$(printf '%s' "${POSTGRES_DSN:-}" | sed -n 's#.*/\([^/?]*\).*#\1#p')"
+  fi
+  : "${dbname:?set AEGIS_SUPERSET_DB_NAME (or POSTGRES_DSN) to the database the backend serves from}"
+  echo "superset boards will read database: $dbname"
+  # The committed bundle ships REPLACE-ME / REPLACE-DB rather than real values.
+  "$VENV/bin/python" - "$staged" "$pw" "$dbname" <<'PY'
 import pathlib, re, sys
-staged, pw = pathlib.Path(sys.argv[1]), sys.argv[2]
+staged, pw, dbname = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 f = staged / "databases" / "Aegis.yaml"
-f.write_text(re.sub(r"(postgresql\+psycopg2://aegis_superset:)[^@]+@", rf"\1{pw}@", f.read_text()))
+text = re.sub(r"(postgresql\+psycopg2://aegis_superset:)[^@]+@", rf"\1{pw}@", f.read_text())
+f.write_text(text.replace("/REPLACE-DB'", f"/{dbname}'"))
 PY
   "$SUPERSET" import-directory -o "$staged"
   rm -rf "$staged"
