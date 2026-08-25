@@ -23,7 +23,7 @@ refusing that shortcut.
 ```mermaid
 flowchart TD
     subgraph SETUP["One-time provisioning, run as the table owner"]
-        A["python -m aegis.dbadmin --role aegis_readonly --password ..."] --> B["scripts/sql/aegis-readonly-role.sql"]
+        A["python -m aegis.dbadmin prints the SQL"] --> B["scripts/sql/aegis-readonly-role.sql"]
         B --> C["CREATE ROLE aegis_readonly<br/>NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT"]
         C --> D["GRANT SELECT on all tables, REVOKE INSERT UPDATE DELETE TRUNCATE"]
         D --> E["Column grant on users: every column except password_hash"]
