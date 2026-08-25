@@ -2,219 +2,201 @@
 
 ## What it is
 
-The pipeline that turns an uploaded PDF into searchable, embedded chunks a
-retrieval system can query. If you have never built a document pipeline
-before: a PDF is not text — it is a description of where ink goes on a
-page. Extracting the *actual reading order* (which matters enormously for a
-two-column academic paper or a table-heavy regulation) is a hard,
-well-studied problem, and Aegis measures whether it got that right rather
-than assuming it did.
+The pipeline that turns an uploaded PDF into searchable, embedded, graph-linked
+chunks. Six stages run in order: parse, chunk, enrich, embed, index, graph.
 
-## Why it exists here
+A PDF is not text — it is a description of where ink goes on a page.
+Recovering the actual reading order matters enormously for a two-column paper
+or a table-heavy regulation, so this module measures whether it got that right
+instead of assuming it did.
 
-The system's retrieval quality depends entirely on what got extracted from
-the source PDF. Two failure modes this module is built to catch rather than
-silently ship: **reading order corruption** (text extracted in the wrong
-sequence reads as nonsense even though every word is technically present),
-and **a parse that looks fine but silently missed structure** (headings
-flattened, tables read as prose). Both are measured with real numbers, not
-assumed.
+## Why it exists
+
+Retrieval quality is capped by what ingestion extracted. Two failure modes are
+measured rather than hoped away: **reading-order corruption**, where every
+word is present but the sequence is nonsense, and **structure loss**, where
+headings flatten and tables read as prose. Both produce a number recorded on
+the document row.
 
 ## Diagram
 
 ```mermaid
 flowchart TD
-    U[PDF uploaded] --> P["parse (Docling, CPU queue, max 1 concurrent)"]
-    P --> Q{"assess_parse(): 3 independent signals,<br/>confidence = MINIMUM of the three"}
-    Q -->|low confidence| FLAG["FLAGGED, never blocked —<br/>run continues, reasons recorded"]
-    Q --> C[chunk — structure-aware, word-based, 400/60]
-    C --> E["enrich — ONE SQL statement, NO model call.<br/>Prepends the D7 prefix into content"]
-    E --> EM["embed — genailab-maas-text-embedding-3-large,<br/>3072 dims, batch 64, written to chunks.embedding"]
-    EM --> I["index — publishes to Qdrant.<br/>FREE if embed already ran: reads chunks.embedding, no provider call"]
-    I --> G["graph — spaCy NER + co-occurrence,<br/>NOT an LLM by default"]
-    G --> G1["project into Neo4j — with source_id on each node<br/>(fatal if it fails: entities that did not land exist nowhere visible)"]
-    G1 --> G2["publish entity + relation vectors and the chunk KV<br/>(non-fatal but never silent: reports 'failed: …', never a fabricated 0)"]
-    G2 --> DONE[Chunk fully indexed, searchable by BOTH arms]
+    U[PDF uploaded] --> V{PDF magic bytes and size cap}
+    V -->|no| R[415 or 413]
+    V -->|yes| D[documents row, workflow started]
+    D --> P[parse with Docling]
+    P --> Q["assess_parse: three signals, confidence is the minimum"]
+    Q --> C["chunk: structure-aware, 400 words, 60 overlap"]
+    C --> E["enrich: one SQL update, no model call"]
+    E --> M["embed: batches of 64, vectors into chunks.embedding"]
+    M --> I["index: publish stored vectors to Qdrant"]
+    I --> G["graph: extract entities and relations"]
+    G --> G1[project into Neo4j with source_id]
+    G1 --> G2[publish entity and relation vectors, plus the chunk KV]
+    G2 --> DONE[searchable by every retrieval arm]
 ```
 
-## The architecture
+## How it works
 
-```
-aegis/src/aegis/ingestion/
-  convert.py    the ONLY module permitted to import Docling — all parser API calls live here
-  quality.py    assess_parse() — the 3-signal confidence gate
-  blocks.py     the internal block representation
-  furniture.py  running-header/footer stripping
-  probe.py      OCR-need decision, independent PDFium text-layer reading
-  tables.py     table→summary policy thresholds
-aegis/src/aegis/retrieval/chunker.py   chunk_sections() — the actual chunking algorithm
-backend/src/app/ingestion/
-  stages.py           the 6 stage handlers (parse/chunk/enrich/embed/index/graph)
-  graph_projection.py writes the extraction into Neo4j — and the node's source_id
-  graph_vectors.py    writes the entity/relation vectors and LightRAG's chunk KV
-  chunk_kv.py         LightRAG's chunk key-value table — how an entity resolves to a passage
-  graph_backfill.py   --backfill-graph: rebuilds the two graph indexes from chunks.meta
-  vector_index.py     the narrow re-index path — replay stored embeddings, no provider call
-  reindex.py          the wide re-index path — re-run chunk→graph, skip only parse
-  store.py            DocumentStore — local-disk artifact storage
-  __main__.py         python -m app.ingestion --reindex / --verify / --backfill-graph CLI
-```
+**Upload.** `POST /v1/documents` sniffs the `%PDF-` magic bytes rather than
+trusting the declared content type, refuses anything above
+`MAX_DOCUMENT_BYTES` (64 MiB), hashes the bytes, and dedupes on
+`(tenant_id, content_sha256)` so a re-upload is cheap rather than merely
+refused. A principal with no tenant pin cannot upload, because the document
+would own no chunks. Bytes go to local disk through `DocumentStore`.
 
-**The `graph` stage has three writes, and they fail differently on purpose.**
-Recording the extraction on `chunks.meta` and projecting it into Neo4j are
-**fatal** — an entity that did not land exists nowhere a person can see. Publishing
-the entity/relation vectors is **not** fatal, because those are an index *over* a
-graph already verified present, so a transient vector-store blip must not discard
-a wholly correct document. It is never silent either: with Qdrant pointed at a
-dead port the stage completes and reports `entity_vectors: null, graph_vectors:
-"failed: Connection refused"` — an honest unknown, not a fabricated zero.
+**parse.** Docling, pinned at `docling[rapidocr]==2.120.3`, and confined to one
+module: `aegis.ingestion.convert` is the only place permitted to import it.
+The STANDARD pipeline (layout model plus TableFormer) is used, not the VLM
+pipeline. Two non-default options are set together and both are required:
+`heading_hierarchy_options.enabled` and `generate_parsed_pages` — the heading
+model reasons from the font and layout evidence the second one supplies.
+`TableFormerMode.ACCURATE` is asserted at runtime, not merely requested.
+`OMP_NUM_THREADS=1` is pinned before Docling loads, because Docling (via
+torch) and xgboost each ship their own OpenMP runtime.
 
-## What is actually in Aegis
+**The quality gate.** `assess_parse()` produces three independent signals and
+takes the **minimum**, because a parse is worth what its worst check says:
 
-### Docling — pinned exactly, and confined to one module
+1. **Ordering agreement** — Kendall's tau between Docling's block order and
+   the raw text layer, computed **per page** and averaged weighted by anchor
+   count. Document-wide tau hides column corruption.
+2. **Fragment rate** — the share of prose blocks ending without terminal
+   punctuation. The signal reads the document's own list style, so a glossary
+   whose entries are conventionally unpunctuated is not counted as broken
+   sentences.
+3. **Flat heading histogram** — everything at level 1 across a long structured
+   document means the heading hierarchy is not running.
 
-`docling[rapidocr]==2.120.3`, exact-pinned. `aegis.ingestion.__init__`
-states the rule directly: *"`aegis.ingestion.convert` is the only module in
-the platform permitted to import Docling."* The **STANDARD** pipeline
-(layout model + TableFormer) was chosen over Docling's VLM pipeline on a
-**measured 255× per-page difference** — 281 seconds versus 1.10 seconds per
-page on the reference machine.
+A low-confidence parse is **flagged, never blocked**. The signal measures
+disagreement, not incorrectness; blocking would burn the most expensive
+stage's retry budget; and there is no automatic remedy to fall back to. The
+score lands on `documents.parse_confidence` and the reasons land in the
+durable run record.
 
-**Two pipeline options are set that are not Docling's defaults, and both
-are required together**: `heading_hierarchy_options.enabled = True` and
-`generate_parsed_pages = True`. The source records a real measured trap:
-enabling the heading option **alone** produced a plausible-looking but
-wrong heading tree (`{1: 13, 2: 12, 3: 8}`) — it needs the parsed-pages
-option too, which supplies the font/layout evidence the heading model
-actually reasons from.
+**chunk.** `chunk_sections()` at 400 words with 60 words of overlap, counted by
+whitespace splitting — there is no tokenizer in the chunker. Blocks are
+grouped into runs sharing a heading path, packed greedily, and a table block
+is never split and never has prose packed into it. Every chunk is prefixed
+with `[title · type · date · heading path]` so it carries its own citation
+context. Tables above a size threshold get a natural-language summary from a
+`CHEAP`-role model call, cached by content hash in `table_summaries`.
 
-`TableFormerMode.ACCURATE` is **asserted at runtime**, not merely
-requested — if it is not set to ACCURATE, `convert.py` raises rather than
-silently parsing tables with the faster, less accurate model.
+**enrich.** One idempotent SQL `UPDATE` that folds the pre-computed prefix into
+`content`. No model call happens in this stage.
 
-**`OMP_NUM_THREADS=1` is pinned before Docling loads**, and the reason is a
-specific, measured crash: Docling (via torch) and xgboost each ship their
-own OpenMP runtime. Loading torch first and then triggering xgboost
-segfaults; loading in the other order deadlocks on the first torch matrix
-operation. The fix costs about 5% parse time on the reference fixture (7.6s
-→ 8.0s) and avoids the crash entirely.
+**embed.** `genailab-maas-text-embedding-3-large`, 3072 dimensions, batched 64
+chunks per request, written to `chunks.embedding` in Postgres.
 
-### There is no fallback parser
+**index.** The stored vectors are published to Qdrant. Because the vectors
+live in Postgres, `python -m app.ingestion --reindex` replays them into a
+fresh collection with no embedding-provider call.
 
-If Docling is not installed, the call raises `ImportError` naming the exact
-pip extra to install. There is no `pypdf`, no `PyMuPDF`, no degraded text
-extraction path — a missing Docling install is a hard stop, not a silent
-downgrade to worse text.
+**graph.** Extraction defaults to an **LLM** extractor (`GRAPH_EXTRACTOR=llm`);
+setting `GRAPH_EXTRACTOR=spacy` selects the deterministic spaCy NER plus
+sentence-co-occurrence extractor instead. If the model gateway cannot be
+resolved, the deterministic extractor runs and its name is recorded on every
+chunk and on the stage event, so the fallback is never silent. The stage then
+performs three writes with deliberately different failure behaviour:
 
-### The quality gate — confidence is the MINIMUM of three signals, not an average
+| Write | Fatal | Why |
+| --- | --- | --- |
+| extraction onto `chunks.meta` | yes | an entity that did not land exists nowhere |
+| Neo4j projection, including `source_id` on the node | yes | same reason |
+| entity and relation vectors plus the LightRAG chunk KV | no | an index over a graph already verified present; reported as `failed: <reason>`, never as a fabricated zero |
 
-Quoted directly: *"A parse is worth what its worst check says it is
-worth."* Three independent, measured signals:
+## What it stores
 
-1. **Ordering agreement** — Kendall's tau computed **per page, then
-   averaged weighted by anchor count** (not document-wide — the source
-   records a measured case where document-wide tau was 0.967 on a badly
-   re-ordered two-column PDF, while the correct per-page tau was 0.565;
-   computing it document-wide would have hidden the corruption).
-2. **Fragment rate** — the share of prose blocks ending mid-sentence
-   (missing terminal punctuation). Crucially, this signal **reads the
-   document's own list style**: if a document's list items are
-   conventionally unpunctuated (a glossary, a taxonomy), they are excluded
-   from the population rather than counted as broken sentences — this exact
-   fix was needed for the real CFPB document in this project's own corpus,
-   whose confidence went from **0.0000 to 0.9987** once the list-style
-   check was added, with every prose-heavy document's score verified
-   byte-identical before and after.
-3. **Flat heading histogram** — catches the specific case where every
-   heading collapsed to level 1 (evidence the two pipeline options above
-   were not both actually engaged).
+| Table | Columns that matter |
+| --- | --- |
+| `documents` | `tenant_id`, `filename`, `content_sha256`, `mime_type`, `size_bytes`, `title`, `doc_type`, `doc_date`, `status`, `completed_stage`, `workflow_id`, `page_count`, `chunk_count`, `parse_confidence`, `error`; unique on `(tenant_id, content_sha256)` |
+| `chunks` | `tenant_id`, `document_id` (FK, `ON DELETE CASCADE`), `persona`, `content`, `embedding` (3072-dim), `meta` (JSONB, carries the extraction), `search_vector` (a generated `tsvector` over `content`, GIN-indexed) |
+| `table_summaries` | `tenant_id`, `digest` (SHA-256 of the table's Markdown), `summary`, `row_count`, `col_count`, `model_role`; one row per table per tenant |
 
-**A low-confidence parse is flagged, never blocked.** Three reasons stated
-directly: the signal measures *disagreement*, not correctness, so a
-genuinely unusual-but-valid layout can trigger it; blocking would burn the
-most expensive stage's retry budget for nothing; and there is no automatic
-remedy to fall back to anyway. The reasons are recorded on the document row
-and in the durable run record, so an operator can see exactly why a
-document was flagged.
+It also writes `job_runs` progress (owned by the jobs module), `run_events`
+stage transitions (owned by the runs module), Qdrant points, and the Neo4j
+projection. Source bytes live on local disk under `DOCUMENT_STORE_PATH`.
 
-### Chunking — word-based, structure-aware, not semantic and not LLM-driven
+## Security and tenant isolation
 
-`chunk_sections()` at the shipped defaults: **400 words, 60-word overlap**,
-counted by `len(text.split())` — there is **no tokenizer anywhere in the
-chunker**, just whitespace splitting as a portable approximation
-(~0.75 tokens/word for English). The algorithm groups blocks into runs that
-share a heading path (breaking at every heading, not just a path change),
-packs blocks greedily up to the word budget, and — critically — **a table
-block is never split and never has prose packed into it**; it is always
-its own chunk.
+- `documents`, `chunks` and `table_summaries` all carry `tenant_id` and are
+  registered for Postgres row-level security.
+- `chunks` carries its own `tenant_id` rather than reaching one through
+  `documents`. A policy that has to join to find the owner makes the join the
+  boundary instead of the row.
+- `table_summaries` is scoped per tenant even though it is keyed by a content
+  hash. A cache is the easiest place for a boundary to be argued away.
+- Upload requires a tenant-pinned principal; a platform principal with no
+  tenant is refused with a `400`.
+- Uploaded bytes are validated by magic number, so a renamed `.docx` is
+  refused at the door rather than at parse time.
+- `AEGIS_STORAGE_ENCRYPTION` selects at-rest encryption for the document
+  store; the default is `none`.
 
-Every chunk is prefixed with four fields — `[title · type · date · heading
-path]` — before it is embedded, so the chunk carries its own citation
-context even in isolation.
+## API surface
 
-### `enrich` calls no model at all
+| Method | Path | Who may call | Returns |
+| --- | --- | --- | --- |
+| POST | `/v1/documents` | any authenticated, tenant-pinned caller | the `document_id`, size, hash and the ingest `workflow_id` |
+| GET | `/v1/documents` | any authenticated caller | the caller's tenant's documents and their ingest status |
+| GET | `/v1/documents/{document_id}/ingest` | any authenticated caller | that document's stage timeline, read from `run_events` |
 
-This is worth knowing precisely because it's counter-intuitive given the
-name: the `enrich` stage is **one idempotent SQL `UPDATE` statement**,
-folding the pre-computed prefix into `content`. No model call happens here.
-The one model call in the entire pipeline is the **table summariser**
-(`ModelRole.CHEAP`), which runs during the `chunk` stage, only for tables
-above a size threshold, cached by content hash so an identical table is
-never summarised twice — even across different documents.
+The command-line surface is `python -m app.ingestion` with `--reindex`,
+`--verify` and `--backfill-graph`.
 
-### Embedding — real model, real dimension, and why re-indexing is free
+## Configuration
 
-`genailab-maas-text-embedding-3-large`, **3072 dimensions**, batched at 64
-chunks per request, written to `chunks.embedding` in Postgres. That storage
-is what makes `python -m app.ingestion --reindex` **free** — it replays the
-already-computed vectors from Postgres into a fresh Qdrant collection
-without calling the embedding provider again. This exact mechanism is what
-recovered the platform after the Chroma→Qdrant migration accidentally
-dropped every existing vector: the embeddings had never left Postgres.
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `DOCUMENT_STORE_PATH` | `document_storage` | where source bytes are written |
+| `DOCLING_WARM_ON_START` | `false` | preload the Docling models at boot |
+| `GRAPH_EXTRACTOR` | `llm` | `spacy` selects the deterministic extractor |
+| `TABLE_SUMMARY_ENABLED` | `true` | summarise tables during chunking |
+| `TABLE_SUMMARY_MIN_ROWS` | `3` | smallest table worth summarising |
+| `TABLE_SUMMARY_MIN_COLS` | `3` | as above, columns |
+| `TABLE_SUMMARY_MIN_CELLS` | `12` | as above, cells |
+| `TABLE_SUMMARY_MAX_GRID_CHARS` | `6000` | largest grid sent to the model |
+| `MODEL_EMBEDDING` | fleet default | which embedding deployment is used |
+| `QDRANT_URL` | `http://localhost:6333` | where the index stage publishes |
+| `NEO4J_URI` | `bolt://localhost:7687` | where the graph is projected |
+| `AEGIS_STORAGE_ENCRYPTION` | `none` | at-rest encryption for stored documents |
 
-### Graph extraction — spaCy by default, not an LLM
+## Where it lives
 
-The `graph` stage runs `build_extractor(prefer="deterministic")`, which
-resolves to a **spaCy** NER + sentence-co-occurrence extractor, not a
-model call — entity/relation extraction here is a classical NLP technique,
-not an LLM prompt. If spaCy is unavailable, it degrades to a `NoOpExtractor`
-that honestly extracts nothing rather than guessing.
+| Path | What it does |
+| --- | --- |
+| `aegis/src/aegis/ingestion/convert.py` | the only module permitted to import Docling |
+| `aegis/src/aegis/ingestion/quality.py` | `assess_parse()`, the three-signal confidence gate |
+| `aegis/src/aegis/ingestion/blocks.py` | the internal parsed-block representation |
+| `aegis/src/aegis/ingestion/furniture.py` | running header and footer stripping |
+| `aegis/src/aegis/ingestion/probe.py` | the OCR-need decision and independent text-layer read |
+| `aegis/src/aegis/ingestion/tables.py` | table-to-summary thresholds |
+| `aegis/src/aegis/retrieval/chunker.py` | `chunk_sections()`, the chunking algorithm |
+| `backend/src/app/ingestion/upload.py` | magic-byte validation, size cap, dedupe, workflow start |
+| `backend/src/app/ingestion/stages.py` | the six stage handlers |
+| `backend/src/app/ingestion/store.py` | `DocumentStore`, local-disk artifact storage |
+| `backend/src/app/ingestion/graph_projection.py` | the Neo4j write, including `source_id` |
+| `backend/src/app/ingestion/graph_vectors.py` | entity and relation vector publication |
+| `backend/src/app/ingestion/chunk_kv.py` | LightRAG's `lightrag_doc_chunks` key-value table |
+| `backend/src/app/ingestion/vector_index.py` | the narrow re-index path, replaying stored vectors |
+| `backend/src/app/ingestion/reindex.py` | the wide re-index path, re-running chunk through graph |
+| `backend/src/app/ingestion/graph_backfill.py` | `--backfill-graph`, rebuilt from `chunks.meta` |
+| `backend/src/app/ingestion/__main__.py` | the `--reindex` / `--verify` / `--backfill-graph` CLI |
 
-## How it runs
+## What it does not do
 
-1. `parse` — Docling extracts structured blocks, and `assess_parse` scores
-   confidence as the minimum of three independent signals.
-2. `chunk` — blocks are packed into ~400-word chunks along heading
-   boundaries; any table above threshold gets a cached model-written
-   summary.
-3. `enrich` — one SQL statement prepends the citation prefix. No model call.
-4. `embed` — chunks are embedded in batches of 64 and the vectors stored in
-   Postgres.
-5. `index` — the stored vectors are published to Qdrant.
-6. `graph` — spaCy extracts entities and relations per chunk.
-
-## What is not here
-
-- **No fallback parser.** Missing Docling is a hard `ImportError`, not a
-  degraded path.
-- **OCR is a per-document decision, not per-page.** A document that is 90%
-  digital text with one scanned page gets no OCR at all for that page — the
-  affected pages are named in the decision reason, but not recovered.
-- **The flat-heading check cannot detect a half-configured Docling** — it
-  only catches the fully-flat case; the "one option set, the other
-  forgotten" case (the exact trap documented above) needs both options
-  actually verified in the pipeline construction, which is why both are
-  asserted rather than merely set.
-- **`dedup_pieces` (content-hash deduplication) is not called by the ingest
-  pipeline** — every chunk is written even if two chunks hash identically;
-  deduplication exists in the codebase but is used only by a different
-  retrieval path, not ingestion.
-- **Only PDFs are accepted.** Upload validation checks for the PDF magic
-  bytes and refuses anything else outright.
-- **`--backfill-graph` is sourced from `chunks.meta`, not from Neo4j** — and it
-  has to be. Neo4j holds the projection *after* merging: no extractor ids,
-  descriptions already rewritten, and no record of which chunk anything came
-  from, so `source_id` could not be rebuilt from it at all.
-- **A whole-corpus `--backfill-graph` can exceed the embedding gateway's
-  per-call timeout on a large document.** The command exits 1 naming that
-  document rather than claiming success; backfilling it alone completes.
+- No fallback parser. A missing Docling install raises `ImportError` naming
+  the pip extra, rather than degrading to worse text.
+- Only PDFs are accepted.
+- OCR is decided per document, not per page. A mostly-digital document with
+  one scanned page gets no OCR for that page; the affected pages are named in
+  the decision reason.
+- No content-hash deduplication of chunks. Two identical chunks are both
+  written.
+- `--backfill-graph` is sourced from `chunks.meta`, never from Neo4j. The
+  projection holds no extractor ids and no record of which chunk anything came
+  from, so `source_id` could not be rebuilt from it.
+- The flat-heading check catches the fully-flat case only. The
+  "one Docling option set, the other forgotten" case is prevented by asserting
+  both at pipeline construction, not by this signal.

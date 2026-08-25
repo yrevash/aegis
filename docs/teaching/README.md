@@ -1,50 +1,39 @@
-# Learning Aegis, module by module
+# Aegis, module by module
 
-> All 29 files were written against the running source on 2026-08-21 and
-> re-verified against it on **2026-08-23**, after two days that changed a great
-> deal: durable Postgres checkpointing, the graph retrieval arm's entity vectors
-> and chunk KV, notifications over Redis pub/sub and SSE, both guardrail engines
-> running, append-only audit privileges, and a compliance surface. Where a file
-> described the older behaviour it was corrected; where a claim could not be
-> verified it says so rather than repeating itself.
+Twenty-nine modules, one document each. Read a module's file and you know that module —
+what it does, how it works, what it stores in the database, what security it enforces,
+what routes it exposes. You should not need to open a second file.
 
-One file per module. Each is a **parent file** — everything about that module in
-one place, written for someone who has never seen it before and read end to end.
+Read in the order below and you know Aegis.
 
-There is no second or third file per module. If a thing is worth knowing about
-`aegis.guardrails`, it is in `guardrails.md`.
+---
 
 ## The shape every file follows
 
-Read one and you can navigate all of them, because they are all built the same way:
+They are all built the same way, so reading one teaches you how to read the rest.
 
 | Section | What it gives you |
 |---|---|
-| **What it is** | The module in plain language, before any code. Jargon is expanded where it first appears |
-| **Why it exists here** | The specific problem in *this* platform that the module answers |
+| **What it is** | The module in plain language, before any code |
+| **Why it exists** | Why an enterprise agentic platform needs it |
 | **Diagram** | The real flow, using the real names from the source |
-| **The architecture** | The files, with one line each, so you can walk from the doc into the code |
-| **What is actually in Aegis** | The mechanism, with real functions and real measured numbers |
-| **How it runs** | One request through the module, in order |
-| **What is not here** | The absences, stated plainly. This section is the point, not an apology |
+| **How it works** | The mechanism, step by step |
+| **What it stores** | The database tables it owns, and what each column is for |
+| **Security and tenant isolation** | What it enforces, and who is allowed to call it |
+| **API surface** | The routes, who may call them, what they return |
+| **Configuration** | The environment variables that change its behaviour |
+| **Where it lives** | The files, so you can walk from the doc into the code |
+| **What it does not do** | The boundaries, stated plainly |
 
 ## The rule these files obey
 
-**Every claim describes what is actually in this repository.** Not what a platform
-like this usually has, not what the roadmap says, not what the library *could* do.
-If Aegis uses NeMo Guardrails, the file says which rails are defined and where the
-`.co` files are. If something is absent, the file says it is absent.
+**Every claim describes what is in this repository today.** Not what a platform like this
+usually has, not what the roadmap says, not what a library *could* do. If Aegis uses NeMo
+Guardrails, the file says which rails are defined and where the `.co` files are. If
+something is out of scope, the file says so.
 
-Each file also carries a **What is not here** section, and that section is the point
-rather than an apology: a learner who cannot tell the implemented parts from the
-intended ones has not learned the system.
-
-The same rule applies to the bugs. Several files spend a paragraph on a defect this
-platform actually shipped — a rail that documented itself as advisory and refused, a
-retrieval arm that was inert by construction, a flag that was decorative. They are
-there because the shape of a real failure teaches the mechanism better than a clean
-description of it does, and because a reader who knows how a control failed once can
-recognise the same failure the next time.
+The **What it does not do** section is part of the teaching, not an apology. A reader who
+cannot tell what the system covers from what it does not has not learned the system.
 
 ---
 
@@ -62,7 +51,7 @@ recognise the same failure the next time.
 |---|---|
 | [`governance`](governance.md) | Tenants, RBAC, Postgres row-level security, budgets, audit |
 | [`guardrails`](guardrails.md) | The input and output rails — schema, PII, injection, topic, content safety, grounding |
-| [`security`](security.md) | Threats mapped to the controls that are actually wired |
+| [`security`](security.md) | Threats mapped to the controls that are wired |
 | [`redteam`](redteam.md) | The harness that attacks the rails and reports what got through |
 | [`conformance`](conformance.md) | The suite that proves a domain swap is complete |
 | [`settings`](settings.md) | Prompt versions, seats, guardrail configuration, the LLM-Ops loop |
@@ -79,7 +68,7 @@ recognise the same failure the next time.
 | | |
 |---|---|
 | [`ingestion`](ingestion.md) | Parse, chunk, enrich, embed, index — and the quality gate |
-| [`retrieval`](retrieval.md) | Hybrid vector + graph recall, fusion, reranking |
+| [`retrieval`](retrieval.md) | Vector, graph and keyword recall, fused and reranked |
 
 ### The chokepoint
 | | |
@@ -109,24 +98,30 @@ recognise the same failure the next time.
 
 ---
 
+## If you are demoing rather than learning
+
+Four companion guides walk every screen of every portal, in order, with what each panel
+shows and what to say about it:
+
+| | |
+|---|---|
+| [`persona-platform-admin`](persona-platform-admin.md) | The operator who sees every tenant |
+| [`persona-tenant-admin`](persona-tenant-admin.md) | One tenant's administrator |
+| [`persona-ai-team`](persona-ai-team.md) | The builders — console, harness, evals, guardrails |
+| [`persona-client`](persona-client.md) | The end user, and the narrowest portal |
+
+---
+
 ## Related, and deliberately not duplicated here
 
-- [`../module/MODULE_REFERENCE.md`](../module/MODULE_REFERENCE.md) — the Module
-  Contract and the map. This course explains; that document specifies.
-- [`../module/PIPELINES.md`](../module/PIPELINES.md) — **generated** from
-  `aegis.pipelines.spec`, so a stage cannot be documented there and absent in code.
-- [`../security/`](../security/) — the threat model and the OWASP-Agentic mapping.
-- [`../install/`](../install/README.md) — getting it running.
+- [`../module/MODULE_REFERENCE.md`](../module/MODULE_REFERENCE.md) — the Module Contract
+  and the map. This course explains; that document specifies.
 - [`../architecture/system-architecture.md`](../architecture/system-architecture.md) —
-  the whole platform in one file. Read it first if you want the shape before the parts.
-- [`../compliance/README.md`](../compliance/README.md) — the control-by-control
-  evidence map, and the live surface behind `GET /v1/compliance`.
+  every layer and store as one picture. Start here if you want the whole platform before
+  any single module.
+- [`../compliance/README.md`](../compliance/README.md) — the control-by-control position
+  against twelve published frameworks.
+- [`../install/README.md`](../install/README.md) — getting it running.
 
-**Two subsystems have no file here, because they are not `aegis.*` modules.** Both
-live in `backend/src/app/` and are documented in `system-architecture.md`:
-
-- **Notifications** (`backend/src/app/notifications.py`,
-  `backend/src/app/data/notifications.py`) — durable row first, Redis pub/sub second,
-  SSE to the browser. §5 of the architecture doc.
-- **The compliance surface** (`backend/src/app/platform/compliance.py`) — §6, and
-  `../compliance/README.md` in full.
+Notifications and compliance are not `aegis.*` modules and so have no file here; both are
+documented in `../architecture/system-architecture.md`.

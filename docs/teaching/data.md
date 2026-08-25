@@ -2,107 +2,144 @@
 
 ## What it is
 
-The portable persistence layer — a minimal SQLAlchemy 2.0 base plus two
-custom column types (JSON and a vector-as-JSON column) that modules like
-memory and governance build their tables on. If you have never worked
-across two different database engines: the same table definition needs to
-produce working SQL on both **SQLite** (used by the fast unit-test suite,
-which needs no running Postgres) and **PostgreSQL** (production). A column
-type that only exists in Postgres — like its native `jsonb` — breaks the
-test suite unless it is wrapped so it degrades gracefully on SQLite.
+`aegis.data` is the portable ORM foundation every durable Aegis module builds its
+tables on. It is one declarative base, three cross-dialect column types, and one
+constant. That is the whole package.
 
-## Why it exists here
+## Why it exists
 
-Without this module, every table definition that needs a JSON column or an
-embedding vector would either hardcode a Postgres-only type (breaking the
-SQLite test path) or duplicate a workaround in every file that needs one.
-`aegis.data` centralises exactly two type decorators once, so every durable
-module — memory, governance — gets both correctly, on both dialects,
-automatically.
+Aegis runs on PostgreSQL in production and on SQLite in the unit-test suite, which
+must run with no database server. A table declared with a Postgres-only type will
+not materialise on SQLite. Without a shared foundation, every module needing a
+JSON column, an embedding column or a timestamp would solve that separately — and
+each separate solution is a chance to get UTC handling or dialect fallback wrong.
+`aegis.data` solves it once, so every module gets it right by construction.
 
 ## Diagram
 
 ```mermaid
 flowchart LR
-    M["A durable module's model<br/>(memory, governance, runs, settings, …)"] --> B["AegisBase<br/>the one declarative base"]
-    B --> J["JsonB<br/>jsonb on Postgres, JSON elsewhere"]
-    B --> V["VectorColumn<br/>list[float] as JSON, sized to EMBED_DIM"]
-    B --> U["UtcDateTime<br/>tz-aware on both dialects"]
-    J --> PG[(Postgres — production)]
+    M["A durable module's models<br/>governance, memory, jobs, ops, settings, runs, skills, redteam"] --> B["AegisBase<br/>the one declarative base"]
+    B --> J["JsonB"]
+    B --> V["VectorColumn"]
+    B --> U["UtcDateTime"]
+    J --> PG[("PostgreSQL: jsonb for both JSON columns, timestamptz for time")]
     V --> PG
     U --> PG
-    J --> SL[(SQLite — the test suites)]
+    J --> SL[("SQLite: portable JSON, and DATETIME holding naive UTC")]
     V --> SL
     U --> SL
+    HOST["Host application"] -->|owns engine, sessionmaker,<br/>create_all| B
 ```
 
-## The architecture
+## How it works
 
-```
-aegis/src/aegis/data/
-  base.py   AegisBase (the declarative base), JsonB, VectorColumn, UtcDateTime, EMBED_DIM
-```
+**`AegisBase`** is a SQLAlchemy 2.0 `DeclarativeBase`. Modules register their
+mapped classes on it, and the host application calls
+`AegisBase.metadata.create_all` once at bootstrap. This module owns the *shape* of
+the tables and nothing about their lifecycle — no engine, no session, no host
+imports.
 
-That is the whole package — one file, deliberately.
+Its `type_annotation_map` maps `datetime` to `UtcDateTime`, so every
+`Mapped[datetime]` on this base gets the correct timestamp type automatically
+rather than by each author remembering.
 
-## What is actually in Aegis
-
-### `EMBED_DIM = 3072` — the one number that ties the whole embedding story together
-
-Defined here, and re-exported through `aegis.data`, `aegis.retrieval`, and
-`app.data.models`. It is the dimensionality of
-`genailab-maas-text-embedding-3-large`, the platform's one embedding model
-(see `gateway.md`). Every `VectorColumn` in the codebase is sized to this
-constant — changing embedding models means changing this number, and every
-stored vector becomes incompatible with the new dimension until
-re-embedded.
-
-### `JsonB` — native `jsonb` on Postgres, portable `JSON` everywhere else
+**`JsonB`** is one line:
 
 ```python
 JsonB = JSON().with_variant(JSONB, "postgresql")
 ```
 
-One line, and it is the whole mechanism: SQLAlchemy's `.with_variant()`
-swaps the column type per dialect automatically. Production gets real,
-indexable Postgres `jsonb`; the SQLite test database gets ordinary `JSON`
-that still round-trips correctly for tests, even though it lacks
-`jsonb`'s query operators.
+SQLAlchemy's `.with_variant()` swaps the type per dialect. Production gets native,
+indexable Postgres `jsonb`; SQLite gets portable `JSON` that round-trips the same
+values.
 
-### `VectorColumn` — an embedding is stored as JSON, deliberately **not** pgvector
+**`VectorColumn`** stores an embedding as a JSON array of floats — `jsonb` on
+Postgres, `JSON` elsewhere. It is deliberately **not** a pgvector `vector` column.
+Approximate-nearest-neighbour search runs on Qdrant, the embedded vector engine;
+this SQL column is the durable source of record that the memory mirror reads and
+that a reindex replays from, never a search index. It carries no distance
+operators. The `dim` argument is documentary — JSON storage does not enforce it,
+and the mirror skips off-dimension rows at query time.
 
-This is worth understanding precisely, because it is a real architectural
-decision with a stated reason, not an oversight:
+**`UtcDateTime`** is the timestamp contract. A plain `Mapped[datetime]` would map
+to `TIMESTAMP WITHOUT TIME ZONE`, which is wrong in two ways on Postgres: asyncpg
+refuses to encode a timezone-aware datetime for a naive column, and
+`server_default=func.now()` on a naive column stores the server's local wall
+clock rather than UTC. `UtcDateTime` closes both:
 
-> *"The embedding-of-record column is a portable `list[float]` stored as
-> JSON ... not a pgvector `vector` type: ANN search runs on the embedded
-> vector store (Qdrant), so the SQL column is only the durable
-> source-of-record that the memory mirror reads, never a search index."*
+| Dialect | Column type | Behaviour |
+|---|---|---|
+| PostgreSQL | `TIMESTAMP WITH TIME ZONE` | Real instants; `now()` is correct regardless of the server's `TimeZone`. |
+| Everything else | `DATETIME` | Holds naive UTC, because SQLite has no aware type. |
 
-Concretely: **similarity search never runs against this Postgres column.**
-It exists purely so the raw floats survive durably in the same transaction
-as the row they describe, and can be **replayed** into Qdrant (or a fresh
-Qdrant collection) without ever calling the embedding provider again — this
-is the exact mechanism that makes `python -m app.ingestion --reindex` free
-(see `ingestion.md`). The module docstring notes `pgvector` was an actual
-prior dependency, **removed** once vector search moved fully to the
-embedded vector store — this column used to be a pgvector `vector` and
-no longer is.
+Binding normalises either input form (naive input is read as UTC). Loading always
+returns an **aware UTC** datetime, so `datetime.now(UTC) - row.created_at` can
+never raise a naive/aware `TypeError`.
 
-## How it runs
+**`EMBED_DIM = 3072`** is the dimensionality of the platform's one embedding model,
+`genailab-maas-text-embedding-3-large`. Every `VectorColumn` is sized against it,
+and it is re-exported through `aegis.retrieval` and `app.data.models` so there is
+one number, not four.
 
-A durable module (memory, governance) defines its ORM tables on
-`AegisBase`, using `JsonB` for JSON columns and `VectorColumn(EMBED_DIM)`
-for any embedding-of-record column. The host application owns the actual
-engine, sessionmaker, and calls `AegisBase.metadata.create_all` (plus RLS
-bootstrap) — this module owns only the *shape* of the tables, never their
-lifecycle.
+## What it stores
 
-## What is not here
+This module stores nothing of its own. It declares no tables — it declares the
+base and the column types that other modules' tables are made of. The tables built
+on `AegisBase` are owned by the modules that declare them:
 
-- **No pgvector.** Removed on purpose; do not reintroduce it as a
-  "faster" vector column — the ANN search path is Qdrant, and this column's
-  entire job is durable replay storage, not a query index.
-- **No connection or session management.** This package defines table
-  shapes only; the host application is responsible for actually connecting
-  to a database.
+| Owner | Tables |
+|---|---|
+| `aegis.governance` | `tenants`, `users`, `budgets`, `usage_ledger`, `audit_log` |
+| `aegis.memory` | `memory_session`, `memory_message`, `memory_fact`, `memory_profile`, `memory_write_log`, `memory_consolidation_job` |
+| `aegis.jobs` | `job_runs`, `documents`, `chunks`, `table_summaries` |
+| `aegis.ops` | `eval_results`, `prompt_versions` |
+| `aegis.runs` | `runs`, `run_events` |
+| `aegis.settings` | `settings` |
+| `aegis.skills` | `agent_skills` |
+| `aegis.redteam` | `redteam_runs` |
+
+The backend keeps a second, separate `Base` in `backend/src/app/data/models.py`
+for the platform-owned tables (`approvals`, `chat_sessions`, `chat_messages`,
+`mcp_servers`, `notifications`). Both metadatas are created by
+`app.data.session.bootstrap`.
+
+## Security and tenant isolation
+
+No tenant-scoped data. This package defines column types, not rows, and holds no
+policy. Tenant isolation is enforced by `aegis.governance` — Postgres row-level
+security plus an application-level predicate — on the tables that modules declare
+on this base.
+
+One shape here does matter downstream: because both metadatas share the same
+`UtcDateTime` contract, a timestamp comparison in a tenant-scoped query behaves
+identically across every table the policy covers.
+
+## API surface
+
+No HTTP routes.
+
+## Configuration
+
+No environment variables. `aegis.data` reads none — the host supplies the engine
+and the connection URL. Its only install requirement is the `aegis[data]` extra,
+which is `sqlalchemy[asyncio]`.
+
+## Where it lives
+
+| File | What it does |
+|---|---|
+| `aegis/src/aegis/data/base.py` | `AegisBase`, `JsonB`, `VectorColumn`, `UtcDateTime`, `EMBED_DIM`. |
+| `aegis/src/aegis/data/__init__.py` | Re-exports all five names. |
+
+## What it does not do
+
+- **No pgvector.** The embedding column is a durable JSON record for replay, not a
+  query index. Vector search runs on Qdrant.
+- **No connection or session management.** The host owns the engine, the
+  sessionmaker and the transaction boundaries.
+- **No migrations.** `create_all` is `CREATE TABLE IF NOT EXISTS` and never alters
+  an existing table. Additive column drift is reconciled by
+  `aegis.governance.schema.reconcile_additive_columns` at host bootstrap.
+- **No dimension enforcement.** `VectorColumn(3072)` records the number; JSON
+  storage does not check it.

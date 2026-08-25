@@ -2,138 +2,160 @@
 
 ## What it is
 
-The durable record of one agent run, from the first token to the last —
-every stage it entered, every guardrail verdict, every tool call, every
-cost. If you have never worked with an append-only event log before: instead
-of a single `runs` row being written and then edited in place as a run
-progresses (which loses the history of what happened, and can leave a
-half-updated row if the process crashes mid-write), Aegis appends immutable
-`run_events` rows as things happen, and the summary header is **derived**
-from them afterward, never written directly.
+The durable record of one run, from the first token to the last: every stage
+it entered, every guardrail verdict, every tool call, every token and every
+dollar. Events are appended as they happen; the summary header is **derived**
+from them afterwards.
 
-## Why it exists here
+An **append-only event log** means nothing edits a row in place. A crash
+mid-run leaves a valid partial history rather than a half-written summary, and
+a change to the summarising logic can be applied retroactively by re-folding
+the same events.
 
-Two properties this buys, both real operational needs: a run's status is
-always reconstructible even if the summarising code changes later (just
-re-fold the same events with new logic), and a crash mid-run cannot corrupt
-the record into an inconsistent state — a partial set of events is still a
-valid, readable partial history, never a half-written row.
+## Why it exists
+
+Two operational needs. A run's status must be reconstructible even if the
+code that summarises it changes later. And a run's cost, timing and approval
+count must be answerable months afterwards, for governance and for
+troubleshooting, without trusting a mutable status column that some writer may
+have skipped.
 
 ## Diagram
 
 ```mermaid
 flowchart TD
-    A[Agent run starts] --> B["record_events(): append run_events rows<br/>— composite PK (id, ts), RANGE partitioned by ts"]
-    B --> C[node_started / node_finished / tool_call / guardrail / ...]
-    C --> D["fold_events(): pure function<br/>events → RunHeader"]
-    D --> E["runs.RunHeader — a REGENERABLE PROJECTION<br/>every field is a fold over events, never written directly"]
-    F[Ingest activities] -.->|also write via ingest_log| B
-    G["Partition missing?<br/>(a partitioned table with no partitions rejects every write)"] -.->|after_create hook| B
+    A[Agent run starts] --> B[record_events appends run_events rows]
+    C[Ingest stages] --> B
+    B --> D[node_started / node_finished / tool_call / guardrail / approval]
+    D --> E["fold_events: a pure function over the ordered events"]
+    E --> F[runs header row, fully regenerable]
+    B --> G[live SSE stream to the console trace panel]
+    H[partition for this month] -.-> B
+    F --> I[rebuild_run_header / reconcile_run_header]
+    I --> F
 ```
 
-## The architecture
+## How it works
 
-```
-aegis/src/aegis/runs/
-  models.py       RunEvent (partitioned table) and Run (the header) table definitions
-  record.py       RunEventRecord, fold_events(), record_events(), read_run_header()
-  partitions.py   monthly range-partition creation and pruning
-backend/src/app/jobs/ingest_log.py    writes ingest stage transitions as run_events
-backend/src/app/api/ingest_log.py     GET /v1/documents/{id}/ingest — reads the log back
-backend/src/app/api/routes_health.py  GET /v1/platform/pipeline — aggregates job_runs + run_events
-```
+1. As a run progresses, `record_events()` appends `RunEvent` rows inside the
+   transaction that did the work.
+2. Ordering is by `seq`, the orchestrator's monotonic per-run counter — not by
+   `ts`, which is a wall clock and can tie or go backwards.
+3. `run_events` is `PARTITIONED BY RANGE (ts)`. A partitioned table with no
+   matching partition rejects every insert, so `partitions.py` creates monthly
+   partitions ahead of time through an `after_create` hook, and installs the
+   same tenant policy on each new partition that the parent carries.
+4. `fold_events()` derives the header purely from the ordered event sequence.
+   Every column on `runs` is a fold; nothing writes a header field it did not
+   first write as an event.
+5. `rebuild_run_header` and `reconcile_run_header` recompute a header from
+   scratch, which is what makes "events win" testable rather than a slogan.
+6. `event_type` is stored as `text`, not a Postgres enum. An event type the
+   record layer does not recognise is exactly the one an operator needs to
+   see, so it is stored and shown rather than rejected.
+7. **Cost is metered at the gateway**, which every model call passes through
+   by construction, so a run's `cost_usd` includes guardrail calls, the depth
+   classifier and the grounding check — not only what a graph node returned.
+   The figures reconcile against `usage_ledger`.
+8. Ingest reuses the same substrate: `app.jobs.ingest_log` writes
+   `ingest_stage` and `ingest_finished` transitions as `run_events` rows, so a
+   document's ingest progress and a conversational run share one mechanism and
+   one partition scheme.
+9. `duration_ms` is the sum of the `node_finished` durations, not wall-clock
+   `finished_at - started_at`. The two differ whenever a run parks at a human
+   approval gate, and the node sum is the one that means "work done".
 
-## What is actually in Aegis
+## What it stores
 
-### `run_events` — range-partitioned by time, on purpose
+**`run_events`** — one row per event, primary key `(id, ts)` because Postgres
+requires the partition key in every unique constraint on a partitioned table.
 
-```python
-__tablename__ = "run_events"
-# composite PK (id, ts)
-# postgresql_partition_by: "RANGE (ts)"
-```
+| Column | What it is for |
+| --- | --- |
+| `id`, `ts` | composite key; `ts` also routes the row to its monthly partition |
+| `run_id` | the run this event belongs to |
+| `tenant_id` | FK to `tenants`, nullable for a platform-level run |
+| `seq` | the monotonic per-run counter every replay orders by |
+| `event_type` | free text, e.g. `node_started`, `tool_call`, `guardrail` |
+| `agent_id` | which lane emitted it, for a per-agent view |
+| `job_id` | FK to `job_runs` when a durable job triggered the run |
+| `trace_id`, `span_id` | the OpenTelemetry correlation ids |
+| `payload` | JSONB, the event body as it streamed |
 
-A **partitioned table with no partitions rejects every write** — Postgres
-requires at least one matching partition to exist before an insert can
-land. `partitions.py` creates monthly partitions ahead of time via an
-`after_create` hook, and `prune_run_event_partitions` can drop old ones. The
-partitioning exists so a growing event log does not turn into one
-enormous, ever-slower table — old months can be pruned or archived as
-whole partitions rather than deleted row by row.
+Indexes: `ix_run_events_run_seq`, `ix_run_events_run_agent`,
+`ix_run_events_tenant_ts`, `ix_run_events_trace`.
 
-### `Run` — a regenerable projection, never written directly
+**`runs`** — the regenerable header, keyed by `run_id`.
 
-`runs.models.Run` (the header table) has columns like `status`,
-`started_at`, `finished_at`, `prompt_tokens`, `completion_tokens`,
-`cost_usd` — every one of them a **fold over the events**, computed by
-`fold_events()`, never set by application code writing to the header
-table directly. This is worth understanding precisely: if the folding logic
-has a bug and is fixed later, `rebuild_run_header`/`reconcile_run_header`
-can regenerate every historical header correctly from the same immutable
-event rows, because the events were never lossy in the first place.
+| Column | What it is for |
+| --- | --- |
+| `tenant_id`, `user_id`, `agent_id`, `trace_id` | ownership and correlation |
+| `status` | nullable with **no default**; `NULL` means the run has not reached a terminal state |
+| `started_at`, `finished_at`, `duration_ms` | timing |
+| `prompt_tokens`, `completion_tokens`, `cost_usd` | attribution figures reconciled against `usage_ledger` |
+| `cache_hit` | whether the answer cache served this run |
+| `event_count`, `last_seq` | fold bookkeeping |
+| `node_count`, `tool_call_count`, `approval_count`, `guardrail_block_count` | the counted facts a console shows |
+| `error_message` | the terminal failure, when there was one |
 
-### Cost is metered at the gateway, not folded from what a node returned
+## Security and tenant isolation
 
-`cost_usd` on the header is still a fold over events, but **which** events carry
-usage changed on 2026-08-23, and the old answer was wrong in two ways at once.
-Cost used to be read from LangGraph's reducers, which see only what a node
-*returns* — so guardrail calls, the depth classifier and the grounding check were
-all invisible — and a terminal `BLOCKED` or `ERROR` event passed no usage at all,
-so a refused run reported **$0.0000** against a real $0.036 of spend.
+- Both tables carry `tenant_id` and are registered for Postgres row-level
+  security. Monthly partitions are not registered by name — their names are a
+  function of the calendar — so `partitions.py` installs the identical policy
+  on each partition as it creates it.
+- `tenant_id` is nullable. Under the isolation predicate `NULL = <scope>` is
+  `NULL` rather than true, so a platform-level run is invisible to every
+  tenant. That is the intended reading.
+- `run_events` is **append-only for the serving role**: it holds `SELECT` and
+  `INSERT`, and `UPDATE, DELETE` are revoked. The revoke is expanded through
+  `pg_inherits` to every attached partition, because Postgres checks
+  privileges on the relation *named* in the query.
+- Retention is `prune_run_event_partitions`, which `DROP`s a whole expired
+  partition. That is DDL, already owner-only, never a `DELETE`.
+- `runs` is deliberately **not** append-only: the header moves through its
+  states as the fold advances.
 
-Usage is now recorded at the gateway's own metering chokepoint, which every model
-call passes through by construction, and the reported figures match the
-`usage_ledger` exactly. The general lesson is worth carrying: a total assembled
-from what the *orchestrator* observed will always miss the calls the orchestrator
-did not make itself.
+## API surface
 
-### `run_events` cannot be rewritten by the serving role
+There is no `GET /v1/runs` and no `GET /v1/run-events`. The record surfaces
+through three purpose-built views:
 
-Since 2026-08-23 the connection every request arrives on holds `SELECT, INSERT`
-on `run_events` and nothing more — and the revoke is expanded through
-`pg_inherits` to each monthly partition, because Postgres checks privileges on
-the relation *named* and `DELETE FROM run_events_2026_08` would otherwise still
-have worked. Retention is still possible because it is
-`prune_run_event_partitions` dropping a whole expired partition — DDL, already
-owner-only — never a `DELETE`. See `governance.md`.
+| Method | Path | Who may call | Returns |
+| --- | --- | --- | --- |
+| GET | `/v1/documents/{document_id}/ingest` | any authenticated caller | one document's ingest stage timeline, read from `run_events` |
+| GET | `/v1/platform/pipeline` | platform staff or platform admin | pipeline health, joining `job_runs` with `run_events` |
+| POST | `/v1/query` | any authenticated caller | the live SSE stream of the same events, as they are emitted |
 
-### Ingest logging reuses the same substrate
+`GET /v1/llmops/runs` is a different surface: which prompt *version* served
+each recent run.
 
-`backend/src/app/jobs/ingest_log.py` writes document-ingest stage
-transitions (`ingest_stage`, `ingest_finished`) as `run_events` rows too —
-it is not a separate logging system. This is why a document's ingest
-progress and an agent's conversational run share one underlying mechanism
-and one partition scheme.
+## Configuration
 
-### No REST endpoint for runs directly
+This module reads no environment variables of its own. It writes to the
+platform database configured by `POSTGRES_DSN`, and partition creation and the
+serving-role grants run on `POSTGRES_ADMIN_DSN`. `RLS_FAIL_CLOSED` (default
+`false`) decides what an unbound tenant scope sees.
 
-There is no `GET /v1/runs` or `GET /v1/run-events`. (`GET /v1/llmops/runs` is a
-different thing: which prompt *version* served each recent run.) The record surfaces only
-through three purpose-built views: the per-document ingest progress
-endpoint, the platform pipeline health aggregation (which joins `job_runs`
-with `run_events`), and the live SSE stream a conversational run emits in
-real time as it happens — the trace panel in the console consumes the live
-stream directly, not a REST poll of stored events.
+## Where it lives
 
-## How it runs
+| Path | What it does |
+| --- | --- |
+| `aegis/src/aegis/runs/models.py` | `RunEvent` and `Run` table definitions, `RUNS_TABLE`, `RUN_EVENTS_TABLE` |
+| `aegis/src/aegis/runs/record.py` | `RunEventRecord`, `record_events()`, `fold_events()`, `read_run_header()`, the rebuild helpers |
+| `aegis/src/aegis/runs/partitions.py` | monthly partition creation, policy install, `prune_run_event_partitions` |
+| `backend/src/app/agent/run_log.py` | the agent's write side into `run_events` |
+| `backend/src/app/jobs/ingest_log.py` | the ingest pipeline's write side into the same table |
+| `backend/src/app/api/ingest_log.py` | `GET /v1/documents/{id}/ingest` reads the log back |
+| `backend/src/app/api/routes_health.py` | `GET /v1/platform/pipeline` aggregates `job_runs` and `run_events` |
+| `aegis/src/aegis/governance/rls.py` | the append-only revoke and the partition expansion |
 
-1. As an agent run or an ingest job progresses, each meaningful step —
-   node started, node finished, a tool call, a guardrail verdict — is
-   appended as an immutable `RunEvent` row via `record_events()`.
-2. The events accumulate under the run's id, partitioned by the timestamp
-   column.
-3. `fold_events()` derives the summary header (status, timing, token counts,
-   cost) purely from the event sequence — this can be re-run at any time to
-   regenerate the header from scratch.
-4. Live consumers (the console's trace panel) read the same events as they
-   are emitted, over SSE, rather than polling the stored table.
+## What it does not do
 
-## What is not here
-
-- **No direct REST surface for the raw event log** — every consumer goes
-  through a purpose-built aggregation (ingest progress, pipeline health) or
-  the live stream, never a generic "give me the events for run X" endpoint.
-- **The header table is not the source of truth** — treat it as a cache of
-  the fold; the events are the actual record. Code that needs to be
-  certain of a run's state should be aware the header could in principle be
-  stale relative to a very recent event, until the next fold runs.
+- No generic REST endpoint for the raw event log. Every consumer goes through
+  a purpose-built aggregation or the live stream.
+- The header is not the source of truth. It is a projection, and it can lag a
+  very recent event until the next fold runs.
+- Nothing deletes individual events. Retention drops whole partitions.
+- The event vocabulary is not constrained by the database. Validation of an
+  event's shape happens at the streaming layer, not in the schema.
