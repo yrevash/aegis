@@ -1,7 +1,7 @@
 'use client'
 
-import { Check, Clock, RotateCw, ShieldCheck } from 'lucide-react'
-import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import { Check, RotateCw, ShieldCheck } from 'lucide-react'
+import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
 import { InfoTip } from '@/components/primitives/InfoTip'
@@ -11,6 +11,9 @@ import type { RunState } from '@/state/runReducer'
 
 import { ActivityRail } from './ActivityRail'
 import { deriveActivity, deriveAgentPanel, isFailure } from './agentLanes'
+import type { Beat } from './motion'
+import { RunMark } from './RunMark'
+import { RunPreview } from './RunPreview'
 import { deriveTiming, formatDuration, isGuardStage, type Stage } from './stageTimeline'
 import { TRUST_CHECKS } from './trustChecks'
 
@@ -328,9 +331,21 @@ export function announceRun(state: RunState | null): string {
  */
 export function RunPanel({
   state,
+  beat,
   children,
 }: {
   state: RunState
+  /**
+   * The console's heartbeat — the newest event's hue and sequence number.
+   *
+   * It used to be computed on every turn and handed only to `ResultTabs`, a component
+   * that mounts *after* the run ends: a hundred and forty-four wire events, every one of
+   * them an invisible tick. The header pulses on each one now, and the signature mark
+   * takes the same beat. `null` before the first event, and deliberately ignored once
+   * `state.running` is false — `lastSignal` updates on `run_finished` like any other
+   * event, so an ungated pulse never stops.
+   */
+  beat: Beat | null
   /** The lane board — the left zone. Passed in, so this file never imports it. */
   children: ReactNode
 }): ReactElement {
@@ -388,8 +403,25 @@ export function RunPanel({
       <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
           <span className="flex items-center gap-2">
-            <Clock aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            <h3 className="eyebrow">
+            {/* The signature mark stands where a clock icon used to. A clock said the
+                one thing the three head figures beside it already say; the mark says
+                what the run is *doing* — screening, thinking, fanned out, gated,
+                blocked — and every one of those is a fact the wire named. */}
+            <RunMark state={state} beat={beat} />
+            {/* The header takes the beat: one same-hue pulse per wire event, re-keyed on
+                `seq` so two consecutive events of the same hue still fire twice. The key
+                is on the heading rather than on the row, because re-keying the row would
+                remount the mark on every event and restart its animation each time. */}
+            <h3
+              key={running && beat !== null ? beat.seq : 'still'}
+              style={
+                running && beat !== null ? ({ '--beat': beat.hex } as CSSProperties) : undefined
+              }
+              className={cn(
+                'eyebrow rounded-sm',
+                running && beat !== null && 'animate-beat',
+              )}
+            >
               {running
                 ? `Running · ${done}/${timing.stages.length}`
                 : `Run · ${timing.stages.length} ${timing.stages.length === 1 ? 'stage' : 'stages'}`}
@@ -450,6 +482,12 @@ export function RunPanel({
           </div>
         )}
       </header>
+
+      {/* The run's scaffold — the same four-beat spine an empty console draws, filled in
+          as the run walks it. It is here rather than beside the panel because the shape
+          it draws *is* this panel's contents arriving: the reader watches one picture
+          fill, not two pictures agree. Full width, above the lanes, inside the card. */}
+      <RunPreview state={state} />
 
       {running ? (
         /* Again a container query: the feed only earns a column when the turn itself is

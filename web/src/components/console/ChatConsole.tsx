@@ -22,7 +22,6 @@ import type { RunState } from '@/state/runReducer'
 
 import { LaneBoard } from './LaneBoard'
 import { ApprovalSpotlight } from './ApprovalSpotlight'
-import { AssistantBot } from './AssistantBot'
 import { Composer } from './Composer'
 import { attachmentVerdict, type TurnAttachment } from './composerAttachment'
 import { RequestedWidth } from './DecisionStrip'
@@ -220,7 +219,7 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
             the header, its lanes on the left, and one feed of what is happening now on
             the right. Directly under the question, because the input rail takes three
             seconds before a single agent exists and this is what fills them. */}
-        <RunPanel state={run}>
+        <RunPanel state={run} beat={beat}>
           <LaneBoard state={run} />
         </RunPanel>
 
@@ -288,8 +287,10 @@ function TurnView({ turn, graph, metrics, onSaveAsSkill }: TurnViewProps): React
  * - **The adapter's own seed questions** — real configuration, not fabricated examples,
  *   and the fastest way for someone watching to see a real run.
  * - **{@link RunPreview}** — the four beats and twelve named rails a question passes
- *   through. It carries no figures at all, because nothing has been measured yet, and it
- *   is the same spine {@link RunStages} fills in the moment a question is sent.
+ *   through. It carries no figures at all, because nothing has been measured yet. It is
+ *   not merely the same *picture* the run draws: it is the same component, mounted here
+ *   with no run and inside `RunPanel` with one, so the promise and the measurement can
+ *   never drift apart.
  *
  * Everything else — memory, activity, stages, lanes, trace — is absent until there is a
  * run to talk about, or one click away behind the header. No placeholder cards, no
@@ -635,7 +636,14 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
 
   const send = (question: string, attachment: TurnAttachment | null = null): void => {
     setDecided(false)
-    setView('run')
+    // Not `setView('run')`. A reader who chose the Flow tab is watching the live
+    // seventeen-node graph — the one thing on this screen that already animates for the
+    // whole forty seconds — and sending a question used to yank them off it. The two
+    // panels stay mutually exclusive: both are `flex-1`, so co-rendering them splits the
+    // height and pushes the thread off screen, `role="tablist"` stops being true, and the
+    // flow panel is mount-gated on purpose because React Flow measures its container once
+    // and a hidden one measures 0x0.
+    setView((current) => (current === 'flow' ? 'flow' : 'run'))
     chat.ask({ question, persona: personaId, attachment, mode })
   }
 
@@ -916,13 +924,13 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
 
             {/* The composer is the frame's footer now, not a sticky bar floating over
                 the thread on a translucent blur. DESIGN.md §1 rules out backdrop-blur
-                on content, and the blur was also what let the assistant's face sit on
-                top of the activity log while a run streamed. */}
+                on content, and the blur was also what let the assistant avatar sit on
+                top of the activity log while a run streamed. That avatar is gone
+                entirely — it was a character, which DESIGN.md §7 forbids, and it stopped
+                animating at the exact moment a run began. `RunMark` took its slot, in
+                the run panel's own header where the run it reports on is. */}
             <div className="shrink-0 border-t border-border bg-background pt-2 pb-1">
               <div className={MEASURE}>
-                <div className="px-1 pb-1">
-                  <AssistantBot running={chat.running} />
-                </div>
                 {composer}
               </div>
             </div>

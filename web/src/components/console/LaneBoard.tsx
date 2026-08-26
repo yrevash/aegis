@@ -455,11 +455,19 @@ function laneHeading(state: RunState, attributed: boolean, count: number): strin
  * it is the receipt. A team whose lanes have not checked in yet is simply **early**. The
  * degraded sentence is for what is left: a run that finished without ever stamping an
  * identity, which is the only case where the panel really is showing less than happened.
+ *
+ * That last distinction was being thrown away at t=0. `routing` is null until the router
+ * runs, and the input rail takes about three seconds before it — so **every** run,
+ * including every team run, opened by saying it had reported no per-agent identity. The
+ * sentence was a lie for the first five seconds of the demo. A run that has not routed
+ * yet has not failed to report anything; it is being sized.
  */
 function laneSentence(state: RunState): string {
   const routing = state.routing
   if (routing === null) {
-    return 'This run reported no per-agent identity, so it reads as one lane.'
+    return state.running || state.events.length === 0
+      ? 'Sizing the run — the router has not named a width yet.'
+      : 'This run reported no per-agent identity, so it reads as one lane.'
   }
   if (routing.depth !== 'team') {
     return `Sized for one agent — ${routing.decided_by} chose a single lane for this question, and it ran the whole turn.`

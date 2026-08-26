@@ -95,24 +95,35 @@ interface AbsenceProps {
  * never rendered as a number, it is a **stated absence in the slot the number
  * would have occupied**. That is what this renders, and it is why it lives in
  * the same file as {@link Receipt} rather than in a screen.
+ *
+ * **One line, not three** (DESIGN.md §4). This used to stack `figure`, `why` and
+ * `needed` as three `<p>`s, and with 100-odd of them across the console that is
+ * the single biggest source of the "too much text" the reviewers hit: a panel
+ * with nothing to show was taller than a panel with something to show. So the
+ * figure and its reason join on one line, and `needed` — which is a recipe, not
+ * a state — moves behind an {@link InfoTip}, which §4 requires stay reachable by
+ * hover *and* by keyboard. Nothing is deleted; a fix here fixes every call site.
  */
 export function Absence({ figure, why, needed, className }: AbsenceProps): ReactElement {
   return (
     <div
       data-slot="absence"
-      className={cn('flex items-start gap-2 rounded-md border border-border bg-surface-2/40 p-4', className)}
+      className={cn('flex items-start gap-2 rounded-md border border-border bg-surface-2/40 p-3', className)}
     >
       <CircleSlash className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <div className="min-w-0 space-y-1.5">
-        <p className="text-sm font-semibold break-words text-foreground">{figure}</p>
-        <p className="text-xs leading-relaxed text-muted-foreground">{why}</p>
+      <p className="min-w-0 text-xs leading-relaxed break-words text-muted-foreground">
+        <span className="font-semibold text-foreground">{figure}</span>
+        <span aria-hidden> · </span>
+        {why}
         {needed == null ? null : (
-          <p className="text-xs leading-relaxed text-foreground">
-            <span className="eyebrow mr-1.5">to measure it</span>
-            {needed}
-          </p>
+          <>
+            {' '}
+            <InfoTip label={`To measure ${figure}`} className="align-text-bottom">
+              {needed}
+            </InfoTip>
+          </>
         )}
-      </div>
+      </p>
     </div>
   )
 }

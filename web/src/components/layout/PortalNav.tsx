@@ -63,6 +63,17 @@ interface PortalNavProps {
  * white ink, and the left edge marker. Never the fill alone; the fill is also
  * the one cue that a colour-blind reader tells apart by *lightness* rather than
  * hue, which is why it is a saturated step rather than a tint (DESIGN.md §2).
+ *
+ * ## No `title=` on the rows
+ *
+ * Each row used to carry `title={item.tooltip}` — 34 native browser tooltips
+ * averaging 28.5 words, one of them 129. A native tooltip clips, times out and
+ * cannot be reached by keyboard at all, so that text had never once been read;
+ * what it *did* do was pop under the pointer every time it crossed the rail.
+ * Nothing was lost by deleting it: the same sentence is on the destination
+ * screen's `PageHeader`, where a reader is actually looking. `Section.tooltip`
+ * stays as the catalogue's plain-language gloss and is capped at 12 words —
+ * asserted by `tests/design/navTooltipLength.test.mjs`.
  */
 export function PortalNav({
   portal,
@@ -95,7 +106,6 @@ export function PortalNav({
                   <Link
                     href={`/app/${portal}/${item.id}`}
                     aria-current={isActive ? 'page' : undefined}
-                    title={item.tooltip}
                     onClick={onNavigate}
                     className={cn(
                       'group relative flex w-full touch-manipulation items-center gap-3 rounded-lg px-3 text-sm outline-none transition-colors duration-[--dur-fast]',

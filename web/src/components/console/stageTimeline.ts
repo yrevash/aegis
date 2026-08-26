@@ -89,6 +89,68 @@ export const OUTPUT_CHAIN = [
 ] as const
 
 /**
+ * Wire rail id → position in {@link INPUT_CHAIN}.
+ *
+ * The two chains above are **display labels** — `'PII'`, `'prompt injection'` — and
+ * `Guardrail.layer` is the pipeline's own id — `'pii'`, `'injection'`. Nothing mapped
+ * one to the other, so the wire could name the deciding rail and no surface could point
+ * at it. These two tables are that map, and they are deliberately the only place it
+ * exists.
+ *
+ * Every id is a literal from `aegis/src/aegis/guardrails/pipeline.py`. The tables are
+ * **not** exhaustive over what the pipeline can emit, and that is the honest part: an
+ * output `'exfiltration'` verdict has no cell in `check_output`'s six-layer chain, so it
+ * resolves to `null` and a surface draws no mark rather than marking the wrong rail.
+ *
+ * `injection_unavailable` — the fail-closed verdict when the injection classifier cannot
+ * be reached — maps to the injection rail's position, because that is the rail whose
+ * absence produced it.
+ */
+const INPUT_LAYERS: Record<string, number | undefined> = {
+  schema: 0,
+  denylist: 1,
+  pii: 2,
+  injection: 3,
+  injection_unavailable: 3,
+  content_safety: 4,
+  topical: 5,
+}
+
+/** Wire rail id → position in {@link OUTPUT_CHAIN}. `content` is the content filter. */
+const OUTPUT_LAYERS: Record<string, number | undefined> = {
+  schema: 0,
+  content: 1,
+  denylist: 2,
+  content_safety: 3,
+  grounding: 4,
+  pii: 5,
+}
+
+/**
+ * Where a verdict's deciding rail sits in its stage's chain.
+ *
+ * @param stage - The `Guardrail.stage` the verdict came from.
+ * @param layer - The `Guardrail.layer` the wire named, which is often `null`.
+ * @returns The index into the stage's chain, or `null` when the wire named no layer,
+ *   named one this chain does not contain, or reported a stage with no chain at all
+ *   (`tool_result`). **Null means "do not mark a rail"** — a break drawn at the wrong
+ *   rail is worse than no break.
+ */
+export function railIndexOf(stage: string, layer: string | null): number | null {
+  if (layer === null || layer === '') return null
+  const table = stage === 'input' ? INPUT_LAYERS : stage === 'output' ? OUTPUT_LAYERS : null
+  if (table === null) return null
+  return table[layer] ?? null
+}
+
+/** The display label of the rail a verdict came from, or `null`. See {@link railIndexOf}. */
+export function railLabelOf(stage: string, layer: string | null): string | null {
+  const index = railIndexOf(stage, layer)
+  if (index === null) return null
+  return stage === 'input' ? INPUT_CHAIN[index] : OUTPUT_CHAIN[index]
+}
+
+/**
  * Per-node briefs. Deliberately partial: a node with no entry still renders, under
  * the label the wire sent it with and the neutral hue, because the graph is allowed
  * to grow a stage without this file hearing about it first.

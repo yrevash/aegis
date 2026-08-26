@@ -40,6 +40,7 @@ import { LoadingState } from '@/components/primitives/States'
 import { BackendGate } from '@/components/shared/BackendGate'
 import { TenantRailPolicy } from '@/components/guardrails/TenantRailPolicy'
 import { nemoState, postureAbsence } from '@/components/guardrail/postureState'
+import { RailFiringLine } from '@/components/guardrail/RailFiringLine'
 import { SIGNALS } from '@/config/signals'
 import { cn } from '@/lib/utils'
 
@@ -870,6 +871,12 @@ function GuardrailsView(): ReactElement {
           </InfoTip>
         }
       />
+
+      {/* The rails, doing it — real payloads from the stored battery against the real
+          input rail, one at a time. It leads because every panel below it describes the
+          pipeline, and this one runs it. `INPUT_RAILS` is passed rather than re-declared
+          so a verdict's `layer` is named by the same rail card the reader scrolls to. */}
+      <RailFiringLine rails={INPUT_RAILS} />
 
       <RedteamHero report={redteam} loading={redteamLoading} platformWide={platformWide} />
 

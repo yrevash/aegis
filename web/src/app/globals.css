@@ -420,17 +420,50 @@
     animation: trace-in 0.28s ease-out both;
   }
 
-  /* Idle graph scanline sweep. */
-  @keyframes scanline {
+  /* The signature mark's screening rotation — it carries DURATION, never progress, and
+   * it exists only while a guardrail stage is open, so it is not an ambient loop. */
+  @keyframes mark-spin {
     from {
-      transform: translateY(-100%);
+      transform: rotate(0deg);
     }
     to {
-      transform: translateY(100%);
+      transform: rotate(360deg);
     }
   }
-  .animate-scan {
-    animation: scanline 2.4s linear infinite;
+  .animate-mark-spin {
+    animation: mark-spin 2.4s linear infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* The mark's core — one pulse per wire event, re-keyed on `beat.seq`. */
+  @keyframes mark-core {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.12);
+    }
+  }
+  .animate-mark-core {
+    animation: mark-core 0.9s ease-out;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* The mark's idle draw-on: once, on mount. Deliberately not infinite — §6 bans
+   * ambient loops on an operator screen, and an idle console is all operator screen. */
+  @keyframes mark-draw {
+    from {
+      stroke-dasharray: 0 24;
+    }
+    to {
+      stroke-dasharray: 24 0;
+    }
+  }
+  .animate-mark-draw {
+    animation: mark-draw 0.32s ease-out both;
   }
 
   /* Active-beat — one synchronized same-hue pulse fired on every stream event.
@@ -465,22 +498,6 @@
     animation: flow-pulse 1s ease-out;
     transform-box: fill-box;
     transform-origin: center;
-  }
-
-  /* Idle attract-loop — gentle breathing for dormant panels before a run. */
-  @keyframes idle-breathe {
-    0%,
-    100% {
-      opacity: 0.6;
-      transform: scale(0.996);
-    }
-    50% {
-      opacity: 1;
-      transform: scale(1.004);
-    }
-  }
-  .animate-idle-breathe {
-    animation: idle-breathe 4.5s ease-in-out infinite;
   }
 
   /* Idle trust-bar shimmer — a slow highlight sweep across the dormant bar. */

@@ -93,7 +93,18 @@ export interface Section {
   icon: LucideIcon
   /** Short mono caption — the honest tech, kept terse. */
   hint: string
-  /** Full plain-language subtitle surfaced on hover / in the header. */
+  /**
+   * One plain-language line saying what the section is — **12 words at most**,
+   * asserted by `web/tests/design/navTooltipLength.test.mjs`.
+   *
+   * It is no longer a `title=` attribute on the nav row. Thirty-four of these had
+   * grown to a 28.5-word mean and a 129-word worst case inside a native browser
+   * tooltip, which clips, times out and takes no keyboard focus — so the text was
+   * unreadable by construction while still firing under the pointer every time it
+   * crossed the rail. The explanation each one had accumulated belongs on the
+   * destination screen's `PageHeader` `InfoTip`, where a reader is already looking;
+   * anything longer than *that* belongs in `docs/`. What stays here is the gloss.
+   */
   tooltip: string
   /** Optional group heading this item sits under (defaults to "Workspace"). */
   group?: string
@@ -123,53 +134,49 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Analytics',
     icon: AreaChart,
     hint: 'Apache Superset',
-    tooltip:
-      'Aegis Analytics — Superset\'s charts rendered inside Aegis, never in another portal: the backend builds the query, mints a short-lived guest token, and every row is narrowed to your tenant by a WHERE clause the browser cannot remove · Apache Superset',
+    tooltip: 'Superset charts inside Aegis, every row narrowed to your tenant server-side',
   },
   savings: {
     id: 'savings',
     label: 'Savings',
     icon: PiggyBank,
     hint: 'baseline vs actual',
-    tooltip: 'What the workload would cost on the frontier model vs what it actually cost',
+    tooltip: 'What the workload would cost on the frontier model vs actual',
   },
   forecast: {
     id: 'forecast',
     label: 'Forecast',
     icon: TrendingUp,
     hint: 'statsforecast · conformal',
-    tooltip: 'Aegis Forecast — spend and demand projected forward, with the interval coverage that was actually measured · statsforecast',
+    tooltip: 'Aegis Forecast — spend projected forward with measured interval coverage · statsforecast',
   },
   mlops: {
     id: 'mlops',
     label: 'MLOps',
     icon: Sigma,
     hint: 'SHAP · conformal',
-    tooltip: 'Aegis ML — model card, SHAP drivers & calibrated confidence · XGBoost + MAPIE',
+    tooltip: 'Aegis ML — model card, SHAP drivers, calibrated confidence · XGBoost/MAPIE',
   },
   tokenopt: {
     id: 'tokenopt',
     label: 'Token opt',
     icon: Coins,
     hint: 'routing · savings',
-    tooltip:
-      'Aegis Gateway — role→model routing, fallback chains, and savings vs the frontier baseline · metered from live calls',
+    tooltip: 'Aegis Gateway — role→model routing, fallback chains, savings vs frontier baseline',
   },
   evals: {
     id: 'evals',
     label: 'Evals',
     icon: Gauge,
     hint: 'RAGAS · DeepEval',
-    tooltip:
-      'Aegis Evals — the offline regression gate: deterministic RAGAS/DeepEval-pattern metrics scored with no LLM',
+    tooltip: 'Aegis Evals — offline regression gate · deterministic RAGAS/DeepEval metrics, no LLM',
   },
   documents: {
     id: 'documents',
     icon: FileStack,
     label: 'Documents',
     hint: 'corpus · ingest',
-    tooltip:
-      'Aegis Corpus — what the agent can ground an answer in, and the one place to add more: upload a document, watch its six ingest stages commit, and see which of your own documents are searchable. Every row is your tenant\'s and no other\'s.',
+    tooltip: 'Your tenant\'s corpus — upload a document, watch six ingest stages commit',
   },
   memory: {
     id: 'memory',
@@ -183,56 +190,49 @@ export const SECTIONS: Record<string, Section> = {
     label: 'RAG',
     icon: Network,
     hint: 'hybrid · rerank',
-    tooltip:
-      'Aegis Retrieval — the arsenal made observable: which recall arms fired (vector/graph/bm25), RRF fusion, LLM rerank, spotlighting, query-rewrite and the bounded Self-RAG loop, with real measured counts',
+    tooltip: 'Which recall arms fired, RRF fusion, rerank and the Self-RAG loop',
   },
   cache: {
     id: 'cache',
     label: 'Cache',
     icon: DatabaseZap,
     hint: 'semantic · TTL',
-    tooltip:
-      'Aegis Caches — the three real caches (memory recall, retrieval + answers, guardrail verdicts) with their true method, backend, TTL & thresholds · RedisVL / Redis / in-memory',
+    tooltip: 'The three real caches with their true method, backend, TTL and thresholds',
   },
   voice: {
     id: 'voice',
     label: 'Voice',
     icon: Mic,
     hint: 'Whisper · rails',
-    tooltip:
-      'Aegis Voice — record or upload speech, transcribed on the fleet\'s hosted Whisper and split on silence for long audio; the transcript is then screened by the FULL text rail stack before a word of it can reach the agent',
+    tooltip: 'Speech transcribed on hosted Whisper, then screened by the full text rails',
   },
   vision: {
     id: 'vision',
     label: 'Vision',
     icon: ScanEye,
     hint: 'screen · then model',
-    tooltip:
-      'Aegis Vision — upload an image and watch the ordering that makes vision safe: payload hygiene, then a cheap vision call that screens the pixels for instructions aimed at an AI, then image-PII redaction, and only then the hosted Llama-3.2-90B-Vision analysis and the platform\'s own output rails; an image that fails the screen never reaches the answering model, and if the screen cannot run the image is blocked rather than passed',
+    tooltip: 'Image screened for prompts aimed at an AI, then PII-redacted, then analysed',
   },
   guardrails: {
     id: 'guardrails',
     label: 'Guardrails',
     icon: ShieldCheck,
     hint: 'rails · verdicts',
-    tooltip:
-      'Aegis Guardrails — the defense-in-depth rail stack (schema → PII → injection → content-safety → topical → grounding), the active engine (programmatic vs NeMo Colang), the live verdict feed, and a red-team block-rate teaser',
+    tooltip: 'The rail stack, its active engine, and the live verdict feed',
   },
   graph: {
     id: 'graph',
     label: 'Graph',
     icon: Waypoints,
     hint: 'entities · relations',
-    tooltip:
-      'Aegis Knowledge Graph — the typed entity graph (organizations, people, products, policies…) and the real relations between them; a run highlights the evidence subgraph the answer stood on',
+    tooltip: 'The typed entity graph, and the evidence subgraph a run stood on',
   },
   harness: {
     id: 'harness',
     label: 'Harness',
     icon: Cpu,
     hint: 'graph · tweak',
-    tooltip:
-      'Aegis Harness — the agentic graph made legible: every tunable knob (gate, self-repair, retrieval loop, caches) with its value/default/bounds, and a live run folded into one glass-box trace record (node timeline · gate · tools · outcome)',
+    tooltip: 'The agentic graph\'s knobs, bounds and one live glass-box trace record',
   },
   simulation: {
     id: 'simulation',
@@ -246,7 +246,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Tech Stack & Versions',
     icon: Layers,
     hint: 'SBOM',
-    tooltip: 'Every runtime, library and service in production — so DevOps knows exactly what is running',
+    tooltip: 'Every runtime, library and service in production — the DevOps inventory',
     group: 'Operations',
   },
   patch: {
@@ -262,8 +262,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Latency',
     icon: Timer,
     hint: 'p50 · p95',
-    tooltip:
-      'Aegis Latency — per-node and per-run p50/p95/max drawn from real samples in a per-process rolling window (resets on restart); no runs yet reads as an honest empty state, never fake zeros',
+    tooltip: 'Per-node p50/p95/max from a per-process rolling window that resets on restart',
     group: 'Operations',
   },
   redteam: {
@@ -271,8 +270,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Red-team',
     icon: Swords,
     hint: 'attacks · block-rate',
-    tooltip:
-      'Aegis Red-team — the offline attack battery (prompt injection, jailbreak, system-prompt leak, PII extraction, content safety) scored against the guardrail stack: overall block-rate, gate pass/fail, per-category bars and the probes that leaked',
+    tooltip: 'Offline attack battery scored against the guardrail stack — block-rate per category',
     group: 'Operations',
   },
   security: {
@@ -280,8 +278,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Security',
     icon: Lock,
     hint: 'OWASP · posture',
-    tooltip:
-      'Aegis Security posture — every OWASP-Agentic threat mapped to the live Aegis control holding it down, with an honest enforced / partial / not-covered status derived from real wiring signals',
+    tooltip: 'Every OWASP-Agentic threat mapped to the live control holding it down',
     group: 'Operations',
   },
   compliance: {
@@ -289,8 +286,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Compliance',
     icon: ScrollText,
     hint: 'frameworks · evidence',
-    tooltip:
-      'Aegis Compliance readiness — twelve published frameworks, India first (the DPDP Act 2023 and its 2025 Rules, the CERT-In Directions, MeitY/RBI/SEBI/BIS), then OWASP LLM Top 10, OWASP Top 10, MITRE ATLAS, NIST AI RMF, ISO/IEC 42001, ISO/IEC 27001, the EU AI Act, SOC 2 and GDPR — mapped control by control to a file, a route or a test in this repository, with four honest states: enforced, partial, not implemented, not applicable. Plus a data-residency inventory derived from live configuration on every read, so where the data goes is checked rather than claimed. Readiness evidence, never a certification claim — nothing here has been audited by an independent party, the page says so on its face, and a test resolves every reference against the real artefact on each run',
+    tooltip: 'Twelve frameworks mapped control by control to a file, route or test',
     group: 'Operations',
   },
   llmops: {
@@ -306,8 +302,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Jobs',
     icon: ListChecks,
     hint: 'durable queue',
-    tooltip:
-      'Aegis Substrate — durable background work, its admission caps, and the cancel control',
+    tooltip: 'Aegis Substrate — durable background work, admission caps, and the cancel control',
     group: 'Governance',
   },
   governance: {
@@ -315,7 +310,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Governance',
     icon: Landmark,
     hint: 'tenants · budgets',
-    tooltip: 'Aegis Governance — tenants, budgets, usage & RBAC read straight from the ledger',
+    tooltip: 'Aegis Governance — tenants, budgets, usage and RBAC, read from the ledger',
     group: 'Governance',
   },
   approvals: {
@@ -323,8 +318,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Approvals',
     icon: Gavel,
     hint: 'the human gate',
-    tooltip:
-      'Aegis Approvals — every action the agent paused on rather than took: what approving would run, why the gate fired, and how long is left on its SLA. Deciding one resumes the parked run.',
+    tooltip: 'Every action the agent paused on, why the gate fired, SLA remaining',
     group: 'Governance',
   },
   audit: {
@@ -332,7 +326,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Audit',
     icon: ScrollText,
     hint: 'Postgres audit',
-    tooltip: 'Aegis Governance — append-only audit trail · Postgres (RLS), with trace links to Aegis Trace',
+    tooltip: 'Aegis Governance — append-only audit trail · Postgres RLS, with trace links',
     group: 'Governance',
   },
   mcp: {
@@ -340,8 +334,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'MCP',
     icon: Network,
     hint: 'external tool servers',
-    tooltip:
-      'Aegis MCP — the external Model Context Protocol servers this platform may reach, the tools discovered on each, and the risk tier every one of them is gated at: an external tool is HIGH risk and stops at the human gate until a platform admin lowers it for a named tool, a disabled server\'s tools leave the agent\'s payload entirely, and whatever a peer returns passes the TOOL_RESULT rail before it reaches a prompt · Model Context Protocol',
+    tooltip: 'External MCP servers, their discovered tools, and the risk tier gating each',
     group: 'Governance',
   },
   database: {
@@ -349,8 +342,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Database',
     icon: Database,
     hint: 'read-only · scoped',
-    tooltip:
-      'Aegis DB console — the schema and a closed set of parameterised reads over a Postgres role that holds SELECT and nothing else, with every row filtered to the selected tenant by a clause the server writes into the query, bounded rows/bytes/time, and both sides of every read on the audit trail',
+    tooltip: 'Parameterised reads on a SELECT-only Postgres role, tenant-scoped server-side, fully audited',
     group: 'Governance',
   },
   roles: {
@@ -366,7 +358,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Risk Map',
     icon: ShieldAlert,
     hint: 'OWASP-Agentic',
-    tooltip: 'How an autonomous agent can go wrong — and the control holding each risk down',
+    tooltip: 'Each way an autonomous agent goes wrong, and the control holding it',
     group: 'Governance',
   },
   settings: {
@@ -374,7 +366,7 @@ export const SECTIONS: Record<string, Section> = {
     label: 'Settings',
     icon: SlidersHorizontal,
     hint: 'platform → tenant → you',
-    tooltip: 'The per-tenant control catalogue and the tool roster — every value shows which scope decided it',
+    tooltip: 'Per-tenant controls and the tool roster — every value names its scope',
     group: 'Governance',
   },
 }
