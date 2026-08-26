@@ -234,10 +234,11 @@ function Arrowhead({ left }: { left: number }): ReactElement {
     left: `calc(${left}% + 12px)`,
     borderTop: '5px solid transparent',
     borderBottom: '5px solid transparent',
-    // impeccable-disable-next-line side-tab: CSS triangle, not a card accent.
     // The transparent top/bottom borders plus one solid side on a `size-0` span is
     // the arrowhead idiom; the detector's `side-tab` rule looks for a thick accent
-    // border on a card, and there is no card here.
+    // border on a card, and there is no card here. The waiver must sit on the line
+    // directly above the finding, so it goes last.
+    // impeccable-disable-next-line side-tab
     borderRight: `6px solid ${TRACK_INK}`,
   }
   return (

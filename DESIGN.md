@@ -162,8 +162,22 @@ unit at **70%** of the numeral, name below in secondary ink, and **4px** between
 
 ## 3. Type
 
-Inter for interface, **JetBrains Mono for every numeral, id, cost, count and timestamp** via the
-`Figure` primitive, so columns align and figures do not reflow as they tick.
+**IBM Plex Sans** for interface *and* display, **JetBrains Mono for every numeral, id, cost, count
+and timestamp** via the `Figure` primitive, so columns align and figures do not reflow as they tick.
+
+Plex Sans is a superfamily, so `--font-display` resolves to the same family as `--font-sans`: the
+display voice comes from weight and tracking, not a second face. The token stays rather than being
+deleted, so a distinct display face can return without touching a call site.
+
+**`--font-mono` does not move to Plex Mono, deliberately.** Both monos have an identical `0.6000em`
+advance, so column alignment is unchanged either way — but Plex Mono's x-height is 6.2% smaller, and
+mono carries every figure in this product at 11.52px, read off a projector. Family coherence is not
+worth that trade across 324 call sites.
+
+**Nothing renders below 11px.** Functional text has a floor, enforced by
+`tests/design/textFloor.test.mjs`, and being on the size ramp is not a defence — a size can be on
+the ramp and still be unreadable. The test checks the token sheet too, so one line cannot
+reintroduce the problem globally.
 
 ```
 display  28/32  -0.02em 600   page title — ONE per screen
@@ -255,6 +269,31 @@ Budget **4** (was 2). Motion confirms a state change, reveals structure, or show
 - No scroll-jacking, no parallax, no infinite ambient loops on operator screens.
 - `prefers-reduced-motion` respected on every animated element, including the 3D.
 
+**Four named motions, and a fifth is a change to this file rather than a component decision.**
+M1 *Arrive* (content enters once, staggered — the only GSAP motion), M2 *Settle* (a changed value
+takes a tint wash, no transform), M3 *Beat* (the console heartbeat, one pulse per wire event),
+M4 *Trace* (a streaming row slides in). M1 fires on **first mount only** — never on a refresh, a
+filter change or a tab switch; a stagger that replays on every poll is what makes a product look
+like a template.
+
+**GSAP is in the stack, and it is fenced.** Its reason is orchestration: a staggered, interruptible,
+properly-cleaned-up entrance across siblings is the thing CSS `animation-delay` does badly. If a
+proposed use is not orchestration across siblings, it is a CSS transition and belongs in
+`globals.css`.
+
+The fence exists because **the reduced-motion kill switch cannot reach GSAP**, and this was measured
+rather than assumed: under `reduce`, a `@keyframes` element had already snapped to its 300px end
+state while a GSAP tween sat mid-flight at 105px — exactly where it sat with reduced motion off.
+`globals.css` zeroes `animation-*` and `transition-*`; GSAP writes `transform` into inline style on
+every frame, so that rule is not weak against it, it is *inapplicable*.
+
+So every tween lives inside `useGSAP` (StrictMode is on; a bare effect tween survives the
+double-mount and fights its own second copy) **and** inside a `gsap.matchMedia()` block with an
+explicit `(prefers-reduced-motion: reduce)` conditional, whose reduce branch **sets the final state**
+rather than returning — a tween that hides before it reveals, skipped, is content that never
+appears. `tests/design/gsapBoundary.test.mjs` fails on any of the four violations, because a
+convention without a test decays the first time somebody writes the one-line version.
+
 ## 7. 3D — simple geometry, and never load-bearing
 
 The brief: *"not too gimmicky, extreme simple 3d not extreme."*
@@ -295,6 +334,14 @@ downloads from a CDN at runtime and its own docs say that is not for production.
 
 **Spline is ruled out**: its runtime is 544 kB gzip plus the scene file, with a documented case of
 17.9 s of CPU script time. Fine as an *authoring* tool to produce the still; never as a runtime.
+
+**A note this section owes the reader.** The reasoning above rejected `react-force-graph-3d` at
++305 kB and Spline at 544 kB, and GSAP was later added *alongside* Motion — a second animation
+engine, on a page that already had one. That is in tension with the paragraph above it, and the
+tension is real rather than resolved by argument. It was the owner's decision, taken with the cost
+known, on the grounds that the entrance orchestration was worth it. Recording it here is the point:
+a rule that gets quietly bent stops being a rule, and the next person deserves to see that this one
+was bent on purpose and by whom.
 
 ### The knowledge-graph decision, stated honestly
 
