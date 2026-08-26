@@ -2053,6 +2053,7 @@ async def audit_verify(
         unchained=result.unchained,
         broken_at=result.broken_at,
         detail=result.detail,
+        head=result.head,
     )
 
 

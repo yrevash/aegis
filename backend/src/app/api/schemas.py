@@ -399,6 +399,15 @@ class AuditChainResponse(BaseModel):
         default=None, description="Id of the first row that did not verify."
     )
     detail: str = Field(description="One sentence naming what was found.")
+    head: str | None = Field(
+        default=None,
+        description=(
+            "This chain's current tip. A chain cannot detect rows removed from its END "
+            "— what remains verifies perfectly — so record this value elsewhere and "
+            "notice if it ever goes backwards. Stated as a limit rather than left as a "
+            "claim the verifier silently fails to make."
+        ),
+    )
 
 
 class Verification(_BaseEvent):

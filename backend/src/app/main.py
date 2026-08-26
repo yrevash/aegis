@@ -19,6 +19,8 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
+from aegis.guardrails import Guardrails
+from aegis.guardrails.memory_write import MemoryWriteCandidate, MemoryWriteVerdict
 from aegis.governance.schema import SchemaDriftError
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -336,7 +338,17 @@ async def _run_memory_sweeper(stop: asyncio.Event) -> None:
         try:
             async with get_sessionmaker()() as session:
                 await sweep_pending(
-                    session, config=config, complete=complete, embed=embed, limit=limit
+                    session,
+                    config=config,
+                    complete=complete,
+                    embed=embed,
+                    limit=limit,
+                    # Without this the memory-write rail is a seam nothing fills, and
+                    # the fourth guard stage exists only to be scored by the red-team
+                    # button. That is the same defect the read-back tier shipped with
+                    # one phase earlier; a screen the production path does not pass is
+                    # not a guardrail, it is a guardrail-shaped hole.
+                    screen=_memory_write_screen,
                 )
         except Exception:  # noqa: BLE001 - the sweeper must survive transient errors
             logger.warning("Memory consolidation sweep failed", exc_info=True)
@@ -344,6 +356,19 @@ async def _run_memory_sweeper(stop: asyncio.Event) -> None:
             await asyncio.wait_for(stop.wait(), timeout=period)
         except TimeoutError:
             continue
+
+
+async def _memory_write_screen(
+    candidate: MemoryWriteCandidate,
+) -> MemoryWriteVerdict:
+    """Screen one candidate fact with the platform's own guardrail pipeline.
+
+    A fresh :class:`Guardrails` per call rather than a shared one, matching how the
+    other module-level rail helpers are built: the pipeline is cheap to construct and
+    holds no per-call state worth reusing, and a long-lived instance in a background
+    sweeper is a place for configuration to go stale.
+    """
+    return await Guardrails().check_memory_write(candidate)
 
 
 async def _run_memory_retention(stop: asyncio.Event) -> None:

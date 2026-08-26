@@ -1151,6 +1151,7 @@ async def sweep_pending(
     embed: EmbedFn,
     limit: int = 10,
     spec: MemorySpec | None = None,
+    screen: MemoryWriteScreen | None = None,
 ) -> int:
     """Run up to ``limit`` PENDING consolidation jobs; flip each to DONE or ERROR.
 
@@ -1259,6 +1260,7 @@ async def sweep_pending(
                     embed=embed,
                     tenant_id=job_tenant,
                     spec=spec,
+                    screen=screen,
                 )
         except Exception as exc:  # noqa: BLE001 - queue must never crash the sweep
             await session.rollback()

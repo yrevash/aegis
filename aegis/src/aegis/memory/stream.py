@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from aegis.core.stream import AegisEmitter
     from aegis.memory.cache import MemorySemanticCache
     from aegis.memory.config import MemoryConfig
+    from aegis.guardrails.memory_write import MemoryWriteScreen
     from aegis.memory.consolidate import CompleteFn, ConsolidationResult, EmbedFn
     from aegis.memory.spec import MemorySpec
 
@@ -209,6 +210,7 @@ async def stream_add(
     trace_id: str | None = None,
     spec: MemorySpec | None = None,
     cache: MemorySemanticCache | None = None,
+    screen: MemoryWriteScreen | None = None,
 ) -> ConsolidationResult:
     """Consolidate a session into durable facts and stream the write, invalidating the cache.
 
@@ -232,6 +234,7 @@ async def stream_add(
         tenant_id=tenant_id,
         trace_id=trace_id,
         spec=spec,
+        screen=screen,
     )
     await session.commit()  # authoritative SQL is durable before the derived cache drops
     await emitter.custom(

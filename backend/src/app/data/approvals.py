@@ -35,6 +35,8 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aegis.governance.audit import chain_row
+
 from app.api.schemas import ApprovalDecision, ApprovalRow, RiskLevel
 from app.config import get_settings
 
@@ -587,8 +589,12 @@ async def sweep_expired(now: datetime | None = None) -> list[SweepAction]:
             # action appeared in the inbox as decided, by nobody, for no stated reason.
             # Committing them together is what stops the decision and its record from
             # ever disagreeing, which a second connection or a post-commit write could.
+            # Chained in this transaction rather than inserted bare. An unchained row
+            # sitting mid-chain is one the verifier can only report as uncovered, which
+            # quietly shrinks what the trail proves every time the sweeper runs.
             session.add(
-                AuditLog(
+                await chain_row(
+                    session,
                     tenant_id=row.tenant_id,
                     ts=cutoff,
                     action="approval.sla_expired",

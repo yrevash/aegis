@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 __all__ = [
@@ -69,18 +70,78 @@ def _frame(value: str | None) -> str:
     return f"{len(encoded)}:{value}"
 
 
+def _expanded(value: float | int) -> str:
+    """Render a number the way ``jsonb`` will store it, not the way Python prints it.
+
+    This is the specific bug that made the verifier accuse an untouched row. Python's
+    JSON encoder emits exponent notation for large and small magnitudes — ``1e+30``,
+    ``1e-07`` — and PostgreSQL's ``jsonb`` parses those into ``numeric`` and stores the
+    **expanded decimal**. Measured against the live database:
+
+        1e+30  ->  1000000000000000000000000000000
+        1e16   ->  10000000000000000
+        1e-7   ->  0.0000001
+
+    So the writer hashed ``1e+30`` and the verifier, reading the row back, hashed thirty
+    zeroes — a permanent, unfixable "this row was edited" on a row nobody touched. And a
+    verifier that cries wolf is a verifier that gets turned off, which would take the
+    whole feature with it.
+
+    ``Decimal(repr(v))`` rather than ``Decimal(v)`` on purpose: the latter takes the
+    exact binary value, so ``1e30`` becomes ``1000000000000000019884624838656`` — the
+    true value of the float, and not what ``jsonb`` produces from the same text.
+    """
+    return format(Decimal(repr(value)), "f")
+
+
+def _render(value: Any) -> str:  # noqa: ANN401 - walks arbitrary JSON
+    """Serialise one JSON value canonically.
+
+    Hand-written rather than driven through ``json.dumps``, because the number rule in
+    :func:`_expanded` cannot be expressed through it: the C encoder formats floats itself
+    and ignores a subclass's ``__repr__``, and routing ints through a float subclass to
+    reach that hook turns ``42`` into ``42.0``. Twenty lines of explicit recursion is
+    smaller than the pile of hooks needed to persuade the standard encoder, and it can be
+    audited by reading it.
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        # Checked before the numeric branch: bool is a subclass of int.
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return _expanded(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, dict):
+        inner = ",".join(
+            f"{json.dumps(str(k), ensure_ascii=False)}:{_render(v)}"
+            for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
+        )
+        return "{" + inner + "}"
+    if isinstance(value, list | tuple):
+        return "[" + ",".join(_render(v) for v in value) + "]"
+    # Anything else has no canonical JSON form. Render its text so an audit write cannot
+    # be made to raise by an unusual payload — refusing to record the action would be a
+    # worse outcome than recording it under a stable approximation.
+    return json.dumps(str(value), ensure_ascii=False)
+
+
 def canonical_payload(payload: dict[str, Any] | None) -> str:
     """Render a payload the one way both writer and verifier will render it.
 
-    Sorted keys, no insignificant whitespace, and ``ensure_ascii=False`` so a non-ASCII
-    value has exactly one representation rather than two that differ only in escaping.
+    Sorted keys, no insignificant whitespace, ``ensure_ascii=False`` so a non-ASCII value
+    has exactly one representation rather than two differing only in escaping, and
+    numbers expanded to the decimal form ``jsonb`` will hand back.
 
     The caller **must store the round-tripped form** — ``json.loads(canonical_payload(d))``
     — not the dict it started with. See this module's docstring, point 4.
     """
     if not payload:
         return "{}"
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return _render(payload)
 
 
 def row_fingerprint(

@@ -4733,6 +4733,11 @@ export interface components {
              */
             detail: string;
             /**
+             * Head
+             * @description This chain's current tip. A chain cannot detect rows removed from its END — what remains verifies perfectly — so record this value elsewhere and notice if it ever goes backwards. Stated as a limit rather than left as a claim the verifier silently fails to make.
+             */
+            head?: string | null;
+            /**
              * Intact
              * @description Whether every hashed row re-derived, in order.
              */

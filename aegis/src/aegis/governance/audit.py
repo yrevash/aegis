@@ -175,6 +175,77 @@ async def record_audit(
         await session.commit()
 
 
+async def chain_row(
+    session: AsyncSession,
+    *,
+    tenant_id: int | None,
+    ts: datetime,
+    action: str,
+    actor: str | None,
+    model: str | None = None,
+    trace_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+    approved_by: str | None = None,
+) -> AuditLog:
+    """Build a chained :class:`AuditLog` inside a caller's own transaction.
+
+    ``record_audit`` opens its own session, which is exactly wrong for a writer that
+    must commit its audit row *with* the state change it describes — the SLA sweeper
+    writes the rejection and its record together precisely so the two can never
+    disagree. That writer was therefore inserting ``AuditLog`` directly, and inserting
+    it **unchained**: a row with no hash sitting mid-chain, which the verifier can only
+    report as uncovered.
+
+    This gives such a writer the chain without taking away its transaction. The tail is
+    read in the caller's session, so the link is computed against what that transaction
+    can see.
+
+    Returns:
+        The row, chained and ready to ``session.add``. Not added here — the caller owns
+        the transaction and the ordering within it.
+    """
+    tail = (
+        await session.execute(
+            select(AuditLog.row_hash)
+            .where(
+                AuditLog.tenant_id.is_(None)
+                if tenant_id is None
+                else AuditLog.tenant_id == tenant_id
+            )
+            .where(AuditLog.row_hash.is_not(None))
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    stored_payload = json.loads(canonical_payload(payload))
+    prev = tail if tail is not None else GENESIS
+    return AuditLog(
+        tenant_id=tenant_id,
+        ts=ts,
+        action=action,
+        actor=actor,
+        model=model,
+        trace_id=trace_id,
+        payload=stored_payload,
+        approved_by=approved_by,
+        row_hash=chain_hash(
+            prev,
+            row_fingerprint(
+                tenant_id=tenant_id,
+                ts=ts,
+                action=action,
+                actor=actor,
+                model=model,
+                trace_id=trace_id,
+                payload=stored_payload,
+                approved_by=approved_by,
+            ),
+        ),
+        prev_hash=prev,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ChainVerification:
     """What walking one tenant's audit chain found.
@@ -188,6 +259,20 @@ class ChainVerification:
         broken_at: The ``id`` of the first row that did not, or ``None``.
         detail: One sentence naming what broke, for an operator who is not going to
             read the algorithm.
+        head: The last row's hash — this chain's current tip.
+
+            **Why this is on the response.** A chain detects an edited row and a row
+            removed from the middle, because both orphan everything downstream. It
+            cannot, by itself, detect rows removed from the **end**: truncate the tail
+            and what remains is a shorter chain that verifies perfectly. Nothing inside
+            the database can close that, because the evidence of what was there is what
+            was deleted.
+
+            Publishing the head is what closes it, and it has to be closed *outside*.
+            An operator who records this value — in a ticket, a monitor, another system
+            — can detect truncation by noticing the head went backwards. Until that
+            anchor exists somewhere else, tail truncation is an honest and stated limit
+            of this verifier rather than a claim it quietly fails to make.
     """
 
     checked: int
@@ -195,6 +280,7 @@ class ChainVerification:
     intact: bool
     broken_at: int | None = None
     detail: str = ""
+    head: str | None = None
 
 
 async def verify_audit_chain(tenant_id: int | None) -> ChainVerification:
@@ -274,6 +360,7 @@ async def verify_audit_chain(tenant_id: int | None) -> ChainVerification:
         checked=len(chained),
         unchained=unchained,
         intact=True,
+        head=chained[-1].row_hash if chained else None,
         detail=(
             f"{len(chained)} row(s) re-derived in order"
             + (
