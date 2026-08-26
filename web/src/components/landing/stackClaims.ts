@@ -107,7 +107,7 @@ export const STACK_CLAIMS: readonly StackClaim[] = [
   },
   {
     mark: 'Offline eval gate',
-    mechanism: 'RAGAS-style deterministic proxies — no LLM call, no ragas dependency',
+    mechanism: 'Real ragas metrics, every judge call metered through our own gateway',
     path: 'aegis/src/aegis/evals/metrics.py',
   },
   {
