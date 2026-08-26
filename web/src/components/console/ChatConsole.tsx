@@ -449,9 +449,23 @@ type ConsoleView = 'run' | 'flow'
 function ViewTabs({
   view,
   onView,
+  live = false,
 }: {
   view: ConsoleView
   onView: (view: ConsoleView) => void
+  /**
+   * Whether a run is in flight.
+   *
+   * The Flow canvas is live for the whole run — nodes light as the graph is walked,
+   * untaken branches stay grey, traversed edges animate — and it sits behind the tab
+   * that is not the default. So the one view that shows the agent walking its own graph
+   * is the one nobody is looking at, and during a demo it is never seen at all.
+   *
+   * Marking the tab while it is live is the invitation to look. It reports a fact about
+   * the panel you are not on rather than decorating this one, which is why §6's ban on
+   * status dots does not reach it — and it stops the moment the run does.
+   */
+  live?: boolean
 }): ReactElement {
   const tabs: { id: ConsoleView; label: string }[] = [
     { id: 'run', label: 'Run' },
@@ -500,7 +514,18 @@ function ViewTabs({
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            {tab.label}
+            {tab.id === 'flow' && live && !selected ? (
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="animate-beat-open size-1.5 shrink-0 rounded-full bg-blue-700"
+                />
+                {tab.label}
+                <span className="text-[0.72rem] font-normal opacity-70">live</span>
+              </span>
+            ) : (
+              tab.label
+            )}
           </button>
         )
       })}
@@ -808,7 +833,7 @@ export function ChatConsole({ role }: { role: Role }): ReactElement {
             onSelect={chat.selectChat}
             onNew={chat.newChat}
           />
-          {!idle && <ViewTabs view={view} onView={setView} />}
+          {!idle && <ViewTabs view={view} onView={setView} live={chat.running} />}
           {!idle && view === 'flow' && (
             <span className="flex items-center gap-1.5 text-[0.72rem] text-muted-foreground">
               <Workflow aria-hidden className="size-3.5" />

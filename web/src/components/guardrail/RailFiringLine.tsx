@@ -32,6 +32,7 @@ import {
   type FiringRail,
   type FiringSummary,
 } from './firingLine'
+import { useReducedMotion } from 'motion/react'
 import { BATTERY_PROBES } from './batteryProbes'
 
 /**
@@ -183,11 +184,15 @@ function FiringFigure({
 function FiringChart({
   summary,
   slots,
+  firing,
 }: {
   summary: FiringSummary
   /** Total probes selected, so the line marches across the battery rather than the data. */
   slots: number
+  /** Whether the line is still running, so the next slot can be marked. */
+  firing: boolean
 }): ReactElement {
+  const reduced = useReducedMotion() ?? false
   const baseline = VIEW_H - PAD
   const measured = summary.points
     .map((p) => p.totalMs)
@@ -216,6 +221,22 @@ function FiringChart({
         strokeDasharray={measured.length === 0 ? '2 3' : undefined}
         vectorEffect="non-scaling-stroke"
       />
+      {firing && summary.points.length < slots && (
+        /* Where the next probe will land. The line fires one at a time and each rail
+           call is milliseconds, so without this the gap between marks reads as the
+           chart having finished rather than as the next probe being in flight. */
+        <line
+          x1={(summary.points.length + 0.5) * stepX}
+          y1={baseline}
+          x2={(summary.points.length + 0.5) * stepX}
+          y2={PAD}
+          stroke={chartHex('neutral')}
+          strokeWidth="1.5"
+          strokeDasharray="3 3"
+          className={reduced ? undefined : 'animate-probe-next'}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
       {summary.points.map((point) => {
         const x = (point.index - 0.5) * stepX
         const hex = chartHex(verdictSignal(point.verdict))
@@ -239,28 +260,50 @@ function FiringChart({
           )
         }
         const yv = y(point.totalMs)
+        const blocked = point.verdict === 'block'
+        const stemW = Math.max(stepX * 0.13, 2)
+        const capW = stepX * 0.62
         return (
-          <g key={point.probe.id}>
-            <line
-              x1={x}
-              y1={baseline}
-              x2={x}
-              y2={yv}
-              stroke={hex}
-              strokeOpacity="0.45"
-              strokeWidth="1.5"
-              vectorEffect="non-scaling-stroke"
+          <g key={point.probe.id} className={reduced ? undefined : 'animate-probe-land'}>
+            {/* The stem carries the measured height. It is a filled bar rather than a
+                hairline because a one-pixel stroke at this scale reads as a tick on the
+                axis instead of as a probe that landed. */}
+            <rect
+              x={x - stemW / 2}
+              y={yv}
+              width={stemW}
+              height={Math.max(baseline - yv, 0.5)}
+              fill={hex}
+              fillOpacity={blocked ? 0.3 : 0.22}
             />
-            <line
-              x1={x - stepX * 0.3}
-              y1={yv}
-              x2={x + stepX * 0.3}
-              y2={yv}
-              stroke={hex}
-              strokeWidth="3"
-              strokeLinecap="butt"
-              vectorEffect="non-scaling-stroke"
-            />
+            {/* The cap is where the eye reads the value off the scale. */}
+            <rect x={x - capW / 2} y={yv - 1.5} width={capW} height={3} fill={hex} />
+            {blocked && (
+              /* A blocked probe gets a second bar above the cap - a barrier, and the
+                 shape channel the verdict needs. Colour alone fails a projector, a
+                 colour-blind reader and a greyscale print, and this panel is the one
+                 whose subject is not claiming more than it can show. */
+              <rect
+                x={x - capW * 0.34}
+                y={yv - 6.5}
+                width={capW * 0.68}
+                height={2}
+                fill={hex}
+                fillOpacity={0.85}
+              />
+            )}
+            {!reduced && (
+              /* The impact: one flash across the cap as the verdict frame arrives, then
+                 gone. `forwards` holds it at opacity 0, so a settled chart is still. */
+              <rect
+                x={x - capW / 2}
+                y={yv - 2.5}
+                width={capW}
+                height={5}
+                fill={hex}
+                className="animate-probe-impact"
+              />
+            )}
           </g>
         )
       })}
@@ -557,7 +600,7 @@ export function RailFiringLine({ rails }: RailFiringLineProps): ReactElement {
                 </p>
               </div>
               <div className="mt-2 overflow-x-auto">
-                <FiringChart summary={summary} slots={probes.length} />
+                <FiringChart summary={summary} slots={probes.length} firing={firing} />
               </div>
             </div>
 

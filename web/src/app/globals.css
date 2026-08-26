@@ -494,6 +494,82 @@
    * the wire says is open and stops the moment the beat lands, so it reports a fact
    * rather than decorating an idle screen. It carries duration, never progress.
    */
+  /*
+   * A probe landing on the firing line.
+   *
+   * The mark grows from the rail to its measured height the moment its verdict frame
+   * arrives, so a reader watching the line sees *when* each answer came back rather
+   * than finding twelve marks already drawn. It is one-shot per mark - each `<g>`
+   * mounts once, when its verdict lands - so nothing loops and the finished chart is
+   * still. The height it grows to is the wire's own `total`; the motion carries
+   * arrival, never magnitude.
+   *
+   * `transform-box: fill-box` is required: the chart is drawn under
+   * `preserveAspectRatio="none"`, and without it the origin is the whole viewport and
+   * the mark shears sideways as it grows.
+   */
+  @keyframes probe-land {
+    from {
+      transform: scaleY(0);
+      opacity: 0.35;
+    }
+    to {
+      transform: scaleY(1);
+      opacity: 1;
+    }
+  }
+  .animate-probe-land {
+    animation: probe-land 0.32s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    transform-box: fill-box;
+    transform-origin: bottom;
+  }
+
+  /* The cap flashes once on arrival - the impact, not a status light. */
+  @keyframes probe-impact {
+    0% {
+      opacity: 0;
+      transform: scaleX(0.2);
+    }
+    45% {
+      opacity: 0.9;
+      transform: scaleX(1.4);
+    }
+    100% {
+      opacity: 0;
+      transform: scaleX(1.4);
+    }
+  }
+  .animate-probe-impact {
+    animation: probe-impact 0.5s ease-out forwards;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* Where the next probe will land, while the line is still firing. */
+  @keyframes probe-next {
+    0%,
+    100% {
+      opacity: 0.14;
+    }
+    50% {
+      opacity: 0.48;
+    }
+  }
+  .animate-probe-next {
+    animation: probe-next 1.1s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-probe-land,
+    .animate-probe-next {
+      animation: none;
+    }
+    .animate-probe-impact {
+      animation: none;
+      opacity: 0;
+    }
+  }
+
   @keyframes beat-open {
     0%,
     100% {
