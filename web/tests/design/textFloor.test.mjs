@@ -91,7 +91,22 @@ test('the token ramp itself does not dip below the floor', () => {
   let declarationsSeen = 0
   const offenders = []
 
-  // Every font-size declaration in the sheet, whatever names it.
+  // Every font-size declaration in the sheet, AND every entry in Tailwind v4's named
+  // type scale. The second half is the one an audit caught missing: this project has no
+  // tailwind.config.js, so the named scale (`text-xs`, `text-sm`, …) is defined by
+  // `--text-*` custom properties inside `@theme`. A scan that reads only `font-size:`
+  // declarations leaves `--text-xs: 0.5rem` — one line, 206 call sites — completely
+  // unguarded, which is exactly the "one line cannot reintroduce this globally" claim
+  // the test was written to support.
+  for (const match of css.matchAll(/--text-[a-z0-9-]+:\s*(\d*\.?\d+)(px|rem|em)\s*;/g)) {
+    declarationsSeen += 1
+    const px = toPx(match[1], match[2])
+    if (px !== null && px < FLOOR_PX) {
+      const line = css.slice(0, match.index).split('\n').length
+      offenders.push(`globals.css:${line} → ${match[0].trim()} = ${px}px`)
+    }
+  }
+
   for (const match of css.matchAll(/font-size:\s*(\d*\.?\d+)(px|rem|em)\s*;/g)) {
     declarationsSeen += 1
     const px = toPx(match[1], match[2])

@@ -519,6 +519,29 @@
    * `preserveAspectRatio="none"`, and without it the origin is the whole viewport and
    * the mark shears sideways as it grows.
    */
+  /*
+   * M1 "Arrive" — the pre-paint hidden state.
+   *
+   * This lives in CSS rather than in the component because JavaScript cannot beat the
+   * first paint of server-rendered HTML: setting opacity 0 from a layout effect gives
+   * content → blank → content, measured at 284ms normally and 1705ms under 6x CPU
+   * throttle. Same problem and same fix as the text-scale boot script.
+   *
+   * `.js` is added synchronously in <head> by ARRIVE_BOOT. Without JavaScript the class
+   * never lands, this rule never matches, and every child renders normally — an
+   * entrance animation must never be able to blank the page for somebody whose script
+   * failed to load.
+   */
+  .js [data-arrive] > * {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Nothing to arrive from: reduced motion means the content is simply there. */
+    .js [data-arrive] > * {
+      opacity: 1;
+    }
+  }
+
   @keyframes probe-land {
     from {
       transform: scaleY(0);

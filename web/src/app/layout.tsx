@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { Providers } from '@/components/auth/Providers'
+import { ARRIVE_BOOT } from '@/components/shared/arriveBoot'
 import { TEXT_SCALE_BOOT } from '@/components/settings/textScale'
 
 export const metadata: Metadata = {
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: TEXT_SCALE_BOOT }} />
+        <script dangerouslySetInnerHTML={{ __html: ARRIVE_BOOT }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         {/* Loaded at runtime (not next/font) so `next build` never blocks on a

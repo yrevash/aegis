@@ -38,10 +38,12 @@ import { useRef, type ReactElement, type ReactNode } from 'react'
  *
  * ## The trap in the reduce branch
  *
- * The `reduce` branch **sets the final state**; it does not return early. The tween hides
- * the element before revealing it, so skipping the tween without setting the end state
+ * The `reduce` branch **sets the final state**; it does not return early. CSS hides the
+ * children before the first paint, so skipping the tween without setting the end state
  * leaves the content invisible for ever — an accessibility preference that blanks the
  * page. Arriving instantly is the correct reduced-motion behaviour, not arriving never.
+ * (The CSS carries its own `reduce` override for the same reason, so the content is
+ * visible even in the instant before this effect runs.)
  *
  * ## Where it may be used
  *
@@ -82,7 +84,11 @@ export function RevealGroup({
             gsap.set(targets, { opacity: 1, y: 0, clearProps: 'transform' })
             return
           }
-          gsap.set(targets, { opacity: 0, y: 10 })
+          // Opacity 0 is already applied by CSS before the first paint (see
+          // `arriveBoot.ts`); this only adds the offset the tween animates out of.
+          // Setting the hidden state here instead is what produced a measured
+          // content → blank → content flash of up to 1.7s on a throttled machine.
+          gsap.set(targets, { y: 10 })
           gsap.to(targets, {
             opacity: 1,
             y: 0,
@@ -101,7 +107,7 @@ export function RevealGroup({
   )
 
   return (
-    <div ref={scope} className={className}>
+    <div ref={scope} data-arrive className={className}>
       {children}
     </div>
   )

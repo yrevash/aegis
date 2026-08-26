@@ -174,10 +174,17 @@ advance, so column alignment is unchanged either way — but Plex Mono's x-heigh
 mono carries every figure in this product at 11.52px, read off a projector. Family coherence is not
 worth that trade across 324 call sites.
 
-**Nothing renders below 11px.** Functional text has a floor, enforced by
-`tests/design/textFloor.test.mjs`, and being on the size ramp is not a defence — a size can be on
-the ramp and still be unreadable. The test checks the token sheet too, so one line cannot
-reintroduce the problem globally.
+**No functional text is *declared* below 11px**, enforced by
+`tests/design/textFloor.test.mjs` over arbitrary utilities, `font-size` declarations and the
+`--text-*` scale. Being on the size ramp is not a defence: a size can be on the ramp and still be
+unreadable, so the test ignores the ramp and asks only whether a human can read the value.
+
+**Two things it deliberately does not claim.** The reader's own text-size control has a *Small*
+step at 90%, which takes an 11px declaration to 9.9px — that is a preference someone chose, and
+overriding it would be worse than honouring it. And a handful of chart labels are sized in SVG
+attributes rather than utilities, which a source scan over class names cannot see. The floor is a
+floor on what this codebase *declares*, not a guarantee about every pixel the browser finally
+paints, and stating it as the latter would be a claim the test does not support.
 
 ```
 display  28/32  -0.02em 600   page title — ONE per screen

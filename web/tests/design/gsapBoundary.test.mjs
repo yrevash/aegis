@@ -38,17 +38,52 @@ function sources(dir = SRC, found = []) {
   return found
 }
 
-/** The files that import gsap at all, with their text. */
+/**
+ * Strip comments before looking for the required constructs.
+ *
+ * An audit defeated the first version of this test by writing `useGSAP` and
+ * `gsap.matchMedia` into a comment above a bare tween. The checks below ask whether the
+ * file *does* something, so they must not be satisfied by a file that merely *mentions*
+ * it.
+ */
+function code(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
+
+/** Anything that brings gsap into a module, including the ways around a plain import. */
+const GSAP_IMPORT = [
+  /from\s+['"]gsap(\/|['"])/, // import gsap from 'gsap'
+  /from\s+['"]@gsap\/react['"]/, // import { useGSAP } from '@gsap/react'
+  /import\s*\(\s*['"]gsap(\/|['"])/, // await import('gsap') — the dynamic dodge
+  /require\s*\(\s*['"]gsap(\/|['"])/,
+]
+
+/** The files that reach gsap at all, with their comment-stripped text. */
 function gsapFiles() {
   const hits = []
   for (const file of sources()) {
-    const text = readFileSync(file, 'utf8')
-    if (/from\s+['"]gsap(\/|['"])/.test(text) || /from\s+['"]@gsap\/react['"]/.test(text)) {
+    const raw = readFileSync(file, 'utf8')
+    const text = code(raw)
+    if (GSAP_IMPORT.some((re) => re.test(text))) {
       hits.push({ file: file.replace(SRC, 'src/'), text })
     }
   }
   return hits
 }
+
+test('gsap is never re-exported through a barrel', () => {
+  // The third defeat an audit found: a barrel that re-exports gsap lets a consumer use
+  // it while importing from somewhere this scan does not recognise as gsap. Forbidding
+  // the launder is simpler and stricter than trying to follow it.
+  const offenders = []
+  for (const file of sources()) {
+    const text = code(readFileSync(file, 'utf8'))
+    if (/export\s+(\*|\{[^}]*\})\s+from\s+['"](gsap|@gsap\/react)/.test(text)) {
+      offenders.push(`${file.replace(SRC, 'src/')} — re-exports gsap`)
+    }
+  }
+  assert.deepEqual(offenders, [], `gsap laundered through a barrel:\n  ${offenders.join('\n  ')}`)
+})
 
 test('every file that imports gsap uses useGSAP, never a bare effect', () => {
   const files = sources()
