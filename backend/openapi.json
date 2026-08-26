@@ -11975,7 +11975,8 @@
             "synthesis": "#/components/schemas/SynthesisEvent",
             "token": "#/components/schemas/AnswerChunk",
             "tool_call": "#/components/schemas/ToolCall",
-            "tool_result": "#/components/schemas/ToolResult"
+            "tool_result": "#/components/schemas/ToolResult",
+            "verification": "#/components/schemas/Verification"
           },
           "propertyName": "type"
         },
@@ -12027,6 +12028,9 @@
           },
           {
             "$ref": "#/components/schemas/Reflection"
+          },
+          {
+            "$ref": "#/components/schemas/Verification"
           },
           {
             "$ref": "#/components/schemas/MemoryEvent"
@@ -12667,6 +12671,82 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "Verification": {
+        "description": "One grounded check of a round's outcome, between ``act`` and ``reflect``.\n\nThe judge this replaces asked ``all(r[\"ok\"])`` of values the *tools reported about\nthemselves*: a tool that updated the wrong record and returned success was \"goal\nmet\". This event carries what was checked and, in ``method``, **how** — which is the\npart that matters. ``deterministic`` means the result rows decided it, ``read-back``\nmeans a read-only call proved whether the write actually landed, and\n``unverifiable`` means nothing in this deployment could confirm it, which is\nreported rather than assumed away.\n\n``repairable`` says whether another round could plausibly help. A guardrail refusal\nand a call that has failed identically three times are both failures that retrying\ncannot fix, and saying so on the wire is what stops a console implying otherwise.\n\nPurely additive — a client that does not know this variant ignores it.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The sub-agent that emitted this event. ``None`` means the supervisor or a graph-level node, which is what every single-pass run emits.",
+            "title": "Agent Id"
+          },
+          "evidence": {
+            "default": "",
+            "description": "The record read back, or the failure text. May be empty.",
+            "title": "Evidence",
+            "type": "string"
+          },
+          "method": {
+            "description": "The tier that decided: deterministic, read-back or unverifiable.",
+            "title": "Method",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "VERIFIED, FAILED, BLOCKED, OSCILLATING, GATHERED or UNVERIFIED.",
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "description": "One sentence naming what was checked, and the result.",
+            "title": "Reason",
+            "type": "string"
+          },
+          "repairable": {
+            "description": "Whether another round could plausibly change this outcome.",
+            "title": "Repairable",
+            "type": "boolean"
+          },
+          "round": {
+            "default": 0,
+            "description": "The planning round this check follows.",
+            "title": "Round",
+            "type": "integer"
+          },
+          "run_id": {
+            "description": "Correlates all events of one query run.",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "seq": {
+            "description": "Monotonic sequence number within the run.",
+            "title": "Seq",
+            "type": "integer"
+          },
+          "type": {
+            "const": "verification",
+            "default": "verification",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "seq",
+          "outcome",
+          "method",
+          "reason",
+          "repairable"
+        ],
+        "title": "Verification",
         "type": "object"
       },
       "VisionAnalyseRequest": {

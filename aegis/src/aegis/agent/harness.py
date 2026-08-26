@@ -69,8 +69,9 @@ _KNOB_SPECS: tuple[_KnobSpec, ...] = (
     _KnobSpec(
         "max_plan_iterations",
         "int",
-        "Hard cap on planning rounds — guarantees termination. 1 = single linear pass; "
-        "the default 2 allows one re-plan.",
+        "Outer cap on planning rounds — guarantees termination. 1 = single linear pass; "
+        "the default 4 covers read, write, repaired write and one round of slack. "
+        "It is the OUTER bound: progress detection stops a stuck run sooner.",
         minimum=1,
     ),
     _KnobSpec(

@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import logging
 import re
+import hashlib
+import json
 import time
 from collections.abc import Awaitable, Callable
 from functools import wraps
@@ -113,6 +115,7 @@ NODE_LABELS: dict[str, str] = {
     "gate": "Risk gate",
     "approval": "Human approval",
     "act": "Execute actions",
+    "verify": "Verify the outcome",
     "reflect": "Reflect & self-repair",
     "generate": "Generate answer",
     "guard_output": "Output guardrail",
@@ -1215,15 +1218,236 @@ def build_agent(
             allowed, summary = await screen_tool_result(
                 str(summary), tool_name=call["name"], deps=deps, writer=writer
             )
-            ok = bool(ok) and allowed
+            tool_ok = bool(ok)
+            ok = tool_ok and allowed
             writer(events.tool_result(call["id"], ok, summary))
             # ``tool`` carries the name forward so ``reflect`` can tell a read from a
             # write. Without it the row is anonymous by the time the loop decides
             # whether the goal was met.
+            #
+            # ``refused`` is the distinction the repair loop cannot work without.
+            # ``ok`` collapses two unlike failures into one value: the tool itself
+            # failed, or the tool succeeded and the output rail refused to let its
+            # result into the prompt. They call for opposite responses — the first is
+            # worth another attempt, the second is a decision, and retrying it means
+            # re-running the call and being refused again for the same reason, which
+            # at a raised budget is a retry loop against our own guardrail. Recorded
+            # per row rather than derived later, because by ``reflect`` the reason is
+            # gone.
             results.append(
-                {"call_id": call["id"], "ok": ok, "summary": summary, "tool": call["name"]}
+                {
+                    "call_id": call["id"],
+                    "ok": ok,
+                    "refused": tool_ok and not allowed,
+                    "summary": summary,
+                    "tool": call["name"],
+                }
             )
         return {"tool_results": results}
+
+    def _fingerprint(call: dict[str, Any]) -> str:
+        """A stable identity for one attempted call, so a repeat is recognisable.
+
+        Canonical JSON with sorted keys, because ``{"id": 1, "status": "x"}`` and
+        ``{"status": "x", "id": 1}`` are the same attempt and must hash the same.
+        """
+        payload = json.dumps(call.get("args", {}), sort_keys=True, default=str)
+        return hashlib.sha256(f"{call.get('name', '')}\x00{payload}".encode()).hexdigest()
+
+    async def verify(state: AgentState) -> dict[str, Any]:
+        """Judge the round's outcome against something outside the model.
+
+        This node is the difference between a repair loop and theatre. The judge it
+        replaces asked one question — ``all(r["ok"])`` — of values the *tools reported
+        about themselves*. A tool that updated the wrong record and returned ``ok=True``
+        was "goal met". Nothing read anything back.
+
+        The design stance is deliberate and is the one the evidence supports: **no
+        self-critique**. Asking a model whether its own work was good is the failure mode
+        the 2026 literature is clearest about — ungrounded self-correction does not
+        reliably help and often degrades. What works is verification grounded in
+        something external: an exit code, a rail verdict, or the record itself.
+
+        Three tiers, cheapest first, stopping at the first that reaches a verdict:
+
+        1. **Deterministic.** No tool call, no model call. Tool failures, rail refusals,
+           repeated fingerprints, and read-only rounds are all decidable from the rows.
+        2. **Read-back.** One read-only call, below the gate, proving the write landed.
+           This is the tier that makes the loop real; a demo that shows the record
+           actually changed is not the same artefact as one that shows a spinner.
+        3. **Judge.** One reasoning call, only where the first two were inconclusive.
+
+        Returns:
+            A state delta carrying ``verification`` (the verdict), ``repair_iterations``
+            (``1`` only for a round worth repairing, so a read-only round no longer
+            spends the repair budget) and a ``transcript`` extension.
+        """
+        writer = get_stream_writer()
+        results = list(state.get("tool_results") or [])
+        calls = list(state.get("tool_calls") or [])
+        # A list, not a set: the threshold is "how many times has this exact call
+        # already been tried", and a set cannot answer that.
+        seen = list(state.get("attempt_fingerprints") or [])
+        fingerprints = [_fingerprint(c) for c in calls]
+
+        def verdict(
+            outcome: str,
+            method: str,
+            reason: str,
+            *,
+            repairable: bool,
+            evidence: str = "",
+            charge: bool | None = None,
+        ) -> dict[str, Any]:
+            """Record one verdict.
+
+            ``repairable`` and ``charge`` are deliberately separate, and conflating them
+            was a real defect: a read-only round must let the loop go round again — it is
+            the first half of the canonical read-then-write — while not spending a repair
+            round to do it. Tying the two together stopped the loop dead after a
+            successful lookup, so the write it was looking things up FOR never happened.
+            ``charge`` defaults to following ``repairable`` because that is right for
+            every other verdict.
+            """
+            payload = {
+                "outcome": outcome,
+                "method": method,
+                "reason": reason,
+                "repairable": repairable,
+                "evidence": evidence,
+                "round": int(state.get("plan_iterations") or 0),
+            }
+            writer(events.verification(**payload))
+            billed = repairable if charge is None else charge
+            return {
+                "verification": payload,
+                "repair_iterations": 1 if (billed and outcome != "VERIFIED") else 0,
+                "attempt_fingerprints": fingerprints,
+                "transcript": [
+                    {"role": "tool", "name": "verify", "content": f"{outcome}: {reason}"}
+                ],
+            }
+
+        # ── Tier 1 ────────────────────────────────────────────────────────────────
+        if not results:
+            return verdict(
+                "GATHERED",
+                "deterministic",
+                "no tool ran this round.",
+                repairable=False,
+                charge=False,
+            )
+
+        refused = [r for r in results if r.get("refused")]
+        if refused:
+            names = ", ".join(sorted({str(r.get("tool", "?")) for r in refused}))
+            return verdict(
+                "BLOCKED",
+                "deterministic",
+                f"the output guardrail refused a result from {names}.",
+                repairable=False,
+            )
+
+        failed = [r for r in results if not r.get("ok")]
+        if failed:
+            names = ", ".join(sorted({str(r.get("tool", "?")) for r in failed}))
+            # Oscillation is checked HERE, inside the failure path, and not before it.
+            # A repeated fingerprint on its own is not oscillation: retrying an identical
+            # call after a transient failure is exactly the repair this loop exists to
+            # perform, and the retry that finally succeeds carries the same fingerprint
+            # as the attempt that failed. What is not progress is the same call failing
+            # the same way twice — so the repeat only condemns a round that also failed.
+            # Three identical attempts is the stuck threshold, not two. A tool that
+            # fails transiently and succeeds on a retry is the ordinary case this loop
+            # is for, and that retry necessarily carries the same fingerprint as the
+            # attempt it repairs. Condemning the second identical try would refuse to
+            # repair exactly the failures most worth repairing.
+            if any(seen.count(f) >= 2 for f in fingerprints):
+                return verdict(
+                    "OSCILLATING",
+                    "deterministic",
+                    f"{names} has now failed three times on an identical call; "
+                    "repeating it is not progress, so the loop stops rather than "
+                    "spending the rest of the budget on the same request.",
+                    repairable=False,
+                    evidence=str(failed[0].get("summary", ""))[:400],
+                )
+            return verdict(
+                "FAILED",
+                "deterministic",
+                f"{names} reported failure.",
+                repairable=True,
+                evidence=str(failed[0].get("summary", ""))[:400],
+            )
+
+        writes = [r for r in results if not deps.tool_read_only(str(r.get("tool", "")))]
+        if not writes:
+            # Every call was a lookup and every one worked. That is progress, not a goal
+            # met — and crucially it is NOT charged to the repair budget, which is the
+            # arithmetic that made a failed write unretryable at the old default.
+            return verdict(
+                "GATHERED",
+                "deterministic",
+                "every call this round was read-only and succeeded; the run has what it "
+                "looked up and can now act on it.",
+                repairable=True,
+                charge=False,
+            )
+
+        # ── Tier 2: read the record back ──────────────────────────────────────────
+        for row in writes:
+            name = str(row.get("tool", ""))
+            args = next(
+                (c.get("args", {}) for c in calls if c.get("name") == name), {}
+            )
+            plan = deps.read_back_for(name, args)
+            if plan is None:
+                continue
+            if not deps.tool_read_only(plan.tool):
+                # A verifier that can act is not a verifier. Refuse rather than run it.
+                continue
+            try:
+                proof = await deps.run_tool(
+                    state.get("persona") or "",
+                    plan.tool,
+                    plan.args,
+                    actor=state.get("persona") or "",
+                    model=state.get("model"),
+                    trace_id=state.get("trace_id"),
+                    approver=None,
+                )
+            except Exception as exc:  # noqa: BLE001 - an unreadable record is inconclusive
+                return verdict(
+                    "UNVERIFIED",
+                    "read-back",
+                    f"the record could not be read back: {exc}",
+                    repairable=True,
+                )
+            summary = str(getattr(proof, "summary", ""))
+            if plan.expect and plan.expect in summary:
+                return verdict(
+                    "VERIFIED",
+                    "read-back",
+                    plan.describe,
+                    repairable=False,
+                    evidence=summary[:400],
+                )
+            return verdict(
+                "FAILED",
+                "read-back",
+                f"{plan.describe} — the record does not show it.",
+                repairable=True,
+                evidence=summary[:400],
+            )
+
+        # ── Tier 3: judge, only where the first two could not decide ──────────────
+        return verdict(
+            "UNVERIFIED",
+            "unverifiable",
+            "the write reported success and this deployment has no read-only call that "
+            "could confirm it. Reported as unverified rather than assumed to have worked.",
+            repairable=False,
+        )
 
     async def reflect(state: AgentState) -> dict[str, Any]:
         """Bounded self-repair (Reflexion-style): judge the outcome and maybe re-plan.
@@ -1257,11 +1481,44 @@ def build_agent(
         # It is a lie — the read succeeded — and it renders in the console as a failed
         # tool, so it would have bought a working gate with a false event on the trace.
         acted = [r for r in results if not deps.tool_read_only(str(r.get("tool", "")))]
-        done = bool(results) and all(r["ok"] for r in results) and bool(acted)
+        # The verdict now comes from ``verify``, which checked something outside the
+        # model — the rows, or the record read back — rather than from the tools'
+        # own report about themselves. ``reflect`` still owns the ROUTING decision
+        # and the event; it no longer owns the judgement.
+        checked = dict(state.get("verification") or {})
+        outcome = str(checked.get("outcome") or "")
+        if outcome:
+            # ``VERIFIED`` and ``UNVERIFIED`` both mean the loop has nothing further to
+            # try; they differ in the STRENGTH OF THE EVIDENCE, not in the decision. That
+            # distinction belongs on the verification event — which names the tier that
+            # decided and says plainly when nothing could confirm the write — rather than
+            # in this boolean. Collapsing them here would report every successful write
+            # as unfinished on any deployment that has no read-back bound, which is most
+            # of them; separating them here would make ``done`` mean two things at once.
+            done = outcome in {"VERIFIED", "UNVERIFIED"}
+            repairable = bool(checked.get("repairable"))
+        else:
+            # No verdict: ``verify`` did not run (a path that never acted). Fall back to
+            # the old arithmetic so this node is still total.
+            done = bool(results) and all(r["ok"] for r in results) and bool(acted)
+            repairable = not done
         budget_left = iteration < budget
+        # A result the output rail refused is not a failure to repair. The tool ran and
+        # succeeded; the rail declined to let its output into the prompt. Re-planning
+        # re-runs the same call and is refused again for the same reason, so at any
+        # budget above one round this is a retry loop pointed at our own guardrail —
+        # spending real tokens to be told no repeatedly. A refusal is a decision, and
+        # the loop's response to a decision is to stop and say so.
+        refused = [r for r in results if r.get("refused")]
         # Self-repair master switch: when disabled, the reflect node still runs and
         # reports the outcome but NEVER routes back to plan (a single linear pass).
-        will_retry = config.self_repair_enabled and (not done) and budget_left
+        will_retry = (
+            config.self_repair_enabled
+            and (not done)
+            and budget_left
+            and repairable
+            and not refused
+        )
         # A team run has no ``plan`` round to go back TO — its answer came from the
         # fan-out and the synthesis, not from the planner — so re-planning would drop
         # the synthesis and answer the question a second time, single-pass. The loop is
@@ -1274,6 +1531,13 @@ def build_agent(
             reason = (
                 "team run: the synthesis is the answer; the self-repair loop does not "
                 "re-plan a fan-out."
+            )
+        elif refused:
+            names = ", ".join(sorted({str(r.get("tool", "?")) for r in refused}))
+            reason = (
+                f"the output guardrail refused a tool result ({names}); that is a "
+                "decision, not a failure to repair, so the loop stops rather than "
+                "re-running the same call to be refused again."
             )
         elif done:
             reason = "goal met: every action succeeded."
@@ -1548,6 +1812,7 @@ def build_agent(
     builder.add_node("gate", _timed("gate", NODE_LABELS["gate"])(gate))
     builder.add_node("approval", approval)
     builder.add_node("act", _timed("act", NODE_LABELS["act"])(act))
+    builder.add_node("verify", _timed("verify", NODE_LABELS["verify"])(verify))
     builder.add_node("reflect", _timed("reflect", NODE_LABELS["reflect"])(reflect))
     builder.add_node(
         "generate",
@@ -1613,7 +1878,10 @@ def build_agent(
     # After acting, reflect: loop back to plan for a bounded self-repair round, or
     # finalise. The counter incremented in ``plan`` (capped by max_plan_iterations)
     # guarantees termination.
-    builder.add_edge("act", "reflect")
+    # ``act`` no longer reports its own success. ``verify`` sits between them and
+    # decides against something outside the model — the rows, or the record read back.
+    builder.add_edge("act", "verify")
+    builder.add_edge("verify", "reflect")
     builder.add_conditional_edges(
         "reflect",
         _route_reflect,

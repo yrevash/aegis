@@ -19,7 +19,7 @@ def test_agent_config_defaults_unchanged():
     # The human gate is driven by tool risk (gate_min_risk) and nothing else.
     assert cfg.gate_min_risk is RiskLevel.HIGH
     assert cfg.stream_chunk_words == 4
-    assert cfg.max_plan_iterations == 2
+    assert cfg.max_plan_iterations == 4
 
 
 def test_agent_config_fields_are_settable():

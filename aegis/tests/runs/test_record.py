@@ -63,8 +63,8 @@ def test_the_fold_derives_every_header_field_from_the_events():
     assert header.user_id == 3
     assert header.trace_id == "trace-abcdef"
     assert header.status is RunStatus.COMPLETED
-    assert header.event_count == 25
-    assert header.last_seq == 24
+    assert header.event_count == 26
+    assert header.last_seq == 25
     assert header.node_count == 2  # two node_started events
     assert header.tool_call_count == 1
     assert header.approval_count == 1

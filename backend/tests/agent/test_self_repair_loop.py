@@ -138,17 +138,26 @@ async def test_iteration_budget_caps_planning_rounds(make_deps):
     events = await _drive(deps, approve=False)
     types = [e.type for e in events]
 
-    # Default budget is 2 planning rounds → exactly 2 tool_calls, then it gives up.
-    assert deps.config.max_plan_iterations == 2
-    assert types.count("tool_call") == 2
-    assert calls["n"] == 2
+    # The budget is the OUTER bound and no longer the one that fires first. A call
+    # failing identically every time is stopped by progress detection at three
+    # attempts, before the fourth round the budget would allow: a budget bounds
+    # spend, it does not notice that nothing is being achieved.
+    assert deps.config.max_plan_iterations == 4
+    assert types.count("tool_call") == 3
+    assert calls["n"] == 3
 
     reflections = [e for e in events if e.type == "reflection"]
-    assert len(reflections) == 2
-    assert reflections[0].will_retry is True   # round 1 → retry
-    assert reflections[1].will_retry is False  # round 2 → budget exhausted, stop
-    assert reflections[1].done is False        # goal never met, but the run finishes
-    assert "budget exhausted" in reflections[1].reason
+    assert len(reflections) == 3
+    assert reflections[0].will_retry is True
+    assert reflections[1].will_retry is True
+    assert reflections[2].will_retry is False
+    assert reflections[2].done is False        # goal never met, but the run finishes
+
+    # And the trace names WHICH bound fired. "budget exhausted" would be a lie here:
+    # a round was still available, and the loop stopped because nothing improved.
+    checks = [e for e in events if e.type == "verification"]
+    assert checks[-1].outcome == "OSCILLATING"
+    assert checks[-1].repairable is False
     assert types[-1] == "run_finished"
 
 

@@ -499,7 +499,7 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     SettingSpec(
         key="agent.max_plan_iterations",
         type_=int,
-        default=2,
+        default=4,
         writable_by=_TENANT_CONTROLS,
         readable_by=_EVERY_ROLE,
         merge=MergeRule.TIGHTEN_ONLY,

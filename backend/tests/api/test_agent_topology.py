@@ -42,6 +42,9 @@ REAL_NODE_IDS = {
     "gate",
     "approval",
     "act",
+    # ``verify`` sits between them: the round is judged against something
+    # outside the model before ``reflect`` decides whether to go round again.
+    "verify",
     "reflect",
     "generate",
     "guard_output",
@@ -67,7 +70,7 @@ async def test_topology_serves_every_real_node_with_its_label(client):
     body = resp.json()
 
     served = {n["id"] for n in body["nodes"]}
-    assert served == REAL_NODE_IDS, "served topology must be the real 17-node graph"
+    assert served == REAL_NODE_IDS, "served topology must be the real 18-node graph"
     # Labels come from the ONE table the ``_timed`` wrapper streams from.
     for node in body["nodes"]:
         assert node["label"] == NODE_LABELS[node["id"]]

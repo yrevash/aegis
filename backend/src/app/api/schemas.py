@@ -381,6 +381,43 @@ class BudgetExceeded(_BaseEvent):
     message: str = Field(description="Human-readable explanation for the UI/audit.")
 
 
+class Verification(_BaseEvent):
+    """One grounded check of a round's outcome, between ``act`` and ``reflect``.
+
+    The judge this replaces asked ``all(r["ok"])`` of values the *tools reported about
+    themselves*: a tool that updated the wrong record and returned success was "goal
+    met". This event carries what was checked and, in ``method``, **how** — which is the
+    part that matters. ``deterministic`` means the result rows decided it, ``read-back``
+    means a read-only call proved whether the write actually landed, and
+    ``unverifiable`` means nothing in this deployment could confirm it, which is
+    reported rather than assumed away.
+
+    ``repairable`` says whether another round could plausibly help. A guardrail refusal
+    and a call that has failed identically three times are both failures that retrying
+    cannot fix, and saying so on the wire is what stops a console implying otherwise.
+
+    Purely additive — a client that does not know this variant ignores it.
+    """
+
+    type: Literal["verification"] = "verification"
+    outcome: str = Field(
+        description=(
+            "VERIFIED, FAILED, BLOCKED, OSCILLATING, GATHERED or UNVERIFIED."
+        )
+    )
+    method: str = Field(
+        description="The tier that decided: deterministic, read-back or unverifiable."
+    )
+    reason: str = Field(description="One sentence naming what was checked, and the result.")
+    repairable: bool = Field(
+        description="Whether another round could plausibly change this outcome."
+    )
+    evidence: str = Field(
+        default="", description="The record read back, or the failure text. May be empty."
+    )
+    round: int = Field(default=0, description="The planning round this check follows.")
+
+
 class Reflection(_BaseEvent):
     """One self-repair reflection after an action (Reflexion-style bounded loop).
 
@@ -532,6 +569,7 @@ StreamEvent = Annotated[
     | ProvenanceEvent
     | BudgetExceeded
     | Reflection
+    | Verification
     | MemoryEvent
     | RoutingEvent
     | AgentStatus

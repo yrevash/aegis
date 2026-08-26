@@ -332,6 +332,22 @@ export interface BudgetExceeded extends BaseEvent {
  * on the floor by a reducer that had no branch for it — the agent repairing itself
  * is the single most demoable thing it does, and it was invisible.
  */
+export interface Verification extends BaseEvent {
+  type: 'verification'
+  /** VERIFIED, FAILED, BLOCKED, OSCILLATING, GATHERED or UNVERIFIED. */
+  outcome: string
+  /** The tier that decided: `deterministic`, `read-back` or `unverifiable`. */
+  method: string
+  /** One sentence naming what was checked, and the result. */
+  reason: string
+  /** Whether another round could plausibly change this outcome. */
+  repairable: boolean
+  /** The record read back, or the failure text. May be empty. */
+  evidence: string
+  /** The planning round this check follows. */
+  round: number
+}
+
 export interface Reflection extends BaseEvent {
   type: 'reflection'
   /** 1-based planning round this reflection follows (hard-capped). */
@@ -443,6 +459,7 @@ export type StreamEvent =
   | Provenance
   | BudgetExceeded
   | Reflection
+  | Verification
   | RoutingEvent
   | AgentStatus
   | SynthesisEvent
