@@ -75,12 +75,23 @@ class GuardStage(StrEnum):
     system nobody here controls) straight into an agent's context, where it is read
     by the model as instructions-adjacent text. Screening the user and screening
     the answer leaves that whole surface unguarded, which is OWASP LLM01 exactly.
+
+    ``MEMORY_WRITE`` is the fourth, and it was missing for a subtler reason: a
+    poisoned fact is not screened by any of the other three. It arrives as ordinary
+    conversation — which the ``INPUT`` rail passes, correctly, because it *is*
+    ordinary — is distilled by the extractor into a durable fact, and comes back on a
+    later turn as this platform's own remembered belief, at which point nothing treats
+    it as untrusted any more. The turn that poisons the store and the turn that is
+    poisoned by it are different turns, which is why guarding both ends of a single
+    turn never caught it. OWASP ASI06.
     """
 
     INPUT = "input"
     OUTPUT = "output"
     #: A tool's output, screened **before** it is allowed into any agent's context.
     TOOL_RESULT = "tool_result"
+    #: A candidate memory fact, screened **before** it reaches the durable store.
+    MEMORY_WRITE = "memory_write"
 
 
 class ApprovalDecision(StrEnum):

@@ -21,6 +21,7 @@ from aegis.guardrails.content_safety import (
 )
 from aegis.guardrails.grounding import GroundingVerdict, check_grounding
 from aegis.guardrails.media import MediaGuardResult, MediaScreen, media_rail, screen_image
+from aegis.guardrails.memory_write import MemoryWriteCandidate
 from aegis.guardrails.pipeline import (
     AnyRail,
     Guardrails,
@@ -77,6 +78,51 @@ async def check_output(
     return await Guardrails(
         completer=completer, vision_completer=vision_completer
     ).check_output(text)
+
+
+async def check_memory_write(
+    text: str,
+    *,
+    subject: str = "",
+    predicate: str = "",
+    object: str = "",  # noqa: A002 - the triple's own field name
+    origin: str = "consolidation",
+    completer: ChatCompleter | None = None,
+) -> GuardResult:
+    """Screen a candidate memory fact with a fresh :class:`Guardrails` pipeline.
+
+    The fourth rail stage (:attr:`~aegis.core.types.GuardStage.MEMORY_WRITE`). Run this
+    over anything on its way into the durable store. It exists because the other three
+    stages structurally cannot see this attack: the poisoning message is ordinary
+    conversation the INPUT rail rightly passes, and the fact it becomes is read back on
+    a *later* turn as this platform's own belief. OWASP ASI06.
+
+    This returns the bare :class:`GuardResult` for callers — like the red-team runner —
+    that only need the verdict. The write path uses
+    :meth:`Guardrails.check_memory_write`, which hands back the **rewritten fields**,
+    because a caller that stores the strings it passed in has not redacted anything.
+
+    Args:
+        text: The rendered sentence a retriever will later put in front of a model.
+        subject: The triple's subject, screened alongside the text.
+        predicate: The triple's predicate.
+        object: The triple's object.
+        origin: ``"consolidation"`` or ``"operator:<username>"``, named in the rationale
+            so a refusal is attributable to the same actor a successful write is.
+        completer: Optional chat completer for model-based injection detection. Without
+            one only deterministic signatures run — which is a real limit, not a
+            formality: a policy override phrased as an ordinary business sentence
+            carries no signature at all.
+
+    Returns:
+        A GuardResult; BLOCK means the fact must not be stored.
+    """
+    verdict = await Guardrails(completer=completer).check_memory_write(
+        MemoryWriteCandidate(
+            subject=subject, predicate=predicate, object=object, text=text, origin=origin
+        )
+    )
+    return verdict.result
 
 
 async def check_tool_result(
@@ -143,6 +189,7 @@ __all__ = [
     "check_grounding",
     "check_input",
     "check_output",
+    "check_memory_write",
     "check_tool_result",
     "content_safety",
     "grounding",

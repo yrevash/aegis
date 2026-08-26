@@ -68,6 +68,7 @@ async def test_each_probe_is_screened_by_the_rail_its_stage_names():
             check_tool_result=recorder(Stage.TOOL_RESULT),
             check_ingest=recorder(Stage.INGEST),
             check_sequence=recorder(Stage.SEQUENCE),
+            check_memory_write=recorder(Stage.MEMORY_WRITE),
         )
     )
     for stage in Stage:

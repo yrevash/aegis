@@ -52,6 +52,7 @@ const GUARD_STAGE_LABEL: Record<GuardStage, string> = {
   input: 'Input',
   output: 'Output',
   tool_result: 'Tool result',
+  memory_write: 'Memory write',
 }
 
 /**

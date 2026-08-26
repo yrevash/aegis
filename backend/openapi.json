@@ -4384,11 +4384,12 @@
         "type": "object"
       },
       "GuardStage": {
-        "description": "Which rail stage produced a verdict.\n\n``INPUT`` and ``OUTPUT`` are the two ends of a turn. ``TOOL_RESULT`` is the\nthird, and it is the one that used to be missing: a tool pulls arbitrary\nthird-party content (a web search result, a scraped page, a record from a\nsystem nobody here controls) straight into an agent's context, where it is read\nby the model as instructions-adjacent text. Screening the user and screening\nthe answer leaves that whole surface unguarded, which is OWASP LLM01 exactly.",
+        "description": "Which rail stage produced a verdict.\n\n``INPUT`` and ``OUTPUT`` are the two ends of a turn. ``TOOL_RESULT`` is the\nthird, and it is the one that used to be missing: a tool pulls arbitrary\nthird-party content (a web search result, a scraped page, a record from a\nsystem nobody here controls) straight into an agent's context, where it is read\nby the model as instructions-adjacent text. Screening the user and screening\nthe answer leaves that whole surface unguarded, which is OWASP LLM01 exactly.\n\n``MEMORY_WRITE`` is the fourth, and it was missing for a subtler reason: a\npoisoned fact is not screened by any of the other three. It arrives as ordinary\nconversation — which the ``INPUT`` rail passes, correctly, because it *is*\nordinary — is distilled by the extractor into a durable fact, and comes back on a\nlater turn as this platform's own remembered belief, at which point nothing treats\nit as untrusted any more. The turn that poisons the store and the turn that is\npoisoned by it are different turns, which is why guarding both ends of a single\nturn never caught it. OWASP ASI06.",
         "enum": [
           "input",
           "output",
-          "tool_result"
+          "tool_result",
+          "memory_write"
         ],
         "title": "GuardStage",
         "type": "string"

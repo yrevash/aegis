@@ -41,7 +41,7 @@ export type RunStatus =
  * content in particular), so a planted instruction in a third-party page is
  * blocked and shown rather than read by the model.
  */
-export type GuardStage = 'input' | 'output' | 'tool_result'
+export type GuardStage = 'input' | 'output' | 'tool_result' | 'memory_write'
 
 /**
  * Outcome of a guardrail check.

@@ -445,6 +445,11 @@ class AgentDeps(_AegisAgentDeps):
             run_tool=_default_run_tool,
             tool_risk=_default_tool_risk,
             tool_read_only=_default_tool_read_only,
+            # Without this line the verifier's read-back tier is unreachable and every
+            # write reports UNVERIFIED. The seam existed, defaulted to "nothing can be
+            # read back", and nothing overrode it — so the tier that makes the loop a
+            # verifier rather than a self-report had never executed in production.
+            read_back_for=_default_read_back_for,
             render_system_prompt=_default_render_system_prompt,
             agent_roster=_default_agent_roster,
             subagent_roster=_default_subagent_roster,
@@ -571,6 +576,22 @@ def _default_tool_risk(tool_name: str) -> RiskLevel:
     if tool_name == LOAD_SKILL_TOOL:
         return LOAD_SKILL_RISK
     return merged_tool_risk(tool_name)
+
+
+def _default_read_back_for(tool_name: str, args: object) -> object:
+    """Bind the desk adapter's read-back table into the agent.
+
+    One line of indirection on purpose: the agent package defines the *contract*
+    (:class:`~aegis.agent.deps.ReadBack`) and the adapter owns the domain knowledge of
+    which read proves which write. Swapping the domain swaps this table and nothing else.
+
+    The import is deferred for the same reason every other adapter binding in this
+    module defers it — the adapter imports the agent contract, so a module-level import
+    here would close the cycle.
+    """
+    from app.adapter.tools import read_back_for as adapter_read_back_for
+
+    return adapter_read_back_for(tool_name, args)  # type: ignore[arg-type]
 
 
 def _default_tool_read_only(tool_name: str) -> bool:

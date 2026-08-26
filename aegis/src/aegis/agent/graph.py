@@ -1395,11 +1395,22 @@ def build_agent(
             )
 
         # ── Tier 2: read the record back ──────────────────────────────────────────
+        # EVERY write is checked, and one unproven write condemns the round. Returning
+        # on the first success would report VERIFIED for a round whose second write
+        # silently failed — which is the exact defect this node exists to end, rebuilt
+        # one tier down.
+        #
+        # Arguments are matched by ``call_id``, not by tool name. Two calls to the same
+        # tool in one round are the ordinary case (close R-1 and R-2), and matching by
+        # name reads the first call's arguments for both — so the second would be
+        # "verified" against the first's record.
+        by_id = {str(c.get("id")): c for c in calls}
+        proven: list[str] = []
+        proof_text: list[str] = []
         for row in writes:
             name = str(row.get("tool", ""))
-            args = next(
-                (c.get("args", {}) for c in calls if c.get("name") == name), {}
-            )
+            call = by_id.get(str(row.get("call_id")), {})
+            args = call.get("args", {}) if call else {}
             plan = deps.read_back_for(name, args)
             if plan is None:
                 continue
@@ -1425,19 +1436,29 @@ def build_agent(
                 )
             summary = str(getattr(proof, "summary", ""))
             if plan.expect and plan.expect in summary:
-                return verdict(
-                    "VERIFIED",
-                    "read-back",
-                    plan.describe,
-                    repairable=False,
-                    evidence=summary[:400],
-                )
+                proven.append(plan.describe)
+                proof_text.append(summary)
+                continue
+            # One write that the record does not show condemns the round, whatever the
+            # others did.
             return verdict(
                 "FAILED",
                 "read-back",
                 f"{plan.describe} — the record does not show it.",
                 repairable=True,
                 evidence=summary[:400],
+            )
+
+        if proven:
+            return verdict(
+                "VERIFIED",
+                "read-back",
+                "; ".join(proven),
+                repairable=False,
+                # The record itself, not the tool's report of itself. Dropping this
+                # leaves a VERIFIED verdict with nothing behind it, which is the shape
+                # of a claim rather than a check.
+                evidence=" | ".join(proof_text)[:400],
             )
 
         # ── Tier 3: judge, only where the first two could not decide ──────────────

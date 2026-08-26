@@ -49,6 +49,11 @@ class WriteOp(StrEnum):
     UPDATE = "update"
     INVALIDATE = "invalidate"
     NOOP = "noop"
+    #: The memory-write rail refused this fact. Its own op rather than a NOOP with a
+    #: reason string, because a refusal and "the extractor proposed nothing new" are
+    #: different events and an operator reading the log needs to tell them apart —
+    #: one is the system working, the other is an attack being turned away.
+    REFUSED = "refused"
     PRUNE = "prune"  # soft-archived out of hot recall by the forgetting sweep (never deleted)
     DELETE = "delete"  # explicit, subject-initiated forget (right-to-be-forgotten; soft by default)
 

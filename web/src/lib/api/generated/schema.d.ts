@@ -6432,9 +6432,18 @@ export interface components {
          *     system nobody here controls) straight into an agent's context, where it is read
          *     by the model as instructions-adjacent text. Screening the user and screening
          *     the answer leaves that whole surface unguarded, which is OWASP LLM01 exactly.
+         *
+         *     ``MEMORY_WRITE`` is the fourth, and it was missing for a subtler reason: a
+         *     poisoned fact is not screened by any of the other three. It arrives as ordinary
+         *     conversation — which the ``INPUT`` rail passes, correctly, because it *is*
+         *     ordinary — is distilled by the extractor into a durable fact, and comes back on a
+         *     later turn as this platform's own remembered belief, at which point nothing treats
+         *     it as untrusted any more. The turn that poisons the store and the turn that is
+         *     poisoned by it are different turns, which is why guarding both ends of a single
+         *     turn never caught it. OWASP ASI06.
          * @enum {string}
          */
-        GuardStage: "input" | "output" | "tool_result";
+        GuardStage: "input" | "output" | "tool_result" | "memory_write";
         /**
          * GuardVerdict
          * @description Outcome of an input or output rail.
@@ -10834,7 +10843,7 @@ export interface components {
          * StreamEvent
          * @description Any event a run may emit over the POST /v1/query SSE stream. Discriminated on the `type` field carried inside the frame's `data` payload.
          */
-        StreamEvent: components["schemas"]["RunStarted"] | components["schemas"]["NodeStarted"] | components["schemas"]["NodeFinished"] | components["schemas"]["Reasoning"] | components["schemas"]["Guardrail"] | components["schemas"]["RetrievalStep"] | components["schemas"]["ToolCall"] | components["schemas"]["ToolResult"] | components["schemas"]["ApprovalRequired"] | components["schemas"]["AnswerChunk"] | components["schemas"]["RunFinished"] | components["schemas"]["ErrorEvent"] | components["schemas"]["ApprovalQueued"] | components["schemas"]["ProvenanceEvent"] | components["schemas"]["BudgetExceeded"] | components["schemas"]["Reflection"] | components["schemas"]["MemoryEvent"] | components["schemas"]["RoutingEvent"] | components["schemas"]["AgentStatus"] | components["schemas"]["SynthesisEvent"];
+        StreamEvent: components["schemas"]["RunStarted"] | components["schemas"]["NodeStarted"] | components["schemas"]["NodeFinished"] | components["schemas"]["Reasoning"] | components["schemas"]["Guardrail"] | components["schemas"]["RetrievalStep"] | components["schemas"]["ToolCall"] | components["schemas"]["ToolResult"] | components["schemas"]["ApprovalRequired"] | components["schemas"]["AnswerChunk"] | components["schemas"]["RunFinished"] | components["schemas"]["ErrorEvent"] | components["schemas"]["ApprovalQueued"] | components["schemas"]["ProvenanceEvent"] | components["schemas"]["BudgetExceeded"] | components["schemas"]["Reflection"] | components["schemas"]["Verification"] | components["schemas"]["MemoryEvent"] | components["schemas"]["RoutingEvent"] | components["schemas"]["AgentStatus"] | components["schemas"]["SynthesisEvent"];
         /**
          * SynthesisEvent
          * @description The fan-out's merge, naming which agents contributed **and which were omitted**.
@@ -11196,6 +11205,79 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * Verification
+         * @description One grounded check of a round's outcome, between ``act`` and ``reflect``.
+         *
+         *     The judge this replaces asked ``all(r["ok"])`` of values the *tools reported about
+         *     themselves*: a tool that updated the wrong record and returned success was "goal
+         *     met". This event carries what was checked and, in ``method``, **how** — which is the
+         *     part that matters. ``deterministic`` means the result rows decided it, ``read-back``
+         *     means a read-only call proved whether the write actually landed, and
+         *     ``unverifiable`` means nothing in this deployment could confirm it, which is
+         *     reported rather than assumed away.
+         *
+         *     ``repairable`` says whether another round could plausibly help. A guardrail refusal
+         *     and a call that has failed identically three times are both failures that retrying
+         *     cannot fix, and saying so on the wire is what stops a console implying otherwise.
+         *
+         *     Purely additive — a client that does not know this variant ignores it.
+         */
+        Verification: {
+            /**
+             * Agent Id
+             * @description The sub-agent that emitted this event. ``None`` means the supervisor or a graph-level node, which is what every single-pass run emits.
+             * @default null
+             */
+            agent_id: string | null;
+            /**
+             * Evidence
+             * @description The record read back, or the failure text. May be empty.
+             * @default
+             */
+            evidence: string;
+            /**
+             * Method
+             * @description The tier that decided: deterministic, read-back or unverifiable.
+             */
+            method: string;
+            /**
+             * Outcome
+             * @description VERIFIED, FAILED, BLOCKED, OSCILLATING, GATHERED or UNVERIFIED.
+             */
+            outcome: string;
+            /**
+             * Reason
+             * @description One sentence naming what was checked, and the result.
+             */
+            reason: string;
+            /**
+             * Repairable
+             * @description Whether another round could plausibly change this outcome.
+             */
+            repairable: boolean;
+            /**
+             * Round
+             * @description The planning round this check follows.
+             * @default 0
+             */
+            round: number;
+            /**
+             * Run Id
+             * @description Correlates all events of one query run.
+             */
+            run_id: string;
+            /**
+             * Seq
+             * @description Monotonic sequence number within the run.
+             */
+            seq: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "verification";
         };
         /**
          * VisionAnalyseRequest

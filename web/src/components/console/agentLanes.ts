@@ -339,6 +339,7 @@ const GUARD_STAGE: Record<GuardStage, string> = {
   input: 'Input',
   output: 'Output',
   tool_result: 'Tool result',
+  memory_write: 'Memory write',
 }
 
 /**

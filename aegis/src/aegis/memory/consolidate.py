@@ -38,6 +38,8 @@ profile are refreshed at the end. Everything is dependency-injected (``complete`
 
 from __future__ import annotations
 
+import dataclasses
+
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -54,6 +56,7 @@ from aegis.memory.config import MemoryConfig
 from aegis.memory.scope import bind_memory_scope
 from aegis.memory.scoring import ForgetPolicy
 from aegis.memory.spec import FactSchemaLike, MemorySpec, resolve_spec
+from aegis.guardrails.memory_write import MemoryWriteCandidate, MemoryWriteScreen
 from aegis.memory.stores import (
     ConsolidationStatus,
     MemoryConsolidationJob,
@@ -112,6 +115,7 @@ class ConsolidationResult:
         updated: Refinements applied (old row expired + superseding row inserted).
         invalidated: Contradictions applied (old row invalidated + contradicting row).
         noop: Decisions that legitimately changed nothing (dedup or an explicit noop).
+        refused: Candidates the memory-write rail would not admit to the store.
         rejected: Decisions **refused** because the model's ``target_id`` could not be
             resolved to a fact it was actually shown. Surfaced as its own count rather
             than folded into ``noop`` so a caller can see model failures, not just infer
@@ -123,6 +127,12 @@ class ConsolidationResult:
     invalidated: int = 0
     noop: int = 0
     rejected: int = 0
+    #: Candidates the memory-write rail refused. Counted separately from ``rejected``
+    #: because they are different events: ``rejected`` is the model failing to name a
+    #: target, ``refused`` is a fact the rail would not let into the store. One is our
+    #: own extractor misbehaving, the other is an attack being turned away, and a
+    #: dashboard that folds them together can report neither.
+    refused: int = 0
 
 
 class _DecideOp(BaseModel):
@@ -668,6 +678,7 @@ async def _reconcile(
     complete: CompleteFn,
     trace_id: str | None,
     result: ConsolidationResult,
+    screen: MemoryWriteScreen | None = None,
 ) -> list[FactSchemaLike]:
     """Phase 2: per-candidate dedup short-circuit → decide-op → bitemporal apply.
 
@@ -680,6 +691,64 @@ async def _reconcile(
     """
     applied: list[FactSchemaLike] = []
     for candidate, embedding in zip(candidates, embeddings, strict=False):
+        # The memory-write rail, before anything else touches this candidate.
+        #
+        # It goes here rather than in the three apply functions for one reason: this is
+        # the single point every candidate passes through, so one hook covers ADD,
+        # UPDATE and INVALIDATE and cannot be forgotten when a fourth is added. It runs
+        # BEFORE the dedup short-circuit deliberately — a poisoned fact that happens to
+        # resemble a stored one would otherwise skip the rail entirely and bump the
+        # access count of the fact it is impersonating.
+        #
+        # ``screen is None`` means no rail is configured. The write proceeds, because a
+        # deployment without a rail is a deployment without a rail — but it is not
+        # silently equivalent to passing, and the guardrails posture reports the stage
+        # as unconfigured rather than clean.
+        if screen is not None:
+            verdict = await screen(
+                MemoryWriteCandidate(
+                    subject=candidate.subject,
+                    predicate=candidate.predicate,
+                    object=candidate.object,
+                    text=candidate.text,
+                    origin="consolidation",
+                )
+            )
+            if verdict.blocked:
+                _write_log(
+                    session,
+                    subject_id=subject_id,
+                    tenant_id=tenant_id,
+                    op=WriteOp.REFUSED,
+                    fact_id=None,
+                    before={},
+                    # Kinds, never values: a log of what was refused must not become the
+                    # place the refused content is stored.
+                    after={
+                        "predicate": candidate.predicate,
+                        "redactions": list(verdict.redactions),
+                    },
+                    reason=verdict.result.reason,
+                    trace_id=trace_id,
+                )
+                result.refused += 1
+                continue
+            # A caller that writes the strings it sent has not redacted anything.
+            candidate = dataclasses.replace(
+                candidate,
+                subject=verdict.subject,
+                predicate=verdict.predicate,
+                object=verdict.object,
+                text=verdict.text,
+            ) if dataclasses.is_dataclass(candidate) else candidate.model_copy(
+                update={
+                    "subject": verdict.subject,
+                    "predicate": verdict.predicate,
+                    "object": verdict.object,
+                    "text": verdict.text,
+                }
+            )
+
         neighbors = await topk_by_cosine(
             session,
             MemoryFact,
@@ -909,6 +978,7 @@ async def consolidate(
     tenant_id: int | None = None,
     trace_id: str | None = None,
     spec: MemorySpec | None = None,
+    screen: MemoryWriteScreen | None = None,
 ) -> ConsolidationResult:
     """Distil the session's episodic turns into bitemporal semantic facts (mem0 2-phase).
 
@@ -977,6 +1047,7 @@ async def consolidate(
             complete=complete,
             trace_id=trace_id,
             result=result,
+            screen=screen,
         )
         # Derived state follows the applied ops, not the raw candidates: a noop'd or
         # refused candidate must never move the structured profile.

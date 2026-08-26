@@ -278,3 +278,89 @@ async def test_a_read_only_round_does_not_spend_the_repair_budget(make_deps):
     for check in checks:
         if check["outcome"] == "GATHERED":
             assert check["repairable"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_read_back_tier_actually_runs_and_names_its_method(make_deps):
+    """The tier that makes this a verifier rather than a self-report.
+
+    An audit found this had never executed: the seam existed, defaulted to "nothing can
+    be read back", and no production wiring overrode it — so every write reported
+    UNVERIFIED while the commit claimed the record was being checked. A default that
+    silently disables the headline feature is worse than no feature, because the trace
+    still looks like verification happened.
+    """
+    from aegis.agent.deps import ReadBack
+
+    deps = make_deps(propose_tool=True, high_risk=False)
+
+    async def run_tool(persona, name, args, *, actor, model, trace_id, approver):  # noqa: ANN001
+        if name == "find_requests":
+            return _Outcome(ok=True, summary="R-1 status: resolved")
+        return _Outcome(ok=True, summary="updated")
+
+    deps = dataclasses.replace(
+        deps,
+        run_tool=run_tool,
+        tool_read_only=lambda n: n == "find_requests",
+        read_back_for=lambda name, args: ReadBack(
+            tool="find_requests", args={"text": "R-1"}, expect="resolved",
+            describe="R-1 now reads 'resolved'",
+        ),
+    )
+
+    events = await _drive(deps, approve=False)
+    checks = [e for e in events if e["type"] == "verification"]
+
+    assert checks, "verify emitted nothing"
+    assert checks[-1]["method"] == "read-back", (
+        f"the read-back tier did not run; method was {checks[-1]['method']!r}"
+    )
+    assert checks[-1]["outcome"] == "VERIFIED"
+    # The evidence is the record itself, not the tool's opinion of itself.
+    assert "resolved" in checks[-1]["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_write_that_did_not_land_condemns_the_round(make_deps):
+    """One unproven write is enough, and the arguments must match the right call.
+
+    Two failure modes in one test, because they compound. Returning after the first
+    successful read-back reports VERIFIED for a round whose second write silently
+    failed — the very defect this node exists to end, rebuilt one tier down. And
+    matching a write's arguments by TOOL NAME rather than call id reads the first
+    call's arguments for both, so the second is "verified" against the first's record.
+    Closing two requests in one round is the ordinary case, not an exotic one.
+    """
+    from aegis.agent.deps import ReadBack
+
+    deps = make_deps(propose_tool=True, high_risk=False)
+
+    async def run_tool(persona, name, args, *, actor, model, trace_id, approver):  # noqa: ANN001
+        if name == "find_requests":
+            # The record only ever shows R-1. R-2 never landed.
+            return _Outcome(ok=True, summary=f"{args.get('text')} status: open")
+        return _Outcome(ok=True, summary="updated")
+
+    def read_back(name, args):
+        target = str(args.get("request_id") or "")
+        return ReadBack(
+            tool="find_requests", args={"text": target}, expect="resolved",
+            describe=f"{target} now reads 'resolved'",
+        )
+
+    deps = dataclasses.replace(
+        deps,
+        run_tool=run_tool,
+        tool_read_only=lambda n: n == "find_requests",
+        read_back_for=read_back,
+    )
+
+    events = await _drive(deps, approve=False)
+    checks = [e for e in events if e["type"] == "verification"]
+
+    assert checks, "verify emitted nothing"
+    # The record says "open", so nothing may report VERIFIED.
+    assert checks[-1]["outcome"] != "VERIFIED", (
+        "a write the record does not show was reported as verified"
+    )

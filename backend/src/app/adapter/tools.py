@@ -29,8 +29,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol
 
+from aegis.agent.deps import ReadBack
 from pydantic import BaseModel, Field
 
 from app.adapter.schema import (
@@ -755,6 +757,61 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
 }
 """Name → :class:`ToolSpec` for every action tool the domain exposes."""
+
+
+def read_back_for(tool_name: str, args: Mapping[str, Any]) -> ReadBack | None:
+    """Given a write that just executed, the read-only call that proves it landed.
+
+    This is what turns the repair loop into a *verifier*. Without it the loop can only
+    ask the tool whether the tool succeeded, which is the question a tool that wrote to
+    the wrong record answers "yes" to. Reading the record back is grounded in something
+    the model does not control, and it is also the difference between a demo that is
+    real and one that is a scripted animation.
+
+    Every entry must name a tool that is **read-only and below the gate threshold**, so
+    verification can never itself become an action or raise a second approval. The
+    caller re-checks that; this table not relying on the caller's check would be the
+    kind of belt that quietly becomes the only belt.
+
+    ``None`` is a legitimate answer and the common one: a write nothing can observe is
+    reported as *unverified*, never as verified. ``add_case_note`` is the example — the
+    note does not surface in any read tool's summary, so claiming to have confirmed it
+    would be inventing evidence.
+
+    Args:
+        tool_name: The write that just ran.
+        args: The arguments it ran with.
+
+    Returns:
+        The read-back plan, or ``None`` when this deployment cannot observe the write.
+    """
+    request_id = str(args.get("request_id") or "").strip()
+    if not request_id:
+        return None
+
+    if tool_name == "update_request_status":
+        status = str(args.get("status") or "").strip()
+        if not status:
+            return None
+        return ReadBack(
+            tool="find_requests",
+            args={"text": request_id},
+            expect=status,
+            describe=f"{request_id} now reads {status!r} on the desk",
+        )
+
+    if tool_name == "assign_request":
+        agent_id = str(args.get("agent_id") or "").strip()
+        if not agent_id:
+            return None
+        return ReadBack(
+            tool="find_requests",
+            args={"text": request_id},
+            expect=agent_id,
+            describe=f"{request_id} is now assigned to {agent_id}",
+        )
+
+    return None
 
 
 ALLOWLIST: dict[str, frozenset[str]] = {
