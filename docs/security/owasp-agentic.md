@@ -15,13 +15,18 @@ you can open.
 > model take a consequential action without a human**. The security stance of
 > `docs/security/overview.md` §3 is "security is layers, not one tool," and the code is built that way.
 
-> **Naming note (honest).** The OWASP GenAI Security Project's agentic work is evolving;
-> the *category themes* below (excessive agency, tool misuse/hijacking, trust-chain abuse,
-> prompt injection, sensitive-information disclosure, …) are stable, but exact item
-> **numbering/wording should be confirmed against the current OWASP publication** before
-> quoting an "ASI0x" identifier. Where Aegis's own code annotates the older LLM Top 10
-> (e.g. `LLM02` insecure output handling, `LLM06` sensitive-info disclosure), those
-> annotations are noted so the lineage is traceable.
+> **Naming note.** This hedge used to say the ASI numbering "should be confirmed against
+> the current OWASP publication before quoting an ASI0x identifier". That was true when it
+> was written and stopped being true on **9 December 2025**, when the OWASP GenAI Security
+> Project published the *Top 10 for Agentic Applications*, version 2026. The identifiers
+> and titles used here and in `threat-model.md` are now taken **verbatim from that
+> document's own PDF**, not from secondary sources — several of which disagree with it, and
+> with each other.
+>
+> The themes below are organised by subject rather than by ASI number, so the two
+> numbering schemes are deliberately not conflated. Where Aegis's own code annotates the
+> older LLM Top 10 (e.g. `LLM02` insecure output handling, `LLM06` sensitive-info
+> disclosure), those annotations are kept so the lineage stays traceable.
 
 ---
 

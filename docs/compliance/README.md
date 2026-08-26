@@ -21,7 +21,7 @@ the international frameworks. The ordering is by jurisdiction, not by where Aegi
 scores well: for a deployment in India the first three are law and the rest are
 practice, and a reviewer's own risk register is ordered the same way.
 
-**Total: 114 controls — 37 enforced · 53 partial · 19 not implemented · 5 not
+**Total: 124 controls — 40 enforced · 60 partial · 19 not implemented · 5 not
 applicable.** Twenty-four of them are India's, and two of those twenty-four are
 enforced. That ratio is the honest one and it is not flattered anywhere below.
 **Two frameworks are now enforced in every control that applies to this deployment:
