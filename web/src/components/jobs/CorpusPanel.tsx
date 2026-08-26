@@ -122,6 +122,17 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
    * Keyboard reaches the same thing without a pointer: the disclosure control is a real
    * button, `onFocus` reveals on tab, and Enter or Space pins exactly as a click does.
    */
+  /*
+   * The list itself is closed until it is asked for.
+   *
+   * Nine rows of document is the bulk of this page, and almost nobody arriving here is
+   * reading it: the figures above already answer how much is in the corpus and how much
+   * of it is searchable. So the card keeps its heading and its counts, and the rows come
+   * on the same terms the rows' own figures do — a hover shows them, a click keeps them.
+   */
+  const [listHovered, setListHovered] = useState(false)
+  const [listPinned, setListPinned] = useState(false)
+
   const [hovered, setHovered] = useState<number | null>(null)
   const [pinned, setPinned] = useState<ReadonlySet<number>>(() => new Set())
   const togglePin = useCallback((id: number): void => {
@@ -151,10 +162,20 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
   }, [refresh, reloadKey])
 
   const rows = load.status === 'ready' ? load.rows : []
+  const listShown = listPinned || listHovered
 
   return (
-    <Card className="overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-5">
+    <Card
+      className="overflow-hidden"
+      onMouseEnter={() => setListHovered(true)}
+      onMouseLeave={() => setListHovered(false)}
+    >
+      <div
+        className={cn(
+          'flex flex-wrap items-center justify-between gap-3 p-5',
+          listShown && 'border-b border-border',
+        )}
+      >
         <div className="flex items-center gap-3">
           <FileText className="size-5 text-muted-foreground" />
           <div>
@@ -166,27 +187,49 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          className={`inline-flex h-11 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
-        >
-          <RefreshCw className="size-3.5" aria-hidden />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className={`inline-flex h-11 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
+          >
+            <RefreshCw className="size-3.5" aria-hidden />
+            Refresh
+          </button>
+          <button
+            type="button"
+            aria-expanded={listShown}
+            aria-controls="corpus-list"
+            onFocus={() => setListHovered(true)}
+            onClick={() => setListPinned((open) => !open)}
+            className={`inline-flex h-11 touch-manipulation items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 ${FOCUS}`}
+          >
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                'size-3.5 transition-transform duration-[--dur-fast] motion-reduce:transition-none',
+                listShown && 'rotate-180',
+              )}
+            />
+            {listPinned ? 'Hide the list' : 'Show the list'}
+          </button>
+        </div>
       </div>
 
-      {load.status === 'loading' ? (
-        <div className="p-4">
-          <LoadingState rows={3} label="Reading the corpus…" />
-        </div>
-      ) : load.status === 'error' ? (
-        <div className="p-4">
+      {/* A failed read is shown whether or not the list is open. Everything else is
+          behind the disclosure; an error a reader has to hover to discover is an error
+          the screen is hiding. */}
+      {load.status === 'error' ? (
+        <div className="border-t border-border p-4">
           <ErrorState
             error={load.message}
             fallback="The corpus could not be read."
             retry={() => void refresh()}
           />
+        </div>
+      ) : !listShown ? null : load.status === 'loading' ? (
+        <div className="p-4">
+          <LoadingState rows={3} label="Reading the corpus…" />
         </div>
       ) : rows.length === 0 ? (
         <div className="p-4">
@@ -197,7 +240,7 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
           />
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <div id="corpus-list" className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-border bg-surface-2/50">
               <tr>
