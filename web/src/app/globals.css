@@ -483,6 +483,39 @@
     animation: active-beat 0.9s ease-out;
   }
 
+  /*
+   * The open beat, breathing.
+   *
+   * `animate-beat` above is one-shot: it fires per wire event, which is right when
+   * events keep coming and wrong for the stage that emits nothing at all between its
+   * open and its close. Agentic retrieval is that stage, and it is the longest one.
+   *
+   * This loops, and §6's ban on ambient loops is not in play: it is bound to a stage
+   * the wire says is open and stops the moment the beat lands, so it reports a fact
+   * rather than decorating an idle screen. It carries duration, never progress.
+   */
+  @keyframes beat-open {
+    0%,
+    100% {
+      opacity: 0.45;
+      transform: scale(0.86);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  .animate-beat-open {
+    animation: beat-open 1.8s ease-in-out infinite;
+    transform-origin: center;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-beat-open {
+      animation: none;
+      opacity: 1;
+    }
+  }
+
   /* Graph halo — SVG-safe (scales around its own centre). */
   @keyframes flow-pulse {
     0% {

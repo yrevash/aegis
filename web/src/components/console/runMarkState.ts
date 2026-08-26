@@ -120,3 +120,23 @@ export function segmentsOf(state: RunState | null): number {
   if (fanout < 2) return SEGMENTS
   return Math.min(fanout, 8)
 }
+
+/**
+ * How long one revolution takes, per state that has open work.
+ *
+ * The ring turns for as long as a stage is open and carries **duration, never progress** —
+ * there is no percentage on this wire to draw. It was previously reserved for `screening`,
+ * on the assumption that the other live states would be animated by their own per-event
+ * pulse. That assumption was wrong in the one place it mattered most: agentic retrieval
+ * emits nothing between its open and its close, so a 60-second window drew a single pulse
+ * and then held perfectly still - the exact spinner-shaped hole this mark exists to fill.
+ *
+ * The speeds differ so the states stay distinguishable with colour off: screening is brisk
+ * because it is a rail and it is quick, thinking is slower and steady, fan-out slower again
+ * because more of the ring is moving.
+ */
+export const SPIN_SECONDS: Partial<Record<MarkState, number>> = {
+  screening: 2.4,
+  thinking: 3.6,
+  fanout: 4.8,
+}

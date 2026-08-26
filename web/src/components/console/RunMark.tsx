@@ -7,7 +7,14 @@ import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
 
 import type { Beat } from './motion'
-import { SEGMENTS, brokenSegmentOf, markStateOf, segmentsOf, type MarkState } from './runMarkState'
+import {
+  SEGMENTS,
+  SPIN_SECONDS,
+  brokenSegmentOf,
+  markStateOf,
+  segmentsOf,
+  type MarkState,
+} from './runMarkState'
 
 /** The mark's geometry. A 48-unit box, an r=18 ring, an r=6 core. */
 const CX = 24
@@ -65,6 +72,7 @@ const WEIGHT: Record<MarkState, number> = {
   settled: 2.5,
 }
 
+
 /**
  * The signature mark — a six-segment ring around a core, driven by the live run.
  *
@@ -113,6 +121,7 @@ export function RunMark({
   // every event including `run_finished`, so a pulse that is not gated on the live state
   // beats for ever after the run has ended.
   const pulseKey = mark === 'thinking' && beat !== null ? beat.seq : 'still'
+  const spin = SPIN_SECONDS[mark]
 
   return (
     <svg
@@ -129,7 +138,10 @@ export function RunMark({
            open" looks like, and it is the only state that draws no gaps. */
         <circle cx={CX} cy={CY} r={R} />
       ) : (
-        <g className={cn(mark === 'screening' && !reduced && 'animate-mark-spin')}>
+        <g
+          className={cn(spin !== undefined && !reduced && 'animate-mark-spin')}
+          style={spin === undefined ? undefined : { animationDuration: `${spin}s` }}
+        >
           {paths.map((d, index) =>
             /* The one missing segment of a blocked run sits at the rail the wire named.
                `brokenSegmentOf` returns null rather than guessing, and then the ring is

@@ -20,6 +20,7 @@ import {
   brokenSegmentOf,
   markStateOf,
   segmentsOf,
+  SPIN_SECONDS,
 } from '../../src/components/console/runMarkState.ts'
 
 /** A RunState carrying only the fields the mark reads. */
@@ -128,4 +129,36 @@ test('the ring splits into the wire’s own lane count, and only on a fan-out', 
     6,
     'a single-lane run never re-splits the ring',
   )
+})
+
+
+/**
+ * The defect this guards is one that shipped.
+ *
+ * `screening` turned and every other live state was left to a per-event pulse, on the
+ * assumption that events keep arriving while a run is open. Agentic retrieval emits
+ * nothing between its open and its close, so a 60-second window drew one pulse and then
+ * held perfectly still — a spinner-shaped hole in the mark that exists to fill it.
+ *
+ * A state that means "work is open" must therefore carry motion of its own, and this
+ * fails if a future state is added to the live set without any.
+ */
+test('every state that means work is open carries motion of its own', () => {
+  const open = ['screening', 'thinking', 'fanout']
+  for (const state of open) {
+    const seconds = SPIN_SECONDS[state]
+    assert.equal(
+      typeof seconds,
+      'number',
+      `${state} means a stage is open and would render motionless between wire events`,
+    )
+    assert.ok(seconds > 0 && seconds < 30, `${state} turns at an unreadable rate`)
+  }
+})
+
+test('a state with nothing open does not turn', () => {
+  // Motion here would be decoration: there is no open stage whose duration it could carry.
+  for (const state of ['idle', 'settled', 'blocked', 'gated']) {
+    assert.equal(SPIN_SECONDS[state], undefined, `${state} turns while nothing is running`)
+  }
 })

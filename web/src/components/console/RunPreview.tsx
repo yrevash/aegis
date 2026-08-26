@@ -4,6 +4,8 @@ import { ChevronRight, Search, ShieldCheck, Signpost } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 import { Figure } from '@/components/primitives/Figure'
+import { useEffect, useState } from 'react'
+import { useTick } from './useTick'
 import { InfoTip } from '@/components/primitives/InfoTip'
 import { cn } from '@/lib/utils'
 import type { RunState } from '@/state/runReducer'
@@ -83,6 +85,32 @@ export function RunPreview({ state = null }: { state?: RunState | null } = {}): 
   const beats = beatStates(state)
   const live = state !== null
 
+  /*
+   * The open beat's own elapsed.
+   *
+   * A beat prints the wire's `duration_ms` when it lands, and printed nothing at all
+   * while it was open — which is the whole of the longest stage. Agentic retrieval runs
+   * for a minute and emits nothing between its open and its close, so the beat that was
+   * doing all the work was the one beat carrying no figure.
+   *
+   * This is measured here rather than taken from the wire because the wire has not sent
+   * it yet: it is time since *this* beat opened, restarted whenever a different beat
+   * does, and it is labelled `elapsed so far` so it is never mistaken for the measured
+   * total that replaces it. The clock stops when the run does.
+   */
+  const openBeat = beats.find((b) => b.status === 'running') ?? null
+  const now = useTick(openBeat !== null)
+  const [openedAt, setOpenedAt] = useState<{ id: string; at: number } | null>(null)
+  useEffect(() => {
+    if (openBeat === null) {
+      setOpenedAt(null)
+      return
+    }
+    setOpenedAt((prev) => (prev?.id === openBeat.id ? prev : { id: openBeat.id, at: Date.now() }))
+  }, [openBeat])
+  const openMs =
+    openBeat !== null && openedAt?.id === openBeat.id ? Math.max(0, now - openedAt.at) : null
+
   const heading = live ? 'The path this run is taking' : 'Every question takes this path'
   const tip = (
     <InfoTip label="About the path">
@@ -133,7 +161,14 @@ export function RunPreview({ state = null }: { state?: RunState | null } = {}): 
             return (
               <li key={beat.id} className="flex min-w-0 items-center gap-1.5">
                 {index > 0 && <ChevronRight aria-hidden className="size-3 shrink-0 text-border" />}
-                <Icon aria-hidden className={cn('size-3.5 shrink-0', tone.icon)} />
+                <Icon
+                  aria-hidden
+                  className={cn(
+                    'size-3.5 shrink-0',
+                    tone.icon,
+                    beat.status === 'running' && 'animate-beat-open',
+                  )}
+                />
                 <span className={cn('min-w-0 truncate text-[0.78rem] font-medium', tone.label)}>
                   {beat.label}
                 </span>
@@ -141,7 +176,17 @@ export function RunPreview({ state = null }: { state?: RunState | null } = {}): 
                 {/* The rail count while it is still a promise; the wire's own total the
                     moment the beat lands. Never both — the count is what makes somebody
                     open the tip, and the duration is what replaces it. */}
-                {beat.durationMs !== null ? (
+                {beat.durationMs === null && beat.status === 'running' && openMs !== null ? (
+                  /* The open beat, ticking. `elapsed so far` is the same label the stage
+                     rows use for the same fact, so the two surfaces cannot be read as
+                     claiming different things. */
+                  <Figure
+                    className="tabular shrink-0 text-[0.66rem] text-blue-700"
+                    label="elapsed so far"
+                  >
+                    {formatDuration(openMs)}
+                  </Figure>
+                ) : beat.durationMs !== null ? (
                   <Figure
                     className="tabular shrink-0 text-[0.66rem] text-muted-foreground"
                     label={`${formatDuration(beat.durationMs)} measured`}

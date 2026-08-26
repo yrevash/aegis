@@ -16,21 +16,8 @@ import { RunMark } from './RunMark'
 import { RunPreview } from './RunPreview'
 import { deriveTiming, formatDuration, isGuardStage, type Stage } from './stageTimeline'
 import { TRUST_CHECKS } from './trustChecks'
+import { useTick } from './useTick'
 
-/** How often the live counters tick. Fast enough to read as live, slow enough to read. */
-const TICK_MS = 100
-
-/** The clock, while a run is in flight. Stops the moment it is not. */
-function useTick(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!active) return
-    setNow(Date.now())
-    const id = setInterval(() => setNow(Date.now()), TICK_MS)
-    return () => clearInterval(id)
-  }, [active])
-  return now
-}
 
 /** Cost, as a governance figure: always four decimals, never rounded to nothing. */
 function formatUsd(usd: number): string {
