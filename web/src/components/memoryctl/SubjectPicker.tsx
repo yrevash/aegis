@@ -74,12 +74,12 @@ export function SubjectPicker({
                 <span className="block truncate text-sm font-medium text-foreground">
                   {row.label}
                 </span>
-                <span className="tabular block truncate font-mono text-[0.62rem] text-muted-foreground">
+                <span className="tabular block truncate font-mono text-[0.6875rem] text-muted-foreground">
                   {subjectSummary(row)}
                 </span>
               </span>
               {row.is_self && (
-                <Badge tone="agent" className="shrink-0 text-[0.56rem]">
+                <Badge tone="agent" className="shrink-0 text-[0.6875rem]">
                   You
                 </Badge>
               )}

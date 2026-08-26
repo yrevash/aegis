@@ -112,13 +112,13 @@ export function ConformalBand({
       {/* Endpoint labels aligned under the band */}
       <div className="relative h-4">
         <span
-          className="tabular absolute top-0 -translate-x-1/2 font-mono text-[0.66rem] font-semibold text-foreground"
+          className="tabular absolute top-0 -translate-x-1/2 font-mono text-[0.6875rem] font-semibold text-foreground"
           style={{ left: `${loPct}%` }}
         >
           {formatValue(Math.min(interval[0], interval[1]), unit)}
         </span>
         <span
-          className="tabular absolute top-0 -translate-x-1/2 font-mono text-[0.66rem] font-semibold text-foreground"
+          className="tabular absolute top-0 -translate-x-1/2 font-mono text-[0.6875rem] font-semibold text-foreground"
           style={{ left: `${hiPct}%` }}
         >
           {formatValue(Math.max(interval[0], interval[1]), unit)}
@@ -152,7 +152,7 @@ function BandHeader({ coverage }: { coverage: string | null }): ReactElement {
       </span>
       {coverage && (
         <span
-          className="tabular font-mono text-[0.66rem] font-semibold"
+          className="tabular font-mono text-[0.6875rem] font-semibold"
           style={{ color: 'var(--blue-800)' }}
         >
           {coverage} coverage

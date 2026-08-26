@@ -206,7 +206,7 @@ function CaseMatrix({
               </span>
               {bar ? (
                 <span className="mt-0.5 block font-normal normal-case">
-                  <Figure className="text-[0.68rem] leading-4">
+                  <Figure className="text-[0.6875rem] leading-4">
                     {bar.higherIsBetter ? '≥' : '≤'} {pct(bar.threshold)}
                   </Figure>
                 </span>

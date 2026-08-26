@@ -36,7 +36,7 @@ function Delta({ row }: { row: MemoryWriteRow }): ReactElement | null {
   return (
     <div
       translate="no"
-      className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 font-mono text-[0.62rem] break-words"
+      className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 font-mono text-[0.6875rem] break-words"
     >
       {keys.map((k) => {
         const before = row.before[k]
@@ -88,16 +88,16 @@ function WriteRow({ row }: { row: MemoryWriteRow }): ReactElement {
         <div className="flex items-center gap-2">
           <Badge tone={style.tone}>{style.label}</Badge>
           {row.fact_id != null && (
-            <span translate="no" className="tabular font-mono text-[0.62rem] text-muted-foreground">
+            <span translate="no" className="tabular font-mono text-[0.6875rem] text-muted-foreground">
               fact #{row.fact_id}
             </span>
           )}
           {supersedes != null && (
-            <span translate="no" className="tabular font-mono text-[0.62rem] text-block-ink">
+            <span translate="no" className="tabular font-mono text-[0.6875rem] text-block-ink">
               supersedes #{String(supersedes)}
             </span>
           )}
-          <span className="eyebrow ml-auto text-[0.56rem]">{formatAgo(row.ts)}</span>
+          <span className="eyebrow ml-auto text-[0.6875rem]">{formatAgo(row.ts)}</span>
         </div>
         <div className="mt-1 flex items-start gap-2">
           {row.reason && <p className="min-w-0 flex-1 text-xs leading-snug text-foreground">{row.reason}</p>}
@@ -125,7 +125,7 @@ function WriteRow({ row }: { row: MemoryWriteRow }): ReactElement {
         {open && (
           <div className="animate-reveal mt-1.5 rounded-md border border-border/60 bg-surface-2/40 p-2">
             <Delta row={row} />
-            <p translate="no" className="mt-1 font-mono text-[0.6rem] break-words text-muted-foreground/80">
+            <p translate="no" className="mt-1 font-mono text-[0.6875rem] break-words text-muted-foreground/80">
               {row.model ?? 'system'}
               {row.trace_id ? ` · ${row.trace_id}` : ''}
             </p>
@@ -159,7 +159,7 @@ export function WriteLogPanel({ state }: Props): ReactElement {
         info="Every change to the agent's memory — what it learned, updated, or retired, and why."
         right={
           <span className="inline-flex items-center gap-1">
-            <Badge tone="neutral" className="text-[0.56rem]">
+            <Badge tone="neutral" className="text-[0.6875rem]">
               append-only
             </Badge>
             <InfoTip label="About append-only">

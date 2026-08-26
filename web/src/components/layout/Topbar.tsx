@@ -121,7 +121,7 @@ export function Topbar({ portal }: { portal: Portal }): ReactElement {
           </span>
           <span className="flex min-w-0 flex-col leading-tight">
             <span className="truncate font-medium capitalize">{displayName}</span>
-            <span className="truncate font-mono text-[0.62rem] tracking-wide text-muted-foreground">
+            <span className="truncate font-mono text-[0.6875rem] tracking-wide text-muted-foreground">
               {portal.replace('_', ' ')}
             </span>
           </span>

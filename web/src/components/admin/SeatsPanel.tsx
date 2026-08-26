@@ -282,7 +282,7 @@ export function SeatsPanel({
                     <Figure className="block text-[0.8125rem] font-medium text-foreground">
                       {seat.username}
                     </Figure>
-                    <span className="flex items-center gap-1.5 text-[0.68rem] text-muted-foreground">
+                    <span className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
                       <Building2 className="size-3 shrink-0" aria-hidden />
                       <Figure>{`tenant #${seat.tenantId}`}</Figure>
                     </span>

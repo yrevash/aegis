@@ -120,10 +120,10 @@ export function RunPreview({ state = null }: { state?: RunState | null } = {}): 
       {live
         ? 'Every duration here is the stage’s own duration_ms. The rails are not timed individually — the wire reports one total per guardrail and at most one deciding layer, so only that layer is marked.'
         : 'Nothing here is measured, because nothing has run yet.'}
-      <span className="mt-2 block font-mono text-[0.68rem] leading-relaxed">
+      <span className="mt-2 block font-mono text-[0.6875rem] leading-relaxed">
         <span className="text-muted-foreground">_screen_input</span> · {INPUT_CHAIN.join(' · ')}
       </span>
-      <span className="mt-1 block font-mono text-[0.68rem] leading-relaxed">
+      <span className="mt-1 block font-mono text-[0.6875rem] leading-relaxed">
         <span className="text-muted-foreground">check_output</span> · {OUTPUT_CHAIN.join(' · ')}
       </span>
     </InfoTip>
@@ -181,14 +181,14 @@ export function RunPreview({ state = null }: { state?: RunState | null } = {}): 
                      rows use for the same fact, so the two surfaces cannot be read as
                      claiming different things. */
                   <Figure
-                    className="tabular shrink-0 text-[0.66rem] text-blue-700"
+                    className="tabular shrink-0 text-[0.6875rem] text-blue-700"
                     label="elapsed so far"
                   >
                     {formatDuration(openMs)}
                   </Figure>
                 ) : beat.durationMs !== null ? (
                   <Figure
-                    className="tabular shrink-0 text-[0.66rem] text-muted-foreground"
+                    className="tabular shrink-0 text-[0.6875rem] text-muted-foreground"
                     label={`${formatDuration(beat.durationMs)} measured`}
                   >
                     {formatDuration(beat.durationMs)}
@@ -196,7 +196,7 @@ export function RunPreview({ state = null }: { state?: RunState | null } = {}): 
                 ) : (
                   beat.chain.length > 0 && (
                     <Figure
-                      className="shrink-0 text-[0.66rem] text-muted-foreground"
+                      className="shrink-0 text-[0.6875rem] text-muted-foreground"
                       label={`${COUNT.format(beat.chain.length)} layers`}
                     >
                       {COUNT.format(beat.chain.length)}
@@ -209,7 +209,7 @@ export function RunPreview({ state = null }: { state?: RunState | null } = {}): 
                 {beat.caption !== '' && (
                   <span
                     className={cn(
-                      'shrink-0 truncate text-[0.66rem]',
+                      'shrink-0 truncate text-[0.6875rem]',
                       beat.status === 'blocked' ? 'text-block-ink' : 'text-muted-foreground',
                     )}
                   >

@@ -72,7 +72,7 @@ function Question({ text, meta }: { text: string; meta: string }): ReactElement 
       <h2 className="font-display text-lg leading-snug font-semibold tracking-tight text-balance text-foreground @[40rem]/turn:text-xl">
         {text}
       </h2>
-      <span className="font-mono text-[0.68rem] text-muted-foreground">{meta}</span>
+      <span className="font-mono text-[0.6875rem] text-muted-foreground">{meta}</span>
     </div>
   )
 }

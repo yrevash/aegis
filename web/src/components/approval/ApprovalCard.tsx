@@ -123,7 +123,7 @@ export function ApprovalCard({
             floating above them: the record of what a person authorised and the thing
             they pressed are one object, at one weight, in one box. */}
         <div className="rounded-md border border-risk/45 bg-risk/[0.08] p-3">
-          <p className="flex items-center gap-1.5 font-mono text-[0.68rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
+          <p className="flex items-center gap-1.5 font-mono text-[0.6875rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
             <ShieldAlert className="size-3.5 shrink-0" aria-hidden />
             {refusal === null ? 'What approving authorises' : 'What a decision would authorise'}
           </p>
@@ -273,7 +273,7 @@ export function ProposedAction({
         <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-border bg-surface-2/70 px-3 py-2">
           {entries.map(([k, v]) => (
             <div key={k} className="contents">
-              <dt className="font-mono text-[0.68rem] tracking-wide text-muted-foreground uppercase">
+              <dt className="font-mono text-[0.6875rem] tracking-wide text-muted-foreground uppercase">
                 {k}
               </dt>
               <dd className="tabular min-w-0 font-mono text-[0.72rem] break-all text-foreground">

@@ -94,7 +94,7 @@ export function PortalNav({
         <div key={group.heading}>
           {/* Not `.eyebrow`: that utility hard-sets `--muted-foreground`, which
               is 3.45:1 on navy and fails AA at 11px. Same anatomy, rail ink. */}
-          <h2 className="mb-2 px-3 font-mono text-[0.68rem] font-medium uppercase tracking-[0.16em] text-rail-text/70">
+          <h2 className="mb-2 px-3 font-mono text-[0.6875rem] font-medium uppercase tracking-[0.16em] text-rail-text/70">
             {group.heading}
           </h2>
           <ul className="space-y-0.5">

@@ -168,7 +168,7 @@ export function AuditInsights({
           <div className="flex min-w-0 flex-col">
             <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
               <span className="eyebrow">Activity over the window</span>
-              <span className="tabular font-mono text-[0.68rem] text-muted-foreground">
+              <span className="tabular font-mono text-[0.6875rem] text-muted-foreground">
                 {window}
               </span>
               <InfoTip label="What the axis covers">
@@ -432,7 +432,7 @@ function Facts({ pulse, loading }: { pulse: AuditPulse; loading: boolean }): Rea
             <Figure size="stat" className="mt-1 block text-foreground">
               {loading ? '·' : cell.value}
             </Figure>
-            <p className="mt-0.5 font-mono text-[0.65rem] leading-4 text-muted-foreground">
+            <p className="mt-0.5 font-mono text-[0.6875rem] leading-4 text-muted-foreground">
               {cell.sub}
             </p>
           </div>
@@ -463,7 +463,7 @@ function Panel({
           <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="text-sm font-semibold text-foreground">{title}</span>
         </span>
-        <span className="font-mono text-[0.65rem] text-muted-foreground">{note}</span>
+        <span className="font-mono text-[0.6875rem] text-muted-foreground">{note}</span>
         <InfoTip label={`About ${title}`}>{tip}</InfoTip>
       </h3>
       {children}

@@ -132,7 +132,7 @@ function ArmChip({
         <p className={cn('truncate text-xs font-medium', fired ? 'text-foreground' : 'text-muted-foreground')}>
           {ORIGIN_LABEL[origin]}
         </p>
-        <p className="tabular-nums font-mono text-[0.68rem] text-muted-foreground">
+        <p className="tabular-nums font-mono text-[0.6875rem] text-muted-foreground">
           {fired
             ? showCount
               ? `${COUNT.format(candidates)} candidates`
@@ -230,7 +230,7 @@ export function ArsenalPanel({ obs }: ArsenalPanelProps): ReactElement {
                 {rr.top_scores.map((s, i) => (
                   <span
                     key={i}
-                    className="tabular-nums rounded-md bg-blue-400/12 px-1.5 py-0.5 font-mono text-[0.68rem] text-blue-600"
+                    className="tabular-nums rounded-md bg-blue-400/12 px-1.5 py-0.5 font-mono text-[0.6875rem] text-blue-600"
                   >
                     {SCORE.format(s)}
                   </span>

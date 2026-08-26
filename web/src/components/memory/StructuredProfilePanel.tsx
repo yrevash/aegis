@@ -22,7 +22,7 @@ function renderValue(value: unknown): ReactElement {
     return (
       <span className="flex flex-wrap justify-end gap-1">
         {value.map((v) => (
-          <Badge key={String(v)} tone="neutral" className="px-2 text-[0.6rem]">
+          <Badge key={String(v)} tone="neutral" className="px-2 text-[0.6875rem]">
             {String(v).replace(/_/g, ' ')}
           </Badge>
         ))}
@@ -63,7 +63,7 @@ export function StructuredProfilePanel({ state }: Props): ReactElement {
         info="A stable, consolidated record of what the agent knows about this subject, distilled from its facts and past sessions."
         right={
           state.status === 'ready' ? (
-            <span className="eyebrow text-[0.56rem]">updated {formatAgo(state.data.updated_at)}</span>
+            <span className="eyebrow text-[0.6875rem]">updated {formatAgo(state.data.updated_at)}</span>
           ) : undefined
         }
       />
@@ -85,12 +85,12 @@ export function StructuredProfilePanel({ state }: Props): ReactElement {
                 key={k}
                 className="col-span-2 flex min-w-0 items-center justify-between gap-4 border-b border-border/60 py-1.5"
               >
-                <dt className="eyebrow shrink-0 text-[0.56rem]">{humanizeKey(k)}</dt>
+                <dt className="eyebrow shrink-0 text-[0.6875rem]">{humanizeKey(k)}</dt>
                 <dd className="min-w-0">{renderValue(v)}</dd>
               </div>
             ) : (
               <div key={k} className="min-w-0 border-b border-border/60 py-1.5">
-                <dt className="eyebrow text-[0.56rem]">{humanizeKey(k)}</dt>
+                <dt className="eyebrow text-[0.6875rem]">{humanizeKey(k)}</dt>
                 <dd className="mt-0.5 min-w-0">{renderValue(v)}</dd>
               </div>
             ),

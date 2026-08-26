@@ -249,7 +249,7 @@ export function ChatThreadsPanel({ token }: { token: string | null }): ReactElem
                     <span className="block truncate text-sm text-foreground">{row.title}</span>
                     <span
                       translate="no"
-                      className="tabular block truncate font-mono text-[0.68rem] text-muted-foreground"
+                      className="tabular block truncate font-mono text-[0.6875rem] text-muted-foreground"
                     >
                       {row.last_active_at != null ? formatAgo(row.last_active_at) : '—'} ·{' '}
                       {row.id.slice(0, 8)}

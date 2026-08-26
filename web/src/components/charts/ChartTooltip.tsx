@@ -44,7 +44,7 @@ export function ChartTooltip({
   return (
     <div className="rounded-md border border-border bg-popover px-3 py-2 shadow-pop">
       {label !== undefined && (
-        <p className="mb-1 font-mono text-[0.68rem] tracking-wide text-muted-foreground uppercase">
+        <p className="mb-1 font-mono text-[0.6875rem] tracking-wide text-muted-foreground uppercase">
           {label}
         </p>
       )}

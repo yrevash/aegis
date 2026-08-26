@@ -64,7 +64,7 @@ export function SubjectSummary({
               sessions and a consolidated profile, stored in Postgres + pgvector.
             </InfoTip>
             {sample && (
-              <span className="eyebrow rounded-sm border border-border/70 px-1.5 py-0.5 text-[0.56rem] text-muted-foreground">
+              <span className="eyebrow rounded-sm border border-border/70 px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground">
                 sample
               </span>
             )}
@@ -116,7 +116,7 @@ export function SubjectSummary({
       {hasShape ? (
         <div className="-mt-1">
           <div className="mb-1 flex items-center gap-1.5">
-            <span className="eyebrow text-[0.56rem]">Memory growth</span>
+            <span className="eyebrow text-[0.6875rem]">Memory growth</span>
             <InfoTip label="About memory growth">
               Facts the agent has recorded about this subject over time.
             </InfoTip>
@@ -138,7 +138,7 @@ export function SubjectSummary({
       <dl className="mt-1 grid grid-cols-3 gap-3 border-t border-border/70 pt-3">
         {stats.map((s) => (
           <div key={s.label} className="flex min-w-0 flex-col gap-0.5">
-            <dt className="eyebrow text-[0.58rem]">{s.label}</dt>
+            <dt className="eyebrow text-[0.6875rem]">{s.label}</dt>
             <dd>
               <Figure size="stat" className={cn(s.value == null && 'text-muted-foreground')}>
                 {s.value == null ? '—' : <CountUp value={s.value} />}

@@ -364,13 +364,13 @@ export function PipelineIso({
             >
               <StageMark stage={stage} />
               <span className="font-mono text-sm font-medium text-foreground">{stage.name}</span>
-              <span className="rounded-full border border-border bg-surface-2 px-1.5 py-px font-mono text-[0.65rem] text-muted-foreground">
+              <span className="rounded-full border border-border bg-surface-2 px-1.5 py-px font-mono text-[0.6875rem] text-muted-foreground">
                 {stage.queue}
               </span>
               <InfoTip label={`What the ${stage.name} stage does`}>{stage.tip}</InfoTip>
               <span className="ml-auto flex shrink-0 items-center gap-2">
                 {stage.active > 0 ? (
-                  <span className="inline-flex items-center gap-1 rounded-md bg-blue-400/12 px-1.5 py-0.5 font-mono text-[0.65rem] font-medium text-blue-700">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-blue-400/12 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-blue-700">
                     <Loader2
                       className="size-3 animate-spin motion-reduce:animate-none"
                       aria-hidden
@@ -379,13 +379,13 @@ export function PipelineIso({
                   </span>
                 ) : null}
                 {stage.failed > 0 ? (
-                  <span className="inline-flex items-center gap-1 rounded-md bg-block/25 px-1.5 py-0.5 font-mono text-[0.65rem] font-medium text-[color:var(--block-ink)]">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-block/25 px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-[color:var(--block-ink)]">
                     <TriangleAlert className="size-3" aria-hidden />
                     {stage.failed} failed
                   </span>
                 ) : null}
                 {increase[stage.name] ? (
-                  <span className="font-mono text-[0.65rem] font-medium text-blue-700">
+                  <span className="font-mono text-[0.6875rem] font-medium text-blue-700">
                     +{increase[stage.name]}
                   </span>
                 ) : null}
@@ -463,7 +463,7 @@ function StageSolid({
         <WorkMarker index={index} height={h} reduce={reduce} count={stage.active} />
       ) : null}
 
-      <text x={lx} y={ly} textAnchor="middle" className="fill-muted-foreground font-mono text-[10px]">
+      <text x={lx} y={ly} textAnchor="middle" className="fill-muted-foreground font-mono text-[11px]">
         {stage.name}
       </text>
       <text
@@ -480,7 +480,7 @@ function StageSolid({
           x={lx + 20}
           y={ly + 14}
           textAnchor="start"
-          className="fill-blue-700 font-mono text-[10px] font-semibold"
+          className="fill-blue-700 font-mono text-[11px] font-semibold"
           initial={reduce ? false : { opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.28, ease: 'easeOut' }}
@@ -536,7 +536,7 @@ function WorkMarker({
       )}
       <circle cx={cx} cy={0} r={3.4} fill="var(--blue-900)" />
       {count > 1 ? (
-        <text x={cx + 7} y={0} dy="3" className="fill-blue-700 font-mono text-[9px] font-semibold">
+        <text x={cx + 7} y={0} dy="3" className="fill-blue-700 font-mono text-[11px] font-semibold">
           {`×${count}`}
         </text>
       ) : null}
@@ -577,7 +577,7 @@ function FailChip({ x, y, count }: { x: number; y: number; count: number }): Rea
         x={-width / 2 + 17}
         y="0"
         dy="3.2"
-        className="font-mono text-[9.5px] font-medium"
+        className="font-mono text-[0.6875rem] font-medium"
         fill="var(--block-ink)"
       >
         {word}

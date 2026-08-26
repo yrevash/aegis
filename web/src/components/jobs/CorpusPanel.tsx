@@ -284,7 +284,7 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
                           {row.title ?? row.filename}
                           <span className="sr-only">, open the ingest log</span>
                         </button>
-                        <p className="text-[0.68rem] text-muted-foreground">
+                        <p className="text-[0.6875rem] text-muted-foreground">
                           <Figure>#{row.document_id}</Figure> · {row.doc_type ?? 'untyped'} ·{' '}
                           {row.doc_date ?? 'undated'}
                         </p>

@@ -191,14 +191,14 @@ function BulletBar({
               style={{ left: '70%' }}
             />
           </div>
-          <p className={cn('mt-1 flex items-center gap-1 text-[0.68rem]', b.ink)}>
+          <p className={cn('mt-1 flex items-center gap-1 text-[0.6875rem]', b.ink)}>
             {b.alert ? <AlertTriangle aria-hidden className="size-3 shrink-0" /> : null}
             <Figure>{`${pct}%`}</Figure>
             <span>{b.word}</span>
           </p>
         </>
       ) : (
-        <p className="mt-1.5 text-[0.68rem] leading-snug text-muted-foreground">
+        <p className="mt-1.5 text-[0.6875rem] leading-snug text-muted-foreground">
           No cap recorded — nothing to draw a proportion against.
         </p>
       )}
@@ -348,7 +348,7 @@ function UsageFigure({
       <Figure size="stat" className="mt-1 block break-all text-foreground">
         {value}
       </Figure>
-      <p className="mt-0.5 text-[0.68rem] text-muted-foreground">{sub}</p>
+      <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">{sub}</p>
     </div>
   )
 }
@@ -383,13 +383,13 @@ function CapFigure({
         </Figure>
       </span>
       {frac != null && b != null ? (
-        <span className={cn('flex items-center gap-1 text-[0.68rem]', b.ink)}>
+        <span className={cn('flex items-center gap-1 text-[0.6875rem]', b.ink)}>
           {b.alert ? <AlertTriangle aria-hidden className="size-3 shrink-0" /> : null}
           <Figure>{`${Math.round(frac * 100)}%`}</Figure>
           <span>{b.word}</span>
         </span>
       ) : (
-        <span className="text-[0.68rem] text-muted-foreground">no cap recorded</span>
+        <span className="text-[0.6875rem] text-muted-foreground">no cap recorded</span>
       )}
     </div>
   )
@@ -715,7 +715,7 @@ function GovernanceView(): ReactElement {
             <div className="border-t border-border px-5 pt-3 pb-4 md:px-6">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                 <span className="eyebrow">Cost shape</span>
-                <span className="font-mono text-[0.62rem] text-muted-foreground">
+                <span className="font-mono text-[0.6875rem] text-muted-foreground">
                   {window ? `per ${window}, oldest → newest` : 'oldest → newest'}
                 </span>
               </div>

@@ -143,7 +143,7 @@ export function MetricBullets({
         {TICKS.map((t) => (
           <span
             key={t}
-            className="tabular absolute top-0 font-mono text-[0.66rem] text-muted-foreground"
+            className="tabular absolute top-0 font-mono text-[0.6875rem] text-muted-foreground"
             style={{
               left: `${t * 100}%`,
               transform: t === 0 ? 'none' : t === 1 ? 'translateX(-100%)' : 'translateX(-50%)',
@@ -154,7 +154,7 @@ export function MetricBullets({
         ))}
       </div>
 
-      <p className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[0.68rem] text-muted-foreground">
+      <p className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[0.6875rem] text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2 w-4 rounded-[2px] bg-[color:var(--blue-600)]" aria-hidden />
           reading

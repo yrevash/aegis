@@ -292,7 +292,7 @@ export function SkillsDrawer({
                         {skill.triggers.map((trigger) => (
                           <span
                             key={trigger}
-                            className="rounded-full border border-border bg-surface px-1.5 py-0.5 font-mono text-[0.64rem] text-muted-foreground"
+                            className="rounded-full border border-border bg-surface px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground"
                           >
                             {trigger}
                           </span>

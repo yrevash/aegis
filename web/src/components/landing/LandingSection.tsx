@@ -40,8 +40,10 @@ interface LandingSectionProps {
 /**
  * The section heading, one step under `.t-hero`.
  *
- * Space Grotesk, because the display face is what carries this page's voice and
- * Inter carries the console's. `globals.css` stops at `.t-title` (18px), which is
+ * `--font-display`, because the display voice is what carries this page. That token
+ * now resolves to the same family as `--font-sans` — IBM Plex Sans is a superfamily,
+ * so the voice comes from weight and tracking rather than from a second face.
+ * `globals.css` stops at `.t-title` (18px), which is
  * a card title — a landing section heading has no utility to inherit, and adding
  * one to the global sheet for a single page would put a marketing type step in
  * front of every product screen.

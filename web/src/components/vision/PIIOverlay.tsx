@@ -53,7 +53,7 @@ export function PIIOverlay({
                   height: `${(r.height / height) * 100}%`,
                 }}
               >
-                <span className="absolute -top-0.5 left-0 -translate-y-full whitespace-nowrap rounded-sm bg-[color:var(--danger)] px-1 py-px font-mono text-[0.6rem] font-medium text-white">
+                <span className="absolute -top-0.5 left-0 -translate-y-full whitespace-nowrap rounded-sm bg-[color:var(--danger)] px-1 py-px font-mono text-[0.6875rem] font-medium text-white">
                   {r.entity_type}
                   {r.score != null ? ` ${SCORE.format(r.score)}` : ''}
                 </span>

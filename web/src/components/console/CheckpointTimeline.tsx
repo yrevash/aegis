@@ -231,7 +231,7 @@ export function CheckpointTimeline({ runId }: { runId: string | null }): ReactEl
             </div>
 
             {gateIndex >= 0 && (
-              <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.68rem] text-muted-foreground">
+              <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-muted-foreground">
                 <LegendKey className="bg-blue-400" label="before the gate" />
                 <LegendKey className="bg-risk" label="paused here" />
                 {resumeIndex >= 0 && <LegendKey className="bg-blue-700" label="after approval" />}

@@ -133,7 +133,7 @@ function Step({
       <div className="flex items-center gap-2">
         <span
           className={cn(
-            'grid size-5 shrink-0 place-items-center rounded-full text-[0.65rem] font-semibold',
+            'grid size-5 shrink-0 place-items-center rounded-full text-[0.6875rem] font-semibold',
             done ? 'bg-blue-600 text-white' : 'border border-border bg-surface-2 text-muted-foreground',
           )}
           aria-hidden
@@ -153,7 +153,7 @@ function Step({
         </Figure>
         <span className="text-xs text-muted-foreground">{unit}</span>
       </p>
-      <p className="text-[0.68rem] text-muted-foreground">{note}</p>
+      <p className="text-[0.6875rem] text-muted-foreground">{note}</p>
     </li>
   )
 }

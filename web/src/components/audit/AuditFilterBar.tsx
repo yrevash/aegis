@@ -173,7 +173,7 @@ export function AuditFilterBar({
         </button>
 
         {busy ? (
-          <span aria-live="polite" className="font-mono text-[0.68rem] text-muted-foreground">
+          <span aria-live="polite" className="font-mono text-[0.6875rem] text-muted-foreground">
             Loading…
           </span>
         ) : null}
@@ -291,7 +291,7 @@ export function AuditFilterBar({
               type="button"
               onClick={() => patch(chip.clear)}
               className={cn(
-                'inline-flex h-6 touch-manipulation items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 font-mono text-[0.68rem] text-blue-700 transition-colors duration-[--dur-fast] hover:bg-blue-100',
+                'inline-flex h-6 touch-manipulation items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 font-mono text-[0.6875rem] text-blue-700 transition-colors duration-[--dur-fast] hover:bg-blue-100',
                 FOCUS,
               )}
             >
@@ -304,7 +304,7 @@ export function AuditFilterBar({
             type="button"
             onClick={() => onChange({ ...EMPTY_AUDIT_QUERY, limit: value.limit })}
             className={cn(
-              'ml-auto inline-flex h-6 touch-manipulation items-center gap-1.5 rounded-full px-2 font-mono text-[0.68rem] text-muted-foreground transition-colors hover:text-foreground',
+              'ml-auto inline-flex h-6 touch-manipulation items-center gap-1.5 rounded-full px-2 font-mono text-[0.6875rem] text-muted-foreground transition-colors hover:text-foreground',
               FOCUS,
             )}
           >

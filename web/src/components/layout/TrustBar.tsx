@@ -102,7 +102,7 @@ export function TrustBar({ state, beat = null, idle = false }: TrustBarProps): R
               )}
               <span
                 className={cn(
-                  'grid size-4 place-items-center rounded-full border text-[0.6rem] transition-colors',
+                  'grid size-4 place-items-center rounded-full border text-[0.6875rem] transition-colors',
                   done ? cn(token.border, token.text) : 'border-border text-muted-foreground/60',
                 )}
                 style={done ? { boxShadow: `0 0 10px -2px ${token.hex}` } : undefined}

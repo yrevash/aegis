@@ -139,7 +139,7 @@ export function RerankScoreboard({
             <ol className="space-y-1">
               {shown.map((s) => (
                 <li key={s.id} className="flex items-baseline gap-2">
-                  <Figure className="w-5 shrink-0 text-right text-[0.66rem] leading-4 text-muted-foreground">
+                  <Figure className="w-5 shrink-0 text-right text-[0.6875rem] leading-4 text-muted-foreground">
                     #{s.rank}
                   </Figure>
                   <span

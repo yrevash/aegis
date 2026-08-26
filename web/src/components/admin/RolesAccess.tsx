@@ -245,12 +245,12 @@ export function RolesAccess({
                             <span className="block text-sm font-medium text-foreground">
                               {u.username}
                               {isSelf && (
-                                <span className="ml-1.5 align-middle text-[0.6rem] tracking-wide text-muted-foreground uppercase">
+                                <span className="ml-1.5 align-middle text-[0.6875rem] tracking-wide text-muted-foreground uppercase">
                                   you
                                 </span>
                               )}
                             </span>
-                            <Figure className="block text-[0.68rem] text-muted-foreground">
+                            <Figure className="block text-[0.6875rem] text-muted-foreground">
                               {u.email ?? 'no email recorded'}
                             </Figure>
                           </span>
@@ -272,7 +272,7 @@ export function RolesAccess({
                       <TD>
                         <div className="flex items-center gap-1.5 whitespace-nowrap">
                           <Badge tone="neutral">{ROLE_CATALOG[current].label}</Badge>
-                          <Figure className="text-[0.68rem] text-muted-foreground">{u.role}</Figure>
+                          <Figure className="text-[0.6875rem] text-muted-foreground">{u.role}</Figure>
                         </div>
                       </TD>
                       <TD>
@@ -318,7 +318,7 @@ export function RolesAccess({
                           {!isSaving && flash.has(u.id) && (
                             <span
                               role="status"
-                              className="flex items-center gap-1 text-[0.68rem] text-ok-ink"
+                              className="flex items-center gap-1 text-[0.6875rem] text-ok-ink"
                             >
                               <Check className="size-3.5" aria-hidden /> updated
                             </span>
@@ -400,7 +400,7 @@ function PortalLegend({
                   </span>
                   <span className="flex shrink-0 items-baseline gap-1">
                     <Figure className="text-sm font-semibold text-foreground">{n ?? '—'}</Figure>
-                    <span className="text-[0.68rem] text-muted-foreground">
+                    <span className="text-[0.6875rem] text-muted-foreground">
                       {n === 1 ? 'holder' : 'holders'}
                     </span>
                   </span>

@@ -356,7 +356,7 @@ function Stat({
       {hint && (
         <p
           className={cn(
-            'mt-0.5 font-mono text-[0.62rem]',
+            'mt-0.5 font-mono text-[0.6875rem]',
             tone === 'warn' ? 'text-risk-ink' : tone === 'ok' ? 'text-ok-ink' : 'text-muted-foreground',
           )}
         >

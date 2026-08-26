@@ -258,7 +258,7 @@ function StageTimeline({ stages }: { stages: IngestStage[] }): ReactElement {
                 </span>
                 <span
                   className={cn(
-                    'tabular font-mono text-[0.68rem]',
+                    'tabular font-mono text-[0.6875rem]',
                     stage.state === 'failed' ? 'text-block-ink' : 'text-muted-foreground',
                   )}
                 >
@@ -363,7 +363,7 @@ function ParsePanel({ progress }: { progress: IngestProgress }): ReactElement {
 
         {parse.ocr_reason ? (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="rounded-full border border-border bg-surface-2 px-1.5 py-px font-mono text-[0.65rem] text-foreground">
+            <span className="rounded-full border border-border bg-surface-2 px-1.5 py-px font-mono text-[0.6875rem] text-foreground">
               OCR {parse.ocr_enabled ? 'on' : 'off'}
             </span>
             <InfoTip label="Why OCR was or was not used">{parse.ocr_reason}</InfoTip>
@@ -452,10 +452,10 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
                     className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-foreground"
                   >
                     {entity.label}
-                    <span className="font-mono text-[0.65rem] text-muted-foreground">
+                    <span className="font-mono text-[0.6875rem] text-muted-foreground">
                       {entity.kind}
                     </span>
-                    <span className="font-mono text-[0.65rem] text-blue-700">
+                    <span className="font-mono text-[0.6875rem] text-blue-700">
                       ×{entity.mentions}
                     </span>
                   </span>
@@ -476,7 +476,7 @@ function GraphPanel({ progress }: { progress: IngestProgress }): ReactElement {
                         —{relation.phrase}→
                       </span>
                       <span className="text-foreground">{relation.target}</span>
-                      <span className="ml-1.5 font-mono text-[0.65rem]">
+                      <span className="ml-1.5 font-mono text-[0.6875rem]">
                         ×{relation.mentions}
                       </span>
                     </li>

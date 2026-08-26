@@ -42,7 +42,7 @@ function SessionMessages({ token, sessionId }: { token: string | null; sessionId
     <ol className="mt-1 min-w-0 space-y-2 border-l border-border/70 pl-3">
       {state.data.rows.map((m) => (
         <li key={m.id} className="min-w-0 text-xs leading-snug break-words">
-          <span className={cn('mr-1.5 font-mono text-[0.6rem] uppercase tracking-wide', roleTint(m.role))}>
+          <span className={cn('mr-1.5 font-mono text-[0.6875rem] uppercase tracking-wide', roleTint(m.role))}>
             {m.role}
           </span>
           <span className="text-muted-foreground">{m.content}</span>
@@ -75,14 +75,14 @@ function SessionRow({ token, session }: { token: string | null; session: MemoryS
               {session.id}
             </span>
             {session.persona && (
-              <Badge tone="neutral" className="text-[0.58rem]">
+              <Badge tone="neutral" className="text-[0.6875rem]">
                 {session.persona}
               </Badge>
             )}
-            <span className="tabular font-mono text-[0.6rem] text-muted-foreground">
+            <span className="tabular font-mono text-[0.6875rem] text-muted-foreground">
               {session.turn_count} turns
             </span>
-            <span className="eyebrow ml-auto text-[0.56rem]">{formatAgo(session.last_active_at)}</span>
+            <span className="eyebrow ml-auto text-[0.6875rem]">{formatAgo(session.last_active_at)}</span>
           </span>
           <span className="mt-1 block text-xs leading-snug text-muted-foreground">
             {session.summary ?? 'No running summary yet.'}

@@ -1095,7 +1095,7 @@ function WaitingGate({
             <ShieldAlert className="size-3 shrink-0" aria-hidden />
             {row.risk} risk
           </Badge>
-          <span className="rounded-md border border-border bg-surface px-2 py-0.5 text-[0.68rem] whitespace-nowrap text-muted-foreground">
+          <span className="rounded-md border border-border bg-surface px-2 py-0.5 text-[0.6875rem] whitespace-nowrap text-muted-foreground">
             <Figure aria-label={`gate ${rank} of ${total} by urgency`}>
               {`${rank}/${total}`}
             </Figure>{' '}
@@ -1152,7 +1152,7 @@ function WaitingGate({
           */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
             <GateReceipt approvalId={row.id} view={view} variant="inline" />
-            <span className="text-[0.68rem] text-muted-foreground">
+            <span className="text-[0.6875rem] text-muted-foreground">
               run <Figure className="break-all">{row.run_id}</Figure>
             </span>
           </div>
@@ -1170,7 +1170,7 @@ function WaitingGate({
               overdue ? 'border-block/40' : 'border-risk/40',
             )}
           >
-            <p className="flex items-center gap-1.5 font-mono text-[0.66rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
+            <p className="flex items-center gap-1.5 font-mono text-[0.6875rem] font-medium tracking-[0.16em] text-risk-ink uppercase">
               <Gavel className="size-3.5 shrink-0" aria-hidden />
               What approving authorises
             </p>

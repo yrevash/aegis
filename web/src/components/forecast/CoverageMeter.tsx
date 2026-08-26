@@ -78,12 +78,12 @@ export function CoverageMeter({ result }: { result: ForecastResult }): ReactElem
         />
       </div>
 
-      <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 text-[0.68rem] text-muted-foreground">
-        <Figure className="text-[0.68rem] leading-4">
+      <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 text-[0.6875rem] text-muted-foreground">
+        <Figure className="text-[0.6875rem] leading-4">
           {inside} of {bt.n_points} held-out actuals inside the band · {bt.windows} rolling-origin
           windows
         </Figure>
-        <Figure className="text-[0.68rem] leading-4">
+        <Figure className="text-[0.6875rem] leading-4">
           ↑ requested {pct(bt.requested_coverage)}
         </Figure>
       </div>

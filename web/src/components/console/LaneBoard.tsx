@@ -66,7 +66,7 @@ function ToolChip({ tool }: { tool: LaneTool }): ReactElement {
             : 'border-border bg-surface-2/60',
       )}
     >
-      <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[0.68rem]">
+      <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[0.6875rem]">
         <span className="shrink-0 font-medium text-foreground">{tool.tool}</span>
         <span className="truncate text-muted-foreground">({argPreview(tool.args)})</span>
         <span
@@ -79,7 +79,7 @@ function ToolChip({ tool }: { tool: LaneTool }): ReactElement {
         </span>
       </div>
       {detail !== null && (
-        <p className="text-[0.68rem] leading-snug text-muted-foreground">{detail}</p>
+        <p className="text-[0.6875rem] leading-snug text-muted-foreground">{detail}</p>
       )}
     </li>
   )
@@ -124,7 +124,7 @@ function LaneThinking({
         >
           <span
             aria-hidden
-            className="tabular mt-px shrink-0 font-mono text-[0.62rem] text-muted-foreground/70"
+            className="tabular mt-px shrink-0 font-mono text-[0.6875rem] text-muted-foreground/70"
           >
             {index + 1}
           </span>
@@ -224,7 +224,7 @@ function LaneDetail({
       {(bill || showVerdict) && (measured !== null || lane.contributed !== null) && (
         <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
           {bill && measured !== null && (
-            <span className="tabular font-mono text-[0.68rem] text-muted-foreground">
+            <span className="tabular font-mono text-[0.6875rem] text-muted-foreground">
               {measured}
             </span>
           )}
@@ -373,7 +373,7 @@ function LaneRosterRow({
           <span className="sr-only">{lane.status}</span>
         )}
         {bill !== null && (
-          <span className="tabular shrink-0 font-mono text-[0.68rem] text-muted-foreground">
+          <span className="tabular shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
             {bill}
           </span>
         )}

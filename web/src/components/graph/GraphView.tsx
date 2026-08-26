@@ -429,7 +429,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
                       ancestor being `overflow-x: visible`, nothing clipped it. It shrinks
                       and ellipsises now, and the full phrase is on the row's `title`. */}
                   <span
-                    className="flex min-w-0 shrink items-center gap-1 font-mono text-[0.68rem] text-blue-600"
+                    className="flex min-w-0 shrink items-center gap-1 font-mono text-[0.6875rem] text-blue-600"
                     title={e.relation}
                   >
                     <ArrowRight className="size-3 shrink-0" aria-hidden />

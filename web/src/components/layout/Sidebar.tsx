@@ -45,7 +45,7 @@ export function Sidebar({ portal }: { portal: Portal }): ReactElement {
         <PortalNav portal={portal} active={activeSectionFrom(pathname)} />
       </div>
 
-      <p className="border-t border-rail-border px-5 py-4 font-mono text-[0.68rem] font-medium uppercase tracking-[0.16em] text-rail-text/70">
+      <p className="border-t border-rail-border px-5 py-4 font-mono text-[0.6875rem] font-medium uppercase tracking-[0.16em] text-rail-text/70">
         {portalLabelFor(portal)}
       </p>
     </aside>

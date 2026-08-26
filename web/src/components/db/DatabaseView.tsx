@@ -283,7 +283,7 @@ function Catalog({
             >
               {table.name}
             </Figure>
-            <Figure className="shrink-0 text-[0.65rem] text-muted-foreground/80">
+            <Figure className="shrink-0 text-[0.6875rem] text-muted-foreground/80">
               {table.rowEstimate > 0 ? table.rowEstimate.toLocaleString() : '0'}
             </Figure>
           </span>
@@ -374,7 +374,7 @@ function Group({
     <div className={className}>
       <p className="eyebrow mb-1 flex items-center gap-1 px-2">
         {title}
-        <Figure className="text-[0.65rem]">{count}</Figure>
+        <Figure className="text-[0.6875rem]">{count}</Figure>
         <InfoTip label={`About ${title}`}>{tip}</InfoTip>
       </p>
       <ul className="space-y-0.5">{children}</ul>

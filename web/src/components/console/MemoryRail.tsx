@@ -359,7 +359,7 @@ export function MemoryRail({
           className={cn(
             'ml-auto shrink-0',
             shown.length === MAX_OPEN_CARDS
-              ? 'tabular font-mono text-[0.66rem] text-foreground'
+              ? 'tabular font-mono text-[0.6875rem] text-foreground'
               : 'sr-only',
           )}
           title={`${MAX_OPEN_CARDS} cards at a time`}

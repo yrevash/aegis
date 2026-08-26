@@ -162,8 +162,19 @@
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
 
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-display: 'Space Grotesk', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  /* IBM Plex Sans is a superfamily: the display voice comes from weight and tracking,
+     not from a second face, so `--font-display` is the same family as `--font-sans`.
+     The token stays rather than being deleted — 11 `font-display` call sites plus
+     `.t-hero`/`.t-metric`/`.t-title` read it, and keeping it leaves one lever to
+     reintroduce a distinct display face later without touching a call site.
+
+     `--font-mono` is deliberately unchanged. JetBrains Mono and IBM Plex Mono have an
+     identical 0.6000em advance, so column alignment is the same either way — but Plex
+     Mono's x-height is 6.2% smaller, and mono carries every numeral, id, cost and
+     timestamp in the product through `Figure`, at 11.52px and 10.88px. Family coherence
+     is not worth that trade across 324 call sites. */
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
 
   --color-background: var(--background);
@@ -293,7 +304,7 @@
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 0.16em;
-    font-size: 0.68rem;
+    font-size: 0.6875rem; /* 11px — the functional-text floor, see tests/design/textFloor */
     font-weight: 500;
     color: var(--eyebrow-ink, var(--muted-foreground));
   }

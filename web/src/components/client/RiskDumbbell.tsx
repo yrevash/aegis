@@ -90,7 +90,7 @@ function AxisHeader({ ceiling }: { ceiling: number }): ReactElement {
         {TICKS.map((t) => (
           <span
             key={t}
-            className="absolute bottom-0 -translate-x-1/2 font-mono text-[0.6rem] text-muted-foreground"
+            className="absolute bottom-0 -translate-x-1/2 font-mono text-[0.6875rem] text-muted-foreground"
             style={{ left: `${t * 100}%` }}
           >
             {Math.round(t * ceiling)}
@@ -113,7 +113,7 @@ function Row({ move, ceiling }: { move: RiskMovement; ceiling: number }): ReactE
     <li className={cn(ROW_GRID, 'px-5 py-3.5 transition-colors duration-150 hover:bg-surface-2/50')}>
       {/* Identity — id, name, OWASP-Agentic category. */}
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 md:self-center">
-        <span className="font-mono text-[0.68rem] tabular text-muted-foreground">{risk.id}</span>
+        <span className="font-mono text-[0.6875rem] tabular text-muted-foreground">{risk.id}</span>
         <span className="t-title text-foreground">{risk.title}</span>
         <span className="eyebrow">{risk.category}</span>
       </div>
@@ -127,7 +127,7 @@ function Row({ move, ceiling }: { move: RiskMovement; ceiling: number }): ReactE
           {inherent} <span className="text-muted-foreground">→</span>{' '}
           <span className="font-semibold">{residual}</span>
         </span>
-        <span className="tabular font-mono text-[0.66rem] text-muted-foreground">
+        <span className="tabular font-mono text-[0.6875rem] text-muted-foreground">
           −{Math.round(removedPct)}%
         </span>
       </div>
@@ -157,7 +157,7 @@ function Row({ move, ceiling }: { move: RiskMovement; ceiling: number }): ReactE
             {risk.mitigation}
           </InfoTip>
         </p>
-        <p className="min-w-0 truncate font-mono text-[0.68rem] text-muted-foreground">
+        <p className="min-w-0 truncate font-mono text-[0.6875rem] text-muted-foreground">
           {risk.control_ref}
         </p>
       </div>
@@ -234,6 +234,10 @@ function Arrowhead({ left }: { left: number }): ReactElement {
     left: `calc(${left}% + 12px)`,
     borderTop: '5px solid transparent',
     borderBottom: '5px solid transparent',
+    // impeccable-disable-next-line side-tab: CSS triangle, not a card accent.
+    // The transparent top/bottom borders plus one solid side on a `size-0` span is
+    // the arrowhead idiom; the detector's `side-tab` rule looks for a thick accent
+    // border on a card, and there is no card here.
     borderRight: `6px solid ${TRACK_INK}`,
   }
   return (

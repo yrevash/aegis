@@ -200,7 +200,7 @@ function StageRow({
         {/* A fixed slot, empty on a non-LLM node, so every bar track ends at the same
             x and the column of durations reads as a column. A model name that reserved
             width only on the rows that had one left the chart ragged. */}
-        <span className="hidden w-[8.5rem] shrink-0 truncate text-right font-mono text-[0.66rem] text-muted-foreground/80 @[44rem]/stage:inline-block">
+        <span className="hidden w-[8.5rem] shrink-0 truncate text-right font-mono text-[0.6875rem] text-muted-foreground/80 @[44rem]/stage:inline-block">
           {stage.model ?? ''}
         </span>
         <Figure

@@ -136,14 +136,16 @@ function ControlRow({ control }: { control: ComplianceControl }): ReactElement {
             {control.summary}
           </p>
           {control.gap ? (
-            <p
-              className={cn(
-                'max-w-prose text-pretty rounded-md border-l-2 py-1 pl-3 text-sm leading-relaxed',
-                meta.ink,
-                stateOf(control.state) === 'partial' ? 'border-risk' : 'border-border',
-              )}
-            >
-              <span className="font-semibold">Missing: </span>
+            /* The gap was a coloured left border — the accent-stripe pattern, and a hue
+               carrying the state on its own. DESIGN.md §4 requires a glyph, a word and a
+               hue, so the state moves into a `Badge` and the border goes. */
+            <p className={cn('max-w-prose text-pretty text-sm leading-relaxed', meta.ink)}>
+              <Badge
+                tone={stateOf(control.state) === 'partial' ? 'risk' : 'neutral'}
+                className="mr-2 align-[0.05em]"
+              >
+                Missing
+              </Badge>
               {control.gap}
             </p>
           ) : null}

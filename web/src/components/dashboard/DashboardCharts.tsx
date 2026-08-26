@@ -54,7 +54,7 @@ function ChartHead({
         />
       )}
       {sample && (
-        <span className="eyebrow ml-auto rounded-sm border border-border/70 px-1.5 py-0.5 text-[0.56rem] text-muted-foreground">
+        <span className="eyebrow ml-auto rounded-sm border border-border/70 px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground">
           sample
         </span>
       )}

@@ -272,7 +272,7 @@ export default function LoginPage() {
                         aria-hidden
                       />
                     ) : (
-                      <span className="tabular shrink-0 font-mono text-[0.68rem] text-muted-foreground">
+                      <span className="tabular shrink-0 font-mono text-[0.6875rem] text-muted-foreground">
                         {q.username}
                       </span>
                     )}

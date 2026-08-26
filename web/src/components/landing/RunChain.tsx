@@ -50,7 +50,7 @@ const STEP_MS = 850
  * reliable, and it does not leave a landmine for the next person who edits it.
  */
 const RAIL_EYEBROW =
-  'font-mono text-[0.68rem] font-medium tracking-[0.16em] text-rail-text uppercase' 
+  'font-mono text-[0.6875rem] font-medium tracking-[0.16em] text-rail-text uppercase' 
 
 export function RunChain(): ReactElement {
   const [active, setActive] = useState(0)
@@ -155,7 +155,7 @@ export function RunChain(): ReactElement {
 
               {/* The panel stretches to the rail beside it, so it ends with the
                   position the rail used to carry as a column of ordinals. */}
-              <p className="tabular mt-8 font-mono text-[0.68rem] text-rail-text/70">
+              <p className="tabular mt-8 font-mono text-[0.6875rem] text-rail-text/70">
                 stage {active + 1} of {CHAIN.length}
               </p>
             </div>
@@ -254,7 +254,7 @@ function ChainRow({
           >
             {link.label}
           </span>
-          {gate ? <span className="font-mono text-[0.68rem] text-risk">gate</span> : null}
+          {gate ? <span className="font-mono text-[0.6875rem] text-risk">gate</span> : null}
         </span>
         {/* The numeral is decoration for a sighted reader; what the control does
             is not obvious from the stage name alone, so it is said here. */}
@@ -291,7 +291,7 @@ function ChainRow({
                   <span className="text-[0.8125rem] text-white/70">{lane.label}</span>
                   <span
                     className={cn(
-                      'font-mono text-[0.68rem]',
+                      'font-mono text-[0.6875rem]',
                       lane.writes ? 'text-risk' : 'text-rail-text/70',
                     )}
                   >

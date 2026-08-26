@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 }
 
 /**
- * Root layout. Fonts (Inter / Space Grotesk / JetBrains Mono) are loaded via a
+ * Root layout. Fonts (IBM Plex Sans / JetBrains Mono) are loaded via a
  * plain <link> at runtime rather than next/font so `next build` never depends on
  * a network fetch; the CSS font stacks in globals.css name these families first.
  *
@@ -39,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             font fetch; the CSS stacks in globals.css name these families first. */}
         {/* eslint-disable-next-line @next/next/no-page-custom-font */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
           rel="stylesheet"
         />
       </head>
