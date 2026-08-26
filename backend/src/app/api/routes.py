@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from aegis.governance.audit import verify_audit_chain
 from aegis.gateway.routing import (
     DeploymentNotAllowedError,
     deployment_for_choice,
@@ -77,6 +78,7 @@ from app.api.schemas import (
     ApprovalInboxRow,
     ApprovalRequest,
     ApprovalResponse,
+    AuditChainResponse,
     AuditLogResponse,
     BudgetRow,
     BudgetUpsertRequest,
@@ -2014,6 +2016,44 @@ async def platform_public_metrics(
 
 # Upper bound on how many audit rows one /audit call may return.
 _AUDIT_LIMIT_MAX = 200
+
+
+@router.get("/audit/verify", response_model=AuditChainResponse, tags=["audit"])
+async def audit_verify(
+    tenant_id: int | None = None,
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> AuditChainResponse:
+    """Walk the audit chain and report the first break, if any.
+
+    This is the difference between "append-only because a grant says so" and
+    "append-only, and here is how you check". Every row is hashed with its predecessor's
+    hash mixed in, so editing a row breaks that row and **removing** one breaks
+    everything after it — the quieter attack, and the one a per-row hash cannot see.
+
+    Scoped exactly like ``GET /audit``: a tenant-bound caller verifies its own chain, a
+    platform admin may name a tenant. Chains are per tenant precisely so this answer is
+    reachable without handing anybody another tenant's rows.
+
+    ``unchained`` is reported separately and never folded into ``intact``. Rows written
+    before the chain existed carry no hash, and nothing can prove anything about history
+    nobody hashed — a green tick covering them would be the overclaim this endpoint
+    exists to retire.
+
+    Args:
+        tenant_id: Platform-staff tenant selector; a tenant-bound caller may only name
+            its own.
+        auth: The authenticated admin/devops principal; the sole source of the scope.
+    """
+    await _require_seat(auth, "seat.can_view_tenant_audit")
+    scoped = _scope_tenant(auth, tenant_id)
+    result = await verify_audit_chain(scoped)
+    return AuditChainResponse(
+        intact=result.intact,
+        checked=result.checked,
+        unchained=result.unchained,
+        broken_at=result.broken_at,
+        detail=result.detail,
+    )
 
 
 @router.get("/audit", response_model=AuditLogResponse, tags=["audit"])

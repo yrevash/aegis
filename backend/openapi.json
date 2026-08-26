@@ -1466,6 +1466,51 @@
         "title": "AttachmentResponse",
         "type": "object"
       },
+      "AuditChainResponse": {
+        "description": "The result of walking one tenant's audit chain.\n\n``intact`` is a statement about the **checked** rows only. ``unchained`` counts rows\nwritten before the chain existed; they carry no hash, nothing can prove anything\nabout them, and folding them into a pass would be exactly the overclaim this\nendpoint retires.",
+        "properties": {
+          "broken_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Id of the first row that did not verify.",
+            "title": "Broken At"
+          },
+          "checked": {
+            "description": "Rows that carried a hash and were re-derived.",
+            "title": "Checked",
+            "type": "integer"
+          },
+          "detail": {
+            "description": "One sentence naming what was found.",
+            "title": "Detail",
+            "type": "string"
+          },
+          "intact": {
+            "description": "Whether every hashed row re-derived, in order.",
+            "title": "Intact",
+            "type": "boolean"
+          },
+          "unchained": {
+            "description": "Rows predating the chain. Reported, never counted as verified.",
+            "title": "Unchained",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "intact",
+          "checked",
+          "unchained",
+          "detail"
+        ],
+        "title": "AuditChainResponse",
+        "type": "object"
+      },
       "AuditLogResponse": {
         "description": "Body for `GET /audit` — recent audit rows, newest first (admin only).",
         "properties": {
@@ -14513,6 +14558,61 @@
           }
         ],
         "summary": "Audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/v1/audit/verify": {
+      "get": {
+        "description": "Walk the audit chain and report the first break, if any.\n\nThis is the difference between \"append-only because a grant says so\" and\n\"append-only, and here is how you check\". Every row is hashed with its predecessor's\nhash mixed in, so editing a row breaks that row and **removing** one breaks\neverything after it — the quieter attack, and the one a per-row hash cannot see.\n\nScoped exactly like ``GET /audit``: a tenant-bound caller verifies its own chain, a\nplatform admin may name a tenant. Chains are per tenant precisely so this answer is\nreachable without handing anybody another tenant's rows.\n\n``unchained`` is reported separately and never folded into ``intact``. Rows written\nbefore the chain existed carry no hash, and nothing can prove anything about history\nnobody hashed — a green tick covering them would be the overclaim this endpoint\nexists to retire.\n\nArgs:\n    tenant_id: Platform-staff tenant selector; a tenant-bound caller may only name\n        its own.\n    auth: The authenticated admin/devops principal; the sole source of the scope.",
+        "operationId": "audit_verify_v1_audit_verify_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditChainResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Audit Verify",
         "tags": [
           "audit"
         ]

@@ -146,6 +146,21 @@ export type AuditLogRow = Narrowed<Sent<Schemas['AuditLogRow']>, { outcome: Audi
  */
 export type AuditOutcome = 'blocked' | 'completed'
 
+/**
+ * Response from `GET /audit/verify` — the chain walk.
+ *
+ * `intact` is a statement about the **checked** rows only. `unchained` is reported
+ * separately on purpose: nothing can prove anything about history nobody hashed, and a
+ * green tick covering those rows would be exactly the overclaim the endpoint retires.
+ */
+export interface AuditChainResponse {
+  intact: boolean
+  checked: number
+  unchained: number
+  broken_at: number | null
+  detail: string
+}
+
 /** Response from `GET /audit` — the filtered trail. */
 export type AuditLogResponse = Narrowed<
   Sent<Schemas['AuditLogResponse']>,

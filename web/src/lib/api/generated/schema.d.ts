@@ -689,6 +689,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/audit/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Audit Verify
+         * @description Walk the audit chain and report the first break, if any.
+         *
+         *     This is the difference between "append-only because a grant says so" and
+         *     "append-only, and here is how you check". Every row is hashed with its predecessor's
+         *     hash mixed in, so editing a row breaks that row and **removing** one breaks
+         *     everything after it — the quieter attack, and the one a per-row hash cannot see.
+         *
+         *     Scoped exactly like ``GET /audit``: a tenant-bound caller verifies its own chain, a
+         *     platform admin may name a tenant. Chains are per tenant precisely so this answer is
+         *     reachable without handing anybody another tenant's rows.
+         *
+         *     ``unchained`` is reported separately and never folded into ``intact``. Rows written
+         *     before the chain existed carry no hash, and nothing can prove anything about history
+         *     nobody hashed — a green tick covering them would be the overclaim this endpoint
+         *     exists to retire.
+         *
+         *     Args:
+         *         tenant_id: Platform-staff tenant selector; a tenant-bound caller may only name
+         *             its own.
+         *         auth: The authenticated admin/devops principal; the sole source of the scope.
+         */
+        get: operations["audit_verify_v1_audit_verify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/login": {
         parameters: {
             query?: never;
@@ -4667,6 +4706,42 @@ export interface components {
              * @description The model's reading of the image, or '' if blocked.
              */
             summary: string;
+        };
+        /**
+         * AuditChainResponse
+         * @description The result of walking one tenant's audit chain.
+         *
+         *     ``intact`` is a statement about the **checked** rows only. ``unchained`` counts rows
+         *     written before the chain existed; they carry no hash, nothing can prove anything
+         *     about them, and folding them into a pass would be exactly the overclaim this
+         *     endpoint retires.
+         */
+        AuditChainResponse: {
+            /**
+             * Broken At
+             * @description Id of the first row that did not verify.
+             */
+            broken_at?: number | null;
+            /**
+             * Checked
+             * @description Rows that carried a hash and were re-derived.
+             */
+            checked: number;
+            /**
+             * Detail
+             * @description One sentence naming what was found.
+             */
+            detail: string;
+            /**
+             * Intact
+             * @description Whether every hashed row re-derived, in order.
+             */
+            intact: boolean;
+            /**
+             * Unchained
+             * @description Rows predating the chain. Reported, never counted as verified.
+             */
+            unchained: number;
         };
         /**
          * AuditLogResponse
@@ -12338,6 +12413,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditLogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    audit_verify_v1_audit_verify_get: {
+        parameters: {
+            query?: {
+                tenant_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditChainResponse"];
                 };
             };
             /** @description Validation Error */

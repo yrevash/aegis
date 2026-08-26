@@ -381,6 +381,26 @@ class BudgetExceeded(_BaseEvent):
     message: str = Field(description="Human-readable explanation for the UI/audit.")
 
 
+class AuditChainResponse(BaseModel):
+    """The result of walking one tenant's audit chain.
+
+    ``intact`` is a statement about the **checked** rows only. ``unchained`` counts rows
+    written before the chain existed; they carry no hash, nothing can prove anything
+    about them, and folding them into a pass would be exactly the overclaim this
+    endpoint retires.
+    """
+
+    intact: bool = Field(description="Whether every hashed row re-derived, in order.")
+    checked: int = Field(description="Rows that carried a hash and were re-derived.")
+    unchained: int = Field(
+        description="Rows predating the chain. Reported, never counted as verified."
+    )
+    broken_at: int | None = Field(
+        default=None, description="Id of the first row that did not verify."
+    )
+    detail: str = Field(description="One sentence naming what was found.")
+
+
 class Verification(_BaseEvent):
     """One grounded check of a round's outcome, between ``act`` and ``reflect``.
 

@@ -12,6 +12,7 @@ import type {
   AgentTopologyResponse,
   ApprovalRequest,
   ApprovalResponse,
+  AuditChainResponse,
   AuditLogResponse,
   Budget,
   BudgetsResponse,
@@ -206,6 +207,25 @@ export async function getAudit(
   search = '?limit=50',
 ): Promise<AuditLogResponse> {
   return request<AuditLogResponse>(`/audit${search}`, { method: 'GET' }, token)
+}
+
+/**
+ * Walk the audit chain and report the first break.
+ *
+ * Every row is hashed with its predecessor's hash mixed in, so editing a row breaks that
+ * row and **removing** one breaks everything after it — the quieter attack, and the one a
+ * per-row hash cannot see. Scoped exactly like `getAudit`.
+ *
+ * `unchained` counts rows written before the chain existed. They carry no hash, so
+ * nothing can be proved about them; the response reports them separately rather than
+ * folding them into a pass.
+ */
+export async function verifyAuditChain(
+  token: string | null,
+  tenantId?: number,
+): Promise<AuditChainResponse> {
+  const search = tenantId === undefined ? '' : `?tenant_id=${tenantId}`
+  return request<AuditChainResponse>(`/audit/verify${search}`, { method: 'GET' }, token)
 }
 
 /** Request a SHAP + conformal explanation for a set of features. */
