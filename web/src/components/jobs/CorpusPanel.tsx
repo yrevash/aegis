@@ -1,7 +1,7 @@
 'use client'
 
-import { FileText, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import { ChevronDown, FileText, RefreshCw } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState, type ReactElement } from 'react'
 
 import { Badge } from '@/components/ui/Badge'
 import { Card } from '@/components/ui/Card'
@@ -63,7 +63,75 @@ function formatDate(iso: string | null): string | null {
  *
  * Empty is an honest answer and is rendered as one. Nothing here is simulated.
  */
+/**
+ * The six facts a row carries beyond its name and its status.
+ *
+ * They are not columns any more. Eight columns of small grey type is the density this
+ * screen was criticised for: a reader scanning for *which document is stuck* has to
+ * read past stage, pages, chunks, size, date and workflow id on every row to find the
+ * one word that answers it. The facts are still every bit as true and none is dropped
+ * — they are revealed for the row being looked at instead of for all of them at once.
+ */
+function rowFacts(row: DocumentRow): { label: string; value: ReactElement }[] {
+  return [
+    {
+      label: 'stage',
+      value: row.completed_stage ? (
+        <Figure>{row.completed_stage}</Figure>
+      ) : (
+        <NotRecorded what="not started" />
+      ),
+    },
+    {
+      label: 'pages',
+      value:
+        row.page_count === null ? <NotRecorded what="not parsed" /> : <Figure>{row.page_count}</Figure>,
+    },
+    {
+      label: 'chunks',
+      value:
+        row.chunk_count === null ? (
+          <NotRecorded what="not chunked" />
+        ) : (
+          <Figure>{row.chunk_count}</Figure>
+        ),
+    },
+    { label: 'size', value: <Figure>{formatBytes(row.size_bytes)}</Figure> },
+    { label: 'uploaded', value: <>{formatDate(row.created_at) ?? <NotRecorded />}</> },
+    {
+      label: row.error ? 'error' : 'workflow',
+      value: (
+        <span className={cn('min-w-0 break-all', row.error && 'text-block-ink')}>
+          {row.error ?? row.workflow_id ?? <NotRecorded what="no workflow" />}
+        </span>
+      ),
+    },
+  ]
+}
+
 export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): ReactElement {
+  /*
+   * Two ways a row's facts come on screen, and they compose.
+   *
+   * `hovered` is the row under the pointer — one at a time, and it follows the pointer
+   * off the row again. `pinned` is the set a reader has clicked open, and those stay
+   * open while they compare two documents, which is the whole reason a pin exists: a
+   * hover reveal cannot be compared against anything, because moving to the second row
+   * closes the first.
+   *
+   * Keyboard reaches the same thing without a pointer: the disclosure control is a real
+   * button, `onFocus` reveals on tab, and Enter or Space pins exactly as a click does.
+   */
+  const [hovered, setHovered] = useState<number | null>(null)
+  const [pinned, setPinned] = useState<ReadonlySet<number>>(() => new Set())
+  const togglePin = useCallback((id: number): void => {
+    setPinned((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -133,70 +201,99 @@ export function CorpusPanel({ token, reloadKey, onOpen }: CorpusPanelProps): Rea
           <table className="w-full text-left text-sm">
             <thead className="border-b border-border bg-surface-2/50">
               <tr>
-                {['Document', 'Status', 'Stage', 'Pages', 'Chunks', 'Size', 'Uploaded', 'Detail'].map(
-                  (h) => (
-                    <th key={h} scope="col" className="eyebrow px-4 py-2.5 font-medium">
-                      {h}
-                    </th>
-                  ),
-                )}
+                {['Document', 'Status'].map((h) => (
+                  <th key={h} scope="col" className="eyebrow px-4 py-2.5 font-medium">
+                    {h}
+                  </th>
+                ))}
+                {/* The disclosure column has no heading text worth reading aloud on
+                    every row, but a header cell must still name the column. */}
+                <th scope="col" className="w-10 px-4 py-2.5">
+                  <span className="sr-only">Show this document&rsquo;s ingest figures</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rows.map((row) => (
-                <tr
-                  key={row.document_id}
-                  className="align-middle transition-colors duration-[--dur-fast] hover:bg-surface-2/60"
-                >
-                  <td className="px-4 py-2.5">
-                    <button
-                      type="button"
-                      onClick={() => onOpen?.(row.document_id)}
-                      /* A document titled `dl` is a 15px-wide target. The row's own
-                         label decides the width, so the floor has to be a minimum
-                         rather than an overhang: min-h/min-w 1.5rem = 24px. */
-                      className={`inline-block min-h-6 min-w-6 rounded-sm text-left font-medium text-foreground underline-offset-2 hover:underline ${FOCUS}`}
+              {rows.map((row) => {
+                const isPinned = pinned.has(row.document_id)
+                const shown = isPinned || hovered === row.document_id
+                return (
+                  <Fragment key={row.document_id}>
+                    <tr
+                      onMouseEnter={() => setHovered(row.document_id)}
+                      onMouseLeave={() =>
+                        setHovered((current) => (current === row.document_id ? null : current))
+                      }
+                      className={cn(
+                        'align-middle transition-colors duration-[--dur-fast]',
+                        shown ? 'bg-surface-2/60' : 'hover:bg-surface-2/60',
+                      )}
                     >
-                      {row.title ?? row.filename}
-                      <span className="sr-only">, open the ingest log</span>
-                    </button>
-                    <p className="text-[0.68rem] text-muted-foreground">
-                      <Figure>#{row.document_id}</Figure> · {row.doc_type ?? 'untyped'} ·{' '}
-                      {row.doc_date ?? 'undated'}
-                    </p>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <Badge tone={statusVariant(row.status)}>{row.status}</Badge>
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                    {row.completed_stage ? (
-                      <Figure>{row.completed_stage}</Figure>
-                    ) : (
-                      <NotRecorded what="not started" />
+                      <td className="px-4 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() => onOpen?.(row.document_id)}
+                          /* A document titled `dl` is a 15px-wide target. The row's own
+                             label decides the width, so the floor has to be a minimum
+                             rather than an overhang: min-h/min-w 1.5rem = 24px. */
+                          className={`inline-block min-h-6 min-w-6 rounded-sm text-left font-medium text-foreground underline-offset-2 hover:underline ${FOCUS}`}
+                        >
+                          {row.title ?? row.filename}
+                          <span className="sr-only">, open the ingest log</span>
+                        </button>
+                        <p className="text-[0.68rem] text-muted-foreground">
+                          <Figure>#{row.document_id}</Figure> · {row.doc_type ?? 'untyped'} ·{' '}
+                          {row.doc_date ?? 'undated'}
+                        </p>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <Badge tone={statusVariant(row.status)}>{row.status}</Badge>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <button
+                          type="button"
+                          aria-expanded={shown}
+                          onFocus={() => setHovered(row.document_id)}
+                          onClick={() => togglePin(row.document_id)}
+                          className={cn(
+                            'inline-flex size-6 items-center justify-center rounded-md text-muted-foreground',
+                            'transition-colors duration-[--dur-fast] hover:text-foreground',
+                            isPinned && 'text-foreground',
+                            FOCUS,
+                          )}
+                        >
+                          <ChevronDown
+                            aria-hidden
+                            className={cn(
+                              'size-4 transition-transform duration-[--dur-fast] motion-reduce:transition-none',
+                              shown && 'rotate-180',
+                            )}
+                          />
+                          <span className="sr-only">
+                            {isPinned
+                              ? `Stop showing the ingest figures for ${row.title ?? row.filename}`
+                              : `Keep the ingest figures for ${row.title ?? row.filename} on screen`}
+                          </span>
+                        </button>
+                      </td>
+                    </tr>
+                    {shown && (
+                      <tr className="bg-surface-2/40">
+                        <td colSpan={3} className="px-4 pb-3 pt-0">
+                          <dl className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5 text-xs text-muted-foreground">
+                            {rowFacts(row).map((fact) => (
+                              <div key={fact.label} className="flex min-w-0 items-baseline gap-1.5">
+                                <dt className="eyebrow">{fact.label}</dt>
+                                <dd className="min-w-0">{fact.value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                    {row.page_count === null ? <NotRecorded what="not parsed" /> : <Figure>{row.page_count}</Figure>}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                    {row.chunk_count === null ? <NotRecorded what="not chunked" /> : <Figure>{row.chunk_count}</Figure>}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                    <Figure>{formatBytes(row.size_bytes)}</Figure>
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                    {formatDate(row.created_at) ?? <NotRecorded />}
-                  </td>
-                  <td
-                    className={cn(
-                      'max-w-[22rem] truncate px-4 py-2.5 text-xs',
-                      row.error ? 'text-block-ink' : 'text-muted-foreground',
-                    )}
-                  >
-                    {row.error ?? row.workflow_id ?? <NotRecorded what="no workflow" />}
-                  </td>
-                </tr>
-              ))}
+                  </Fragment>
+                )
+              })}
             </tbody>
           </table>
         </div>
