@@ -69,6 +69,6 @@ export const ORIGIN_COLOR = {
 export const ORIGIN_LABEL: Record<RetrievalOrigin, string> = {
   vector: 'Vector (dense)',
   graph: 'Graph (entities)',
-  bm25: 'BM25 (keyword)',
+  bm25: 'Keyword (ts_rank)',
   cache: 'Cache',
 }

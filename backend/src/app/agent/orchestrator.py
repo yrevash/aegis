@@ -527,6 +527,16 @@ async def _enqueue_gate(
             trace_id=trace_id,
             tenant_id=tenant_id,
             requested_by=requested_by,
+            # `_enqueue_gate` has taken `rationale` as a required argument all along and
+            # then dropped it here, so every live approval row stored `rationale: NULL`
+            # while the docstring promised it was "already persisted on the durable
+            # inbox row". Only the seeded `demo-gate-*` rows carried one, which is why
+            # the inbox LOOKED right — the demo corpus was covering for the gap.
+            #
+            # It matters for the out-of-band approver: someone opening the inbox from a
+            # link, without the console stream that carried the sentence, saw an action
+            # and its args and no statement of why a person was needed.
+            rationale=rationale,
         )
         return row.sla_deadline
     except Exception:  # noqa: BLE001 - durable inbox is best-effort at the edge

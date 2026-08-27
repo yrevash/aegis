@@ -76,7 +76,7 @@ from .router import (
     route_query,
 )
 from .state import AgentState
-from .subagent import SubAgentResult, SubAgentStatus
+from .subagent import SubAgentResult, SubAgentStatus, bound_result_text
 from .team import (
     SharedRetrievalPool,
     TeamOutcome,
@@ -1234,12 +1234,24 @@ def build_agent(
             # at a raised budget is a retry loop against our own guardrail. Recorded
             # per row rather than derived later, because by ``reflect`` the reason is
             # gone.
+            # The per-result ceiling, applied on the MAIN path too.
+            #
+            # It was enforced only inside `run_subagent`, so the same oversized tool
+            # result was truncated in a fan-out lane and passed whole here — and the
+            # single-agent path is the one the demo runs. `results` feeds both `verify`
+            # and `generate`, so an unbounded summary reaches the model twice.
+            #
+            # Shared with the lane implementation rather than re-derived, so the two
+            # cannot drift apart again.
             results.append(
                 {
                     "call_id": call["id"],
                     "ok": ok,
                     "refused": tool_ok and not allowed,
-                    "summary": summary,
+                    "summary": bound_result_text(
+                        summary,
+                        max_tokens=getattr(deps.config, "max_tool_result_tokens", 0),
+                    ),
                     "tool": call["name"],
                 }
             )
@@ -1571,6 +1583,27 @@ def build_agent(
             reason = (
                 f"iteration budget exhausted ({iteration}/{budget}); "
                 "finalising with the best available result."
+            )
+        elif not repairable:
+            # The branch that was missing, and its absence made this event lie.
+            #
+            # `will_retry` is False whenever the verdict is not repairable — OSCILLATING
+            # and BLOCKED are the live cases — but the reason fell through to the
+            # catch-all below and streamed "re-planning (round 3/4)" beside
+            # `will_retry: false`. A reader watching the console was told the loop was
+            # about to try again at the exact moment it had decided to stop.
+            reason = (
+                f"the verifier returned {outcome}, which is not repairable; the loop "
+                "stops rather than spending the rest of its budget on a call that "
+                "cannot succeed."
+            )
+        elif outcome == "GATHERED":
+            # Also wrong under the catch-all: a round where every call was read-only and
+            # succeeded is not "an action failed". Nothing failed — the round gathered
+            # evidence and the plan needs another pass to use it.
+            reason = (
+                "every call this round was read-only and succeeded; re-planning to act "
+                f"on what they returned (round {iteration}/{budget})."
             )
         else:
             reason = (
@@ -2195,7 +2228,17 @@ def _emit_retrieval(
     # Wide-recall pool size (N recalled), then the reranked, scored survivors
     # (K). num_candidates is the honest pre-rerank count, not len(sources).
     writer(events.retrieval("candidates", num_candidates=result.num_candidates))
-    writer(events.retrieval("reranked", scored_sources=scored))
+    # `num_candidates` passed explicitly, because it defaults to 0 and a consumer
+    # reading only this beat was told the run found nothing — while the `done` beat for
+    # the same run reported 32. The rerank does not change how many candidates were
+    # recalled; it changes which survive, and `scored_sources` already carries that.
+    writer(
+        events.retrieval(
+            "reranked",
+            num_candidates=result.num_candidates,
+            scored_sources=scored,
+        )
+    )
     writer(
         events.retrieval(
             "done",

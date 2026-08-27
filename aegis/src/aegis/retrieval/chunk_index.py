@@ -68,6 +68,7 @@ from typing import Any
 
 __all__ = [
     "DEFAULT_CHUNK_COLLECTION",
+    "prune_stale_chunk_points",
     "ChunkPoint",
     "IndexDrift",
     "audit_chunk_index",
@@ -417,6 +418,109 @@ def stored_point_ids(
         if offset is None or not records:
             break
     return frozenset(found)
+
+
+def prune_stale_chunk_points(
+    client: object,
+    expected_ids: Iterable[str],
+    *,
+    collection: str = DEFAULT_CHUNK_COLLECTION,
+    workspace: str | None = None,
+    file_path_prefix: str | None = None,
+    full_doc_id: str | None = None,
+    dry_run: bool = False,
+) -> frozenset[str]:
+    """Delete points in this scope that the current chunking no longer produces.
+
+    **The defect this closes.** Point ids are content-addressed, and the module's own
+    docstring says a re-run therefore "converges rather than growing". That is true only
+    while the chunk *boundaries* are unchanged. When a document is re-chunked the ids
+    change, the upsert writes a whole second set, and nothing removes the first —
+    measured on this deployment: **50 of 167 chunk points (30%) were orphans** from a
+    superseded ingest, three documents each carrying two complete independent chunkings.
+
+    Orphans are not inert. They are retrieved, reranked and cited. In one live answer two
+    windows over the *same* §1026.13(c)(1) sentence came back as `[source 1]` and
+    `[source 4]`, and the model reported them as two agents confirming each other. For a
+    platform whose differentiator is honest provenance, one passage wearing two source
+    numbers is the sharpest possible failure.
+
+    Args:
+        client: A Qdrant client.
+        expected_ids: Every point id the current chunking produces **for this scope**.
+        collection: The collection to prune.
+        workspace: The workspace to filter on; ``None`` resolves the platform's.
+        file_path_prefix: Tenant tag prefix (``"t1::"``), scoping the prune to one owner.
+        full_doc_id: Restrict to one document.
+        dry_run: Report what would be deleted without deleting it.
+
+    Returns:
+        The ids that are (or would be) removed.
+
+    Raises:
+        ValueError: If ``expected_ids`` is empty. A scope that legitimately holds nothing
+            and a scope whose chunks failed to load are indistinguishable here, and the
+            second one would delete the tenant's entire index. Refusing is the only safe
+            reading — a caller that really means "empty this scope" must do it explicitly.
+    """
+    expected = frozenset(str(i).replace("-", "") for i in expected_ids)
+    if not expected:
+        raise ValueError(
+            "prune_stale_chunk_points refuses an empty expected set: it cannot tell a "
+            "scope that holds nothing from a read that failed, and the second would "
+            "delete every point in scope"
+        )
+
+    # This scrolls itself rather than calling `stored_point_ids`, and the reason is a
+    # bug that would have deleted live data.
+    #
+    # `stored_point_ids` NORMALISES what it returns (`str(record.id).replace("-", "")`)
+    # because Qdrant hands back hyphenated UUIDs while `lightrag_point_id` produces bare
+    # hex. That is right for comparison and fatal for deletion: comparing a normalised
+    # store against raw expected ids marks every live point stale, and the normalised
+    # ids are not what `delete` needs anyway. Caught by a test on the first run.
+    #
+    # So: compare on the normalised form, delete by the RAW id the store gave us.
+    from qdrant_client import models  # noqa: PLC0415 - lazy: heavy optional dependency
+
+    qdrant = _require_client(client)
+    if not qdrant.collection_exists(collection):
+        return frozenset()
+
+    ws = effective_workspace(workspace)
+    scope_filter = models.Filter(
+        must=[models.FieldCondition(key="workspace_id", match=models.MatchValue(value=ws))]
+    )
+
+    stale_raw: list[Any] = []
+    offset: Any = None
+    while True:
+        records, offset = qdrant.scroll(
+            collection_name=collection,
+            scroll_filter=scope_filter,
+            limit=256,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        for record in records:
+            payload = record.payload or {}
+            if file_path_prefix is not None:
+                path = str(payload.get("file_path") or "")
+                if not path.startswith(file_path_prefix):
+                    continue
+            if full_doc_id is not None and str(
+                payload.get("full_doc_id") or ""
+            ) != str(full_doc_id):
+                continue
+            if str(record.id).replace("-", "") not in expected:
+                stale_raw.append(record.id)
+        if offset is None or not records:
+            break
+
+    if stale_raw and not dry_run:
+        qdrant.delete(collection_name=collection, points_selector=list(stale_raw))
+    return frozenset(str(i) for i in stale_raw)
 
 
 def audit_chunk_index(

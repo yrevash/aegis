@@ -809,20 +809,40 @@ def _tool_message(
     The full text is not lost: it stays on the result record that the trace and the audit
     read, so the model loses the tail and the evidence does not.
     """
-    if max_tokens > 0 and content:
-        from aegis.memory.tokens import count_tokens
+    return {
+        "role": "tool",
+        "tool_call_id": call.id or "",
+        "content": bound_result_text(content, max_tokens=max_tokens),
+    }
 
-        size = count_tokens(content)
-        if size > max_tokens:
-            # Proportional cut on characters — the estimator is monotone, so this lands
-            # close enough, and being slightly under a ceiling is the safe direction.
-            keep = max(200, int(len(content) * (max_tokens / size)))
-            content = (
-                content[:keep]
-                + f"\n\n[truncated: {size} tokens exceeded the {max_tokens}-token "
-                + "ceiling for one tool result; the full text is on the run record]"
-            )
-    return {"role": "tool", "tool_call_id": call.id or "", "content": content}
+
+def bound_result_text(content: str, *, max_tokens: int) -> str:
+    """Bound one tool result's contribution to a trajectory, with a visible marker.
+
+    Extracted so the main graph and a sub-agent lane cannot disagree about it. They did:
+    the ceiling was enforced only inside ``run_subagent``, so the identical 16k-token
+    search result was truncated in a lane and pasted whole on the single-agent path —
+    which is the path the demo actually runs.
+
+    ``max_tokens <= 0`` disables the bound; the caller decides, this function does not
+    invent a default.
+    """
+    if max_tokens <= 0 or not content:
+        return content
+
+    from aegis.memory.tokens import count_tokens
+
+    size = count_tokens(content)
+    if size <= max_tokens:
+        return content
+    # Proportional cut on characters — the estimator is monotone, so this lands close
+    # enough, and being slightly under a ceiling is the safe direction.
+    keep = max(200, int(len(content) * (max_tokens / size)))
+    return (
+        content[:keep]
+        + f"\n\n[truncated: {size} tokens exceeded the {max_tokens}-token "
+        + "ceiling for one tool result; the full text is on the run record]"
+    )
 
 
 def _last_assistant_text(messages: list[dict[str, Any]]) -> str:

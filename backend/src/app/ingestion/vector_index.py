@@ -45,6 +45,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from aegis.retrieval.chunk_index import (
+    effective_workspace,
+    lightrag_point_id,
+    prune_stale_chunk_points,
     DEFAULT_CHUNK_COLLECTION,
     ChunkPoint,
     IndexDrift,
@@ -88,6 +91,7 @@ class DenseIndexReport:
         documents: Documents whose chunks were considered.
         rows: Durable chunk rows read.
         published: Points written into the dense index.
+        pruned: Point ids deleted because the current chunking no longer produces them.
         unembedded: Rows skipped because they carry the "not embedded yet" sentinel.
             These need the ``embed`` stage; naming them keeps a partial rebuild from
             reading as a complete one.
@@ -102,6 +106,10 @@ class DenseIndexReport:
     documents: int = 0
     rows: int = 0
     published: int = 0
+    #: Point ids removed because the current chunking no longer produces them. Reported
+    #: rather than silent: a rebuild that quietly deletes is a rebuild nobody can audit,
+    #: and this list is the evidence that a re-chunk converged instead of accumulating.
+    pruned: list[str] = field(default_factory=list)
     unembedded: list[int] = field(default_factory=list)
     drift: IndexDrift | None = None
     kv: ChunkKVResult | None = None
@@ -112,6 +120,7 @@ class DenseIndexReport:
             "documents": self.documents,
             "rows": self.rows,
             "published": self.published,
+            "pruned": len(self.pruned),
             "unembedded": list(self.unembedded),
             "indexed": len(self.drift.present) if self.drift else None,
             "missing": len(self.drift.missing) if self.drift else None,
@@ -314,6 +323,36 @@ async def rebuild_dense_index(
             report.published = publish_chunk_points(
                 qdrant, points, collection=collection
             )
+            # Prune AFTER publishing, never before.
+            #
+            # Order matters: publish-then-prune means the scope is never empty, so a
+            # crash between the two leaves a superset (retrievable, with some
+            # duplicates) rather than a hole (silently unretrievable). The old order
+            # of operations had no prune at all, which is why a re-chunk left the
+            # previous chunking in place and 30% of this deployment's points became
+            # orphans that were still being retrieved and cited.
+            #
+            # Scoped with the SAME arguments the audit uses, so a per-document rebuild
+            # can never reach another document's points, and the helper itself refuses
+            # an empty expected set.
+        # Pruned whether or not this is a dry run — with the flag FORWARDED, so a dry
+        # run reports what it WOULD delete instead of reporting nothing. A destructive
+        # step whose preview is always "0" is a preview nobody can act on, which is how
+        # the first version of this call read.
+        if points:
+            report.pruned = sorted(
+                prune_stale_chunk_points(
+                    qdrant,
+                    [
+                        lightrag_point_id(point.key, workspace=effective_workspace())
+                        for point in points
+                    ],
+                    collection=collection,
+                    dry_run=dry_run,
+                    **_audit_scope(tenant_id=tenant_id, document_id=document_id),
+                )
+            )
+
         # Audited whether or not anything was written, and audited from the *store*.
         # A rebuild that reports what it intended to write is the writer believing
         # itself, which is the defect this whole module answers.

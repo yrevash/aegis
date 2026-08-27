@@ -198,12 +198,29 @@ async def test_find_requests_is_bounded(desk):
         await find_requests({"limit": FIND_REQUESTS_MAX_LIMIT + 1}, desk)
 
 
-async def test_find_requests_reports_an_empty_shortlist_as_not_done(desk):
-    """No match is ``ok=False`` so the self-repair loop re-plans with a wider filter."""
+async def test_find_requests_reports_an_empty_shortlist_as_a_successful_query(desk):
+    """An empty result set is a successful query, not a failed one.
+
+    This test asserted the opposite, deliberately: ``ok=False`` was chosen so the
+    self-repair loop would re-plan with a wider filter. The intent was reasonable and
+    the mechanism was not — ``verify``'s deterministic tier reads a failed tool call as
+    FAILED and repairable, so the loop fired against an answer that was already correct.
+
+    Measured on one such live run: **3 rounds, 15 tool calls, 68,836 prompt tokens,
+    $0.1244**, on a question fully answered after round one. And "no requests match" is
+    frequently the *complete* answer — asking whether any exist is answered by "none".
+
+    Broadening is still available and still prompted: the summary says "Try a broader
+    one", which a planner can act on. What it no longer does is tell the verifier that
+    a working query failed.
+
+    ``changed=False`` is the flag that actually guards side effects, and it is unchanged.
+    """
     result = await find_requests({"category": "shipping"}, desk)
-    assert result.ok is False
+    assert result.ok is True
     assert result.changed is False
     assert result.inverse is None
+    assert "broader" in result.summary.lower()
 
 
 async def test_find_requests_is_audited_with_the_ids_it_disclosed(desk, audit_sink):

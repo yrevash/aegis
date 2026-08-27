@@ -24,6 +24,7 @@ from aegis.guardrails.memory_write import MemoryWriteCandidate, MemoryWriteVerdi
 from aegis.governance.schema import SchemaDriftError
 
 from app.a2a.routes import router as a2a_router
+from app.memory.screen import memory_write_screen
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.routing import BaseRoute
@@ -350,7 +351,7 @@ async def _run_memory_sweeper(stop: asyncio.Event) -> None:
                     # button. That is the same defect the read-back tier shipped with
                     # one phase earlier; a screen the production path does not pass is
                     # not a guardrail, it is a guardrail-shaped hole.
-                    screen=_memory_write_screen,
+                    screen=memory_write_screen,
                 )
         except Exception:  # noqa: BLE001 - the sweeper must survive transient errors
             logger.warning("Memory consolidation sweep failed", exc_info=True)
@@ -359,18 +360,6 @@ async def _run_memory_sweeper(stop: asyncio.Event) -> None:
         except TimeoutError:
             continue
 
-
-async def _memory_write_screen(
-    candidate: MemoryWriteCandidate,
-) -> MemoryWriteVerdict:
-    """Screen one candidate fact with the platform's own guardrail pipeline.
-
-    A fresh :class:`Guardrails` per call rather than a shared one, matching how the
-    other module-level rail helpers are built: the pipeline is cheap to construct and
-    holds no per-call state worth reusing, and a long-lived instance in a background
-    sweeper is a place for configuration to go stale.
-    """
-    return await Guardrails().check_memory_write(candidate)
 
 
 async def _run_memory_retention(stop: asyncio.Event) -> None:

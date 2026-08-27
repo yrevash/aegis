@@ -119,13 +119,27 @@ def build_public_card(*, base_url: str) -> dict[str, Any]:
         },
         "documentationUrl": f"{origin}/docs",
         "capabilities": {
-            # Streaming is claimed only where it is true: the run already streams over
-            # SSE, and `SendStreamingMessage` maps onto it.
-            "streaming": True,
-            # Not built. Claiming it would be the kind of unearned capability line this
-            # platform's whole posture is against.
+            # All three false, and two of them used to be true here for no reason the
+            # server could back up.
+            #
+            # `streaming` claimed that `SendStreamingMessage` "maps onto" the SSE run.
+            # It does not — the method is not in `A2A_METHODS` and a peer calling it
+            # gets `-32601 method not found`. `app/a2a/routes.py` says so in its own
+            # docstring ("which this surface does not implement and does not
+            # advertise"), so the two modules were contradicting each other and the
+            # card was the one telling peers the wrong thing.
+            #
+            # `extendedAgentCard` claimed a `GetAuthenticatedExtendedCard` method that
+            # is likewise absent; `?extended=true` returns bytes identical to the
+            # public card.
+            #
+            # A peer chooses its call based on these flags, so an unearned `true` here
+            # is worse than a `false`: it routes a working client into a method that
+            # cannot answer. This module's own standard — "an advertised capability
+            # that cannot be exercised" is worse than shipping fewer — decides it.
+            "streaming": False,
             "pushNotifications": False,
-            "extendedAgentCard": True,
+            "extendedAgentCard": False,
         },
         "securitySchemes": {
             "bearer": {

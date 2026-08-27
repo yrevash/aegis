@@ -275,3 +275,36 @@ def test_the_ceiling_measures_hindi_at_its_real_cost() -> None:
         "the fixture no longer demonstrates the escaping blow-up, so it no longer "
         "protects against reintroducing it"
     )
+
+
+def test_the_per_result_bound_is_shared_by_both_paths() -> None:
+    """A lane and the main graph must not disagree about the same ceiling.
+
+    They did. `max_tool_result_tokens` was enforced only inside `run_subagent`, so an
+    identical oversized tool result was truncated in a fan-out lane and passed whole on
+    the single-agent path — which is the path a demo actually runs, and the path whose
+    `results` feed both `verify` and `generate`, so the unbounded text reached the model
+    twice.
+
+    Asserting on the shared function rather than on two copies of the logic is the point:
+    one implementation cannot drift from itself.
+    """
+    from pathlib import Path
+
+    from aegis.agent.subagent import bound_result_text
+
+    long = "row data " * 3000
+    out = bound_result_text(long, max_tokens=100)
+    assert len(out) < len(long)
+    assert "truncated" in out
+    assert bound_result_text("short", max_tokens=100) == "short"
+    assert bound_result_text(long, max_tokens=0) == long
+
+    # And the main graph must actually route through it.
+    graph = (
+        Path(__file__).resolve().parents[2] / "src" / "aegis" / "agent" / "graph.py"
+    ).read_text()
+    assert "bound_result_text(" in graph, (
+        "the main graph appends tool summaries without the per-result ceiling; a lane "
+        "truncates the same result and the single-agent path does not"
+    )

@@ -435,8 +435,20 @@ async def find_requests(args: dict, ctx: ToolContext) -> ToolActionResult:
     )
 
     if not page:
+        # `ok=True`, and the distinction is expensive.
+        #
+        # An empty result set is a SUCCESSFUL query that matched nothing. It was
+        # reported as `ok=False`, and `verify`'s deterministic tier reads a failed tool
+        # call as FAILED+repairable — so the self-repair loop fired against a correct
+        # answer. Measured on one such run: 3 rounds, 15 tool calls, 68,836 prompt
+        # tokens, **$0.1244**, on a question that was fully answered after round one.
+        # "No requests match" is the answer to "are there any?", not a failure to
+        # determine it.
+        #
+        # `changed=False` still says nothing was written, which is the flag that
+        # actually guards side effects.
         return ToolActionResult(
-            ok=False,
+            ok=True,
             changed=False,
             summary="No service requests match that filter. Try a broader one.",
         )

@@ -201,19 +201,41 @@ async def _run(text: str, *, auth: Any) -> str:  # noqa: ANN401 - AuthContext
     Collecting tokens here rather than inventing a task store keeps the honest property
     that a task's result is returned to the caller who asked for it.
     """
+    from aegis.governance.context import (
+        reset_governance_context,
+        set_governance_context,
+    )
+
     from app.adapter import persona_for_role
     from app.agent import get_approval_registry, run_agent
-    from app.api.routes import get_agent_deps
+    from app.api.routes import _resolve_governance, get_agent_deps
 
     deps = get_agent_deps()
     chunks: list[str] = []
-    async for event in run_agent(
-        text,
-        persona=persona_for_role(auth.role),
-        role=auth.role.value,
-        deps=deps,
-        registry=get_approval_registry(),
-    ):
-        if getattr(event, "type", "") == "token":
-            chunks.append(getattr(event, "text", ""))
+
+    # Bind the caller's tenant/user + caps, exactly as `/v1/query` does.
+    #
+    # Without this the run is unattributed and free: measured side by side on one
+    # deployment, an A2A run spending $0.0107 wrote **zero** usage_ledger rows and
+    # recorded `tenant=None user=None`, while an equivalent /v1/query run wrote 14 rows
+    # with the right tenant. Authenticated, guardrailed — and invisible to the cost
+    # surface.
+    #
+    # This is the same defect the evals route carried, which `routes.py` itself calls
+    # "the one place this platform's metering claim is false". Fixing it there and
+    # leaving it here would have meant the claim was still false, just somewhere else.
+    governance = await _resolve_governance(auth)
+    token = set_governance_context(governance)
+    try:
+        async for event in run_agent(
+            text,
+            persona=persona_for_role(auth.role),
+            role=auth.role.value,
+            deps=deps,
+            registry=get_approval_registry(),
+        ):
+            if getattr(event, "type", "") == "token":
+                chunks.append(getattr(event, "text", ""))
+    finally:
+        reset_governance_context(token)
     return "".join(chunks).strip()
