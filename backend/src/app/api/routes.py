@@ -3960,7 +3960,17 @@ async def ml_model_card(
 
 @router.post("/evals/live-run", response_model=LiveEvalResponse, tags=["evals"])
 async def evals_live_run(
-    limit: int = 2,
+    limit: int = Query(
+        default=2,
+        ge=1,
+        le=6,
+        description=(
+            "Seed cases to score. Each is ~9 gateway calls (5 completions + 4 "
+            "embeddings), so this bound is a spend bound. Declared here rather than "
+            "clamped silently in the body: a caller who asks for 100 should be told the "
+            "ceiling is 6, not quietly given 6 and left believing they got 100."
+        ),
+    ),
     auth: AuthContext = Depends(require_admin_or_ai_team),
 ) -> LiveEvalResponse:
     """Score the seed corpus with the real Ragas metrics (admin/ai_team).
@@ -3976,6 +3986,15 @@ async def evals_live_run(
     evaluation subsystem whose spend the cost surface cannot see would be the one place
     this platform's metering claim is false.
 
+    **That sentence was false for a release, and the route was the hole.** The adapters
+    do call the gateway, but this route bound no :class:`GovernanceContext`, so every
+    call ran with ``ctx=None``: no budget check, no tenant attribution, no ledger row.
+    Measured before the fix — seven invocations, ~108 model calls, ~$0.088 spent, **zero
+    rows in usage_ledger**. The claim was rendered to the reader on the evals screen and
+    in the API response while it was untrue, which is worse than not making it. The
+    binding below is the whole fix, and ``test_live_run_is_metered`` is why it cannot
+    silently come undone again.
+
     Args:
         limit: Seed cases to score. Small by default — each is several model calls.
         auth: The authenticated admin/ai_team principal.
@@ -3988,9 +4007,16 @@ async def evals_live_run(
 
     from app.core.llm import complete
 
-    metrics = await run_ragas_suite(
-        complete=complete, embed=gateway_embed, limit=max(1, min(limit, 6))
-    )
+    # The caller's tenant/user + caps, bound for the duration of the suite, exactly as
+    # the voice route does. Without this the judge calls are unattributed and free.
+    governance = await _resolve_governance(auth)
+    token = set_governance_context(governance)
+    try:
+        metrics = await run_ragas_suite(
+            complete=complete, embed=gateway_embed, limit=max(1, min(limit, 6))
+        )
+    finally:
+        reset_governance_context(token)
     return LiveEvalResponse(
         metrics=[
             LiveMetricRow(

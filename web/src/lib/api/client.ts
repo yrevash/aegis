@@ -236,9 +236,19 @@ export async function verifyAuditChain(
  * also embeds. `getEvalsReport` stays the cheap deterministic rollup this page polls;
  * this one only runs when somebody asks for it.
  */
+/**
+ * How many seed cases one live run scores.
+ *
+ * Exported so the button can state the cost *before* it is pressed rather than after.
+ * Each case is ~9 gateway calls (5 completions + 4 embeddings), so this number is the
+ * only thing standing between a click and a budget event — it belongs where the reader
+ * of the button and the sender of the request both see the same value.
+ */
+export const LIVE_EVAL_CASES = 2
+
 export async function runLiveEvals(
   token: string | null,
-  limit = 2,
+  limit = LIVE_EVAL_CASES,
 ): Promise<LiveEvalResponse> {
   return request<LiveEvalResponse>(
     `/evals/live-run?limit=${limit}`,

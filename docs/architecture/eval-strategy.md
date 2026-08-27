@@ -3,13 +3,29 @@
 This is how Aegis knows whether an answer is *good* — before it ships (offline gate),
 when the code changes (regression gate), and while it runs in production (live traces).
 The industry has three well-known reference tools for these three jobs — **RAGAS**,
-**DeepEval**, and **Arize Phoenix / Langfuse**. Aegis implements the *ideas* of each in a
-way that stays offline, deterministic, and dependency-light, and is explicit about where
-it uses a **proxy/pattern** rather than the named third-party product.
+**DeepEval**, and **Arize Phoenix / Langfuse**. Aegis now runs **the real `ragas`
+library** for its live metrics, and keeps a separate offline gate built from
+deterministic lexical proxies. Those are two different things and this document keeps
+them apart.
 
 > **The one honesty rule for this doc:** where Aegis ships a *proxy* for a named library,
-> it says so and says why. `ragas`, `deepeval`, `langfuse`, and `patronus` are **not**
-> dependencies of this repo (`backend/pyproject.toml`). `arize-phoenix`,
+> it says so and says why — and where it ships the library itself, it says that instead.
+>
+> **`ragas>=0.4.3,<0.5` IS a dependency** of this repo (`backend/pyproject.toml`), and
+> `aegis.evals.libs` runs its real metrics through the Aegis gateway. This paragraph
+> used to assert the opposite, which made it the load-bearing false sentence in the
+> whole document: every "proxy, not the library" claim below inherited its authority
+> from a line that had stopped being true.
+>
+> `deepeval` is **not** installed in the backend environment, and the reason is specific
+> rather than a preference: `deepeval` requires `click>=8.0.0,<8.4.0` while
+> `huggingface_hub` requires `click>=8.4.2`. The two ranges are disjoint, so the
+> libraries cannot coexist in one interpreter. (`uv pip install deepeval` appears to
+> succeed and silently downgrades click, leaving `huggingface_hub` violating its own
+> declared pin — that is a broken environment, not an installation.) The offline gate
+> that borrows DeepEval's *shape* is therefore still a pattern, and is labelled as one.
+>
+> `langfuse` and `patronus` are not dependencies. `arize-phoenix`,
 > `arize-phoenix-otel`, and `opentelemetry-sdk`/`-api` **are**.
 
 ---
@@ -18,7 +34,8 @@ it uses a **proxy/pattern** rather than the named third-party product.
 
 | Layer | Job | Reference tool | What Aegis actually ships | Where in the repo |
 |---|---|---|---|---|
-| **1. Metrics** | Score retrieval/answer quality on labelled cases | **RAGAS** (conceptual metrics) | RAGAS-*style* **deterministic proxies** (lexical overlap), no `ragas` lib | `backend/src/app/eval/metrics.py`, `harness.py`, `corpus.py`, `judge.py` |
+| **1a. Offline gate** | Score retrieval/answer quality on labelled cases, in CI, for free | **RAGAS** (conceptual metrics) | RAGAS-*style* **deterministic proxies** (lexical overlap) — no LLM call, no network | `backend/src/app/eval/metrics.py`, `harness.py`, `corpus.py`, `judge.py` |
+| **1b. Live metrics** | The same questions, judged by a model | **RAGAS** | **The real `ragas` library**, every judge call through the Aegis gateway | `aegis/src/aegis/evals/libs/gateway_adapters.py`, `ragas_suite.py` |
 | **2. CI regression gate** | Fail the build when quality regresses | **DeepEval** (pytest-native CI/CD) | The DeepEval **pattern**: pytest-native, per-metric thresholds | `backend/tests/eval/test_eval_gate.py`; `backend/src/app/eval/regression.py` and `aegis/src/aegis/evals/regression.py` — both shipped |
 | **3. Production traces** | Grade live runs, keep a glass-box trail | **Arize Phoenix** / **Langfuse** | Per-run + per-step online eval, exported over **OpenTelemetry → Phoenix** | `backend/src/app/ops/trace_eval.py`, `backend/src/app/observability/*` |
 
@@ -38,8 +55,12 @@ open-source library for reference-free RAG evaluation. Its headline metrics are
 **answer relevancy** (does the answer address the question?). RAGAS computes these with an
 LLM + embedding model.
 
-**What Aegis ships — and the honest gap.** Aegis computes **RAGAS-*style* deterministic
-proxies**, *not* the `ragas` library. This is a deliberate choice, documented in the code:
+**What the OFFLINE GATE ships.** Scope matters here, because this paragraph used to read
+as a statement about the whole product and is not one. Aegis ships **both**: the real
+`ragas` library scores live metrics through the gateway (see *Live metrics*, layer 1b),
+and the offline build gate described below computes **RAGAS-*style* deterministic
+proxies**, *not* the `ragas` library. This is a deliberate choice for the gate, documented
+in the code:
 
 - `backend/src/app/eval/metrics.py` — three transparent, offline, token/substring-overlap
   proxies:
@@ -154,7 +175,7 @@ runs.
 
 | Reference tool | Category | Integrated? | Aegis realisation | File(s) |
 |---|---|---|---|---|
-| **RAGAS** | Conceptual metrics (faithfulness, context precision/recall, answer relevancy) | Proxy only (`ragas` not a dep) | Deterministic lexical proxies + optional LLM-judge for relevance | `app/eval/metrics.py`, `judge.py`, `harness.py`, `corpus.py` |
+| **RAGAS** | Conceptual metrics (faithfulness, context precision/recall, answer relevancy) | **Both** — the real library for live scoring, proxies for the offline gate | `ragas` 0.4.3 via `aegis.evals.libs`; deterministic lexical proxies + LLM-judge offline | `aegis/evals/libs/ragas_suite.py`; `app/eval/metrics.py`, `judge.py`, `harness.py`, `corpus.py` |
 | **DeepEval** | Pytest-native CI/CD gate; agent/multi-turn/tool-use eval | Pattern only (`deepeval` not a dep) | Pytest gate plus a dedicated regression module | `tests/eval/test_eval_gate.py`; `app/eval/regression.py` |
 | **Arize Phoenix** | Production traces + online eval | **Yes** (real dep) | OTel → local Phoenix; per-run/per-step online eval | `app/observability/otel.py`, `semconv.py`; `app/ops/trace_eval.py` |
 | **Langfuse** | Production traces + online eval | No (not integrated) | Droppable OTel alternative to Phoenix | (would attach to `app/observability/*`) |

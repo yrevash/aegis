@@ -37,7 +37,7 @@ source of truth also used by the README and the frontend Platform view.
 | **Aegis Retrieval** | Neo4j/LightRAG + Qdrant | `aegis.retrieval.pipeline` | live |
 | **Aegis Signal** | XGBoost + MAPIE + SHAP | `app.ml.model` | live |
 | **Aegis Guardrails** | programmatic + NeMo Colang | `app.guardrails.rails` | live |
-| **Aegis Evals** | RAGAS-style proxies + LLM judge | `app.eval.harness` | live |
+| **Aegis Evals** | Real `ragas` (live) + deterministic proxies & LLM judge (offline gate) | `app.eval.harness`, `aegis.evals.libs` | live |
 | **Aegis Loop** | native | `app.ops.release` | live |
 | **Aegis Governance** | Postgres RLS + JWT | `app.core.governance` | live |
 | **Aegis Trace** | OpenTelemetry → Phoenix | `app.observability.otel` | live |
@@ -164,7 +164,7 @@ Route by job, not by habit. Surface the routing breakdown on the dashboard (smal
 
   The span helper (`observability/spans.py`) degrades to a **no-op** when no tracer/Phoenix is configured (offline "lite" mode and tests), so instrumentation never crashes or requires the network. Being OTel-native = portable, no lock-in (an ADR-worthy point).
 - **Token/cost tracking** from the spans → the live dashboard (cache-hit rate, small-model share, cost per 1000 queries).
-- **Offline evals:** the quality gate (`app.eval`) computes **RAGAS-style deterministic proxies** — lexical/overlap proxies inspired by RAGAS metric ideas, **not** the `ragas` library (which is not a dependency: it needs a network/LLM and this gate runs fully offline). Three proxies are computed and asserted against thresholds:
+- **Offline evals:** the quality gate (`app.eval`) computes **RAGAS-style deterministic proxies** — lexical/overlap proxies inspired by RAGAS metric ideas, **not** the `ragas` library — which IS a dependency of this repo and is used for live scoring in `aegis.evals.libs`, but is deliberately not used *here*, because this gate must run in CI with no network and no model spend. Three proxies are computed and asserted against thresholds:
   - **context-precision proxy @k** — fraction of the top-k retrieved sources whose document is a gold document (proxy for RAGAS *context precision*);
   - **context-recall proxy** — fraction of the case's gold documents that appear anywhere in the retrieved sources (proxy for RAGAS *context recall*);
   - **groundedness/faithfulness proxy** — fraction of the case's expected claim keywords present, by normalized substring match, in the assembled retrieval context (proxy for RAGAS *faithfulness*).

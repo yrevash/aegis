@@ -158,7 +158,7 @@ branded name **plus its honest underlying tech** (branding, never hiding):
 - **Aegis Retrieval** (Neo4j/LightRAG + embedded vectors) — hybrid vector+graph+BM25, RRF, rerank.
 - **Aegis Signal** (XGBoost + MAPIE + SHAP) — calibrated conformal intervals + SHAP explanations.
 - **Aegis Guardrails** (programmatic + NeMo Colang) — input/output rails: injection, PII, schema.
-- **Aegis Evals** (RAGAS-style proxies + LLM judge) — trace-level and answer evaluation.
+- **Aegis Evals** (real `ragas` + deterministic proxies + LLM judge) — trace-level and answer evaluation.
 - **Aegis Loop** (native) — LLM-Ops self-improvement: trace → eval → diagnose → tiered release.
 - **Aegis Governance** (Postgres RLS + JWT) — multi-tenant RBAC, budgets, RLS, audit log.
 - **Aegis Trace** (OpenTelemetry → Phoenix) — end-to-end, glass-box tracing.

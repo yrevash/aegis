@@ -122,7 +122,7 @@ graph TD
         gateway["aegis.gateway<br/>LLM chokepoint"]
         memory["aegis.memory<br/>working + episodic + semantic"]
         governance["aegis.governance<br/>tenants, RBAC, RLS, budgets"]
-        evals["aegis.evals<br/>RAGAS-style + LLM-judge"]
+        evals["aegis.evals<br/>real ragas + proxies + LLM-judge"]
         ops["aegis.ops<br/>eval-gated release"]
         observability["aegis.observability<br/>OTel/OpenInference export"]
         vision["aegis.vision<br/>screened image understanding"]

@@ -1096,6 +1096,15 @@ export interface paths {
          *     evaluation subsystem whose spend the cost surface cannot see would be the one place
          *     this platform's metering claim is false.
          *
+         *     **That sentence was false for a release, and the route was the hole.** The adapters
+         *     do call the gateway, but this route bound no :class:`GovernanceContext`, so every
+         *     call ran with ``ctx=None``: no budget check, no tenant attribution, no ledger row.
+         *     Measured before the fix — seven invocations, ~108 model calls, ~$0.088 spent, **zero
+         *     rows in usage_ledger**. The claim was rendered to the reader on the evals screen and
+         *     in the API response while it was untrue, which is worse than not making it. The
+         *     binding below is the whole fix, and ``test_live_run_is_metered`` is why it cannot
+         *     silently come undone again.
+         *
          *     Args:
          *         limit: Seed cases to score. Small by default — each is several model calls.
          *         auth: The authenticated admin/ai_team principal.
@@ -12893,6 +12902,7 @@ export interface operations {
     evals_live_run_v1_evals_live_run_post: {
         parameters: {
             query?: {
+                /** @description Seed cases to score. Each is ~9 gateway calls (5 completions + 4 embeddings), so this bound is a spend bound. Declared here rather than clamped silently in the body: a caller who asks for 100 should be told the ceiling is 6, not quietly given 6 and left believing they got 100. */
                 limit?: number;
             };
             header?: never;

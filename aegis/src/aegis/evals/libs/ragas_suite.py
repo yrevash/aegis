@@ -23,6 +23,7 @@ be the one place the metering claim is false.
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,6 +49,42 @@ class LiveMetric:
     cases: int
     library: str
     note: str = ""
+
+
+def _usable(value: Any) -> float | None:  # noqa: ANN401 - ragas MetricResult.value
+    """Turn one ragas score into a number, or into ``None`` with no number at all.
+
+    Two of ragas's own routine outcomes are not measurements, and passing either through
+    would break the rule this module is built on — *a zero is a measurement, and not
+    running is not a measurement*.
+
+    **NaN.** ``Faithfulness`` returns ``float("nan")`` when the judge produced no
+    statements, which is an ordinary LLM outcome rather than an error. NaN is not
+    ``None``, so it used to enter the sample, count toward ``cases``, and poison the
+    mean — **one NaN case turned the whole metric NaN even when every other case
+    scored**. Pydantic then serialised it as ``null``, so the panel showed an empty value
+    with no note beside a claim that two cases contributed: a reader told two cases were
+    scored and shown nothing.
+
+    **Zero from a failed judge.** ``AnswerRelevancy`` returns ``0.0`` when the judge
+    generated no question to compare against. That is a judge failure reported as perfect
+    irrelevance, and it drags the corpus mean down with a number nobody measured. This
+    module guards its own zero-avoidance carefully; importing one from the library it
+    trusts would be the same defect at one remove.
+
+    A real 0.0 is indistinguishable from a failed-judge 0.0 at this boundary, so this
+    treats both as not-run. That is the safe direction: under-reporting a genuinely
+    terrible score costs a point of sensitivity, while over-reporting a judge outage as a
+    measured zero is a fabricated number on a screen whose whole subject is not
+    fabricating numbers.
+    """
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out) or out == 0.0:
+        return None
+    return out
 
 
 async def run_ragas_suite(
@@ -104,7 +141,7 @@ async def run_ragas_suite(
             rel = await AnswerRelevancy(llm=llm, embeddings=embedder).ascore(
                 user_input=case.query, response=answer
             )
-            return float(faith.value), float(rel.value)
+            return _usable(faith.value), _usable(rel.value)
         except (TypeError, AttributeError):
             # A wrong call signature is OUR bug, not a judge outage, and it must not be
             # reported as one. This exact catch already lied once: `ascore()` was called
@@ -122,19 +159,38 @@ async def run_ragas_suite(
     def _mean(xs: list[float]) -> float | None:
         return sum(xs) / len(xs) if xs else None
 
+    def _note(scored: list[float], when_none: str) -> str:
+        """Say what the sample is, whenever it is not what was asked for.
+
+        ``cases`` reports how many cases produced a usable score, and a reader comparing
+        it against the ``limit`` they requested deserves to be told where the difference
+        went rather than left to infer it. Silence here is how a mean over one case came
+        to look like a mean over three.
+        """
+        if not scored:
+            return when_none
+        dropped = len(cases) - len(scored)
+        if dropped:
+            return (
+                f"{dropped} of {len(cases)} case(s) produced no usable score — the judge "
+                "returned nothing, or returned a value that is not a measurement — and "
+                "are excluded from this mean rather than counted as zero"
+            )
+        return ""
+
     return [
         LiveMetric(
             name="ragas:faithfulness",
             value=_mean(faiths),
             cases=len(faiths),
             library=lib,
-            note="" if faiths else "the judge returned nothing usable; not scored",
+            note=_note(faiths, "the judge returned nothing usable; not scored"),
         ),
         LiveMetric(
             name="ragas:answer_relevancy",
             value=_mean(rels),
             cases=len(rels),
             library=lib,
-            note="" if rels else "the judge or the embedder was unavailable; not scored",
+            note=_note(rels, "the judge or the embedder was unavailable; not scored"),
         ),
     ]
