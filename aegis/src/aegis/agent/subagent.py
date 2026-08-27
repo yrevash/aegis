@@ -241,8 +241,24 @@ class SubAgentResult:
 
     @property
     def contributed(self) -> bool:
-        """Whether this lane produced findings the synthesis can use."""
-        return self.status is SubAgentStatus.OK and bool(self.findings.strip())
+        """Whether this lane produced findings the synthesis can use.
+
+        ``CEILING`` counts, and that is the whole point of having the state. A lane
+        stopped at its trajectory ceiling has, by construction, done a great deal of
+        work — the ceiling is what it hit *after* several steps — and the docstring on
+        the ceiling branch promises that what it found before the cut is kept. It was
+        not: ``CEILING`` is not ``OK``, so every finding was dropped and the synthesis
+        reported the lane as having returned nothing.
+
+        Partial findings from a truncated lane are worth strictly more than silence.
+        The synthesis names the truncation in words (see ``_omission_phrase``), so a
+        reader is told the lane was cut short *and* gets what it managed to find,
+        rather than being told nothing twice over.
+        """
+        return self.status in (
+            SubAgentStatus.OK,
+            SubAgentStatus.CEILING,
+        ) and bool(self.findings.strip())
 
     def as_dict(self) -> dict[str, Any]:
         """Return a plain, JSON-friendly record (for graph state and the wire)."""
@@ -497,6 +513,23 @@ async def _guarded(
                 role=spec.role,
                 label=spec.label,
                 status="failed",
+                detail=result.error,
+            )
+        )
+        return result
+
+    if result.status is SubAgentStatus.CEILING:
+        # A lane cut at its ceiling is NOT a lane that finished. Emitting "done" here
+        # made the designed terminal state invisible: the console rendered a truncated
+        # lane exactly like a clean one, and the only place a reader could have learned
+        # otherwise was a field the console does not draw. `ceiling` sits beside
+        # `timeout` for the same reason `timeout` is not `done`.
+        writer(
+            events.agent_status(
+                agent_id=spec.agent_id,
+                role=spec.role,
+                label=spec.label,
+                status="ceiling",
                 detail=result.error,
             )
         )

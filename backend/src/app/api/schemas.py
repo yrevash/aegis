@@ -543,9 +543,14 @@ class AgentStatus(_BaseEvent):
     """One sub-agent's lifecycle beat in a concurrent fan-out (additive).
 
     Emitted by each lane of the multi-agent team through its own scoped writer, so a
-    fan-out produces interleaved beats from every agent running at once. ``timeout`` is
-    a **designed** terminal state, not an error: the run degrades gracefully, names the
-    omitted agent in the ``synthesis`` event, and finishes.
+    fan-out produces interleaved beats from every agent running at once. ``timeout`` and
+    ``ceiling`` are **designed** terminal states, not errors: the run degrades
+    gracefully, names the affected agent in the ``synthesis`` event, and finishes.
+
+    They are not interchangeable. ``timeout`` is a lane that ran out of wall clock with
+    nothing to show; ``ceiling`` is a lane that ran out of trajectory and whose partial
+    findings **do** reach the answer. Collapsing the two would tell a reader that a
+    truncated-but-useful lane contributed nothing.
     """
 
     type: Literal["agent_status"] = "agent_status"
@@ -554,8 +559,8 @@ class AgentStatus(_BaseEvent):
     label: str = Field(description="Human label for the agent's lane in the console.")
     status: str = Field(
         description=(
-            "queued | started | thinking | acting | done | failed | timeout — the "
-            "lane's current state."
+            "queued | started | thinking | acting | done | failed | timeout | "
+            "ceiling — the lane's current state."
         )
     )
     detail: str = Field(default="", description="Short human detail for this beat.")

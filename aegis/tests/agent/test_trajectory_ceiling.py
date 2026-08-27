@@ -101,17 +101,33 @@ async def test_a_lane_over_the_ceiling_stops_before_it_calls_the_model(make_deps
         agent_id="a1", role="analyst", label="Analyst",
         system_prompt="You are an analyst.",
     )
+    events_seen: list[object] = []
     result = await run_subagent(
         spec,
         "summarise anything",
         deps=deps,
         persona="operations_lead",
-        writer=lambda _e: None,
+        writer=events_seen.append,
     )
 
     assert calls["n"] == 0, "the ceiling did not stop the call"
     assert result.status is SubAgentStatus.CEILING
     assert "ceiling" in (result.error or "").lower()
+
+    # THE WIRE, not just the returned object. Passing `writer=lambda _e: None` here is
+    # what let a ceiling lane emit `status="done"` for a whole release: the object was
+    # correct and nothing ever looked at what the console was actually told. A terminal
+    # state the operator cannot see is not a terminal state.
+    statuses = [
+        e.get("status")
+        for e in events_seen
+        if isinstance(e, dict) and e.get("type") == "agent_status"
+    ]
+    assert "ceiling" in statuses, (
+        f"a lane cut at its ceiling reported {statuses!r} on the wire — if 'done' is in "
+        "there, the console is drawing a truncated lane as a clean one"
+    )
+    assert "done" not in statuses
 
 
 def test_the_per_result_ceiling_is_read_by_something() -> None:
@@ -162,3 +178,61 @@ def test_an_oversized_tool_result_is_truncated_and_says_so() -> None:
     assert _tool_message(_Call(), "short", max_tokens=100)["content"] == "short"
     # Disabled, nothing is touched either — the bound is opt-out, not mandatory.
     assert _tool_message(_Call(), long, max_tokens=0)["content"] == long
+
+
+def test_a_truncated_lane_keeps_what_it_found() -> None:
+    """The ceiling branch promises the findings survive the cut. They must.
+
+    They did not: ``CEILING`` is not ``OK``, ``contributed`` tested for ``OK``, and so
+    every finding a lane produced before hitting its ceiling was dropped — while the
+    error string three lines away said "what it found before that is kept".
+    """
+    from aegis.agent.subagent import SubAgentResult, SubAgentStatus
+
+    found = SubAgentResult(
+        agent_id="a1", role="analyst", label="Analyst",
+        status=SubAgentStatus.CEILING,
+        findings="Q3 attrition rose 4 points in the Pune site.",
+        error="stopped at its trajectory ceiling",
+    )
+    assert found.contributed, "a truncated lane's findings were thrown away"
+
+    empty = SubAgentResult(
+        agent_id="a2", role="analyst", label="Analyst",
+        status=SubAgentStatus.CEILING, findings="  ",
+    )
+    assert not empty.contributed, "a lane with nothing to say must not count"
+
+
+def test_the_synthesis_names_the_ceiling_either_way() -> None:
+    """Whether a truncated lane contributes or not, the reader is told it was cut.
+
+    Both halves are load-bearing and each was wrong at a different moment. Before the
+    fix, a truncated lane was omitted and described as having "returned nothing usable"
+    — the exact opposite of what a ceiling means. After the first fix it contributed and
+    was silently counted among the healthy lanes, so "3 of 3" hid the truncation.
+    """
+    from aegis.agent.subagent import SubAgentResult, SubAgentStatus
+    from aegis.agent.team import TeamOutcome, synthesis_note
+
+    def note_for(findings: str) -> str:
+        return synthesis_note(
+            TeamOutcome(
+                results=[
+                    SubAgentResult(
+                        agent_id="a1", role="analyst", label="Analyst",
+                        status=SubAgentStatus.CEILING,
+                        findings=findings,
+                        error="stopped at its trajectory ceiling",
+                    )
+                ]
+            )
+        )
+
+    with_findings = note_for("Attrition rose 4 points.")
+    assert "cut short at its trajectory ceiling" in with_findings
+    assert "1 of 1" in with_findings, "it did contribute; the count must say so"
+
+    without = note_for("")
+    assert "cut short at its trajectory ceiling" in without
+    assert "returned nothing usable" not in without

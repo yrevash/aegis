@@ -302,7 +302,12 @@ def agent_status(
     Emitted by :func:`aegis.agent.subagent.run_subagent` through its own scoped writer,
     so a fan-out produces interleaved beats from every concurrent lane. ``status`` is
     one of ``started`` | ``thinking`` | ``acting`` | ``done`` | ``failed`` | ``timeout``
-    — and ``timeout`` is a **designed** terminal state, not an error.
+    | ``ceiling`` — and the last two are **designed** terminal states, not errors.
+
+    ``ceiling`` was missing from this list and from the wire for a release. A lane cut
+    at its trajectory ceiling emitted ``done``, so the console drew a truncated lane
+    exactly like a complete one, and the only record of the truncation lived in a field
+    nothing rendered.
     """
     return {
         "type": "agent_status",

@@ -538,7 +538,7 @@
         "type": "object"
       },
       "AgentStatus": {
-        "description": "One sub-agent's lifecycle beat in a concurrent fan-out (additive).\n\nEmitted by each lane of the multi-agent team through its own scoped writer, so a\nfan-out produces interleaved beats from every agent running at once. ``timeout`` is\na **designed** terminal state, not an error: the run degrades gracefully, names the\nomitted agent in the ``synthesis`` event, and finishes.",
+        "description": "One sub-agent's lifecycle beat in a concurrent fan-out (additive).\n\nEmitted by each lane of the multi-agent team through its own scoped writer, so a\nfan-out produces interleaved beats from every agent running at once. ``timeout`` and\n``ceiling`` are **designed** terminal states, not errors: the run degrades\ngracefully, names the affected agent in the ``synthesis`` event, and finishes.\n\nThey are not interchangeable. ``timeout`` is a lane that ran out of wall clock with\nnothing to show; ``ceiling`` is a lane that ran out of trajectory and whose partial\nfindings **do** reach the answer. Collapsing the two would tell a reader that a\ntruncated-but-useful lane contributed nothing.",
         "properties": {
           "agent_id": {
             "description": "Stable id of the sub-agent this beat belongs to.",
@@ -572,7 +572,7 @@
             "type": "integer"
           },
           "status": {
-            "description": "queued | started | thinking | acting | done | failed | timeout — the lane's current state.",
+            "description": "queued | started | thinking | acting | done | failed | timeout | ceiling — the lane's current state.",
             "title": "Status",
             "type": "string"
           },

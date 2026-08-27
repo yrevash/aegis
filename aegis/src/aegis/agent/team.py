@@ -509,6 +509,17 @@ def synthesis_note(outcome: TeamOutcome) -> str:
     reasons = [
         f"the {r.label.lower()} {_omission_phrase(r)}" for r in outcome.omitted
     ]
+    # A lane cut at its ceiling now CONTRIBUTES its partial findings, which is right —
+    # but it would then be counted among the healthy lanes and never mentioned, and the
+    # reader would be told "3 of 3" about a run where one lane was truncated. Being
+    # counted is not the same as being complete, so a truncated contributor is named
+    # here too.
+    reasons += [
+        f"the {r.label.lower()} was cut short at its trajectory ceiling, so its "
+        "findings are partial"
+        for r in outcome.contributing
+        if r.status is SubAgentStatus.CEILING
+    ]
     if reasons:
         note += "; " + "; ".join(reasons)
     return note + "."
@@ -522,6 +533,13 @@ def _omission_phrase(result: SubAgentResult) -> str:
         return f"was cut short ({result.error})"
     if result.status is SubAgentStatus.FAILED:
         return f"failed ({result.error})"
+    if result.status is SubAgentStatus.CEILING:
+        # Added late, and its absence was the bug: a new terminal state was introduced
+        # and this function — the one place the product turns a lane's fate into words
+        # a reader sees — fell through to "returned nothing usable". For the one state
+        # whose entire design is "it found things, then stopped", that was the exact
+        # opposite of true.
+        return f"was cut short at its trajectory ceiling ({result.error})"
     return "returned nothing usable"
 
 

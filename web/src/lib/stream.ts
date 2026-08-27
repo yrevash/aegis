@@ -388,9 +388,15 @@ export interface RoutingEvent extends BaseEvent {
 /**
  * One sub-agent's lifecycle beat in a concurrent fan-out.
  *
- * `status: 'timeout'` is a **designed** terminal state, not an error: the run degrades
- * gracefully, names the omitted agent in {@link SynthesisEvent}, and finishes. A card
- * that renders it as a stuck spinner is reading the protocol wrong.
+ * `status: 'timeout'` and `status: 'ceiling'` are **designed** terminal states, not
+ * errors: the run degrades gracefully, names the affected agent in
+ * {@link SynthesisEvent}, and finishes. A card that renders either as a stuck spinner is
+ * reading the protocol wrong.
+ *
+ * The two differ in what survives. `timeout` means the lane ran out of wall clock and
+ * has nothing; `ceiling` means it ran out of trajectory and its findings **are** in the
+ * answer, partially. A reader who is not told the difference will over-trust a truncated
+ * lane or discount a complete one.
  */
 export interface AgentStatus extends BaseEvent {
   type: 'agent_status'
@@ -400,7 +406,7 @@ export interface AgentStatus extends BaseEvent {
   role: string
   /** Human label for the agent's lane in the console. */
   label: string
-  /** queued | started | thinking | acting | done | failed | timeout. */
+  /** queued | started | thinking | acting | done | failed | timeout | ceiling. */
   status: string
   /** Short human detail for this beat. */
   detail: string
