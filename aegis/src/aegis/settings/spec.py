@@ -511,6 +511,38 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         ),
     ),
     SettingSpec(
+        key="agent.max_trajectory_tokens",
+        type_=int,
+        default=36000,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        bounds=(2000, 200000),
+        stricter=Strictness.LOWER,
+        description=(
+            "Hard cap on one lane's whole trajectory, in tokens. A lane that would "
+            "exceed it stops with what it has found rather than being cut mid-thought. "
+            "Fewer tokens is stricter: it bounds spend and guarantees termination."
+        ),
+    ),
+    SettingSpec(
+        key="agent.max_tool_result_tokens",
+        type_=int,
+        default=4000,
+        writable_by=_TENANT_CONTROLS,
+        readable_by=_EVERY_ROLE,
+        merge=MergeRule.TIGHTEN_ONLY,
+        bounds=(200, 32000),
+        stricter=Strictness.LOWER,
+        description=(
+            "Hard cap on ONE tool result's contribution to the trajectory. This is the "
+            "bound that bites first in practice: a run's real exposure is a single "
+            "unbounded result — a search returning a whole document — not a long "
+            "conversation. The truncation is marked, and the full text stays on the run "
+            "record."
+        ),
+    ),
+    SettingSpec(
         key="agent.agentic_retrieval_max_rounds",
         type_=int,
         default=2,

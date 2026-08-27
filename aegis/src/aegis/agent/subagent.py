@@ -606,7 +606,25 @@ async def _loop(
                 # monotone estimate is all a ceiling needs.
                 from aegis.memory.tokens import count_tokens
 
-                size = count_tokens(json.dumps(messages, default=str))
+                # `ensure_ascii=False` is the whole fix and it is not cosmetic.
+                #
+                # json.dumps defaults to ensure_ascii=True, so every Devanagari character
+                # became a six-byte \uXXXX escape BEFORE being tokenised. Measured on the
+                # same service-desk trajectory in two languages:
+                #
+                #   english: real=11332  measured=11757  ratio=1.04
+                #   hindi:   real=28272  measured=60057  ratio=2.12  -> killed at 36000
+                #
+                # The Hindi lane was measured at 2.12x its real cost and cut while
+                # carrying ~17k real tokens — less than half the stated bound and well
+                # inside any model's context window. The failure was invisible: an
+                # operator saw a configured bound of 36000 and a lane dying, with no way
+                # to know the number being compared was not the number in the config.
+                #
+                # For a platform that ships to India this is not a rounding error, and
+                # `default=str` is kept because a non-serialisable value should degrade
+                # rather than take the run down.
+                size = count_tokens(json.dumps(messages, ensure_ascii=False, default=str))
                 if size > budget:
                     result.status = SubAgentStatus.CEILING
                     result.error = (

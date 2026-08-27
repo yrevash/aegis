@@ -584,7 +584,16 @@ function Advisories({ token }: { token: string | null }): ReactElement {
   if (state.status === 'idle' || state.status === 'loading') {
     return (
       <Card>
-        <CardBody>
+        {/* The exports render ABOVE the skeleton, not after it.
+            They were inside the ready/error branches only, so all three downloads were
+            gated behind `POST /stack/advisories` — a live advisory-database call
+            measured at 10.8s warm, and still unanswered after 25s cold. The SBOM and
+            AgBOM endpoints are purely local and answer in milliseconds. On a firewalled
+            venue network the advisory call hangs, this component never leaves `loading`,
+            and the bill of materials becomes undownloadable for a reason that has
+            nothing to do with it. */}
+        <CardBody className="flex flex-col gap-4">
+          {exports}
           <LoadingState rows={3} label="Asking the advisory database…" />
         </CardBody>
       </Card>

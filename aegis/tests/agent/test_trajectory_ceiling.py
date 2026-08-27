@@ -236,3 +236,42 @@ def test_the_synthesis_names_the_ceiling_either_way() -> None:
     without = note_for("")
     assert "cut short at its trajectory ceiling" in without
     assert "returned nothing usable" not in without
+
+
+def test_the_ceiling_measures_hindi_at_its_real_cost() -> None:
+    """A bound that silently halves itself in one language is not a bound.
+
+    ``json.dumps`` defaults to ``ensure_ascii=True``, so every Devanagari character became
+    a six-byte ``\\uXXXX`` escape before being tokenised. A Hindi lane was measured at over
+    twice its real cost and cut at the ceiling while carrying less than half the stated
+    bound — well inside any model's context window — and the operator had no way to see
+    it, because the configured number and the compared number were not the same number.
+
+    This product ships to India. The assertion is deliberately loose (1.35×) so it tests
+    the defect and not the tokeniser's exact behaviour, while still failing hard on the
+    2.1–2.6× inflation the escaping caused.
+    """
+    import json
+
+    from aegis.memory.tokens import count_tokens
+
+    hindi = (
+        "कर्मचारी अवकाश नीति के अनुसार अर्जित अवकाश तीस दिन तक अग्रेषित किया जा सकता है। " * 40
+    )
+    messages = [{"role": "user", "content": hindi}]
+
+    real = count_tokens(hindi)
+    measured = count_tokens(json.dumps(messages, ensure_ascii=False, default=str))
+    assert real > 0, "the fixture is vacuous"
+    assert measured / real < 1.35, (
+        f"the ceiling measures Hindi at {measured / real:.2f}x its real cost; a lane "
+        "would be cut far below the configured bound with nothing on screen to say so"
+    )
+
+    # The anti-vacuity half: prove the OLD expression really was this wrong, so this test
+    # cannot pass merely because the fixture is too small to show the difference.
+    escaped = count_tokens(json.dumps(messages, default=str))
+    assert escaped / real > 1.8, (
+        "the fixture no longer demonstrates the escaping blow-up, so it no longer "
+        "protects against reintroducing it"
+    )

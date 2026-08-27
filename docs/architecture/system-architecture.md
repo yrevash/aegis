@@ -370,6 +370,24 @@ absent, not invented — three things are worth naming directly:
 - **Checkpoint storage grows without bound.** Nothing prunes LangGraph's checkpoint
   tables, and no `audit_log` retention or partitioning is documented either. Both are
   recorded as owed work rather than described as solved.
+- **There is no trajectory compaction, and there is now a ceiling instead.** Nothing in
+  Aegis summarises or evicts a run's own turn history. The memory subsystem
+  (`aegis/src/aegis/memory/`) budgets and orders *recalled* material across turns; it
+  never sees the trajectory a single run accumulates. That trajectory exists in exactly
+  one place — a sub-agent lane's `messages` list — and it is now bounded twice: by
+  `AgentConfig.max_trajectory_tokens` before each model call, and by
+  `AgentConfig.max_tool_result_tokens` on each tool result before it is appended. Both
+  are in the settings catalogue as `TIGHTEN_ONLY`, so a tenant can bound its own runs
+  harder than the platform does and can never loosen past it. A lane that reaches the
+  ceiling ends at `SubAgentStatus.CEILING`, keeps the findings it already has, emits a
+  `status="ceiling"` beat, and is named as cut short by the synthesis — the same
+  designed terminal state a timeout gets. **The ceiling is a refusal, not a
+  compaction:** the lane stops rather than continuing on a summarised history, because
+  summarising would put a model call, and a compression-hallucination surface, on the
+  run path. Long-horizon runs that would need compaction are therefore **out of scope by
+  design**, not merely unbuilt — see
+  [`dev_new_docs_v2/sota/07-long-horizon-ceiling.md`](../dev_new_docs_v2/sota/07-long-horizon-ceiling.md)
+  for what building it would cost.
 - **DNS is not resolved by the SSRF guard.** MCP peer registration refuses loopback,
   link-local, private and reserved addresses and non-allowlisted schemes at the registry
   chokepoint, but a hostname that resolves inward still passes. Stated, not hidden.

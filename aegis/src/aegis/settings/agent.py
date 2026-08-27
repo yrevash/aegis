@@ -106,6 +106,13 @@ AGENT_SETTING_BINDINGS: tuple[_Binding, ...] = (
         key="agent.agentic_retrieval_max_rounds", field="agentic_retrieval_max_rounds"
     ),
     _Binding(key="agent.team.max_parallel", field="max_parallel_agents"),
+    # The two long-horizon ceilings. Without these bindings the catalogue entries would
+    # exist and a tenant could write them, and nothing would read the result — the same
+    # declared-but-unbound shape this build has now shipped three times. Both are
+    # TIGHTEN_ONLY and stricter-is-lower, so a tenant can bound its own runs harder than
+    # the platform does and can never loosen past it.
+    _Binding(key="agent.max_trajectory_tokens", field="max_trajectory_tokens"),
+    _Binding(key="agent.max_tool_result_tokens", field="max_tool_result_tokens"),
 )
 
 

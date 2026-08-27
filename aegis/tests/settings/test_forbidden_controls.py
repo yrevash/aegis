@@ -143,6 +143,14 @@ _STRICTER_END: dict[str, Strictness] = {
     "agent.max_plan_iterations": Strictness.LOWER,
     "agent.agentic_retrieval_max_rounds": Strictness.LOWER,
     "agent.team.max_parallel": Strictness.LOWER,
+    # The two long-horizon ceilings. A smaller trajectory budget stops a lane sooner —
+    # less spend, and a guarantee it terminates. A smaller per-result cap truncates a
+    # big tool result harder, which bounds the single largest thing one step can inject
+    # into the context. Both are "lower refuses more", same as the rounds caps above;
+    # written out here rather than inferred because this table exists precisely to be an
+    # independent opinion of the spec's own field.
+    "agent.max_trajectory_tokens": Strictness.LOWER,
+    "agent.max_tool_result_tokens": Strictness.LOWER,
     # A rail that hard-blocks is stricter than one that flags.
     "guardrails.topical.block": Strictness.HIGHER,
     "guardrails.grounding.block": Strictness.HIGHER,

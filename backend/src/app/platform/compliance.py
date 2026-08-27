@@ -3004,10 +3004,12 @@ _OWASP_AGENTIC: tuple[ControlEntry, ...] = (
             "retried, so the loop cannot spend its budget arguing with a guardrail."
         ),
         gap=(
-            "The spend and wall-clock bounds described in the design are not built; the "
-            "loop is bounded by iteration count and progress, not by cost or time. A "
-            "planner that proposes a different call each round can still reach the "
-            "iteration cap, and nothing yet detects a failure cascading across a fan-out."
+            "A token ceiling now bounds each lane — one for the whole trajectory and one "
+            "for a single tool result — and both are tenant-tightenable, so a run is "
+            "bounded by size as well as by iteration count and progress. What is still "
+            "absent is a wall-clock or currency bound on the repair loop itself, and "
+            "cross-lane detection: a failure cascading across a fan-out is still not "
+            "recognised as one event."
         ),
         evidence=[
             _f("aegis/src/aegis/agent/graph.py", "verify, and the termination bounds"),
