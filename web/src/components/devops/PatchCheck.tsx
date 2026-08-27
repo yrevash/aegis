@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 
-import { checkPatches, getAdvisories, getSbom } from '@/lib/api/client'
+import { checkPatches, getAdvisories, getAgbom, getSbom } from '@/lib/api/client'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/primitives/button'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -517,6 +517,17 @@ function Advisories({ token }: { token: string | null }): ReactElement {
     [token],
   )
 
+  const downloadAgbom = useCallback(() => {
+    void getAgbom(token).then((text) => {
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'aegis-agbom.cyclonedx.json'
+      link.click()
+      URL.revokeObjectURL(url)
+    })
+  }, [token])
+
   const exports = (
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="outline" onClick={() => download('cyclonedx')}>
@@ -526,6 +537,13 @@ function Advisories({ token }: { token: string | null }): ReactElement {
       <Button size="sm" variant="outline" onClick={() => download('spdx')}>
         <Download className="size-3.5" aria-hidden />
         SPDX 2.3
+      </Button>
+      {/* The agent's own inventory, beside the dependency one. A package manifest
+          cannot say which tools exist at which risk tier, and that is the half that
+          decides what an agent can actually do. */}
+      <Button size="sm" variant="outline" onClick={() => downloadAgbom()}>
+        <Download className="size-3.5" aria-hidden />
+        AgBOM
       </Button>
     </div>
   )

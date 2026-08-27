@@ -2020,6 +2020,34 @@ async def platform_public_metrics(
 _AUDIT_LIMIT_MAX = 200
 
 
+@router.get("/platform/agbom", tags=["platform"])
+async def platform_agbom(
+    auth: AuthContext = Depends(require_admin_or_devops),
+) -> dict[str, Any]:
+    """The Agent Bill of Materials — every tool, model and rail this agent is made of.
+
+    The dependency SBOM at ``GET /stack/sbom`` answers "what packages is this built
+    from". This answers the question a package manifest cannot: **what can this agent
+    do**. Which tools exist and at what risk tier, which model deployments answer which
+    role, which guard stages screen the traffic.
+
+    That distinction is why the March 2026 litellm compromise is the right thing to point
+    at. Pinning dependencies is necessary and it is not an inventory, and "we are clean"
+    was, until this endpoint, a claim nobody outside could check.
+
+    CycloneDX 1.6 so a buyer's existing scanner reads it. One deliberate divergence from
+    the OWASP AOS example is documented in :mod:`app.platform.agbom`: tools are emitted as
+    ``application`` because ``tool`` is not a CycloneDX component type, and a document
+    that fails validation defeats the point of using a standard format.
+
+    Args:
+        auth: The authenticated admin/devops principal.
+    """
+    from app.platform.agbom import build_agbom
+
+    return build_agbom()
+
+
 @router.get("/audit/verify", response_model=AuditChainResponse, tags=["audit"])
 async def audit_verify(
     tenant_id: int | None = None,

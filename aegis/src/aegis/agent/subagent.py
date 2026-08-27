@@ -44,6 +44,7 @@ Three more invariants, all enforced here rather than hoped for:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -115,6 +116,12 @@ class SubAgentStatus(StrEnum):
     OK = "ok"
     FAILED = "failed"
     TIMEOUT = "timeout"
+    #: The lane's trajectory reached its token ceiling. Like ``TIMEOUT`` this is a
+    #: DESIGNED terminal state and not an error: what the lane found so far is kept and
+    #: the synthesis names it as cut short. Aegis has no trajectory compaction, so this
+    #: is the bound that stands in for it — and a lane that stops at a stated ceiling is
+    #: a different thing from one that fails at a context-window error nobody predicted.
+    CEILING = "ceiling"
     #: The lane was cancelled from outside (a killed agent, or the fan-out's wall clock).
     CANCELLED = "cancelled"
 
@@ -555,6 +562,26 @@ async def _loop(
                     detail=f"step {step}/{spec.max_steps}",
                 )
             )
+            # The trajectory ceiling, checked before the call rather than after it.
+            # Checking after would mean paying for the call that breached the bound,
+            # which is the one call the bound exists to avoid.
+            budget = getattr(deps.config, "max_trajectory_tokens", 0)
+            if budget:
+                # Deferred: `aegis.agent` must import without pulling heavy dependencies
+                # — `tests/agent/test_isolation.py` enforces that, and tiktoken sits
+                # behind this module. The estimator degrades to len//4 without it, and a
+                # monotone estimate is all a ceiling needs.
+                from aegis.memory.tokens import count_tokens
+
+                size = count_tokens(json.dumps(messages, default=str))
+                if size > budget:
+                    result.status = SubAgentStatus.CEILING
+                    result.error = (
+                        f"the lane stopped at its trajectory ceiling ({size} tokens, "
+                        f"limit {budget}); what it found before that is kept."
+                    )
+                    break
+
             completion = await call_with_retry(
                 lambda: deps.complete(
                     spec.model_role, messages, tools=definitions or None

@@ -391,6 +391,27 @@ class AgentConfig:
     gate_min_risk: RiskLevel = RiskLevel.HIGH
     stream_chunk_words: int = 4
     max_plan_iterations: int = 4
+    #: Hard ceiling on the tokens one sub-agent lane's trajectory may reach before its
+    #: next model call, estimated over the whole ``messages`` list.
+    #:
+    #: Aegis has no trajectory compaction: nothing summarises or evicts a run's own turn
+    #: history. Its memory subsystem is excellent and governs *the store across turns* —
+    #: it never sees what one run accumulates. Until compaction exists, the honest answer
+    #: to "what happens on a very long run" is a stated bound rather than a shrug.
+    #:
+    #: **36000, chosen as roughly 3x the observed peak.** Measured 2026-08-27 on this
+    #: deployment across two fan-out runs: peak 11,859 tokens per lane. That is TWO
+    #: SAMPLES, which is thin, and the number should be revisited against a real
+    #: workload rather than trusted as calibrated. Recording the sample size here is the
+    #: point — a ceiling whose provenance is unwritten becomes folklore.
+    max_trajectory_tokens: int = 36000
+    #: Hard ceiling on ONE tool result's contribution to a lane's trajectory. A longer
+    #: summary is truncated with an explicit marker before it is appended; the full text
+    #: stays on the result record, so the model loses the tail and the audit does not.
+    #:
+    #: This is the bound that actually bites first in practice: a run's real exposure is
+    #: one unbounded tool result, not a long conversation.
+    max_tool_result_tokens: int = 4000
     self_repair_enabled: bool = True
     approval_park_timeout: float | None = None
     default_persona_id: str = "default"
@@ -437,6 +458,8 @@ class AgentConfig:
             "gate_min_risk": self.gate_min_risk.value,
             "stream_chunk_words": self.stream_chunk_words,
             "max_plan_iterations": self.max_plan_iterations,
+            "max_trajectory_tokens": self.max_trajectory_tokens,
+            "max_tool_result_tokens": self.max_tool_result_tokens,
             "self_repair_enabled": self.self_repair_enabled,
             "approval_park_timeout": self.approval_park_timeout,
             "default_persona_id": self.default_persona_id,

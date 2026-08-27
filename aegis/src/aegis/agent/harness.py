@@ -75,6 +75,22 @@ _KNOB_SPECS: tuple[_KnobSpec, ...] = (
         minimum=1,
     ),
     _KnobSpec(
+        "max_trajectory_tokens",
+        "int",
+        "Ceiling on one lane's trajectory before its next model call. Aegis has no "
+        "trajectory compaction, so this is the bound that stands in for it.",
+        minimum=2000,
+        maximum=200000,
+    ),
+    _KnobSpec(
+        "max_tool_result_tokens",
+        "int",
+        "Ceiling on one tool result's contribution to a trajectory. The bound that "
+        "bites first: the real exposure is one unbounded result, not a long chat.",
+        minimum=500,
+        maximum=50000,
+    ),
+    _KnobSpec(
         "query_rewrite_enabled",
         "bool",
         "Run a cheap, context-aware query rewrite before retrieval.",

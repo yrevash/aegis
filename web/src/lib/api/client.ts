@@ -665,6 +665,19 @@ export async function getSbom(
   return JSON.stringify(body, null, 2)
 }
 
+/**
+ * Fetch the Agent Bill of Materials.
+ *
+ * The SBOM above answers "what packages is this built from". This answers the question a
+ * package manifest cannot: **what can this agent do** — every tool with its risk tier,
+ * every model deployment the router will request, every guard stage. Same CycloneDX 1.6
+ * envelope, so the same scanner reads it.
+ */
+export async function getAgbom(token: string | null = null): Promise<string> {
+  const body = await request<unknown>('/platform/agbom', { method: 'GET' }, token)
+  return JSON.stringify(body, null, 2)
+}
+
 // ── Client: risk map + savings ───────────────────────────────────────────────
 
 /** Fetch the agent-risk assurance heat-map (client-facing). */

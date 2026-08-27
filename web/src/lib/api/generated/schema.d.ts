@@ -2714,6 +2714,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/platform/agbom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Platform Agbom
+         * @description The Agent Bill of Materials — every tool, model and rail this agent is made of.
+         *
+         *     The dependency SBOM at ``GET /stack/sbom`` answers "what packages is this built
+         *     from". This answers the question a package manifest cannot: **what can this agent
+         *     do**. Which tools exist and at what risk tier, which model deployments answer which
+         *     role, which guard stages screen the traffic.
+         *
+         *     That distinction is why the March 2026 litellm compromise is the right thing to point
+         *     at. Pinning dependencies is necessary and it is not an inventory, and "we are clean"
+         *     was, until this endpoint, a claim nobody outside could check.
+         *
+         *     CycloneDX 1.6 so a buyer's existing scanner reads it. One deliberate divergence from
+         *     the OWASP AOS example is documented in :mod:`app.platform.agbom`: tools are emitted as
+         *     ``application`` because ``tool`` is not a CycloneDX component type, and a document
+         *     that fails validation defeats the point of using a standard format.
+         *
+         *     Args:
+         *         auth: The authenticated admin/devops principal.
+         */
+        get: operations["platform_agbom_v1_platform_agbom_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/platform/caches": {
         parameters: {
             query?: never;
@@ -14533,6 +14570,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PipelinesResponse"];
+                };
+            };
+        };
+    };
+    platform_agbom_v1_platform_agbom_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
