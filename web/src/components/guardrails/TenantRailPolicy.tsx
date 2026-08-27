@@ -158,7 +158,7 @@ export function TenantRailPolicy(): ReactElement {
   }, [token, hydrated])
 
   return (
-    <Card className="rounded-lg">
+    <Card collapsible className="rounded-lg">
       <CardBody>
         <SectionHeader
           as="h2"

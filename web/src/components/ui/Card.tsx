@@ -1,4 +1,8 @@
-import type { ComponentProps, ReactNode } from 'react'
+'use client'
+
+import { ChevronRight } from 'lucide-react'
+import { useState, type ComponentProps, type ReactNode } from 'react'
+
 import { cn } from '@/lib/utils'
 
 /**
@@ -27,13 +31,76 @@ import { cn } from '@/lib/utils'
  * token exists so this is decided once; a card that opts up from it is the whole
  * console opting up, because every panel is this card.
  */
-export function Card({ children, className, ...props }: ComponentProps<'div'>) {
+export function Card({
+  children,
+  className,
+  collapsible = false,
+  summary,
+  ...props
+}: ComponentProps<'div'> & {
+  /**
+   * Open closed; hover reveals; click pins. The same contract as `DataPanel`
+   * (DESIGN.md §4), available to any card without restructuring it.
+   *
+   * `DataPanel` owns its header and body, so it can place the control directly.
+   * A plain `Card` receives them as children, and rewriting forty call sites from
+   * `Card`+`CardHeader`+`CardBody` into `DataPanel` is a structural edit that
+   * silently breaks the ones with a nested card or a non-self-closing header —
+   * measured: a mechanical transform of four such files produced a file that did
+   * not parse.
+   *
+   * So the collapse is applied from the OUTSIDE, through the `data-slot` hooks the
+   * header and body already carry. No child is inspected, cloned or moved.
+   */
+  collapsible?: boolean
+  /** The one line the closed bar carries — a count and a key figure. */
+  summary?: ReactNode
+}) {
+  const [pinned, setPinned] = useState(false)
+  const [peeking, setPeeking] = useState(false)
+  const open = !collapsible || pinned || peeking
+
   return (
     <div
       data-slot="card"
-      className={cn('rounded-lg border border-border bg-card text-card-foreground', className)}
+      data-open={open ? 'true' : 'false'}
+      className={cn(
+        'rounded-lg border border-border bg-card text-card-foreground',
+        collapsible && 'relative',
+        // Room for the control, so it never lands on top of the header's own actions.
+        collapsible && '[&>[data-slot=card-header]]:pr-14',
+        collapsible &&
+          !open &&
+          // `invisible` + zero height, never `hidden`: the content stays in the
+          // accessibility tree and keeps its measured layout, so expanding is instant
+          // and a screen-reader user loses nothing.
+          '[&>[data-slot=card-body]]:invisible [&>[data-slot=card-body]]:h-0 [&>[data-slot=card-body]]:overflow-hidden [&>[data-slot=card-body]]:!py-0',
+        className,
+      )}
+      {...(collapsible
+        ? { onMouseEnter: () => setPeeking(true), onMouseLeave: () => setPeeking(false) }
+        : {})}
       {...props}
     >
+      {collapsible ? (
+        <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+          {summary ? (
+            <span className="text-xs tabular-nums text-muted-foreground">{summary}</span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setPinned((v) => !v)}
+            aria-expanded={open}
+            aria-label={open ? 'Collapse this panel' : 'Expand this panel'}
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <ChevronRight
+              className={cn('size-4 transition-transform duration-[--dur-fast]', open && 'rotate-90')}
+              aria-hidden
+            />
+          </button>
+        </div>
+      ) : null}
       {children}
     </div>
   )

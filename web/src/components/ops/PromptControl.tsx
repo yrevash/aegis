@@ -185,7 +185,7 @@ export function PromptControl(): ReactElement {
     : `version ${screen?.activeVersion}`
 
   return (
-    <Card>
+    <Card collapsible>
       <CardHeader
         eyebrow={screen ? screen.scopeLabel : 'prompt control'}
         title="Live prompt"

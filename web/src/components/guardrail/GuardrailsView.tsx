@@ -886,7 +886,7 @@ function GuardrailsView(): ReactElement {
       <PostureCoverage posture={posture} platformWide={platformWide} />
 
       <div className="grid min-w-0 gap-6 xl:grid-cols-2">
-        <Card className="min-w-0 rounded-lg">
+        <Card collapsible className="min-w-0 rounded-lg">
           <CardBody className="min-w-0">
             <RailStack
               title="Input rails"
@@ -896,7 +896,7 @@ function GuardrailsView(): ReactElement {
             />
           </CardBody>
         </Card>
-        <Card className="min-w-0 rounded-lg">
+        <Card collapsible className="min-w-0 rounded-lg">
           <CardBody className="min-w-0">
             <RailStack
               title="Output rails"

@@ -1,0 +1,17 @@
+import { chromium } from 'playwright'
+const BASE='http://127.0.0.1:3001'
+const b=await chromium.launch({headless:true})
+const c=await b.newContext({viewport:{width:1280,height:900}})
+const p=await c.newPage()
+await p.goto(`${BASE}/`,{waitUntil:'domcontentloaded'})
+await p.evaluate(()=>{try{localStorage.clear();sessionStorage.clear()}catch{}})
+await p.goto(`${BASE}/login`,{waitUntil:'domcontentloaded'});await p.waitForTimeout(1200)
+await p.locator('input[name="username"], input#username, input[type="text"]').first().fill('northwind.analyst')
+await p.locator('input[type="password"]').first().fill('demo')
+await p.locator('button[type="submit"]').first().click()
+await p.waitForURL(x=>!x.pathname.startsWith('/login'),{timeout:25000}).catch(()=>{})
+await p.waitForTimeout(2500)
+await p.goto(`${BASE}/app/ai_team/memory`,{waitUntil:'domcontentloaded'});await p.waitForTimeout(4000)
+await p.screenshot({path:'/Users/yrevash/aegis/.demo/frames/mem.png',fullPage:true})
+console.log('  height', await p.evaluate(()=>document.body.scrollHeight))
+await p.close();await c.close();await b.close()
