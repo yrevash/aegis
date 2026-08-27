@@ -5415,6 +5415,74 @@
         "title": "LatencyResponse",
         "type": "object"
       },
+      "LiveEvalResponse": {
+        "description": "The result of an explicitly-triggered, LLM-judged evaluation run.\n\nSeparate from ``GET /evals/report`` on purpose: that one is deterministic, offline\nand memoised so a dashboard can poll it. This one costs model calls, and every one\nof them goes through the platform gateway — so the spend shows up in the usage\nledger like any other call rather than being invisible to the cost surface.",
+        "properties": {
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/LiveMetricRow"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "source": {
+            "description": "What produced these numbers.",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "metrics",
+          "source"
+        ],
+        "title": "LiveEvalResponse",
+        "type": "object"
+      },
+      "LiveMetricRow": {
+        "description": "One metric computed by a real evaluation library, not by a proxy.",
+        "properties": {
+          "cases": {
+            "description": "How many cases contributed.",
+            "title": "Cases",
+            "type": "integer"
+          },
+          "library": {
+            "description": "Library and version that produced it.",
+            "title": "Library",
+            "type": "string"
+          },
+          "name": {
+            "description": "Namespaced with the library — e.g. ragas:faithfulness.",
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "description": "Why the value is null, when it is.",
+            "title": "Note",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The score in [0,1], or null when the metric could not be run. Never zero for a metric that did not run — a zero is a measurement.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "name",
+          "cases",
+          "library"
+        ],
+        "title": "LiveMetricRow",
+        "type": "object"
+      },
       "Locality": {
         "description": "Where a configured destination sits relative to this deployment.",
         "enum": [
@@ -15011,6 +15079,55 @@
         "summary": "Get Ingest Progress",
         "tags": [
           "ingestion"
+        ]
+      }
+    },
+    "/v1/evals/live-run": {
+      "post": {
+        "description": "Score the seed corpus with the real Ragas metrics (admin/ai_team).\n\nA POST and not a GET, and not memoised, because this **spends money**: every metric\nis LLM-judged and answer relevancy also embeds. ``GET /evals/report`` stays the cheap\ndeterministic rollup a dashboard may poll; conflating them would turn a page refresh\ninto a budget event.\n\nEvery judge call goes through :func:`aegis.gateway.complete` rather than at an API\ndirectly, so it is budget-checked, rate-limited, traced and written to the usage\nledger. That is the difference between using the library and using it honestly: an\nevaluation subsystem whose spend the cost surface cannot see would be the one place\nthis platform's metering claim is false.\n\nArgs:\n    limit: Seed cases to score. Small by default — each is several model calls.\n    auth: The authenticated admin/ai_team principal.",
+        "operationId": "evals_live_run_v1_evals_live_run_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 2,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveEvalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Evals Live Run",
+        "tags": [
+          "evals"
         ]
       }
     },

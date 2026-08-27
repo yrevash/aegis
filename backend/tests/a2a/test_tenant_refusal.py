@@ -91,3 +91,31 @@ def test_the_refusal_message_names_no_tenant() -> None:
             assert "3" not in message
         else:  # pragma: no cover - the call above must raise
             pytest.fail(f"routed={routed!r} held={held!r} was not refused")
+
+
+@pytest.mark.parametrize("bad", [7, 7.0, True, ["7"], {"tenant": 7}, None.__class__])
+def test_a_non_string_routing_field_is_refused_and_not_raised(bad: object) -> None:
+    """A 500 is an oracle by another route.
+
+    The non-string cases used to reach a string method and raise `AttributeError`, which
+    the framework turned into a 500. A caller who cannot tell a wrong tenant from a right
+    one can still tell a 500 from a `-32602`, so the *shape* of the failure carried the
+    signal the message was careful not to. Every rejection now leaves by the same door.
+    """
+    with pytest.raises(TenantMismatchError):
+        resolve_addressed_tenant(routed=bad, authenticated=7)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "sneaky", [" 7", "7 ", "\t7", "7\n", "+7", "07", "7.0", "٧", "７"]
+)
+def test_whitespace_signs_padding_and_full_width_digits_are_all_refused(sneaky: str) -> None:
+    """Anything that parses to 7 but is not the string "7".
+
+    Each of these is a way to write a tenant id that a log, a rate limiter or a blocklist
+    sees differently from the comparison that decides access. Full-width `７` and
+    Arabic-Indic `٧` both convert to 7 under Python's `int()`; a leading `+` or `0` and
+    surrounding whitespace all survive it too.
+    """
+    with pytest.raises(TenantMismatchError):
+        resolve_addressed_tenant(routed=sneaky, authenticated=7)

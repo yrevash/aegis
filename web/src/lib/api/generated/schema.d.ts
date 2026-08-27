@@ -1072,6 +1072,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/evals/live-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evals Live Run
+         * @description Score the seed corpus with the real Ragas metrics (admin/ai_team).
+         *
+         *     A POST and not a GET, and not memoised, because this **spends money**: every metric
+         *     is LLM-judged and answer relevancy also embeds. ``GET /evals/report`` stays the cheap
+         *     deterministic rollup a dashboard may poll; conflating them would turn a page refresh
+         *     into a budget event.
+         *
+         *     Every judge call goes through :func:`aegis.gateway.complete` rather than at an API
+         *     directly, so it is budget-checked, rate-limited, traced and written to the usage
+         *     ledger. That is the difference between using the library and using it honestly: an
+         *     evaluation subsystem whose spend the cost surface cannot see would be the one place
+         *     this platform's metering claim is false.
+         *
+         *     Args:
+         *         limit: Seed cases to score. Small by default — each is several model calls.
+         *         auth: The authenticated admin/ai_team principal.
+         */
+        post: operations["evals_live_run_v1_evals_live_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/evals/report": {
         parameters: {
             query?: never;
@@ -7021,6 +7056,56 @@ export interface components {
             window_capacity?: number | null;
         };
         /**
+         * LiveEvalResponse
+         * @description The result of an explicitly-triggered, LLM-judged evaluation run.
+         *
+         *     Separate from ``GET /evals/report`` on purpose: that one is deterministic, offline
+         *     and memoised so a dashboard can poll it. This one costs model calls, and every one
+         *     of them goes through the platform gateway — so the spend shows up in the usage
+         *     ledger like any other call rather than being invisible to the cost surface.
+         */
+        LiveEvalResponse: {
+            /** Metrics */
+            metrics: components["schemas"]["LiveMetricRow"][];
+            /**
+             * Source
+             * @description What produced these numbers.
+             */
+            source: string;
+        };
+        /**
+         * LiveMetricRow
+         * @description One metric computed by a real evaluation library, not by a proxy.
+         */
+        LiveMetricRow: {
+            /**
+             * Cases
+             * @description How many cases contributed.
+             */
+            cases: number;
+            /**
+             * Library
+             * @description Library and version that produced it.
+             */
+            library: string;
+            /**
+             * Name
+             * @description Namespaced with the library — e.g. ragas:faithfulness.
+             */
+            name: string;
+            /**
+             * Note
+             * @description Why the value is null, when it is.
+             * @default
+             */
+            note: string;
+            /**
+             * Value
+             * @description The score in [0,1], or null when the metric could not be run. Never zero for a metric that did not run — a zero is a measurement.
+             */
+            value?: number | null;
+        };
+        /**
          * Locality
          * @description Where a configured destination sits relative to this deployment.
          * @enum {string}
@@ -12744,6 +12829,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestProgressResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evals_live_run_v1_evals_live_run_post: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveEvalResponse"];
                 };
             };
             /** @description Validation Error */

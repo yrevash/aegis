@@ -8,6 +8,7 @@ it is has not been served.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -33,17 +34,21 @@ from app.config import get_settings
 router = APIRouter(tags=["a2a"])
 
 
-def _origin(request: Request) -> str:
-    """The externally reachable origin for this request.
+def _origin() -> str:
+    """The origin this deployment publishes as its own identity — from configuration only.
 
-    Taken from the request rather than from configuration so the card advertises URLs a
-    caller can actually reach — a card served on localhost that advertises a production
-    hostname is a card that tells peers to go somewhere they cannot.
+    **Never from the request.** An earlier version read ``request.base_url``, which
+    honours the ``Host`` header: a request carrying ``Host: evil.com`` came back with a
+    card, signed by this platform's real key, whose interface URL and whose ``jku``
+    inside the *signed* protected header both pointed at the attacker. Aegis's own
+    signature then certified a document telling peers to send bearer tokens elsewhere,
+    and the response was cacheable for five minutes. Attacker-controlled input must never
+    reach the inside of a signature.
+
+    Returns:
+        The configured origin without a trailing slash, or ``""`` when none is set.
     """
-    configured = getattr(get_settings(), "public_base_url", "") or ""
-    if configured:
-        return str(configured).rstrip("/")
-    return str(request.base_url).rstrip("/")
+    return str(getattr(get_settings(), "a2a_public_origin", "") or "").rstrip("/")
 
 
 @router.get("/.well-known/agent-card.json", include_in_schema=False)
@@ -58,10 +63,19 @@ async def agent_card(request: Request, response: Response) -> dict[str, Any]:
     for. ``max-age`` is short on purpose: the signing key is per process today, so a long
     cache would leave peers holding a key that no longer verifies.
     """
-    origin = _origin(request)
+    origin = _origin()
+    if not origin:
+        # No configured identity, so nothing here can be signed: a signature over a
+        # guessed origin is worth less than no signature, because it looks authoritative.
+        # The card still describes the agent honestly; it simply carries relative
+        # interface URLs and no `signatures` array.
+        card = build_public_card(base_url="")
+        response.headers["Cache-Control"] = "no-store"
+        return card
+
     card = build_public_card(base_url=origin)
     signed = sign_card(card, jku=f"{origin}/.well-known/jwks.json")
-    body = repr(signed).encode()
+    body = json.dumps(signed, sort_keys=True, separators=(",", ":")).encode()
     response.headers["Cache-Control"] = "public, max-age=300"
     response.headers["ETag"] = f'"{hashlib.sha256(body).hexdigest()[:32]}"'
     return signed
@@ -128,13 +142,78 @@ async def a2a_rpc(
             rpc_id=rpc_id,
         )
 
-    # SendMessage. The run itself is deliberately not wired here yet — this returns a
-    # task in SUBMITTED rather than pretending to have completed work it did not do.
+    # SendMessage — and it runs the agent.
+    #
+    # An earlier version returned TASK_STATE_SUBMITTED and did nothing, while the signed
+    # public card advertised two concrete skills. A peer running any A2A client got a
+    # task id and silence, and `GetTask` sent them to a stream that does not exist. That
+    # is worse than not shipping the surface: it is an advertised capability that cannot
+    # be exercised, which is exactly the class of claim this platform refuses everywhere
+    # else.
+    text = _text_of(params.get("message"))
+    if not text:
+        return rpc_error(-32602, "message must carry at least one text part", rpc_id=rpc_id)
+
+    task = task_id()
+    try:
+        answer = await _run(text, auth=auth)
+    except Exception as exc:  # noqa: BLE001 - a failed run is a task state, not a 500
+        return rpc_result(
+            as_task(
+                task=task,
+                state="TASK_STATE_FAILED",
+                text=f"the run did not complete: {exc}",
+                context=str(getattr(auth, "tenant_id", "") or ""),
+            ),
+            rpc_id=rpc_id,
+        )
+
     return rpc_result(
         as_task(
-            task=task_id(),
-            state="TASK_STATE_SUBMITTED",
+            task=task,
+            state="TASK_STATE_COMPLETED",
+            text=answer,
             context=str(getattr(auth, "tenant_id", "") or ""),
         ),
         rpc_id=rpc_id,
     )
+
+
+def _text_of(message: Any) -> str:
+    """Pull the text out of an A2A `Message`, tolerating shapes we do not use."""
+    if not isinstance(message, dict):
+        return ""
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    out: list[str] = []
+    for part in parts:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            out.append(part["text"])
+    return " ".join(out).strip()
+
+
+async def _run(text: str, *, auth: Any) -> str:  # noqa: ANN401 - AuthContext
+    """Drive one agent run to its answer, scoped by the caller's own token.
+
+    Non-streaming: A2A's `SendMessage` is the unary call, and `SendStreamingMessage` —
+    which this surface does not implement and does not advertise — is the streaming one.
+    Collecting tokens here rather than inventing a task store keeps the honest property
+    that a task's result is returned to the caller who asked for it.
+    """
+    from app.adapter import persona_for_role
+    from app.agent import get_approval_registry, run_agent
+    from app.api.routes import get_agent_deps
+
+    deps = get_agent_deps()
+    chunks: list[str] = []
+    async for event in run_agent(
+        text,
+        persona=persona_for_role(auth.role),
+        role=auth.role.value,
+        deps=deps,
+        registry=get_approval_registry(),
+    ):
+        if getattr(event, "type", "") == "token":
+            chunks.append(getattr(event, "text", ""))
+    return "".join(chunks).strip()

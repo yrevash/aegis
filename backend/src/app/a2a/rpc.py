@@ -67,12 +67,30 @@ def resolve_addressed_tenant(
         # the safe case.
         return authenticated
 
+    if not isinstance(routed, str):
+        # A non-string `tenant` — an int, a list, an object — used to reach `.isascii()`
+        # and raise AttributeError, which FastAPI turned into a 500. That is an oracle by
+        # another route: a caller who cannot tell a wrong tenant from a right one can
+        # still tell a 500 from a -32602, and the shape of the failure is the signal.
+        # Every rejection leaves here as the same error with the same message.
+        raise TenantMismatchError(
+            "the addressed tenant is not the tenant this credential belongs to"
+        )
+
     # `str.isdigit()` and `int()` both accept non-ASCII digits — `int("٧")` is 7, and
     # so are a dozen other scripts' sevens. A routing identifier that can be written in
     # forms that differ on the wire but compare equal after parsing is a filter-evasion
     # primitive: whatever logs, rate-limits or blocklists this value sees one string and
     # the comparison sees another. ASCII digits only, checked before parsing.
     if not routed.isascii() or not routed.isdecimal():
+        raise TenantMismatchError(
+            "the addressed tenant is not the tenant this credential belongs to"
+        )
+
+    # And it must be the CANONICAL spelling. "07" is ASCII, decimal, and parses to 7 —
+    # so it would be accepted while presenting different bytes to every log, rate
+    # limiter and blocklist that sees the raw field. One value, one spelling.
+    if routed != str(int(routed)):
         raise TenantMismatchError(
             "the addressed tenant is not the tenant this credential belongs to"
         )

@@ -2859,12 +2859,20 @@ _OWASP_AGENTIC: tuple[ControlEntry, ...] = (
     ControlEntry(
         id="ASI03",
         title="Identity and Privilege Abuse",
-        state=ControlState.ENFORCED,
+        state=ControlState.PARTIAL,
         summary=(
             "Tenancy is enforced in Postgres RLS beneath the application filters, and "
             "the MCP surface re-resolves the caller's identity and authority on every "
             "call rather than once per connection — measured over one socket by swapping "
             "the bearer and watching the tool list and tenant scope change with it."
+        ),
+        gap=(
+            "What is enforced is the tenant boundary and per-call re-resolution. What is "
+            "absent is an agent identity at all: the agent acts as the human whose token "
+            "it holds, so there is no delegation chain a third party could verify and no "
+            "way to distinguish 'this agent, acting for this person' from 'this person'. "
+            "The A2A card is the platform's first verifiable identity and it identifies "
+            "the deployment, not a running agent."
         ),
         evidence=[
             _f("aegis/src/aegis/governance/rls.py", "row-level security policies"),
@@ -2905,11 +2913,20 @@ _OWASP_AGENTIC: tuple[ControlEntry, ...] = (
     ControlEntry(
         id="ASI05",
         title="Unexpected Code Execution (RCE)",
-        state=ControlState.ENFORCED,
+        state=ControlState.PARTIAL,
         summary=(
-            "There is no code-execution tool and no shell. The registry is a closed set "
-            "of typed, allowlisted callables with validated argument models, so there is "
-            "no path by which generated text becomes an executed program."
+            "There is no code-execution tool and no shell. The in-process registry is a "
+            "closed set of typed, allowlisted callables with validated argument models, "
+            "and an external tool discovered from an MCP peer starts at HIGH risk — so "
+            "an unrecognised name cannot slip under the human gate by being unknown, and "
+            "the persona allowlist is re-checked before any connection is opened."
+        ),
+        gap=(
+            "The tool set is not closed, and an earlier version of this row claimed it "
+            "was. A registered MCP peer contributes tools at runtime, and a peer can add "
+            "one tomorrow that nobody has assessed. What bounds that is risk-tiering and "
+            "the gate, not the absence of a path — which is a weaker and truer statement. "
+            "Nothing sandboxes an external tool's effects on the peer's own side."
         ),
         evidence=[
             _f("backend/src/app/adapter/tools.py", "TOOL_REGISTRY — a closed, typed set"),
@@ -2952,16 +2969,19 @@ _OWASP_AGENTIC: tuple[ControlEntry, ...] = (
         title="Insecure Inter-Agent Communication",
         state=ControlState.PARTIAL,
         summary=(
-            "Fan-out runs inside one orchestrator rather than over a network between "
-            "peers, so there is no unauthenticated agent-to-agent channel to intercept, "
-            "and every hop is traced and audited."
+            "Internal fan-out runs inside one orchestrator rather than over a network "
+            "between peers, and every hop is traced and audited. The external A2A "
+            "surface is authenticated, and its routing tenant is structurally barred "
+            "from setting the database tenant scope."
         ),
         gap=(
-            "That is a property of the architecture, not a control that was built: "
-            "Aegis speaks no agent-to-agent protocol, so there is nothing yet to "
-            "authenticate. A signed agent card and an authenticated peer surface are "
-            "planned and absent, and until they exist this control is answered by 'we "
-            "do not do the risky thing' rather than 'we do it safely'."
+            "The A2A surface is now served and its card is signed, so a peer can verify "
+            "who it is talking to — but the traffic itself is not yet mutually "
+            "authenticated, there is no peer allowlist, and inbound A2A cannot start a "
+            "run. What holds today is that the addressed tenant can never become the "
+            "database tenant: the routing field is refused when it disagrees with the "
+            "bearer token rather than reconciled. That is one property, well tested, and "
+            "not the whole control."
         ),
         evidence=[
             _f("aegis/src/aegis/agent/subagent.py", "fan-out inside one process"),

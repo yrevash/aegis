@@ -146,6 +146,22 @@ export type AuditLogRow = Narrowed<Sent<Schemas['AuditLogRow']>, { outcome: Audi
  */
 export type AuditOutcome = 'blocked' | 'completed'
 
+/** One metric computed by a real evaluation library, not by a proxy. */
+export interface LiveMetricRow {
+  name: string
+  /** null when the metric could not run. Never 0 for a metric that did not run. */
+  value: number | null
+  cases: number
+  library: string
+  note: string
+}
+
+/** Response from `POST /evals/live-run` — real Ragas scores, metered through the gateway. */
+export interface LiveEvalResponse {
+  metrics: LiveMetricRow[]
+  source: string
+}
+
 /**
  * Response from `GET /audit/verify` — the chain walk.
  *

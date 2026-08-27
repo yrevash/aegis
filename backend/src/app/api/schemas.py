@@ -381,6 +381,35 @@ class BudgetExceeded(_BaseEvent):
     message: str = Field(description="Human-readable explanation for the UI/audit.")
 
 
+class LiveMetricRow(BaseModel):
+    """One metric computed by a real evaluation library, not by a proxy."""
+
+    name: str = Field(description="Namespaced with the library — e.g. ragas:faithfulness.")
+    value: float | None = Field(
+        default=None,
+        description=(
+            "The score in [0,1], or null when the metric could not be run. Never zero "
+            "for a metric that did not run — a zero is a measurement."
+        ),
+    )
+    cases: int = Field(description="How many cases contributed.")
+    library: str = Field(description="Library and version that produced it.")
+    note: str = Field(default="", description="Why the value is null, when it is.")
+
+
+class LiveEvalResponse(BaseModel):
+    """The result of an explicitly-triggered, LLM-judged evaluation run.
+
+    Separate from ``GET /evals/report`` on purpose: that one is deterministic, offline
+    and memoised so a dashboard can poll it. This one costs model calls, and every one
+    of them goes through the platform gateway — so the spend shows up in the usage
+    ledger like any other call rather than being invisible to the cost surface.
+    """
+
+    metrics: list[LiveMetricRow]
+    source: str = Field(description="What produced these numbers.")
+
+
 class AuditChainResponse(BaseModel):
     """The result of walking one tenant's audit chain.
 

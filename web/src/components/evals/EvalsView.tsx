@@ -16,6 +16,9 @@ import { DataPanel } from '@/components/ui/DataPanel'
 import { TBody, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { getEvalsReport } from '@/lib/api/client'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { runLiveEvals } from '@/lib/api/client'
+import { errorSentence } from '@/lib/api/apiError'
+import type { LiveEvalResponse } from '@/lib/api/types'
 import type { EvalCaseResult, EvalMetricConfig, EvalsReportResponse } from '@/lib/api/platform'
 import { cn } from '@/lib/utils'
 
@@ -279,8 +282,30 @@ function CaseMatrix({
  * that. The metric × case matrix underneath is the grid the gate computes.
  */
 function EvalsView(): ReactElement {
+
   const { session, hydrated } = useAuth()
   const token = session?.token ?? null
+
+  /*
+   * The live run is a button, never an effect. It costs model calls, and a page that
+   * spends money on mount is a page somebody turns off.
+   */
+  const [live, setLive] = useState<LiveEvalResponse | null>(null)
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [scoring, setScoring] = useState(false)
+
+  const runLive = async (): Promise<void> => {
+    setScoring(true)
+    setLiveError(null)
+    try {
+      setLive(await runLiveEvals(token))
+    } catch (error) {
+      setLive(null)
+      setLiveError(errorSentence(error, 'The live evaluation could not run.'))
+    } finally {
+      setScoring(false)
+    }
+  }
   const report = useLoad<EvalsReportResponse>(() => getEvalsReport(token), token, hydrated)
   const data = report.data
 
@@ -431,16 +456,50 @@ function EvalsView(): ReactElement {
             platform leaves a cell of the score matrix empty rather than fill it
             with a number it cannot defend. */}
         <Card className="min-w-0">
-          <CardHeader eyebrow="ragas · answer relevancy" title="One cell left empty" />
-          <CardBody>
-            <SceneState name="matrix" size="sm">
+          <CardHeader
+            eyebrow="ragas · answer relevancy"
+            title={live === null ? 'One cell left empty' : 'Scored by ragas'}
+          />
+          <CardBody className="space-y-3">
+            {live === null ? (
               <Absence
                 figure="Answer relevancy"
-                why="Scoring it needs a model to judge a model; every figure here is deterministic."
-                needed="An LLM judge wired into the gate."
+                why="Scoring it needs a model to judge a model, and every figure on this page is deterministic. The number is not withheld — it is not computed until somebody asks, because asking costs model calls."
+                needed="Press the button; the run is metered like any other call."
                 className="text-left"
               />
-            </SceneState>
+            ) : (
+              <dl className="space-y-2">
+                {live.metrics.map((m) => (
+                  <div key={m.name} className="flex items-baseline justify-between gap-3">
+                    <dt className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                      {m.name}
+                    </dt>
+                    <dd className="shrink-0">
+                      {m.value === null ? (
+                        <span className="text-xs text-muted-foreground">{m.note}</span>
+                      ) : (
+                        <Figure className="tabular text-lg font-semibold text-foreground">
+                          {m.value.toFixed(3)}
+                        </Figure>
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            <button
+              type="button"
+              onClick={() => void runLive()}
+              disabled={scoring}
+              className="inline-flex h-11 w-full touch-manipulation items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 text-sm font-medium text-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              {scoring ? 'Judging…' : live === null ? 'Score it with ragas' : 'Score again'}
+            </button>
+            {liveError !== null && (
+              <p className="text-xs text-block-ink">{liveError}</p>
+            )}
+            {live !== null && <Receipt origin={live.source} />}
           </CardBody>
         </Card>
       </div>

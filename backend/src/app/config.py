@@ -398,6 +398,24 @@ class Settings(BaseSettings):
     # test/offline path stays quiet, but it is explicitly non-secret.
     jwt_secret: str = Field(default=DEFAULT_JWT_SECRET)
     jwt_algorithm: str = Field(default="HS256")
+    #: The externally reachable origin this deployment publishes as its own identity,
+    #: e.g. ``https://aegis.example``. Used ONLY by the A2A agent card.
+    #:
+    #: It must come from configuration and never from the request. Deriving it from the
+    #: ``Host`` header let an attacker send ``Host: evil.com`` and receive a card, signed
+    #: with this platform's real key, whose interface URL and whose ``jku`` inside the
+    #: signed header both pointed at the attacker — so Aegis's own signature certified a
+    #: document instructing peers to send their bearer tokens somewhere else, cacheable
+    #: for five minutes.
+    #:
+    #: Empty means "this deployment does not know its own public identity", and the card
+    #: is then served UNSIGNED rather than signed over a guess.
+    #:
+    #: Named ``origin`` rather than ``base_url`` deliberately: the residency inventory
+    #: treats a ``*_base_url`` field as a network DESTINATION this platform sends data
+    #: to, and this is the opposite — it is where this deployment says it *is*. Nothing
+    #: is ever sent here. The suffix convention was right to ask.
+    a2a_public_origin: str = Field(default="")
     # Access-token lifetime in minutes.
     jwt_expire_minutes: int = Field(default=720)
 

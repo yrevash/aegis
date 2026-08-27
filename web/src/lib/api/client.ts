@@ -13,6 +13,7 @@ import type {
   ApprovalRequest,
   ApprovalResponse,
   AuditChainResponse,
+  LiveEvalResponse,
   AuditLogResponse,
   Budget,
   BudgetsResponse,
@@ -226,6 +227,24 @@ export async function verifyAuditChain(
 ): Promise<AuditChainResponse> {
   const search = tenantId === undefined ? '' : `?tenant_id=${tenantId}`
   return request<AuditChainResponse>(`/audit/verify${search}`, { method: 'GET' }, token)
+}
+
+/**
+ * Score the seed corpus with the real Ragas metrics.
+ *
+ * A POST because it **spends money**: every metric is LLM-judged and answer relevancy
+ * also embeds. `getEvalsReport` stays the cheap deterministic rollup this page polls;
+ * this one only runs when somebody asks for it.
+ */
+export async function runLiveEvals(
+  token: string | null,
+  limit = 2,
+): Promise<LiveEvalResponse> {
+  return request<LiveEvalResponse>(
+    `/evals/live-run?limit=${limit}`,
+    { method: 'POST' },
+    token,
+  )
 }
 
 /** Request a SHAP + conformal explanation for a set of features. */

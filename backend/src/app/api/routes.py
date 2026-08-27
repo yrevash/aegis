@@ -79,6 +79,8 @@ from app.api.schemas import (
     ApprovalRequest,
     ApprovalResponse,
     AuditChainResponse,
+    LiveEvalResponse,
+    LiveMetricRow,
     AuditLogResponse,
     BudgetRow,
     BudgetUpsertRequest,
@@ -3918,6 +3920,50 @@ async def ml_model_card(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
     return model.model_card()
+
+
+@router.post("/evals/live-run", response_model=LiveEvalResponse, tags=["evals"])
+async def evals_live_run(
+    limit: int = 2,
+    auth: AuthContext = Depends(require_admin_or_ai_team),
+) -> LiveEvalResponse:
+    """Score the seed corpus with the real Ragas metrics (admin/ai_team).
+
+    A POST and not a GET, and not memoised, because this **spends money**: every metric
+    is LLM-judged and answer relevancy also embeds. ``GET /evals/report`` stays the cheap
+    deterministic rollup a dashboard may poll; conflating them would turn a page refresh
+    into a budget event.
+
+    Every judge call goes through :func:`aegis.gateway.complete` rather than at an API
+    directly, so it is budget-checked, rate-limited, traced and written to the usage
+    ledger. That is the difference between using the library and using it honestly: an
+    evaluation subsystem whose spend the cost surface cannot see would be the one place
+    this platform's metering claim is false.
+
+    Args:
+        limit: Seed cases to score. Small by default — each is several model calls.
+        auth: The authenticated admin/ai_team principal.
+    """
+    # Deferred like the other model-touching routes in this module, and for the same
+    # reason: `aegis.evals.libs` imports ragas, and importing it at module scope would
+    # make every consumer of this file pay for a library only this route uses.
+    from aegis.evals.libs.ragas_suite import run_ragas_suite
+    from aegis.gateway import embed as gateway_embed
+
+    from app.core.llm import complete
+
+    metrics = await run_ragas_suite(
+        complete=complete, embed=gateway_embed, limit=max(1, min(limit, 6))
+    )
+    return LiveEvalResponse(
+        metrics=[
+            LiveMetricRow(
+                name=m.name, value=m.value, cases=m.cases, library=m.library, note=m.note
+            )
+            for m in metrics
+        ],
+        source="ragas, judged through the Aegis gateway (metered in usage_ledger)",
+    )
 
 
 @router.get("/evals/report", response_model=EvalsReportResponse, tags=["evals"])
