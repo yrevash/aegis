@@ -121,10 +121,18 @@ export function EpisodicSessionsPanel({ token, sessions }: Props): ReactElement 
     )
   }
   return (
-    <ul className="flex flex-col gap-2">
-      {sessions.map((s) => (
-        <SessionRow key={s.id} token={token} session={s} />
-      ))}
-    </ul>
+    <div
+      className="relative -mx-1 min-w-0 overflow-y-auto overscroll-contain px-1"
+      style={{ maxHeight: 420 }}
+      tabIndex={0}
+      role="group"
+      aria-label="Sessions"
+    >
+      <ul className="flex flex-col gap-2">
+        {sessions.map((s) => (
+          <SessionRow key={s.id} token={token} session={s} />
+        ))}
+      </ul>
+    </div>
   )
 }

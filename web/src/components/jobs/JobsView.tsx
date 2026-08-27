@@ -390,6 +390,7 @@ export function JobsView({ token, tenantId }: JobsViewProps): ReactElement {
       <DataPanel
         eyebrow="job_runs · the record layer"
         title="Queue"
+        collapsible
         maxHeight="30rem"
         actions={
           <button

@@ -511,7 +511,13 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
               auto-rejected — so not deciding is itself a decision.
             </InfoTip>
           </div>
-          <ul className="grid gap-4">
+          <ul
+            className="relative grid min-w-0 gap-4 overflow-y-auto overscroll-contain pr-1"
+            style={{ maxHeight: 900 }}
+            tabIndex={0}
+            role="group"
+            aria-label="Gates waiting on a decision"
+          >
             {waiting.map((row, index) => (
               <li
                 key={row.id}

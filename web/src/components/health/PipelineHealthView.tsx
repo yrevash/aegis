@@ -232,6 +232,7 @@ function ComponentPanel({ data }: { data: PlatformHealthResponse }): ReactElemen
       <DataPanel
         eyebrow="probed concurrently · every verdict keeps its evidence"
         title="Dependencies"
+        collapsible
         maxHeight={420}
         // `w-full` because `DataPanel`'s toolbar is a wrapping flex row and the
         // strip is the only thing in it: without it the bar shrinks to its content.

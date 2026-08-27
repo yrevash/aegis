@@ -746,6 +746,7 @@ function GovernanceView(): ReactElement {
               className="rounded-lg xl:col-span-2"
               eyebrow="aegis.governance · /governance/dashboard"
               title="Tenants & budgets"
+              collapsible
               actions={
                 <Badge tone="neutral" className="gap-1.5">
                   <Landmark className="size-3" aria-hidden />
