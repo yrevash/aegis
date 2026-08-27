@@ -8,8 +8,27 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# `.env` is loaded into `os.environ` HERE, at the earliest point any backend module
+# runs, and the reason is a bug rather than a preference.
+#
+# pydantic-settings reads `.env` into this module's Settings object without touching
+# `os.environ`. But `import litellm` calls `load_dotenv()` as a side effect, so the
+# process environment gains every `.env` key the first time anything imports litellm —
+# which happens lazily, on whichever request path gets there first.
+#
+# Anything reading `os.environ` therefore saw one answer before that import and a
+# different one after. `aegis.gateway.routing._routed_default` reads `MODEL_<ROLE>` that
+# way, so the AgBOM's model inventory changed shape mid-process: the same pid served six
+# models at 10:20 and four different ones at 10:35. A buyer diffing two inventories from
+# one deployment would have seen a fleet change that never happened.
+#
+# Loading it once here removes the window. `override=False` so a real environment
+# variable still beats the file, which is the precedence every deployment expects.
+load_dotenv(override=False)
 
 # The non-secret dev fallback JWT signing key. It is deliberately long enough to
 # clear PyJWT's minimum-key-length warning on the offline/test path, but it must

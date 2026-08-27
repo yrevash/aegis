@@ -503,30 +503,54 @@ function Advisories({ token }: { token: string | null }): ReactElement {
 
   useEffect(() => audit(), [audit])
 
+  /**
+   * Why the failure is rendered rather than logged.
+   *
+   * Both handlers used to be a bare `.then()`. A rejected fetch produced no file, no
+   * message and an unhandled promise rejection in a console nobody has open — the button
+   * simply did nothing, which a person reads as a broken page or, worse, as a download
+   * that silently succeeded. These are compliance artefacts; "I clicked export and
+   * nothing happened" is the one outcome that must not be ambiguous.
+   */
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  const save = useCallback((filename: string, text: string) => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
   const download = useCallback(
     (format: 'cyclonedx' | 'spdx') => {
-      void getSbom(format, token).then((text) => {
-        const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `aegis-sbom.${format}.json`
-        link.click()
-        URL.revokeObjectURL(url)
-      })
+      setExportError(null)
+      void getSbom(format, token)
+        .then((text) => save(`aegis-sbom.${format}.json`, text))
+        .catch((err: unknown) => {
+          setExportError(
+            `The ${format === 'spdx' ? 'SPDX' : 'CycloneDX'} export failed: ${
+              err instanceof Error ? err.message : 'the server did not respond'
+            }`,
+          )
+        })
     },
-    [token],
+    [token, save],
   )
 
   const downloadAgbom = useCallback(() => {
-    void getAgbom(token).then((text) => {
-      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = 'aegis-agbom.cyclonedx.json'
-      link.click()
-      URL.revokeObjectURL(url)
-    })
-  }, [token])
+    setExportError(null)
+    void getAgbom(token)
+      .then((text) => save('aegis-agbom.cyclonedx.json', text))
+      .catch((err: unknown) => {
+        setExportError(
+          `The AgBOM export failed: ${
+            err instanceof Error ? err.message : 'the server did not respond'
+          }`,
+        )
+      })
+  }, [token, save])
 
   const exports = (
     <div className="flex flex-wrap items-center gap-2">
@@ -545,6 +569,15 @@ function Advisories({ token }: { token: string | null }): ReactElement {
         <Download className="size-3.5" aria-hidden />
         AgBOM
       </Button>
+      {/* `aria-live` because the message appears after the click, with no focus move —
+          a screen-reader user would otherwise get the same silence the sighted user
+          used to get. */}
+      <p
+        aria-live="polite"
+        className="basis-full text-xs text-block-ink"
+      >
+        {exportError ?? ''}
+      </p>
     </div>
   )
 

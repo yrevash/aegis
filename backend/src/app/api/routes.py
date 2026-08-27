@@ -2023,7 +2023,7 @@ _AUDIT_LIMIT_MAX = 200
 @router.get("/platform/agbom", tags=["platform"])
 async def platform_agbom(
     auth: AuthContext = Depends(require_admin_or_devops),
-) -> dict[str, Any]:
+) -> JSONResponse:
     """The Agent Bill of Materials — every tool, model and rail this agent is made of.
 
     The dependency SBOM at ``GET /stack/sbom`` answers "what packages is this built
@@ -2040,12 +2040,20 @@ async def platform_agbom(
     ``application`` because ``tool`` is not a CycloneDX component type, and a document
     that fails validation defeats the point of using a standard format.
 
+    Served as ``application/vnd.cyclonedx+json``, the media type registered for this
+    format — the same one the sibling dependency SBOM already returns. A CycloneDX
+    document served as generic ``application/json`` is one a content-negotiating scanner
+    has no reason to recognise, which undoes the entire argument for choosing a standard
+    format over a bespoke one.
+
     Args:
         auth: The authenticated admin/devops principal.
     """
     from app.platform.agbom import build_agbom
 
-    return build_agbom()
+    return JSONResponse(
+        content=build_agbom(), media_type="application/vnd.cyclonedx+json"
+    )
 
 
 @router.get("/audit/verify", response_model=AuditChainResponse, tags=["audit"])

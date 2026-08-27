@@ -2739,6 +2739,12 @@ export interface paths {
          *     ``application`` because ``tool`` is not a CycloneDX component type, and a document
          *     that fails validation defeats the point of using a standard format.
          *
+         *     Served as ``application/vnd.cyclonedx+json``, the media type registered for this
+         *     format — the same one the sibling dependency SBOM already returns. A CycloneDX
+         *     document served as generic ``application/json`` is one a content-negotiating scanner
+         *     has no reason to recognise, which undoes the entire argument for choosing a standard
+         *     format over a bespoke one.
+         *
          *     Args:
          *         auth: The authenticated admin/devops principal.
          */
@@ -4200,9 +4206,14 @@ export interface components {
          * @description One sub-agent's lifecycle beat in a concurrent fan-out (additive).
          *
          *     Emitted by each lane of the multi-agent team through its own scoped writer, so a
-         *     fan-out produces interleaved beats from every agent running at once. ``timeout`` is
-         *     a **designed** terminal state, not an error: the run degrades gracefully, names the
-         *     omitted agent in the ``synthesis`` event, and finishes.
+         *     fan-out produces interleaved beats from every agent running at once. ``timeout`` and
+         *     ``ceiling`` are **designed** terminal states, not errors: the run degrades
+         *     gracefully, names the affected agent in the ``synthesis`` event, and finishes.
+         *
+         *     They are not interchangeable. ``timeout`` is a lane that ran out of wall clock with
+         *     nothing to show; ``ceiling`` is a lane that ran out of trajectory and whose partial
+         *     findings **do** reach the answer. Collapsing the two would tell a reader that a
+         *     truncated-but-useful lane contributed nothing.
          */
         AgentStatus: {
             /**
@@ -4238,7 +4249,7 @@ export interface components {
             seq: number;
             /**
              * Status
-             * @description queued | started | thinking | acting | done | failed | timeout — the lane's current state.
+             * @description queued | started | thinking | acting | done | failed | timeout | ceiling — the lane's current state.
              */
             status: string;
             /**
@@ -14589,9 +14600,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
         };
