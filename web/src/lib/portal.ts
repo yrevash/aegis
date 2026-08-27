@@ -168,8 +168,11 @@ export const SECTIONS: Record<string, Section> = {
     id: 'evals',
     label: 'Evals',
     icon: Gauge,
-    hint: 'RAGAS · DeepEval',
-    tooltip: 'Aegis Evals — offline regression gate · deterministic RAGAS/DeepEval metrics, no LLM',
+    hint: 'ragas · offline gate',
+    // "no LLM" stopped being true when the real ragas library landed and the live panel
+    // started making judged calls. The screen has two halves and the label now says so:
+    // a deterministic offline gate, and a live run that costs model calls.
+    tooltip: 'Deterministic offline gate, plus live scoring with the real ragas library',
   },
   documents: {
     id: 'documents',
