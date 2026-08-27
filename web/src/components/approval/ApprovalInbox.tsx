@@ -545,6 +545,7 @@ export function ApprovalInbox({ token, canFilterByTenant }: ApprovalInboxProps):
           className="rounded-lg"
           eyebrow="aegis.approvals · decided"
           title="Decision history"
+          collapsible
           maxHeight={520}
           actions={
             <Badge tone="neutral" className="gap-1.5">

@@ -131,3 +131,7 @@ testdata/audit/
 storage/
 .runlogs/
 .qdrant-initialized
+
+# Locally recorded demo video — regenerate with web/demo-record.mjs, never commit.
+.demo/
+web/demo-record.mjs

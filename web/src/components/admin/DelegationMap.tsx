@@ -188,6 +188,7 @@ export function DelegationMap({
       className="rounded-lg"
       eyebrow="aegis.rbac · lib/portal · ROLE_SECTIONS"
       title="Where each portal's authority stops"
+      collapsible
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="neutral" className="gap-1.5">

@@ -60,6 +60,7 @@ import {
   Waypoints,
   Workflow,
   type LucideIcon,
+  Share2,
 } from 'lucide-react'
 
 import type { FineRole } from '@/lib/api/types'
@@ -173,6 +174,13 @@ export const SECTIONS: Record<string, Section> = {
     // started making judged calls. The screen has two halves and the label now says so:
     // a deterministic offline gate, and a live run that costs model calls.
     tooltip: 'Deterministic offline gate, plus live scoring with the real ragas library',
+  },
+  interop: {
+    id: 'interop',
+    label: 'Interop',
+    icon: Share2,
+    hint: 'A2A · MCP · CycloneDX',
+    tooltip: 'The published standards other systems can talk to',
   },
   documents: {
     id: 'documents',
@@ -428,10 +436,10 @@ export const SECTIONS: Record<string, Section> = {
  * tenant with a clause the browser cannot reach.
  */
 export const ROLE_SECTIONS: Record<Portal, string[]> = {
-  platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'database', 'mcp', 'console', 'settings'],
+  platform_admin: ['dashboard', 'analytics', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'database', 'mcp', 'console', 'settings', 'interop'],
   tenant_admin: ['dashboard', 'analytics', 'documents', 'approvals', 'governance', 'roles', 'forecast', 'jobs', 'audit', 'console', 'llmops', 'memory', 'settings'],
-  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings'],
-  devops: ['dashboard', 'stack', 'patch', 'security', 'compliance', 'redteam', 'cache', 'latency', 'audit', 'settings'],
+  ai_team: ['console', 'harness', 'mlops', 'llmops', 'evals', 'tokenopt', 'memory', 'rag', 'graph', 'cache', 'jobs', 'voice', 'vision', 'guardrails', 'simulation', 'settings', 'interop'],
+  devops: ['dashboard', 'stack', 'patch', 'security', 'compliance', 'redteam', 'cache', 'latency', 'audit', 'settings', 'interop'],
   client: ['console', 'dashboard', 'documents', 'analytics', 'approvals', 'savings', 'forecast', 'risk', 'memory', 'settings'],
 }
 

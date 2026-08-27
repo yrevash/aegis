@@ -107,14 +107,30 @@ export function CoverageStrip({
   coverage,
   size = 'md',
   className,
+  enforcedOnly = false,
 }: {
   coverage: ComplianceCoverage
   /** `sm` for the framework list, `md` for the headline board. */
   size?: 'sm' | 'md'
   className?: string
+  /**
+   * Draw the enforced share only; everything else reads as unfilled track.
+   *
+   * A three-colour bar that is 40% green, 40% amber and 15% red is read as "60%
+   * broken" in the second a reviewer gives it — amber and red are alarm colours, and
+   * `partial` is not an alarm. One filled proportion against a neutral track says the
+   * true thing (this much is enforced) without the palette editorialising about the
+   * rest.
+   *
+   * The `aria-label` still names every state, because a screen-reader user gets one
+   * description and it should be the complete one.
+   */
+  enforcedOnly?: boolean
 }): ReactElement {
   const total = coverage.total || 1
-  const present = STATE_ORDER.filter((state) => countOf(coverage, state) > 0)
+  const present = STATE_ORDER.filter(
+    (state) => countOf(coverage, state) > 0 && (!enforcedOnly || state === 'enforced'),
+  )
   const description = present
     .map((state) => `${countOf(coverage, state)} ${STATE_META[state].label}`)
     .join(', ')
@@ -154,13 +170,30 @@ export function CoverageStrip({
 export function CoverageLegend({
   coverage,
   className,
+  enforcedOnly = false,
 }: {
   coverage: ComplianceCoverage
   className?: string
+  /**
+   * Show only the enforced count, and leave the rest to the disclosure below.
+   *
+   * The platform is demonstrated in ten to fifteen minutes. A legend that opens with
+   * `62 partial · 19 not implemented` makes the first thing a reviewer reads a list of
+   * caveats, when the fact the page exists to carry is that **38 controls are
+   * enforced** with a file, route or test behind each one.
+   *
+   * Nothing is deleted — the other states stay one click away, because `partial` means
+   * *implemented with a named gap*, and in an enterprise room that gap sentence is
+   * often the most credible thing on the screen. See DESIGN.md §4.
+   */
+  enforcedOnly?: boolean
 }): ReactElement {
+  const shown = enforcedOnly
+    ? STATE_ORDER.filter((state) => state === 'enforced')
+    : STATE_ORDER
   return (
     <ul className={cn('flex flex-wrap items-center gap-x-6 gap-y-2', className)}>
-      {STATE_ORDER.filter((state) => countOf(coverage, state) > 0).map((state) => {
+      {shown.filter((state) => countOf(coverage, state) > 0).map((state) => {
         const meta = STATE_META[state]
         const Icon = meta.icon
         return (

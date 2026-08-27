@@ -416,6 +416,7 @@ function LatencyView(): ReactElement {
             <DataPanel
               eyebrow="aegis · /latency"
               title="Per-node breakdown"
+              collapsible
               maxHeight={480}
               actions={
                 <Badge tone="neutral" className="font-mono">

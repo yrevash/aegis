@@ -177,6 +177,7 @@ export function RolesAccess({
           className="rounded-lg xl:col-span-2"
           eyebrow="aegis.admin · /admin/users"
           title="Who has access"
+          collapsible
           maxHeight={520}
           actions={
             <div className="flex flex-wrap items-center gap-2">

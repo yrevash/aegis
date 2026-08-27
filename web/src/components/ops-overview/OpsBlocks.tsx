@@ -425,6 +425,7 @@ export function AuditBlock({
       as="h3"
       eyebrow="aegis · GET /audit"
       title="Recent platform activity"
+      collapsible
       actions={<DeepLink href={`/app/${portal}/audit`} icon={ScrollText} label="Full audit trail" />}
     >
       {audit.state === 'loading' ? (

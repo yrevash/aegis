@@ -663,6 +663,8 @@ function RedteamView(): ReactElement {
           <DataPanel
             eyebrow="blocked"
             title="Attacks the rails stopped"
+            collapsible
+            summary={`${report.blocked.length} attack${report.blocked.length === 1 ? "" : "s"} stopped`}
             maxHeight={520}
             actions={
               <Badge tone="ok" className="gap-1.5">
@@ -688,6 +690,8 @@ function RedteamView(): ReactElement {
           <DataPanel
             eyebrow="got through"
             title="Attacks nothing stopped"
+            collapsible
+            summary={`${report.leaked.length} got through`}
             maxHeight={520}
             actions={
               <Badge tone={report.leaked.length === 0 ? 'ok' : 'block'} className="gap-1.5">
@@ -770,6 +774,8 @@ function RedteamView(): ReactElement {
             <DataPanel
               eyebrow="unchecked"
               title="Refused without being examined"
+              collapsible
+              summary={`${report.unchecked.length} unchecked`}
               maxHeight={420}
               actions={
                 <Badge tone="block" className="gap-1.5">
@@ -786,6 +792,8 @@ function RedteamView(): ReactElement {
             <DataPanel
               eyebrow="false positives"
               title="Benign controls the rails blocked"
+              collapsible
+              summary={`${report.falsePositiveDetail.length} false positive${report.falsePositiveDetail.length === 1 ? "" : "s"}`}
               maxHeight={420}
               actions={
                 <Badge tone="block" className="gap-1.5">
@@ -819,6 +827,8 @@ function RedteamView(): ReactElement {
       <DataPanel
         eyebrow="history"
         title="Previous runs"
+        collapsible
+        summary={`${history.length} run${history.length === 1 ? "" : "s"}`}
         maxHeight={420}
         actions={
           <Badge tone="neutral" className="gap-1.5 font-mono">

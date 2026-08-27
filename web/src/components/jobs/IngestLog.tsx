@@ -503,6 +503,7 @@ function TablePanel({ progress }: { progress: IngestProgress }): ReactElement {
       as="h3"
       eyebrow="tables · own chunks, shape kept"
       title="Tables"
+      collapsible
       maxHeight="16rem"
       actions={
         <Badge tone="neutral">
@@ -551,6 +552,7 @@ function LogTail({ progress }: { progress: IngestProgress }): ReactElement {
       as="h3"
       eyebrow="run_events · the durable record, replayed"
       title="Log"
+      collapsible
       maxHeight="14rem"
       actions={
         <InfoTip label="Why the log cannot drift from the pipeline">

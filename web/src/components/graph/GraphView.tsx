@@ -266,6 +266,7 @@ function GraphView({ role }: { role: Role }): ReactElement {
         <DataPanel
           className="min-w-0 xl:col-span-1"
           title="Entities in view"
+          collapsible
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <InfoTip label="About Entities in view">

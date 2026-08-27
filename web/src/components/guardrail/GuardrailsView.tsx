@@ -712,6 +712,7 @@ function PostureCoverage({
     <DataPanel
       eyebrow="GET /security/posture"
       title="OWASP coverage"
+      collapsible
       maxHeight={440}
       actions={
         <InfoTip label="How coverage status is decided">

@@ -64,6 +64,7 @@ export function ToolRosterCard({ refreshKey }: { refreshKey: number }): ReactEle
   return (
     <DataPanel
       title="Tools"
+      collapsible
       eyebrow="platform ∩ persona, then the tenant’s gate floor"
       maxHeight={roster !== null && roster.rows.length > 8 ? '26rem' : undefined}
       actions={

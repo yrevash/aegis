@@ -231,6 +231,7 @@ export function StackVersions({ token }: { token: string | null }): ReactElement
       <DataPanel
         eyebrow="SBOM · resolved pins"
         title="The resolved inventory"
+        collapsible
         maxHeight={620}
         actions={
           <Badge tone="neutral" className="gap-1.5">

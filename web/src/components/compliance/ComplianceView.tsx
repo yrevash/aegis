@@ -169,6 +169,71 @@ function ControlRow({ control }: { control: ComplianceControl }): ReactElement {
   )
 }
 
+/**
+ * Enforced controls first; everything else behind one click.
+ *
+ * The whole platform is presented in ten to fifteen minutes, and this page carries
+ * **124 controls across 13 frameworks**. Opened flat, a reviewer scrolls past dozens
+ * of amber `partial` rows to find the green ones, and the screen's first impression
+ * is a wall of caveats rather than the 38 controls this platform actually enforces.
+ *
+ * So the enforced rows are the page, and the rest is one click away.
+ *
+ * **The rest is not deleted, and that is deliberate.** `partial` does not mean
+ * "failed" — it means implemented with a named gap, and for an enterprise jury that
+ * gap sentence is often the most credible thing on screen. A page that cannot answer
+ * "what is missing?" is worse in that room than one that can. This hides it by
+ * default; it does not lose it.
+ */
+function EnforcedFirst({ controls }: { controls: ComplianceControl[] }): ReactElement {
+  const [showRest, setShowRest] = useState(false)
+  const enforced = controls.filter((c) => c.state === 'enforced')
+  const rest = controls.filter((c) => c.state !== 'enforced')
+
+  return (
+    <div className="min-w-0">
+      {enforced.length > 0 ? (
+        <ul className="min-w-0">
+          {enforced.map((control) => (
+            <ControlRow key={control.id} control={control} />
+          ))}
+        </ul>
+      ) : (
+        <p className="py-3 text-sm text-muted-foreground">
+          No control in this framework is fully enforced yet.
+        </p>
+      )}
+
+      {rest.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowRest((v) => !v)}
+            aria-expanded={showRest}
+            className="mt-2 inline-flex w-full items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground transition-colors duration-[--dur-fast] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <span>
+              {showRest ? 'Hide' : 'Show'} {COUNT.format(rest.length)} control
+              {rest.length === 1 ? '' : 's'} still in progress
+            </span>
+            <ChevronRight
+              className={cn('size-4 transition-transform duration-[--dur-fast]', showRest && 'rotate-90')}
+              aria-hidden
+            />
+          </button>
+          {showRest ? (
+            <ul className="min-w-0">
+              {rest.map((control) => (
+                <ControlRow key={control.id} control={control} />
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 /** One framework in the picker: name, edition, its own strip, its control count. */
 function FrameworkButton({
   framework,
@@ -203,7 +268,7 @@ function FrameworkButton({
         <span className="eyebrow truncate" translate="no">
           {framework.version}
         </span>
-        <CoverageStrip coverage={framework.coverage} size="sm" />
+        <CoverageStrip coverage={framework.coverage} size="sm" enforcedOnly />
       </button>
     </li>
   )
@@ -303,10 +368,16 @@ function ComplianceView(): ReactElement {
         prose to a tooltip, and names the exception: the moment a caveat is needed is
         the wrong moment to make somebody find it. A jury reading "ISO 27001" on a
         screen and inferring a certificate is exactly that moment.
+
+        Quietened from an amber alert to a muted line, deliberately, and NOT removed.
+        Every other caveat on this page is a gap — a control partly implemented — and
+        gaps now collapse behind a click. This one is different in kind: without it the
+        page implies an attestation that does not exist, which is a false claim rather
+        than an unflattering true one. Tone down, never delete.
       */}
-      <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-risk bg-risk/15 px-3 py-2.5">
-        <ShieldAlert className="mt-0.5 size-4 shrink-0 text-risk-ink" aria-hidden />
-        <p className="min-w-0 text-pretty text-sm leading-relaxed text-risk-ink">
+      <div className="flex min-w-0 items-start gap-2">
+        <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <p className="min-w-0 text-pretty text-xs leading-relaxed text-muted-foreground">
           {data?.disclaimer ??
             'Compliance-readiness evidence, not certification. Nothing on this page has been audited by an independent party.'}
           {data ? (
@@ -339,8 +410,12 @@ function ComplianceView(): ReactElement {
               }
             />
             <CardBody className="flex min-w-0 flex-col gap-3 pt-0">
-              <CoverageStrip coverage={data.coverage} />
-              <CoverageLegend coverage={data.coverage} className="border-t border-border pt-3" />
+              <CoverageStrip coverage={data.coverage} enforcedOnly />
+              <CoverageLegend
+                coverage={data.coverage}
+                enforcedOnly
+                className="border-t border-border pt-3"
+              />
               <Receipt
                 origin="GET /compliance"
                 detail="counts are derived from the control states, never authored beside them"
@@ -397,8 +472,8 @@ function ComplianceView(): ReactElement {
                 }
                 toolbar={
                   <div className="flex min-w-0 flex-col gap-2">
-                    <CoverageStrip coverage={selected.coverage} />
-                    <CoverageLegend coverage={selected.coverage} />
+                    <CoverageStrip coverage={selected.coverage} enforcedOnly />
+                    <CoverageLegend coverage={selected.coverage} enforcedOnly />
                   </div>
                 }
                 footer={
@@ -409,11 +484,7 @@ function ComplianceView(): ReactElement {
                   />
                 }
               >
-                <ul className="min-w-0">
-                  {selected.controls.map((control) => (
-                    <ControlRow key={control.id} control={control} />
-                  ))}
-                </ul>
+                <EnforcedFirst controls={selected.controls} />
               </DataPanel>
             )}
           </div>

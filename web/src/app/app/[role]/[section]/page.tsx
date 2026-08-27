@@ -20,6 +20,7 @@ import { TokenOptMount } from '@/components/gateway/TokenOptView'
 import { GovernanceMount } from '@/components/governance/GovernanceView'
 import { GraphMount } from '@/components/graph/GraphView'
 import { GuardrailsMount } from '@/components/guardrail/GuardrailsView'
+import { InteropMount } from '@/components/interop/InteropView'
 import { JobsMount } from '@/components/jobs/JobsView'
 import { HarnessMount } from '@/components/harness/HarnessView'
 import { LatencyMount } from '@/components/latency/LatencyView'
@@ -82,6 +83,7 @@ export default async function SectionPage({
   if (section === 'guardrails') return <GuardrailsMount />
   if (section === 'security') return <SecurityMount />
   if (section === 'compliance') return <ComplianceMount />
+  if (section === 'interop') return <InteropMount />
   if (section === 'database') return <DatabaseMount />
   if (section === 'mcp') return <McpConsoleMount />
   if (section === 'redteam') return <RedteamMount />

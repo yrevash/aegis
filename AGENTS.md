@@ -150,6 +150,28 @@ These are invariants, not preferences. Each one has a reason and most have a tes
   a per-connection pragma and has no row security at all, so a suite running on it
   reports tenant-isolation guarantees that are never actually checked.
 
+### Frontend: quiet by default, and every page explains itself
+
+Two rules govern every screen for every role. Both are written out in full in
+`DESIGN.md` §4 — read them before adding a panel.
+
+- **A listing opens closed.** Any panel whose body is a list of rows shows only a
+  bar with its title, its row count and one key figure. Hover expands, click pins.
+  Use `DataPanel`'s `collapsible` prop — do not hand-roll a disclosure, and never
+  `display:none` the rows, because collapsed must stay in the accessibility tree
+  and reachable by keyboard. One surface per page — the one the page is named
+  after — stays open.
+- **A page explains itself without prose.** A reviewer names what a screen does
+  from its structure, not from a paragraph. Before adding a sentence to a page,
+  cut it in this order: a restatement of the label, then advice; keep only a
+  sentence naming a file, route, table, rail or figure. Everything else belongs
+  in `docs/`. Mechanism goes in an `InfoTip`, a number's defence in a `Receipt`.
+
+The forcing function is a **ten-to-fifteen minute** demo of the whole platform. A
+screen a reviewer cannot read in seconds has failed, however correct it is. What
+this never licenses is deleting evidence: a `Receipt`, an `Absence` and an active
+failure's remediation always stay. Quiet comes from relocating, never removing.
+
 ## Verify before you claim done
 
 Never report success without pasting real output. In order:

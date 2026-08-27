@@ -275,6 +275,7 @@ function SecurityView(): ReactElement {
               <DataPanel
                 eyebrow="threat → control"
                 title="Every threat, and what holds it"
+                collapsible
                 maxHeight={560}
                 footer={
                   <Receipt

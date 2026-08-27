@@ -92,6 +92,12 @@ const nextConfig = {
     const api = process.env.AEGIS_DEV_API_ORIGIN || 'http://127.0.0.1:8110'
     return [
       { source: '/v1/:path*', destination: `${api}/v1/:path*` },
+      // A2A discovery. The spec fixes these paths at the ROOT and registers them with
+      // IANA, so they cannot live under `/v1` — which also means the `/v1/:path*` rule
+      // above never matched them. The Interop screen probed the card, got the Next dev
+      // server's own 404, and honestly reported "no answer" for an endpoint the backend
+      // was serving correctly all along.
+      { source: '/.well-known/:path*', destination: `${api}/.well-known/:path*` },
       { source: '/health', destination: `${api}/health` },
       { source: '/ready', destination: `${api}/ready` },
       { source: '/readyz', destination: `${api}/readyz` },

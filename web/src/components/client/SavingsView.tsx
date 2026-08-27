@@ -222,6 +222,7 @@ export function SavingsView({ token }: { token: string | null }): ReactElement {
             className={cn('col-span-12 min-w-0', showShare || unpriced.length > 0 ? 'lg:col-span-7' : null)}
             eyebrow="usage ledger"
             title="Where the savings come from"
+            collapsible
             actions={<ReconcileChip reconciles={rec.reconciles} delta={rec.deltaUsd} />}
             footer={
               <Receipt

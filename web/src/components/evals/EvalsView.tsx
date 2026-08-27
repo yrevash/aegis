@@ -563,6 +563,7 @@ function EvalsView(): ReactElement {
       <DataPanel
         eyebrow="seed corpus"
         title="Metric × case matrix"
+        collapsible
         actions={
           cases.length ? (
             <Badge tone="neutral">

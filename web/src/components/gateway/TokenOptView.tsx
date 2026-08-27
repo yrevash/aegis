@@ -324,6 +324,7 @@ function TokenOptView(): ReactElement {
           <DataPanel
             eyebrow="aegis.gateway"
             title="Per-role usage"
+            collapsible
             maxHeight={420}
             actions={
               <Badge tone="neutral" className="font-mono">
@@ -383,6 +384,7 @@ function TokenOptView(): ReactElement {
           <DataPanel
             eyebrow="aegis.gateway"
             title="Role → model"
+            collapsible
             maxHeight={420}
             actions={
               <Badge tone="neutral" className="gap-1.5">

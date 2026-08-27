@@ -263,6 +263,7 @@ export function PatchCheck({ token }: { token: string | null }): ReactElement {
       <DataPanel
         eyebrow="installed vs latest"
         title="Every pin, worst first"
+        collapsible
         maxHeight={560}
         toolbar={
           <label className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-2/40 px-2.5 py-1.5 text-sm focus-within:ring-2 focus-within:ring-ring sm:max-w-xs">
@@ -631,6 +632,7 @@ function Advisories({ token }: { token: string | null }): ReactElement {
     <DataPanel
       eyebrow="aegis · POST /stack/advisories"
       title="Published advisories, worst first"
+      collapsible
       maxHeight={420}
       toolbar={
         <div className="flex flex-wrap items-center gap-3">

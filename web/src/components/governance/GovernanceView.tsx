@@ -788,6 +788,7 @@ function GovernanceView(): ReactElement {
               className="rounded-lg"
               eyebrow="aegis.governance · usage ledger"
               title="Cost by model"
+              collapsible
               actions={
                 <Badge tone="neutral" className="gap-1.5">
                   <Figure>{byModel.length}</Figure> {byModel.length === 1 ? 'model' : 'models'}
@@ -821,6 +822,7 @@ function GovernanceView(): ReactElement {
             className="rounded-lg"
             eyebrow="aegis.governance · RBAC"
             title="Users & roles"
+            collapsible
             maxHeight={360}
             actions={
               <Badge tone="neutral" className="gap-1.5">
@@ -907,6 +909,7 @@ function GovernanceView(): ReactElement {
             className="rounded-lg"
             eyebrow="aegis.governance · audit"
             title="Recent audit tail"
+            collapsible
             maxHeight={360}
             actions={
               <Badge tone="neutral" className="gap-1.5">

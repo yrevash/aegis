@@ -256,6 +256,54 @@ by `web/tests/devops/healthStrip.test.mjs`.
 required component is genuinely down, the server's own `detail` stays visible in the failure
 banner. The moment it is needed is the wrong moment to make someone hover for it.
 
+### Listings open closed — hover reveals, click pins
+
+The rule above, generalised, and it now governs **every screen for every role**.
+
+The forcing function is the demo: the whole platform is presented in **ten to fifteen minutes**. A
+reviewer arriving on a screen gets a few seconds to decide what it is. If those seconds are spent
+scrolling past forty rows of a table to find the one figure that matters, the screen has failed —
+however correct the table is.
+
+**So a listing is closed by default.** Any panel whose body is a list of rows — documents,
+approvals, audit entries, jobs, prompts, seats, advisories, probes, components — opens as a single
+bar carrying **its title, its row count, and one key figure**. Nothing else.
+
+    Documents                                    10 rows · 7 ingested
+
+That bar is the whole contract: a reviewer learns *what this panel holds* and *that it is populated*
+without reading one row. **Hover expands it. Click pins it open.** Hover is for a glance; the pin is
+for the reviewer who actually wants to read, and it must survive the pointer leaving.
+
+**Never `display:none`.** The rows are collapsed, not removed — they stay in the accessibility tree
+and reachable by keyboard, and the trigger is a real `<button>` with `aria-expanded` naming its
+panel. Hiding is the redesign; losing is the regression, exactly as above.
+
+**One thing per page stays open.** A page of nothing but closed bars explains nothing. Each screen
+keeps its *primary* surface expanded — the thing the page is named after — and closes everything
+below it. On Documents that is the upload control and the corpus figures; the document list closes.
+
+### Every page explains itself, without prose
+
+A reviewer must be able to name what a screen does from the screen alone, with no narration and no
+paragraph to read.
+
+**The page's subject is its structure, not its sentences.** Documents means: an obvious way to
+upload, the figures that say what the corpus is made of, and a closed list. That is the whole page.
+A reader who needs the mechanism explained hovers an `InfoTip`; a reader who needs a number defended
+reads its `Receipt`.
+
+**Text is a last resort, and a label beats a sentence.** No paragraph earns its place on a page when
+a noun would do. Cut in this order, and stop as soon as the screen reads:
+
+1. any sentence restating the label above it
+2. any sentence giving advice
+3. keep the sentence naming a file, route, table, rail or figure — that one is the glass box
+4. what remains is documentation; it belongs in `docs/`, not on the screen
+
+**What is never cut:** a `Receipt`, an `Absence`, or an active failure's remediation. Provenance is
+the product (§5) — quiet is achieved by *relocating* evidence, never by deleting it.
+
 ## 5. The receipt, still the signature
 
 Aegis refuses to assert anything without its origin — `Source:` lines, evidence on health rows,

@@ -87,7 +87,7 @@ import type {
 
 import { ApiError, logRequestFailure, serverDetail } from './apiError'
 import { getAuthToken, reportSessionExpired } from './authToken'
-import { API_BASE } from './config'
+import { API_BASE, API_ORIGIN } from './config'
 
 /**
  * Issue one authenticated call.
@@ -928,4 +928,37 @@ export async function getForecastDomain(
     { method: 'GET' },
     token,
   )
+}
+
+/** The shape the Interop screen reads off the public agent card. */
+export interface AgentCard {
+  name?: string
+  protocolVersion?: string
+  skills?: { id: string; name: string }[]
+  supportedInterfaces?: { url: string; protocolBinding: string }[]
+}
+
+/**
+ * Read the public A2A agent card.
+ *
+ * Joined onto {@link API_ORIGIN}, not {@link API_BASE}: `/.well-known/agent-card.json`
+ * is fixed by the A2A specification and registered with IANA, so a well-known URI moved
+ * under `/v1` has not been served at all.
+ *
+ * **Unauthenticated on purpose, and it takes no token.** Discovery is precisely what a
+ * stranger is allowed to read, and issuing this request from the browser with no
+ * credential is the same request a peer agent makes — which is what makes the Interop
+ * screen a probe rather than a claim.
+ *
+ * Returns `null` rather than throwing when the card does not answer: the caller renders
+ * "no answer", and a discovery endpoint being down is not an error state for the page
+ * that reports on it.
+ */
+export async function getAgentCard(): Promise<AgentCard | null> {
+  try {
+    const res = await fetch(`${API_ORIGIN}/.well-known/agent-card.json`)
+    return res.ok ? ((await res.json()) as AgentCard) : null
+  } catch {
+    return null
+  }
 }

@@ -200,6 +200,7 @@ export function SeatsPanel({
         className="rounded-lg"
         eyebrow="aegis.admin · seats"
         title="Named seats"
+        collapsible
         actions={chooser}
       >
         {load.status === 'loading' ? (
