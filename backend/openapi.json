@@ -13346,6 +13346,35 @@
         ]
       }
     },
+    "/v1/a2a": {
+      "post": {
+        "description": "The A2A JSON-RPC endpoint — `SendMessage` and `GetTask`.\n\n**Authenticated, and scoped by the token alone.** The `tenant` routing field in the\nrequest body is attacker-controlled and arrives before authentication; it selects\nwhich agent is addressed and never sets the database tenant scope. When it disagrees\nwith the token, this refuses rather than reconciling — reconciling would mean\nsilently honouring one of them, and whichever one you honour, a caller has learned\nsomething about the other.",
+        "operationId": "a2a_rpc_v1_a2a_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response A2A Rpc V1 A2A Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "A2A Rpc",
+        "tags": [
+          "a2a"
+        ]
+      }
+    },
     "/v1/about": {
       "get": {
         "description": "Return a trivial, public product-identity card (name, version, module count).",

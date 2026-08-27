@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING
 from aegis.guardrails import Guardrails
 from aegis.guardrails.memory_write import MemoryWriteCandidate, MemoryWriteVerdict
 from aegis.governance.schema import SchemaDriftError
+
+from app.a2a.routes import router as a2a_router
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.routing import BaseRoute
@@ -795,6 +797,11 @@ def create_app() -> FastAPI:
     versioned, infra = _split_infra_probes(router)
     app.include_router(versioned, prefix=API_PREFIX)
     app.include_router(infra)
+    # A2A discovery. These live at the ROOT, not under ``/v1``, because the path is
+    # fixed by the specification and registered with IANA — a well-known URI that is not
+    # where the standard says it is has not been served. They are public by design: an
+    # agent card is discovery, and it carries nothing a stranger may not know.
+    app.include_router(a2a_router)
     # §10.4 — the MCP front door, served over Streamable HTTP at ``/mcp/mcp``. It is a
     # MOUNT rather than a FastAPI route because the ``mcp`` SDK hands us a complete ASGI
     # application: the transport, the bearer-auth middleware chain, the session manager

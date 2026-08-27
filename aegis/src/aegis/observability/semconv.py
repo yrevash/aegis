@@ -23,10 +23,10 @@ from enum import StrEnum
 from aegis.core.events import SpanKind
 
 __all__ = [
-    "A2A_FROM",
-    "A2A_PROTOCOL",
-    "A2A_REASON",
-    "A2A_TO",
+    "HANDOFF_FROM",
+    "HANDOFF_SCOPE",
+    "HANDOFF_REASON",
+    "HANDOFF_TO",
     "ANSWER_CACHE_HIT",
     "ANSWER_CACHE_SIMILARITY",
     "DEFAULT_PROVIDER",
@@ -110,13 +110,20 @@ ROUTER_ROLE = "app.router.role"
 ROUTER_REASON = "app.router.reason"
 ROUTER_USED_LLM = "app.router.used_llm"
 
-# A2A-style labelled agent handoff (the supervisor dispatching a turn to a
-# specialist). Emitted as a dedicated span so the trace tree reads as an
-# explicit agent-to-agent handoff, not just a routing attribute on a node.
-A2A_FROM = "app.a2a.from"  # the dispatching agent (e.g. "supervisor")
-A2A_TO = "app.a2a.to"  # the specialist role the turn is handed to
-A2A_REASON = "app.a2a.reason"  # why this specialist was chosen
-A2A_PROTOCOL = "app.a2a.protocol"  # labelling convention ("a2a")
+# An INTERNAL agent handoff — the supervisor dispatching a turn to a specialist inside
+# this process. Emitted as a dedicated span so the trace tree reads as an explicit
+# handoff rather than a routing attribute buried on a node.
+#
+# These were named ``app.a2a.*`` and carried the literal value ``"a2a"``, which was
+# borrowed vocabulary at the time and became actively misleading the moment this platform
+# started speaking the real Agent2Agent protocol at ``/.well-known/agent-card.json``. Two
+# unrelated things must not share a name: one is an in-process dispatch that crosses no
+# boundary and authenticates nothing, the other is a networked protocol with signed
+# identity. A reader grepping for A2A deserves to find the protocol, not this.
+HANDOFF_FROM = "app.handoff.from"  # the dispatching agent (e.g. "supervisor")
+HANDOFF_TO = "app.handoff.to"  # the specialist role the turn is handed to
+HANDOFF_REASON = "app.handoff.reason"  # why this specialist was chosen
+HANDOFF_SCOPE = "app.handoff.scope"  # always "in-process" — it crosses no network
 
 # Agentic retrieval (bounded reformulate-and-re-retrieve loop).
 RETRIEVAL_ROUNDS = "app.retrieval.rounds"

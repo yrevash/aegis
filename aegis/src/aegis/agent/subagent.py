@@ -538,10 +538,10 @@ async def _loop(
         SpanKind.AGENT,
         f"subagent.{spec.role}",
         attributes={
-            semconv.A2A_FROM: "supervisor",
-            semconv.A2A_TO: spec.role,
-            semconv.A2A_REASON: task,
-            semconv.A2A_PROTOCOL: "a2a",
+            semconv.HANDOFF_FROM: "supervisor",
+            semconv.HANDOFF_TO: spec.role,
+            semconv.HANDOFF_REASON: task,
+            semconv.HANDOFF_SCOPE: "in-process",
         },
     ):
         for step in range(1, max(1, spec.max_steps) + 1):

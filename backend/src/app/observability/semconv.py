@@ -8,10 +8,10 @@ no host coupling to sever.
 from __future__ import annotations
 
 from aegis.observability.semconv import (
-    A2A_FROM,
-    A2A_PROTOCOL,
-    A2A_REASON,
-    A2A_TO,
+    HANDOFF_FROM,
+    HANDOFF_SCOPE,
+    HANDOFF_REASON,
+    HANDOFF_TO,
     ANSWER_CACHE_HIT,
     ANSWER_CACHE_SIMILARITY,
     DEFAULT_PROVIDER,
@@ -51,10 +51,10 @@ from aegis.observability.semconv import (
 )
 
 __all__ = [
-    "A2A_FROM",
-    "A2A_PROTOCOL",
-    "A2A_REASON",
-    "A2A_TO",
+    "HANDOFF_FROM",
+    "HANDOFF_SCOPE",
+    "HANDOFF_REASON",
+    "HANDOFF_TO",
     "ANSWER_CACHE_HIT",
     "ANSWER_CACHE_SIMILARITY",
     "DEFAULT_PROVIDER",

@@ -468,10 +468,10 @@ def build_agent(
             SpanKind.AGENT,
             f"handoff → {decision.role}",
             attributes={
-                semconv.A2A_FROM: "supervisor",
-                semconv.A2A_TO: decision.role,
-                semconv.A2A_REASON: decision.reason,
-                semconv.A2A_PROTOCOL: "a2a",
+                semconv.HANDOFF_FROM: "supervisor",
+                semconv.HANDOFF_TO: decision.role,
+                semconv.HANDOFF_REASON: decision.reason,
+                semconv.HANDOFF_SCOPE: "in-process",
             },
         ):
             writer(

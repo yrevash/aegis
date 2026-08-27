@@ -108,6 +108,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/a2a": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A2A Rpc
+         * @description The A2A JSON-RPC endpoint — `SendMessage` and `GetTask`.
+         *
+         *     **Authenticated, and scoped by the token alone.** The `tenant` routing field in the
+         *     request body is attacker-controlled and arrives before authentication; it selects
+         *     which agent is addressed and never sets the database tenant scope. When it disagrees
+         *     with the token, this refuses rather than reconciling — reconciling would mean
+         *     silently honouring one of them, and whichever one you honour, a caller has learned
+         *     something about the other.
+         */
+        post: operations["a2a_rpc_v1_a2a_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/about": {
         parameters: {
             query?: never;
@@ -11756,6 +11783,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    a2a_rpc_v1_a2a_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
