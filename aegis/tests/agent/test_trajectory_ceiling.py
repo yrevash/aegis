@@ -112,3 +112,53 @@ async def test_a_lane_over_the_ceiling_stops_before_it_calls_the_model(make_deps
     assert calls["n"] == 0, "the ceiling did not stop the call"
     assert result.status is SubAgentStatus.CEILING
     assert "ceiling" in (result.error or "").lower()
+
+
+def test_the_per_result_ceiling_is_read_by_something() -> None:
+    """A declared field that nothing reads is not a bound.
+
+    This build shipped that defect twice before catching it a third time: a read-back
+    seam with no production binding, then a memory screen whose callers had no parameter
+    to pass it through. Both looked complete from the config surface. So this asserts the
+    cheapest possible property — that some module other than the config and the knob list
+    actually mentions the field.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    declared_in = {"deps.py", "harness.py"}
+    readers = [
+        path.name
+        for path in (root / "aegis" / "src" / "aegis").rglob("*.py")
+        if "max_tool_result_tokens" in path.read_text() and path.name not in declared_in
+    ]
+    assert readers, (
+        "max_tool_result_tokens is declared and exposed as a knob but read by nothing — "
+        "a ceiling nothing enforces is a configuration field, not a bound"
+    )
+
+
+def test_an_oversized_tool_result_is_truncated_and_says_so() -> None:
+    """Silent truncation is worse than the overflow it prevents.
+
+    A model handed a quietly shortened result reasons confidently about the fragment it
+    was given. Told plainly that it is looking at the beginning of something longer, it
+    can ask for the rest or qualify its answer. The marker is the whole point.
+    """
+    from aegis.agent.subagent import _tool_message
+
+    class _Call:
+        id = "c1"
+        name = "find_requests"
+
+    long = "row data " * 3000
+    out = _tool_message(_Call(), long, max_tokens=100)
+
+    assert len(out["content"]) < len(long)
+    assert "truncated" in out["content"]
+    assert "full text is on the run record" in out["content"]
+
+    # Under the ceiling, nothing is touched.
+    assert _tool_message(_Call(), "short", max_tokens=100)["content"] == "short"
+    # Disabled, nothing is touched either — the bound is opt-out, not mandatory.
+    assert _tool_message(_Call(), long, max_tokens=0)["content"] == long

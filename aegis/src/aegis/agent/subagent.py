@@ -611,6 +611,7 @@ async def _loop(
                     _tool_message(
                         call,
                         f"'{call.name}' is not available to this agent; it was not run.",
+                        max_tokens=getattr(deps.config, "max_tool_result_tokens", 0),
                     )
                 )
             for call in proposed:
@@ -660,7 +661,15 @@ async def _loop(
                     trace_id=trace_id,
                     result=result,
                 )
-                messages.append(_tool_message(call, summary))
+                # The bound applies here above all: `summary` is whatever the tool
+                # returned, and that is the unbounded input a run is actually exposed to.
+                messages.append(
+                    _tool_message(
+                        call,
+                        summary,
+                        max_tokens=getattr(deps.config, "max_tool_result_tokens", 0),
+                    )
+                )
 
         # Step cap reached with the model still wanting tools: finalise on what we have
         # rather than looping. The cap is what guarantees termination.
@@ -727,8 +736,41 @@ async def _execute(
     return summary
 
 
-def _tool_message(call: Any, content: str) -> dict[str, Any]:  # noqa: ANN401 - ToolCallResult
-    """Build the ``tool``-role reply the loop feeds back to the model."""
+def _tool_message(
+    call: Any,  # noqa: ANN401 - ToolCallResult
+    content: str,
+    *,
+    max_tokens: int = 0,
+) -> dict[str, Any]:
+    """Build the ``tool``-role reply the loop feeds back to the model.
+
+    ``max_tokens`` bounds ONE result's contribution to the trajectory, and it is the
+    bound that bites first in practice: a run's real exposure is one unbounded tool
+    result — a search that returns a whole document, a query that matches ten thousand
+    rows — not a long conversation. The whole-trajectory ceiling would catch that too,
+    but only by ending the lane, when truncating one oversized result would have let it
+    finish.
+
+    The truncation is **marked, never silent**. A model handed a quietly shortened result
+    will reason confidently about the part it was given, and that is worse than a model
+    told plainly that it is looking at the beginning of something longer.
+
+    The full text is not lost: it stays on the result record that the trace and the audit
+    read, so the model loses the tail and the evidence does not.
+    """
+    if max_tokens > 0 and content:
+        from aegis.memory.tokens import count_tokens
+
+        size = count_tokens(content)
+        if size > max_tokens:
+            # Proportional cut on characters — the estimator is monotone, so this lands
+            # close enough, and being slightly under a ceiling is the safe direction.
+            keep = max(200, int(len(content) * (max_tokens / size)))
+            content = (
+                content[:keep]
+                + f"\n\n[truncated: {size} tokens exceeded the {max_tokens}-token "
+                + "ceiling for one tool result; the full text is on the run record]"
+            )
     return {"role": "tool", "tool_call_id": call.id or "", "content": content}
 
 
