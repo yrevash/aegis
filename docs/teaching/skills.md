@@ -2,191 +2,173 @@
 
 ## What it is
 
-A skill is a small, named playbook — written in a strict `SKILL.md` format —
-that an agent can pull into its own context **on demand**, rather than
-having every possible playbook pasted into every prompt. If you have never
-seen "progressive disclosure" before: instead of giving the model a 500-page
-manual every time, you give it a one-line table of contents ("there is a
-skill called `closing_requests` for closing customer requests") and a tool,
-`load_skill`, that fetches the full page only when the model decides it
-needs it.
+A skill is a small named playbook, written in a strict `SKILL.md` format,
+that an agent pulls into its own context **on demand**. The model always sees
+a one-line card for every skill in force; it fetches the full body only by
+calling the `load_skill` tool.
 
-## Why it exists here
+That two-tier pattern is **progressive disclosure**: give the model a table of
+contents in every prompt, and the chapter only when it asks.
 
-Without this, an operator wanting to add "when a customer mentions X, do Y"
-either has to fork the codebase or accept that every instruction lives
-permanently in the system prompt, bloating every single call regardless of
-relevance. Skills let a **non-engineer** author a playbook, save it, and have
-it reach the right agent — scoped to a platform, a tenant, or one user —
-without touching code, and reviewed by the same input guardrail that
+## Why it exists
+
+Without it, "when a customer mentions X, do Y" either means forking the
+codebase or pasting every instruction permanently into the system prompt,
+where it costs tokens on every call regardless of relevance. Skills let a
+non-engineer author a playbook, scope it to a platform, a tenant or one user,
+and have it reach the right agent — screened by the same input guardrail that
 screens everything else.
 
 ## Diagram
 
 ```mermaid
 flowchart TD
-    subgraph AUTHOR["Writing a skill"]
-        A[SKILL.md text] --> B{"parse_skill_md():<br/>hand-written STRICT YAML subset —<br/>NOT a full YAML parser"}
-        B -->|unknown frontmatter key| REFUSE1[SkillFormatError]
-        B -->|ok| C["write_skill(): rail-screen BEFORE any row is built"]
-        C -->|guardrail blocks| REFUSE2[422 — never stored]
-        C -->|ok| D["set_active(): activation is authority-checked<br/>BEFORE the row is written"]
-        D --> E["INSERT/UPDATE agent_skills row<br/>(re-authoring same name+scope = UPDATE, not a new row)"]
-    end
-    subgraph FORCE["Is it in force?"]
-        E --> F{"row exists AND name is in<br/>skills.enabled (a MergeRule.UNION setting)"}
-    end
-    subgraph RUN["During a run"]
-        G[Working memory assembled] --> H["Tier 1: one-line card per in-force skill<br/>'name (scope): description'"]
-        H --> I[Model decides it needs one]
-        I --> J["load_skill tool call — Tier 2:<br/>returns the full body, LOW risk tier"]
-    end
-    F -.gates.-> H
+    A["SKILL.md text"] --> B{parse_skill_md}
+    B -->|unknown frontmatter key| R1[SkillFormatError]
+    B -->|ok| C[write_skill]
+    C --> D{input guardrail on the body}
+    D -->|blocked| R2[422, never stored]
+    D -->|ok| E{authority to write at this scope}
+    E -->|no| R3[403]
+    E -->|yes| F[insert or update agent_skills row]
+    F --> G{"name listed in skills.enabled"}
+    G -->|yes| H[one-line card in the system prompt]
+    H --> I[model calls load_skill]
+    I --> J[full body returned, rescreened]
 ```
 
-## The architecture
+## How it works
+
+**The format.** `parse_skill_md` implements a hand-written strict subset of
+YAML: `key: value`, an inline `[a, b]` list, and a `- item` block list. It
+refuses everything else by name. Frontmatter keys are a closed set — `name`,
+`description`, `triggers` — and an unknown key is a refusal, not a dropped
+field. `name` must match `^[a-z0-9][a-z0-9_-]{1,63}$`, `description` is capped
+at 280 characters, the body at 20,000. A three-key grammar cannot carry the
+attack surface a general YAML parser has.
+
+**Two orthogonal facts decide whether a skill is in force.** The row must
+exist in `agent_skills`, **and** its name must appear in the `skills.enabled`
+setting. There is deliberately no `enabled` column: a second flag would be a
+second mechanism, and the screen and the prompt could read different answers.
+
+`skills.enabled` merges with `MergeRule.UNION`, so the effective set is
+platform ∪ tenant ∪ user. A union can only grow, which means no tenant or
+user can remove a platform safety skill by writing a shorter list.
+
+**Scope precedence — the no-shadow rule.** Three scopes: `platform`, `tenant`,
+`user`, reusing the settings module's own enum. When several layers declare
+the same name:
 
 ```
-aegis/src/aegis/skills/
-  document.py   SKILL.md parser + renderer — the strict subset grammar
-  models.py     AgentSkill ORM row + the DB CHECK constraints that encode scope rules
-  store.py      resolution, authoring, the no-shadow bind order
-backend/src/app/agent/skills_tool.py   the load_skill tool definition + dispatch
-backend/src/app/api/routes_skills.py   HTTP surface: list/write/activate/delete
+a platform row with is_safety = true wins its name outright
+otherwise: user > tenant > platform
 ```
 
-## What is actually in Aegis
+Without the safety exception a tenant admin could author under a platform
+safety skill's exact name and replace its content while the *set* of names
+stayed identical. A database `CHECK` constraint makes a non-platform row with
+`is_safety = true` impossible to insert at all.
 
-### The `SKILL.md` format — a hand-written strict subset, not a YAML library
+**Triggers order, they never filter.** A trigger term matching the query moves
+a skill to the front of the card list. Every in-force skill is always offered.
+A trigger that withheld a skill would be indistinguishable in a trace from a
+skill that does not exist.
 
-Quoted directly from `document.py`'s own reasoning:
+**`load_skill` is a `RiskLevel.LOW` tool**, so it never stops at a human
+approval gate. What makes that safe: the body was screened by the input rail
+at authoring time, before any row was built, and the returned text passes
+through the tool-result rail again on its way back into context. The tool
+reads only `args["name"]` from the model — tenant, user and agent identity
+come from the server-side request context.
 
-> *"The subset here accepts `key: value`, an inline `[a, b]` list and a `-
-> item` block list, and refuses everything else by name. A parser that
-> cannot express a billion laughs cannot be asked to."*
+**Resolution runs in full on every load.** `load_skill` does not look the row
+up by name; it re-resolves, so a skill not in force for this caller cannot be
+loaded by naming it, and a name that binds to a platform safety row loads
+that row's body whoever asks.
 
-("Billion laughs" is a real YAML denial-of-service attack using nested
-aliases — the point is that a general YAML parser has an attack surface a
-three-key grammar simply cannot have.) Accepted frontmatter keys are a
-**closed set**: `name`, `description`, `triggers`. Anything else is a
-refusal naming the unknown key, not a silently-dropped field. `name` must
-match `^[a-z0-9][a-z0-9_-]{1,63}$` — "an identifier in a tool call, not a
-title." `description` is capped at 280 characters; the body at 20,000.
+## What it stores
 
-The parser was verified against the repo's own root `SKILL.md` (an
-unrelated Claude-Code tooling file, not an Aegis skill) — it uses a YAML
-folded block scalar the strict parser correctly refuses, which is a live
-demonstration that the subset grammar actually excludes what it claims to.
+One table, `agent_skills`:
 
-### Two orthogonal facts decide whether a skill is "in force" — deliberately, not one flag
+| Column | What it is for |
+| --- | --- |
+| `id` | primary key |
+| `scope` | `platform`, `tenant` or `user` |
+| `tenant_id` | FK to `tenants`, `NULL` for a platform row |
+| `user_id` | FK to `users`, set only for a user row |
+| `name` | the identifier the model calls `load_skill` with |
+| `description` | the one line always in the system prompt (max 280 chars) |
+| `body` | the Markdown `load_skill` returns |
+| `triggers` | JSONB list of terms that reorder the cards |
+| `agent_id` | which agent this skill is for, `NULL` for all of them |
+| `is_safety` | platform-only floor, enforced by a `CHECK` constraint |
+| `created_at`, `updated_at`, `updated_by` | authorship trail |
 
-A skill is live only when **both** are true: the row exists in
-`agent_skills`, **and** its name appears in the `skills.enabled` setting.
-There is deliberately no `enabled` column on the row itself — quoted from
-`models.py`: *"A row is content; it is not the answer to 'is this in force'
-... There is deliberately no `enabled` column here — a second flag would be
-a second mechanism, and the first time the two disagreed the screen and the
-prompt would each be reading a different one."*
+Three `CHECK` constraints encode the scope rules:
+`ck_agent_skills_platform_row_has_no_tenant`,
+`ck_agent_skills_user_row_has_a_user`, and
+`ck_agent_skills_only_platform_declares_safety`.
 
-`skills.enabled` uses `MergeRule.UNION` — the effective in-force set is
-platform ∪ tenant ∪ user. This is a **security property**, not a
-convenience: a union can only grow, so no tenant or user can ever remove a
-platform-authored safety skill from the effective set by writing a shorter
-list.
+The in-force list itself lives in the `settings` table under the
+`skills.enabled` key, not here.
 
-### Scope precedence — the no-shadow rule
+## Security and tenant isolation
 
-Three scopes: `platform`, `tenant`, `user` (reusing the exact same enum as
-the settings module, not a second copy that could drift). Which row a *name*
-resolves to, when multiple layers declare the same name:
+- `agent_skills` is registered for Postgres row-level security **and** as a
+  platform baseline table. A `NULL`-tenant row is readable by every bound
+  tenant scope, because a platform safety skill that a tenant could not read
+  would resolve a skill set with the safety floor missing while looking
+  healthy.
+- The write half is **not** widened. The policy carries an explicit
+  `WITH CHECK` with the unwidened predicate, so a tenant-scoped request can
+  read a platform row and is refused when it tries to write one. No tenant
+  can forge a platform skill.
+- Authoring a platform-scope skill requires the platform tier; a tenant-scope
+  write is stamped with the caller's own tenant; a user-scope write with the
+  caller's own user id. `_target()` derives all of that from the auth context,
+  never from the request body.
+- Every body is guardrail-screened **before** a row is constructed, so a
+  blocked body is never stored.
+- `agent_id` is validated against the live roster by name at the API layer, so
+  a typo is refused rather than stored.
 
-```
-a platform row with is_safety=True wins its name outright
-otherwise:  user > tenant > platform    (most specific wins)
-```
+## API surface
 
-The safety exception is the whole point. Without it, a tenant admin could
-author a skill under the exact same name as a platform safety skill and
-**replace its content** while the *set* of in-force names stayed identical —
-invisible to anything only checking membership. Quoted: *"This function is
-the no-shadow rule."* Enforced at the database level too: a `CHECK`
-constraint (`ck_agent_skills_only_platform_declares_safety`) makes it
-impossible to even insert a non-platform row with `is_safety=True`.
+| Method | Path | Who may call | Returns |
+| --- | --- | --- | --- |
+| GET | `/v1/skills` | any authenticated caller | authored rows visible to this caller, in force or not, plus the roster of agent names |
+| POST | `/v1/skills` | any authenticated caller; the scope decides the authority required | the stored row |
+| PUT | `/v1/skills/{scope}/{name}/active` | any authenticated caller with authority at that scope | the row, plus the new `skills.enabled` list |
+| DELETE | `/v1/skills/{scope}/{name}` | any authenticated caller with authority at that scope | `204 No Content` |
 
-### Triggers order candidates; they never filter
+`load_skill` is a model-facing tool, not an HTTP route.
 
-```python
-any(term in query.lower() for term in skill.triggers)
-```
+## Configuration
 
-A trigger match moves a skill to the front of the card list shown to the
-model — it never removes an untriggered skill from the list. Quoted
-reasoning: *"a trigger that silently withholds a skill is indistinguishable
-in the trace from a skill that does not exist."* All in-force skills are
-always offered as one-line cards; triggers only affect ordering.
+This module reads no environment variables of its own. Its behaviour is
+driven by the `skills.enabled` setting (a `MergeRule.UNION` key in the
+`settings` table) and by `MemoryConfig.n_skill`, which caps how many cards are
+offered per turn (default 12). The database it reads is the platform's, via
+`POSTGRES_DSN`.
 
-### `load_skill` — why it is a LOW risk tool, deliberately
+## Where it lives
 
-The tool is registered at `RiskLevel.LOW` — the lowest tier, meaning it
-never stops at a human approval gate. The reasoning, quoted: tiering it
-higher *"would stop every skill load at a human approval, which is not a
-safety property, it is the feature not working."* What actually makes LOW
-safe here: the skill's body was already screened by the input guardrail
-**at authoring time**, before it was ever stored, and the tool's returned
-text passes through the tool-result rail again on the way back into context
-— so a malicious body could not have been saved in the first place, and even
-a stored body is re-screened on every load.
+| Path | What it does |
+| --- | --- |
+| `aegis/src/aegis/skills/document.py` | the `SKILL.md` strict-subset parser and renderer |
+| `aegis/src/aegis/skills/models.py` | the `AgentSkill` row and its `CHECK` constraints |
+| `aegis/src/aegis/skills/store.py` | `resolve_skills`, `load_skill`, `list_skills`, `write_skill`, `set_active` |
+| `backend/src/app/agent/skills_tool.py` | the `load_skill` tool definition, `LOAD_SKILL_RISK`, dispatch |
+| `backend/src/app/api/routes_skills.py` | list, author, activate and delete over HTTP |
+| `aegis/src/aegis/memory/recall.py` | the recall arm that turns in-force skills into cards |
 
-The tool reads **only** `args["name"]` from the model's call — tenant, user,
-and agent identity come from the server-side request context, never from
-the model's own arguments. Quoted reasoning: *"the argument comes from a
-model that has just read attacker-influenced text, so a `tenant_id` on the
-wire here would be a prompt-injectable cross-tenant read."*
+## What it does not do
 
-### Per-agent assignment — exists in the API, missing from the web client
-
-`AgentSkill.agent_id` is a real column (plain string, no foreign key,
-because the roster of agent names belongs to the domain adapter, not to
-this module). `SkillWriteRequest.agent`, `SkillRow.agent`, and
-`SkillsResponse.agents` all exist in the backend API and are covered by
-tests. **The web client does not send or display this field** —
-`web/src/lib/api/skills.ts` has no `agent` property, and the drawer UI
-currently renders a paragraph asserting the API has no such field, which is
-now incorrect. This is a real, verified gap between what the backend
-supports and what the console exposes.
-
-## How it runs
-
-1. An author writes or pastes a `SKILL.md`. `POST /v1/skills` parses it with
-   the strict grammar, runs the input guardrail over the body **before**
-   constructing any database row, then checks the caller's authority to
-   write at the requested scope **before** activating it.
-2. Every request's working-memory assembly calls `resolve_skills`, which
-   computes the platform ∪ tenant ∪ user union, applies the no-shadow bind
-   rule per name, sorts triggered-then-safety-then-alphabetical, and returns
-   one-line cards.
-3. The model sees the cards. If it decides one is relevant, it calls
-   `load_skill(name=...)`, which resolves the same way and returns the full
-   body — re-screened by the tool-result rail on the way back.
-
-## What is not here
-
-- **Per-agent assignment is a backend-only feature today.** The database and
-  API fully support it; the web console does not surface a control for it,
-  and its own copy currently claims the opposite.
-- **No embedding-based skill selection.** Triggers are plain lowercase
-  substring matches, not a vector similarity search — explicitly noted in
-  the domain adapter's spec module as "a possible future enhancement; the
-  core does not do it today."
-- **No versioning, no draft state, no rollback.** Only `created_at`,
-  `updated_at`, and `updated_by` — re-authoring the same name at the same
-  scope is an in-place `UPDATE`, and there is no history of prior bodies.
-- **A filesystem-based skill-selection path exists in the domain adapter
-  (`select_skills`, a keyword-to-filename dict) but is explicitly documented
-  as no longer on the recall path** — kept alive only because a conformance
-  test still checks the shipped starter files are in step with it; nothing
-  at runtime calls it.
-- **Stale names in the enabled set are silently skipped, by design** — if
-  `skills.enabled` names a skill whose row was deleted, resolution simply
-  omits it rather than raising, which the source calls "not an error" but
-  is worth knowing produces no signal anywhere that the reference is dead.
+- No versioning, no drafts, no rollback. Re-authoring the same name at the
+  same scope is an in-place `UPDATE`; prior bodies are not kept.
+- No embedding-based selection. Triggers are lowercase substring matches.
+- A name in `skills.enabled` whose row has been deleted is skipped silently;
+  nothing reports the dead reference.
+- Skills are not fetched from the filesystem at runtime. The store is the
+  database.

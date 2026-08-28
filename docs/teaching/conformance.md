@@ -2,113 +2,183 @@
 
 ## What it is
 
-A test suite that checks whether a **domain adapter** — the swappable
-plug-in that gives Aegis its actual business domain (customer support,
-finance, whatever a deployment is retargeted to) — is genuinely complete,
-not merely present. If you have never worked on a platform designed to be
-retargeted to a new domain: the risk is a "blind swap" that looks finished
-(the code compiles, the app boots, screens render) while some load-bearing
-piece of the contract was never actually implemented, and that gap is
-invisible until a real user hits it in production.
+`aegis.conformance` is an executable test suite that checks whether a **domain
+adapter** — the swappable package that gives Aegis its business domain — is wired
+completely. It ships as a pytest plugin, runs with one command, and needs no
+Postgres, no Redis, no queue and no model call.
 
-## Why it exists here
+## Why it exists
 
-Quoted directly, and it is the whole reason this suite is structured the
-way it is: *"Fourteen checks, and every one of them descends from a defect
-this repository shipped."* This is not a hypothetical test suite written
-against an imagined failure mode — every single check exists because a real
-version of that exact defect actually happened during this project's own
-development, and someone decided the fix should be a permanent, automated
-check rather than a one-time correction.
+Aegis is retargeted to a new domain by writing one adapter. The risk is a swap
+that *looks* finished: the code imports, the app boots, the screens render, and
+some load-bearing piece of the contract was never actually implemented. That gap
+stays invisible until a real user hits it. The suite makes the gap fail a command
+instead.
+
+Because it touches no infrastructure, an integrator can run it **before** the
+database, the gateway or the queue works — which is exactly when a wiring mistake
+is cheapest to fix.
 
 ## Diagram
 
 ```mermaid
 flowchart TD
-    A[A team retargets Aegis to a new domain] --> B["Writes a domain adapter —<br/>implements the Protocols aegis.adapter declares"]
-    B --> C["pytest --pyargs aegis.conformance --aegis-adapter=mypackage.adapter"]
-    C --> D["Registered as a pytest11 entry point —<br/>the integrator adds NOTHING to conftest.py"]
-    D --> E["14 checks — each descends from a REAL shipped defect"]
-    E --> F1["Does the adapter's roster actually match its declared specialists?"]
-    E --> F2["Does select_skills() actually reach a real file for every trigger?"]
-    E --> F3["Does the corpus carry an id AND text under any accepted spelling?"]
-    E --> Fn["... 11 more, each named after the bug it catches"]
-    F1 --> G{"PASS/FAIL, with the adapter's name printed —<br/>'13 passed' means nothing without knowing against WHAT"}
+    A["A team writes a domain adapter<br/>satisfying aegis.adapter.DomainAdapter"] --> B["Run pytest against aegis.conformance,<br/>naming the adapter import path"]
+    B --> C["The pytest11 entry point supplies the option<br/>the integrator edits no conftest.py"]
+    C --> D["load_adapter imports it once per session"]
+    D --> E["The header line names the adapter under check"]
+    E --> F["14 checks read the adapter and the core"]
+    F --> G1["Contract members present"]
+    F --> G2["Roster roles route to handler nodes"]
+    F --> G3["Tools declare risk tiers, allowlists resolve"]
+    F --> G4["Skills, memory and ML specs resolve"]
+    F --> G5["Corpus records carry identity and text"]
+    F --> G6["No shipped domain vocabulary outside the adapter"]
+    G1 --> H{"PASS or a four-block failure message"}
+    G2 --> H
+    G3 --> H
+    G4 --> H
+    G5 --> H
+    G6 --> H
 ```
 
-## The architecture
+## How it works
+
+### Pointing it at an adapter
+
+Three ways, in precedence order:
+
+1. `pytest --pyargs aegis.conformance --aegis-adapter myapp.adapter`
+2. `AEGIS_ADAPTER=myapp.adapter pytest --pyargs aegis.conformance`
+3. Nothing — the run stops immediately with a usage error naming both of the
+   above.
+
+The command line wins over the environment, so a shell that already exports
+`AEGIS_ADAPTER` for a running application can still check a second adapter
+without unsetting anything.
+
+A missing or unimportable adapter raises `AdapterNotSelectedError`, which is a
+hard stop rather than a skipped suite: a conformance run that quietly checks
+nothing is indistinguishable, in a terminal, from one that passed.
+
+### The plugin
+
+`plugin.py` is registered in `aegis/pyproject.toml` as a `pytest11` entry point,
+so it is live in any environment where `aegis` is installed. An integrator copies
+no files and adds nothing to their own `conftest.py`. Being globally loaded, it is
+deliberately **inert**: it contributes one namespaced option and one header line,
+and does nothing at all to a pytest run that is not checking an adapter.
+
+The header line names the exact adapter path under test. "14 checks passed" is
+only evidence if the reader can see *which* adapter they passed against.
+
+### The fixtures
+
+`conftest.py` imports the adapter once per session and exposes two fixtures:
+`adapter` (the module) and `piece` (a reader for one adapter member). Every check
+that reads a member goes through `piece`, so a missing member fails with the same
+actionable message rather than an `AttributeError` from inside a check body.
+
+### The 14 checks
+
+| # | Check | What it verifies |
+|---|---|---|
+| 1 | `every_contract_member_is_present` | The adapter declares every member `aegis.adapter.DomainAdapter` requires. |
+| 2 | `domain_identity_is_a_usable_topical_rail` | The declared domain identity can actually drive the topical guardrail. |
+| 3 | `every_roster_role_has_a_handler_node` | Each specialist in the roster resolves to a real graph node. |
+| 4 | `the_roster_default_role_is_declared_and_routable` | The default role exists and can be routed to. |
+| 5 | `every_tool_declares_a_risk_tier` | No tool reaches the approval gate without a risk tier. |
+| 6 | `allowlists_name_registered_tools_and_known_personas` | Per-persona tool allowlists name tools and personas that exist. |
+| 7 | `every_persona_the_adapter_declares_resolves` | Every declared persona resolves. |
+| 8 | `the_system_prompt_never_drops_the_platform_floor` | The adapter's system prompt keeps the platform's baseline instructions. |
+| 9 | `memory_spec_satisfies_the_memory_contract` | The memory spec is a real attribute of the adapter and satisfies the contract. |
+| 10 | `skills_directory_holds_at_least_one_playbook` | The skills directory is not empty. |
+| 11 | `every_playbook_is_reachable_from_select_skills` | Every playbook file can actually be selected by a trigger. |
+| 12 | `ml_spec_resolves_to_the_domain_not_the_fallback` | The ML spec trains on domain data, not a generic fallback. |
+| 13 | `seed_corpus_records_carry_identity_and_chunk` | Every corpus record has an id and text. |
+| 14 | `no_shipped_domain_vocabulary_survives_outside_the_adapter` | No word from the shipped domain remains in any core module. |
+
+### Field-name tolerance
+
+Check 13 accepts several spellings rather than demanding one:
+
+- identity: `id`, `doc_id`, `document_id`, `uid`, `key`
+- text: `body`, `text`, `content`, `markdown`, `raw_text`, `chunk_text`
+
+Different adapters reasonably grow their own corpus schema. The check's job is to
+verify the contract is met — every record is identifiable and has text — not to
+impose one field name on every possible adapter.
+
+### The vocabulary check
+
+Check 14 is the inverse of the others: it reads the **core**, not the adapter, and
+asks whether any module outside the adapter still contains a word belonging to the
+shipped domain. `_vocabulary.py` freezes that word list as data the check is
+quarantining — nothing in the platform reads the module, and a term listed there
+is a term the core is forbidden to contain.
+
+The check is **unconditional**. It is not "runs only after a retarget": the
+reference adapter itself must keep the core clean, which is the only way the
+promise holds before anybody retargets. When the reference adapter is the one
+loaded, every listed term must still be found somewhere inside it, so a stale
+entry is a failure rather than decoration.
+
+### The failure message
+
+`_report.py::fail()` renders every failure in the same four labelled blocks —
+**what** was found, **fix** (the edit to make), **if not** (the consequence of
+leaving it), and **scar** (the class of wiring mistake this check guards against).
+It calls `pytest.fail(..., pytrace=False)`, because a traceback through the report
+module tells the reader nothing and buries the four lines that do.
+
+## What it stores
+
+This module stores nothing. It writes no files, opens no connections and mutates
+no adapter it reads.
+
+## Security and tenant isolation
+
+No tenant-scoped data. The suite runs in a developer's or CI's process, reads an
+imported module, and never authenticates as anyone. It performs only pure,
+side-effect-free reads — each check's docstring names exactly what it touches.
+
+## API surface
+
+No HTTP routes. The entire surface is one command:
 
 ```
-aegis/src/aegis/conformance/
-  test_conformance.py   the 14 checks themselves
-  plugin.py              the pytest11 entry point — --aegis-adapter option, header line
-  _report.py             fail() — the shared failure-reporting helper
+pip install 'aegis[conformance]'
+AEGIS_ADAPTER=myapp.adapter pytest --pyargs aegis.conformance
 ```
 
-## What is actually in Aegis
+## Configuration
 
-### A real pytest plugin, registered as an entry point — zero integrator setup
+| Name | Kind | Default | Effect |
+|---|---|---|---|
+| `AEGIS_ADAPTER` | Environment variable | unset | The adapter import path to check. |
+| `--aegis-adapter` | pytest option | unset | The same, and wins over the environment. |
 
-`plugin.py` is registered in `aegis/pyproject.toml` as a `pytest11` entry
-point. This means it is **live in any environment where `aegis` is
-installed** — an integrator writing a new domain adapter adds nothing to
-their own `conftest.py` and copies no files to get the suite running; it is
-already discoverable the moment `aegis` is a dependency. Running it is:
+The `aegis[conformance]` extra pulls exactly one dependency: `pytest>=8.3`.
 
-```
-pytest --pyargs aegis.conformance --aegis-adapter=mypackage.my_adapter
-```
+## Where it lives
 
-### The header line exists because this suite gets demonstrated on a screen
+| File | What it does |
+|---|---|
+| `aegis/src/aegis/conformance/__init__.py` | `ADAPTER_ENV_VAR`, `ADAPTER_OPTION`, `load_adapter()`, `AdapterNotSelectedError`. |
+| `aegis/src/aegis/conformance/plugin.py` | The `pytest11` entry point: the option and the header line. |
+| `aegis/src/aegis/conformance/conftest.py` | Session-scoped `adapter` and `piece` fixtures. |
+| `aegis/src/aegis/conformance/test_conformance.py` | The 14 checks. |
+| `aegis/src/aegis/conformance/_vocabulary.py` | The quarantined domain word list and `MIN_CORE_FILES`. |
+| `aegis/src/aegis/conformance/_report.py` | `fail()` — the four-block failure message. |
+| `aegis/pyproject.toml` | Registers the plugin and declares the `conformance` extra. |
 
-Quoted: *"'13 checks passed' is only evidence if the audience can see
-*which* adapter they passed against."* The plugin prints a header naming
-the exact adapter path under test — so a report of passing conformance
-cannot be silently shown against the wrong adapter, or against no adapter
-at all, and still look like proof of anything.
+## What it does not do
 
-### The checks tolerate real-world field naming, on purpose
-
-`_ID_ATTRS = ("id", "doc_id", "document_id", "uid", "key")` and
-`_TEXT_ATTRS = ("body", "text", "content", "markdown", "raw_text",
-"chunk_text")` — the suite checks whether a corpus record carries an
-identity and text field under **any** of several accepted spellings, rather
-than demanding one exact field name. This is a deliberate accommodation:
-different domain adapters will reasonably have grown their own corpus
-schema, and the conformance check's job is to verify the *contract* is met
-(every record is identifiable and has text), not to impose one rigid field
-name on every possible adapter.
-
-### The blind-swap test this suite is built to catch
-
-The project's own history is the clearest illustration: a domain swap that
-compiles and boots is not the same as one that is complete. Four core
-modules were found to have leaked the *previous* domain's vocabulary into
-what should have been fully retargeted code — the app ran, screens
-rendered, and the platform was still broken for every real authenticated
-user because a fresh agent doing the swap had missed pieces the conformance
-suite exists specifically to surface before a jury or a customer does.
-
-## How it runs
-
-1. A team retargets Aegis by writing a new domain adapter implementing the
-   Protocols `aegis.adapter` declares.
-2. They run the conformance suite against their adapter's import path.
-3. Each of the 14 checks independently verifies one specific contract —
-   the roster matches its declared specialists, every skill trigger reaches
-   a real file, every corpus record is identifiable and has text under an
-   accepted field name, and eleven more — each named for the real defect
-   it was written to catch.
-4. The header names the adapter under test, so a passing report is
-   attributable.
-
-## What is not here
-
-- **This does not verify the adapter's business logic is *correct*** —
-  only that the contract's shape is met (fields exist, roster entries
-  resolve, files are reachable). A conformant adapter can still give wrong
-  domain answers; conformance is a floor, not a correctness proof.
-- **It cannot catch a defect nobody has shipped yet** — by its own stated
-  design, every check descends from a real, already-encountered failure.
-  A genuinely novel class of incompleteness in a future swap would need a
-  new check added, the same way each of the current 14 was added.
+- **It does not check that the adapter is correct.** It checks that the contract's
+  shape is met: members exist, roster entries resolve, files are reachable, records
+  are identifiable. A conformant adapter can still give wrong domain answers.
+- **No quality measurement.** No retrieval quality, no answer grading, no latency.
+- **No infrastructure.** It never reaches a database, a queue, a vector store or a
+  model, which is why it runs before any of those are configured.
+- **It covers the wiring mistakes it enumerates.** A genuinely new class of
+  incompleteness needs a fifteenth check, added the way the current fourteen are.

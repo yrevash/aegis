@@ -2,68 +2,56 @@
 
 ## What it is
 
-The one package every other Aegis module is allowed to depend on: shared
-types, a Protocol-based contract system, a registry, and a "fail loud, not
-silent" way of handling optional dependencies. If you have never seen a
-codebase organised this way: most Python projects let any module import any
-other freely, which over time produces a tangle where you cannot install
-"just the guardrails part" without pulling in every dependency the whole
-project has ever accumulated. `aegis.core` is the deliberate exception to
-that tangle — the one package with **zero heavy dependencies**, that
-everything else can safely assume is already present.
+`aegis.core` is the one package every other Aegis module is allowed to import.
+It holds the shared vocabulary — value types, Protocols, the event contract, the
+run context, typed configuration — and nothing else. It imports nothing internal
+to Aegis and pulls in no heavy dependency.
 
-## Why it exists here
+## Why it exists
 
-Aegis's stated goal is to be **importable, not forkable** — a team building
-an unrelated agentic system should be able to `pip install aegis[guardrails]`
-and get a real, production-shaped component, not a stub tightly wired to
-Aegis's own backend. That only works if there is a boundary: a leaf module
-(say, `aegis.forecast`) can depend on `aegis.core` and nothing else internal,
-so installing it never drags in Docling, Temporal, or a database driver it
-does not need.
+Aegis ships as installable modules, not as one application. A team should be able
+to install `aegis[guardrails]` and get a working component without also getting a
+database driver, a workflow engine or a document parser. That is only possible if
+there is one small, shared substrate that every module can assume is present.
+`aegis.core` is that substrate, and the rule "core imports nothing internal" is
+what keeps it small.
 
 ## Diagram
 
 ```mermaid
 flowchart TD
-    subgraph CORE["aegis.core — zero heavy dependencies"]
-        T["types.py · interfaces.py<br/>the shared vocabulary"]
-        L["lazy.require()<br/>the one door to an optional dependency"]
-        R["registry.py<br/>@register — swap an implementation by name"]
-        S["stream.py · stream_names.py · events.py<br/>the event contract every module narrates through"]
-        C["config.py<br/>CoreSettings, AEGIS_MODE"]
+    subgraph CORE["aegis.core — no internal imports"]
+        T["types.py, interfaces.py, models.py<br/>shared vocabulary"]
+        C["config.py<br/>CoreSettings and AegisMode"]
+        L["lazy.py<br/>require() — the one door to an optional dependency"]
+        R["registry.py<br/>register/get by (kind, name)"]
+        E["events.py, stream.py, stream_names.py<br/>the streaming contract"]
+        X["run_context.py, cache_stats.py, health.py, deprecation.py"]
     end
-    LEAF["Any leaf module<br/>(guardrails, retrieval, ml, …)"] --> CORE
+    LEAF["Leaf modules<br/>guardrails, retrieval, redteam, security"] --> CORE
     DATA["aegis.data"] --> CORE
-    DURABLE["Durable modules<br/>(memory, governance, jobs, …)"] --> DATA
-    CORE -.->|imports nothing internal| X(( ))
-    style CORE fill:#eef,stroke:#448
+    DUR["Durable modules<br/>governance, memory, jobs, ops, settings"] --> DATA
+    DUR --> CORE
 ```
 
-## The architecture
+## How it works
 
-```
-aegis/src/aegis/core/
-  lazy.py         require() — the ONE sanctioned way to reach an optional dependency
-  registry.py     the @register decorator + lookup, so a host can swap implementations
-  interfaces.py   Protocols (ChatCompleter, etc.) — structural typing, no inheritance required
-  types.py        shared value types (GuardVerdict, GuardResult, ModelRole, ...)
-  models.py       shared Pydantic models
-  config.py       CoreSettings, AegisMode (lite/full/auto)
-  events.py       AegisEvent hierarchy — the streaming event contract every module emits through
-  stream.py       AegisEmitter — the streaming interface
-  stream_names.py the closed set of canonical CustomEvent names
-  health.py       the boot-time store probes AEGIS_MODE=full refuses to start without
-  run_context.py  the per-run context every module reads its scope from
-  cache_stats.py  shared cache-hit accounting
-  deprecation.py  the deprecation shim used when a public name moves
-```
+**Shared types.** `types.py` defines the value objects that cross module
+boundaries: `GuardVerdict` (PASS / REDACT / FLAG / BLOCK), `GuardResult`,
+`GuardStage`, `InjectionVerdict`, `PIIMatch`, `FormatCheck`, `RiskLevel`,
+`RunStatus`, `ApprovalDecision`. `models.py` adds `ModelRole` — a *job* name
+(`CHEAP`, `REASONING`, `GENERATION`, `EMBEDDING`, `VISION`, `VOICE`) so callers
+ask for a model by role and the gateway owns the routing table.
 
-## What is actually in Aegis
+**Protocols.** `interfaces.py` declares `ChatCompleter` and `Guardrail` as
+`Protocol` classes. A **Protocol** is structural typing: any object with a
+matching async `__call__` satisfies `ChatCompleter` without inheriting anything.
+This is how the guardrail rails stay model-agnostic — the caller injects a
+completer, the package never imports a provider.
 
-### `require()` — fail loud, never `except ImportError: pass`
-
-The entire function, quoted, because it is short and it is the whole idea:
+**`require()` — fail loud on a missing optional dependency.** `lazy.py` is one
+function. It imports a module or raises an `ImportError` naming the exact
+`pip install` command:
 
 ```python
 def require(extra: str, module: str) -> ModuleType:
@@ -75,44 +63,100 @@ def require(extra: str, module: str) -> ModuleType:
         ) from exc
 ```
 
-This is used everywhere an optional dependency (NeMo Guardrails, Docling,
-Presidio) is reached. The alternative — a silent `except ImportError: pass`
-that degrades to some fallback behaviour with no signal — is exactly what
-this function exists to prevent. A missing dependency is always a loud,
-named `ImportError` telling the caller the exact `pip install` command to
-fix it.
+Every optional dependency in Aegis is reached through it. There is no
+`except ImportError: pass` path that quietly degrades.
 
-### The boundary rule, concretely
+**The registry.** `registry.py` keeps a `dict[(kind, name), type]`. A class
+registers with `@register("guardrail", "default")`; a caller resolves with
+`get(kind, name)`. `discover()` also reads `aegis.<kind>` entry points, so a
+third-party component can register without editing Aegis.
 
-`aegis.core` imports nothing internal to Aegis. Every other module may
-import `aegis.core`, and (for a defined set of "durable" modules that need
-persistence) `aegis.data`, but not each other's internals freely. This is
-what makes the module map in `docs/module/MODULE_REFERENCE.md` a real
-dependency graph rather than aspiration — a module declared to need only the
-`guardrails` extra genuinely cannot import, say, `aegis.jobs`'s Temporal
-dependency, because nothing wires that import in.
+**Infra mode.** `config.py` defines `CoreSettings`, read from `AEGIS_`-prefixed
+environment variables, and `AegisMode`:
 
-### `@register` — swappable implementations, not hardcoded classes
+| Mode | Behaviour |
+|---|---|
+| `full` (default) | Requires Redis, Postgres and a vector-store URL. Refuses to boot without them. |
+| `lite` | Opts into in-memory, non-durable implementations, loudly. |
+| `auto` | Actually probes each backend via `aegis.core.health`; drops to `lite` only on a real failure, and logs which backend and why. |
 
-Modules that a host might want to swap (the guardrail pipeline, for
-instance) are registered under a name (`@register("guardrail", "default")`)
-rather than imported by class name directly — a host can register an
-alternative implementation under the same key and every caller resolving
-through the registry gets the swap without changing their own imports.
+`resolve_mode()` is async because probing is I/O. A host must `await` it and use
+the returned mode; `settings.mode` is only the *declared* mode.
 
-## How it runs
+**The event contract.** `events.py` defines the discriminated union every module
+narrates through (`StepStarted`, `GuardrailEvent`, `StepFinished`, each stamped
+with an OpenInference `SpanKind`). `stream.py` wraps the AG-UI encoder as
+`AegisEmitter` and owns the wire rules. `stream_names.py` is the closed set of
+canonical `CustomEvent` names the console mirrors.
 
-`aegis.core` is not itself something that "runs" — it is the substrate
-every other module's code executes against: its Protocols define what a
-"chat completer" or "guard result" looks like structurally, its event types
-define what every module streams, and `require()` is the gate every optional
-dependency passes through.
+**Run identity.** `run_context.py` binds the in-flight run id into a
+`contextvars` variable at the top of a run, so the gateway chokepoint can attach
+spend to a run without a run id being threaded through every function signature.
 
-## What is not here
+**Cache accounting.** `cache_stats.py` exposes `record_hit` / `record_miss`,
+called on the exact branch that returned a cached value or did not. Every cache
+in the platform reports through it.
 
-- **No business logic of any kind.** If a file in this package is doing
-  something domain-specific (screening text, chunking a document), it is in
-  the wrong package by the project's own rule.
-- **No database or network dependency.** `aegis.core` has zero heavy
-  dependencies by design — anything needing a database is in `aegis.data`
-  or above it.
+**Deprecation.** `deprecation.py` provides one decorator and one function. All
+three of `since`, `removed_in` and `use` are required; an empty `use` raises
+`ValueError` at import time, so a deprecation always names its replacement.
+
+## What it stores
+
+This module stores nothing. It defines no ORM tables and opens no connections.
+
+## Security and tenant isolation
+
+No tenant-scoped data. `aegis.core` holds no rows, no credentials and no policy.
+The `RiskLevel` and `GuardVerdict` enums it defines are used by modules that do
+enforce, but nothing is enforced here.
+
+## API surface
+
+No HTTP routes. The core is a library. Two host routes project data core
+collects — `GET /v1/platform/caches` reads `cache_stats`, and the unversioned
+`/readyz` probe reads `aegis.core.health` — but both routes are declared by the
+backend, not by this module.
+
+## Configuration
+
+Read from `AEGIS_`-prefixed environment variables into `CoreSettings`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AEGIS_MODE` | `full` | `full`, `lite` or `auto`. |
+| `AEGIS_REDIS_URL` | unset | Redis/Memurai URL. Required in `full`. |
+| `AEGIS_DATABASE_URL` | unset | Postgres URL. Required in `full`. |
+| `AEGIS_VECTOR_STORE_URL` | unset | Qdrant node URL. Required in `full`. Also answers to `QDRANT_URL`, which is the name LightRAG's storage reads. |
+| `AEGIS_VECTOR_STORE_PATH` | unset | LightRAG's local working directory. Not a required backend. |
+
+## Where it lives
+
+| File | What it does |
+|---|---|
+| `aegis/src/aegis/core/types.py` | The shared value types and enums. |
+| `aegis/src/aegis/core/models.py` | `ModelRole` — the job-to-role enum. |
+| `aegis/src/aegis/core/interfaces.py` | `ChatCompleter` and `Guardrail` Protocols. |
+| `aegis/src/aegis/core/lazy.py` | `require()` — the optional-dependency door. |
+| `aegis/src/aegis/core/registry.py` | `register` / `get` / `available` / `discover`. |
+| `aegis/src/aegis/core/config.py` | `CoreSettings`, `AegisMode`, `resolve_mode()`. |
+| `aegis/src/aegis/core/health.py` | Per-backend probes for Redis, Postgres, the vector store. |
+| `aegis/src/aegis/core/events.py` | The event union and `SpanKind`. |
+| `aegis/src/aegis/core/stream.py` | `AegisEmitter` — the AG-UI wire wrapper. |
+| `aegis/src/aegis/core/stream_names.py` | Canonical `CustomEvent` name constants. |
+| `aegis/src/aegis/core/run_context.py` | The per-run identity contextvar. |
+| `aegis/src/aegis/core/cache_stats.py` | Hit/miss counters shared by every cache. |
+| `aegis/src/aegis/core/deprecation.py` | The deprecation decorator and warning. |
+| `aegis/src/aegis/core/__init__.py` | The package's public re-exports. |
+
+## What it does not do
+
+- **No business logic.** Nothing here screens text, chunks a document or scores an
+  answer. Domain behaviour belongs in the module that owns it.
+- **No database or network work.** `aegis.core` opens no connections. The health
+  probes accept an injected client and reach a real driver only through
+  `require()`.
+- **No engine or session lifecycle.** Table shapes live in `aegis.data`; the
+  engine belongs to the host application.
+- **The registry is process-local.** It is a dictionary in this process, not a
+  shared service discovery mechanism.

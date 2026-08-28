@@ -2,210 +2,177 @@
 
 ## What it is
 
-The orchestration engine that runs one question through: guardrails, intent
-routing, retrieval, planning, a risk-gated action step, and answer
-generation — with an optional fan-out into a **team** of parallel
-specialist agents when the question calls for it. If you have never used
-LangGraph before: it is a way of defining an agent's control flow as an
-explicit graph of named nodes and edges, rather than one long function, so
-each step can be independently tested, logged, and — critically here —
-paused and resumed for a human approval.
+The orchestration engine. It takes one question and walks it through a fixed
+sequence of steps — input guardrail, intent routing, retrieval, planning, a
+risk gate, action, reflection, answer generation, output guardrail — and can
+fan out into a team of parallel specialist agents when the question needs it.
 
-## Why it exists here
+The sequence is a **LangGraph**: a way of writing an agent's control flow as
+named nodes joined by edges, instead of one long function. Each node can be
+logged, tested, and — the part that matters here — paused and resumed.
 
-Two things a naive single-LLM-call agent cannot do that this module is
-built around: **pause mid-run for a human to approve a risky action** (a
-LangGraph `interrupt`, resumable from a real checkpoint, not a hacky
-polling loop), and **run several specialist agents in parallel on one
-question** when a single agent's reasoning would not cover the question's
-different facets, then synthesise their results back into one answer.
+## Why it exists
 
-## Diagram — the real node names, from `NODE_LABELS`
+An enterprise platform needs two things a single model call cannot give.
+First, a run must be able to **stop mid-flight** so a human can approve a
+consequential action, and then continue from exactly where it stopped, even
+after a server restart. Second, a hard question often needs several
+specialists working at once rather than one agent reasoning alone. Both are
+control-flow properties, so they live in the graph.
+
+## Diagram
 
 ```mermaid
 flowchart TD
-    GI["guard_input — Input guardrail"] --> RT["route — Route intent"]
-    RT -->|qa| RM["recall_memory — the full retrieve→plan→gate→act pipeline"]
-    RT -->|memory| AM["answer_memory — skips RAG/tools entirely"]
-    RT -->|team, router/user says TEAM| PT["plan_team — Plan the team"]
-    RM --> RTV["retrieve — Agentic retrieval"]
-    RTV --> PL["plan — Reason & plan"]
-    PL --> GT["gate — Risk gate, routes on tool risk"]
-    GT -->|risky tool call| AP["approval — Human approval, LangGraph interrupt"]
-    GT -->|safe| AC["act — Execute actions"]
+    GI[guard_input] --> RT[route]
+    RT -->|qa| RM[recall_memory]
+    RT -->|memory| AM[answer_memory]
+    RT -->|team| PT[plan_team]
+    RM --> RV[retrieve]
+    RV --> PL[plan]
+    PL --> GT[gate]
+    GT -->|risky tool| AP[approval interrupt]
+    GT -->|safe| AC[act]
     AP -->|resumed| AC
-    AC --> RF["reflect — Reflect & self-repair"]
-    RF -->|reflect_retry| PL
-    RF -->|done| GN["generate — Generate answer"]
-    PT --> RTM["run_team — Run agents concurrently"]
-    RTM --> SY["synthesize — Synthesise findings"]
+    AC --> RF[reflect]
+    RF -->|retry| PL
+    RF -->|done| GN[generate]
+    PT --> RN[run_team]
+    RN --> SY[synthesize]
     SY --> GN
-    GN --> GO["guard_output — Output guardrail"]
-    GO --> ST["stream — Stream answer"]
+    AM --> GO[guard_output]
+    GN --> GO
+    GO --> ST[stream]
 ```
 
-## The architecture
+## How it works
 
-```
-aegis/src/aegis/agent/
-  graph.py       the LangGraph itself — every node above, NODE_LABELS, SPECIALIST_NODES
-  router.py      classifies intent (qa / memory / team) and depth (auto/single/team)
-  subagent.py    the specialist worker: per-lane working memory, skill cards
-  topology.py    graph_topology() — reads the SAME graph the console draws, cannot drift
-```
+1. **`guard_input`** screens the question against the guardrail stack.
+2. **`route`** classifies intent as `qa`, `memory` or `team`, and resolves
+   how wide the run should be. `SPECIALIST_NODES` maps each intent to its
+   entry node, so adding a specialist means adding a node *and* a map entry.
+3. **Depth** is one line of policy: the user's explicit mode wins unless it
+   is `AUTO`, in which case the classifier decides. An unreadable mode falls
+   back to `SINGLE`, never to `AUTO`. Whether a team can run at all is read
+   from the live roster (`build_team`), not from a feature flag.
+4. **Tenant cap.** A request asking for a wider team than the tenant's
+   `max_parallel_agents` allows is **clamped, not refused**. The `routing`
+   event reports `decided_by: platform_cap` so the console can say "you
+   asked for 5, this ran at 4".
+5. **`retrieve`** runs agentic retrieval over the tenant's corpus.
+6. **`plan`** proposes actions and increments the iteration counter.
+7. **`gate`** routes on the proposed tool's declared risk tier. At or above
+   `gate_min_risk` it goes to **`approval`**, which calls LangGraph's
+   `interrupt()`. The run's state is written to a **checkpointer** — a store
+   that saves a snapshot of graph state after each step — and execution
+   actually stops.
+8. **`act`** executes the approved or safe actions.
+9. **`reflect`** judges the executed `ToolOutcome` results. It loops back to
+   `plan` while the goal is unmet and `max_plan_iterations` still allows it;
+   otherwise it goes to `generate`. The counter increments in `plan`, so the
+   loop always terminates.
+10. **Team path.** `plan_team` decomposes the question, `run_team` runs the
+    specialists concurrently over a shared retrieval pool, `synthesize`
+    merges their findings.
+11. **`generate`** writes the answer, **`guard_output`** screens it, and
+    **`stream`** sends it to the caller as server-sent events.
 
-## What is actually in Aegis
+**The checkpointer is injected.** `AGENT_CHECKPOINTER=memory` uses LangGraph's
+`InMemorySaver`; a parked run dies with the process. `AGENT_CHECKPOINTER=postgres`
+uses `HybridPostgresSaver`, which serves both the sync and async call styles
+over one Postgres-backed store by handing the blocking work to
+`asyncio.to_thread`. Its schema is created by LangGraph's own idempotent
+`setup()` on the owner DSN, then granted to the serving role.
 
-### The graph is one object; the topology shown to a user is read from it, not hand-drawn
+**No ML step runs in this graph.** The ML spine is a tenant-facing capability
+served by its own endpoints, not a stage of the pipeline.
 
-`NODE_LABELS` is not documentation — it is the dictionary the running graph
-itself uses to label its own `node_started`/`node_finished` events, and
-`aegis.agent.topology.graph_topology()` reads the same structure to build
-what the console's orchestration map draws. This is stated directly in the
-source: *"anything that draws the graph ... can no longer drift from what
-actually runs."* There is exactly one source of truth for "what does this
-agent's control flow look like."
+## What it stores
 
-### `SPECIALIST_NODES` — the seam that stops a silent swallow
+| Table | Owner | What matters |
+| --- | --- | --- |
+| `approvals` | this module | `id`, `run_id`, `thread_id`, `tenant_id`, `status`, `action`, `actions` (every call the gate authorises), `args`, `risk`, `requested_by`, `assignee_tier`, `sla_deadline`, `decided_at`, `decided_by` |
+| `checkpoints` | LangGraph | one row per super-step snapshot, keyed by `thread_id` (which is the `run_id`) |
+| `checkpoint_blobs` | LangGraph | the channel values a checkpoint references |
+| `checkpoint_writes` | LangGraph | pending writes recorded against a checkpoint |
 
-```python
-SPECIALIST_NODES = {
-    "qa": "recall_memory",     # the full retrieve→plan→gate→act pipeline
-    "memory": "answer_memory", # answers from memory, skipping RAG/tools
-    "team": "plan_team",       # the adaptive fan-out
-}
-```
+`approvals` is the source of truth for a paused run. The checkpoint tables
+are LangGraph's own schema and carry **no `tenant_id` column**.
 
-The comment explains a real bug this table fixed: before it existed, the
-edge out of `route` was a hardcoded binary — `"memory" → answer_memory,
-else recall_memory`. A domain adapter that declared a third specialist role
-had it silently swallowed into the generic `qa` pipeline, with no error and
-no signal anywhere that the new specialist was never actually reachable. Now
-adding a specialist to a roster requires an explicit node **and** an entry
-here, or a startup-time warning names the unroutable specialist.
+The graph also writes `run_events` rows through `app.agent.run_log`; that
+table belongs to the runs module.
 
-**`team` is not a roster role an adapter declares.** It is written by the
-router itself, when either the depth classifier or the user's explicit mode
-selection decides the question needs a team — which is why it is
-deliberately absent from every domain adapter's own roster and still has
-to be dispatchable.
+## Security and tenant isolation
 
-### Depth/fan-out — one line of policy, with a documented failure default
+- `approvals` carries a `tenant_id` and is registered in the RLS registry, so
+  Postgres row-level security filters it in addition to the app-level
+  predicate.
+- The checkpoint tables have no tenant column and therefore no policy.
+  `GET /v1/agent/checkpoints/{run_id}` enforces scope in the app layer, on the
+  `runs` header, **before** the checkpoint store is touched. An unknown
+  `run_id` and another tenant's `run_id` both answer `404`, byte-identical.
+- That endpoint returns ids, structure and timing only. `channel_values`,
+  interrupt payloads, and task errors and results are dropped, because they
+  carry the query, retrieved passages and any PII.
+- Approving is admin-only *and* seat-gated: both decision routes check
+  `seat.can_approve` after the role check.
+- The `load_skill` tool and every other tool read tenant and user identity
+  from the server-side request context, never from model-supplied arguments.
 
-Verbatim from `_depth_policy`'s own comment:
+## API surface
 
-> `effective_depth = user_mode if user_mode != AUTO else classifier_decision`
+| Method | Path | Who may call | Returns |
+| --- | --- | --- | --- |
+| POST | `/v1/query` | any authenticated caller | the SSE run stream |
+| GET | `/v1/approvals` | any authenticated caller | the approvals inbox, scoped to the caller |
+| POST | `/v1/approval` | admin, with `seat.can_approve` | the decision result, resuming the run |
+| POST | `/v1/approvals/{approval_id}/decision` | admin, with `seat.can_approve` | the durable-row decision result |
+| GET | `/v1/agent/checkpoints/{run_id}` | any authenticated caller | the checkpoint chain, ids and timing only |
+| GET | `/v1/agent/topology` | any authenticated caller | the real node/edge shape, read off the compiled graph |
+| GET | `/v1/harness/config` | admin or ai_team | the tweakable-knob record and effective values |
 
-**The failure default is `SINGLE` on both paths, deliberately not `AUTO`.**
-If a depth mode string cannot be parsed, it falls back to `SINGLE`, not to
-letting the classifier decide — the stated reason: *"a settings resolver
-that cannot be read must not hand the decision to a classifier, because the
-manual path must never introduce a second, more permissive default than the
-automatic one."* An unreadable setting fails toward *less* fan-out, never
-more.
+## Configuration
 
-**Whether a team can run at all is read from the live roster, not a config
-flag** — `available_agents=len(build_team(deps, ...))`. A host that has not
-declared any sub-agents structurally cannot fan out, regardless of what a
-request asks for; there is no separate "team enabled" boolean that could
-disagree with what the roster actually contains.
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `AGENT_CHECKPOINTER` | `memory` | `memory` or `postgres`; decides whether a parked run survives a restart |
+| `POSTGRES_DSN` | `postgresql://postgres:postgres@localhost:5432/taif` | where the Postgres saver writes |
+| `POSTGRES_ADMIN_DSN` | `""` | owner DSN that creates the checkpoint schema and grants it |
+| `APPROVAL_SLA_SECONDS` | `3600` | deadline stamped on a new approval row |
+| `APPROVAL_DEFAULT_TIER` | `tier-1` | default assignee tier |
+| `APPROVAL_SWEEPER_INTERVAL_SECONDS` | `30.0` | how often the SLA sweeper runs |
+| `MODEL_<ROLE>` | per-role fleet default | overrides which deployment a role resolves to |
 
-### What happens when a request asks for more agents than the tenant's cap allows
+## Where it lives
 
-The platform enforces a `max_parallel_agents` ceiling per tenant. When a
-user explicitly requests a wider team than the cap permits, the run is
-**clamped, not refused** — it proceeds at the capped width, and the
-decision is reported honestly on the run's own `routing` event as
-`decided_by: platform_cap`, distinct from `decided_by: user` (an explicit
-choice was honoured) or the classifier's own name (AUTO mode picked the
-width). A console reading this event can show the true story — "you asked
-for 5, this ran at 4, because of your tenant's cap" — rather than silently
-running narrower than requested with no explanation.
+| Path | What it does |
+| --- | --- |
+| `aegis/src/aegis/agent/graph.py` | the LangGraph itself, every node body, `NODE_LABELS`, `SPECIALIST_NODES` |
+| `aegis/src/aegis/agent/router.py` | intent classification and the depth policy |
+| `aegis/src/aegis/agent/state.py` | `AgentState`, the typed graph state |
+| `aegis/src/aegis/agent/deps.py` | the dependency-injection contract and risk ordering |
+| `aegis/src/aegis/agent/team.py` | team planning, concurrent execution, synthesis |
+| `aegis/src/aegis/agent/subagent.py` | one specialist worker with its own working memory |
+| `aegis/src/aegis/agent/topology.py` | `graph_topology()`, read off the compiled graph |
+| `aegis/src/aegis/agent/approvals.py` | the approval registries and parked-run handles |
+| `aegis/src/aegis/agent/orchestrator.py` | the host-agnostic run loop and gate rendezvous |
+| `aegis/src/aegis/agent/rails.py` | tool-result screening |
+| `aegis/src/aegis/agent/retry.py` | transient-only retry around node calls |
+| `aegis/src/aegis/agent/harness.py` | the tweakable-knob record and run summary |
+| `backend/src/app/agent/checkpointer.py` | `HybridPostgresSaver`, schema setup and role grant |
+| `backend/src/app/agent/deps.py` | the composition root that binds real modules to the contract |
+| `backend/src/app/agent/orchestrator.py` | durable decision glue around the pure run loop |
+| `backend/src/app/agent/run_log.py` | writes the run's events into `run_events` |
+| `backend/src/app/agent/skills_tool.py` | the `load_skill` tool definition and dispatch |
+| `backend/src/app/api/routes_checkpoints.py` | the checkpoint-history endpoint |
 
-### The human gate — a real LangGraph `interrupt`, not a polling loop
+## What it does not do
 
-The `gate` node routes on the **tool's declared risk tier**: a risky
-proposed action routes to `approval`, which is a genuine LangGraph
-`interrupt()` — the run's state is checkpointed and execution actually
-pauses, to be resumed later from that exact checkpoint once a human
-decides.
-
-### The checkpointer — durable since 2026-08-23, and why it took a custom saver
-
-The checkpointer is injected, selected by `AGENT_CHECKPOINTER`:
-
-- `memory` (the default in `Settings`, and what the test suites run) is
-  LangGraph's `InMemorySaver`. A parked run dies with the process.
-- `postgres` is `app.agent.checkpointer.HybridPostgresSaver`, and it is what
-  the deployment runs. A run parked on the gate survives a restart: kill the
-  process, start it again, approve on the new one, and the run finishes from
-  the interrupted checkpoint without re-running any node before the gate.
-
-`HybridPostgresSaver` exists because **neither saver shipped by
-`langgraph-checkpoint-postgres` can serve this codebase**, which is worth
-knowing before you reach for one:
-
-- `PostgresSaver` implements only the **sync** protocol. Its `aget_tuple` /
-  `aput` / `alist` are the inherited stubs that `raise NotImplementedError`.
-  Every run here is driven with `graph.astream(...)`, and LangGraph's async
-  loop awaits `aget_tuple` as its very first act — so it would crash on the
-  first token of the first run.
-- `AsyncPostgresSaver` is the mirror trap. Its **sync** entry points raise
-  `asyncio.InvalidStateError` when called from the saver's own loop, and
-  `aegis.agent.orchestrator` calls the sync `graph.get_state(config)` from
-  inside `async def` bodies in three places, including the resume path.
-
-`HybridPostgresSaver` is the sync saver with its missing async half
-implemented by handing the same sync call to `asyncio.to_thread`, so the
-blocking psycopg work never runs on the event loop and both call styles hit
-one Postgres-backed store. The checkpoint schema is created by LangGraph's own
-idempotent `setup()` on the **owner** DSN and then granted to the serving role,
-which owns nothing — without that grant a fresh box fails mid-run rather than
-at boot.
-
-Measured cost: **~1.4 ms** per checkpoint (the ADR had guessed 20–50 ms).
-Storage grows without bound and nothing prunes it — stated here rather than
-left as folklore.
-
-`GET /v1/agent/checkpoints/{run_id}` exposes the history with `channel_values`,
-interrupt values and task results **deliberately dropped**: they carry the
-query, the retrieved passages and any PII. Another tenant's run answers `404`,
-byte-identical to a run that does not exist.
-
-### The reflection loop — self-repair, bounded
-
-After `act`, the `reflect` node judges the outcome from the tools' actual
-executed results (`ToolOutcome`s), and routes either back to `plan` (if
-`reflect_retry` is set — the plan needs revision) or forward to `generate`
-(done). This loop is what lets a run recover from a tool call that failed
-or returned something insufficient, by re-planning rather than simply
-generating an answer from incomplete results — but it is not unbounded;
-retry state is tracked and eventually the graph proceeds to answer
-regardless.
-
-## How it runs
-
-1. `guard_input` screens the incoming question (see `guardrails.md`).
-2. `route` classifies intent (`qa` / `memory` / `team`) and resolves the
-   depth policy (single vs team, and at what width, per the rules above).
-3. For a single-agent run: `recall_memory` → `retrieve` → `plan` → `gate` →
-   (optionally `approval`) → `act` → `reflect` (possibly looping back to
-   `plan`) → `generate`.
-4. For a team run: `plan_team` decomposes the question, `run_team` executes
-   specialists concurrently, `synthesize` merges their results, then
-   `generate`.
-5. `guard_output` screens the answer before it streams to the caller.
-
-## What is not here
-
-- **The reflection loop's retry count is bounded in state, but the exact
-  cap is a configuration value, not something visible from the graph shape
-  alone** — reading the graph diagram tells you the loop exists, not how
-  many times it can fire.
-- **A tenant's `max_parallel_agents` cap is enforced by clamping, never by
-  outright refusing the request** — a user asking for a wider team than
-  permitted always gets a run, just a narrower one, with the clamp reported
-  on the wire.
-- **`team` fan-out cannot be added to a roster as a normal specialist
-  role** — it is graph-internal routing logic, not something a domain
-  adapter can declare or configure away.
+- It does not prune checkpoint history. Storage grows with every run.
+- It does not expose the state a checkpoint captured; the projection is
+  structural only.
+- It does not refuse an over-wide team request; it clamps and reports.
+- `team` is not a roster role a domain adapter can declare. The router writes
+  it, so it cannot be configured away.
+- It does not run a machine-learning step. Predictions are a separate
+  capability with its own endpoints.

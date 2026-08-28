@@ -2,131 +2,217 @@
 
 ## What it is
 
-The one place every tenant-overridable configuration value in Aegis is
-declared, resolved, and merged — guardrail thresholds, model preferences,
-seat permissions, prompt versions, which skills are enabled. If you have
-never built multi-tenant configuration before: the hard problem is not
-storing a value per tenant, it is deciding **what happens when the platform
-sets one thing and a tenant sets another** for the same key. Aegis answers
-that with three explicit merge rules rather than leaving it to each call
-site's own judgement.
+`aegis.settings` is the one place every tenant-overridable control in Aegis is
+declared, stored, resolved and written. It holds a catalogue of setting
+specifications, one table of written values at three scopes, and a resolver that
+merges them under each setting's own rule.
 
-## Why it exists here
+## Why it exists
 
-Without a single resolver, every module that reads a tenant-configurable
-value would have to independently reimplement "check user override, then
-tenant override, then platform default" — and each reimplementation is a
-chance to get the security-relevant cases wrong (a tenant weakening a
-guardrail the platform intended to be a floor). Centralising the merge logic
-turns "a tenant may add a rule but never remove a platform one" from a
-convention someone has to remember into arithmetic the resolver enforces
-for every setting that declares it.
+The hard problem in multi-tenant configuration is not storing a value per tenant.
+It is deciding what happens when the platform sets one thing and a tenant sets
+another for the same key. Without a single resolver, every module reading a
+tenant-configurable value reimplements "check user, then tenant, then platform" —
+and each reimplementation is a chance to let a tenant weaken a control the
+platform meant as a floor.
+
+This module turns "a tenant may add a guardrail but never weaken one" from a
+convention someone has to remember into arithmetic the resolver performs.
 
 ## Diagram
 
 ```mermaid
 flowchart TD
-    subgraph SPEC["Every setting is declared once, with its merge rule"]
-        S["SettingSpec: type, default, writable_by, readable_by, merge"]
-    end
-    subgraph MERGE["Three merge rules — spec.py MergeRule"]
-        O["OVERRIDE — last scope wins (e.g. preferred model)"]
-        T["TIGHTEN_ONLY — may only become STRICTER (e.g. gate_min_risk)"]
-        U["UNION — sets accumulate (e.g. extra guardrail terms)"]
-    end
-    S --> MERGE
-    P[Platform default] --> R["resolver.py: platform → tenant → user, merged per the setting's own rule"]
-    TE[Tenant value] --> R
-    US[User value] --> R
-    R --> EFF[Effective value used by the request]
+    SPEC["spec.py — 25 SettingSpec entries<br/>type, default, bounds, writable_by, readable_by, merge rule"] --> R
+    P["platform row: tenant_id NULL, user_id NULL"] --> R["resolver.resolve()<br/>platform then tenant then user"]
+    T["tenant row: tenant_id set, user_id NULL"] --> R
+    U["user row: both set"] --> R
+    R --> M{"the key's own MergeRule"}
+    M --> O["OVERRIDE — the last scope wins"]
+    M --> TO["TIGHTEN_ONLY — may only become stricter"]
+    M --> UN["UNION — collections accumulate"]
+    O --> EFF["The effective value, plus the source that decided it"]
+    TO --> EFF
+    UN --> EFF
+    EFF --> C1["settings/agent.py builds an AgentConfig for this request"]
+    EFF --> C2["settings/guardrails.py folds a GuardrailPolicy"]
+    EFF --> C3["settings/seats.py answers one seat capability check"]
 ```
 
-## The architecture
+## How it works
 
-```
-aegis/src/aegis/settings/
-  spec.py        every SettingSpec, MergeRule, Strictness — the declaration layer
-  resolver.py     platform→tenant→user resolution + write authority checks
-  guardrails.py   resolve_guardrail_policy() — folds settings onto a Guardrails pipeline
-  seats.py        SeatCapability / Seat — per-user permission checks (seat.can_upload_documents, etc.)
-  agent.py        per-request agent config resolution (never a shared singleton — see below)
-backend/src/app/ops/prompt_runs.py   the LLM-Ops prompt version ledger (see below)
-```
+### Every setting is declared once
 
-## What is actually in Aegis
+`spec.py` holds `SETTING_SPECS` — **25 keys**, each a `SettingSpec` carrying its
+type, default, bounds, the roles that may read it, the roles that may write it,
+and its merge rule. A new control is a catalogue entry plus a row, never a new
+table and never a migration.
 
-### Three merge rules, and why `TIGHTEN_ONLY` is the load-bearing one
+The keys group into six families: `agent.*` (gate threshold, plan iterations,
+retrieval rounds, parallelism, model, mode), `guardrails.*` (topical and grounding
+blocking, denylist terms and patterns, PII entities and blocking, input ceiling),
+`jobs.*` (in-flight caps and cost estimates), `memory.*` (retention windows),
+`seat.*` (the six per-user capabilities), and `skills.enabled`.
 
-```python
-class MergeRule(StrEnum):
-    OVERRIDE = "override"      # last scope wins (e.g. preferred model)
-    TIGHTEN_ONLY = "tighten_only"  # may only become stricter (e.g. gate_min_risk)
-    UNION = "union"             # sets accumulate (e.g. extra guardrails)
-```
+### Three merge rules
 
-Quoted directly on why `TIGHTEN_ONLY` matters: *"it makes the tenant-safety
-rules **executable configuration** rather than prose, because the resolver
-structurally cannot compute a value weaker than the platform default."*
-This is the exact same mechanism `guardrails.md` describes for `pii_block`
-and `topical_block`, and `skills.md` describes for `skills.enabled`
-(`UNION`, so no tenant can remove a platform safety skill). Settings is
-where that mechanism is actually defined; the other modules just consume
-it.
+| Rule | Count | Behaviour | Example |
+|---|---|---|---|
+| `TIGHTEN_ONLY` | 16 | The value may only become stricter than the enclosing scope. | `agent.gate_min_risk`, `guardrails.pii.block` |
+| `OVERRIDE` | 5 | The last scope wins outright. | `agent.model`, `memory.retention_days` |
+| `UNION` | 4 | Collections accumulate; nothing can be removed. | `guardrails.denylist.terms`, `skills.enabled` |
 
-### `Seat` — per-user capability checks, not just per-role
+`TIGHTEN_ONLY` is the load-bearing one. The resolver structurally cannot compute a
+value weaker than the platform default, so a tenant admin writing a guardrail key
+can only turn an advisory rail into a blocking one, never the reverse.
 
-`seats.py` defines `SeatCapability` and `Seat` — a finer grain than the
-five coarse roles (`platform_admin`/`tenant_admin`/`ai_team`/`devops`/
-`client`). `seat_allows()` checks a specific capability (e.g.
-`seat.can_upload_documents`) for a specific user, which is how a tenant
-admin can grant one particular user document-upload rights without
-promoting them to a different role entirely.
+Which direction counts as "stricter" is a property of what a setting *means*, not
+of its type, so each `TIGHTEN_ONLY` spec declares a `Strictness`: a lower
+`agent.gate_min_risk` gates **more** actions, so lower is stricter; a higher
+grounding score demands **more** evidence, so higher is.
 
-### Prompt versioning — the LLM-Ops loop, with real rollback
+### Resolution and writing
 
-Persona system prompts (the actual text instructing the model how to
-behave, e.g. the `operations_lead` persona used in this deployment) are
-versioned rows, not a single mutable string. `POST /v1/llmops/prompts/versions`
-creates a new version; `POST /v1/llmops/prompts/versions/{id}/activate`
-switches which version is live. The previous active version becomes
-`ARCHIVED`, not deleted — rolling back is one more `activate` call against
-the old version's id, not a manual re-paste of old text. This was exercised
-live in this project: the platform's own persona prompt originally said "Be
-concise and decisive," which was clipping every answer regardless of the
-question's actual complexity; the fix was published as version 2 through
-this exact mechanism, with version 1 archived and rollback available with
-one call, rather than editing the row in place.
+`resolve(key, ...)` answers two things at once: what is in force, and **who
+decided it**. The second half is not decoration — a screen showing a value without
+saying whether it is the platform's floor or the tenant's own choice cannot be
+audited. `resolve_all()` does the whole catalogue in one query rather than N round
+trips.
 
-### Agent config is resolved per request, never cached as a shared object
+`write_setting()` is the only writer, and it owns every refusal:
 
-`settings/agent.py` resolves a tenant's agent configuration fresh for each
-request rather than building one shared, mutable config object reused
-across tenants — the same class of bug this design avoids elsewhere (see
-`guardrails.md`'s `with_policy()`, which returns a **new** pipeline object
-for the same reason): writing one tenant's resolved settings onto a shared
-singleton would apply them to the very next tenant's request that happened
-to share the process.
+| Error | When |
+|---|---|
+| `SettingNotWritableError` | The caller's role is not in the key's `writable_by`. |
+| `SettingNotReadableError` | The caller's role is not in `readable_by`. |
+| `SettingValueError` | Wrong type, or out of the declared bounds. |
+| `SettingWeakerThanFloorError` | A `TIGHTEN_ONLY` write weaker than the enclosing scope. |
 
-## How it runs
+The HTTP route re-checks none of this. A second policy that can disagree with the
+first is worse than no second policy.
 
-1. A module needing a tenant-overridable value (a guardrail threshold, an
-   agent's preferred model, whether a skill is in force) calls the
-   resolver with the setting's key.
-2. The resolver reads the platform default, the tenant's own value (if
-   any), and the user's own value (if any), and combines them using
-   exactly the merge rule that setting declared — never a generic
-   "last write wins."
-3. The resolved, effective value is used for that single request and
-   discarded, never cached as a shared mutable object across requests.
+### Per-request folding
 
-## What is not here
+Three thin modules turn resolved values into the objects other packages consume,
+and all three build a **new** object per request rather than writing onto a
+process-wide singleton:
 
-- **Not every setting is writable by every role** — `writable_by` and
-  `readable_by` are declared per setting; a setting a client cannot write is
-  refused at the resolver, not merely hidden by a UI that could be bypassed.
-- **`OVERRIDE` settings offer no floor protection** — by design, for
-  settings like a preferred model where there is no safety reason to
-  prevent a tenant from fully replacing the platform default. Choosing
-  `OVERRIDE` for a setting that should have been `TIGHTEN_ONLY` would be a
-  real security regression, so which rule a new setting gets is a
-  deliberate per-setting decision, not a default that's always safe.
+- `agent.py::resolve_agent_config()` — an `AgentConfig` for this tenant.
+- `guardrails.py::resolve_guardrail_policy()` — a `GuardrailPolicy` folded onto the
+  host's floor, then handed to `Guardrails.with_policy()`.
+- `seats.py::seat_allows()` / `seat_of()` — one user's seat.
+
+Each also exposes a `strictest_*` helper, so a caller can compute the tightest
+legal shape without a database.
+
+### Seats
+
+A **seat** is a per-user capability, finer than the five roles. `SEAT_CAPABILITIES`
+is a closed set of six toggles, each declared beside the guard that reads it:
+
+| Key | Gates |
+|---|---|
+| `seat.can_upload_documents` | `POST /v1/documents`, `POST /v1/jobs/{job_id}/requeue` |
+| `seat.can_edit_memory` | `POST /v1/memory/forget`, `DELETE /v1/memory/facts/{fact_id}` |
+| `seat.can_approve` | `POST /v1/approval`, `POST /v1/approvals/{approval_id}/decision` |
+| `seat.can_view_tenant_audit` | `GET /v1/audit` |
+| `seat.can_change_agent_mode` | `PUT /v1/settings/{key}`, for every `agent.*` key |
+| `seat.label` | Descriptive only — an `OVERRIDE` string that names the grant |
+
+`gates` is prose, not a callable, because enforcement lives in the host's HTTP
+layer and `aegis` must not import a host. Naming it is what stops a toggle being
+added with no reader.
+
+## What it stores
+
+One table, `settings`, on the shared `AegisBase` metadata. Rows are **writes**, not
+effective values — what is in force is computed by the resolver.
+
+| Column | Purpose |
+|---|---|
+| `id` | Primary key. |
+| `scope` | `platform`, `tenant` or `user`. Stored rather than inferred, because it is what `resolve` returns as `source`, what a control renders as its badge, and what an audit row records. |
+| `tenant_id` | FK to `tenants.id`. NULL marks the platform baseline. |
+| `user_id` | FK to `users.id`. Set only on a user row. |
+| `key` | The catalogue key. |
+| `value` | `jsonb` holding any JSON value — a number and a list are as common as an object, so scalars are not wrapped. |
+| `updated_at` | When it was last written. |
+| `updated_by` | A string, not a `users.id`, matching `audit_log`: the writer may be a platform operator with no row in this database. |
+
+Two check constraints keep the scope column and the id columns in agreement:
+`(scope = 'platform') = (tenant_id IS NULL)` and
+`(scope = 'user') = (user_id IS NOT NULL)`. A user- or tenant-scoped row with a
+NULL tenant would be world-readable, because NULL is exactly what marks the
+platform baseline.
+
+Uniqueness is **three partial unique indexes**, one per scope, rather than one
+composite `UNIQUE`. SQL treats NULL as distinct from NULL, so a composite
+constraint would admit two platform rows for the same key; `NULLS NOT DISTINCT` is
+PostgreSQL 15 and the target cluster is 14.
+
+There is deliberately no `created_at`. The row is the current value at a scope;
+its history is the audit log's job.
+
+## Security and tenant isolation
+
+- `settings` is registered in `_TENANT_SCOPED_TABLES`, so the `tenant_isolation`
+  policy is installed on it at boot.
+- It is also one of the two `_PLATFORM_BASELINE_TABLES`. Every tenant can **read**
+  the platform rows and no tenant can write them. That readability is required:
+  a resolver that could not see the platform layer would compute a value weaker
+  than the platform's own choice for a `TIGHTEN_ONLY` key while looking healthy.
+- Read and write authority are per key, declared on the spec and enforced by the
+  resolver. `jobs.*` keys, for instance, are writable by `platform_admin` only and
+  are not readable by a `client` at all.
+- Keys a caller may not read are **omitted** from the list response rather than
+  refused, so one unreadable key does not blank a settings screen.
+- No key gives a tenant reach into SQL: no catalogue key contains `sql`,
+  `database.`, `db.query` or `schema.browse`.
+
+## API surface
+
+| Method | Path | Who may call it | Returns |
+|---|---|---|---|
+| GET | `/v1/settings` | Any authenticated caller | Every control this caller may read, resolved, each with its source. |
+| GET | `/v1/settings/{key}` | Any authenticated caller | One control's effective value and the scope that decided it. 404 for an unknown key, 403 when unreadable, 503 when the store is unreadable. |
+| PUT | `/v1/settings/{key}` | Any authenticated caller, subject to the key's `writable_by` | The written row, re-resolved. Every refusal is the resolver's. |
+| GET | `/v1/admin/seats` | `tenant_admin` and above | The tenant's seats. |
+| PUT | `/v1/admin/seats/{user_id}` | `tenant_admin` and above | One user's updated seat. |
+
+## Configuration
+
+This module reads no environment variables — its whole point is that controls live
+in the database rather than the environment. Two host variables affect it:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `STORES` | `on` | With `off` there is no `settings` table, so the catalogue's compiled-in defaults genuinely are what is in force and are reported with `source="platform"`. |
+| `POSTGRES_DSN` | local default | Where the `settings` table lives. |
+
+## Where it lives
+
+| File | What it does |
+|---|---|
+| `aegis/src/aegis/settings/spec.py` | `SETTING_SPECS`, `SettingSpec`, `MergeRule`, `Strictness`, `spec_for`, `strictest`. |
+| `aegis/src/aegis/settings/models.py` | The `settings` ORM table, `SettingScope`, the constraints and indexes. |
+| `aegis/src/aegis/settings/resolver.py` | `resolve`, `resolve_all`, `write_setting`, and the four refusal errors. |
+| `aegis/src/aegis/settings/agent.py` | `resolve_agent_config`, `strictest_agent_config`. |
+| `aegis/src/aegis/settings/guardrails.py` | `resolve_guardrail_policy`, `fold_resolved`, `strictest_guardrail_policy`. |
+| `aegis/src/aegis/settings/seats.py` | `SEAT_CAPABILITIES`, `Seat`, `seat_allows`, `seat_of`. |
+| `backend/src/app/api/routes_console.py` | The three `/v1/settings` routes. |
+| `backend/src/app/api/routes_seats.py` | The two `/v1/admin/seats` routes. |
+
+## What it does not do
+
+- **`OVERRIDE` keys offer no floor.** That is deliberate for keys such as
+  `agent.model`, where there is no safety reason to stop a tenant replacing the
+  platform default. Which rule a new key gets is a per-key decision.
+- **No history of values.** The row is the current value; the audit log records the
+  change.
+- **No caching across requests.** A resolved value is used for one request and
+  discarded, never held as a shared mutable object.
+- **No key reaches SQL, a model name for the classifier, or a deployment.** The
+  catalogue is bounded by design, and a control outside it is deployment
+  configuration rather than a tenant-writable setting.
+- **The resolver enforces authority; it does not authenticate.** Identity and role
+  come from `aegis.governance`.

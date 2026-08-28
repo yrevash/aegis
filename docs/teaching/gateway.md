@@ -2,153 +2,184 @@
 
 ## What it is
 
-The single chokepoint every model call in Aegis passes through — chat
-completions, embeddings, transcriptions, everything. If you have never built
-a system with a model-call gateway before: the alternative is every piece of
-code that wants to call a model doing so directly, which means routing,
-cost tracking, budget enforcement, and rate limiting all have to be
-re-implemented (or forgotten) at every call site. Aegis has exactly one
-place that actually talks to a model provider, and everything else calls
-through it.
+The single chokepoint every model call passes through — chat completions,
+embeddings, transcriptions, vision. One module talks to the provider; every
+other module calls it.
 
-## Why it exists here
+Because there is exactly one door, routing, cost metering, budget enforcement,
+concurrency limiting and circuit breaking are each implemented once and cannot
+be forgotten at a call site.
 
-Three things this module makes structurally true rather than merely
-policy: (1) a call's cost is computed and recorded **before** the caller
-sees a result, so nothing can spend money invisibly; (2) a budget check
-happens **before** the provider is ever contacted, so an over-cap tenant
-never generates a bill in the first place; (3) a concurrency limit is held
-for the **actual duration** of the call, including retries, not just the
-first attempt.
+## Why it exists
+
+Three properties become structural rather than a matter of discipline. A
+budget check happens **before** the provider is contacted, so an over-cap
+tenant never generates a bill. A call's cost is computed and ledgered **after**
+every successful call, so nothing spends money invisibly. And a concurrency
+slot is held for the call's **actual** duration, retries and fallbacks
+included.
 
 ## Diagram
 
 ```mermaid
 flowchart TD
-    A[Caller: app.core.llm.complete/embed/transcribe] --> B["GovernanceHook.enforce()<br/>BudgetExceededError raised here — BEFORE any provider call"]
-    B -->|ok| C["SlotLimiter.acquire()<br/>Redis / Local / NoOp, chosen at boot"]
-    C --> D["routing.py: resolve ModelRole → real deployment id<br/>e.g. GENERATION → genailab-maas-gpt-4o"]
-    D --> E[LiteLLM call to the actual provider]
-    E -->|success| F["record_call(): cost computed from the<br/>declared per-deployment rate table"]
-    E -->|failure, repeated| G["circuit breaker opens for THIS deployment only<br/>— one tenant's failures never spend another's budget"]
-    F --> H[usage_tally updated — process-wide counters]
-    F --> I[GovernanceHook.record — writes usage_ledger row]
+    A[complete / embed / transcribe] --> B["GovernanceHook.enforce"]
+    B -->|over cap| X[BudgetExceededError, no provider call]
+    B -->|ok| C["SlotLimiter.acquire"]
+    C --> D[resolve ModelRole to a deployment id]
+    D --> E[LiteLLM call to the provider]
+    E -->|repeated failure| F[circuit breaker opens for that deployment]
+    F --> G[next deployment in the fallback chain]
+    E -->|success| H[cost from the per-deployment rate and billing unit]
+    H --> I[record_call updates the process tally]
+    H --> J["GovernanceHook.record writes a usage_ledger row"]
 ```
 
-## The architecture
+## How it works
 
-```
-aegis/src/aegis/gateway/
-  routing.py    the 12-deployment fleet declaration, rates, role→deployment map
-  llm.py        complete/embed/transcribe, the fallback chain, the circuit breaker
-  limiter.py    SlotLimiter: Redis / Local / NoOp — concurrency bound
-  types.py      BudgetExceededError, LLMResult, Usage, GovernanceHook protocol
-  stream.py     the per-call model_call stream event
-backend/src/app/core/llm.py   the host shim: builds the limiter, wires GovernanceHook, re-exports everything
-```
+**The fleet is declared in Python.** `routing.py::_FLEET_DECLARATION` holds
+**12** `Deployment` rows, each with a real input and output rate per 1,000
+tokens. There is no JSON or YAML rate table anywhere in the repository, and
+import-time checks raise immediately on a duplicate deployment id or on a
+`tenant_selectable=True` deployment sitting on a role the safety layers use.
 
-## What is actually in Aegis
+| Role | Default deployment | Tenant-selectable members |
+| --- | --- | --- |
+| `CHEAP` | `genailab-maas-gpt-35-turbo` | none |
+| `REASONING` | `genailab-maas-Phi-4-reasoning` | none |
+| `GENERATION` | `genailab-maas-gpt-4o` | gpt-4o, DeepSeek-V3-0324, Llama-3.3-70B-Instruct, Llama-4-Maverick-17B |
+| `EMBEDDING` | `genailab-maas-text-embedding-3-large` | none |
+| `VISION` | `genailab-maas-Llama-3.2-90B-Vision-Instruct` | none |
+| `VOICE` | `genailab-maas-whisper` | none |
 
-### The fleet — 12 real deployments, all in code, no rate file anywhere
+Only the answer-generation tier is tenant-selectable. Everything else is
+infrastructure a tenant does not pick — including the classifier the guardrails
+judge them by. A tenant who selects DeepSeek-V3 is ledgered at DeepSeek's
+price, not gpt-4o's.
 
-`routing.py::_FLEET_DECLARATION` declares **12** `Deployment` rows, each
-with a real input/output rate per 1,000 tokens. A sample, verbatim:
+**Billing units.** `BillingUnit` is `TOKENS`, `AUDIO_MINUTES` or `IMAGES`.
+`VOICE` bills per audio minute; every other role bills per token. Carrying the
+unit explicitly is what stops a transcription with zero output tokens from
+ledgering as `$0.00` and slipping past a USD cap. `usage_ledger` therefore has
+`audio_seconds` and `images` columns alongside the token counts.
 
-```python
-Deployment("genailab-maas-gpt-4o", ModelRole.GENERATION, 0.0025, 0.01, tenant_selectable=True)
-Deployment("genailab-maas-DeepSeek-V3-0324", ModelRole.GENERATION, 0.00027, 0.0011, tenant_selectable=True)
-Deployment("genailab-maas-whisper", ModelRole.VOICE, 0.006, 0.0)
-```
+**The limiter, chosen once at boot.**
 
-**There is no JSON or YAML rate table anywhere in the repository** — this is
-all Python, with import-time invariant checks that raise immediately on a
-duplicate deployment id, or on `tenant_selectable=True` combined with a role
-reserved for guardrail-internal use.
+| Limiter | Scope | Chosen when |
+| --- | --- | --- |
+| `NoSlotLimiter` | `unlimited` | `GATEWAY_MAX_CONCURRENT_CALLS < 1`; a warning is logged |
+| `RedisSlotLimiter` | `fleet` | stores are on and a `REDIS_URL` is configured; every process shares one count |
+| `LocalSlotLimiter` | `process` | the fallback; bounds this interpreter only, and says so |
 
-Six `ModelRole`s map to a default deployment: `CHEAP`, `REASONING`,
-`GENERATION`, `EMBEDDING`, `VISION`, `VOICE`. Every one is overridable per
-deployment via a `MODEL_<ROLE>` environment variable.
+The lease is derived from `max_call_hold_seconds(llm_timeout_seconds)`, not
+from the timeout directly, because the outer backstop gives the primary
+deployment and each fallback its own timeout budget. A lease shorter than the
+call it guards would hand the slot to a second caller mid-flight.
 
-### Billing units — not everything is priced per token
+**The circuit breaker is scoped per deployment.** A deployment failing
+repeatedly is skipped in the fallback chain, and one health-check probe
+reopens it later. Keyed any more broadly, one tenant's failures could degrade
+or charge another tenant. A fallback chain also never crosses a tenant's own
+pricing tier.
 
-`BillingUnit` is `TOKENS | AUDIO_MINUTES | IMAGES`. Only `VOICE` defaults to
-`AUDIO_MINUTES` — every other role is `TOKENS`. This matters concretely: a
-Whisper transcription call used to ledger as `$0.00` before this was fixed,
-because token-based costing has nothing to multiply for an audio call with
-zero output tokens. Now it prices by audio minutes actually billed.
+**Governance is injected, not built in.** The standalone `aegis.gateway`
+package does no budget enforcement at all unless a host supplies a
+`GovernanceHook` — it never pretends to enforce. The backend injects a real
+one at import time in `app.core.llm`.
 
-### The limiter — three modes, chosen once at boot
+## What it stores
 
-`backend/src/app/core/llm.py::_build_limiter()` picks exactly one:
+This module owns no tables. Its metering writes one row per successful call
+into `usage_ledger`, which the governance module owns:
 
-- **`NoSlotLimiter`** (scope `unlimited`) — when the configured limit is
-  `< 1`. A warning is logged; nothing is bounded.
-- **`RedisSlotLimiter`** (scope `fleet`) — when `stores_enabled` and a
-  `redis_url` are both configured. The bound is shared **across every
-  worker process**, which is what "fleet" means here.
-- **`LocalSlotLimiter`** (scope `process`) — the fallback when Redis is not
-  configured. The bound applies only within one process.
+| Column | What it carries |
+| --- | --- |
+| `tenant_id`, `user_id` | who spent it |
+| `ts` | when |
+| `model` | the deployment id actually called |
+| `prompt_tokens`, `completion_tokens` | token counts |
+| `audio_seconds`, `images` | the non-token billed units |
+| `cost_usd` | computed from the deployment's declared rate and billing unit |
+| `trace_id` | the trace correlation id |
+| `run_id` | the spend-to-run attribution; `NULL` means "not attributable to a run", never zero and never unknown |
 
-**The lease is derived from the widest hold observed, not one attempt** —
-if a call retries, the lease covers the full retry duration, so a slot is
-never silently released mid-retry while the underlying call is still
-running.
+`run_id` deliberately has **no** foreign key to `runs`. The ledger row is
+written during the run; the `runs` header is written afterwards, so a
+constraint would fail every in-run insert and take the USD caps with it.
 
-**A real divergence worth knowing:** the backend defaults
-`GATEWAY_MAX_CONCURRENT_CALLS` to **12**. The standalone `aegis.gateway`
-package, used with no host, defaults the same setting to **0** — which is
-`NoSlotLimiter`, i.e. unlimited. Anyone using the gateway package directly
-without the backend's settings gets no concurrency bound unless they set it
-themselves.
+The gateway also keeps a process-wide in-memory tally that
+`GET /v1/metrics` and `GET /v1/gateway/optimization` read.
 
-### The circuit breaker — scoped per deployment, not per tenant
+## Security and tenant isolation
 
-A deployment that fails repeatedly gets skipped in the fallback chain (one
-health-check probe reopens it later). This is scoped to the **deployment**,
-not to a tenant — the explicit reason, verified by a dedicated test suite
-(`test_tenant_isolation.py`): a circuit breaker keyed any more broadly than
-the deployment itself would let one tenant's repeated failures degrade
-service, or worse, get charged, for another tenant entirely. A fallback
-chain also never crosses a tenant's own pricing/model tier.
+- `usage_ledger` carries `tenant_id` and is registered for Postgres row-level
+  security. It is also **append-only for the serving role**: `UPDATE` and
+  `DELETE` are revoked.
+- Budget enforcement happens before any network call, so an exhausted tenant
+  never reaches the provider.
+- The circuit breaker is keyed on the deployment, so no tenant's failure
+  history can affect another tenant's service or spend.
+- Only `GENERATION` deployments are tenant-selectable; the guardrail
+  classifier, the embedder and the voice model cannot be chosen by a tenant.
+- `ensure_spend_caps_bind()` refuses to boot a non-dev deployment whose caps
+  do not bind — fail-open budgets, or no governance hook at the chokepoint.
 
-### Governance — enforced before the call, recorded after
+## API surface
 
-`GovernanceHook.enforce()` is called and can raise `BudgetExceededError`
-**before** any provider call is made — proven by a dedicated test asserting
-zero calls reach the underlying `acompletion` when a budget is already
-exhausted. `GovernanceHook.record()` runs only after a **successful** call,
-writing the real `usage_ledger` row the rest of the platform (dashboards,
-forecast, governance) reads from.
+| Method | Path | Who may call | Returns |
+| --- | --- | --- | --- |
+| GET | `/v1/gateway/optimization` | any authenticated caller | measured per-role savings versus the frontier baseline, plus the effective routing, fallback and baseline knobs |
+| GET | `/v1/models` | any authenticated caller | the effective role-to-deployment routing table with each row's unit cost and billing unit |
+| GET | `/v1/metrics` | any authenticated caller | the efficiency and cost dashboard fed by the tally |
 
-## How it runs
+The gateway itself is a library surface: `app.core.llm.complete`, `.embed`
+and `.transcribe`.
 
-1. `app.core.llm.complete/embed/transcribe` is called (this is the shim
-   every other backend module imports, not the raw gateway package).
-2. `GovernanceHook.enforce()` checks budgets; raises before any network call
-   if a cap is already tripped.
-3. The slot limiter acquires a concurrency slot, with a lease sized to the
-   call's actual (possibly retried) duration.
-4. `routing.py` resolves the role to a real deployment id.
-5. The provider call goes out through LiteLLM.
-6. On success, cost is computed from the deployment's declared rate and
-   billing unit, `record_call` updates the process-wide tally, and
-   `GovernanceHook.record()` writes the ledger row.
-7. On repeated failure, that deployment's circuit breaker opens — scoped
-   to the deployment, never propagating to another tenant's calls.
+## Configuration
 
-## What is not here
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `GENAILAB_BASE_URL` | `https://genailab.tcs.in` | the provider endpoint (backend settings) |
+| `GENAILAB_API_KEY` | `""` | provider credential |
+| `GENAILAB_SSL_VERIFY` | `false` | TLS verification for the provider |
+| `LLM_MAX_OUTPUT_TOKENS` | `1024` | per-call output ceiling |
+| `LLM_TIMEOUT_SECONDS` | `60.0` | per-call timeout; the slot lease is derived from it |
+| `GATEWAY_MAX_CONCURRENT_CALLS` | `12` (backend) / `0` (standalone package) | concurrency bound; below 1 means unlimited |
+| `GATEWAY_SLOT_WAIT_SECONDS` | `60.0` | how long a caller waits for a slot |
+| `GATEWAY_BREAKER_THRESHOLD` | `3` | consecutive failures before a deployment's breaker opens |
+| `GATEWAY_BREAKER_COOLDOWN_SECONDS` | package default | how long it stays open before a probe |
+| `GATEWAY_BASELINE_ROLE` | unset | the role savings are repriced against |
+| `MODEL_<ROLE>` | per-role fleet default | overrides a role's deployment, e.g. `MODEL_GENERATION` |
+| `COST_<ROLE>_IN` / `COST_<ROLE>_OUT` / `COST_<ROLE>_UNIT` | declared rates | override a role's rate or billing unit |
+| `BUDGET_FAIL_OPEN` | `false` | whether a budget-check failure admits the call |
+| `REDIS_URL` | `redis://localhost:6379/0` | decides fleet-wide versus per-process limiting |
 
-- **No external rate file.** Every rate is a Python literal in
-  `_FLEET_DECLARATION`; changing a price means changing code, not a config
-  file.
-- **The standalone gateway's own default concurrency limit is unlimited**
-  (0 = `NoSlotLimiter`) — only the backend's `Settings` default of 12 bounds
-  it in the shipped deployment.
-- **Two credential env-var families coexist** (`GENAILAB_*` and
-  `GATEWAY_*`) and which one is actually live depends on whether
-  `app.core.llm` has been imported yet, since it calls `configure()` at
-  import time — this is a real source of confusion worth being deliberate
-  about when setting environment variables.
-- **`aegis.gateway.routing` is imported directly by five backend modules but
-  is not part of the package's declared `__all__`** — the backend depends on
-  a path the gateway's own module docstring calls internal.
+The standalone package reads its own `GATEWAY_BASE_URL`, `GATEWAY_API_KEY`,
+`GATEWAY_SSL_VERIFY`, `GATEWAY_MAX_OUTPUT_TOKENS`, `GATEWAY_TIMEOUT_SECONDS`
+and `GATEWAY_BUDGET_FAIL_OPEN` only when no host calls `configure()`. The
+backend calls `configure()` at import of `app.core.llm`, so in the running
+platform the `GENAILAB_*` and `LLM_*` settings are the live ones.
+
+## Where it lives
+
+| Path | What it does |
+| --- | --- |
+| `aegis/src/aegis/gateway/routing.py` | the 12-deployment fleet, rates, billing units, role-to-deployment resolution |
+| `aegis/src/aegis/gateway/llm.py` | `complete` / `embed` / `transcribe`, the fallback chain, the circuit breaker, metering |
+| `aegis/src/aegis/gateway/limiter.py` | `SlotLimiter` and its Redis, local and no-op implementations |
+| `aegis/src/aegis/gateway/types.py` | `BudgetExceededError`, `LLMResult`, `Usage`, the `GovernanceHook` protocol |
+| `aegis/src/aegis/gateway/stream.py` | the per-call `model_call` stream event |
+| `backend/src/app/core/llm.py` | the host shim: builds the limiter, wires governance and observability, calls `configure()` |
+| `aegis/src/aegis/governance/models.py` | `UsageLedger`, the table the metering writes to |
+
+## What it does not do
+
+- No external rate file. Changing a price means changing Python.
+- The standalone package's own default concurrency limit is unlimited; only
+  the backend's `Settings` default of 12 bounds the shipped deployment.
+- It does not stream partial usage. Cost is recorded once, after a successful
+  call completes.
+- It does not decide budgets. It calls an injected hook and reports what the
+  hook said.
+- It does not retry across tenants or pricing tiers; a fallback stays inside
+  the caller's own tier.
