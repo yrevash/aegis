@@ -11,8 +11,11 @@ deleted — `web/` fully replaced it.
 - **Next.js 15** (App Router) + **React 19** + **TypeScript** (strict)
 - **Tailwind CSS v4** (CSS-first, `@tailwindcss/postcss`)
 - **lucide-react** icons, **Recharts** + **react-force-graph** for charts/graph
-- Fonts (Inter / Space Grotesk / JetBrains Mono) via a runtime `<link>` (not
-  `next/font`) so `next build` never blocks on a font fetch
+- Fonts (**IBM Plex Sans** for interface, **JetBrains Mono** for every figure) via a
+  runtime `<link>` (not `next/font`) so `next build` never blocks on a font fetch.
+  `--font-mono` is deliberately still JetBrains rather than Plex Mono: the two share an
+  identical 0.6000em advance, but Plex Mono's x-height is 6.2% smaller, and the figure
+  is the thing this console is read for
 
 ## Commands
 

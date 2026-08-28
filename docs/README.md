@@ -75,7 +75,7 @@ than for what turned out to be right.
 
 | File | Subject |
 |---|---|
-| [`compliance/README.md`](compliance/README.md) | **The current, evidence-backed surface.** 114 controls across 12 frameworks, every claim resolving to a file, route or test, and every gap named. Served live at `GET /v1/compliance` |
+| [`compliance/README.md`](compliance/README.md) | **The current, evidence-backed surface.** 124 controls across 13 frameworks — 38 enforced, every claim resolving to a file, route or test, and every gap named. Served live at `GET /v1/compliance` |
 | [`security/threat-model.md`](security/threat-model.md) | One-page mapping to the OWASP LLM Top 10, the OWASP Agentic (ASI) Top 10 and the lethal trifecta |
 | [`security/owasp-agentic.md`](security/owasp-agentic.md) | The agentic mapping in depth, each control naming a real file. Read by `backend/src/app/platform/risk_map.py` |
 | [`security/overview.md`](security/overview.md) | The security design and how to demonstrate it |

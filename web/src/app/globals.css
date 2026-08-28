@@ -4,7 +4,7 @@
  * Aegis Console — the design system in DESIGN.md, as Tailwind v4 tokens.
  * -----------------------------------------------------------------------------
  * A clean enterprise light system: white cards on a near-white base, hairline
- * borders rather than shadows, Inter for interface and JetBrains Mono for every
+ * borders rather than shadows, IBM Plex Sans for interface and JetBrains Mono for every
  * numeral. LIGHT THEME ONLY — enforced by `tests/design/lightThemeOnly.test.mjs`.
  *
  * One hue carries meaning. The blue ramp below is the whole identity scale;
